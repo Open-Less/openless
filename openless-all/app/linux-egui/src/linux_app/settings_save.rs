@@ -287,8 +287,9 @@ impl OpenLessEguiApp {
                 };
             }
             frontend::view_model::SettingsComboField::PipelineMode => {
-                // 与 Tauri 的 `onPipelineModeChange` 一致：只改偏好。两套模式的
-                // 凭据都留在凭据库里，运行时只读当前模式。
+                // Tauri's selector enables the pipeline flag in both modes;
+                // only the selected mode is consumed, and both namespaces survive.
+                preferences.multimodal_pipeline_enabled = true;
                 preferences.pipeline_mode = if index == 1 {
                     openless_core::shared_types::PipelineMode::Multimodal
                 } else {

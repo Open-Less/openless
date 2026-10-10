@@ -214,6 +214,7 @@ pub enum FrontendAction {
     SettingsProviderField(SettingsProviderField, String),
     /// Save the editor: rename + endpoint/model + credentials through Core.
     SettingsProviderSave,
+    SettingsOmni(openless_linux_egui::omni_settings::OmniAction),
     /// Drop the channel's stored secrets (Core's `remove_credential`).
     SettingsProviderClearSecrets,
     /// Ask Core for the provider's model list (Core's `provider.list_models`).
@@ -931,6 +932,8 @@ pub struct FrontendViewModel {
     pub selection_polish_hotkey: String,
     /// Pipeline mode is 多模态 → the task strip hides the legacy LLM/ASR views.
     pub pipeline_multimodal: bool,
+    #[serde(default)]
+    pub omni: openless_linux_egui::omni_settings::OmniSettings,
 }
 
 impl Default for FrontendViewModel {
@@ -1057,6 +1060,7 @@ impl Default for FrontendViewModel {
             status: String::new(),
             selection_polish_hotkey: String::new(),
             pipeline_multimodal: false,
+            omni: Default::default(),
             remote_running: false,
             remote_urls_stale: false,
             remote_pin: String::new(),

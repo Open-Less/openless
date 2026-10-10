@@ -6193,6 +6193,62 @@ pub const CATALOG: &[Msg] = &[
             "작업 실패",
         ),
     },
+    Msg {
+        key: "common.saved",
+        text: row("已保存", "已儲存", "Saved", "保存しました", "저장됨"),
+    },
+    Msg {
+        key: "modal.service_views.inactive",
+        text: row(
+            "当前模式未使用",
+            "目前模式未使用",
+            "Not used in this mode",
+            "現在のモードでは未使用",
+            "현재 모드에서 사용 안 함",
+        ),
+    },
+    Msg {
+        key: "settings.providers.apiKeyLabel",
+        text: row("API 密钥", "API 金鑰", "API Key", "API キー", "API 키"),
+    },
+    Msg {
+        key: "settings.providers.baseUrlLabel",
+        text: row("接口地址", "介面地址", "Base URL", "エンドポイント", "엔드포인트"),
+    },
+    Msg {
+        key: "settings.providers.omniTitle",
+        text: row(
+            "多模态模型",
+            "多模態模型",
+            "Multimodal model",
+            "マルチモーダルモデル",
+            "멀티모달 모델",
+        ),
+    },
+    Msg {
+        key: "settings.providers.providerLabel",
+        text: row("供应商", "供應商", "Provider", "サプライヤー", "공급자"),
+    },
+    Msg {
+        key: "settings.providers.validateFailed",
+        text: row(
+            "连接检查未通过。",
+            "連線檢查未透過。",
+            "Connection check failed.",
+            "接続チェックに失敗しました。",
+            "연결 확인에 실패했습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.validateSuccessOmni",
+        text: row(
+            "文本连通性通过。这不代表音频听写可用，请再做一次短录音确认。",
+            "文字連通性通過。這不代表音訊聽寫可用，請再做一次短錄音確認。",
+            "Text connectivity passed. This does not mean audio dictation works—please confirm with a short recording.",
+            "テキスト疎通は成功しました。これは音声ディクテーションが使えることを意味しません。短い録音で確認してください。",
+            "텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

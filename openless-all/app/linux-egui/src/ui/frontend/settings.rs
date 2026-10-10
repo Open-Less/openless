@@ -491,10 +491,6 @@ fn advanced_page_title(vm: &FrontendViewModel, lang: Lang) -> Option<(&'static s
             tr_l10n(lang, "settings.coding_agent.title"),
             tr_l10n(lang, "modal.advanced_pages.less_computer"),
         )),
-        1 => Some((
-            tr_l10n(lang, "settings.advanced.multimodal_pipeline_title"),
-            tr_l10n(lang, "modal.advanced_pages.multimodal"),
-        )),
         2 => Some((
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
@@ -1871,43 +1867,305 @@ impl ServiceView {
     }
 
     fn visible(vm: &FrontendViewModel) -> Vec<Self> {
-        let mut views = Vec::new();
-        if vm.multimodal_view {
-            views.push(Self::Omni);
-        }
-        if !vm.pipeline_multimodal {
-            views.push(Self::Llm);
-            views.push(Self::Asr);
-        }
+        let mut views = vec![Self::Llm, Self::Asr, Self::Omni];
         if vm.supports_local_asr {
             views.push(Self::Models);
         }
         views.push(Self::Connections);
         views
     }
+
+    fn inactive(self, multimodal: bool) -> bool {
+        if multimodal {
+            !matches!(self, Self::Omni | Self::Connections)
+        } else {
+            self == Self::Omni
+        }
+    }
+}
+
+fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    use openless_linux_egui::omni_settings::{OmniAction, OmniField};
+    let lang = vm.lang;
+    let mut state = vm.omni.clone();
+    let timer = ui.id().with("omni-autosave");
+    let mut changed = false;
+    card(
+        ui,
+        tr_l10n(lang, "settings.providers.omniTitle"),
+        "",
+        |ui| {
+            if state.busy {
+                ui.label(tr_l10n(lang, "common.saving"));
+            }
+            ui.add_enabled_ui(state.loaded && !state.busy, |ui| {
+                modal_form_row(
+                    ui,
+                    tr_l10n(lang, "settings.providers.providerLabel"),
+                    |ui| {
+                        let selected = state
+                            .presets
+                            .iter()
+                            .position(|p| p.id == state.provider)
+                            .unwrap_or(0);
+                        let labels: Vec<&str> = state
+                            .presets
+                            .iter()
+                            .map(|p| match p.id.as_str() {
+                                "openai" => tr_l10n(lang, "settings.providers.presets.omniOpenai"),
+                                "gemini" => tr_l10n(lang, "settings.providers.presets.omniGemini"),
+                                "dashscope-omni" => {
+                                    tr_l10n(lang, "settings.providers.presets.omniDashscope")
+                                }
+                                _ => tr_l10n(lang, "settings.providers.presets.custom"),
+                            })
+                            .collect();
+                        egui::ComboBox::from_id_salt("omni-provider")
+                            .width(ui.available_width())
+                            .selected_text(labels.get(selected).copied().unwrap_or_default())
+                            .show_ui(ui, |ui| {
+                                for (index, label) in labels.iter().enumerate() {
+                                    if ui.selectable_label(index == selected, *label).clicked()
+                                        && index != selected
+                                        && state.validate().is_ok()
+                                    {
+                                        actions.push(FrontendAction::SettingsOmni(
+                                            OmniAction::Provider(state.presets[index].id.clone()),
+                                        ));
+                                        ui.data_mut(|data| data.remove_temp::<f64>(timer));
+                                    }
+                                }
+                            });
+                    },
+                );
+                let preset = state.presets.iter().find(|p| p.id == state.provider);
+                let model_hint = preset.map(|p| p.model.clone()).unwrap_or_default();
+                let endpoint_hint = preset.map(|p| p.endpoint.clone()).unwrap_or_default();
+                changed |= omni_text_field(
+                    ui,
+                    tr_l10n(lang, "settings.providers.modelLabel"),
+                    &model_hint,
+                    &mut state.model,
+                    OmniField::Model,
+                    false,
+                    actions,
+                );
+                changed |= omni_text_field(
+                    ui,
+                    tr_l10n(lang, "settings.providers.apiKeyLabel"),
+                    tr_l10n(lang, "providers.api_key_hint"),
+                    &mut state.api_key,
+                    OmniField::ApiKey,
+                    true,
+                    actions,
+                );
+                changed |= omni_text_field(
+                    ui,
+                    tr_l10n(lang, "settings.providers.baseUrlLabel"),
+                    &endpoint_hint,
+                    &mut state.endpoint,
+                    OmniField::Endpoint,
+                    false,
+                    actions,
+                );
+                if state.provider == "custom" {
+                    changed |= omni_text_field(
+                        ui,
+                        tr_l10n(lang, "settings.providers.temperatureLabel"),
+                        tr_l10n(lang, "settings.providers.temperaturePlaceholder"),
+                        &mut state.temperature,
+                        OmniField::Temperature,
+                        false,
+                        actions,
+                    );
+                    changed |= omni_text_field(
+                        ui,
+                        tr_l10n(lang, "settings.providers.extraHeadersLabel"),
+                        tr_l10n(lang, "settings.providers.extraHeadersPlaceholder"),
+                        &mut state.extra_headers,
+                        OmniField::ExtraHeaders,
+                        true,
+                        actions,
+                    );
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "providers.extra_headers_hint"))
+                            .size(11.5)
+                            .color(theme::INK_4),
+                    );
+                }
+                if let Err(error) = state.validate() {
+                    ui.colored_label(theme::ERR, tr_l10n(lang, "common.operationFailed"));
+                    ui.label(error.to_string());
+                }
+                ui.add_space(10.0);
+                ui.add_enabled_ui(state.validate().is_ok(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .button(tr_l10n(lang, "settings.providers.fetchModels"))
+                            .clicked()
+                        {
+                            actions.push(FrontendAction::SettingsOmni(OmniAction::Models));
+                        }
+                        if !state.models.is_empty() {
+                            egui::ComboBox::from_id_salt("omni-models")
+                                .selected_text(tr_l10n(lang, "settings.providers.selectModel"))
+                                .show_ui(ui, |ui| {
+                                    for model in &state.models {
+                                        if ui
+                                            .selectable_label(*model == state.model, model)
+                                            .clicked()
+                                            && *model != state.model
+                                        {
+                                            state.model = model.clone();
+                                            actions.push(FrontendAction::SettingsOmni(
+                                                OmniAction::Field(OmniField::Model, model.clone()),
+                                            ));
+                                            changed = true;
+                                        }
+                                    }
+                                });
+                        }
+                        if ui
+                            .button(tr_l10n(lang, "settings.channels.verify"))
+                            .clicked()
+                        {
+                            actions.push(FrontendAction::SettingsOmni(OmniAction::Validate));
+                        }
+                    });
+                });
+                if ui.button(tr_l10n(lang, "btn.clear_secret")).clicked() {
+                    actions.push(FrontendAction::SettingsOmni(OmniAction::ClearSecrets));
+                    ui.data_mut(|data| data.remove_temp::<f64>(timer));
+                }
+            });
+            if let Some(notice) = &state.notice {
+                ui.label(notice);
+            }
+            if !state.busy
+                && (!state.loaded || (state.dirty && state.notice.is_some()))
+                && ui.button(tr_l10n(lang, "common.retry")).clicked()
+            {
+                actions.push(FrontendAction::SettingsOmni(if state.loaded {
+                    OmniAction::Save
+                } else {
+                    OmniAction::Reload
+                }));
+            }
+        },
+    );
+    let now = ui.input(|i| i.time);
+    if changed {
+        state.dirty = true;
+        state.notice = None;
+        ui.data_mut(|data| data.insert_temp(timer, now));
+    }
+    if let Some(at) = ui.data(|data| data.get_temp::<f64>(timer)) {
+        if now - at >= 0.3 && !state.busy && state.loaded && state.validate().is_ok() {
+            ui.data_mut(|data| data.remove_temp::<f64>(timer));
+            actions.push(FrontendAction::SettingsOmni(OmniAction::Save));
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+    vm.omni = state;
+}
+
+fn omni_text_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    hint: &str,
+    value: &mut String,
+    field: openless_linux_egui::omni_settings::OmniField,
+    secret: bool,
+    actions: &mut Vec<FrontendAction>,
+) -> bool {
+    let mut changed = false;
+    modal_form_row(ui, label, |ui| {
+        changed = ui
+            .add(
+                egui::TextEdit::singleline(value)
+                    .id(ui.id().with(label))
+                    .password(secret)
+                    .hint_text(hint)
+                    .desired_width(ui.available_width()),
+            )
+            .changed();
+        if changed {
+            actions.push(FrontendAction::SettingsOmni(
+                openless_linux_egui::omni_settings::OmniAction::Field(field, value.clone()),
+            ));
+        }
+    });
+    changed
 }
 
 fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(1.0, theme::LINE))
+        .corner_radius(12)
+        .inner_margin(16)
+        .show(ui, |ui| {
+            row_desc(
+                ui,
+                tr_l10n(lang, "settings.providers.pipeline_mode_label"),
+                tr_l10n(lang, "settings.providers.pipeline_mode_hint"),
+                |ui| {
+                    let options = [
+                        tr_l10n(lang, "settings.providers.pipeline_mode_traditional"),
+                        tr_l10n(lang, "settings.providers.pipeline_mode_multimodal"),
+                    ];
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 38.0),
+                        egui::Sense::hover(),
+                    );
+                    if let Some(index) =
+                        layout::segmented(ui, rect, &options, usize::from(vm.pipeline_multimodal))
+                    {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::PipelineMode,
+                            index,
+                        ));
+                    }
+                },
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(tr_l10n(
+                    lang,
+                    "settings.providers.pipeline_isolation_notice",
+                ))
+                .size(11.0)
+                .color(theme::INK_4),
+            );
+        });
+    ui.add_space(14.0);
     let views = ServiceView::visible(vm);
     let active = views
         .iter()
-        .position(|view| view.id() == vm.services_view)
-        .unwrap_or(0);
-    let items: Vec<(&str, Option<egui::Color32>)> = views
+        .position(|view| view.id() == vm.services_view && !view.inactive(vm.pipeline_multimodal))
+        .unwrap_or_else(|| {
+            views
+                .iter()
+                .position(|view| !view.inactive(vm.pipeline_multimodal))
+                .unwrap_or(0)
+        });
+    let items: Vec<(&str, Option<egui::Color32>, bool)> = views
         .iter()
         .map(|view| {
             let dot = match view {
-                ServiceView::Llm | ServiceView::Asr => {
+                ServiceView::Llm | ServiceView::Asr if !view.inactive(vm.pipeline_multimodal) => {
                     let configured = vm.service_configured[usize::from(*view == ServiceView::Asr)];
-                    Some(if configured { theme::WARN } else { theme::ERR })
+                    Some(if configured { theme::OK } else { theme::ERR })
                 }
                 _ => None,
             };
-            (view.label(lang), dot)
+            (view.label(lang), dot, view.inactive(vm.pipeline_multimodal))
         })
         .collect();
-    if let Some(index) = service_tabs(ui, &items, active) {
+    if let Some(index) = service_tabs(ui, &items, active, lang) {
         if let Some(view) = views.get(index) {
             actions.push(FrontendAction::SettingsServicesView(view.id()));
         }
@@ -1915,6 +2173,7 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     ui.add_space(10.0);
 
     match views.get(active).copied().unwrap_or(ServiceView::Llm) {
+        ServiceView::Omni => omni_settings(ui, vm, actions),
         ServiceView::Models => {
             card(
                 ui,
@@ -1964,7 +2223,6 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             // 视图 → 渠道类型（0 = 语言模型，1 = 语音识别）。宿主按该类型取数。
             let kinds: &[usize] = match view {
                 ServiceView::Asr => &[1],
-                ServiceView::Omni => &[0, 1],
                 _ => &[0],
             };
             for kind in kinds {
@@ -1976,36 +2234,6 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                 };
                 let add = tr_l10n(lang, "settings.channels.add");
                 let mut add_clicked = false;
-                if !asr && vm.multimodal_view {
-                    // 识别管线（Tauri `ProvidersSection` 的 pipelineMode 行）：只有
-                    // 实验性开关 `multimodalPipelineEnabled` 打开后才出现，就是这里的
-                    // `multimodal_view`。切换只改偏好，两套凭据都留在凭据库里。
-                    segmented_row(
-                        ui,
-                        tr_l10n(lang, "settings.providers.pipeline_mode_label"),
-                        tr_l10n(lang, "settings.providers.pipeline_mode_hint"),
-                        &[
-                            tr_l10n(lang, "settings.providers.pipeline_mode_traditional"),
-                            tr_l10n(lang, "settings.providers.pipeline_mode_multimodal"),
-                        ],
-                        usize::from(vm.pipeline_multimodal),
-                        |index| {
-                            actions.push(FrontendAction::SettingsCombo(
-                                SettingsComboField::PipelineMode,
-                                index,
-                            ));
-                        },
-                    );
-                    ui.label(
-                        egui::RichText::new(tr_l10n(
-                            lang,
-                            "settings.providers.pipeline_isolation_notice",
-                        ))
-                        .size(11.0)
-                        .color(theme::INK_4),
-                    );
-                    ui.add_space(12.0);
-                }
                 // 卡片头：标题在左、＋添加渠道在右（Tauri 的 ProvidersSection），
                 // 标题下方一行说明，再下面是渠道行。
                 card_header(
@@ -2183,51 +2411,12 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     let lang = vm.lang;
     // The Tauri page is a list of drill-in rows; the panel swaps to the detail
     // page (title + back button) while `advanced_open` is set.
+    // Keep existing drill-in IDs, but the pipeline now lives only on Services.
     let rows = [
-        (
-            SettingsIcon::Monitor,
-            tr_l10n(lang, "settings.coding_agent.title"),
-            tr_l10n(lang, "modal.advanced_pages.less_computer"),
-        ),
-        (
-            SettingsIcon::Sparkle,
-            tr_l10n(lang, "settings.advanced.multimodal_pipeline_title"),
-            tr_l10n(lang, "modal.advanced_pages.multimodal"),
-        ),
-        (
-            SettingsIcon::Bolt,
-            tr_l10n(lang, "settings.debug.title"),
-            tr_l10n(lang, "modal.advanced_pages.debug"),
-        ),
+        (0, SettingsIcon::Monitor, tr_l10n(lang, "settings.coding_agent.title"), tr_l10n(lang, "modal.advanced_pages.less_computer")),
+        (2, SettingsIcon::Bolt, tr_l10n(lang, "settings.debug.title"), tr_l10n(lang, "modal.advanced_pages.debug")),
     ];
-    if vm.advanced_open < rows.len() {
-        let (icon, title, _) = rows[vm.advanced_open];
-        let _ = icon;
-        // 多模态管线是实验性功能：Tauri 用 `ExperimentalSectionTitle`（标题 + 徽章
-        // + 悬停说明），所以它不用普通卡片。
-        if vm.advanced_open == 1 {
-            experimental_card(
-                ui,
-                title,
-                tr_l10n(lang, "common.experimental"),
-                // Tauri 的 `ExperimentalSectionTitle hint`：悬停在标题/徽章上的说明。
-                tr_l10n(lang, "settings.advanced.multimodal_pipeline_title_hint"),
-                |ui| {
-                    toggle_row(
-                        ui,
-                        tr_l10n(lang, "settings.advanced.multimodal_pipeline_label"),
-                        tr_l10n(lang, "settings.advanced.multimodal_pipeline_hint"),
-                        vm.settings.multimodal,
-                        || {
-                            actions.push(FrontendAction::SettingsToggle(SettingsField::Multimodal));
-                        },
-                    );
-                },
-            );
-            return;
-        }
-        // Less Computer 与调试工具在 Tauri 里都是「无标题卡片」（标题只出现在
-        // 右栏顶栏），只有多模态用 ExperimentalSectionTitle。
+    if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| match vm.advanced_open {
             0 => {
                 toggle_row(
@@ -2357,9 +2546,9 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         return;
     }
     card(ui, "", "", |ui| {
-        for (index, (icon, title, description)) in rows.iter().enumerate() {
+        for (id, icon, title, description) in &rows {
             if drill_row(ui, *icon, title, description) {
-                vm.advanced_open = index;
+                vm.advanced_open = *id;
             }
         }
     });
@@ -4047,51 +4236,6 @@ fn card(ui: &mut egui::Ui, title: &str, hint: &str, contents: impl FnOnce(&mut e
     ui.add_space(16.0);
 }
 
-/// A card whose title carries the 「实验性」 badge (Tauri
-/// `ExperimentalSectionTitle`): title + blue-soft pill + hover hint.
-fn experimental_card(
-    ui: &mut egui::Ui,
-    title: &str,
-    badge: &str,
-    hint: &str,
-    contents: impl FnOnce(&mut egui::Ui),
-) {
-    egui::Frame::new()
-        .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(0.5, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(14))
-        .inner_margin(egui::Margin::symmetric(18, 18))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(title)
-                        .size(13.0)
-                        .strong()
-                        .color(theme::INK),
-                );
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(layout::text_width(ui, badge, 10.0) + 12.0, 16.0),
-                    egui::Sense::hover(),
-                );
-                ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    badge,
-                    egui::FontId::proportional(10.0),
-                    theme::BLUE,
-                );
-                if !hint.is_empty() {
-                    let _ = response.on_hover_text(hint);
-                }
-            });
-            ui.add_space(6.0);
-            contents(ui);
-        });
-    ui.add_space(16.0);
-}
-
 /// A collapsible card group (Tauri wraps 插入与剪贴板 / 启动 in a `Collapsible`).
 /// The open state lives in egui memory, keyed by the group title.
 fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
@@ -4171,10 +4315,11 @@ fn card_header(
 /// blue underline, required services carry a red/yellow status dot).
 fn service_tabs(
     ui: &mut egui::Ui,
-    items: &[(&str, Option<egui::Color32>)],
+    items: &[(&str, Option<egui::Color32>, bool)],
     active: usize,
+    lang: Lang,
 ) -> Option<usize> {
-    let height = 38.0;
+    let height = 62.0;
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -4186,37 +4331,66 @@ fn service_tabs(
         ],
         egui::Stroke::new(1.0, theme::LINE),
     );
+    let width =
+        (rect.width() - 4.0 * items.len().saturating_sub(1) as f32) / items.len().max(1) as f32;
     let mut x = rect.left();
     let mut clicked = None;
-    for (index, (label, dot)) in items.iter().enumerate() {
-        let width =
-            layout::text_width(ui, label, 13.0) + 28.0 + if dot.is_some() { 13.0 } else { 0.0 };
+    for (index, (label, dot, inactive)) in items.iter().enumerate() {
         let tab = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(width, height));
         let response = ui.interact(
             tab,
             ui.id().with(("openless-service-tab", index)),
-            egui::Sense::click(),
-        );
-        let selected = index == active;
-        let mut text_x = tab.left() + 14.0;
-        if let Some(color) = dot {
-            ui.painter()
-                .circle_filled(egui::pos2(text_x + 3.5, tab.center().y), 3.5, *color);
-            text_x += 13.0;
-        }
-        ui.painter().text(
-            egui::pos2(text_x, tab.center().y),
-            egui::Align2::LEFT_CENTER,
-            *label,
-            egui::FontId::proportional(13.0),
-            if selected {
-                theme::BLUE
-            } else if response.hovered() {
-                theme::INK
+            if *inactive {
+                egui::Sense::hover()
             } else {
-                theme::INK_3
+                egui::Sense::click()
             },
         );
+        let selected = index == active;
+        let color = if *inactive {
+            theme::INK_4
+        } else if selected {
+            theme::BLUE
+        } else if response.hovered() {
+            theme::INK
+        } else {
+            theme::INK_3
+        };
+        let dot_width = if dot.is_some() { 12.0 } else { 0.0 };
+        let galley = ui.painter().layout(
+            (*label).to_owned(),
+            egui::FontId::proportional(13.0),
+            color,
+            (width - 8.0 - dot_width).max(1.0),
+        );
+        let left = tab.center().x - (galley.size().x + dot_width) / 2.0;
+        if let Some(color) = dot {
+            ui.painter()
+                .circle_filled(egui::pos2(left + 3.5, tab.top() + 19.0), 3.5, *color);
+        }
+        ui.painter().galley(
+            egui::pos2(left + dot_width, tab.top() + 10.0),
+            galley,
+            color,
+        );
+        if *inactive {
+            let label = tr_l10n(lang, "modal.service_views.inactive");
+            let size = egui::vec2(
+                (layout::text_width(ui, label, 10.0) + 8.0).min(width - 4.0),
+                17.0,
+            );
+            let badge =
+                egui::Rect::from_center_size(egui::pos2(tab.center().x, tab.bottom() - 15.0), size);
+            ui.painter().rect_filled(badge, 4, theme::WARN_SOFT);
+            ui.painter().text(
+                badge.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(10.0),
+                theme::WARN,
+            );
+            response.clone().on_hover_text(label);
+        }
         if selected {
             ui.painter().line_segment(
                 [
@@ -4226,10 +4400,10 @@ fn service_tabs(
                 egui::Stroke::new(2.0, theme::BLUE),
             );
         }
-        if response.clicked() {
+        if !*inactive && response.clicked() {
             clicked = Some(index);
         }
-        x += width + 6.0;
+        x += width + 4.0;
     }
     clicked
 }

@@ -21,6 +21,7 @@ mod hotkeys;
 mod i18n;
 pub mod local_hotkeys;
 mod logging;
+pub mod omni_settings;
 mod popup;
 mod popup_layer;
 mod popup_window;

@@ -70,12 +70,20 @@ mod linux_app {
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers(Result<ProviderPanel, String>),
         /// Credential channels for the settings modal's AI-services tab.
-        SettingsChannels(Result<Vec<SettingsChannelRow>, String>),
+        SettingsChannels {
+            kind: openless_core::ChannelKind,
+            request: u64,
+            result: Result<Vec<SettingsChannelRow>, String>,
+        },
         ChannelCreated {
             kind: openless_core::ChannelKind,
             result: Result<String, String>,
         },
         ServiceConfigured([bool; 2]),
+        OmniFinished {
+            operation: openless_linux_egui::omni_settings::OmniAction,
+            result: Box<Result<openless_linux_egui::omni_settings::OmniSettings, String>>,
+        },
         ProviderEditor {
             kind: openless_core::ChannelKind,
             channel_id: String,
@@ -519,6 +527,8 @@ mod linux_app {
         settings_channel_kind: openless_core::ChannelKind,
         settings_channels: Vec<SettingsChannelRow>,
         settings_channels_loading: bool,
+        settings_channels_request: u64,
+        settings_channels_refresh_requested: bool,
         /// 语言模型 / 语音识别是否各自有启用的渠道（AI 服务页的状态点）。
         service_configured: [bool; 2],
         /// 文本型设置行（端口/条数/路径…）只在偏好刚载入或外部变更时回灌，
@@ -766,6 +776,8 @@ mod linux_app {
                         settings_channel_kind: openless_core::ChannelKind::Llm,
                         settings_channels: Vec::new(),
                         settings_channels_loading: false,
+                        settings_channels_request: 0,
+                        settings_channels_refresh_requested: false,
                         service_configured: [false; 2],
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
@@ -875,6 +887,8 @@ mod linux_app {
                     settings_channel_kind: openless_core::ChannelKind::Llm,
                     settings_channels: Vec::new(),
                     settings_channels_loading: false,
+                    settings_channels_request: 0,
+                    settings_channels_refresh_requested: false,
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
@@ -2187,6 +2201,8 @@ mod linux_app {
             };
             let kind = self.settings_channel_kind;
             self.settings_channels_loading = true;
+            self.settings_channels_request = self.settings_channels_request.wrapping_add(1);
+            let request = self.settings_channels_request;
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
                 let result = async {
@@ -2219,7 +2235,11 @@ mod linux_app {
                 }
                 .await
                 .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::SettingsChannels(result));
+                let _ = tx.send(UiResult::SettingsChannels {
+                    kind,
+                    request,
+                    result,
+                });
             });
         }
 
@@ -2528,6 +2548,182 @@ mod linux_app {
 
         /// 关闭渠道编辑器；完全没交互过的草稿在这条路径上被回收
         /// （Tauri `shouldRecycleDraft` + `deleteChannelIfBlank`）。
+        fn resolved_services_view(&self, requested: usize) -> usize {
+            let multimodal = self.preferences.as_ref().is_some_and(|p| {
+                p.multimodal_pipeline_enabled
+                    && p.pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal
+            });
+            match requested {
+                3 => 3,
+                4 if multimodal => 4,
+                0 | 1 if !multimodal => requested,
+                2 if !multimodal && self.frontend_vm.supports_local_asr => 2,
+                _ => {
+                    if multimodal {
+                        4
+                    } else {
+                        0
+                    }
+                }
+            }
+        }
+
+        fn select_services_view(&mut self, requested: usize) {
+            let view = self.resolved_services_view(requested);
+            self.frontend_vm.services_view = view;
+            if view == 4 {
+                if !self.frontend_vm.omni.loaded
+                    && !self.frontend_vm.omni.busy
+                    && self.frontend_vm.omni.notice.is_none()
+                {
+                    self.apply_omni_action(openless_linux_egui::omni_settings::OmniAction::Reload);
+                }
+                return;
+            }
+            if !matches!(view, 0 | 1) {
+                return;
+            }
+            let kind = if view == 1 {
+                openless_core::ChannelKind::Asr
+            } else {
+                openless_core::ChannelKind::Llm
+            };
+            if self.settings_channel_kind != kind {
+                self.close_provider_editor();
+                self.selected_channel_id = None;
+                self.settings_channel_kind = kind;
+                self.provider_kind = kind;
+                self.load_settings_channels();
+                self.load_service_configured();
+                self.load_providers(kind);
+            } else if self.settings_channels.is_empty() && !self.settings_channels_loading {
+                self.provider_kind = kind;
+                self.load_settings_channels();
+                self.load_service_configured();
+                self.load_providers(kind);
+            }
+        }
+
+        fn apply_omni_action(&mut self, operation: openless_linux_egui::omni_settings::OmniAction) {
+            use openless_linux_egui::omni_settings::{OmniAction, OmniSettings};
+            let state = &mut self.frontend_vm.omni;
+            if state.busy {
+                return;
+            }
+            if let OmniAction::Field(field, value) = operation {
+                state.edit(field, value);
+                return;
+            }
+            if !matches!(operation, OmniAction::Reload) && !state.loaded {
+                return;
+            }
+            if !matches!(operation, OmniAction::Reload | OmniAction::ClearSecrets)
+                && state.validate().is_err()
+            {
+                return;
+            }
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let host = self.native.as_ref().map(|native| native.host_arc());
+            let mut snapshot = self.frontend_vm.omni.clone();
+            self.frontend_vm.omni.busy = true;
+            let tx = self.tx.clone();
+            let wake = std::thread::current();
+            let job = Box::pin(async move {
+                let result = async {
+                    if snapshot.dirty
+                        && !matches!(operation, OmniAction::Reload | OmniAction::ClearSecrets)
+                    {
+                        snapshot.save(&backend).await.map_err(|e| e.to_string())?;
+                        snapshot.api_key.clear();
+                        snapshot.extra_headers.clear();
+                        snapshot.dirty = false;
+                    }
+                    match &operation {
+                        OmniAction::Provider(id) => {
+                            OmniSettings::select(&backend, id)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let host = host
+                                .ok_or_else(|| "native settings host is unavailable".to_owned())?;
+                            let edits = [("/activeOmniProvider".to_owned(), serde_json::json!(id))]
+                                .into_iter()
+                                .collect();
+                            tokio::task::spawn_blocking(move || {
+                                host.update_preference_fields(&edits)
+                            })
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string())?;
+                            snapshot = OmniSettings::load(&backend)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                        OmniAction::Reload => {
+                            snapshot = OmniSettings::load(&backend)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                        OmniAction::ClearSecrets => {
+                            snapshot
+                                .clear_secrets(&backend)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            snapshot.api_key.clear();
+                            snapshot.extra_headers.clear();
+                        }
+                        OmniAction::Models => {
+                            snapshot.models = backend
+                                .services()
+                                .provider
+                                .list_models(openless_core::ProviderRequest {
+                                    kind: openless_core::ProviderKind::Omni,
+                                    channel_id: Some(snapshot.provider.clone()),
+                                    thinking_enabled: backend
+                                        .get_preferences()
+                                        .llm_thinking_enabled,
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .models;
+                        }
+                        OmniAction::Validate => {
+                            let check = backend
+                                .services()
+                                .provider
+                                .validate(openless_core::ProviderRequest {
+                                    kind: openless_core::ProviderKind::Omni,
+                                    channel_id: Some(snapshot.provider.clone()),
+                                    thinking_enabled: backend
+                                        .get_preferences()
+                                        .llm_thinking_enabled,
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if !check.ok {
+                                return Err("validateFailed".to_owned());
+                            }
+                        }
+                        _ => {}
+                    }
+                    snapshot.busy = false;
+                    Ok(snapshot)
+                }
+                .await;
+                let _ = tx.send(UiResult::OmniFinished {
+                    operation,
+                    result: Box::new(result),
+                });
+                wake.unpark();
+            });
+            if self.provider_jobs.send(job).is_err() {
+                self.frontend_vm.omni.busy = false;
+                self.frontend_vm.omni.notice =
+                    Some(tr_l10n(self.lang, "common.operationFailed").to_owned());
+            }
+        }
+
         fn queue_provider_save(&mut self) -> bool {
             if self.provider_save_pending {
                 self.provider_save_again = true;
@@ -2929,6 +3125,11 @@ mod linux_app {
                 BackendEventKind::HistoryChanged(change) => {
                     self.history.observe(change.revision);
                     self.load_overview();
+                }
+                BackendEventKind::CredentialsChanged(_) => {
+                    // Defer and coalesce credential writes; refresh after the mutation,
+                    // not only before its async worker commits it.
+                    self.settings_channels_refresh_requested = true;
                 }
                 BackendEventKind::PreferencesChanged(_) => {
                     // 外部改动（Core 事件 / 托盘 / 另一窗口）要重新灌一次文本行。
@@ -4075,16 +4276,76 @@ mod linux_app {
                         }
                         Err(error) => self.frontend_vm.marketplace_notice = Some(error),
                     },
-                    UiResult::SettingsChannels(Ok(rows)) => {
-                        self.settings_channels = rows;
+                    UiResult::SettingsChannels {
+                        kind,
+                        request,
+                        result,
+                    } => {
+                        if kind != self.settings_channel_kind
+                            || request != self.settings_channels_request
+                        {
+                            continue;
+                        }
                         self.settings_channels_loading = false;
+                        match result {
+                            Ok(rows) => {
+                                self.settings_channels = rows;
+                                self.frontend_vm.settings_notice = None;
+                            }
+                            Err(error) => self.frontend_vm.settings_notice = Some(error),
+                        }
+                    }
+                    UiResult::OmniFinished { operation, result } => {
+                        use openless_linux_egui::omni_settings::OmniAction;
+                        match *result {
+                            Ok(mut state) => {
+                                state.notice = if matches!(operation, OmniAction::Reload) {
+                                    None
+                                } else {
+                                    Some(match operation {
+                                        OmniAction::Validate => tr_l10n(
+                                            self.lang,
+                                            "settings.providers.validateSuccessOmni",
+                                        )
+                                        .to_owned(),
+                                        OmniAction::Models if state.models.is_empty() => {
+                                            tr_l10n(self.lang, "settings.providers.modelsEmpty")
+                                                .to_owned()
+                                        }
+                                        OmniAction::Models => fmt_l10n(
+                                            self.lang,
+                                            "settings.providers.modelsLoaded",
+                                            &[&state.models.len().to_string()],
+                                        ),
+                                        OmniAction::ClearSecrets => {
+                                            tr_l10n(self.lang, "status.secret_cleared").to_owned()
+                                        }
+                                        _ => tr_l10n(self.lang, "common.saved").to_owned(),
+                                    })
+                                };
+                                self.frontend_vm.omni = state;
+                                if let Some(notice) = &self.frontend_vm.omni.notice {
+                                    self.status = notice.clone();
+                                }
+                            }
+                            Err(error) => {
+                                self.frontend_vm.omni.busy = false;
+                                let message = if error == "validateFailed" {
+                                    tr_l10n(self.lang, "settings.providers.validateFailed")
+                                        .to_owned()
+                                } else {
+                                    format!(
+                                        "{}: {error}",
+                                        tr_l10n(self.lang, "common.operationFailed")
+                                    )
+                                };
+                                self.frontend_vm.omni.notice = Some(message.clone());
+                                self.status = message;
+                            }
+                        }
                     }
                     UiResult::ServiceConfigured(configured) => {
                         self.service_configured = configured;
-                    }
-                    UiResult::SettingsChannels(Err(error)) => {
-                        self.settings_channels_loading = false;
-                        self.frontend_vm.settings_notice = Some(error);
                     }
                     UiResult::ChannelCreated { kind, result } => match result {
                         Ok(channel_id) => {
@@ -4498,8 +4759,8 @@ mod linux_app {
                 // 必配服务的状态点由 `load_service_configured` 异步刷新。
                 vm.service_configured = self.service_configured;
                 vm.multimodal_view = prefs.multimodal_pipeline_enabled;
-                vm.pipeline_multimodal =
-                    prefs.pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal;
+                vm.pipeline_multimodal = prefs.multimodal_pipeline_enabled
+                    && prefs.pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal;
                 // Linux 宿主没有本地推理引擎。
                 vm.supports_local_asr = false;
                 // 热键后端是否真的起来了：没有 fcitx5 监听器时隐藏「快捷键」分区，
@@ -4735,6 +4996,23 @@ mod linux_app {
             // Startup error.
             if let Some(error) = &self.startup_error {
                 vm.status = format!("启动失败: {error}");
+            }
+            if self.settings_channels_refresh_requested && !self.settings_channels_loading {
+                self.settings_channels_refresh_requested = false;
+                self.load_settings_channels();
+                self.load_service_configured();
+            }
+            if self.frontend_vm.settings_section == frontend::view_model::SettingsSection::Services
+            {
+                let view = self.resolved_services_view(self.frontend_vm.services_view);
+                if view != self.frontend_vm.services_view
+                    || (view == 4
+                        && !self.frontend_vm.omni.loaded
+                        && !self.frontend_vm.omni.busy
+                        && self.frontend_vm.omni.notice.is_none())
+                {
+                    self.select_services_view(view);
+                }
             }
         }
 
@@ -5978,7 +6256,22 @@ mod linux_app {
                         self.apply_settings_toggle(field);
                     }
                     frontend::view_model::FrontendAction::SettingsCombo(field, index) => {
+                        if matches!(
+                            field,
+                            frontend::view_model::SettingsComboField::PipelineMode
+                        ) && self.frontend_vm.omni.dirty
+                        {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
+                        }
                         self.apply_settings_combo(field, index);
+                        if matches!(
+                            field,
+                            frontend::view_model::SettingsComboField::PipelineMode
+                        ) {
+                            self.select_services_view(self.frontend_vm.services_view);
+                        }
                     }
                     frontend::view_model::FrontendAction::SettingsText(field, text) => {
                         self.apply_settings_text(field, text);
@@ -5994,31 +6287,26 @@ mod linux_app {
                         {
                             self.request_provider_editor_close();
                         }
+                        if self.frontend_vm.omni.dirty {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
+                        }
                         self.frontend_vm.settings_section = section;
+                        if section == frontend::view_model::SettingsSection::Services {
+                            self.select_services_view(self.frontend_vm.services_view);
+                        }
                     }
                     frontend::view_model::FrontendAction::SettingsServicesView(view) => {
-                        self.frontend_vm.services_view = view.min(3);
-                        let kind = if view == 1 {
-                            openless_core::ChannelKind::Asr
-                        } else {
-                            openless_core::ChannelKind::Llm
-                        };
-                        if self.settings_channel_kind != kind {
-                            self.settings_channel_kind = kind;
-                            self.provider_kind = kind;
-                            // The editor belongs to one channel kind: switching the
-                            // AI-services tab must not carry it across.
-                            self.close_provider_editor();
-                            self.selected_channel_id = None;
-                            self.load_settings_channels();
-                            self.load_service_configured();
-                            self.load_providers(kind);
-                        } else if self.settings_channels.is_empty() {
-                            self.provider_kind = kind;
-                            self.load_settings_channels();
-                            self.load_service_configured();
-                            self.load_providers(kind);
+                        if self.frontend_vm.omni.dirty {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
                         }
+                        self.select_services_view(view);
+                    }
+                    frontend::view_model::FrontendAction::SettingsOmni(action) => {
+                        self.apply_omni_action(action);
                     }
                     // Tauri `startCreate`：点「添加渠道」先在后台建一张空渠道（名字留空），
                     // 再打开同一个编辑器——草稿卡片只是为了让凭据有渠道 id 可落盘；
