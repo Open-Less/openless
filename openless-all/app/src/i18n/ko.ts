@@ -44,6 +44,11 @@ export const ko: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '자체 동기화 서버 (고급)',
+    customServerOrigin: '서버 주소 (https://...)',
+    customServerToken: '로그인 Token',
+    customServerSave: '저장',
+    customServerHint: '비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.',
     protocolTitle: '클라우드 동기화 약관 및 개인정보 안내',
     protocolIntro:
       'OpenLess와 독립 개발자는 개인정보를 존중하고 데이터를 보호하기 위해 노력합니다. 계속하기 전에 아래 안내를 읽어 주세요.',
@@ -1291,7 +1296,7 @@ export const ko: typeof zhCN = {
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
+        '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',

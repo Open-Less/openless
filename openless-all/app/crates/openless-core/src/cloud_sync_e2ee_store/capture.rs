@@ -166,12 +166,17 @@ impl CoreSyncStore {
             &presets.disabled_builtin_preset_ids,
             &builtin_ids,
         )?;
+        // Populated lazily: nothing writes this slot until the user explicitly
+        // changes locale/font scale once sync is enabled (see
+        // `encryptedSyncUiBridge.ts`). A device that never touched that setting
+        // still needs a valid first snapshot/restore, so fall back to sane
+        // defaults instead of failing the whole capture.
         let ui_preferences = self
             .inner
             .extensions
             .read_device(DeviceExtensionKey::UiPreferences)
             .await?
-            .ok_or(DocumentError::Unsupported)?;
+            .unwrap_or_else(|| ui_preferences("system", "medium"));
         let window_positions = match self
             .inner
             .extensions

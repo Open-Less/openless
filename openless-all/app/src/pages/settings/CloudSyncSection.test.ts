@@ -102,7 +102,7 @@ const factory = new Function(
   'exports',
   'require',
   '__listen',
-  `${compiled};return {CloudSyncSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview};`,
+  `${compiled};return {CloudSyncSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview,normalizeCustomServerOrigin};`,
 );
 
 const initial: EncryptedSyncStatus = {
@@ -140,6 +140,10 @@ const calls: Array<[string, any?]> = [];
 let server = { ...initial };
 let deferredStatus: Promise<EncryptedSyncStatus> | null = null;
 let nextStep: api.EnablePreparation['nextStep'] = 'unlock';
+let mockMarketplaceSignedIn = true;
+let savedOrigin: string | null = null;
+let savedToken: string | null = null;
+let failOriginWrite = false;
 const update = (value: Partial<EncryptedSyncStatus>) => {
   server = { ...server, ...value, sequence: (BigInt(server.sequence) + 1n).toString() };
   return { ...server };
@@ -153,11 +157,19 @@ const dependencies: Record<string, any> = {
   useId: () => 'fixture-id',
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
   useHotkeySettings: () => ({
-    prefs: { marketplaceDevLogin: 'fixture' },
+    prefs: { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin },
     refresh: async () => {
       calls.push(['refresh']);
     },
-    updatePrefs: async () => {},
+    updatePrefs: async (next: any) => {
+      const current = { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin };
+      const resolved = typeof next === 'function' ? next(current) : next;
+      const nextOrigin = resolved.syncCustomServerOrigin ?? null;
+      if (nextOrigin === savedOrigin) return;
+      if (failOriginWrite && nextOrigin !== savedOrigin) throw new Error('origin write failed');
+      savedOrigin = nextOrigin;
+      calls.push(['updatePrefs', savedOrigin]);
+    },
   }),
   Icon: 'icon',
   GithubLoginModal: 'login',
@@ -165,8 +177,8 @@ const dependencies: Record<string, any> = {
   Btn: 'button',
   Card: 'card',
   Toggle: 'toggle',
-  isTauri: true,
-  marketplaceAuthStatus: async () => ({ signedIn: true }),
+  isTauriNow: () => true,
+  marketplaceAuthStatus: async () => ({ signedIn: mockMarketplaceSignedIn }),
   cloudSyncE2eeStatus: async () => deferredStatus ?? { ...server },
   mirrorEncryptedSyncUiPreferences: async () => {
     calls.push(['mirror']);
@@ -202,6 +214,16 @@ const dependencies: Record<string, any> = {
     calls.push(['enable', enabled]);
     return update({ enabled });
   },
+  cloudSyncE2eeSignInWithToken: async () => update({ authState: 'signed_in', syncState: 'ready' }),
+  cloudSyncE2eeSignOut: async () => {
+    savedToken = null;
+    return update({ authState: 'signed_out', syncState: 'disabled', account: null });
+  },
+  readCredential: async (_account: string) => savedToken,
+  setCredential: async (account: string, value: string) => {
+    calls.push(['setCredential', account, value]);
+    savedToken = value.trim() ? value : null;
+  },
 };
 const jsx = (type: unknown, props: Record<string, unknown>) => ({ type, props });
 const components = factory(
@@ -213,6 +235,12 @@ const components = factory(
     return () => events.delete(name);
   },
 );
+assert.equal(
+  components.normalizeCustomServerOrigin(' https://sync.example.com/ '),
+  'https://sync.example.com',
+);
+assert.equal(components.normalizeCustomServerOrigin('https://sync.example.com/path'), undefined);
+assert.equal(components.normalizeCustomServerOrigin(''), null);
 Object.defineProperty(globalThis, 'window', { configurable: true, value: new EventTarget() });
 
 try {
@@ -470,6 +498,60 @@ try {
     observedRevision: '42',
   });
   freshHooks.unmount();
+  await settle();
+  assert.equal(events.size, 0);
+
+  // A failed preference write must roll back the credential written first;
+  // otherwise the next attempt could pair a token with the old origin.
+  mockMarketplaceSignedIn = true;
+  savedOrigin = 'https://old.example.com';
+  savedToken = 'old-token';
+  failOriginWrite = true;
+  server = {
+    ...initial,
+    authState: 'signed_out',
+    syncState: 'disabled',
+    account: null,
+    serviceOrigin: savedOrigin,
+  };
+  calls.length = 0;
+  const customHooks = new Hooks();
+  const custom = () => customHooks.render(() => components.CloudSyncSection());
+  custom();
+  await settle();
+  tree = custom();
+  find(tree, (node) => node.type === 'input' && node.props.type === 'text').props.onChange({
+    currentTarget: { value: 'https://new.example.com/' },
+  });
+  find(tree, (node) => node.type === 'input' && node.props.type === 'password').props.onChange({
+    currentTarget: { value: 'new-token' },
+  });
+  tree = custom();
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.onClick();
+  await settle();
+  assert.equal(savedOrigin, 'https://old.example.com');
+  assert.equal(savedToken, 'old-token');
+  assert.deepEqual(
+    calls.map(([name, ...args]) => [name, ...args]),
+    [
+      ['setCredential', 'cloud_sync.custom_token', 'new-token'],
+      ['setCredential', 'cloud_sync.custom_token', 'old-token'],
+    ],
+  );
+  failOriginWrite = false;
+  calls.length = 0;
+  tree = custom();
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.onClick();
+  await settle();
+  tree = custom();
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.signOut').props.onClick();
+  await settle();
+  tree = custom();
+  assert.equal(
+    find(tree, (node) => node.type === 'input' && node.props.type === 'password').props.value,
+    '',
+  );
+  customHooks.unmount();
   await settle();
   assert.equal(events.size, 0);
 } finally {

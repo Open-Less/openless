@@ -87,6 +87,9 @@ impl CoreSyncStore {
     pub fn device(&self) -> SourceDevice {
         self.inner.device.clone()
     }
+    pub fn custom_server_origin(&self) -> Option<String> {
+        self.inner.repositories.preferences.get().sync_custom_server_origin
+    }
     pub fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.inner.gate.subscribe()
     }

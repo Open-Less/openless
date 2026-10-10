@@ -118,6 +118,7 @@ struct Data {
     fail_restore: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
+    custom_origin: Mutex<Option<String>>,
 }
 impl Data {
     fn new() -> Arc<Self> {
@@ -165,7 +166,12 @@ impl Data {
             fail_restore: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
+            custom_origin: Mutex::new(None),
         })
+    }
+
+    fn set_custom_server_origin(&self, origin: Option<String>) {
+        *self.custom_origin.lock().unwrap() = origin;
     }
     fn edit(&self, text: &str) {
         self.documents
@@ -256,6 +262,9 @@ impl SyncServiceData for Data {
     fn device(&self) -> SourceDevice {
         self.documents.lock().unwrap().source_device.clone()
     }
+    fn custom_server_origin(&self) -> Option<String> {
+        self.custom_origin.lock().unwrap().clone()
+    }
     fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.changes.subscribe()
     }
@@ -274,6 +283,8 @@ struct Remote {
     reject_upload: bool,
     hide_receipts: bool,
     drop_metadata_response: bool,
+    github_auth_requests: usize,
+    token_auth_requests: usize,
 }
 struct Server {
     origin: String,
@@ -386,7 +397,16 @@ impl Server {
                             json!({"id":owner.parse::<u64>().unwrap(),"login":"fixture-user"})
                         }
                         ("POST", "/v1/auth/github") => {
+                            remote.github_auth_requests += 1;
                             json!({"protocolVersion":1,"accessToken":"a".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-user"}})
+                        }
+                        ("POST", "/v1/auth/token") => {
+                            remote.token_auth_requests += 1;
+                            // Must report the same owner as every other endpoint here: the
+                            // server's vault-metadata-vs-session owner cross-check
+                            // (`validate_against_metadata`) would otherwise reject it as
+                            // `AccountMismatch`, regardless of which auth path was used.
+                            json!({"protocolVersion":1,"accessToken":"b".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-token-user"}})
                         }
                         ("GET", "/v1/me/vault") => match &remote.snapshot {
                             None => {
@@ -446,6 +466,7 @@ impl Server {
 
 struct Fixture {
     service: EncryptedSyncService,
+    marketplace: Arc<crate::marketplace::MarketplaceService>,
     data: Arc<Data>,
     vault: Arc<Vault>,
     root: std::path::PathBuf,
@@ -496,13 +517,15 @@ impl Fixture {
                 origin: server.origin.clone(),
                 github_client_id: CLIENT.into(),
             },
-            marketplace,
+            Arc::clone(&marketplace),
             local,
             data.clone(),
+            vault.clone(),
             events,
         );
         Self {
             service,
+            marketplace,
             data,
             vault,
             root,
@@ -528,6 +551,33 @@ impl Fixture {
                 "0".into(),
             )
             .await
+    }
+    async fn set_custom_token(&self, token: &str) {
+        self.vault
+            .write(
+                CredentialKey::new(
+                    CredentialNamespace::Application,
+                    None,
+                    crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new(token),
+            )
+            .await
+            .unwrap();
+    }
+    async fn custom_token(&self) -> Option<SecretValue> {
+        self.vault
+            .read(
+                CredentialKey::new(
+                    CredentialNamespace::Application,
+                    None,
+                    crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 }
 
@@ -1311,6 +1361,124 @@ async fn round2_sync_key_deletion_failure_must_not_prevent_account_sign_out() {
         "a sync key cleanup failure must still attempt ordinary account token removal"
     );
     assert_eq!(fixture.service.status().auth_state, AuthState::SignedOut);
+}
+
+#[tokio::test]
+async fn custom_token_sign_in_takes_priority_over_github_and_never_calls_github_auth() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    // Fixture::new already seeded a working GitHub marketplace token; a custom
+    // token must still win without ever touching the GitHub auth endpoint.
+    fixture.set_custom_token("fixture-custom-token").await;
+    let status = fixture.service.sign_in_with_custom_token().await.unwrap();
+    assert_eq!(status.auth_state, AuthState::SignedIn);
+    assert_eq!(status.account.unwrap().github_id, OWNER);
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.token_auth_requests, 1);
+    assert_eq!(
+        remote.github_auth_requests, 0,
+        "a configured custom token must win outright, never falling through to GitHub"
+    );
+}
+
+#[tokio::test]
+async fn sign_in_with_custom_token_fails_clearly_without_a_saved_token() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    assert_eq!(
+        fixture
+            .service
+            .sign_in_with_custom_token()
+            .await
+            .unwrap_err()
+            .message,
+        "sign_in_required"
+    );
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 0);
+}
+
+#[tokio::test]
+async fn custom_token_credential_change_forces_reconnect_not_stale_cache() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("token-a").await;
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 1);
+    // Same token, called again immediately: the cached connection is still
+    // valid and must not re-authenticate.
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 1);
+    // The token value changes underneath the cached connection: this must be
+    // detected and force a fresh exchange, not silently reuse the old session.
+    fixture.set_custom_token("token-b").await;
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 2);
+}
+
+#[tokio::test]
+async fn custom_server_origin_change_forces_reconnect_not_stale_cache() {
+    let first_server = Server::start().await;
+    let replacement_server = Server::start().await;
+    let fixture = Fixture::new(&first_server).await;
+    fixture.set_custom_token("fixture-custom-token").await;
+    fixture.prepare().await;
+    assert_eq!(
+        first_server.state.lock().unwrap().token_auth_requests,
+        1
+    );
+
+    fixture
+        .data
+        .set_custom_server_origin(Some(replacement_server.origin.clone()));
+    fixture.service.sign_in_with_custom_token().await.unwrap();
+
+    assert_eq!(
+        replacement_server
+            .state
+            .lock()
+            .unwrap()
+            .token_auth_requests,
+        1,
+        "changing the live server origin must not reuse the old transport"
+    );
+    assert_eq!(
+        fixture.service.status().service_origin,
+        replacement_server.origin
+    );
+}
+
+#[tokio::test]
+async fn sign_out_with_custom_token_forgets_only_the_custom_token_not_github() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("fixture-custom-token").await;
+    fixture.prepare().await;
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedIn);
+    fixture.service.sign_out().await.unwrap();
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedOut);
+    assert!(
+        fixture.custom_token().await.is_none(),
+        "sign_out must forget the custom token it authenticated with"
+    );
+    let github_token = fixture
+        .vault
+        .read(CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        github_token.is_some(),
+        "sign_out from a custom-token session must never delete an unrelated GitHub credential"
+    );
+    assert_eq!(
+        fixture
+            .marketplace
+            .read_access_token()
+            .await
+            .unwrap()
+            .expose_secret(),
+        "fixture-github-token",
+        "custom-token sign-out must not invalidate the unrelated Marketplace session"
+    );
 }
 
 #[path = "setup_prompt_tests.rs"]

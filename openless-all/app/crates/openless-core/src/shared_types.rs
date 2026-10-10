@@ -849,6 +849,12 @@ pub struct UserPreferences {
     /// saves can't wipe it.
     #[serde(default)]
     pub splash_seen_version: String,
+    /// Self-hosted encrypted-sync server origin (e.g. "https://sync.example.com/"),
+    /// overriding `DEFAULT_SYNC_SERVICE_ORIGIN`. `None` means use the default.
+    /// Validated against the same rules as the protocol's own `parse_origin`
+    /// (https-only, no userinfo/query/fragment, root path) before being saved.
+    #[serde(default)]
+    pub sync_custom_server_origin: Option<String>,
 }
 
 impl UserPreferences {
@@ -1130,6 +1136,8 @@ struct UserPreferencesWire {
     android_overlay_size_dp: u32,
     #[serde(default)]
     splash_seen_version: String,
+    #[serde(default)]
+    sync_custom_server_origin: Option<String>,
 }
 
 fn deserialize_selection_polish_hotkey<'de, D>(
@@ -1291,6 +1299,7 @@ impl Default for UserPreferencesWire {
             android_overlay_gesture_actions: None,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             splash_seen_version: prefs.splash_seen_version,
+            sync_custom_server_origin: prefs.sync_custom_server_origin,
         }
     }
 }
@@ -1506,6 +1515,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_overlay_size_dp,
             ),
             splash_seen_version: wire.splash_seen_version,
+            sync_custom_server_origin: wire.sync_custom_server_origin,
         })
     }
 }
@@ -1862,6 +1872,7 @@ impl Default for UserPreferences {
             android_overlay_gesture_actions: default_android_overlay_gesture_actions(),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             splash_seen_version: String::new(),
+            sync_custom_server_origin: None,
         }
     }
 }

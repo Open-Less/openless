@@ -44,6 +44,12 @@ export const ja: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '自前の同期サーバー（上級者向け）',
+    customServerOrigin: 'サーバーアドレス（https://...）',
+    customServerToken: 'サインイン Token',
+    customServerSave: '保存',
+    customServerHint:
+      '空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。',
     protocolTitle: 'クラウド同期の同意事項とプライバシー',
     protocolIntro:
       'OpenLess と開発者はプライバシーを尊重し、データの保護に取り組んでいます。続行する前に、以下をご確認ください。',
@@ -1299,7 +1305,7 @@ export const ja: typeof zhCN = {
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
+        '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',

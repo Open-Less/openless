@@ -487,6 +487,14 @@ struct ImeCommand {
     quick_note: bool,
     #[serde(default)]
     cloud: bool,
+    // Sent with "start" only: the editor's package and the text around the caret,
+    // snapshotted by the IME when recording begins.
+    #[serde(default)]
+    front_app: Option<String>,
+    #[serde(default)]
+    cursor_before: Option<String>,
+    #[serde(default)]
+    cursor_after: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -524,6 +532,22 @@ fn ime_command(json: &str) -> Result<(), String> {
                     );
                     return;
                 }
+                // Core owns the window budget and the envelope format; Kotlin only hands
+                // over the two sides of the caret. Metadata only in the log, never the text.
+                let cursor_context = openless_core::host_document::window_from_split(
+                    command.cursor_before.as_deref().unwrap_or_default(),
+                    command.cursor_after.as_deref().unwrap_or_default(),
+                    crate::host_document::DEFAULT_BUDGET_CHARS,
+                )
+                .map(|window| {
+                    log::info!(
+                        "[cursor-context] status=ok source=input_connection chars_before={} chars_after={} app={:?}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        command.front_app,
+                    );
+                    openless_core::prompts::cursor_context_input(window.before(), window.after())
+                });
                 let mut starting =
                     Box::pin(backend.start_dictation_with_options(DictationStartOptions {
                         insert_text: false,
@@ -532,6 +556,8 @@ fn ime_command(json: &str) -> Result<(), String> {
                         } else {
                             openless_core::DictationOutputTarget::ForegroundApp
                         },
+                        front_app: command.front_app.clone(),
+                        cursor_context,
                         ..Default::default()
                     }));
                 // The first poll reserves the Core session before any async preparation.

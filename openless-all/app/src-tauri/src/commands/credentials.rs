@@ -5,6 +5,7 @@ const LLM_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::LLM_TEMPERATUR
 const OMNI_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::OMNI_EXTRA_HEADERS_ACCOUNT;
 const OMNI_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::OMNI_TEMPERATURE_ACCOUNT;
 const MARKETPLACE_GITHUB_TOKEN_ACCOUNT: &str = "github.oauth_token";
+const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
 
 /// Tauri host adapter for the framework-independent core credential port.
 ///
@@ -368,6 +369,9 @@ fn read_vault_credential(
         (openless_core::CredentialNamespace::Marketplace, MARKETPLACE_GITHUB_TOKEN_ACCOUNT) => {
             CredentialsVault::get_marketplace_github_token()
         }
+        (openless_core::CredentialNamespace::Application, CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT) => {
+            CredentialsVault::get_cloud_sync_custom_token()
+        }
         (openless_core::CredentialNamespace::Application, _) => {
             return Err(invalid_credential_key(key));
         }
@@ -440,6 +444,13 @@ fn write_vault_credential(
                 CredentialsVault::remove_marketplace_github_token()
             } else {
                 CredentialsVault::set_marketplace_github_token(value)
+            }
+        }
+        (openless_core::CredentialNamespace::Application, CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT) => {
+            if value.trim().is_empty() {
+                CredentialsVault::remove_cloud_sync_custom_token()
+            } else {
+                CredentialsVault::set_cloud_sync_custom_token(value)
             }
         }
         (openless_core::CredentialNamespace::Application, _) => {
@@ -883,6 +894,7 @@ fn credential_key(
             openless_core::CredentialNamespace::Omni
         }
         MARKETPLACE_GITHUB_TOKEN_ACCOUNT => openless_core::CredentialNamespace::Marketplace,
+        CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT => openless_core::CredentialNamespace::Application,
         _ => {
             let parsed = parse_account(account)?;
             match parsed {

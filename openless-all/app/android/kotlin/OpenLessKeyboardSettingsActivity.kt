@@ -114,61 +114,46 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // Live 1:1 footprint + its controlling sliders stay docked under the
-        // scrollable settings so dragging always updates a visible silhouette
-        // without scrolling the form away.
-        var heightDp = prefs.getInt(
-            OpenLessImeService.PREF_KEYBOARD_HEIGHT_DP,
-            OpenLessImeService.DEFAULT_KEYBOARD_HEIGHT_DP,
-        ).coerceIn(OpenLessImeService.MIN_KEYBOARD_HEIGHT_DP, OpenLessImeService.MAX_KEYBOARD_HEIGHT_DP)
-        var raiseDp = prefs.getInt(
-            OpenLessImeService.PREF_KEYBOARD_RAISE_DP,
-            OpenLessImeService.DEFAULT_KEYBOARD_RAISE_DP,
-        ).coerceIn(OpenLessImeService.MIN_KEYBOARD_RAISE_DP, OpenLessImeService.MAX_KEYBOARD_RAISE_DP)
-        val footprint = buildKeyboardFootprintPreview()
-        fun refreshFootprint() = footprint.setSizes(heightDp, raiseDp)
-
-        val appearanceDock = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(4))
-            setBackgroundColor(tone(Color.rgb(30, 30, 30), Color.rgb(245, 245, 247)))
+        // Height/raise are adjusted in their own bottom sheet (see
+        // showKeyboardSizeDialog()), not docked under this form: the 1:1
+        // footprint is as tall as the keyboard itself, so keeping it on this
+        // page permanently left everything above it only a sliver to scroll
+        // in. This row just names the current values and opens the sheet.
+        content.addView(sectionLabel(ui("键盘外观", "Keyboard appearance")))
+        val sizeSummary = TextView(this).apply {
+            text = keyboardSizeSummary()
+            textSize = 14f
+            setTextColor(tone(Color.rgb(150, 150, 150), Color.rgb(110, 110, 115)))
         }
-        appearanceDock.addView(sectionLabel(ui("键盘外观（下方为 1:1 预览）", "Keyboard appearance (1:1 preview below)")))
-        appearanceDock.addView(
-            sliderRow(
-                label = ui("按键区高度（拉伸）", "Key area height (stretch)"),
-                min = OpenLessImeService.MIN_KEYBOARD_HEIGHT_DP,
-                max = OpenLessImeService.MAX_KEYBOARD_HEIGHT_DP,
-                current = heightDp,
-                onChange = { value ->
-                    heightDp = value
-                    prefs.edit().putInt(OpenLessImeService.PREF_KEYBOARD_HEIGHT_DP, value).apply()
-                    refreshFootprint()
-                },
-            ),
+        val sizeRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, dp(6))
+            isClickable = true
+            setOnClickListener { showKeyboardSizeDialog { sizeSummary.text = keyboardSizeSummary() } }
+        }
+        sizeRow.addView(
+            TextView(this).apply {
+                text = ui("键盘高度", "Keyboard height")
+                textSize = 15f
+                setTextColor(tone(Color.rgb(220, 220, 220), Color.rgb(40, 40, 44)))
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
-        appearanceDock.addView(
-            sliderRow(
-                label = ui("整体抬高（底部留白）", "Raise (bottom gap)"),
-                min = OpenLessImeService.MIN_KEYBOARD_RAISE_DP,
-                max = OpenLessImeService.MAX_KEYBOARD_RAISE_DP,
-                current = raiseDp,
-                onChange = { value ->
-                    raiseDp = value
-                    prefs.edit().putInt(OpenLessImeService.PREF_KEYBOARD_RAISE_DP, value).apply()
-                    refreshFootprint()
-                },
-            ),
+        sizeRow.addView(sizeSummary)
+        sizeRow.addView(
+            TextView(this).apply {
+                text = "›"
+                textSize = 18f
+                setTextColor(tone(Color.rgb(150, 150, 150), Color.rgb(110, 110, 115)))
+                setPadding(dp(8), 0, 0, 0)
+            },
         )
-        root.addView(
-            appearanceDock,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        content.addView(
+            sizeRow,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(14)
+            },
         )
-        root.addView(
-            footprint.root,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-        )
-        refreshFootprint()
 
         // Paired with onCreate()'s setDecorFitsSystemWindows(false): now that
         // the window draws edge-to-edge, this restores the padding the
@@ -758,9 +743,214 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         setPadding(0, 0, 0, dp(8))
     }
 
+    private fun keyboardSizeSummary(): String {
+        val heightDp = OpenLessImeService.panelHeightDp(this)
+        val raiseDp = OpenLessImeService.raiseHeightDp(this)
+        return ui("按键区 ${heightDp}dp · 抬高 ${raiseDp}dp", "Keys ${heightDp}dp · raise ${raiseDp}dp")
+    }
+
     /**
-     * Full-width 1:1 IME footprint at the bottom of settings. Key-area block
-     * uses the stretch height; raise strip is empty lift space below keys.
+     * Bottom sheet for the key-area height and raise: two sliders over a
+     * 1:1 footprint that sits flush with the bottom of the screen — exactly
+     * where the real keyboard will. Values save as they change, same as
+     * every other row on this page; onClosed lets the caller refresh
+     * whatever it shows of them.
+     */
+    private fun showKeyboardSizeDialog(onClosed: () -> Unit) {
+        var heightDp = OpenLessImeService.panelHeightDp(this)
+        var raiseDp = OpenLessImeService.raiseHeightDp(this)
+        val footprint = buildKeyboardFootprintPreview()
+        fun save() {
+            prefs.edit()
+                .putInt(OpenLessImeService.PREF_KEYBOARD_HEIGHT_DP, heightDp)
+                .putInt(OpenLessImeService.PREF_KEYBOARD_RAISE_DP, raiseDp)
+                .apply()
+            footprint.setSizes(heightDp, raiseDp)
+        }
+        val heightSlider = steppedSliderRow(
+            label = ui("按键区高度", "Key area height"),
+            min = OpenLessImeService.MIN_KEYBOARD_HEIGHT_DP,
+            max = OpenLessImeService.MAX_KEYBOARD_HEIGHT_DP,
+            current = heightDp,
+            onChange = { value ->
+                heightDp = value
+                save()
+            },
+        )
+        val raiseSlider = steppedSliderRow(
+            label = ui("底部抬高", "Raise from bottom"),
+            min = OpenLessImeService.MIN_KEYBOARD_RAISE_DP,
+            max = OpenLessImeService.MAX_KEYBOARD_RAISE_DP,
+            current = raiseDp,
+            onChange = { value ->
+                raiseDp = value
+                save()
+            },
+        )
+
+        val dialog = android.app.Dialog(this)
+        val linkColor = tone(Color.rgb(94, 234, 212), Color.rgb(15, 118, 110))
+        val titleRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(12))
+        }
+        titleRow.addView(
+            TextView(this).apply {
+                text = ui("键盘高度", "Keyboard height")
+                textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(tone(Color.WHITE, Color.rgb(30, 30, 34)))
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        titleRow.addView(
+            TextView(this).apply {
+                text = ui("恢复默认", "Reset")
+                textSize = 14f
+                setTextColor(linkColor)
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                isClickable = true
+                setOnClickListener {
+                    heightSlider.set(OpenLessImeService.DEFAULT_KEYBOARD_HEIGHT_DP)
+                    raiseSlider.set(OpenLessImeService.DEFAULT_KEYBOARD_RAISE_DP)
+                }
+            },
+        )
+        titleRow.addView(
+            TextView(this).apply {
+                text = ui("完成", "Done")
+                textSize = 14f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(linkColor)
+                setPadding(dp(10), dp(6), 0, dp(6))
+                isClickable = true
+                setOnClickListener { dialog.dismiss() }
+            },
+        )
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(2))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(tone(Color.rgb(30, 30, 30), Color.rgb(245, 245, 247)))
+                val radius = dp(16).toFloat()
+                cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+            }
+            addView(
+                View(this@OpenLessKeyboardSettingsActivity).apply {
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(tone(Color.rgb(90, 90, 90), Color.rgb(200, 200, 205)))
+                        cornerRadius = dp(2).toFloat()
+                    }
+                },
+                LinearLayout.LayoutParams(dp(36), dp(4)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(10)
+                },
+            )
+            addView(titleRow)
+            addView(heightSlider.view)
+            addView(raiseSlider.view)
+        }
+        val sheet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(controls, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(footprint.root, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        footprint.setSizes(heightDp, raiseDp)
+
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(sheet)
+        dialog.setOnDismissListener { onClosed() }
+        dialog.window?.let { window ->
+            // The stock dialog background carries its own inset and rounded
+            // card; clearing it is what lets the sheet span the full width
+            // and sit flush with the bottom edge.
+            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            window.setGravity(Gravity.BOTTOM)
+            window.setWindowAnimations(android.R.style.Animation_InputMethod)
+        }
+        dialog.show()
+    }
+
+    private class SteppedSlider(val view: View, val set: (Int) -> Unit)
+
+    /**
+     * Slider row for the keyboard-size sheet: the value reads as a plain
+     * "300 dp" on the right, and −/+ buttons give the single-dp nudges a
+     * drag can't hit reliably. `set` moves the slider from code (恢复默认)
+     * and reports through onChange exactly like a drag would.
+     */
+    private fun steppedSliderRow(label: String, min: Int, max: Int, current: Int, onChange: (Int) -> Unit): SteppedSlider {
+        var value = current.coerceIn(min, max)
+        val textColor = tone(Color.rgb(220, 220, 220), Color.rgb(40, 40, 44))
+        val valueView = TextView(this).apply {
+            text = "$value dp"
+            textSize = 15f
+            setTextColor(textColor)
+        }
+        val seekBar = SeekBar(this)
+        seekBar.max = (max - min).coerceAtLeast(1)
+        seekBar.progress = value - min
+        fun update(next: Int, fromSeekBar: Boolean) {
+            val clamped = next.coerceIn(min, max)
+            if (clamped == value) return
+            value = clamped
+            valueView.text = "$value dp"
+            if (!fromSeekBar) seekBar.progress = value - min
+            onChange(value)
+        }
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) update(progress + min, fromSeekBar = true)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        fun stepButton(symbol: String, delta: Int): View = TextView(this).apply {
+            text = symbol
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setTextColor(textColor)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)))
+            }
+            isClickable = true
+            setOnClickListener { update(value + delta, fromSeekBar = false) }
+        }
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(
+            TextView(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        header.addView(valueView)
+        val controls = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        controls.addView(stepButton("−", -1), LinearLayout.LayoutParams(dp(34), dp(34)))
+        controls.addView(seekBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        controls.addView(stepButton("+", 1), LinearLayout.LayoutParams(dp(34), dp(34)))
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(14)
+            }
+            addView(header)
+            addView(controls)
+        }
+        return SteppedSlider(row, set = { update(it, fromSeekBar = false) })
+    }
+
+    /**
+     * Full-width 1:1 IME footprint at the bottom of the keyboard-size sheet.
+     * Key-area block uses the stretch height; raise strip is empty lift
+     * space below keys.
      */
     private fun buildKeyboardFootprintPreview(): KeyboardFootprintPreview {
         val caption = TextView(this).apply {
@@ -841,8 +1031,8 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             )
             raiseBlock.visibility = if (raiseDp > 0) View.VISIBLE else View.GONE
             caption.text = ui(
-                "实时预览 · 按键区 ${heightDp}dp · 抬高 ${raiseDp}dp · 共 ${heightDp + raiseDp}dp",
-                "Live preview · keys ${heightDp}dp · raise ${raiseDp}dp · total ${heightDp + raiseDp}dp",
+                "1:1 预览 · 键盘共占屏幕底部 ${heightDp + raiseDp}dp",
+                "1:1 preview · keyboard takes the bottom ${heightDp + raiseDp}dp",
             )
             root.requestLayout()
         }
