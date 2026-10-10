@@ -9,9 +9,9 @@ use std::time::Instant;
 use futures_util::future::BoxFuture;
 use openless_core::{
     ActiveRecording, AudioConsumer as CoreAudioConsumer, AudioRecorder, AudioRecorderRouter,
-    BackendError, BackendErrorCode, DictationContext, DictationEngine, EditObservationAdapter,
-    EditObservationSink, ExternalAudioRecorder, HostAction, HostActions, InsertOutcome,
-    InsertWriteResult, RecordingArchive, RecordingProgressSink, SessionId,
+    BackendError, BackendErrorCode, CapturedTextTarget, DictationContext, DictationEngine,
+    EditObservationAdapter, EditObservationSink, ExternalAudioRecorder, HostAction, HostActions,
+    InsertOutcome, InsertWriteResult, RecordingArchive, RecordingProgressSink, SessionId,
     TextInserter as CoreTextInserter, TextInsertionSession, TextPolisher, TextStreamChunk,
     TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
 };
@@ -258,7 +258,7 @@ pub(crate) fn backend_dependencies(
     }
     dependencies.services.platform =
         Arc::new(TauriPlatformApi::new(Arc::clone(&app), hotkey_status));
-    dependencies.services.host_context = Arc::new(TauriHostContextAdapter);
+    dependencies.services.host_context = Arc::new(TauriHostContextAdapter::default());
     dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter::default());
     dependencies.local_asr_runtime = Some(local_asr_runtime);
     #[cfg(not(mobile))]
@@ -2969,11 +2969,15 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn capture_target(&self) -> Option<Arc<dyn CoreTextInserter>> {
-        Some(Arc::new(Self {
-            insertion_target: Some(crate::selection::capture_selection_insertion_target()),
-            ..self.clone()
-        }))
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
+        let insertion_target = crate::selection::capture_selection_insertion_target();
+        Some(CapturedTextTarget {
+            inserter: Arc::new(Self {
+                insertion_target: Some(insertion_target.clone()),
+                ..self.clone()
+            }),
+            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
+        })
     }
 
     fn begin(
@@ -3662,23 +3666,81 @@ fn map_insert_status(status: crate::types::InsertStatus) -> Result<InsertOutcome
     }
 }
 
-struct TauriHostContextAdapter;
+#[derive(Default)]
+struct TauriHostContextAdapter {
+    target: Option<crate::selection::SelectionInsertionTarget>,
+}
+
+impl TauriHostContextAdapter {
+    fn for_target(target: crate::selection::SelectionInsertionTarget) -> Self {
+        Self {
+            target: Some(target),
+        }
+    }
+}
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
     fn capture(
         &self,
         include_cursor: bool,
     ) -> BoxFuture<'static, Result<openless_core::HostContextCapture, BackendError>> {
+        let target = self.target.clone();
+
         Box::pin(async move {
-            let front_app = crate::coordinator::capture_frontmost_app();
+            let front_app = match target.as_ref() {
+                Some(target) => crate::selection::front_app_for_target(target),
+                None => crate::coordinator::capture_frontmost_app(),
+            };
+
             let cursor_context = if include_cursor {
-                crate::host_document::read_around_cursor(crate::host_document::DEFAULT_BUDGET_CHARS)
-                    .await
-                    .map(|window| {
-                        let before = window.text.chars().take(window.cursor).collect::<String>();
-                        let after = window.text.chars().skip(window.cursor).collect::<String>();
-                        openless_core::prompts::cursor_context_input(&before, &after)
-                    })
+                let started = std::time::Instant::now();
+                let window = match target {
+                    Some(target) => {
+                        #[cfg(any(target_os = "windows", target_os = "macos"))]
+                        {
+                            crate::host_document::read_around_cursor_for_target(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                                target,
+                            )
+                            .await
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            let _ = target;
+                            crate::host_document::read_around_cursor(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                            )
+                            .await
+                        }
+                    }
+                    None => {
+                        crate::host_document::read_around_cursor(
+                            crate::host_document::DEFAULT_BUDGET_CHARS,
+                        )
+                        .await
+                    }
+                };
+
+                // Metadata only — never the document body (design doc §18/§19). Do not include
+                // the foreground window title here; Windows titles can contain document paths,
+                // URLs, subjects, customer names, or account identifiers.
+                match &window {
+                    Some(window) => log::info!(
+                        "[cursor-context] status=ok chars_before={} chars_after={} elapsed_ms={}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        started.elapsed().as_millis(),
+                    ),
+                    None => log::info!(
+                        "[cursor-context] status=none elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    ),
+                }
+                window.map(|window| {
+                    let before = window.text.chars().take(window.cursor).collect::<String>();
+                    let after = window.text.chars().skip(window.cursor).collect::<String>();
+                    openless_core::prompts::cursor_context_input(&before, &after)
+                })
             } else {
                 None
             };

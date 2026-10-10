@@ -183,8 +183,8 @@ pub mod contract {
     pub use crate::{
         require_backend_contract_version, ActivityDay, AudioConsumer, AudioRecorder, BackendConfig,
         BackendDependencies, BackendError, BackendErrorCode, BackendEvent, BackendEventKind,
-        BackendSnapshot, CliDispatchOutcome, CliIntent, Clock, CorrectionRule, CredentialKey,
-        CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
+        BackendSnapshot, CapturedTextTarget, CliDispatchOutcome, CliIntent, Clock, CorrectionRule,
+        CredentialKey, CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
         DictationContext, DictationEngine, DictationHotkeyDispatchOptions, DictationHotkeyEdge,
         DictationInsertStatus, DictationOutputTarget, DictationPhase, DictationResult,
         DictationSession, DictationStartOptions, DictationStateSnapshot, DictionaryEntry,
@@ -289,14 +289,15 @@ pub use model_store::{
 };
 pub use ports::PreparedTranscription;
 pub use ports::{
-    ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, DirectoryResourceResolver,
-    EditObservationAdapter, EditObservationSink, EngineFailure, EngineFailureStage, EngineProgress,
-    EngineProgressSink, EngineResult, EngineStage, HostAction, HostActions, HostContextAdapter,
-    HostContextCapture, InsertOutcome, InsertWriteResult, NoopEditObservationAdapter,
-    NoopHostActions, NoopHostContextAdapter, PolishOutput, RecordingArchive, RecordingControlSink,
-    RecordingEvent, RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession,
-    TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine,
-    TranscriptionSession, UnsupportedTextInserter, VoiceCapture,
+    ActiveRecording, AudioConsumer, AudioRecorder, CapturedTextTarget, DictationEngine,
+    DirectoryResourceResolver, EditObservationAdapter, EditObservationSink, EngineFailure,
+    EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult, EngineStage, HostAction,
+    HostActions, HostContextAdapter, HostContextCapture, InsertOutcome, InsertWriteResult,
+    NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter, PolishOutput,
+    RecordingArchive, RecordingControlSink, RecordingEvent, RecordingProgressSink,
+    ResourceResolver, TextInserter, TextInsertionSession, TextPolisher, TextStreamChunk,
+    TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    UnsupportedTextInserter, VoiceCapture,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{

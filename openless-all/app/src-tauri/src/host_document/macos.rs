@@ -288,14 +288,35 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
 /// `gate` carries the caller-filled `secure_input` / `bundle_id`;
 /// [`focused_element_passing_the_gate`] fills in `role` / `subrole` and makes
 /// the final decision.
-pub(super) fn read_around_cursor_blocking(budget_chars: usize, gate: GateInputs) -> ReadOutcome {
+pub(super) fn read_around_cursor_blocking(
+    budget_chars: usize,
+    gate: GateInputs,
+    target: Option<crate::selection::SelectionInsertionTarget>,
+) -> ReadOutcome {
     unsafe {
+        if let Some(target) = target.as_ref() {
+            if !crate::selection::selection_insertion_target_is_current(target) {
+                return ReadOutcome::Unavailable("insertion target changed before capture");
+            }
+        }
         let focused = match focused_element_passing_the_gate(gate) {
             GatedElement::Ready(el) => el,
             GatedElement::Blocked(reason) => return ReadOutcome::Blocked(reason),
             GatedElement::Unavailable(why) => return ReadOutcome::Unavailable(why),
         };
+        if let Some(target) = target.as_ref() {
+            if !crate::selection::selection_insertion_target_is_current(target) {
+                CFRelease(focused as CFTypeRef);
+                return ReadOutcome::Unavailable("insertion target changed before AX read");
+            }
+        }
         let outcome = read_document(focused, budget_chars);
+        if let Some(target) = target.as_ref() {
+            if !crate::selection::selection_insertion_target_is_current(target) {
+                CFRelease(focused as CFTypeRef);
+                return ReadOutcome::Unavailable("insertion target changed during capture");
+            }
+        }
         CFRelease(focused as CFTypeRef);
         outcome
     }

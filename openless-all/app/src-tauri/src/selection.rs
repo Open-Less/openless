@@ -78,6 +78,8 @@ struct WindowsSelectionTarget {
 struct MacosSelectionTarget {
     /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
     front_app: Option<String>,
+    /// Bundle identifier captured with the foreground app, used by the host-document safety gate.
+    bundle_id: Option<String>,
     /// Foreground app pid at capture time — used to return focus to the original app after the
     /// preview is confirmed.
     front_app_pid: Option<i32>,
@@ -339,10 +341,18 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 
     #[cfg(target_os = "macos")]
     {
+        let (front_app_name, bundle_id, front_app_pid) = current_front_app_snapshot();
+        let front_app = match (front_app_name.as_deref(), bundle_id.as_deref()) {
+            (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
+            (Some(name), None) => Some(name.to_string()),
+            (None, Some(bundle)) => Some(bundle.to_string()),
+            (None, None) => None,
+        };
         return SelectionInsertionTarget {
             macos: Some(MacosSelectionTarget {
-                front_app: current_front_app(),
-                front_app_pid: current_front_app_pid(),
+                front_app,
+                bundle_id,
+                front_app_pid,
             }),
         };
     }
@@ -374,6 +384,36 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // 移动端不提供选区润色；此处保留非桌面平台的类型兜底。
+        let _ = target;
+        true
+    }
+}
+
+/// Check that the foreground/focused target fingerprint has not changed since capture.
+/// Windows callers use this as a document-read fence, before and after synchronous UIA calls.
+pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionTarget) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(captured) = target.windows else {
+            return false;
+        };
+        return capture_windows_selection_target().as_ref() == Some(&captured);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let Some(captured_pid) = target
+            .macos
+            .as_ref()
+            .and_then(|captured| captured.front_app_pid)
+        else {
+            return false;
+        };
+        return current_front_app_pid() == Some(captured_pid);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
         let _ = target;
         true
     }
@@ -1267,6 +1307,39 @@ mod windows_paste {
 
 // ─────────────────────────── front-app label ───────────────────────────
 
+/// Read the frontmost application identity from one `NSRunningApplication` snapshot.
+///
+/// The name, bundle identifier, and pid must come from the same application object: querying
+/// `NSWorkspace.frontmostApplication` separately for each field can combine metadata from two apps
+/// if focus changes between calls.
+#[cfg(target_os = "macos")]
+fn current_front_app_snapshot() -> (Option<String>, Option<String>, Option<i32>) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        let Some(cls) = AnyClass::get("NSWorkspace") else {
+            return (None, None, None);
+        };
+        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
+        if workspace.is_null() {
+            return (None, None, None);
+        }
+        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return (None, None, None);
+        }
+        let name_obj: *mut AnyObject = msg_send![app, localizedName];
+        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
+        let pid: i32 = msg_send![app, processIdentifier];
+        (
+            ns_string_to_rust(name_obj),
+            ns_string_to_rust(bundle_obj),
+            (pid > 0).then_some(pid),
+        )
+    }
+}
+
 /// The foreground app's **structured** identity: `(localizedName, bundleIdentifier)`.
 ///
 /// [`current_front_app`]'s `"Safari (com.apple.Safari)"` display string is for the LLM prompt;
@@ -1278,25 +1351,8 @@ mod windows_paste {
 /// used to carry a near-verbatim duplicate and now calls this function.
 #[cfg(target_os = "macos")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let Some(cls) = AnyClass::get("NSWorkspace") else {
-            return (None, None);
-        };
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return (None, None);
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return (None, None);
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        (ns_string_to_rust(name_obj), ns_string_to_rust(bundle_obj))
-    }
+    let (name, bundle, _) = current_front_app_snapshot();
+    (name, bundle)
 }
 
 /// The bundle id of **one process** — not "who is frontmost" but "who is this pid".
@@ -1328,31 +1384,66 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
+    unsafe {
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let copied = GetWindowTextW(hwnd, &mut buf);
+        if copied <= 0 {
+            return None;
+        }
+        let title = String::from_utf16_lossy(&buf[..copied as usize]);
+        (!title.is_empty()).then_some(title)
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    use windows::Win32::Foundation::HWND;
+
+    target
+        .windows
+        .as_ref()
+        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    target
+        .macos
+        .as_ref()
+        .and_then(|captured| captured.front_app.clone())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn bundle_id_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    target
+        .macos
+        .as_ref()
+        .and_then(|captured| captured.bundle_id.clone())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
     // Windows has no bundle id concept; the window title is the only identity we get for free.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
             return (None, None);
         }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return (None, None);
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return (None, None);
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            (None, None)
-        } else {
-            (Some(title), None)
-        }
+        (windows_window_title(hwnd), None)
     }
 }
 
@@ -1393,22 +1484,7 @@ unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option
 
 #[cfg(target_os = "macos")]
 fn current_front_app_pid() -> Option<i32> {
-    use objc2::msg_send;
-    use objc2::runtime::AnyClass;
-
-    unsafe {
-        let cls = AnyClass::get("NSWorkspace")?;
-        let workspace: *mut objc2::runtime::AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return None;
-        }
-        let app: *mut objc2::runtime::AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return None;
-        }
-        let pid: i32 = msg_send![app, processIdentifier];
-        (pid > 0).then_some(pid)
-    }
+    current_front_app_snapshot().2
 }
 
 #[cfg(test)]

@@ -35,6 +35,14 @@ pub struct HostContextCapture {
     pub cursor_context: Option<String>,
 }
 
+/// The native destination and host-context reader captured from one foreground-target snapshot.
+/// Keeping the two adapters together prevents an asynchronous dictation start from reading
+/// context from a different application than the one that will receive the insertion.
+pub struct CapturedTextTarget {
+    pub inserter: Arc<dyn TextInserter>,
+    pub host_context: Arc<dyn HostContextAdapter>,
+}
+
 pub trait HostContextAdapter: Send + Sync {
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
@@ -598,10 +606,10 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
-    /// Freeze the native destination before context or credentials can await.
-    /// Only capture identity here; input-source changes belong to `begin` and
-    /// its existing cancellation cleanup. Target-independent adapters use None.
-    fn capture_target(&self) -> Option<Arc<dyn TextInserter>> {
+    /// Freeze the native destination and its matching host-context reader before context or
+    /// credentials can await. Only capture identity here; input-source changes belong to `begin`
+    /// and its existing cancellation cleanup. Target-independent adapters use None.
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
         None
     }
 

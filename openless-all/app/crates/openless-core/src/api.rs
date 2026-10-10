@@ -25,8 +25,8 @@ use crate::events::{
 };
 use crate::ports::{
     ActiveRecording, AudioConsumer, CapturedPcm, EditObservationSink, EngineFailureStage,
-    EngineProgress, EngineProgressSink, EngineStage, HostAction, InsertOutcome, TextInserter,
-    TextInsertionSession, TextStreamChunk, TextStreamSink, TranscriptionSession,
+    EngineProgress, EngineProgressSink, EngineStage, HostAction, HostContextAdapter, InsertOutcome,
+    TextInserter, TextInsertionSession, TextStreamChunk, TextStreamSink, TranscriptionSession,
 };
 use crate::shared_types::{
     CredentialsStatus, PendingCorrection, UserPreferences, LEARNED_VOCAB_NOTE,
@@ -121,6 +121,7 @@ struct DictationReservation {
     session_id: SessionId,
     resources: Arc<crate::voice_session::VoiceResourceHold>,
     inserter: Arc<dyn TextInserter>,
+    host_context: Arc<dyn HostContextAdapter>,
 }
 
 /// Core-owned audio-to-Agent session shared by native hosts.
@@ -5589,12 +5590,22 @@ impl OpenLessBackend {
             crate::voice_session::VoiceSessionKind::Dictation,
         )?;
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
-        // Freeze the destination before context/credential awaits or feedback
-        // can change foreground focus. No native preparation happens yet.
-        let inserter = insert_text
-            .then(|| self.deps.text_inserter.capture_target())
-            .flatten()
-            .unwrap_or_else(|| Arc::clone(&self.deps.text_inserter));
+        // Freeze the destination and its matching host-context reader before context/credential
+        // awaits or feedback can change foreground focus. No native preparation happens yet.
+        let (inserter, host_context) = if insert_text {
+            match self.deps.text_inserter.capture_target() {
+                Some(captured) => (captured.inserter, captured.host_context),
+                None => (
+                    Arc::clone(&self.deps.text_inserter),
+                    Arc::clone(&self.deps.services.host_context),
+                ),
+            }
+        } else {
+            (
+                Arc::clone(&self.deps.text_inserter),
+                Arc::clone(&self.deps.services.host_context),
+            )
+        };
         self.disarm_edit_observation();
         // Context capture can await AX, a keyring, or another host service.
         // Publish ownership before that first await so Esc/stop see Starting
@@ -5623,6 +5634,7 @@ impl OpenLessBackend {
             session_id,
             resources: starting_resources,
             inserter,
+            host_context,
         })
     }
 
@@ -5644,6 +5656,7 @@ impl OpenLessBackend {
             session_id,
             resources: starting_resources,
             inserter,
+            host_context,
         } = reservation;
         if options.output_target == DictationOutputTarget::CloudNote {
             if let Err(error) = self.set_dictation_cloud_note(session_id, true) {
@@ -5652,7 +5665,11 @@ impl OpenLessBackend {
             }
         }
         let context = match self
-            .capture_dictation_context(&options, DictationContextPurpose::Dictation)
+            .capture_dictation_context_with_host(
+                &options,
+                DictationContextPurpose::Dictation,
+                host_context.as_ref(),
+            )
             .await
         {
             Ok(context) => Arc::new(context),
@@ -6839,6 +6856,20 @@ impl OpenLessBackend {
         options: &DictationStartOptions,
         purpose: DictationContextPurpose,
     ) -> Result<DictationContext, BackendError> {
+        self.capture_dictation_context_with_host(
+            options,
+            purpose,
+            self.deps.services.host_context.as_ref(),
+        )
+        .await
+    }
+
+    async fn capture_dictation_context_with_host(
+        &self,
+        options: &DictationStartOptions,
+        purpose: DictationContextPurpose,
+        host_context: &dyn HostContextAdapter,
+    ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
@@ -6850,10 +6881,7 @@ impl OpenLessBackend {
         if captured_options.front_app.is_none()
             || (preferences.cursor_context_enabled && captured_options.cursor_context.is_none())
         {
-            match self
-                .deps
-                .services
-                .host_context
+            match host_context
                 .capture(preferences.cursor_context_enabled)
                 .await
             {

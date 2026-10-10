@@ -7,9 +7,9 @@ use std::sync::{
     mpsc, Arc, OnceLock,
 };
 use std::time::{Duration, Instant};
-use windows::core::{implement, Interface, Result, PWSTR, VARIANT};
+use windows::core::{implement, Interface, Result, BSTR, PWSTR, VARIANT};
 use windows::Win32::{
-    Foundation::{CloseHandle, HWND},
+    Foundation::{CloseHandle, BOOL, HWND},
     System::{
         Com::{
             CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -451,6 +451,37 @@ pub(super) fn spawn_edit_watcher(
     Some(stop)
 }
 
+/// Sensitive process name fragments (password managers, terminals). Matched against the
+/// lowercased executable filename only (not the full path), substring match.
+///
+/// Pure function — no COM, so it is unit-testable without a live UIA element. The live lookup
+/// is [`allowed_process`], shared by the edit watcher and the cursor-context reader so both
+/// paths answer identically (see `openless-core`'s equivalent `SENSITIVE_BUNDLE_PREFIXES` note
+/// on macOS: one ungated path means no gate).
+const BLOCKED_PROCESS_NAME_FRAGMENTS: &[&str] = &[
+    "keepass",
+    "1password",
+    "bitwarden",
+    "lastpass",
+    "dashlane",
+    "windowsterminal",
+    "powershell",
+    "pwsh",
+    "cmd.exe",
+    "conhost",
+    "mintty",
+    "wezterm",
+    "alacritty",
+    "putty",
+];
+
+fn is_blocked_process_name(executable_name: &str) -> bool {
+    let lowered = executable_name.to_lowercase();
+    BLOCKED_PROCESS_NAME_FRAGMENTS
+        .iter()
+        .any(|blocked| lowered.contains(blocked))
+}
+
 unsafe fn allowed_process(element: &IUIAutomationElement) -> Result<bool> {
     let pid = element.CurrentProcessId()? as u32;
     if pid == std::process::id() {
@@ -467,26 +498,9 @@ unsafe fn allowed_process(element: &IUIAutomationElement) -> Result<bool> {
     );
     let _ = CloseHandle(process);
     result?;
-    let path = String::from_utf16_lossy(&buffer[..len as usize]).to_lowercase();
+    let path = String::from_utf16_lossy(&buffer[..len as usize]);
     let name = path.rsplit(['/', '\\']).next().unwrap_or("");
-    Ok(![
-        "keepass",
-        "1password",
-        "bitwarden",
-        "lastpass",
-        "dashlane",
-        "windowsterminal",
-        "powershell",
-        "pwsh",
-        "cmd.exe",
-        "conhost",
-        "mintty",
-        "wezterm",
-        "alacritty",
-        "putty",
-    ]
-    .iter()
-    .any(|blocked| name.contains(blocked)))
+    Ok(!is_blocked_process_name(name))
 }
 
 unsafe fn read_text(element: &IUIAutomationElement) -> Result<String> {
@@ -596,4 +610,352 @@ unsafe fn observe(request: &Request) -> Result<()> {
         let _ = uia.RemovePropertyChangedEventHandler(&element, &property);
     }
     result
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cursor context reader
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A separate, read-only path from the edit watcher above: `read_text()` / `observe()`
+// serve insertion-delivery checks and local edit learning (full document, never leaves the
+// device). This path serves LLM cursor context — it only ever fetches a bounded span around
+// the caret, and the result may be sent to the configured LLM provider, so it goes through
+// its own safety gate ([`allowed_process`] + `CurrentIsPassword`) before a single UIA text
+// call is made. See `windows_cursor_context开发方案.md` §4.
+
+/// Outcome of locating a usable caret [`IUIAutomationTextRange`].
+enum CaretLookup {
+    /// A zero-length (collapsed) range at the insertion point, tagged with which pattern
+    /// produced it (diagnostic only — never logged with document content).
+    Found(IUIAutomationTextRange, &'static str),
+    /// `TextPattern::GetSelection()` fallback found a real (non-collapsed) selection. Per
+    /// §8 of the design doc, the first version never guesses which end is the caret —
+    /// "selection rewrite" is a separate future feature, not folded into dictation context.
+    NonCollapsedSelection,
+    Unavailable(&'static str),
+}
+
+/// Finds the caret as a zero-length text range. **Only callable in a `spawn_blocking`
+/// context** (every call here is a synchronous COM round-trip).
+///
+/// Priority, matching §5/§8 of the design doc:
+/// 1. `IUIAutomationTextPattern2::GetCaretRange()`, only when `isActive == TRUE` — an inactive
+///    caret is unusable and short-circuits to `Unavailable` without trying the fallback (an
+///    inactive caret on this element is unlikely to become valid by asking a different pattern).
+/// 2. `IUIAutomationTextPattern::GetSelection()`, used only when it is exactly one collapsed
+///    range — this is the compatibility path for controls without `TextPattern2`.
+/// 3. Neither pattern exists (including controls that only expose `ValuePattern`, see §9):
+///    `Unavailable`. **Never** derived from `ValuePattern::CurrentValue()` — that pattern
+///    cannot report a caret offset, and guessing one (e.g. end-of-value) would silently inject
+///    wrong context when the user is editing mid-document.
+unsafe fn find_caret_range(element: &IUIAutomationElement) -> CaretLookup {
+    if let Ok(pattern2) =
+        element.GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
+    {
+        let mut is_active = BOOL(0);
+        match pattern2.GetCaretRange(&mut is_active) {
+            Ok(range) if is_active.as_bool() => return CaretLookup::Found(range, "textPattern2"),
+            Ok(_) => return CaretLookup::Unavailable("caret is not active"),
+            // GetCaretRange itself failed even though the pattern exists; fall through and
+            // try the TextPattern/GetSelection compatibility path below.
+            Err(_) => {}
+        }
+    }
+
+    let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+    else {
+        let has_value_only = element
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .is_ok();
+        return CaretLookup::Unavailable(if has_value_only {
+            "focused control exposes value but no caret text range"
+        } else {
+            "no caret-capable text pattern on focused element"
+        });
+    };
+    let Ok(selection) = pattern.GetSelection() else {
+        return CaretLookup::Unavailable("GetSelection failed");
+    };
+    let Ok(count) = selection.Length() else {
+        return CaretLookup::Unavailable("selection length unavailable");
+    };
+    if count != 1 {
+        // 0 => no selection/caret reported at all; >1 => discontiguous selection. Neither is
+        // "a caret"; stay conservative rather than picking one range heuristically.
+        return CaretLookup::Unavailable("no single caret-equivalent selection range");
+    }
+    let Ok(range) = selection.GetElement(0) else {
+        return CaretLookup::Unavailable("selection range unavailable");
+    };
+    match range.CompareEndpoints(
+        TextPatternRangeEndpoint_Start,
+        &range,
+        TextPatternRangeEndpoint_End,
+    ) {
+        Ok(0) => CaretLookup::Found(range, "textPattern"),
+        Ok(_) => CaretLookup::NonCollapsedSelection,
+        Err(_) => CaretLookup::Unavailable("selection endpoint comparison failed"),
+    }
+}
+
+struct RangeText {
+    text: String,
+    moved: i32,
+}
+
+fn cursor_read_plan(budget_chars: usize) -> Option<(i32, i32, i32)> {
+    let budget_chars = budget_chars.min(super::MAX_BUDGET_CHARS);
+    let over_fetch = budget_chars.checked_mul(2)?.max(1);
+    let over_fetch = i32::try_from(over_fetch).ok()?;
+    let text_cap = over_fetch.checked_mul(2)?.checked_add(64)?;
+    Some((over_fetch, over_fetch, text_cap))
+}
+
+fn decode_uia_utf16(units: &[u16]) -> std::result::Result<String, &'static str> {
+    String::from_utf16(units).map_err(|_| "UIA text contains invalid UTF-16")
+}
+
+fn decode_uia_text(text: &BSTR) -> std::result::Result<String, &'static str> {
+    decode_uia_utf16(text.as_wide())
+}
+
+/// Read one range side and verify that the provider honored the requested character movement.
+/// UIA permits a provider to substitute a larger text unit when `TextUnit_Character` is not
+/// supported; rejecting inconsistent movement/text results prevents that fallback from exposing
+/// a document-sized range as if it were cursor-local context.
+unsafe fn read_range_side(
+    caret: &IUIAutomationTextRange,
+    endpoint: TextPatternRangeEndpoint,
+    requested: i32,
+    text_cap: i32,
+    before: bool,
+) -> std::result::Result<RangeText, &'static str> {
+    let range = caret.Clone().map_err(|_| "caret range clone failed")?;
+    let moved = range
+        .MoveEndpointByUnit(endpoint, TextUnit_Character, requested)
+        .map_err(|_| "caret range movement failed")?;
+    if (before && (moved > 0 || moved < requested)) || (!before && (moved < 0 || moved > requested))
+    {
+        return Err("caret range movement was inconsistent");
+    }
+
+    let start_to_caret = range
+        .CompareEndpoints(
+            TextPatternRangeEndpoint_Start,
+            caret,
+            TextPatternRangeEndpoint_Start,
+        )
+        .map_err(|_| "caret range start comparison failed")?;
+    let end_to_caret = range
+        .CompareEndpoints(
+            TextPatternRangeEndpoint_End,
+            caret,
+            TextPatternRangeEndpoint_End,
+        )
+        .map_err(|_| "caret range end comparison failed")?;
+    if (before && (start_to_caret > 0 || end_to_caret != 0))
+        || (!before && (start_to_caret != 0 || end_to_caret < 0))
+    {
+        return Err("caret range endpoints were inconsistent");
+    }
+
+    let text = range
+        .GetText(text_cap)
+        .map_err(|_| "caret range text unavailable")?;
+    let text = decode_uia_text(&text)?;
+    if text.encode_utf16().count() > text_cap as usize
+        || text.chars().count() > moved.unsigned_abs() as usize
+    {
+        return Err("caret range text length was inconsistent");
+    }
+    Ok(RangeText { text, moved })
+}
+
+/// Reads the document window around the caret. **Only callable in a `spawn_blocking`
+/// context.** Never reads the full document (��7 of the design doc): the range is expanded
+/// from the caret by `MoveEndpointByUnit`, not sliced out of `DocumentRange()`.
+unsafe fn read_document(element: &IUIAutomationElement, budget_chars: usize) -> super::ReadOutcome {
+    let (caret, source) = match find_caret_range(element) {
+        CaretLookup::Found(range, source) => (range, source),
+        CaretLookup::NonCollapsedSelection => {
+            return super::ReadOutcome::Unavailable("non-collapsed selection")
+        }
+        CaretLookup::Unavailable(reason) => return super::ReadOutcome::Unavailable(reason),
+    };
+    let budget_chars = budget_chars.min(super::MAX_BUDGET_CHARS);
+    let Some((before_want, after_want, text_cap)) = cursor_read_plan(budget_chars) else {
+        return super::ReadOutcome::Unavailable("cursor context budget is out of range");
+    };
+
+    let before = match read_range_side(
+        &caret,
+        TextPatternRangeEndpoint_Start,
+        -before_want,
+        text_cap,
+        true,
+    ) {
+        Ok(side) => side,
+        Err(reason) => return super::ReadOutcome::Unavailable(reason),
+    };
+    let after = match read_range_side(
+        &caret,
+        TextPatternRangeEndpoint_End,
+        after_want,
+        text_cap,
+        false,
+    ) {
+        Ok(side) => side,
+        Err(reason) => return super::ReadOutcome::Unavailable(reason),
+    };
+
+    // Diagnostic only: no document content or application identity is logged.
+    log::debug!(
+        "[cursor-context] source={source} before_want={before_want} before_moved={} before_chars={} after_want={after_want} after_moved={} after_chars={}",
+        before.moved,
+        before.text.chars().count(),
+        after.moved,
+        after.text.chars().count(),
+    );
+
+    let mut text = before.text;
+    let cursor = text.chars().count();
+    text.push_str(&after.text);
+
+    super::ReadOutcome::Window(super::window_around_cursor(&text, cursor, budget_chars))
+}
+
+/// Synchronously reads the document around the cursor. **Only callable in a `spawn_blocking`
+/// context** — see [`super::windows_probe`] for the async/timeout wrapper.
+///
+/// Gate order follows §15-17 of the design doc: password field and process blocklist are
+/// checked immediately after acquiring the focused element, before any text pattern is
+/// touched. Focus consistency (§12) is re-checked right before returning a successful window,
+/// so a focus change mid-read (Alt+Tab, OpenLess's own UI stealing focus, …) discards the
+/// result instead of mixing one app's text with another's dictation.
+pub(super) fn read_around_cursor_blocking(
+    budget_chars: usize,
+    target: Option<crate::selection::SelectionInsertionTarget>,
+) -> super::ReadOutcome {
+    if let Some(target) = target.as_ref() {
+        if !crate::selection::selection_insertion_target_is_current(target) {
+            return super::ReadOutcome::Unavailable("insertion target changed before capture");
+        }
+    }
+
+    unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return super::ReadOutcome::Unavailable("COM initialization failed");
+        }
+        struct ComGuard;
+        impl Drop for ComGuard {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() }
+            }
+        }
+        let _com = ComGuard;
+
+        let outcome = (|| -> Result<super::ReadOutcome> {
+            let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
+            let timeouts: IUIAutomation2 = uia.cast()?;
+            timeouts.SetConnectionTimeout(200)?;
+            timeouts.SetTransactionTimeout(200)?;
+
+            let initial_window = GetForegroundWindow();
+            let element = uia.GetFocusedElement()?;
+            if let Some(target) = target.as_ref() {
+                if !crate::selection::selection_insertion_target_is_current(target) {
+                    return Ok(super::ReadOutcome::Unavailable(
+                        "insertion target changed before UIA read",
+                    ));
+                }
+            }
+
+            if element.CurrentIsPassword()?.as_bool() {
+                return Ok(super::ReadOutcome::Blocked(
+                    super::BlockReason::SecureTextField,
+                ));
+            }
+            if !allowed_process(&element)? {
+                return Ok(super::ReadOutcome::Blocked(super::BlockReason::BlockedApp));
+            }
+
+            let outcome = read_document(&element, budget_chars);
+            if !matches!(outcome, super::ReadOutcome::Window(_)) {
+                return Ok(outcome);
+            }
+
+            // Focus must not have moved during the read above — otherwise this window's "before"
+            // text could belong to a different app than the dictation that is about to use it.
+            if GetForegroundWindow() != initial_window
+                || !uia
+                    .CompareElements(&element, &uia.GetFocusedElement()?)?
+                    .as_bool()
+            {
+                return Ok(super::ReadOutcome::Unavailable(
+                    "focus changed during capture",
+                ));
+            }
+            if let Some(target) = target.as_ref() {
+                if !crate::selection::selection_insertion_target_is_current(target) {
+                    return Ok(super::ReadOutcome::Unavailable(
+                        "insertion target changed during capture",
+                    ));
+                }
+            }
+
+            Ok(outcome)
+        })();
+
+        outcome.unwrap_or(super::ReadOutcome::Unavailable("UIA call failed"))
+    }
+}
+
+#[cfg(test)]
+mod cursor_context_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_read_plan_is_bounded_and_overfetches_both_sides() {
+        assert_eq!(cursor_read_plan(600), Some((1200, 1200, 2464)));
+        assert_eq!(cursor_read_plan(usize::MAX), Some((8000, 8000, 16064)));
+    }
+
+    #[test]
+    fn invalid_uia_utf16_is_rejected() {
+        assert!(decode_uia_utf16(&[0xD800]).is_err());
+        assert_eq!(decode_uia_utf16(&[0xD83D, 0xDE42]).unwrap(), "🙂");
+    }
+
+    #[test]
+    fn password_managers_and_terminals_are_blocked_by_name() {
+        for name in [
+            "KeePassXC.exe",
+            "1Password.exe",
+            "Bitwarden.exe",
+            "powershell.exe",
+            "WindowsTerminal.exe",
+            "cmd.exe",
+            "conhost.exe",
+        ] {
+            assert!(is_blocked_process_name(name), "{name} should be blocked");
+        }
+    }
+
+    #[test]
+    fn ordinary_editors_are_not_blocked_by_name() {
+        for name in ["notepad.exe", "WINWORD.EXE", "Code.exe", "chrome.exe"] {
+            assert!(
+                !is_blocked_process_name(name),
+                "{name} should not be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_that_merely_contains_a_blocked_fragment_is_still_blocked() {
+        // Substring match is intentional here (unlike the macOS bundle-id prefix match): Windows
+        // executable names have no reverse-DNS namespace to anchor a prefix check against, and
+        // helper/updater binaries commonly append suffixes to the vendor name.
+        assert!(is_blocked_process_name("1password-updater.exe"));
+    }
 }

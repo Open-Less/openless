@@ -433,6 +433,17 @@ mod windows_impl {
 
     const SENDINPUT_CHUNK_CHARS: usize = 16;
     const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
+    /// Gap after every synthetic keystroke, not just at chunk boundaries.
+    ///
+    /// Mirrors macOS's `INTER_KEYSTROKE_DELAY` (see that module's comment: "Chromium /
+    /// Electron / Tauri themselves drop characters when keyDown/keyUp have no delay"). Windows
+    /// had no such gap — characters within a chunk were sent back-to-back with zero spacing,
+    /// only pausing every [`SENDINPUT_CHUNK_CHARS`]. Observed on hardware: dictating mixed
+    /// Chinese/English text ("我要把这个 open list...") dropped the leading character(s) of the
+    /// Latin-script word right after the CJK→ASCII transition (e.g. "open" arrived as "pen").
+    /// 1ms is inaudible/invisible to the user but gives the target app's message loop room to
+    /// process each keystroke before the next one lands.
+    const INTER_KEYSTROKE_DELAY: Duration = Duration::from_millis(1);
 
     /// Windows 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
@@ -464,7 +475,16 @@ mod windows_impl {
     fn type_unicode_chunk_with_sender(
         text: &str,
         options: WindowsSendInputOptions,
+        send: impl FnMut(char, WindowsSendInputOptions) -> Result<(), TypeError>,
+    ) -> Result<usize, TypeError> {
+        type_unicode_chunk_with_sender_and_sleeper(text, options, send, std::thread::sleep)
+    }
+
+    fn type_unicode_chunk_with_sender_and_sleeper(
+        text: &str,
+        options: WindowsSendInputOptions,
         mut send: impl FnMut(char, WindowsSendInputOptions) -> Result<(), TypeError>,
+        mut sleep: impl FnMut(Duration),
     ) -> Result<usize, TypeError> {
         if text.is_empty() {
             return Ok(0);
@@ -491,9 +511,12 @@ mod windows_impl {
             }
             typed_chars += 1;
             sent_in_chunk += 1;
+            // Sleep after every event, including the final event in this write. The latter is
+            // what preserves a gap when streaming reconciliation starts the next write later.
+            sleep(INTER_KEYSTROKE_DELAY);
 
             if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
-                std::thread::sleep(SENDINPUT_CHUNK_DELAY);
+                sleep(SENDINPUT_CHUNK_DELAY);
                 sent_in_chunk = 0;
             }
         }
@@ -534,6 +557,53 @@ mod windows_impl {
             .unwrap();
             assert_eq!(sent, "a\n🙂");
             assert_eq!(consumed, 4);
+        }
+
+        #[test]
+        fn pacing_crosses_write_boundaries_and_includes_final_event() {
+            let mut sent = String::new();
+            let mut sleeps = Vec::new();
+            let mut send = |ch, _| {
+                sent.push(ch);
+                Ok(())
+            };
+            let mut sleep = |duration| sleeps.push(duration);
+
+            type_unicode_chunk_with_sender_and_sleeper(
+                "a",
+                WindowsSendInputOptions::default(),
+                &mut send,
+                &mut sleep,
+            )
+            .unwrap();
+            type_unicode_chunk_with_sender_and_sleeper(
+                "b",
+                WindowsSendInputOptions::default(),
+                &mut send,
+                &mut sleep,
+            )
+            .unwrap();
+
+            assert_eq!(sent, "ab");
+            assert_eq!(sleeps, vec![INTER_KEYSTROKE_DELAY, INTER_KEYSTROKE_DELAY]);
+        }
+
+        #[test]
+        fn chunk_pause_follows_the_sixteenth_event() {
+            let mut sleeps = Vec::new();
+            let mut sleep = |duration| sleeps.push(duration);
+            type_unicode_chunk_with_sender_and_sleeper(
+                &"x".repeat(17),
+                WindowsSendInputOptions::default(),
+                |_, _| Ok(()),
+                &mut sleep,
+            )
+            .unwrap();
+
+            assert_eq!(sleeps.len(), 18);
+            assert!(sleeps[..16].iter().all(|gap| *gap == INTER_KEYSTROKE_DELAY));
+            assert_eq!(sleeps[16], SENDINPUT_CHUNK_DELAY);
+            assert_eq!(sleeps[17], INTER_KEYSTROKE_DELAY);
         }
 
         #[test]

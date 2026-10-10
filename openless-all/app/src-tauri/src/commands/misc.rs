@@ -271,17 +271,16 @@ pub async fn debug_read_cursor_context(
     }
     let budget = budget_chars
         .filter(|chars| *chars > 0)
-        .unwrap_or(crate::host_document::DEFAULT_BUDGET_CHARS);
+        .unwrap_or(crate::host_document::DEFAULT_BUDGET_CHARS)
+        .min(crate::host_document::MAX_BUDGET_CHARS);
 
     let result = crate::host_document::probe_around_cursor(budget).await;
     // Also log it: install verification usually involves switching to another app and clicking
     // manually, and digging through the log is easier than digging through devtools.
     log::info!(
-        "[cursor-context] status={:?} reason={:?} app={:?} bundle={:?} chars={} elapsed={}ms",
+        "[cursor-context] status={:?} reason={:?} chars={} elapsed={}ms",
         result.status,
         result.reason,
-        result.app_name,
-        result.bundle_id,
         result
             .window
             .as_ref()
