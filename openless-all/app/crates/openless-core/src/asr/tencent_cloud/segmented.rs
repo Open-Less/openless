@@ -475,7 +475,7 @@ mod tests {
                             "session exceeded its audio budget"
                         );
                         // Index restarts at zero for every connection.
-                        ws.send(Message::Text(serde_json::json!({"code":0,"result":{"index":0,"slice_type":1,"voice_text_str":text}}).to_string())).await.unwrap();
+                        ws.send(Message::text(serde_json::json!({"code":0,"result":{"index":0,"slice_type":1,"voice_text_str":text}}).to_string())).await.unwrap();
                     }
                     Message::Text(end) => {
                         assert_eq!(end, r#"{"type":"end"}"#);
@@ -488,7 +488,7 @@ mod tests {
                 received, audio,
                 "no skipped or duplicated PCM at a boundary"
             );
-            ws.send(Message::Text(serde_json::json!({"code":0,"result":{"index":0,"slice_type":2,"voice_text_str":text},"final":1}).to_string())).await.unwrap();
+            ws.send(Message::text(serde_json::json!({"code":0,"result":{"index":0,"slice_type":2,"voice_text_str":text},"final":1}).to_string())).await.unwrap();
         }
         assert!(
             tokio::time::timeout(Duration::from_millis(100), listener.accept())

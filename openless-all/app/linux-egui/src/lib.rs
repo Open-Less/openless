@@ -25,6 +25,7 @@ mod popup;
 mod popup_layer;
 mod popup_window;
 mod preference_patch;
+pub mod provider_protocol;
 mod qa;
 mod recordings;
 mod remote_input;

@@ -1365,7 +1365,7 @@ async fn build_cloud_polisher_provider(
     ))
 }
 
-fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
+pub fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);

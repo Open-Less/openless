@@ -248,6 +248,7 @@ pub struct LayerFrame {
     pub exit: bool,
     /// When to draw the next frame.
     pub repaint_after: Duration,
+    pub capsule_layout: Option<(CapsuleGeometry, bool)>,
 }
 
 // ── compositor probe ────────────────────────────────────────────────────────
@@ -702,7 +703,7 @@ fn bind_globals(
     state
 }
 
-pub fn run_layer_capsule<F>(geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
+pub fn run_layer_capsule<F>(mut geometry: CapsuleGeometry, mut frame: F) -> Result<(), String>
 where
     F: FnMut(&egui::Context, egui::RawInput, bool) -> LayerFrame,
 {
@@ -779,6 +780,7 @@ where
     });
     let scale = 1.0;
     let mut first = true;
+    let mut right_aligned = false;
 
     loop {
         queue
@@ -788,7 +790,7 @@ where
             return Ok(());
         }
         let _ = connection.flush();
-        let rect = geometry.rect_for_configure(state.configure.unwrap_or((width, height)));
+        let rect = geometry.rect_for_configure(state.configure.unwrap_or(geometry.buffer_size()));
         let input = state.take_input(rect);
         let mut frame = frame(&context, input, first);
         first = false;
@@ -801,6 +803,30 @@ where
         )?;
         if frame.exit {
             return Ok(());
+        }
+        if let Some((next, align_right)) = frame.capsule_layout {
+            if next != geometry || align_right != right_aligned {
+                geometry = next;
+                right_aligned = align_right;
+                let (width, height) = geometry.buffer_size();
+                layer_surface.set_size(width, height);
+                layer_surface.set_anchor(if right_aligned {
+                    zwlr_layer_surface_v1::Anchor::Bottom | zwlr_layer_surface_v1::Anchor::Right
+                } else {
+                    zwlr_layer_surface_v1::Anchor::Bottom
+                });
+                layer_surface.set_margin(
+                    0,
+                    if right_aligned { 24 } else { 0 },
+                    geometry.bottom_gap,
+                    0,
+                );
+                state.configure = None;
+                wl_surface.commit();
+                connection
+                    .flush()
+                    .map_err(|error| format!("wayland resize flush: {error}"))?;
+            }
         }
         std::thread::sleep(frame.repaint_after.min(MAX_FRAME_PAUSE));
     }

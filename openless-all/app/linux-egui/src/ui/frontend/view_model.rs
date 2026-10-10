@@ -390,6 +390,13 @@ pub enum SettingsProviderField {
     AuthMode,
     PrimarySecret,
     SecondarySecret,
+    RequestFormat,
+    MessagesThinking,
+    MaxTokens,
+    ThinkingBudget,
+    ServiceTier,
+    Temperature,
+    ExtraHeaders,
 }
 
 /// Which inputs the editor renders. Core's `AuthRequirement` decides this;
@@ -447,6 +454,8 @@ pub struct SettingsProviderEditor {
     pub has_models_url: bool,
     /// 模型字段是否处于「自定义模型…」手输模式（Tauri `customModelMode`）。
     pub custom_model: bool,
+    #[serde(default)]
+    pub protocol: openless_linux_egui::provider_protocol::ProviderProtocolDraft,
     pub busy: bool,
 }
 
@@ -485,6 +494,8 @@ pub enum SettingsField {
     AudioCue,
     /// 录音胶囊是否显示（Tauri `showCapsule`；Linux 上同样生效）。
     ShowCapsule,
+    CapsuleTranscript,
+    LlmThinking,
     MuteWhileRecording,
     RecordAudioForDebug,
     ActivityHeatmap,
@@ -500,6 +511,7 @@ pub enum SettingsComboField {
     Microphone,
     /// 胶囊样式：0 = siri（流光），1 = classic（经典药丸），2 = typeless（深色胶囊）。
     CapsuleStyle,
+    CapsuleTranscriptFontSize,
     RecordingMode,
     SilenceSeconds,
     RemoteDefaultMode,
@@ -1097,6 +1109,10 @@ pub struct SettingsFields {
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
     pub show_capsule: bool,
     pub capsule_style: usize,
+    pub capsule_transcript: bool,
+    pub capsule_transcript_font_size: usize,
+    #[serde(default)]
+    pub llm_thinking_enabled: bool,
     pub record_audio_for_debug: bool,
     pub history_max_entries: String,
     /// 风格直达快捷键（可录制/停用/移除）。
@@ -1146,6 +1162,9 @@ impl Default for SettingsFields {
             audio_cue: false,
             show_capsule: true,
             capsule_style: 0,
+            capsule_transcript: true,
+            capsule_transcript_font_size: 14,
+            llm_thinking_enabled: false,
             record_audio_for_debug: false,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),

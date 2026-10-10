@@ -130,6 +130,12 @@ impl LinuxNativeRuntime {
         self.hotkeys.is_some()
     }
 
+    pub fn set_hotkey_waker(&self, thread: std::thread::Thread) {
+        if let Some(listener) = &self.hotkeys {
+            listener.set_waker(thread);
+        }
+    }
+
     pub fn drain_native_events(
         &self,
     ) -> (

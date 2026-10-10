@@ -190,6 +190,12 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AudioCue => {
                 preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
             }
+            frontend::view_model::SettingsField::LlmThinking => {
+                preferences.llm_thinking_enabled = !preferences.llm_thinking_enabled;
+            }
+            frontend::view_model::SettingsField::CapsuleTranscript => {
+                preferences.capsule_transcript_enabled = !preferences.capsule_transcript_enabled;
+            }
             frontend::view_model::SettingsField::ShowCapsule => {
                 preferences.show_capsule = !preferences.show_capsule;
 
@@ -291,6 +297,9 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsComboField::SilenceSeconds => {
                 preferences.silence_auto_stop_seconds = index as f32 + 1.0;
+            }
+            frontend::view_model::SettingsComboField::CapsuleTranscriptFontSize => {
+                preferences.capsule_transcript_font_size = (12 + 2 * index.min(4)) as u8;
             }
             frontend::view_model::SettingsComboField::CapsuleStyle => {
                 preferences.capsule_style = match index {

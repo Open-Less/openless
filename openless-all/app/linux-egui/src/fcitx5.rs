@@ -197,7 +197,13 @@ pub(crate) fn file_fingerprint(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    Some(format!("{:x}", hasher.finalize()))
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 /// Drop a per-user copy that would shadow the package's addon, so a package
@@ -883,6 +889,7 @@ pub(crate) fn apply_selection_target(
     source: &str,
     replacement: &str,
 ) -> Result<(), BackendError> {
+    crate::selection::validate_selection_replacement_source(source)?;
     if send_bool_message("ApplySelectionTarget", |message| {
         message.append3(session_id, source, replacement)
     })? {

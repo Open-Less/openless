@@ -11,6 +11,7 @@ pub mod paging;
 pub mod popups;
 pub mod selection_ask;
 pub mod settings;
+mod transcript_motion;
 pub use openless_linux_egui::siri_wgpu;
 pub mod style;
 pub mod translation;
@@ -698,6 +699,7 @@ mod tests {
                 default_model: String::new(),
                 has_models_url: false,
                 custom_model: false,
+                protocol: Default::default(),
                 busy: false,
             }),
             ..Default::default()
@@ -777,6 +779,7 @@ mod tests {
                 default_model: String::new(),
                 has_models_url: false,
                 custom_model: false,
+                protocol: Default::default(),
                 busy: false,
             })
         };

@@ -91,7 +91,7 @@ tauri-plugin-autostart = "2"
 global-hotkey = "0.6"
 enigo = "0.3"
 arboard = "3"
-rcgen = { version = "0.13", features = ["x509-parser"] }
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
 x509-parser = { version = "0.16", features = ["verify"] }
 time = "0.3"
 tempfile = "3"

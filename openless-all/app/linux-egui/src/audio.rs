@@ -338,6 +338,10 @@ fn run_audio_thread(
                 result = Ok(stream);
                 break;
             }
+            Err(error) if error.code == BackendErrorCode::PermissionDenied => {
+                let _ = startup.send(Err(error));
+                return;
+            }
             Err(error) => {
                 log::warn!("{backend} audio backend failed; trying next backend: {error}");
                 result = Err(error);
@@ -385,29 +389,94 @@ fn try_start_audio_stream(
     let device = select_input_device(host, preferred_device_name).map_err(|error| {
         BackendError::new(error.code, format!("{backend} backend: {}", error.message))
     })?;
-    let supported = device
-        .default_input_config()
-        .map_err(|error| classify_audio_error("default input config", error.to_string()))?;
-    let sample_format = supported.sample_format();
-    let input_sample_rate = supported.sample_rate();
-    let channels = usize::from(supported.channels());
-    let config: cpal::StreamConfig = supported.into();
-    let stream = build_input_stream(
-        &device,
-        &config,
-        sample_format,
-        input_sample_rate,
-        channels,
-        Arc::clone(consumer),
-        Arc::clone(progress),
-        writer.clone(),
-        Arc::clone(stop),
-        Arc::clone(runtime_error),
-    )?;
-    stream
-        .play()
-        .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
-    Ok(stream)
+    let mut native = None;
+    let mut start = |supported: cpal::SupportedStreamConfig| -> Result<cpal::Stream, BackendError> {
+        let accepting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let config = supported.config();
+        let stream = build_input_stream(
+            &device,
+            &config,
+            supported.sample_format(),
+            supported.sample_rate(),
+            usize::from(supported.channels()),
+            Arc::clone(consumer),
+            Arc::clone(progress),
+            writer.clone(),
+            Arc::clone(stop),
+            Arc::clone(runtime_error),
+            Arc::clone(&accepting),
+        )?;
+        stream
+            .play()
+            .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
+        accepting.store(true, std::sync::atomic::Ordering::Release);
+        Ok(stream)
+    };
+    let initial_error = match device.default_input_config() {
+        Ok(config) => {
+            native = Some(config);
+            match start(config) {
+                Ok(stream) => return Ok(stream),
+                Err(error) if error.code == BackendErrorCode::PermissionDenied => {
+                    return Err(error)
+                }
+                Err(error) => error,
+            }
+        }
+        Err(error) => classify_audio_error("default input config", error.to_string()),
+    };
+    if initial_error.code == BackendErrorCode::PermissionDenied {
+        return Err(initial_error);
+    }
+    let ranges = match device.supported_input_configs() {
+        Ok(ranges) => ranges,
+        Err(_) => return Err(initial_error),
+    };
+    try_input_candidates(
+        native_input_alternatives(native.as_ref(), ranges),
+        initial_error,
+        &mut start,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn try_input_candidates<T, U>(
+    candidates: impl IntoIterator<Item = T>,
+    mut last_error: BackendError,
+    mut start: impl FnMut(T) -> Result<U, BackendError>,
+) -> Result<U, BackendError> {
+    for candidate in candidates {
+        match start(candidate) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.code == BackendErrorCode::PermissionDenied => return Err(error),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+#[cfg(target_os = "linux")]
+fn native_input_alternatives(
+    default: Option<&cpal::SupportedStreamConfig>,
+    ranges: impl IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+) -> Vec<cpal::SupportedStreamConfig> {
+    let native_rate = default.map(|config| config.sample_rate());
+    let mut candidates = Vec::new();
+    for range in ranges {
+        let min = range.min_sample_rate();
+        let max = range.max_sample_rate();
+        for rate in [native_rate.unwrap_or(max).clamp(min, max), min, max] {
+            let candidate = range.with_sample_rate(rate);
+            let same = |other: &cpal::SupportedStreamConfig| {
+                other.config() == candidate.config()
+                    && other.sample_format() == candidate.sample_format()
+            };
+            if !default.is_some_and(same) && !candidates.iter().any(same) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
 }
 
 #[cfg(target_os = "linux")]
@@ -451,6 +520,7 @@ fn build_input_stream(
     writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
+    accepting: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<cpal::Stream, BackendError> {
     use cpal::traits::DeviceTrait;
 
@@ -461,12 +531,17 @@ fn build_input_stream(
             let stop_for_error = Arc::clone(&stop);
             let runtime_error = Arc::clone(&runtime_error);
             let writer = writer.clone();
+            let accepting_audio = Arc::clone(&accepting);
+            let accepting_error = Arc::clone(&accepting);
             let started = std::time::Instant::now();
             let mut normalizer = openless_core::PcmNormalizer::default();
             device
                 .build_input_stream::<$sample, _, _>(
                     *config,
                     move |data: &[$sample], _| {
+                        if !accepting_audio.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
                         let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
                         if let Some(chunk) =
                             normalizer.process(&samples, channels, input_sample_rate)
@@ -486,6 +561,9 @@ fn build_input_stream(
                         }
                     },
                     move |error| {
+                        if !accepting_error.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
                         let error = classify_audio_error("input stream", error.to_string());
                         let mut slot = runtime_error
                             .lock()
@@ -503,6 +581,18 @@ fn build_input_stream(
 
     match sample_format {
         cpal::SampleFormat::F32 => make_stream!(f32, |sample: f32| sample),
+        cpal::SampleFormat::F64 => make_stream!(f64, |sample: f64| sample as f32),
+        cpal::SampleFormat::I64 => {
+            make_stream!(i64, |sample: i64| (sample as f64 / i64::MAX as f64) as f32)
+        }
+        cpal::SampleFormat::U64 => make_stream!(
+            u64,
+            |sample: u64| (sample as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32
+        ),
+        cpal::SampleFormat::U32 => make_stream!(
+            u32,
+            |sample: u32| (sample as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32
+        ),
         cpal::SampleFormat::I16 => {
             make_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32)
         }
@@ -648,6 +738,55 @@ mod tests {
             classify_audio_error("start", "device disappeared".to_string()).code,
             BackendErrorCode::Platform
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_alternatives_preserve_channels_format_and_advertised_rates() {
+        let range = cpal::SupportedStreamConfigRange::new(
+            2,
+            44_100,
+            48_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+        let native = range.with_sample_rate(48_000);
+        let alternatives = native_input_alternatives(Some(&native), [range, range]);
+        assert_eq!(alternatives.len(), 1);
+        assert_eq!(alternatives[0].channels(), 2);
+        assert_eq!(alternatives[0].sample_format(), cpal::SampleFormat::F32);
+        assert_eq!(alternatives[0].sample_rate(), 44_100);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn candidates_stop_at_success_or_permission_failure() {
+        let mut attempts = Vec::new();
+        let result = try_input_candidates(
+            [1, 2, 3],
+            classify_audio_error("start", "failed".into()),
+            |candidate| {
+                attempts.push(candidate);
+                if candidate == 2 {
+                    Ok(candidate)
+                } else {
+                    Err(classify_audio_error("start", "failed".into()))
+                }
+            },
+        );
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(attempts, [1, 2]);
+        let mut attempts = 0;
+        let result: Result<(), _> = try_input_candidates(
+            [1, 2],
+            classify_audio_error("start", "failed".into()),
+            |_| {
+                attempts += 1;
+                Err(classify_audio_error("start", "permission denied".into()))
+            },
+        );
+        assert_eq!(result.unwrap_err().code, BackendErrorCode::PermissionDenied);
+        assert_eq!(attempts, 1);
     }
 
     #[test]

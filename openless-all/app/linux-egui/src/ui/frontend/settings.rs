@@ -657,6 +657,34 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 },
             );
             capsule_style_preview(ui, vm.settings.capsule_style.min(2));
+            if vm.settings.show_capsule {
+                toggle_row(
+                    ui,
+                    tr_l10n(lang, "settings.recording.capsuleTranscriptLabel"),
+                    tr_l10n(lang, "settings.recording.capsuleTranscriptDesc"),
+                    vm.settings.capsule_transcript,
+                    || {
+                        actions.push(FrontendAction::SettingsToggle(
+                            SettingsField::CapsuleTranscript,
+                        ));
+                    },
+                );
+                if vm.settings.capsule_transcript {
+                    combo_index_row(
+                        ui,
+                        tr_l10n(lang, "settings.recording.capsuleTranscriptFontSize"),
+                        "",
+                        (vm.settings.capsule_transcript_font_size.clamp(12, 20) - 12) / 2,
+                        &["12px", "14px", "16px", "18px", "20px"],
+                        |index| {
+                            actions.push(FrontendAction::SettingsCombo(
+                                SettingsComboField::CapsuleTranscriptFontSize,
+                                index,
+                            ));
+                        },
+                    );
+                }
+            }
             toggle_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mute_during_recording_label"),
@@ -3135,7 +3163,10 @@ fn channel_editor_panel(
     let lang = vm.lang;
     // Tauri：字段修改后自动保存（300ms 防抖 + 失焦/离开前 flush）。这里到点就推一次
     // `SettingsProviderSave`；没到点则请求下一帧再看。
-    editor_auto_save(ui, actions);
+    let protocol_valid = editor.protocol.validate().is_ok();
+    if protocol_valid {
+        editor_auto_save(ui, actions);
+    }
     let edited = vm
         .channels
         .iter()
@@ -3201,7 +3232,7 @@ fn channel_editor_panel(
         },
         18.0,
     );
-    if back_response.clicked() {
+    if back_response.clicked() && protocol_valid {
         editor_close(ui, actions);
     }
     let heading_left = back.right() + 14.0;
@@ -3304,6 +3335,7 @@ fn channel_editor_panel(
                                 &vm.channel_providers,
                                 edited,
                                 lang,
+                                vm.settings.llm_thinking_enabled,
                                 actions,
                             );
                         });
@@ -3405,7 +3437,7 @@ fn channel_editor_panel(
         egui::FontId::proportional(12.0),
         theme::SURFACE,
     );
-    if done.clicked() {
+    if done.clicked() && protocol_valid {
         editor_close(ui, actions);
     }
     let clear = footer_ui.interact(
@@ -3509,6 +3541,7 @@ fn provider_editor_body(
     providers: &[SettingsChannelProvider],
     channel_index: Option<usize>,
     lang: Lang,
+    llm_thinking_enabled: bool,
     actions: &mut Vec<FrontendAction>,
 ) {
     // 分区标题：云图标 + 「服务连接」（Tauri `ChannelSectionHeading`）。
@@ -3580,6 +3613,7 @@ fn provider_editor_body(
             .color(theme::INK_3),
     );
     ui.add_space(4.0);
+    provider_protocol_block(ui, editor, lang, actions);
     ui.label(
         egui::RichText::new(tr_l10n(lang, "providers.credentials"))
             .size(11.5)
@@ -3702,7 +3736,241 @@ fn provider_editor_body(
         }
     }
     ui.add_space(6.0);
+    if !editor.is_asr
+        && matches!(
+            editor.provider_type.as_str(),
+            "custom" | "custom_responses" | "custom_messages"
+        )
+    {
+        modal_form_row(
+            ui,
+            tr_l10n(lang, "settings.providers.extraHeadersLabel"),
+            |ui| {
+                let mut headers = editor.protocol.extra_headers.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::multiline(&mut headers)
+                            .id(egui::Id::new("settings-provider-extra-headers"))
+                            .desired_width(ui.available_width().min(420.0))
+                            .desired_rows(3)
+                            .hint_text(tr_l10n(lang, "settings.providers.extraHeadersPlaceholder")),
+                    )
+                    .changed()
+                {
+                    editor_mark_dirty(ui);
+                    actions.push(FrontendAction::SettingsProviderField(
+                        SettingsProviderField::ExtraHeaders,
+                        headers,
+                    ));
+                }
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "providers.extra_headers_hint"))
+                        .size(11.5)
+                        .color(theme::INK_4),
+                );
+            },
+        );
+    }
     provider_model_block(ui, editor, lang, actions);
+    if !editor.is_asr {
+        let mut changed = false;
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.providers.thinkingModeLabel"),
+            tr_l10n(lang, "settings.providers.thinkingModeHint"),
+            llm_thinking_enabled,
+            || changed = true,
+        );
+        if changed {
+            actions.push(FrontendAction::SettingsToggle(SettingsField::LlmThinking));
+        }
+        if matches!(
+            editor.provider_type.as_str(),
+            "custom" | "custom_responses" | "custom_messages"
+        ) {
+            modal_form_row(
+                ui,
+                tr_l10n(lang, "settings.providers.temperatureLabel"),
+                |ui| {
+                    provider_field(
+                        ui,
+                        "",
+                        &editor.protocol.temperature,
+                        SettingsProviderField::Temperature,
+                        false,
+                        actions,
+                    );
+                    ui.label(
+                        egui::RichText::new(tr_l10n(
+                            lang,
+                            "settings.providers.temperaturePlaceholder",
+                        ))
+                        .size(11.5)
+                        .color(theme::INK_4),
+                    );
+                },
+            );
+        }
+    }
+}
+
+/// The same non-secret accounts and conditional controls as Tauri LlmProtocolFields.
+fn provider_protocol_block(
+    ui: &mut egui::Ui,
+    editor: &SettingsProviderEditor,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) {
+    use openless_core::llm_protocol::LlmRequestFormat;
+    let draft = &editor.protocol;
+    if editor.is_asr || draft.formats.is_empty() {
+        return;
+    }
+    let format = draft.format();
+    modal_form_row(
+        ui,
+        tr_l10n(lang, "settings.providers.requestFormatLabel"),
+        |ui| {
+            egui::ComboBox::from_id_salt("provider-request-format")
+                .selected_text(match format {
+                    LlmRequestFormat::ChatCompletions => "Chat Completions",
+                    LlmRequestFormat::Responses => "Responses",
+                    LlmRequestFormat::Messages => "Messages",
+                })
+                .show_ui(ui, |ui| {
+                    for option in &draft.formats {
+                        let (label, value) = match option {
+                            LlmRequestFormat::ChatCompletions => {
+                                ("Chat Completions", "chat_completions")
+                            }
+                            LlmRequestFormat::Responses => ("Responses", "responses"),
+                            LlmRequestFormat::Messages => ("Messages", "messages"),
+                        };
+                        if ui.selectable_label(format == *option, label).clicked() {
+                            editor_mark_dirty(ui);
+                            actions.push(FrontendAction::SettingsProviderField(
+                                SettingsProviderField::RequestFormat,
+                                value.into(),
+                            ));
+                            ui.close();
+                        }
+                    }
+                });
+        },
+    );
+    if format == LlmRequestFormat::Responses {
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.providers.responsesThinkingHint"))
+                .size(11.5)
+                .color(theme::INK_4),
+        );
+    }
+    if editor.provider_type == "ark" {
+        let mut changed = false;
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.providers.serviceTierLabel"),
+            tr_l10n(lang, "settings.providers.serviceTierHint"),
+            draft.values[4] == "fast",
+            || changed = true,
+        );
+        if changed {
+            editor_mark_dirty(ui);
+            actions.push(FrontendAction::SettingsProviderField(
+                SettingsProviderField::ServiceTier,
+                if draft.values[4] == "fast" {
+                    String::new()
+                } else {
+                    "fast".into()
+                },
+            ));
+        }
+    }
+    if format == LlmRequestFormat::Messages {
+        let budget = draft.values[1] == "budget";
+        modal_form_row(
+            ui,
+            tr_l10n(lang, "settings.providers.messagesThinkingLabel"),
+            |ui| {
+                egui::ComboBox::from_id_salt("provider-messages-thinking")
+                    .selected_text(tr_l10n(
+                        lang,
+                        if budget {
+                            "settings.providers.thinkingBudget"
+                        } else {
+                            "settings.providers.thinkingAdaptive"
+                        },
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (value, key) in [
+                            ("adaptive", "settings.providers.thinkingAdaptive"),
+                            ("budget", "settings.providers.thinkingBudget"),
+                        ] {
+                            if ui
+                                .selectable_label(budget == (value == "budget"), tr_l10n(lang, key))
+                                .clicked()
+                            {
+                                editor_mark_dirty(ui);
+                                actions.push(FrontendAction::SettingsProviderField(
+                                    SettingsProviderField::MessagesThinking,
+                                    value.into(),
+                                ));
+                                ui.close();
+                            }
+                        }
+                    });
+            },
+        );
+        for (index, field, key, placeholder) in [
+            (
+                2,
+                SettingsProviderField::MaxTokens,
+                "settings.providers.maxTokensLabel",
+                "8192",
+            ),
+            (
+                3,
+                SettingsProviderField::ThinkingBudget,
+                "settings.providers.thinkingBudgetLabel",
+                "1024",
+            ),
+        ] {
+            if index == 3 && !budget {
+                continue;
+            }
+            modal_form_row(ui, tr_l10n(lang, key), |ui| {
+                let mut value = draft.values[index].clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut value).hint_text(placeholder))
+                    .changed()
+                {
+                    editor_mark_dirty(ui);
+                    actions.push(FrontendAction::SettingsProviderField(field, value));
+                }
+            });
+        }
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.providers.messagesThinkingHint"))
+                .size(11.5)
+                .color(theme::INK_4),
+        );
+    }
+    if let Err(error) = draft.validate() {
+        let key = match error.message.as_str() {
+            "llmRequestFormatInvalid" => "settings.providers.llmRequestFormatInvalid",
+            "llmThinkingModeInvalid" => "settings.providers.llmThinkingModeInvalid",
+            "llmTokenLimitInvalid" => "settings.providers.llmTokenLimitInvalid",
+            "llmThinkingBudgetInvalid" => "settings.providers.llmThinkingBudgetInvalid",
+            "llmServiceTierInvalid" => "settings.providers.llmServiceTierInvalid",
+            "llmProtocolHeaderConflict" => "settings.providers.llmProtocolHeaderConflict",
+            _ => "common.operationFailed",
+        };
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, key))
+                .size(12.0)
+                .color(theme::ERR),
+        );
+    }
 }
 
 /// Tauri `.ol-channel-form-row`：`grid-template-columns: 140px minmax(0, 1fr)`，
@@ -4707,12 +4975,13 @@ mod tests {
                 default_model: String::new(),
                 has_models_url: false,
                 custom_model: false,
+                protocol: Default::default(),
                 busy: false,
             };
             let mut actions = Vec::new();
             let ctx = egui::Context::default();
             let _ = crate::ui::frontend::run_pass(&ctx, egui::RawInput::default(), |ui| {
-                provider_editor_body(ui, &editor, &[], None, Lang::ZhCn, &mut actions);
+                provider_editor_body(ui, &editor, &[], None, Lang::ZhCn, false, &mut actions);
             });
             assert!(
                 actions.is_empty(),
@@ -4746,6 +5015,7 @@ mod tests {
                 default_model: "doubao-lite".to_string(),
                 has_models_url,
                 custom_model,
+                protocol: Default::default(),
                 busy: false,
             }
         };
@@ -4878,6 +5148,7 @@ mod tests {
                 default_model: String::new(),
                 has_models_url: true,
                 custom_model: false,
+                protocol: Default::default(),
                 busy: false,
             }),
             channel_providers: vec![SettingsChannelProvider {
@@ -4982,7 +5253,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ui| provider_editor_body(ui, editor, &[], None, Lang::ZhCn, &mut actions),
+            |ui| provider_editor_body(ui, editor, &[], None, Lang::ZhCn, false, &mut actions),
         );
         let mut text = String::new();
         for clipped in &output.shapes {

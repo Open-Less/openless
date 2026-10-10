@@ -48,6 +48,12 @@ mod linux_app {
 
     enum UiResult {
         Message(String),
+        HotkeyError(BackendError),
+        ProviderSaved {
+            editor: Box<ProviderEditor>,
+            result: Result<(), String>,
+        },
+        ProviderSecretsCleared(Result<(), String>),
         HistoryLoaded {
             generation: u64,
             revision: u64,
@@ -377,6 +383,7 @@ mod linux_app {
         endpoint: String,
         model: String,
         volcengine_service: String,
+        protocol: openless_linux_egui::provider_protocol::ProviderProtocolDraft,
         auth_mode: String,
         resource_id: String,
         // Secret inputs are intentionally write-only. Loading an editor never
@@ -409,8 +416,7 @@ mod linux_app {
         model: String,
         resource_id: String,
         auth_mode: String,
-        // Write-only secret drafts: they start empty on every load and are
-        // cleared as soon as they have been handed to Core.
+        // Write-only drafts start empty on load; clear only after Core's save receipt.
         primary_secret: String,
         secondary_secret: String,
         models: Vec<String>,
@@ -421,6 +427,7 @@ mod linux_app {
         models_url: Option<String>,
         /// 「自定义模型…」手输模式（仅 UI 状态，Tauri `customModelMode`）。
         custom_model: bool,
+        protocol: openless_linux_egui::provider_protocol::ProviderProtocolDraft,
     }
 
     impl ProviderEditorForm {
@@ -452,6 +459,7 @@ mod linux_app {
                 default_model: editor.descriptor.default_model.clone().unwrap_or_default(),
                 models_url: provider_models_url(&editor.descriptor, &editor.endpoint),
                 custom_model: false,
+                protocol: editor.protocol.clone(),
             }
         }
     }
@@ -564,6 +572,10 @@ mod linux_app {
         draft_touched: bool,
         /// Draft mirrored into the view model while the editor is open.
         provider_editor_form: Option<ProviderEditorForm>,
+        provider_jobs: tokio::sync::mpsc::UnboundedSender<ProviderJob>,
+        provider_save_pending: bool,
+        provider_save_again: bool,
+        provider_close_pending: bool,
         provider_models: Vec<String>,
         new_provider_type: String,
         pending_channel_delete: Option<String>,
@@ -602,6 +614,7 @@ mod linux_app {
         pending_local_hotkeys: Vec<(std::time::Instant, openless_linux_egui::LocalHotkeyEdge)>,
         /// 本地边沿与插件信号之间的去重（同一个物理按键可能两个来源都报）。
         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator,
+        hotkey_jobs: tokio::sync::mpsc::UnboundedSender<HotkeyJob>,
         /// 已在 60s 内重开过的面板次数（索引见 `popup_kind_index`）。
         popup_restarts: [PopupRestartBudget; POPUP_KIND_COUNT],
         /// 最近一次下发给窗口/面板的热键配置；变了才重发。
@@ -676,6 +689,9 @@ mod linux_app {
             || vm.style_examples != saved.examples
     }
 
+    type HotkeyJob = std::pin::Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send>>;
+    type ProviderJob = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
+
     impl OpenLessEguiApp {
         fn new(
             tokio: Arc<tokio::runtime::Runtime>,
@@ -686,6 +702,44 @@ mod linux_app {
             let (tx, rx) = mpsc::channel();
             let locale_pref = load_locale_pref();
             let lang = locale_pref.resolve();
+            let (provider_jobs, mut provider_rx) =
+                tokio::sync::mpsc::unbounded_channel::<ProviderJob>();
+            tokio.spawn(async move {
+                while let Some(job) = provider_rx.recv().await {
+                    job.await;
+                }
+            });
+            let (hotkey_jobs, mut hotkey_rx) = tokio::sync::mpsc::unbounded_channel::<HotkeyJob>();
+            let hotkey_results = tx.clone();
+            let host_thread = std::thread::current();
+            tokio.spawn(async move {
+                // Admit edges FIFO: the first poll registers each Core gate
+                // waiter before the next edge. Do not serialize completion:
+                // Combined must bypass an in-flight start, and model/network
+                // finalization must not block opening QA or cancelling input.
+                while let Some(mut job) = hotkey_rx.recv().await {
+                    let ready = std::future::poll_fn(|cx| {
+                        std::task::Poll::Ready(match job.as_mut().poll(cx) {
+                            std::task::Poll::Ready(result) => Some(result),
+                            std::task::Poll::Pending => None,
+                        })
+                    })
+                    .await;
+                    let results = hotkey_results.clone();
+                    let wake = host_thread.clone();
+                    tokio::spawn(async move {
+                        let result = match ready {
+                            Some(result) => result,
+                            None => job.await,
+                        };
+                        let _ = results.send(match result {
+                            Ok(message) => UiResult::Message(message),
+                            Err(error) => UiResult::HotkeyError(error),
+                        });
+                        wake.unpark();
+                    });
+                }
+            });
             // The Quick Note shortcut card is dismissible and the choice
             // survives restarts (upstream keeps it in localStorage).
             let quick_note_shortcut_hidden = openless_linux_egui::load_quick_note_shortcut_hidden();
@@ -746,6 +800,10 @@ mod linux_app {
                         editor_draft: false,
                         draft_touched: false,
                         provider_editor_form: None,
+                        provider_jobs,
+                        provider_save_pending: false,
+                        provider_save_again: false,
+                        provider_close_pending: false,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
                         pending_channel_delete: None,
@@ -769,6 +827,7 @@ mod linux_app {
                         pending_ui_actions: Vec::new(),
                         pending_local_hotkeys: Vec::new(),
                         hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                        hotkey_jobs,
                         quick_note_shortcut_hidden,
                         popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                         hotkeys_sent: None,
@@ -849,6 +908,10 @@ mod linux_app {
                     editor_draft: false,
                     draft_touched: false,
                     provider_editor_form: None,
+                    provider_jobs,
+                    provider_save_pending: false,
+                    provider_save_again: false,
+                    provider_close_pending: false,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
                     pending_channel_delete: None,
@@ -872,6 +935,7 @@ mod linux_app {
                     pending_ui_actions: Vec::new(),
                     pending_local_hotkeys: Vec::new(),
                     hotkey_dedupe: openless_linux_egui::HotkeyDeduplicator::default(),
+                    hotkey_jobs,
                     quick_note_shortcut_hidden,
                     popup_restarts: [PopupRestartBudget::default(); POPUP_KIND_COUNT],
                     hotkeys_sent: None,
@@ -1377,6 +1441,8 @@ mod linux_app {
                     sequence: self.last_event_sequence.saturating_mul(2),
                     phase: String::new(),
                     text: String::new(),
+                    transcript: String::new(),
+                    transcript_font_size: 14,
                     audio_level: None,
                     translation_active: false,
                     style: self.capsule_style_tag(),
@@ -1414,6 +1480,74 @@ mod linux_app {
             self.refresh_vocab_suggestions();
         }
 
+        fn capsule_transcript(&self) -> String {
+            // Selection polish uses the capsule too, but must never expose the
+            // previous dictation's raw text (Tauri selectionPolish gating).
+            if self.selection.as_ref().is_some_and(|selection| {
+                matches!(
+                    selection.phase,
+                    SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
+                )
+            }) {
+                return String::new();
+            }
+            if self
+                .preferences
+                .as_ref()
+                .is_none_or(|prefs| prefs.capsule_transcript_enabled)
+            {
+                self.transcript_state.text().to_owned()
+            } else {
+                String::new()
+            }
+        }
+
+        fn capsule_transcript_font_size(&self) -> u8 {
+            self.preferences
+                .as_ref()
+                .map_or(14, |prefs| prefs.capsule_transcript_font_size.clamp(12, 20))
+        }
+
+        fn sync_capsule_transcript(&mut self) {
+            if !self.capsule_enabled() {
+                return;
+            }
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let snapshot = backend.snapshot().dictation;
+            let Some(session_id) = snapshot
+                .session_id
+                .filter(|id| Some(*id) == self.transcript_session)
+            else {
+                return;
+            };
+            if !matches!(
+                snapshot.phase,
+                DictationPhase::Recording
+                    | DictationPhase::Transcribing
+                    | DictationPhase::Polishing
+            ) {
+                return;
+            }
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                    phase: format!("{:?}", snapshot.phase),
+                    text: String::new(),
+                    transcript: self.capsule_transcript(),
+                    transcript_font_size: self.capsule_transcript_font_size(),
+                    audio_level: Some(snapshot.level),
+                    translation_active: snapshot.translation_active,
+                    style: self.capsule_style_tag(),
+                    suggestions: Vec::new(),
+                },
+            );
+        }
+
         fn show_capsule_popup(&mut self) {
             if !self.capsule_enabled() {
                 return;
@@ -1449,6 +1583,8 @@ mod linux_app {
                     sequence: self.last_event_sequence.saturating_mul(2),
                     phase: format!("{:?}", snapshot.phase),
                     text,
+                    transcript: self.capsule_transcript(),
+                    transcript_font_size: self.capsule_transcript_font_size(),
                     audio_level: Some(snapshot.level),
                     translation_active: snapshot.translation_active,
                     style,
@@ -1477,6 +1613,8 @@ mod linux_app {
                     sequence: self.last_event_sequence.saturating_mul(2),
                     phase: "failed".to_string(),
                     text: tr_l10n(lang, "capsule.selectionPolish.noSelection").to_string(),
+                    transcript: String::new(),
+                    transcript_font_size: 14,
                     audio_level: None,
                     translation_active: false,
                     style: self.capsule_style_tag(),
@@ -1910,6 +2048,15 @@ mod linux_app {
                         }
                     }
                 }
+            }
+        }
+
+        fn spawn_hotkey<F>(&self, future: F)
+        where
+            F: Future<Output = Result<String, BackendError>> + Send + 'static,
+        {
+            if self.hotkey_jobs.send(Box::pin(future)).is_err() {
+                log::error!("[hotkey] ordered dispatcher stopped");
             }
         }
 
@@ -2348,6 +2495,7 @@ mod linux_app {
             editor.auth_mode = form.auth_mode.clone();
             editor.primary_secret = form.primary_secret.clone();
             editor.secondary_secret = form.secondary_secret.clone();
+            editor.protocol = form.protocol.clone();
             Some(editor)
         }
 
@@ -2380,7 +2528,55 @@ mod linux_app {
 
         /// 关闭渠道编辑器；完全没交互过的草稿在这条路径上被回收
         /// （Tauri `shouldRecycleDraft` + `deleteChannelIfBlank`）。
+        fn queue_provider_save(&mut self) -> bool {
+            if self.provider_save_pending {
+                self.provider_save_again = true;
+                return true;
+            }
+            let Some(editor) = self.editor_from_form() else {
+                return false;
+            };
+            if let Err(error) = editor.protocol.validate() {
+                self.status = error.to_string();
+                return false;
+            }
+            let Some(backend) = self.backend() else {
+                return false;
+            };
+            let tx = self.tx.clone();
+            let wake = std::thread::current();
+            self.provider_save_pending = true;
+            self.draft_touched = true;
+            let job = Box::pin(async move {
+                let result = save_provider_editor(backend, editor.clone())
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::ProviderSaved {
+                    editor: Box::new(editor),
+                    result,
+                });
+                wake.unpark();
+            });
+            if self.provider_jobs.send(job).is_err() {
+                self.provider_save_pending = false;
+                self.status = tr_l10n(self.lang, "common.operationFailed").to_owned();
+                return false;
+            }
+            true
+        }
+
         fn request_provider_editor_close(&mut self) {
+            if self.provider_save_pending {
+                self.provider_close_pending = true;
+                return;
+            }
+            if self
+                .provider_editor_form
+                .as_ref()
+                .is_some_and(|form| form.protocol.validate().is_err())
+            {
+                return;
+            }
             let recycle = self.editor_draft && !self.draft_touched;
             let channel_id = self
                 .provider_editor_form
@@ -2403,6 +2599,8 @@ mod linux_app {
         }
 
         fn close_provider_editor(&mut self) {
+            self.provider_close_pending = false;
+            self.provider_save_again = false;
             self.provider_editor = ProviderEditorState::Idle;
             self.provider_editor_form = None;
             self.frontend_vm.provider_editor = None;
@@ -2423,7 +2621,7 @@ mod linux_app {
                     .provider
                     .list_models(openless_core::ProviderRequest {
                         kind: provider_kind(kind),
-                        thinking_enabled: false,
+                        thinking_enabled: backend.get_preferences().llm_thinking_enabled,
                         channel_id: Some(channel_id.clone()),
                     })
                     .await
@@ -2557,6 +2755,8 @@ mod linux_app {
                                 sequence: event_sequence.saturating_mul(2),
                                 phase: format!("{:?}", state.phase),
                                 text,
+                                transcript: self.capsule_transcript(),
+                                transcript_font_size: self.capsule_transcript_font_size(),
                                 audio_level: Some(state.level),
                                 translation_active: state.translation_active,
                                 style,
@@ -2572,6 +2772,7 @@ mod linux_app {
                         && self.transcript_state.apply(&delta).is_ok() =>
                 {
                     self.transcript = self.transcript_state.text().to_string();
+                    self.sync_capsule_transcript();
                 }
                 BackendEventKind::PolishDelta(delta) if delta.is_final => {
                     self.transcript = delta.text;
@@ -2739,6 +2940,7 @@ mod linux_app {
                         }
                         self.preferences = Some(self.settings_save.rebase(&latest));
                     }
+                    self.sync_capsule_transcript();
                     self.load_remote_status();
                     self.load_library();
                 }
@@ -2922,7 +3124,7 @@ mod linux_app {
                     self.last_event_sequence.saturating_mul(2).saturating_add(1),
                 );
                 if let Some(backend) = self.backend() {
-                    self.spawn(async move {
+                    self.spawn_hotkey(async move {
                         backend.services().qa.dismiss().await?;
                         Ok(tr_l10n(lang, "qa.closed").to_string())
                     });
@@ -2930,8 +3132,9 @@ mod linux_app {
             } else {
                 log::info!("[hotkey] QA panel toggle: showing");
                 if let Some(backend) = self.backend() {
+                    self.qa_visible = true;
                     // `show()` 只发 HostAction::ShowQa：Core 仍停在 Idle，不录音。
-                    self.spawn(async move {
+                    self.spawn_hotkey(async move {
                         backend.services().qa.show().await?;
                         Ok(String::new())
                     });
@@ -2943,7 +3146,7 @@ mod linux_app {
         fn toggle_qa_recording(&mut self) {
             let lang = self.lang;
             if let Some(backend) = self.backend() {
-                self.spawn(async move {
+                self.spawn_hotkey(async move {
                     backend.services().qa.toggle_recording().await?;
                     Ok(tr_l10n(lang, "qa.recording_updated").to_string())
                 });
@@ -2976,8 +3179,7 @@ mod linux_app {
         /// Start/finish a permanent quick note, shared by the button and hotkeys.
         fn toggle_quick_note(&mut self) {
             if let Some(backend) = self.backend() {
-                let tx = self.tx.clone();
-                self.tokio.spawn(async move {
+                self.spawn_hotkey(async move {
                     let result = if backend.dictation_output_target()
                         == Some(openless_core::DictationOutputTarget::QuickNote)
                     {
@@ -2998,9 +3200,8 @@ mod linux_app {
                             .await
                             .map(|_| ())
                     };
-                    if let Err(error) = result {
-                        let _ = tx.send(UiResult::Message(error.to_string()));
-                    }
+                    result?;
+                    Ok(String::new())
                 });
             }
         }
@@ -3094,8 +3295,10 @@ mod linux_app {
                         }
                     }
                     LocalHotkey::Qa => {
-                        log::info!("[hotkey] local selection-ask hotkey: toggling the panel");
-                        self.toggle_qa_panel();
+                        if single_shot {
+                            log::info!("[hotkey] local selection-ask hotkey: toggling the panel");
+                            self.toggle_qa_panel();
+                        }
                     }
                     LocalHotkey::Dictation
                         if edge.kind == LocalHotkeyEdgeKind::Pressed
@@ -3291,7 +3494,7 @@ mod linux_app {
                 let local_edges = std::mem::take(&mut self.pending_local_hotkeys);
                 for event in self.apply_local_hotkey_edges(local_edges) {
                     let host = Arc::clone(&host);
-                    self.spawn(async move {
+                    self.spawn_hotkey(async move {
                         host.dispatch_hotkey_event(event).await?;
                         Ok(tr_l10n(lang, "status.hotkey_handled").to_string())
                     });
@@ -3305,7 +3508,7 @@ mod linux_app {
                         continue;
                     }
                     let host = Arc::clone(&host);
-                    self.spawn(async move {
+                    self.spawn_hotkey(async move {
                         host.dispatch_hotkey_event(event).await?;
                         Ok(tr_l10n(lang, "status.hotkey_handled").to_string())
                     });
@@ -3484,6 +3687,13 @@ mod linux_app {
                         }
                     }
                     UiResult::Message(message) => self.status = message,
+                    UiResult::HotkeyError(error) => {
+                        self.status = if error.message == "selectionPolishSelectionTooLong" {
+                            tr_l10n(self.lang, "selection.source_truncated").to_owned()
+                        } else {
+                            error.to_string()
+                        };
+                    }
                     UiResult::HistoryRepolish { id, result } => {
                         self.frontend_vm.history_repolish_running = false;
                         match result {
@@ -3579,6 +3789,71 @@ mod linux_app {
                     UiResult::Providers(Err(error)) => {
                         self.providers = ProvidersState::Failed;
                         self.status = error;
+                    }
+                    UiResult::ProviderSaved { editor, result } => {
+                        self.provider_save_pending = false;
+                        match result {
+                            Err(error) => {
+                                self.provider_save_again = false;
+                                self.provider_close_pending = false;
+                                self.status = error;
+                            }
+                            Ok(()) => {
+                                let mut changed = false;
+                                if let Some(form) =
+                                    self.provider_editor_form.as_mut().filter(|form| {
+                                        form.channel_id == editor.channel.id
+                                            && form.kind == editor.kind
+                                            && form.provider_type
+                                                == editor.descriptor.provider_type.as_str()
+                                    })
+                                {
+                                    changed = form.name != editor.name
+                                        || form.endpoint != editor.endpoint
+                                        || form.model != editor.model
+                                        || form.resource_id != editor.resource_id
+                                        || form.auth_mode != editor.auth_mode
+                                        || form.protocol.values != editor.protocol.values
+                                        || form.protocol.temperature != editor.protocol.temperature
+                                        || (!form.primary_secret.is_empty()
+                                            && form.primary_secret != editor.primary_secret)
+                                        || (!form.secondary_secret.is_empty()
+                                            && form.secondary_secret != editor.secondary_secret)
+                                        || (!form.protocol.extra_headers.is_empty()
+                                            && form.protocol.extra_headers
+                                                != editor.protocol.extra_headers);
+                                    // Erase only acknowledged drafts, never text entered during a save.
+                                    if form.primary_secret == editor.primary_secret {
+                                        form.primary_secret.clear();
+                                    }
+                                    if form.secondary_secret == editor.secondary_secret {
+                                        form.secondary_secret.clear();
+                                    }
+                                    if form.protocol.extra_headers == editor.protocol.extra_headers
+                                    {
+                                        form.protocol.extra_headers.clear();
+                                    }
+                                }
+                                self.status = tr_l10n(self.lang, "status.channel_saved").to_owned();
+                                self.load_settings_channels();
+                                self.load_service_configured();
+                                let again = std::mem::take(&mut self.provider_save_again);
+                                if again || (self.provider_close_pending && changed) {
+                                    if !self.queue_provider_save() {
+                                        self.provider_close_pending = false;
+                                    }
+                                } else if self.provider_close_pending {
+                                    self.close_provider_editor();
+                                }
+                            }
+                        }
+                    }
+                    UiResult::ProviderSecretsCleared(result) => {
+                        self.status = match result {
+                            Ok(()) => tr_l10n(self.lang, "status.secret_cleared").to_owned(),
+                            Err(error) => error,
+                        };
+                        self.load_service_configured();
                     }
                     UiResult::ProviderEditor {
                         kind,
@@ -4154,6 +4429,9 @@ mod linux_app {
                 s.microphone_error = self.microphone_error.clone();
                 // 胶囊开关与样式（Tauri `showCapsule` / `capsuleStyle`）。
                 s.show_capsule = prefs.show_capsule;
+                s.capsule_transcript = prefs.capsule_transcript_enabled;
+                s.capsule_transcript_font_size =
+                    usize::from(prefs.capsule_transcript_font_size.clamp(12, 20));
                 s.capsule_style = match prefs.capsule_style {
                     openless_core::shared_types::CapsuleStyle::Classic => 1,
                     openless_core::shared_types::CapsuleStyle::Typeless => 2,
@@ -4178,6 +4456,7 @@ mod linux_app {
                 }
                 s.remote_default_mode = usize::from(prefs.remote_input_default_mode == "hold");
                 s.system_proxy = prefs.use_system_proxy;
+                s.llm_thinking_enabled = prefs.llm_thinking_enabled;
                 s.multimodal = prefs.multimodal_pipeline_enabled;
                 s.less_computer = prefs.coding_agent_enabled;
                 s.coding_agent_provider = match prefs.coding_agent_provider.as_str() {
@@ -4332,6 +4611,7 @@ mod linux_app {
                     default_model: form.default_model.clone(),
                     has_models_url: form.models_url.is_some(),
                     custom_model: form.custom_model,
+                    protocol: form.protocol.clone(),
                     busy: matches!(self.provider_editor, ProviderEditorState::Loading),
                 }
             });
@@ -5911,40 +6191,55 @@ mod linux_app {
                                 frontend::view_model::SettingsProviderField::SecondarySecret => {
                                     form.secondary_secret = value
                                 }
+                                frontend::view_model::SettingsProviderField::RequestFormat => {
+                                    form.protocol.values[0] = value
+                                }
+                                frontend::view_model::SettingsProviderField::MessagesThinking => {
+                                    form.protocol.values[1] = value
+                                }
+                                frontend::view_model::SettingsProviderField::MaxTokens => {
+                                    form.protocol.values[2] = value
+                                }
+                                frontend::view_model::SettingsProviderField::ThinkingBudget => {
+                                    form.protocol.values[3] = value
+                                }
+                                frontend::view_model::SettingsProviderField::ServiceTier => {
+                                    form.protocol.values[4] = value
+                                }
+                                frontend::view_model::SettingsProviderField::Temperature => {
+                                    form.protocol.temperature = value
+                                }
+                                frontend::view_model::SettingsProviderField::ExtraHeaders => {
+                                    form.protocol.extra_headers = value
+                                }
                             }
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderSave => {
-                        self.draft_touched = true;
-                        if let Some(editor) = self.editor_from_form() {
-                            if let Some(backend) = self.backend() {
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    save_provider_editor(backend, editor).await?;
-                                    Ok(tr_l10n(lang, "status.channel_saved").to_string())
-                                });
-                                // Secrets are write-only: drop the drafts once Core
-                                // has them so they are not kept in egui state.
-                                if let Some(form) = self.provider_editor_form.as_mut() {
-                                    form.primary_secret.clear();
-                                    form.secondary_secret.clear();
-                                }
-                                self.load_settings_channels();
-                                self.load_service_configured();
-                            }
-                        }
+                        self.queue_provider_save();
                     }
                     frontend::view_model::FrontendAction::SettingsProviderClearSecrets => {
                         if let Some(editor) = self.editor_from_form() {
                             if let Some(backend) = self.backend() {
-                                let lang = self.lang;
-                                self.spawn(async move {
-                                    clear_provider_secrets(Arc::clone(&backend), &editor).await?;
-                                    Ok(tr_l10n(lang, "status.secret_cleared").to_string())
+                                let tx = self.tx.clone();
+                                let wake = std::thread::current();
+                                let job = Box::pin(async move {
+                                    let result = clear_provider_secrets(backend, &editor)
+                                        .await
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(UiResult::ProviderSecretsCleared(result));
+                                    wake.unpark();
                                 });
+                                if self.provider_jobs.send(job).is_err() {
+                                    self.status =
+                                        tr_l10n(self.lang, "common.operationFailed").to_owned();
+                                    continue;
+                                }
+                                self.provider_save_again = false;
                                 if let Some(form) = self.provider_editor_form.as_mut() {
                                     form.primary_secret.clear();
                                     form.secondary_secret.clear();
+                                    form.protocol.extra_headers.clear();
                                 }
                                 self.load_service_configured();
                             }
@@ -6487,6 +6782,9 @@ mod linux_app {
         backend: Arc<openless_core::OpenLessBackend>,
         editor: ProviderEditor,
     ) -> Result<(), BackendError> {
+        if !editor.protocol.formats.is_empty() {
+            editor.protocol.validate()?;
+        }
         let channel_id = editor.channel.id.as_str();
         backend
             .rename_channel(editor.kind, channel_id.to_string(), editor.name)
@@ -6599,6 +6897,41 @@ mod linux_app {
                 .await?;
             }
         }
+        if matches!(
+            editor.descriptor.provider_type.as_str(),
+            "custom" | "custom_responses" | "custom_messages"
+        ) {
+            write_or_remove_provider_value(
+                &backend,
+                editor.kind,
+                channel_id,
+                openless_core::credentials::LLM_TEMPERATURE_ACCOUNT,
+                &editor.protocol.temperature,
+            )
+            .await?;
+            write_secret_if_entered(
+                &backend,
+                editor.kind,
+                channel_id,
+                openless_core::credentials::LLM_EXTRA_HEADERS_ACCOUNT,
+                &editor.protocol.extra_headers,
+            )
+            .await?;
+        }
+        if !editor.protocol.formats.is_empty() {
+            for (account, value) in openless_core::llm_protocol::CONFIG_ACCOUNTS
+                .iter()
+                .zip(&editor.protocol.values)
+            {
+                if *account == openless_core::llm_protocol::SERVICE_TIER_ACCOUNT
+                    && editor.descriptor.provider_type.as_str() != "ark"
+                {
+                    continue;
+                }
+                write_or_remove_provider_value(&backend, editor.kind, channel_id, account, value)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -6620,6 +6953,18 @@ mod linux_app {
             ],
             _ => &[api_key_account(editor.kind)],
         };
+        if matches!(
+            editor.descriptor.provider_type.as_str(),
+            "custom" | "custom_responses" | "custom_messages"
+        ) {
+            backend
+                .remove_credential(provider_credential_key(
+                    editor.kind,
+                    &editor.channel.id,
+                    openless_core::credentials::LLM_EXTRA_HEADERS_ACCOUNT,
+                )?)
+                .await?;
+        }
         for account in accounts {
             backend
                 .remove_credential(provider_credential_key(
@@ -6682,7 +7027,41 @@ mod linux_app {
             } else {
                 (String::new(), String::new())
             };
+        let mut protocol = openless_linux_egui::provider_protocol::ProviderProtocolDraft {
+            default_format: descriptor.default_request_format.unwrap_or_default(),
+            formats: descriptor.supported_request_formats.clone(),
+            ..Default::default()
+        };
+        if kind == openless_core::ChannelKind::Llm && !protocol.formats.is_empty() {
+            for (index, account) in openless_core::llm_protocol::CONFIG_ACCOUNTS
+                .iter()
+                .enumerate()
+            {
+                if *account == openless_core::llm_protocol::SERVICE_TIER_ACCOUNT
+                    && descriptor.provider_type.as_str() != "ark"
+                {
+                    continue;
+                }
+                protocol.values[index] = read_provider_value(&backend, kind, &channel.id, account)
+                    .await?
+                    .unwrap_or_default();
+            }
+        }
+        if matches!(
+            descriptor.provider_type.as_str(),
+            "custom" | "custom_responses" | "custom_messages"
+        ) {
+            protocol.temperature = read_provider_value(
+                &backend,
+                kind,
+                &channel.id,
+                openless_core::credentials::LLM_TEMPERATURE_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+        }
         Ok(ProviderEditor {
+            protocol,
             kind,
             name: channel.name.clone(),
             channel,
@@ -6709,7 +7088,7 @@ mod linux_app {
             .provider
             .validate(openless_core::ProviderRequest {
                 kind: provider_kind(kind),
-                thinking_enabled: false,
+                thinking_enabled: backend.get_preferences().llm_thinking_enabled,
                 channel_id: Some(channel_id.clone()),
             })
             .await;
@@ -6910,6 +7289,7 @@ mod linux_app {
             attempts: u8,
             focus_window: Option<u32>,
             focus_watch_remaining: u8,
+            last_capsule_layout: Option<(u32, u32, bool)>,
         }
 
         impl PopupOverlay {
@@ -6959,6 +7339,7 @@ mod linux_app {
                     attempts: 0,
                     focus_window: None,
                     focus_watch_remaining: 0,
+                    last_capsule_layout: None,
                 })
             }
 
@@ -6969,6 +7350,7 @@ mod linux_app {
             }
 
             fn apply(&mut self, reason: &str) -> OverlayPlacement {
+                self.last_capsule_layout = None;
                 let placement = place_overlay(
                     &mut self.connection,
                     std::process::id(),
@@ -7008,6 +7390,37 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     placement.warnings
                 );
                 placement
+            }
+
+            pub fn capsule_layout(&mut self, ctx: &egui::Context, size: (u32, u32), card: bool) {
+                if self.kind != PopupKind::Capsule
+                    || self.last_capsule_layout == Some((size.0, size.1, card))
+                {
+                    return;
+                }
+                self.last_capsule_layout = Some((size.0, size.1, card));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    size.0 as f32,
+                    size.1 as f32,
+                )));
+                let position = if card {
+                    self.environment.placement_area().map(|area| {
+                        openless_linux_egui::clamp_to_area(
+                            area.x + area.width as i32 - size.0 as i32 - 24,
+                            area.y + area.height as i32 - size.1 as i32 - 24,
+                            size,
+                            area,
+                        )
+                    })
+                } else {
+                    self.environment
+                        .position_for(size, openless_linux_egui::CAPSULE_BOTTOM_GAP)
+                };
+                if let Some((x, y)) = position {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        x as f32, y as f32,
+                    )));
+                }
             }
 
             pub fn place(&mut self, ctx: &egui::Context, visible: bool) {
@@ -7119,6 +7532,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
 
             pub fn place(&mut self, _ctx: &egui::Context, _visible: bool) {}
+            pub fn capsule_layout(&mut self, _ctx: &egui::Context, _size: (u32, u32), _card: bool) {
+            }
         }
     }
 
@@ -7382,9 +7797,23 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                     exit = true;
                 }
             }
+            let size = frontend::popups::capsule_window_size(&capsule);
+            let card = !capsule.suggestions.is_empty();
             openless_linux_egui::LayerFrame {
                 output,
                 exit,
+                capsule_layout: Some((
+                    openless_linux_egui::capsule_geometry(
+                        size.0,
+                        size.1,
+                        if card {
+                            24
+                        } else {
+                            openless_linux_egui::CAPSULE_BOTTOM_GAP
+                        },
+                    ),
+                    card,
+                )),
                 // Same cadence as the windowed popup: animate fast, idle slowly.
                 repaint_after: Duration::from_millis(if self.state.visible && animated {
                     33
@@ -7410,6 +7839,15 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             }
             if self.pump(Some(&ctx)) {
                 return;
+            }
+            if self.kind == PopupKind::Capsule {
+                if let Some(overlay) = self.overlay.as_mut() {
+                    overlay.capsule_layout(
+                        &ctx,
+                        frontend::popups::capsule_window_size(&self.state.capsule),
+                        !self.state.capsule.suggestions.is_empty(),
+                    );
+                }
             }
             self.send_ready_if_needed();
             self.poll_local_hotkeys(&ctx);
@@ -7780,6 +8218,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         return openless_linux_egui::LayerFrame {
                             output,
                             exit: true,
+                            capsule_layout: None,
                             repaint_after: std::time::Duration::from_millis(0),
                         };
                     }
@@ -7856,8 +8295,8 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::LESS_COMPUTER_WINDOW_SIZE.1 as f32,
             ],
-            // Fixed 460×180 Siri stage; classic pills keep their own smaller
-            // painted bounds inside it. No phase-dependent host resizing.
+            // Recording keeps a fixed 460x180 Siri stage plus the transcript rail;
+            // only an idle vocabulary card changes the host size and placement.
             PopupKind::Capsule => [
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.0 as f32,
                 openless_linux_egui::CAPSULE_WINDOW_SIZE.1 as f32,
@@ -7966,6 +8405,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // 没有托盘时必须开窗，否则关掉就再也找不回来。
         let window_should_be_open = !start_minimized || !tray_available;
         let ctx = egui::Context::default();
+        native.set_hotkey_waker(std::thread::current());
         let mut app = OpenLessEguiApp::new(tokio, Ok(native), tray, window_should_be_open);
         app.runtime_warning = runtime_warning;
         let mut ui_bridge = UiBridgeHost::bind(socket.clone())
@@ -8008,7 +8448,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             if app.exit_requested {
                 break;
             }
-            std::thread::sleep(HOST_TICK_INTERVAL);
+            std::thread::park_timeout(HOST_TICK_INTERVAL);
         }
         log::info!("[ui-host] host exiting; asking the UI window to close");
         ui_bridge.shutdown();
@@ -8177,6 +8617,27 @@ Internal flags (set by OpenLess itself, not for regular use):
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn capsule_uses_raw_accumulator_not_polished_output_and_respects_preferences() {
+            let mut app = fixture_app(false);
+            app.transcript_state
+                .apply(&openless_core::TranscriptDelta {
+                    text: "raw words".into(),
+                    offset: 0,
+                    is_final: false,
+                })
+                .unwrap();
+            app.transcript = "polished output".into();
+            app.preferences = Some(UserPreferences::default());
+            assert_eq!(app.capsule_transcript(), "raw words");
+            assert_eq!(app.capsule_transcript_font_size(), 14);
+            let prefs = app.preferences.as_mut().unwrap();
+            prefs.capsule_transcript_enabled = false;
+            prefs.capsule_transcript_font_size = 255;
+            assert!(app.capsule_transcript().is_empty());
+            assert_eq!(app.capsule_transcript_font_size(), 20);
+        }
 
         #[test]
         fn style_example_changes_mark_the_editor_dirty() {
@@ -8706,6 +9167,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 sequence: 1,
                 phase: "Recording".into(),
                 text: String::new(),
+                transcript: String::new(),
+                transcript_font_size: 14,
                 audio_level: Some(0.2),
                 translation_active: false,
                 style: "siri".into(),
@@ -9069,6 +9532,9 @@ Internal flags (set by OpenLess itself, not for regular use):
 
 #[cfg(target_os = "linux")]
 fn main() {
+    // Select a process-wide provider before HTTPS or secure WebSocket clients start.
+    // reqwest and the native TLS listener enable different rustls provider features.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if let Err(error) = linux_app::run() {
         eprintln!("OpenLess Linux UI failed: {error}");
         std::process::exit(1);

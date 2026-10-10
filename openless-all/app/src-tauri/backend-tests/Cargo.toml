@@ -10,7 +10,7 @@ anyhow = "1"
 openless-core = { path = "../../crates/openless-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
-rcgen = { version = "0.13", features = ["x509-parser"] }
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
 x509-parser = { version = "0.16", features = ["verify"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }

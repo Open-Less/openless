@@ -149,6 +149,194 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
+    Msg {
+        key: "providers.extra_headers_hint",
+        text: row(
+            "不读取已保存的请求头。留空保留；清除密钥时一并移除。",
+            "不讀取已儲存的請求標頭。留空保留；清除密鑰時一併移除。",
+            "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
+            "保存済みヘッダーは読み戻しません。空欄なら保持し、秘密情報の削除時に一緒に削除します。",
+            "저장된 헤더는 다시 읽지 않습니다. 비워 두면 유지되며 비밀 정보 삭제 시 함께 제거됩니다.",
+        ),
+    },
+    Msg {
+        key: "selection.source_truncated",
+        text: row(
+            "选区包含截断占位，未替换，以免删除未读取的原文。",
+            "選取範圍含有截斷佔位，未替換，以免刪除未讀取的原文。",
+            "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
+            "選択範囲に省略されたテキストが含まれています。未取得の原文を保護するため、置換しませんでした。",
+            "선택 영역에 잘린 대체 텍스트가 포함되어 있습니다. 생략된 원문을 보호하기 위해 교체하지 않았습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptLabel",
+        text: row(
+            "显示流式原文",
+            "顯示串流原文",
+            "Show live transcript",
+            "文字起こしをリアルタイム表示",
+            "실시간 원문 표시",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptDesc",
+        text: row(
+            "在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。",
+            "在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。",
+            "Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.",
+            "音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。",
+            "오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptFontSize",
+        text: row(
+            "原文字号",
+            "原文字級",
+            "Transcript font size",
+            "文字起こしの文字サイズ",
+            "원문 글자 크기",
+        ),
+    },
+        Msg {
+        key: "settings.providers.requestFormatLabel",
+        text: row(
+            "请求格式",
+            "請求格式",
+            "Request format",
+            "リクエスト形式",
+            "요청 형식",
+        ),
+    },
+        Msg {
+        key: "settings.providers.responsesThinkingHint",
+        text: row(
+            "部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。",
+            "部分模型只能降低思考，無法完全關閉。推理請求不傳送溫度引數。",
+            "Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.",
+            "一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。",
+            "일부 모델은 사고를 줄일 수만 있으며 완전히 끌 수 없습니다. 추론 요청에는 온도를 보내지 않습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.serviceTierLabel",
+        text: row(
+            "方舟低延迟推理（fast）",
+            "方舟低延遲推理（fast）",
+            "Ark low-latency inference (fast)",
+            "Ark 低レイテンシ推論（fast）",
+            "Ark 저지연 추론(fast)",
+        ),
+    },
+        Msg {
+        key: "settings.providers.serviceTierHint",
+        text: row(
+            "仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。",
+            "僅適用於支援低延遲的方舟模型；不支援的模型可能回傳 400。",
+            "Only supported Ark models can use this option; unsupported models may return 400.",
+            "対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。",
+            "지원되는 Ark 모델에서만 사용할 수 있으며, 지원되지 않는 모델은 400을 반환할 수 있습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.messagesThinkingLabel",
+        text: row(
+            "思考方式",
+            "思考方式",
+            "Thinking mode",
+            "思考方式",
+            "사고 방식",
+        ),
+    },
+        Msg {
+        key: "settings.providers.thinkingAdaptive",
+        text: row("自适应", "自適應", "Adaptive", "適応型", "적응형"),
+    },
+        Msg {
+        key: "settings.providers.thinkingBudget",
+        text: row("固定预算", "固定預算", "Fixed budget", "固定予算", "고정 예산"),
+    },
+        Msg {
+        key: "settings.providers.maxTokensLabel",
+        text: row(
+            "最大输出 tokens",
+            "最大輸出 tokens",
+            "Maximum output tokens",
+            "最大出力トークン数",
+            "최대 출력 토큰",
+        ),
+    },
+        Msg {
+        key: "settings.providers.thinkingBudgetLabel",
+        text: row(
+            "思考预算 tokens",
+            "思考預算 tokens",
+            "Thinking budget tokens",
+            "思考トークン予算",
+            "사고 토큰 예산",
+        ),
+    },
+        Msg {
+        key: "settings.providers.messagesThinkingHint",
+        text: row(
+            "旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。",
+            "舊模型或相容閘道可能需要固定預算；思考預算必須小於最大輸出。開啟思考時不傳送溫度引數。",
+            "Older models or compatible gateways may need a fixed budget below the output limit. Thinking requests omit temperature.",
+            "旧モデルや互換ゲートウェイでは固定予算が必要な場合があります。予算は最大出力未満にしてください。思考時は温度を送信しません。",
+            "이전 모델이나 호환 게이트웨이는 고정 예산이 필요할 수 있습니다. 예산은 출력 한도보다 작아야 합니다. 사고 요청에는 온도를 보내지 않습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmServiceTierInvalid",
+        text: row(
+            "低延迟推理选项无效，请重新选择。",
+            "低延遲推理選項無效，請重新選擇。",
+            "Invalid low-latency inference option. Select it again.",
+            "低レイテンシ推論の設定が無効です。もう一度選択してください。",
+            "저지연 추론 옵션이 잘못되었습니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmRequestFormatInvalid",
+        text: row(
+            "请求格式无效，请重新选择。",
+            "請求格式無效，請重新選擇。",
+            "Invalid request format. Select a supported format.",
+            "リクエスト形式が無効です。選択し直してください。",
+            "잘못된 요청 형식입니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmThinkingModeInvalid",
+        text: row(
+            "思考方式无效，请重新选择。",
+            "思考方式無效，請重新選擇。",
+            "Invalid thinking mode. Select a supported mode.",
+            "思考方式が無効です。選択し直してください。",
+            "잘못된 사고 방식입니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmTokenLimitInvalid",
+        text: row(
+            "Token 上限必须为正整数。",
+            "Token 上限必須為正整數。",
+            "Token limits must be positive integers.",
+            "トークン上限は正の整数にしてください。",
+            "토큰 한도는 양의 정수여야 합니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmThinkingBudgetInvalid",
+        text: row(
+            "思考预算至少为 1024，且固定预算必须小于最大输出。",
+            "思考預算至少為 1024，且固定預算必須小於最大輸出。",
+            "Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.",
+            "思考予算は1024以上、固定予算では最大出力未満にしてください。",
+            "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
+        ),
+    },
     // ---- Shell / navigation ------------------------------------------------
 
     Msg {
@@ -5946,6 +6134,64 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.channels.edit",
         text: row("编辑", "編輯", "Edit", "編集", "편집"),
+    },
+    Msg {
+        key: "settings.providers.extraHeadersLabel",
+        text: row(
+            "额外 Headers",
+            "額外 Headers",
+            "Extra headers",
+            "追加 Headers",
+            "추가 Headers",
+        ),
+    },
+    Msg {
+        key: "settings.providers.extraHeadersPlaceholder",
+        text: row(
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+        ),
+    },
+    Msg {
+        key: "settings.providers.temperatureLabel",
+        text: row("Temperature", "Temperature", "Temperature", "Temperature", "Temperature"),
+    },
+    Msg {
+        key: "settings.providers.temperaturePlaceholder",
+        text: row(
+            "留空则不发送；范围 0～2（含边界），例如 0.3",
+            "留空則不傳送；範圍 0～2（含邊界），例如 0.3",
+            "Leave empty to omit; range 0–2 inclusive, e.g. 0.3",
+            "空欄なら送信しません。範囲は 0〜2（両端を含む）。例: 0.3",
+            "비워 두면 보내지 않음. 범위 0~2(양 끝 포함), 예: 0.3",
+        ),
+    },
+    Msg {
+        key: "settings.providers.thinkingModeHint",
+        text: row(
+            "按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。",
+            "依所選請求格式與模型支援的引數啟用、關閉或降低思考，不在提示詞注入控制指令。",
+            "Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.",
+            "選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。",
+            "선택한 요청 형식과 모델이 지원하는 매개변수로 사고를 켜거나 끄거나 줄입니다. 프롬프트에 제어 지시를 추가하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.thinkingModeLabel",
+        text: row("思考", "思考", "Thinking", "思考", "사고"),
+    },
+    Msg {
+        key: "common.operationFailed",
+        text: row(
+            "操作失败",
+            "操作失敗",
+            "Operation failed",
+            "操作に失敗しました",
+            "작업 실패",
+        ),
     },
 ];
 

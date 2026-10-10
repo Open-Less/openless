@@ -73,10 +73,9 @@ pub enum CapsuleAction {
 const CARD_WIDTH: f32 = 320.0;
 const CARD_CHROME: f32 = 72.0;
 const CARD_ROW: f32 = 36.0;
-/// 卡片到窗口边缘的留白（Tauri `VOCAB_CARD_EDGE_MARGIN`）。
-const CARD_EDGE: f32 = 12.0;
-/// 行数多到装不下时标题区至少留这么高，剩下的分给行 —— Tauri 会改窗口大小，我们这个
-/// 舞台是固定的 460×180，所以宁可压行高，也不让最后一行露在窗外。
+// The card fills its dynamically sized window; the host applies the 24px screen-edge gap.
+const CARD_EDGE: f32 = 0.0;
+// Fallback while a compositor has not acknowledged the new window size yet.
 const CARD_CHROME_MIN: f32 = 44.0;
 const CARD_BUTTON: f32 = 28.0;
 /// 标题占的高度（画的时候用固定值，几何才能是纯函数、测试才点得中按钮）。
@@ -94,10 +93,18 @@ pub(crate) struct VocabCardRow {
     pub reject: egui::Rect,
 }
 
-/// 按 Tauri `VocabSuggestionCard` 的尺寸算卡片几何。
-///
-/// 与 Tauri 的唯一差别：Tauri 会把窗口改成卡片大小（320 × 72+36n）并挪到屏幕右下角，
-/// 我们的胶囊舞台是固定的 460×180，所以行数多时压缩行高，并把卡片靠右放。
+// Tauri VocabSuggestionCard window size; recording keeps the fixed Siri stage.
+pub(crate) fn capsule_window_size(state: &CapsulePopupState) -> (u32, u32) {
+    if state.suggestions.is_empty() {
+        openless_linux_egui::CAPSULE_WINDOW_SIZE
+    } else {
+        (
+            CARD_WIDTH as u32,
+            CARD_CHROME as u32 + CARD_ROW as u32 * state.suggestions.len() as u32,
+        )
+    }
+}
+
 pub(crate) fn vocab_card_layout(stage: egui::Rect, rows: usize) -> VocabCardLayout {
     let count = rows.max(1) as f32;
     let max_height = (stage.height() - 2.0 * CARD_EDGE).max(CARD_CHROME_MIN);
@@ -1136,6 +1143,7 @@ pub fn dictation_capsule(
     let phase = state.phase.to_ascii_lowercase();
     // 「要记住这个词吗？」卡片与录音胶囊共用一个窗口：有候选时整窗只画这张卡。
     if !state.suggestions.is_empty() {
+        super::transcript_motion::clear(root_ui);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(root_ui, |ui| {
@@ -1180,8 +1188,19 @@ pub fn dictation_capsule(
                 egui::vec2(pill_width, pill_height),
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
+            let transcript_visible = paint_capsule_transcript(ui, available, rect, state);
             if state.translation_active {
-                translating_badge(ui, rect, lang, if typeless { TYPELESS_SCALE } else { 1.0 });
+                let badge_anchor = if transcript_visible && !siri {
+                    rect.translate(egui::vec2(0.0, -60.0))
+                } else {
+                    rect
+                };
+                translating_badge(
+                    ui,
+                    badge_anchor,
+                    lang,
+                    if typeless { TYPELESS_SCALE } else { 1.0 },
+                );
             }
             // The capsule footprint is invariant across recording, thinking and
             // terminal frames. The old volume scale made the pill visibly jump
@@ -1235,9 +1254,15 @@ pub fn dictation_capsule(
             // large actions only while recording, then only its small stop
             // action while processing.
             let center = if siri {
-                // Siri is a full 460×180 light stage, not a wave squeezed
-                // inside the classic 176×42 pill. All phases share this host.
-                available
+                // Keep the light stage at 460×180; the sibling transcript rail
+                // owns the extra 48px above it, never stretches the shader.
+                egui::Rect::from_min_max(
+                    egui::pos2(
+                        available.left(),
+                        (available.bottom() - 180.0).max(available.top()),
+                    ),
+                    available.right_bottom(),
+                )
             } else if typeless && phase != "recording" {
                 if processing {
                     let stop_rect = egui::Rect::from_center_size(
@@ -1495,6 +1520,46 @@ pub fn dictation_capsule(
 /// Siri 舞台的错误提示（Tauri `VoiceOrbStage` 的 `errorGlowTextStyle`）：底部居中的
 /// 红字药丸；文案优先用宿主给的 `message`（例如选区润色的「未选中内容」），缺省才是
 /// 通用的「出现错误」。
+/// Raw ASR belongs above the light/pill, never replaces audio feedback or controls.
+fn paint_capsule_transcript(
+    ui: &egui::Ui,
+    stage: egui::Rect,
+    pill: egui::Rect,
+    state: &CapsulePopupState,
+) -> bool {
+    let phase = state.phase.to_ascii_lowercase();
+    if !matches!(phase.as_str(), "recording" | "transcribing" | "polishing")
+        || state.transcript.trim().is_empty()
+    {
+        super::transcript_motion::clear(ui);
+        return false;
+    }
+    let dark = state.style == "typeless";
+    let siri = state.style != "classic" && !dark;
+    let height = if siri { 40.0 } else { 52.0 };
+    let bottom = if siri {
+        stage.bottom() - 180.0 - 8.0
+    } else {
+        pill.top() - 8.0
+    };
+    let font = egui::FontId::proportional(state.transcript_font_size.clamp(12, 20) as f32);
+    let ink = if dark { TYPELESS_INK } else { theme::INK };
+    super::transcript_motion::paint(
+        ui,
+        state.transcript.trim(),
+        super::transcript_motion::RailStyle {
+            stage,
+            bottom,
+            height,
+            font,
+            ink,
+            background: if dark { TYPELESS_BG } else { theme::SURFACE },
+            border: if dark { TYPELESS_BORDER } else { theme::LINE },
+        },
+    );
+    true
+}
+
 pub fn paint_siri_error(ui: &egui::Ui, center: egui::Rect, state: &CapsulePopupState, lang: Lang) {
     let text = if state.text.trim().is_empty() {
         tr_l10n(lang, "capsule.error").to_string()
@@ -3219,6 +3284,37 @@ mod tests {
     }
 
     #[test]
+    fn raw_transcript_rail_keeps_all_styles_and_hides_on_terminal_phases() {
+        for style in ["siri", "classic", "typeless"] {
+            for phase in [
+                "Recording",
+                "Transcribing",
+                "Polishing",
+                "Completed",
+                "Failed",
+                "Cancelled",
+            ] {
+                let state = CapsulePopupState {
+                    phase: phase.into(),
+                    style: style.into(),
+                    transcript: "raw ASR words".into(),
+                    transcript_font_size: 18,
+                    ..Default::default()
+                };
+                let painted = run(egui::vec2(460.0, 228.0), |ui| {
+                    dictation_capsule(ui, &state, Lang::En, siri_wgpu::DEFAULT_WARMUP_MS);
+                    String::new()
+                });
+                assert_eq!(
+                    painted.contains("raw ASR words"),
+                    matches!(phase, "Recording" | "Transcribing" | "Polishing"),
+                    "style={style}, phase={phase}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn recording_capsule_paints_no_coloured_outline() {
         // Tauri 的经典药丸只有 1px 中性描边（Capsule.tsx：border 1px
         // var(--ol-capsule-pill-border)）；录音音量只驱动中心波形。
@@ -3229,6 +3325,8 @@ mod tests {
                 phase: phase.to_string(),
                 text: String::new(),
                 audio_level: Some(0.6),
+                transcript: String::new(),
+                transcript_font_size: 14,
                 translation_active: false,
                 style: "classic".to_string(),
                 suggestions: Vec::new(),
@@ -3254,6 +3352,8 @@ mod tests {
             phase: "Recording".to_string(),
             text: String::new(),
             audio_level: Some(0.6),
+            transcript: String::new(),
+            transcript_font_size: 14,
             translation_active: false,
             style: "siri".to_string(),
             suggestions: Vec::new(),
@@ -3402,6 +3502,8 @@ mod tests {
             phase: "Recording".to_string(),
             text: String::new(),
             audio_level: Some(0.4),
+            transcript: String::new(),
+            transcript_font_size: 14,
             translation_active: false,
             style: "siri".to_string(),
             suggestions: Vec::new(),
@@ -3456,6 +3558,8 @@ mod tests {
         let done = CapsulePopupState {
             phase: "Completed".to_string(),
             text: inserted_message(Lang::ZhCn, 12),
+            transcript: String::new(),
+            transcript_font_size: 14,
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),
@@ -3483,6 +3587,8 @@ mod tests {
         let failed = CapsulePopupState {
             phase: "Failed".to_string(),
             text: String::new(),
+            transcript: String::new(),
+            transcript_font_size: 14,
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),

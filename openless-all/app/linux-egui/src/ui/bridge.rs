@@ -485,6 +485,7 @@ fn spawn_connection(stream: UnixStream) -> std::io::Result<UiConnection> {
     let (incoming_tx, incoming_rx) = mpsc::channel();
     let (outgoing_tx, outgoing_rx) = mpsc::channel::<Outgoing>();
     let reader_outgoing = outgoing_tx.clone();
+    let host_thread = std::thread::current();
 
     let reader = std::thread::Builder::new()
         .name("openless-ui-host-reader".into())
@@ -496,6 +497,7 @@ fn spawn_connection(stream: UnixStream) -> std::io::Result<UiConnection> {
                         if incoming_tx.send(frame).is_err() {
                             break;
                         }
+                        host_thread.unpark();
                     }
                     // EOF：UI 进程退出（正常关闭或被杀）。
                     Ok(None) => break,
@@ -506,6 +508,7 @@ fn spawn_connection(stream: UnixStream) -> std::io::Result<UiConnection> {
                 }
             }
             let _ = reader_outgoing.send(Outgoing::Stop);
+            host_thread.unpark();
             let _ = reader.get_ref().shutdown(std::net::Shutdown::Both);
         })?;
 

@@ -121,8 +121,11 @@ impl LocalStorage {
     ) -> SyncResult<SyncSecretAccount> {
         let binding = serde_json::to_vec(&[&self.origin, owner, vault, key, &self.device_id])
             .map_err(|_| error("local_storage_unavailable"))?;
-        SyncSecretAccount::new(format!("cloud-sync.e2ee.key.{:x}", Sha256::digest(binding)))
-            .map_err(|_| error("local_storage_unavailable"))
+        SyncSecretAccount::new(format!(
+            "cloud-sync.e2ee.key.{}",
+            hex::encode(Sha256::digest(binding))
+        ))
+        .map_err(|_| error("local_storage_unavailable"))
     }
 
     pub(crate) async fn key(&self) -> SyncResult<Arc<DerivedKey>> {
@@ -130,8 +133,8 @@ impl LocalStorage {
             .get_or_try_init(|| async {
                 let aad = self.aad("device", "storage-key")?;
                 let account = SyncSecretAccount::new(format!(
-                    "cloud-sync.e2ee.local.{:x}",
-                    Sha256::digest(aad)
+                    "cloud-sync.e2ee.local.{}",
+                    hex::encode(Sha256::digest(aad))
                 ))
                 .map_err(|_| error("local_storage_unavailable"))?;
                 let value = self
@@ -214,8 +217,10 @@ impl LocalStorage {
 
     fn path(&self, owner: &str, name: &str) -> PathBuf {
         let id = format!("{owner}\0{name}");
-        self.root
-            .join(format!("{:x}.enc", Sha256::digest(id.as_bytes())))
+        self.root.join(format!(
+            "{}.enc",
+            hex::encode(Sha256::digest(id.as_bytes()))
+        ))
     }
 
     pub(crate) async fn read<T: DeserializeOwned + Send + 'static>(

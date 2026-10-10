@@ -121,6 +121,10 @@ pub enum HostToPopup {
         phase: String,
         #[serde(default)]
         text: String,
+        #[serde(default)]
+        transcript: String,
+        #[serde(default = "default_transcript_font_size")]
+        transcript_font_size: u8,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audio_level: Option<f32>,
         /// 正在翻译：药丸上方显示「正在翻译」徽章（Tauri `capsule.translating`）。
@@ -683,17 +687,38 @@ pub struct QaPopupState {
     pub viewer_login: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+fn default_transcript_font_size() -> u8 {
+    14
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CapsulePopupState {
     pub phase: String,
     pub text: String,
     pub audio_level: Option<f32>,
+    pub transcript: String,
+    pub transcript_font_size: u8,
     pub translation_active: bool,
     /// 胶囊样式（`siri` / `classic` / `typeless`）。
     pub style: String,
     /// 「要记住这个词吗？」卡片的内容（Tauri `PendingCorrection`）。非空时整窗只画
     /// 这张卡 —— 它就是「确认式词库学习」的确认入口，没有它自动学词永远不会落库。
     pub suggestions: Vec<CapsuleSuggestion>,
+}
+
+impl Default for CapsulePopupState {
+    fn default() -> Self {
+        Self {
+            phase: String::new(),
+            text: String::new(),
+            audio_level: None,
+            transcript: String::new(),
+            transcript_font_size: 14,
+            translation_active: false,
+            style: String::new(),
+            suggestions: Vec::new(),
+        }
+    }
 }
 
 /// 卡片上的一行：用户手改出来的「错误写法 → 想要的写法」（Core
@@ -810,6 +835,8 @@ impl PopupState {
             HostToPopup::Capsule {
                 phase,
                 text,
+                transcript,
+                transcript_font_size,
                 audio_level,
                 translation_active,
                 style,
@@ -819,6 +846,8 @@ impl PopupState {
                 self.capsule = CapsulePopupState {
                     phase,
                     text,
+                    transcript,
+                    transcript_font_size: transcript_font_size.clamp(12, 20),
                     audio_level,
                     translation_active,
                     style,
@@ -972,7 +1001,14 @@ impl PopupSupervisor {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        runtime.spawn(supervise(command, command_rx, event_tx));
+        runtime.spawn(supervise(
+            command,
+            command_rx,
+            PopupEventSender {
+                sender: event_tx,
+                waker: std::thread::current(),
+            },
+        ));
         Self {
             commands: command_tx,
             events: event_rx,
@@ -1008,10 +1044,26 @@ impl Drop for PopupSupervisor {
     }
 }
 
+struct PopupEventSender {
+    sender: mpsc::SyncSender<PopupSupervisorEvent>,
+    waker: std::thread::Thread,
+}
+
+impl PopupEventSender {
+    fn try_send(
+        &self,
+        event: PopupSupervisorEvent,
+    ) -> Result<(), mpsc::TrySendError<PopupSupervisorEvent>> {
+        let result = self.sender.try_send(event);
+        self.waker.unpark();
+        result
+    }
+}
+
 async fn supervise(
     mut command: Command,
     mut commands: tokio_mpsc::Receiver<SupervisorCommand>,
-    events: mpsc::SyncSender<PopupSupervisorEvent>,
+    events: PopupEventSender,
 ) {
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -1485,6 +1537,8 @@ mod tests {
             sequence: 5,
             phase: String::new(),
             text: String::new(),
+            transcript: String::new(),
+            transcript_font_size: 14,
             audio_level: None,
             translation_active: false,
             style: "siri".to_owned(),
@@ -1515,7 +1569,8 @@ mod tests {
     /// 老宿主（协议 v2）不带 `suggestions` 时按空卡片解析，不能报错。
     #[test]
     fn a_capsule_without_suggestions_still_parses() {
-        let legacy = r#"{"type":"capsule","version":3,"session_id":"s","sequence":1,"phase":"Recording"}"#;
+        let legacy =
+            r#"{"type":"capsule","version":3,"session_id":"s","sequence":1,"phase":"Recording"}"#;
         let message: HostToPopup = serde_json::from_str(legacy).expect("legacy capsule");
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);
@@ -1530,6 +1585,8 @@ mod tests {
             sequence: 3,
             phase: "Recording".to_owned(),
             text: String::new(),
+            transcript: "raw words".into(),
+            transcript_font_size: 18,
             audio_level: Some(0.5),
             translation_active: true,
             style: "typeless".to_owned(),
@@ -1538,6 +1595,8 @@ mod tests {
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);
         assert!(state.capsule.translation_active);
+        assert_eq!(state.capsule.transcript, "raw words");
+        assert_eq!(state.capsule.transcript_font_size, 18);
         assert_eq!(
             state.capsule.style, "typeless",
             "the capsule style must travel with the frame to the popup process"
