@@ -61,6 +61,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   openrouterFree: 'openrouterFree',
   requesty: 'requesty',
   'api-route': 'apiRoute',
+  cheaperinference: 'cheaperinference',
   orcarouter: 'orcarouter',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',

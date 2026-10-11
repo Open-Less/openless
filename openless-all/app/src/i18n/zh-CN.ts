@@ -1588,6 +1588,7 @@ export const zhCN = {
         openrouterFree: 'OpenRouter（免费模型）',
         requesty: 'Requesty',
         apiRoute: 'API Route',
+        cheaperinference: 'Cheaper Inference',
         orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里云 Coding Plan',
         codingPlanX: 'CodingPlanX',

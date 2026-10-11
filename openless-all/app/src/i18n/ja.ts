@@ -1661,6 +1661,7 @@ export const ja: typeof zhCN = {
         openrouterFree: 'OpenRouter（無料モデル）',
         requesty: 'Requesty',
         apiRoute: 'API Route',
+        cheaperinference: 'Cheaper Inference',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',

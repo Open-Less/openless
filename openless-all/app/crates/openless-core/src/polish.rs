@@ -200,6 +200,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "openrouterFree"
             | "requesty"
             | "api-route"
+            | "cheaperinference"
             | "orcarouter"
             | "alibabaCoding"
             | "codingPlanX"

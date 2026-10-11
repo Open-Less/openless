@@ -1706,6 +1706,7 @@ export const es: typeof zhCN = {
         openrouterFree: 'OpenRouter (modelos gratuitos)',
         requesty: 'Requesty',
         apiRoute: 'API Route',
+        cheaperinference: 'Cheaper Inference',
         orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
