@@ -73,7 +73,29 @@ jobs:
           cache-dependency-path: openless-all/app/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Resolve Playwright browser version
+        id: playwright_version
+        run: |
+          version=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browsers
+        id: playwright_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # Browser revisions follow Playwright, not unrelated npm lock changes.
+          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium webkit
+      - name: Install Playwright browsers on cache miss
+        if: steps.playwright_cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium webkit
+      - name: Save Playwright browsers on branch builds
+        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - run: npm run test:ui-motion
       - uses: actions/upload-artifact@v4
         if: failure()
