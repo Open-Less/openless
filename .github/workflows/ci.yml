@@ -69,8 +69,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
       - run: npm ci
       - run: npm run build
       - name: Resolve Playwright browser version
@@ -90,8 +90,8 @@ jobs:
       - name: Install Playwright browsers on cache miss
         if: steps.playwright_cache.outputs.cache-hit != 'true'
         run: npx playwright install chromium webkit
-      - name: Save Playwright browsers on branch builds
-        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+      - name: Save Playwright browsers on beta builds
+        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/ms-playwright
@@ -160,8 +160,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: actions/setup-java@v4
         with:
@@ -175,12 +175,12 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
-          # 仓库缓存上限 10 GB，超出后按 LRU 淘汰。过去每个 PR 都会各存一份
-          # ~1.6 GB 的依赖树，把其他 job 的缓存挤掉，导致每次运行都从零编译。
-          # 现在 PR 只从基线分支恢复，只有分支推送和 tag 才写入缓存。
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Only beta maintains the shared dependency tree; PRs restore it.
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch') }}
 
       - name: Install Linux check dependencies
         run: |
@@ -307,8 +307,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
       - uses: dtolnay/rust-toolchain@1.88.0
@@ -324,14 +324,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Cache macOS stable dependencies
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
           key: macos-stable-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
@@ -476,13 +476,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target

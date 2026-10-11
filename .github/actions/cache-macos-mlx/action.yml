@@ -39,7 +39,15 @@ runs:
     # so MLX is saved before rust-cache prunes src-tauri/vendor path packages.
     # Cache only CMake output, not Cargo fingerprints: Cargo still reruns the
     # build script and CMake validates its native inputs on every clean checkout.
-    - uses: actions/cache@v4
+    - name: Restore MLX outside beta builds
+      if: github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch')
+      uses: actions/cache/restore@v4
+      with:
+        path: openless-all/app/src-tauri/target/${{ inputs.profile }}/build/qwen3-asr-rs-*/out
+        key: macos-mlx-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.native.outputs.fingerprint }}-${{ hashFiles('openless-all/app/src-tauri/Cargo.toml', 'openless-all/app/src-tauri/Cargo.lock', 'openless-all/app/src-tauri/tauri*.json', '.cargo/config.toml', '.github/actions/cache-macos-mlx/action.yml') }}
+    - name: Maintain MLX cache on beta builds
+      if: github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      uses: actions/cache@v4
       with:
         path: openless-all/app/src-tauri/target/${{ inputs.profile }}/build/qwen3-asr-rs-*/out
         key: macos-mlx-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.native.outputs.fingerprint }}-${{ hashFiles('openless-all/app/src-tauri/Cargo.toml', 'openless-all/app/src-tauri/Cargo.lock', 'openless-all/app/src-tauri/tauri*.json', '.cargo/config.toml', '.github/actions/cache-macos-mlx/action.yml') }}

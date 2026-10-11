@@ -91,9 +91,10 @@ jobs:
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri/backend-tests -> ../../target
-          # Saving after a failed test step keeps the next push incremental
-          # instead of repeating a cold build of the whole dependency tree.
+          # Failed beta checks can still warm the shared tree. PRs never write
+          # their own copy, even when tests fail or dependencies change.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Build and test fcitx5 plugin
         if: inputs.scope != 'none'
