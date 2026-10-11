@@ -78,6 +78,11 @@ impl SiriEffect {
         }
     }
 
+    pub fn with_resolved(mut self, resolved: f32) -> Self {
+        self.resolved = resolved.clamp(0.0, 1.0);
+        self
+    }
+
     pub fn with_tint(mut self, tint: [f32; 3]) -> Self {
         self.tint = tint;
         self

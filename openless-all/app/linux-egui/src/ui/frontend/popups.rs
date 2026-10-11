@@ -1239,7 +1239,8 @@ pub fn dictation_capsule(
                     .unwrap_or_default()
             });
             let new_session = motion.update(&phase, now);
-            let wave_opacity = motion.wave_opacity(now);
+            let wave_resolution = motion.wave_resolution(now);
+            let orb_ready = motion.orb_ready(now);
             let shine_cycle = motion.shine_cycle_seconds(now);
             ui.ctx()
                 .data_mut(|data| data.insert_temp(motion_id, motion));
@@ -1364,7 +1365,7 @@ pub fn dictation_capsule(
                     egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
                 )
             };
-            if phase == "recording" {
+            if phase == "recording" || (siri && phase == "starting") {
                 // Siri capsules are transparent overlays. Queue the spectral
                 // ribbon through the shared WGPU callback used by both eframe
                 // windows and the native layer-shell surface.
@@ -1382,7 +1383,8 @@ pub fn dictation_capsule(
                     let _ = siri_wgpu::paint(
                         ui,
                         center,
-                        siri_wgpu::SiriEffect::wave(clock.time, clock.level),
+                        siri_wgpu::SiriEffect::wave(clock.time, clock.level)
+                            .with_resolved(clock.resolved),
                     );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
@@ -1399,9 +1401,9 @@ pub fn dictation_capsule(
                 // 思考态 / 终态：Siri 舞台画光点（终态是「六点合回一颗圆」的收尾），
                 // 经典 / typeless 只画文案。
                 if siri {
-                    // wave → orb 的交叉淡出：切态后 0.55s 内保持可见，再用 0.6s 淡出，
-                    // 期间波形继续向圆心收拢（Tauri `opacity .6s ease-out .55s`）。
-                    if let Some(opacity) = wave_opacity {
+                    // One effect per frame: contract the ribbon into one point,
+                    // hold during transcription, then hand off to gathered dots.
+                    if (processing || terminal) && !orb_ready {
                         let fade_drive = siri_wgpu::SiriDrive {
                             level: state.audio_level.unwrap_or_default(),
                             resolved: 0.0,
@@ -1416,10 +1418,9 @@ pub fn dictation_capsule(
                             ui,
                             center,
                             siri_wgpu::SiriEffect::wave(clock.time, clock.level)
-                                .with_opacity(opacity),
+                                .with_resolved(clock.resolved * wave_resolution),
                         );
-                    }
-                    if processing || terminal {
+                    } else if processing || terminal {
                         // 思考中 1.5 速转；终态回落到 1.0 并让六点合并成中央一颗圆
                         //（Tauri `VoiceOrbStage` 的 speed / merging）。
                         let drive = siri_wgpu::SiriDrive {
@@ -3381,54 +3382,60 @@ mod tests {
         let pill_left = size.x / 2.0 - PILL_WIDTH / 2.0;
         let pill_right = pill_left + PILL_WIDTH;
         let centre_y = size.y - CAPSULE_BOTTOM_INSET - PILL_HEIGHT / 2.0;
-        let cancel = egui::pos2(pill_left + 8.0 + ROUND_BUTTON / 2.0, centre_y);
-        let confirm = egui::pos2(pill_right - 8.0 - ROUND_BUTTON / 2.0, centre_y);
-        for (position, expected) in [
-            (cancel, CapsuleAction::Cancel),
-            (confirm, CapsuleAction::Confirm),
-        ] {
-            let ctx = egui::Context::default();
-            let state = CapsulePopupState {
-                phase: "Recording".to_string(),
-                audio_level: Some(0.4),
-                style: "classic".to_string(),
-                suggestions: Vec::new(),
-                ..Default::default()
-            };
-            let mut action = CapsuleAction::None;
-            // 三帧：第一帧布局，第二帧按下，第三帧松开（egui 的点击需要成对事件）。
-            for events in [
-                vec![egui::Event::PointerMoved(position)],
-                vec![egui::Event::PointerButton {
-                    pos: position,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::default(),
-                }],
-                vec![egui::Event::PointerButton {
-                    pos: position,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::default(),
-                }],
+        for (style, inset) in [("classic", 8.0), ("typeless", 7.0)] {
+            let cancel = egui::pos2(pill_left + inset + ROUND_BUTTON / 2.0, centre_y);
+            let confirm = egui::pos2(pill_right - inset - ROUND_BUTTON / 2.0, centre_y);
+            for (position, expected) in [
+                (cancel, CapsuleAction::Cancel),
+                (confirm, CapsuleAction::Confirm),
             ] {
-                let _ = crate::ui::frontend::run_pass(
-                    &ctx,
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        action =
-                            dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
-                    },
+                let ctx = egui::Context::default();
+                let state = CapsulePopupState {
+                    phase: "Recording".to_string(),
+                    audio_level: Some(0.4),
+                    style: style.to_string(),
+                    suggestions: Vec::new(),
+                    ..Default::default()
+                };
+                let mut action = CapsuleAction::None;
+                // 三帧：第一帧布局，第二帧按下，第三帧松开（egui 的点击需要成对事件）。
+                for events in [
+                    vec![egui::Event::PointerMoved(position)],
+                    vec![egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    }],
+                    vec![egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::default(),
+                    }],
+                ] {
+                    let _ = crate::ui::frontend::run_pass(
+                        &ctx,
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            action = dictation_capsule(
+                                ui,
+                                &state,
+                                Lang::ZhCn,
+                                siri_wgpu::DEFAULT_WARMUP_MS,
+                            );
+                        },
+                    );
+                }
+                assert_eq!(
+                    action, expected,
+                    "clicking {position:?} must report {expected:?}, style={style}"
                 );
             }
-            assert_eq!(
-                action, expected,
-                "clicking {position:?} must report {expected:?}"
-            );
         }
     }
 
@@ -3471,8 +3478,15 @@ mod tests {
 
     #[test]
     fn siri_recording_and_thinking_use_the_full_stage() {
-        for phase in ["recording", "transcribing"] {
-            let ctx = egui::Context::default();
+        let ctx = egui::Context::default();
+        for (phase, time) in [
+            ("recording", 0.0),
+            ("transcribing", 0.1),
+            ("transcribing", 1.0),
+            ("polishing", 1.1),
+            ("polishing", 2.0),
+            ("completed", 2.1),
+        ] {
             let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
             let state = CapsulePopupState {
                 phase: phase.into(),
@@ -3483,11 +3497,21 @@ mod tests {
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(stage),
+                    time: Some(time),
                     ..Default::default()
                 },
                 |ui| {
                     dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
                 },
+            );
+            assert_eq!(
+                output
+                    .shapes
+                    .iter()
+                    .filter(|shape| matches!(&shape.shape, egui::Shape::Callback(_)))
+                    .count(),
+                1,
+                "{phase} must queue exactly one effect, never overlapping wave and orb"
             );
             assert!(
                 output.shapes.iter().any(|shape| matches!(

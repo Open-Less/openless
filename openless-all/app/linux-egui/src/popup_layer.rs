@@ -27,6 +27,7 @@
 //! shell around them and reports failures as `Err`.
 
 use std::ffi::c_void;
+use std::os::fd::AsRawFd;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
@@ -781,8 +782,37 @@ where
     let scale = 1.0;
     let mut first = true;
     let mut right_aligned = false;
+    let animation_started = Instant::now();
 
     loop {
+        // dispatch_pending alone never reads the display socket. Without this,
+        // pointer events arriving after initial configure cannot reach egui.
+        if let Some(reader) = queue.prepare_read() {
+            let mut fd = libc::pollfd {
+                fd: reader.connection_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: fd is a valid, borrowed display descriptor and the pollfd
+            // remains live for this non-blocking call. The reader owns the read.
+            let ready = unsafe { libc::poll(&mut fd, 1, 0) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(format!("wayland input poll: {error}"));
+                }
+            } else if fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+                match reader.read() {
+                    Ok(_) => {}
+                    Err(wayland_client::backend::WaylandError::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(format!("wayland input read: {error}")),
+                }
+            }
+        }
         queue
             .dispatch_pending(&mut state)
             .map_err(|error| format!("wayland dispatch: {error}"))?;
@@ -791,7 +821,8 @@ where
         }
         let _ = connection.flush();
         let rect = geometry.rect_for_configure(state.configure.unwrap_or(geometry.buffer_size()));
-        let input = state.take_input(rect);
+        let mut input = state.take_input(rect);
+        input.time = Some(animation_started.elapsed().as_secs_f64());
         let mut frame = frame(&context, input, first);
         first = false;
         let primitives = context.tessellate(frame.output.shapes.clone(), scale);

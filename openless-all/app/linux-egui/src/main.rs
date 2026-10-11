@@ -8107,7 +8107,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             if first {
                 theme::install(ctx);
             }
-            let mut exit = self.pump(None);
+            let exit = self.pump(None);
             self.send_ready_if_needed();
             let animated = matches!(
                 self.state.capsule.phase.to_ascii_lowercase().as_str(),
@@ -8164,7 +8164,9 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                         };
                         self.send(message);
                     }
-                    exit = true;
+                    // The host owns cancellation/stop and the terminal hide.
+                    // Keep the process alive so stdout is flushed and the
+                    // recording-to-processing animation remains visible.
                 }
             }
             let size = frontend::popups::capsule_window_size(&capsule);
@@ -8464,8 +8466,15 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                                 }
                                 _ => {}
                             }
+                            let keep_open = matches!(
+                                &message,
+                                PopupToHost::CancelDictation { .. }
+                                    | PopupToHost::StopDictation { .. }
+                            );
                             self.send(message);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            if !keep_open {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
                         }
                     }
                 }
