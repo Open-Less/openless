@@ -45,6 +45,8 @@ pub struct OmniSettings {
     pub models: Vec<String>,
     pub loaded: bool,
     pub busy: bool,
+    pub switching: bool,
+    pub revision: u64,
     pub dirty: bool,
     pub notice: Option<String>,
 }
@@ -69,6 +71,8 @@ impl Default for OmniSettings {
             models: Vec::new(),
             loaded: false,
             busy: false,
+            switching: false,
+            revision: 0,
             dirty: false,
             notice: None,
         }
@@ -85,13 +89,40 @@ impl OmniSettings {
     pub fn edit(&mut self, field: OmniField, value: String) {
         match field {
             OmniField::Model => self.model = value,
-            OmniField::Endpoint => self.endpoint = value,
+            OmniField::Endpoint => {
+                self.endpoint = value;
+                self.models.clear();
+            }
             OmniField::ApiKey => self.api_key = value,
             OmniField::Temperature => self.temperature = value,
             OmniField::ExtraHeaders => self.extra_headers = value,
         }
+        self.revision = self.revision.wrapping_add(1);
         self.dirty = true;
         self.notice = None;
+    }
+    pub fn merge_receipt(&self, submitted: &Self, mut stored: Self) -> Self {
+        if self.provider == stored.provider && self.revision != submitted.revision {
+            if self.model != submitted.model {
+                stored.model = self.model.clone();
+            }
+            if self.endpoint != submitted.endpoint {
+                stored.endpoint = self.endpoint.clone();
+                stored.models.clear();
+            }
+            if self.api_key != submitted.api_key {
+                stored.api_key = self.api_key.clone();
+            }
+            if self.temperature != submitted.temperature {
+                stored.temperature = self.temperature.clone();
+            }
+            if self.extra_headers != submitted.extra_headers {
+                stored.extra_headers = self.extra_headers.clone();
+            }
+            stored.revision = self.revision;
+            stored.dirty = true;
+        }
+        stored
     }
     pub async fn load(backend: &OpenLessBackend) -> Result<Self, BackendError> {
         let mut state = Self::default();
@@ -177,15 +208,11 @@ async fn read(
     provider: &str,
     account: &str,
 ) -> Result<String, BackendError> {
-    // Linux migration uses provider-scoped keys. Legacy unscoped Omni slots are
-    // the same fallback consumed by Core; never edit a slot the runtime ignores.
-    let value = match backend
+    // Use the same provider-scoped key as the production Omni pipeline.
+    // Legacy import is handled by the credential store, not by UI fallbacks.
+    let value = backend
         .read_credential(key(Some(provider.into()), account)?)
-        .await?
-    {
-        Some(value) => Some(value),
-        None => backend.read_credential(key(None, account)?).await?,
-    };
+        .await?;
     Ok(value.map(SecretValue::into_exposed).unwrap_or_default())
 }
 async fn put(
@@ -198,7 +225,6 @@ async fn put(
         backend
             .remove_credential(key(Some(provider.into()), account)?)
             .await?;
-        backend.remove_credential(key(None, account)?).await?;
     } else {
         backend
             .set_credential(

@@ -413,7 +413,9 @@ pub enum SettingsProviderAuth {
     Volcengine,
     /// Xfyun: AppID + API Key.
     Xfyun,
-    /// Another Core-defined shape (Tencent Cloud and friends).
+    /// Tencent Cloud: public AppID and two write-only secret fields.
+    TencentCloud,
+    /// Another Core-defined credential shape.
     Other,
     /// Endpoint + Model + API Key.
     ApiKey,

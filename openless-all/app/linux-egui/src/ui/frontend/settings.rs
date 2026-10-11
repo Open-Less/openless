@@ -1896,48 +1896,58 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
         "",
         |ui| {
             if state.busy {
-                ui.label(tr_l10n(lang, "common.saving"));
+                ui.label(tr_l10n(lang, "common.loading"));
             }
-            ui.add_enabled_ui(state.loaded && !state.busy, |ui| {
-                modal_form_row(
-                    ui,
-                    tr_l10n(lang, "settings.providers.providerLabel"),
-                    |ui| {
-                        let selected = state
-                            .presets
-                            .iter()
-                            .position(|p| p.id == state.provider)
-                            .unwrap_or(0);
-                        let labels: Vec<&str> = state
-                            .presets
-                            .iter()
-                            .map(|p| match p.id.as_str() {
-                                "openai" => tr_l10n(lang, "settings.providers.presets.omniOpenai"),
-                                "gemini" => tr_l10n(lang, "settings.providers.presets.omniGemini"),
-                                "dashscope-omni" => {
-                                    tr_l10n(lang, "settings.providers.presets.omniDashscope")
-                                }
-                                _ => tr_l10n(lang, "settings.providers.presets.custom"),
-                            })
-                            .collect();
-                        egui::ComboBox::from_id_salt("omni-provider")
-                            .width(ui.available_width())
-                            .selected_text(labels.get(selected).copied().unwrap_or_default())
-                            .show_ui(ui, |ui| {
-                                for (index, label) in labels.iter().enumerate() {
-                                    if ui.selectable_label(index == selected, *label).clicked()
-                                        && index != selected
-                                        && state.validate().is_ok()
-                                    {
-                                        actions.push(FrontendAction::SettingsOmni(
-                                            OmniAction::Provider(state.presets[index].id.clone()),
-                                        ));
-                                        ui.data_mut(|data| data.remove_temp::<f64>(timer));
+            ui.add_enabled_ui(state.loaded && !state.switching, |ui| {
+                ui.add_enabled_ui(!state.busy, |ui| {
+                    modal_form_row(
+                        ui,
+                        tr_l10n(lang, "settings.providers.providerLabel"),
+                        |ui| {
+                            let selected = state
+                                .presets
+                                .iter()
+                                .position(|p| p.id == state.provider)
+                                .unwrap_or(0);
+                            let labels: Vec<String> = state
+                                .presets
+                                .iter()
+                                .map(|preset| {
+                                    let key =
+                                        format!("settings.providers.presets.{}", preset.label_key);
+                                    let label = fmt_l10n(lang, &key, &[]);
+                                    if label == key {
+                                        preset.label_key.clone()
+                                    } else {
+                                        label
                                     }
-                                }
-                            });
-                    },
-                );
+                                })
+                                .collect();
+                            egui::ComboBox::from_id_salt("omni-provider")
+                                .width(ui.available_width())
+                                .selected_text(
+                                    labels.get(selected).map(String::as_str).unwrap_or_default(),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for (index, label) in labels.iter().enumerate() {
+                                        if ui
+                                            .selectable_label(index == selected, label.as_str())
+                                            .clicked()
+                                            && index != selected
+                                            && state.validate().is_ok()
+                                        {
+                                            actions.push(FrontendAction::SettingsOmni(
+                                                OmniAction::Provider(
+                                                    state.presets[index].id.clone(),
+                                                ),
+                                            ));
+                                            ui.data_mut(|data| data.remove_temp::<f64>(timer));
+                                        }
+                                    }
+                                });
+                        },
+                    );
+                });
                 let preset = state.presets.iter().find(|p| p.id == state.provider);
                 let model_hint = preset.map(|p| p.model.clone()).unwrap_or_default();
                 let endpoint_hint = preset.map(|p| p.endpoint.clone()).unwrap_or_default();
@@ -1998,7 +2008,7 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
                     ui.label(error.to_string());
                 }
                 ui.add_space(10.0);
-                ui.add_enabled_ui(state.validate().is_ok(), |ui| {
+                ui.add_enabled_ui(state.validate().is_ok() && !state.busy, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .button(tr_l10n(lang, "settings.providers.fetchModels"))
@@ -2033,7 +2043,13 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
                         }
                     });
                 });
-                if ui.button(tr_l10n(lang, "btn.clear_secret")).clicked() {
+                if ui
+                    .add_enabled(
+                        !state.busy,
+                        egui::Button::new(tr_l10n(lang, "btn.clear_secret")),
+                    )
+                    .clicked()
+                {
                     actions.push(FrontendAction::SettingsOmni(OmniAction::ClearSecrets));
                     ui.data_mut(|data| data.remove_temp::<f64>(timer));
                 }
@@ -2058,6 +2074,9 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
         state.dirty = true;
         state.notice = None;
         ui.data_mut(|data| data.insert_temp(timer, now));
+    }
+    if !state.dirty {
+        ui.data_mut(|data| data.remove_temp::<f64>(timer));
     }
     if let Some(at) = ui.data(|data| data.get_temp::<f64>(timer)) {
         if now - at >= 0.3 && !state.busy && state.loaded && state.validate().is_ok() {
@@ -2413,8 +2432,18 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // page (title + back button) while `advanced_open` is set.
     // Keep existing drill-in IDs, but the pipeline now lives only on Services.
     let rows = [
-        (0, SettingsIcon::Monitor, tr_l10n(lang, "settings.coding_agent.title"), tr_l10n(lang, "modal.advanced_pages.less_computer")),
-        (2, SettingsIcon::Bolt, tr_l10n(lang, "settings.debug.title"), tr_l10n(lang, "modal.advanced_pages.debug")),
+        (
+            0,
+            SettingsIcon::Monitor,
+            tr_l10n(lang, "settings.coding_agent.title"),
+            tr_l10n(lang, "modal.advanced_pages.less_computer"),
+        ),
+        (
+            2,
+            SettingsIcon::Bolt,
+            tr_l10n(lang, "settings.debug.title"),
+            tr_l10n(lang, "modal.advanced_pages.debug"),
+        ),
     ];
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| match vm.advanced_open {
@@ -3166,6 +3195,22 @@ fn provider_model_block(
         }
     });
 
+    if editor.auth == SettingsProviderAuth::TencentCloud {
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.providers.tencentCloudNote"))
+                .size(11.5)
+                .color(theme::INK_4),
+        );
+    }
+    // Tauri disables catalog fetching for these ASR credential shapes.
+    if matches!(
+        editor.auth,
+        SettingsProviderAuth::Volcengine
+            | SettingsProviderAuth::Xfyun
+            | SettingsProviderAuth::TencentCloud
+    ) {
+        return;
+    }
     // 可用模型：拉取（或看文档）→ 选择 → 写入模型字段并保存。
     ui.add_space(2.0);
     if editor.has_models_url {
@@ -3825,18 +3870,22 @@ fn provider_editor_body(
         }
         SettingsProviderAuth::Volcengine => {
             let mut mode = editor.auth_mode.clone();
-            modal_form_row(ui, "Auth", |ui| {
-                egui::ComboBox::from_id_salt("settings-provider-auth-mode")
-                    .selected_text(&mode)
-                    .show_ui(ui, |ui| {
-                        for option in ["app_id_token", "api_key"] {
-                            if ui.selectable_label(mode == option, option).clicked() {
-                                mode = option.to_string();
-                                ui.close();
+            modal_form_row(
+                ui,
+                tr_l10n(lang, "settings.providers.volcengineAuthModeLabel"),
+                |ui| {
+                    egui::ComboBox::from_id_salt("settings-provider-auth-mode")
+                        .selected_text(&mode)
+                        .show_ui(ui, |ui| {
+                            for option in ["app_id_token", "api_key"] {
+                                if ui.selectable_label(mode == option, option).clicked() {
+                                    mode = option.to_string();
+                                    ui.close();
+                                }
                             }
-                        }
-                    });
-            });
+                        });
+                },
+            );
             if mode != editor.auth_mode {
                 editor_mark_dirty(ui);
                 actions.push(FrontendAction::SettingsProviderField(
@@ -3847,7 +3896,7 @@ fn provider_editor_body(
             if mode == "api_key" {
                 provider_field(
                     ui,
-                    "API Key",
+                    tr_l10n(lang, "settings.providers.volcengineApiKeyLabel"),
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
                     true,
@@ -3856,7 +3905,7 @@ fn provider_editor_body(
             } else {
                 provider_field(
                     ui,
-                    "APP ID",
+                    tr_l10n(lang, "settings.providers.volcengineAppKeyLabel"),
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
                     true,
@@ -3864,7 +3913,7 @@ fn provider_editor_body(
                 );
                 provider_field(
                     ui,
-                    "Access Token",
+                    tr_l10n(lang, "settings.providers.volcengineAccessKeyLabel"),
                     &editor.secondary_secret,
                     SettingsProviderField::SecondarySecret,
                     true,
@@ -3873,7 +3922,7 @@ fn provider_editor_body(
             }
             provider_field(
                 ui,
-                "Resource ID",
+                tr_l10n(lang, "settings.providers.volcengineResourceIdLabel"),
                 &editor.resource_id,
                 SettingsProviderField::ResourceId,
                 false,
@@ -3883,7 +3932,7 @@ fn provider_editor_body(
         SettingsProviderAuth::Xfyun => {
             provider_field(
                 ui,
-                "AppID",
+                tr_l10n(lang, "settings.providers.xfyunAppIdLabel"),
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
@@ -3891,7 +3940,33 @@ fn provider_editor_body(
             );
             provider_field(
                 ui,
-                "API Key",
+                tr_l10n(lang, "settings.providers.xfyunApiKeyLabel"),
+                &editor.secondary_secret,
+                SettingsProviderField::SecondarySecret,
+                true,
+                actions,
+            );
+        }
+        SettingsProviderAuth::TencentCloud => {
+            provider_field(
+                ui,
+                tr_l10n(lang, "settings.providers.tencentCloudAppIdLabel"),
+                &editor.resource_id,
+                SettingsProviderField::ResourceId,
+                false,
+                actions,
+            );
+            provider_field(
+                ui,
+                tr_l10n(lang, "settings.providers.tencentCloudSecretIdLabel"),
+                &editor.primary_secret,
+                SettingsProviderField::PrimarySecret,
+                true,
+                actions,
+            );
+            provider_field(
+                ui,
+                tr_l10n(lang, "settings.providers.tencentCloudSecretKeyLabel"),
                 &editor.secondary_secret,
                 SettingsProviderField::SecondarySecret,
                 true,
@@ -3908,7 +3983,7 @@ fn provider_editor_body(
         SettingsProviderAuth::ApiKey => {
             provider_field(
                 ui,
-                tr_l10n(lang, "providers.api_key_hint"),
+                tr_l10n(lang, "settings.providers.apiKeyLabel"),
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
@@ -3916,7 +3991,7 @@ fn provider_editor_body(
             );
             provider_field(
                 ui,
-                "Endpoint",
+                tr_l10n(lang, "settings.providers.baseUrlLabel"),
                 &editor.endpoint,
                 SettingsProviderField::Endpoint,
                 false,

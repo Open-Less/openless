@@ -6249,6 +6249,62 @@ pub const CATALOG: &[Msg] = &[
             "텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.",
         ),
     },
+    Msg {
+        key: "settings.providers.tencentCloudAppIdLabel",
+        text: row(
+            "腾讯云 AppID",
+            "騰訊雲 AppID",
+            "Tencent Cloud AppID",
+            "Tencent Cloud AppID",
+            "Tencent Cloud AppID",
+        ),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudNote",
+        text: row(
+            "使用腾讯云「语音识别」服务的 API 密钥。默认 Hy-ASR-3.0-preview 支持中英与 20 种方言；Preview 仅支持 60 秒以内的 16kHz 单声道 PCM，暂不支持上下文或热词增强。",
+            "使用騰訊雲「語音辨識」服務的 API 金鑰。預設 Hy-ASR-3.0-preview 支援中英與 20 種方言；Preview 僅支援 60 秒內的 16kHz 單聲道 PCM，暫不支援上下文或熱詞增強。",
+            "Uses Tencent Cloud Speech Recognition API credentials. The default Hy-ASR-3.0-preview supports Chinese, English, and 20 dialects; Preview accepts only mono 16 kHz PCM up to 60 seconds and does not yet support context or hotword boosting.",
+            "Tencent Cloud 音声認識 API の認証情報を使用します。既定の Hy-ASR-3.0-preview は中国語・英語・20 方言に対応します。Preview は 60 秒以内の 16kHz モノラル PCM のみ対応し、コンテキストとホットワード強化は未対応です。",
+            "Tencent Cloud 음성 인식 API 자격 증명을 사용합니다. 기본 Hy-ASR-3.0-preview는 중국어·영어·20개 방언을 지원합니다. Preview는 60초 이내의 16kHz 모노 PCM만 지원하며, 컨텍스트와 핫워드 강화는 아직 지원하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudSecretIdLabel",
+        text: row("SecretID", "SecretID", "SecretID", "SecretID", "SecretID"),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudSecretKeyLabel",
+        text: row("SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAccessKeyLabel",
+        text: row("Access Token", "Access Token", "Access Token", "Access Token", "Access Token"),
+    },
+    Msg {
+        key: "settings.providers.volcengineApiKeyLabel",
+        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAppKeyLabel",
+        text: row("APP ID", "APP ID", "APP ID", "APP ID", "APP ID"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAuthModeLabel",
+        text: row("鉴权模式", "鑑權模式", "Auth mode", "認証モード", "인증 모드"),
+    },
+    Msg {
+        key: "settings.providers.volcengineResourceIdLabel",
+        text: row("Resource ID", "Resource ID", "Resource ID", "Resource ID", "Resource ID"),
+    },
+    Msg {
+        key: "settings.providers.xfyunApiKeyLabel",
+        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+    },
+    Msg {
+        key: "settings.providers.xfyunAppIdLabel",
+        text: row("AppID", "AppID", "AppID", "AppID", "AppID"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

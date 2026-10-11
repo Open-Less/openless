@@ -82,6 +82,7 @@ mod linux_app {
         ServiceConfigured([bool; 2]),
         OmniFinished {
             operation: openless_linux_egui::omni_settings::OmniAction,
+            submitted: Box<openless_linux_egui::omni_settings::OmniSettings>,
             result: Box<Result<openless_linux_egui::omni_settings::OmniSettings, String>>,
         },
         ProviderEditor {
@@ -2571,6 +2572,9 @@ mod linux_app {
         fn select_services_view(&mut self, requested: usize) {
             let view = self.resolved_services_view(requested);
             self.frontend_vm.services_view = view;
+            if !matches!(view, 0 | 1) {
+                self.close_provider_editor();
+            }
             if view == 4 {
                 if !self.frontend_vm.omni.loaded
                     && !self.frontend_vm.omni.busy
@@ -2607,11 +2611,13 @@ mod linux_app {
         fn apply_omni_action(&mut self, operation: openless_linux_egui::omni_settings::OmniAction) {
             use openless_linux_egui::omni_settings::{OmniAction, OmniSettings};
             let state = &mut self.frontend_vm.omni;
-            if state.busy {
+            if let OmniAction::Field(field, value) = operation {
+                if state.loaded && !state.switching {
+                    state.edit(field, value);
+                }
                 return;
             }
-            if let OmniAction::Field(field, value) = operation {
-                state.edit(field, value);
+            if state.busy {
                 return;
             }
             if !matches!(operation, OmniAction::Reload) && !state.loaded {
@@ -2627,7 +2633,10 @@ mod linux_app {
             };
             let host = self.native.as_ref().map(|native| native.host_arc());
             let mut snapshot = self.frontend_vm.omni.clone();
+            let submitted = Box::new(snapshot.clone());
             self.frontend_vm.omni.busy = true;
+            self.frontend_vm.omni.switching =
+                matches!(operation, OmniAction::Provider(_) | OmniAction::Reload);
             let tx = self.tx.clone();
             let wake = std::thread::current();
             let job = Box::pin(async move {
@@ -2708,17 +2717,20 @@ mod linux_app {
                         _ => {}
                     }
                     snapshot.busy = false;
+                    snapshot.switching = false;
                     Ok(snapshot)
                 }
                 .await;
                 let _ = tx.send(UiResult::OmniFinished {
                     operation,
+                    submitted,
                     result: Box::new(result),
                 });
                 wake.unpark();
             });
             if self.provider_jobs.send(job).is_err() {
                 self.frontend_vm.omni.busy = false;
+                self.frontend_vm.omni.switching = false;
                 self.frontend_vm.omni.notice =
                     Some(tr_l10n(self.lang, "common.operationFailed").to_owned());
             }
@@ -4295,11 +4307,20 @@ mod linux_app {
                             Err(error) => self.frontend_vm.settings_notice = Some(error),
                         }
                     }
-                    UiResult::OmniFinished { operation, result } => {
+                    UiResult::OmniFinished {
+                        operation,
+                        submitted,
+                        result,
+                    } => {
                         use openless_linux_egui::omni_settings::OmniAction;
                         match *result {
-                            Ok(mut state) => {
-                                state.notice = if matches!(operation, OmniAction::Reload) {
+                            Ok(state) => {
+                                let mut state =
+                                    self.frontend_vm.omni.merge_receipt(&submitted, state);
+                                let save_again = state.dirty;
+                                state.notice = if save_again
+                                    || matches!(operation, OmniAction::Reload)
+                                {
                                     None
                                 } else {
                                     Some(match operation {
@@ -4327,9 +4348,13 @@ mod linux_app {
                                 if let Some(notice) = &self.frontend_vm.omni.notice {
                                     self.status = notice.clone();
                                 }
+                                if save_again {
+                                    self.apply_omni_action(OmniAction::Save);
+                                }
                             }
                             Err(error) => {
                                 self.frontend_vm.omni.busy = false;
+                                self.frontend_vm.omni.switching = false;
                                 let message = if error == "validateFailed" {
                                     tr_l10n(self.lang, "settings.providers.validateFailed")
                                         .to_owned()
@@ -5134,6 +5159,11 @@ mod linux_app {
             for action in actions {
                 match action {
                     frontend::view_model::FrontendAction::Navigate(page) => {
+                        if self.frontend_vm.omni.dirty {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
+                        }
                         self.active_page = match page {
                             frontend::view_model::Page::Overview => shell::Page::Overview,
                             frontend::view_model::Page::History => shell::Page::History,
@@ -5153,6 +5183,11 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::ToggleSettings => {
+                        if self.frontend_vm.omni.dirty {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
+                        }
                         self.frontend_vm.settings_open = !self.frontend_vm.settings_open;
                         if self.frontend_vm.settings_open {
                             self.frontend_vm.active_page = frontend::view_model::Page::Settings;
@@ -5169,6 +5204,11 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::CloseSettings => {
+                        if self.frontend_vm.omni.dirty {
+                            self.apply_omni_action(
+                                openless_linux_egui::omni_settings::OmniAction::Save,
+                            );
+                        }
                         self.frontend_vm.settings_open = false;
                         self.frontend_vm.active_page = frontend::view_model::Page::Overview;
                     }
@@ -6963,7 +7003,7 @@ mod linux_app {
             Core::Volcengine => Ui::Volcengine,
             Core::Xfyun => Ui::Xfyun,
             Core::OAuth => Ui::OAuth,
-            Core::TencentCloud => Ui::Other,
+            Core::TencentCloud => Ui::TencentCloud,
             Core::ApiKey | Core::EndpointModelOptionalApiKey | Core::ApiKeyUnlessCustomEndpoint => {
                 Ui::ApiKey
             }
@@ -7158,6 +7198,32 @@ mod linux_app {
                 )
                 .await?;
             }
+            openless_core::AuthRequirement::TencentCloud => {
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
+                    &editor.resource_id,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                    &editor.primary_secret,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+                    &editor.secondary_secret,
+                )
+                .await?;
+            }
             _ => {
                 write_or_remove_provider_value(
                     &backend,
@@ -7239,6 +7305,10 @@ mod linux_app {
                 openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
                 openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
             ],
+            openless_core::AuthRequirement::TencentCloud => &[
+                openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+            ],
             _ => &[api_key_account(editor.kind)],
         };
         if matches!(
@@ -7308,6 +7378,18 @@ mod linux_app {
                         kind,
                         &channel.id,
                         openless_core::credentials::VOLCENGINE_RESOURCE_ID_ACCOUNT,
+                    )
+                    .await?
+                    .unwrap_or_default(),
+                )
+            } else if descriptor.auth_requirement == openless_core::AuthRequirement::TencentCloud {
+                (
+                    String::new(),
+                    read_provider_value(
+                        &backend,
+                        kind,
+                        &channel.id,
+                        openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
                     )
                     .await?
                     .unwrap_or_default(),
