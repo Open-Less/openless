@@ -549,10 +549,8 @@ fn handle_method_call(
     if path == ITEM_PATH && interface == ITEM_INTERFACE {
         // Match macOS: primary click opens the window; right click belongs to
         // the desktop's DBusMenu, and middle click has no application action.
-        if member == "Activate" {
-            if commands.send(TrayCommand::ShowMain).is_ok() {
-                command_waker.unpark();
-            }
+        if member == "Activate" && commands.send(TrayCommand::ShowMain).is_ok() {
+            command_waker.unpark();
         }
         return Some(message.method_return());
     }
