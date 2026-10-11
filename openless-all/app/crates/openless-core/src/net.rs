@@ -27,6 +27,9 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
+/// Client type returned by the shared factories across adapter crate boundaries.
+pub use reqwest::Client as HttpClient;
+
 /// Whether the user allows the app to use the system proxy (issue #869). Default
 /// true = follow the system proxy, matching historical behavior; when off, all
 /// reqwest clients are built with `.no_proxy()` for direct connections.

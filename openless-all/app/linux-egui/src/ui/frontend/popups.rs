@@ -3302,11 +3302,14 @@ mod tests {
                     ..Default::default()
                 };
                 let painted = run(egui::vec2(460.0, 228.0), |ui| {
+                    // This checks visibility, not the separately animated birth
+                    // of each grapheme. Render the settled/reduced-motion rail.
+                    ui.style_mut().animation_time = 0.0;
                     dictation_capsule(ui, &state, Lang::En, siri_wgpu::DEFAULT_WARMUP_MS);
                     String::new()
                 });
                 assert_eq!(
-                    painted.contains("raw ASR words"),
+                    has(&painted, "raw ASR words"),
                     matches!(phase, "Recording" | "Transcribing" | "Polishing"),
                     "style={style}, phase={phase}"
                 );

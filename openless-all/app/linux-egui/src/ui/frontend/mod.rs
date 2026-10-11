@@ -1033,42 +1033,30 @@ mod tests {
         lines
     }
 
-    /// 识别管线（Tauri `ProvidersSection` 的 pipelineMode 行）：行本身、两个模式
-    /// 选项和“两套凭据互相独立”的说明；只有实验性开关
-    /// （`multimodalPipelineEnabled` → 这里的 `multimodal_view`）打开后才出现。
+    /// The pipeline selector remains available in both modes, matching Tauri.
     #[test]
-    fn the_pipeline_mode_row_only_shows_with_the_experimental_switch() {
+    fn the_pipeline_mode_row_is_available_in_both_modes() {
         let zh = openless_linux_egui::Lang::ZhCn;
-        let mut vm = FrontendViewModel {
-            multimodal_view: true,
-            pipeline_multimodal: false,
-            ..Default::default()
-        };
-        let on = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
-        for key in [
-            "settings.providers.pipeline_mode_label",
-            "settings.providers.pipeline_mode_traditional",
-            "settings.providers.pipeline_mode_multimodal",
-            "settings.providers.pipeline_isolation_notice",
-        ] {
-            let text = openless_linux_egui::tr_l10n(zh, key);
-            assert!(
-                on.iter().any(|line| line == text),
-                "{key} must be painted when the switch is on: {on:?}"
-            );
-        }
-
-        vm.multimodal_view = false;
-        let off = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
-        for key in [
-            "settings.providers.pipeline_mode_label",
-            "settings.providers.pipeline_isolation_notice",
-        ] {
-            let text = openless_linux_egui::tr_l10n(zh, key);
-            assert!(
-                !off.iter().any(|line| line == text),
-                "{key} must disappear when the experimental switch is off"
-            );
+        for multimodal in [false, true] {
+            let mut vm = FrontendViewModel {
+                multimodal_view: multimodal,
+                pipeline_multimodal: multimodal,
+                ..Default::default()
+            };
+            let lines =
+                painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+            for key in [
+                "settings.providers.pipeline_mode_label",
+                "settings.providers.pipeline_mode_traditional",
+                "settings.providers.pipeline_mode_multimodal",
+                "settings.providers.pipeline_isolation_notice",
+            ] {
+                let text = openless_linux_egui::tr_l10n(zh, key);
+                assert!(
+                    lines.iter().any(|line| line == text),
+                    "{key} must remain available, multimodal={multimodal}: {lines:?}"
+                );
+            }
         }
     }
 
