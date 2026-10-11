@@ -230,6 +230,15 @@ fn vulkan_effects_are_visible_local_independent_and_transparent() {
             }
         }
     }
+    // The handoff frame must preserve the collapsed point's radius, colour
+    // and brightness, not replace it with a differently sized gathered orb.
+    let collapsed = SiriEffect::wave(1.35, 0.52).with_resolved(0.0);
+    let mut gathered = SiriEffect::orb(1.35, 1.0);
+    gathered.level = collapsed.level;
+    let before = draw(&device, &queue, 1, 1.0, &[(collapsed, [0.0, 0.0])], false);
+    let after = draw(&device, &queue, 1, 1.0, &[(gathered, [0.0, 0.0])], false);
+    assert!(before.iter().zip(&after).all(|(a, b)| a.abs_diff(*b) <= 2));
+
     let effects = [
         (SiriEffect::wave(1.35, 0.52), [32.0, 128.0]),
         (SiriEffect::orb(0.7, 0.5), [192.0, 128.0]),

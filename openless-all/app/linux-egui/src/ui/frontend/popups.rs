@@ -1418,7 +1418,7 @@ pub fn dictation_capsule(
                             ui,
                             center,
                             siri_wgpu::SiriEffect::wave(clock.time, clock.level)
-                                .with_resolved(clock.resolved * wave_resolution),
+                                .with_resolved(clock.resolved.min(wave_resolution)),
                         );
                     } else if processing || terminal {
                         // 思考中 1.5 速转；终态回落到 1.0 并让六点合并成中央一颗圆
@@ -1433,8 +1433,10 @@ pub fn dictation_capsule(
                         };
                         let dt = ui.input(|input| input.stable_dt);
                         // 聚拢度 / 出场 hold 由时钟算（Tauri `GATHER_HOLD_S` + `merging`）。
+                        siri_wgpu::continue_from(ui.ctx(), "capsule-siri-wave", "capsule-siri-orb");
                         let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
-                        let effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
+                        let mut effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
+                        effect.level = clock.level;
                         let _ = siri_wgpu::paint(ui, center, effect);
                     }
                     ui.ctx()
@@ -3181,10 +3183,10 @@ mod tests {
         );
     }
 
-    /// wave → orb 的交叉淡出（Tauri `opacity .6s ease-out .55s`）：刚切到思考态时波形
-    /// 还在（两个回调），淡出之后只剩圆点环。
+    /// Recording, contraction and dots must always use one callback, never
+    /// two overlaid effects, even when LLM processing starts immediately.
     #[test]
-    fn the_wave_cross_fades_into_the_orb_after_recording() {
+    fn the_wave_hands_off_to_the_orb_without_overlapping_callbacks() {
         let ctx = egui::Context::default();
         let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
         let render = |time: f64, phase: &str| {
@@ -3219,13 +3221,13 @@ mod tests {
         );
         assert_eq!(
             render(0.2, "polishing"),
-            2,
-            "right after the switch the wave must still be fading over the orb"
+            1,
+            "right after the switch only the contracting wave may be queued"
         );
         assert_eq!(
             render(2.0, "polishing"),
             1,
-            "once the fade is over only the orb remains"
+            "once contraction is complete only the orb remains"
         );
     }
 

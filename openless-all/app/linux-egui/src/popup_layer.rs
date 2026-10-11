@@ -26,12 +26,15 @@
 //! [`pointer_events`]) so the policy is unit-testable; the I/O half is a thin
 //! shell around them and reports failures as `Err`.
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::os::fd::AsRawFd;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use wayland_client::protocol::{wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface};
+use wayland_client::protocol::{
+    wl_compositor, wl_pointer, wl_registry, wl_seat, wl_surface, wl_touch,
+};
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
@@ -275,6 +278,8 @@ struct LayerState {
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_input: TouchInput,
     pointer_position: Option<egui::Pos2>,
     /// Set when the pointer actually moved (or entered) since the last frame, so
     /// a stationary pointer does not emit a motion event every frame.
@@ -302,11 +307,100 @@ impl LayerState {
             }
         }
         all.extend(events);
+        all.append(&mut self.touch_input.events);
         egui::RawInput {
             screen_rect: Some(rect),
             events: all,
             focused: true,
             ..Default::default()
+        }
+    }
+}
+
+/// Native touchscreen contacts also need pointer emulation for egui buttons,
+/// just as egui-winit does. Do not promote another finger during a gesture.
+#[derive(Default)]
+struct TouchInput {
+    contacts: BTreeMap<i32, egui::Pos2>,
+    primary: Option<i32>,
+    events: Vec<egui::Event>,
+}
+
+impl TouchInput {
+    fn emit(&mut self, id: i32, phase: egui::TouchPhase, pos: egui::Pos2) {
+        self.events.push(egui::Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId::from(id),
+            phase,
+            pos,
+            force: None,
+        });
+    }
+
+    fn button(&mut self, pos: egui::Pos2, pressed: bool) {
+        self.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+
+    fn cancel_pointer(&mut self) {
+        if self.primary.take().is_some() {
+            // PointerGone alone leaves egui's button held. Move off-surface
+            // before releasing, so cancellation cannot become a button click.
+            let outside = egui::pos2(-100_000.0, -100_000.0);
+            self.events.push(egui::Event::PointerMoved(outside));
+            self.button(outside, false);
+            self.events.push(egui::Event::PointerGone);
+        }
+    }
+
+    fn down(&mut self, id: i32, pos: egui::Pos2) {
+        let single = self.contacts.is_empty();
+        let std::collections::btree_map::Entry::Vacant(contact) = self.contacts.entry(id) else {
+            return;
+        };
+        contact.insert(pos);
+        self.emit(id, egui::TouchPhase::Start, pos);
+        if single {
+            self.primary = Some(id);
+            self.events.push(egui::Event::PointerMoved(pos));
+            self.button(pos, true);
+        } else {
+            // Multi-finger gestures must not accidentally stop dictation.
+            self.cancel_pointer();
+        }
+    }
+
+    fn motion(&mut self, id: i32, pos: egui::Pos2) {
+        let Some(contact) = self.contacts.get_mut(&id) else {
+            return;
+        };
+        *contact = pos;
+        self.emit(id, egui::TouchPhase::Move, pos);
+        if self.primary == Some(id) {
+            self.events.push(egui::Event::PointerMoved(pos));
+        }
+    }
+
+    fn up(&mut self, id: i32) {
+        let Some(pos) = self.contacts.remove(&id) else {
+            return;
+        };
+        self.emit(id, egui::TouchPhase::End, pos);
+        if self.primary == Some(id) {
+            self.primary = None;
+            self.button(pos, false);
+            self.events.push(egui::Event::PointerGone);
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.cancel_pointer();
+        for (id, pos) in std::mem::take(&mut self.contacts) {
+            self.emit(id, egui::TouchPhase::Cancel, pos);
         }
     }
 }
@@ -389,6 +483,16 @@ impl Dispatch<wl_seat::WlSeat, ()> for LayerState {
             if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
                 state.pointer = Some(seat.get_pointer(qh, ()));
             }
+            if capabilities.contains(wl_seat::Capability::Touch) {
+                if state.touch.is_none() {
+                    state.touch = Some(seat.get_touch(qh, ()));
+                }
+            } else if let Some(touch) = state.touch.take() {
+                state.touch_input.cancel();
+                if touch.version() >= 3 {
+                    touch.release();
+                }
+            }
         }
     }
 }
@@ -437,6 +541,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for LayerState {
                 let pressed = button_state == wl_pointer::ButtonState::Pressed;
                 state.pressed.push((position, button, pressed));
             }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for LayerState {
+    fn event(
+        state: &mut Self,
+        _touch: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _data: &(),
+        _connection: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_touch::Event::Down { id, x, y, .. } => {
+                state.touch_input.down(id, egui::pos2(x as f32, y as f32));
+            }
+            wl_touch::Event::Motion { id, x, y, .. } => {
+                state.touch_input.motion(id, egui::pos2(x as f32, y as f32));
+            }
+            wl_touch::Event::Up { id, .. } => state.touch_input.up(id),
+            wl_touch::Event::Cancel => state.touch_input.cancel(),
             _ => {}
         }
     }
@@ -1065,6 +1192,59 @@ mod tests {
         );
         assert_eq!(button_from_code(0x112), Some(egui::PointerButton::Middle));
         assert_eq!(button_from_code(0x113), None);
+    }
+
+    fn touch_button_frame(ctx: &egui::Context, state: &mut LayerState) -> bool {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+        let mut clicked = false;
+        crate::ui::frontend::run_pass(ctx, state.take_input(rect), |ui| {
+            clicked |= ui
+                .put(
+                    egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(80.0, 40.0)),
+                    egui::Button::new("Stop"),
+                )
+                .clicked();
+        });
+        clicked
+    }
+
+    #[test]
+    fn a_native_touch_tap_clicks_once_and_drains_input() {
+        let ctx = egui::Context::default();
+        let mut state = LayerState::default();
+        touch_button_frame(&ctx, &mut state);
+        state.touch_input.down(7, egui::pos2(30.0, 25.0));
+        state.touch_input.motion(7, egui::pos2(31.0, 25.0));
+        state.touch_input.up(7);
+        assert!(touch_button_frame(&ctx, &mut state));
+        assert!(!touch_button_frame(&ctx, &mut state));
+        assert!(state.touch_input.contacts.is_empty());
+        assert!(state.touch_input.primary.is_none());
+        assert!(state.touch_input.events.is_empty());
+    }
+
+    #[test]
+    fn cancelling_or_adding_a_finger_cannot_click_or_leave_a_button_held() {
+        let ctx = egui::Context::default();
+        let mut state = LayerState::default();
+        touch_button_frame(&ctx, &mut state);
+        for multi in [false, true] {
+            state.touch_input.down(1, egui::pos2(30.0, 25.0));
+            assert!(!touch_button_frame(&ctx, &mut state));
+            if multi {
+                state.touch_input.down(2, egui::pos2(40.0, 25.0));
+                state.touch_input.up(1);
+                state.touch_input.up(2);
+            } else {
+                state.touch_input.cancel();
+            }
+            assert!(!touch_button_frame(&ctx, &mut state));
+            assert!(!ctx.input(|input| input.pointer.any_down()));
+            assert!(state.touch_input.contacts.is_empty());
+            state.touch_input.down(3, egui::pos2(30.0, 25.0));
+            state.touch_input.up(3);
+            assert!(touch_button_frame(&ctx, &mut state));
+        }
     }
 
     #[test]
