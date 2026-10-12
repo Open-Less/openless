@@ -1239,8 +1239,7 @@ pub fn dictation_capsule(
                     .unwrap_or_default()
             });
             let new_session = motion.update(&phase, now);
-            let wave_resolution = motion.wave_resolution(now);
-            let orb_ready = motion.orb_ready(now);
+            let wave_opacity = motion.wave_opacity(now);
             let shine_cycle = motion.shine_cycle_seconds(now);
             ui.ctx()
                 .data_mut(|data| data.insert_temp(motion_id, motion));
@@ -1365,7 +1364,7 @@ pub fn dictation_capsule(
                     egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
                 )
             };
-            if phase == "recording" || (siri && phase == "starting") {
+            if phase == "recording" {
                 // Siri capsules are transparent overlays. Queue the spectral
                 // ribbon through the shared WGPU callback used by both eframe
                 // windows and the native layer-shell surface.
@@ -1383,8 +1382,7 @@ pub fn dictation_capsule(
                     let _ = siri_wgpu::paint(
                         ui,
                         center,
-                        siri_wgpu::SiriEffect::wave(clock.time, clock.level)
-                            .with_resolved(clock.resolved),
+                        siri_wgpu::SiriEffect::wave(clock.time, clock.level),
                     );
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(16));
@@ -1401,9 +1399,9 @@ pub fn dictation_capsule(
                 // 思考态 / 终态：Siri 舞台画光点（终态是「六点合回一颗圆」的收尾），
                 // 经典 / typeless 只画文案。
                 if siri {
-                    // One effect per frame: contract the ribbon into one point,
-                    // hold during transcription, then hand off to gathered dots.
-                    if (processing || terminal) && !orb_ready {
+                    // wave → orb 的交叉淡出：切态后 0.55s 内保持可见，再用 0.6s 淡出，
+                    // 期间波形继续向圆心收拢（Tauri `opacity .6s ease-out .55s`）。
+                    if let Some(opacity) = wave_opacity {
                         let fade_drive = siri_wgpu::SiriDrive {
                             level: state.audio_level.unwrap_or_default(),
                             resolved: 0.0,
@@ -1418,9 +1416,10 @@ pub fn dictation_capsule(
                             ui,
                             center,
                             siri_wgpu::SiriEffect::wave(clock.time, clock.level)
-                                .with_resolved(clock.resolved.min(wave_resolution)),
+                                .with_opacity(opacity),
                         );
-                    } else if processing || terminal {
+                    }
+                    if processing || terminal {
                         // 思考中 1.5 速转；终态回落到 1.0 并让六点合并成中央一颗圆
                         //（Tauri `VoiceOrbStage` 的 speed / merging）。
                         let drive = siri_wgpu::SiriDrive {
@@ -1433,10 +1432,8 @@ pub fn dictation_capsule(
                         };
                         let dt = ui.input(|input| input.stable_dt);
                         // 聚拢度 / 出场 hold 由时钟算（Tauri `GATHER_HOLD_S` + `merging`）。
-                        siri_wgpu::continue_from(ui.ctx(), "capsule-siri-wave", "capsule-siri-orb");
                         let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
-                        let mut effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
-                        effect.level = clock.level;
+                        let effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
                         let _ = siri_wgpu::paint(ui, center, effect);
                     }
                     ui.ctx()
@@ -3183,10 +3180,10 @@ mod tests {
         );
     }
 
-    /// Recording, contraction and dots must always use one callback, never
-    /// two overlaid effects, even when LLM processing starts immediately.
+    /// wave → orb 的交叉淡出（Tauri `opacity .6s ease-out .55s`）：刚切到思考态时波形
+    /// 还在（两个回调），淡出之后只剩圆点环。
     #[test]
-    fn the_wave_hands_off_to_the_orb_without_overlapping_callbacks() {
+    fn the_wave_cross_fades_into_the_orb_after_recording() {
         let ctx = egui::Context::default();
         let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
         let render = |time: f64, phase: &str| {
@@ -3221,13 +3218,13 @@ mod tests {
         );
         assert_eq!(
             render(0.2, "polishing"),
-            1,
-            "right after the switch only the contracting wave may be queued"
+            2,
+            "right after the switch the wave must still be fading over the orb"
         );
         assert_eq!(
             render(2.0, "polishing"),
             1,
-            "once contraction is complete only the orb remains"
+            "once the fade is over only the orb remains"
         );
     }
 
@@ -3480,15 +3477,8 @@ mod tests {
 
     #[test]
     fn siri_recording_and_thinking_use_the_full_stage() {
-        let ctx = egui::Context::default();
-        for (phase, time) in [
-            ("recording", 0.0),
-            ("transcribing", 0.1),
-            ("transcribing", 1.0),
-            ("polishing", 1.1),
-            ("polishing", 2.0),
-            ("completed", 2.1),
-        ] {
+        for phase in ["recording", "transcribing"] {
+            let ctx = egui::Context::default();
             let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
             let state = CapsulePopupState {
                 phase: phase.into(),
@@ -3499,21 +3489,11 @@ mod tests {
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(stage),
-                    time: Some(time),
                     ..Default::default()
                 },
                 |ui| {
                     dictation_capsule(ui, &state, Lang::ZhCn, siri_wgpu::DEFAULT_WARMUP_MS);
                 },
-            );
-            assert_eq!(
-                output
-                    .shapes
-                    .iter()
-                    .filter(|shape| matches!(&shape.shape, egui::Shape::Callback(_)))
-                    .count(),
-                1,
-                "{phase} must queue exactly one effect, never overlapping wave and orb"
             );
             assert!(
                 output.shapes.iter().any(|shape| matches!(

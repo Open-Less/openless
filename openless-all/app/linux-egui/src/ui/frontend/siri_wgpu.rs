@@ -78,11 +78,6 @@ impl SiriEffect {
         }
     }
 
-    pub fn with_resolved(mut self, resolved: f32) -> Self {
-        self.resolved = resolved.clamp(0.0, 1.0);
-        self
-    }
-
     pub fn with_tint(mut self, tint: [f32; 3]) -> Self {
         self.tint = tint;
         self
@@ -223,25 +218,6 @@ pub fn tick(ctx: &egui::Context, id: &str, drive: SiriDrive, dt: f32) -> SiriClo
 
     ctx.data_mut(|data| data.insert_temp(key, clock));
     clock
-}
-
-/// Carry the collapsed ribbon's phase and brightness into its first orb frame.
-/// The ribbon already supplied the gathered entrance, so do not hold it again.
-pub fn continue_from(ctx: &egui::Context, source: &str, target: &str) {
-    let source = egui::Id::new(("openless-siri-clock", source));
-    let target = egui::Id::new(("openless-siri-clock", target));
-    ctx.data_mut(|data| {
-        if data.get_temp::<SiriClock>(target).is_some() {
-            return;
-        }
-        if let Some(mut clock) = data.get_temp::<SiriClock>(source) {
-            clock.resolved = 0.0;
-            clock.warm_progress = 1.0;
-            clock.gather = 1.0;
-            clock.elapsed = GATHER_HOLD_SECONDS;
-            data.insert_temp(target, clock);
-        }
-    });
 }
 
 /// 丢掉某个时钟，让入场动画（wave 展开 / 圆点聚拢）从头走一遍。
@@ -385,12 +361,7 @@ fn orb(frag: vec2<f32>) -> vec4<f32> {
     col += exp(-length(p) * 15.0) * gather * vec3<f32>(0.7, 0.8, 1.0);
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
     let alpha = clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0);
-    let dots = vec4<f32>(col, alpha);
-    // At gather=1 this is exactly the preceding collapsed wave. Interpolate
-    // within one shader draw, not two additive layers with different radii.
-    let handoff = smoothstep(0.0, 0.35, 1.0 - gather);
-    if handoff >= 1.0 { return dots; }
-    return mix(wave(frag), dots, handoff);
+    return vec4<f32>(col, alpha);
 }
 
 fn round_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
@@ -844,32 +815,6 @@ mod tests {
             "merging into one circle: {}",
             clock.gather
         );
-    }
-
-    #[test]
-    fn a_wave_handoff_keeps_phase_and_level_without_a_second_hold() {
-        let ctx = egui::Context::default();
-        let mut wave = tick(&ctx, "wave-handoff", SiriDrive::default(), 0.0);
-        for _ in 0..60 {
-            wave = tick(&ctx, "wave-handoff", SiriDrive::default(), 1.0 / 60.0);
-        }
-        let drive = SiriDrive {
-            resolved: 0.0,
-            speed: 1.5,
-            ..Default::default()
-        };
-        continue_from(&ctx, "wave-handoff", "orb-handoff");
-        let first = tick(&ctx, "orb-handoff", drive, 0.0);
-        assert_eq!(first.time, wave.time);
-        assert_eq!(first.level, wave.level);
-        assert_eq!(first.gather, 1.0);
-        let next = tick(&ctx, "orb-handoff", drive, 1.0 / 60.0);
-        assert!(next.time > first.time);
-        assert!(next.gather < 1.0, "do not hold the collapsed point again");
-        continue_from(&ctx, "wave-handoff", "orb-handoff");
-        let unchanged = tick(&ctx, "orb-handoff", drive, 0.0);
-        assert_eq!(unchanged.time, next.time);
-        assert_eq!(unchanged.gather, next.gather);
     }
 
     /// 新会话复位：时钟丢掉之后，下一帧回到「刚出场」的状态。

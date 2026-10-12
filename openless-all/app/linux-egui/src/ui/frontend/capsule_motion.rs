@@ -1,5 +1,8 @@
-//! Capsule phase timing: keep Tauri's caption sweep while sequencing the Siri
-//! ribbon, single-point contraction and six-point LLM stage without overlap.
+//! 胶囊相位时序：状态切换时的入场 / 收尾节奏，逐项对齐 Tauri。
+//!
+//! Tauri 那边这些节奏由 CSS / React 生命周期承担（`cap-shine` 的 0.9s→2.4s burst、
+//! `VoiceOrbStage` 里 wave 的 `opacity .6s ease-out .55s`）。egui 没有 CSS，节奏只能自己
+//! 算，所以集中在这里并配单测 —— 这样「和 Tauri 不一致」是能被断言发现的，而不是靠肉眼。
 
 /// 经典药丸 thinking 文案的扫光：进入转写/润色的头 2 秒走快速 burst（Tauri 用 0.9s/周期
 /// 提示「流式刚开始」），之后回落到 2.4s 的稳态。切回其它状态也复位成快速，下次重新 burst。
@@ -7,8 +10,10 @@ pub const SHINE_BURST_SECONDS: f64 = 2.0;
 pub const SHINE_FAST_CYCLE_SECONDS: f64 = 0.9;
 pub const SHINE_SLOW_CYCLE_SECONDS: f64 = 2.4;
 
-/// Contract the recording ribbon completely before handing off to six dots.
-pub const WAVE_COLLAPSE_SECONDS: f64 = 0.55;
+/// wave → orb 的交叉淡出（Tauri `opacity .6s ease-out .55s`）：切态后先保持可见 0.55s，
+/// 再用 0.6s 淡出；Tauri 另外在 1.3s 后卸载 canvas，这里淡完就不再画（等价且更省）。
+pub const WAVE_FADE_DELAY_SECONDS: f64 = 0.55;
+pub const WAVE_FADE_SECONDS: f64 = 0.6;
 
 /// 录音相位：只有它画满幅的声波。
 fn phase_is_recording(phase: &str) -> bool {
@@ -36,7 +41,7 @@ impl CapsuleMotion {
         if phase_is_recording(phase) {
             self.recording_left_at = None;
         } else if phase_is_recording(&self.phase) {
-            // Start contraction when recording ends, not when LLM processing starts.
+            // 刚从录音切走：wave 的淡出从这一刻起算。
             self.recording_left_at = Some(now);
         }
         self.phase = phase.to_string();
@@ -59,30 +64,21 @@ impl CapsuleMotion {
         }
     }
 
-    /// Spatial contraction, not an opacity fade. The collapsed wave remains a
-    /// single bright point throughout transcription, however long it takes.
-    pub fn wave_resolution(&self, now: f64) -> f32 {
-        let Some(left_at) = self.recording_left_at else {
-            return 0.0;
-        };
-        let t = ((now - left_at) / WAVE_COLLAPSE_SECONDS).clamp(0.0, 1.0) as f32;
-        1.0 - t * t * (3.0 - 2.0 * t)
-    }
-
-    /// Enter the six-point effect only in the LLM/output stage and only after
-    /// contraction has finished. Never queue both effects in the same frame.
-    pub fn orb_ready(&self, now: f64) -> bool {
-        matches!(
-            self.phase.as_str(),
-            "polishing"
-                | "inserting"
-                | "completed"
-                | "done"
-                | "inserted"
-                | "cancelled"
-                | "failed"
-                | "error"
-        ) && self.wave_resolution(now) == 0.0
+    /// wave 在本帧的整体不透明度：`None` = 不用再画（思考态且淡出已结束）。
+    pub fn wave_opacity(&self, now: f64) -> Option<f32> {
+        let left_at = self.recording_left_at?;
+        let age = now - left_at;
+        if age < WAVE_FADE_DELAY_SECONDS {
+            return Some(1.0);
+        }
+        let elapsed = age - WAVE_FADE_DELAY_SECONDS;
+        if elapsed >= WAVE_FADE_SECONDS {
+            return None;
+        }
+        let t = (elapsed / WAVE_FADE_SECONDS).clamp(0.0, 1.0) as f32;
+        // CSS `ease-out` 的近似：起步快、收尾慢。
+        let eased = 1.0 - (1.0 - t).powi(3);
+        Some(1.0 - eased)
     }
 }
 
@@ -91,35 +87,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transcription_holds_one_point_until_the_llm_stage() {
-        let mut motion = CapsuleMotion::default();
-        motion.update("recording", 0.0);
-        motion.update("transcribing", 1.0);
-        assert_eq!(motion.wave_resolution(1.0), 1.0);
-        let halfway = motion.wave_resolution(1.0 + WAVE_COLLAPSE_SECONDS / 2.0);
-        assert!((halfway - 0.5).abs() < 0.001);
-        assert_eq!(motion.wave_resolution(2.0), 0.0);
-        assert!(!motion.orb_ready(20.0));
-        motion.update("polishing", 20.0);
-        assert!(motion.orb_ready(20.0));
-    }
-
-    #[test]
-    fn a_fast_llm_stage_cannot_overlap_the_collapsing_wave() {
+    fn the_wave_stays_opaque_during_the_fade_delay() {
         let mut motion = CapsuleMotion::default();
         motion.update("recording", 0.0);
         motion.update("polishing", 1.0);
-        assert!(!motion.orb_ready(1.0));
-        assert!(!motion.orb_ready(1.2));
-        assert!(motion.orb_ready(2.0));
+        assert_eq!(motion.wave_opacity(1.0), Some(1.0));
+        assert_eq!(motion.wave_opacity(1.5), Some(1.0));
     }
 
     #[test]
-    fn a_popup_opened_mid_polish_starts_with_the_gathered_orb() {
+    fn the_wave_fade_covers_half_a_second_and_then_stops() {
         let mut motion = CapsuleMotion::default();
+        motion.update("recording", 0.0);
+        motion.update("polishing", 10.0);
+        // 延迟期内完全不透明。
+        assert_eq!(motion.wave_opacity(10.3), Some(1.0));
+        assert_eq!(motion.wave_opacity(10.55), Some(1.0));
+        // 淡出中：单调下降、且始终落在 (0, 1) 之间。
+        let quarter = motion.wave_opacity(10.55 + 0.15).unwrap();
+        let half = motion.wave_opacity(10.55 + 0.3).unwrap();
+        let late = motion.wave_opacity(10.55 + 0.55).unwrap();
+        assert!(
+            quarter < 1.0 && quarter > half && half > late && late > 0.0,
+            "{quarter} {half} {late}"
+        );
+        // 淡完就不再画。
+        assert_eq!(motion.wave_opacity(10.55 + WAVE_FADE_SECONDS), None);
+        assert_eq!(motion.wave_opacity(12.0), None);
+    }
+
+    #[test]
+    fn no_fade_is_scheduled_without_a_recording_phase() {
+        let mut motion = CapsuleMotion::default();
+        // 直接进思考态（例如错过了录音相位）：没有 wave 可淡出。
         motion.update("polishing", 5.0);
-        assert_eq!(motion.wave_resolution(5.0), 0.0);
-        assert!(motion.orb_ready(5.0));
+        assert_eq!(motion.wave_opacity(5.0), None);
+        assert_eq!(motion.wave_opacity(9.0), None);
     }
 
     #[test]
