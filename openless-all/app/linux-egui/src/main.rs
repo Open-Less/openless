@@ -80,6 +80,7 @@ mod linux_app {
             result: Result<String, String>,
         },
         ServiceConfigured([bool; 2]),
+        LinuxAccess(openless_linux_egui::linux_access::LinuxAccessSnapshot),
         OmniFinished {
             operation: openless_linux_egui::omni_settings::OmniAction,
             submitted: Box<openless_linux_egui::omni_settings::OmniSettings>,
@@ -530,6 +531,7 @@ mod linux_app {
         settings_channels_loading: bool,
         settings_channels_request: u64,
         settings_channels_refresh_requested: bool,
+        linux_access_last_check: Option<std::time::Instant>,
         /// 语言模型 / 语音识别是否各自有启用的渠道（AI 服务页的状态点）。
         service_configured: [bool; 2],
         /// 文本型设置行（端口/条数/路径…）只在偏好刚载入或外部变更时回灌，
@@ -779,6 +781,7 @@ mod linux_app {
                         settings_channels_loading: false,
                         settings_channels_request: 0,
                         settings_channels_refresh_requested: false,
+                        linux_access_last_check: None,
                         service_configured: [false; 2],
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
@@ -890,6 +893,7 @@ mod linux_app {
                     settings_channels_loading: false,
                     settings_channels_request: 0,
                     settings_channels_refresh_requested: false,
+                    linux_access_last_check: None,
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
@@ -3899,6 +3903,10 @@ mod linux_app {
                             }
                         }
                     }
+                    UiResult::LinuxAccess(snapshot) => {
+                        self.frontend_vm.linux_access = snapshot;
+                        self.linux_access_last_check = Some(std::time::Instant::now());
+                    }
                     UiResult::Message(message) => self.status = message,
                     UiResult::HotkeyError(error) => {
                         self.status = if error.message == "selectionPolishSelectionTooLong" {
@@ -4512,12 +4520,48 @@ mod linux_app {
             });
         }
 
+        fn refresh_linux_access(&mut self) {
+            if self.frontend_vm.linux_access.checking {
+                return;
+            }
+            self.frontend_vm.linux_access.checking = true;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                use openless_linux_egui::linux_access::{
+                    self, CheckState, KeyringState, LinuxAccessSnapshot,
+                };
+                let session = tokio::task::spawn_blocking(linux_access::probe_session);
+                let (session, (network, network_latency_ms)) =
+                    tokio::join!(session, linux_access::probe_network(),);
+                let (keyring, input) =
+                    session.unwrap_or((KeyringState::Unavailable, CheckState::Unavailable));
+                let _ = tx.send(UiResult::LinuxAccess(LinuxAccessSnapshot {
+                    checking: false,
+                    keyring,
+                    input,
+                    network,
+                    network_latency_ms,
+                }));
+            });
+        }
+
         // ── Frontend bridge ─────────────────────────────────────────────────
 
         /// Sync backend state into the frontend view model each frame before
         /// rendering. Only fields that have real data sources are populated;
         /// unwired fields remain in their default empty / loading state.
         fn sync_view_model(&mut self) {
+            // Only one diagnostic job can run, and only refresh while the
+            // privacy page is visible. Match Tauri's 30-second network cadence.
+            if self.frontend_vm.settings_open
+                && self.frontend_vm.settings_section
+                    == frontend::view_model::SettingsSection::Privacy
+                && self
+                    .linux_access_last_check
+                    .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(30))
+            {
+                self.refresh_linux_access();
+            }
             self.frontend_vm.settings_saving = self.settings_save.in_flight.is_some();
             self.frontend_vm.settings_save_error = self.settings_save.error.clone();
             // Capture overview error before taking a mutable borrow on frontend_vm.
@@ -5200,6 +5244,7 @@ mod linux_app {
                         if self.frontend_vm.settings_open {
                             self.frontend_vm.active_page = frontend::view_model::Page::Settings;
                             // 每次打开设置都刷新「必配服务」状态点。
+                            self.linux_access_last_check = None;
                             self.load_service_configured();
                             self.provider_kind = self.settings_channel_kind;
                             self.load_providers(self.settings_channel_kind);
@@ -6341,6 +6386,9 @@ mod linux_app {
                             );
                         }
                         self.frontend_vm.settings_section = section;
+                        if section == frontend::view_model::SettingsSection::Privacy {
+                            self.refresh_linux_access();
+                        }
                         if section == frontend::view_model::SettingsSection::Services {
                             self.select_services_view(self.frontend_vm.services_view);
                         }

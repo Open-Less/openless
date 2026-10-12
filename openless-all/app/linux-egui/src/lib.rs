@@ -19,6 +19,7 @@ pub mod frame_stats;
 mod host_actions;
 mod hotkeys;
 mod i18n;
+pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
 pub mod omni_settings;

@@ -2275,6 +2275,78 @@ pub const CATALOG: &[Msg] = &[
     },
     // Linux-only settings: session services and the real data/credential split.
     Msg {
+        key: "settings.linux_privacy.refresh",
+        text: row("重新检查会话与网络", "重新檢查工作階段與網路", "Recheck session & network", "セッションとネットワークを再確認", "세션 및 네트워크 다시 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.not_checked",
+        text: row("尚未检查", "尚未檢查", "Not checked", "未確認", "확인 전"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_ready",
+        text: row("OpenLess 插件接口可达", "OpenLess 外掛介面可達", "OpenLess addon responds", "OpenLess プラグイン応答あり", "OpenLess 플러그인 응답 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_unavailable",
+        text: row("插件接口不可达", "外掛介面無法連線", "Addon interface unavailable", "プラグインに接続できません", "플러그인 인터페이스 사용 불가"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_label",
+        text: row("OpenLess 网络连接", "OpenLess 網路連線", "OpenLess network connection", "OpenLess ネットワーク接続", "OpenLess 네트워크 연결"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_online",
+        text: row("HTTP 可达（{} ms）", "HTTP 可達（{} ms）", "HTTP reachable ({} ms)", "HTTP 接続確認（{} ms）", "HTTP 연결 확인 ({} ms)"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_unavailable",
+        text: row("OpenLess 服务不可达", "OpenLess 服務無法連線", "OpenLess endpoint unreachable", "OpenLess サービスに接続できません", "OpenLess 서비스 연결 불가"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_probe_desc",
+        text: row(
+            "与 Tauri 相同：GET OpenLess /packs，8 秒超时，收到 HTTP 响应才算可达。每 30 秒刷新；不代表 ASR/LLM 渠道鉴权有效，请在 AI 服务页验证渠道。",
+            "與 Tauri 相同：GET OpenLess /packs，8 秒逾時，收到 HTTP 回應才算可達。每 30 秒更新；不代表 ASR/LLM 渠道驗證有效，請在 AI 服務頁驗證渠道。",
+            "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
+            "Tauri と同じく OpenLess /packs に GET し、8 秒でタイムアウトします。HTTP 応答で接続を確認し、30 秒ごとに更新します。ASR/LLM 認証は AI サービスで別途検証してください。",
+            "Tauri와 동일하게 OpenLess /packs에 GET 요청하며 제한 시간은 8초입니다. HTTP 응답으로 연결을 확인하고 30초마다 갱신합니다. ASR/LLM 인증은 AI 서비스에서 별도로 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_ready",
+        text: row("默认保险库已解锁", "預設保管庫已解鎖", "Default vault unlocked", "既定保管庫は解除済み", "기본 보관소 잠금 해제됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_locked",
+        text: row("默认保险库已锁定", "預設保管庫已鎖定", "Default vault locked", "既定保管庫はロック中", "기본 보관소 잠김"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_missing_service",
+        text: row("Secret Service 未运行", "Secret Service 未執行", "Secret Service not running", "Secret Service 未起動", "Secret Service 실행 안 됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_missing_collection",
+        text: row("缺少默认保险库", "缺少預設保管庫", "No default vault", "既定保管庫がありません", "기본 보관소 없음"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unavailable",
+        text: row("会话或保险库检查失败", "工作階段或保管庫檢查失敗", "Session/vault check failed", "セッション・保管庫の確認失敗", "세션/보관소 확인 실패"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_restart",
+        text: row("服务已恢复，需重启 OpenLess", "服務已恢復，需重新啟動 OpenLess", "Service restored; restart OpenLess", "サービス復旧済み・OpenLess 再起動が必要", "서비스 복구됨, OpenLess 재시작 필요"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_probe_desc",
+        text: row(
+            "只检查会话 D-Bus、默认保险库的锁定状态与适配器初始化结果。不读取密钥、不自动解锁或写入测试密钥；实际保存权限仍以保存结果为准。",
+            "僅檢查工作階段 D-Bus、預設保管庫的鎖定狀態與介面初始化結果。不讀取金鑰、不自動解鎖或寫入測試金鑰；實際儲存權限仍以儲存結果為準。",
+            "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
+            "セッション D-Bus、既定保管庫のロック状態、接続初期化のみ確認します。キーの読み取り、自動解除、テスト書き込みは行いません。書き込み権限は実際の保存結果で確認してください。",
+            "세션 D-Bus, 기본 보관소 잠금 상태 및 어댑터 초기화만 확인합니다. 키 읽기, 자동 잠금 해제, 테스트 쓰기는 하지 않습니다. 실제 쓰기 권한은 저장 결과로 확인하세요.",
+        ),
+    },
+    Msg {
         key: "settings.linux_privacy.section_desc",
         text: row(
             "Linux 会话、Keyring / Secret Service，以及本地历史、录音和偏好。",
@@ -6441,6 +6513,20 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.providers.xfyunAppIdLabel",
         text: row("AppID", "AppID", "AppID", "AppID", "AppID"),
+    },
+    Msg {
+        key: "settings.permissions.checking",
+        text: row("检查中…", "檢查中…", "Checking…", "確認中…", "확인 중…"),
+    },
+    Msg {
+        key: "settings.permissions.hotkey_failed",
+        text: row(
+            "监听失败",
+            "監聽失敗",
+            "Listener failed",
+            "監視失敗",
+            "감지 실패",
+        ),
     },
 ];
 

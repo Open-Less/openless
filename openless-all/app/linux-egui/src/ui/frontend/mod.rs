@@ -908,7 +908,9 @@ mod tests {
                 super::view_model::SettingsSection::Shortcuts => "modal.descriptions.shortcuts",
                 super::view_model::SettingsSection::Services => "modal.descriptions.services",
                 super::view_model::SettingsSection::Appearance => "modal.descriptions.appearance",
-                super::view_model::SettingsSection::Privacy => "modal.descriptions.privacy",
+                super::view_model::SettingsSection::Privacy => {
+                    "settings.linux_privacy.section_desc"
+                }
                 super::view_model::SettingsSection::Advanced => "modal.descriptions.advanced",
                 super::view_model::SettingsSection::About => "modal.descriptions.about",
             };

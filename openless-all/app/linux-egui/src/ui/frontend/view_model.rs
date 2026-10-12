@@ -547,6 +547,7 @@ pub enum SettingsTextField {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsActionField {
     RetrySave,
+    RefreshLinuxAccess,
     /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
     PreviewAudioCue,
     ExportDiagnostics,
@@ -880,6 +881,8 @@ pub struct FrontendViewModel {
     /// Actual backend data directory; empty until the backend is available.
     #[serde(default)]
     pub application_data_directory: String,
+    #[serde(default)]
+    pub linux_access: openless_linux_egui::linux_access::LinuxAccessSnapshot,
     /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
     pub remote_running: bool,
     /// 服务报出的地址已过期：继续展示旧网址会诱导用户在错误的地址上配对，
@@ -1081,6 +1084,7 @@ impl Default for FrontendViewModel {
             style_hotkey_draft_pack: 0,
             permissions: SettingsPermissions::default(),
             application_data_directory: String::new(),
+            linux_access: Default::default(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
             quick_note_hotkey: String::new(),

@@ -2316,40 +2316,52 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
 }
 
 fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
-    let lang = vm.lang;
-    egui::Frame::new()
-        .fill(theme::BLUE_SOFT)
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.intro_title"))
-                        .strong()
-                        .color(theme::BLUE),
-                );
-                ui.label(
-                    egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.intro_desc"))
-                        .size(11.5)
-                        .color(theme::INK_3),
-                );
-            });
-        });
-    ui.add_space(10.0);
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        // Keep editable retention controls reachable before the longer service
+        // explanations. Wrapped paragraphs must never inherit centered text.
+        privacy_data(ui, vm, actions);
+        privacy_access(ui, vm, actions);
+    });
+}
 
-    // Linux capabilities are not macOS-style authorization grants. In
-    // particular, device enumeration does not prove capture access, and the
-    // keyring requirement below is not a claim that a wallet is unlocked.
+fn privacy_note(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(egui::RichText::new(text).size(11.5).color(theme::INK_3))
+            .wrap()
+            .halign(egui::Align::Min),
+    );
+}
+
+fn privacy_access(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    use openless_linux_egui::linux_access::{CheckState, KeyringState};
+    let lang = vm.lang;
+    let checking = vm.linux_access.checking;
+    if ui
+        .add_enabled(
+            !checking,
+            egui::Button::new(if checking {
+                tr_l10n(lang, "settings.permissions.checking")
+            } else {
+                tr_l10n(lang, "settings.linux_privacy.refresh")
+            }),
+        )
+        .clicked()
+    {
+        actions.push(FrontendAction::SettingsAction(
+            SettingsActionField::RefreshLinuxAccess,
+        ));
+    }
+    ui.add_space(8.0);
     card(
         ui,
         tr_l10n(lang, "settings.linux_privacy.title"),
         "",
         |ui| {
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.desc"))
-                    .size(11.5)
-                    .color(theme::INK_3),
-            );
+            privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.desc"));
             ui.add_space(6.0);
             let microphone_detected =
                 vm.permissions.microphone == super::view_model::PermissionState::Granted;
@@ -2368,35 +2380,83 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     theme::INK_4
                 },
             );
-            let hotkey_ready = vm.permissions.hotkey == super::view_model::PermissionState::Granted;
+            let hotkey_ready = vm.permissions.hotkey == super::view_model::PermissionState::Granted
+                && vm.linux_access.input == CheckState::Ready;
             status_row(
                 ui,
                 tr_l10n(lang, "settings.permissions.hotkey_label"),
                 tr_l10n(lang, "settings.linux_privacy.hotkey_desc"),
-                if hotkey_ready {
+                if checking {
+                    tr_l10n(lang, "settings.permissions.checking")
+                } else if hotkey_ready {
                     tr_l10n(lang, "settings.linux_privacy.hotkey_ready")
+                } else if vm.linux_access.input == CheckState::Unavailable {
+                    tr_l10n(lang, "settings.permissions.hotkey_failed")
                 } else {
-                    tr_l10n(lang, "settings.permissions.indeterminate")
+                    tr_l10n(lang, "settings.linux_privacy.not_checked")
                 },
-                if hotkey_ready {
+                if hotkey_ready && !checking {
                     theme::OK
                 } else {
                     theme::INK_4
                 },
             );
+            let (input_text, input_color) = if checking {
+                (tr_l10n(lang, "settings.permissions.checking"), theme::INK_4)
+            } else {
+                match vm.linux_access.input {
+                    CheckState::Ready => (
+                        tr_l10n(lang, "settings.linux_privacy.input_ready"),
+                        theme::OK,
+                    ),
+                    CheckState::Unavailable => (
+                        tr_l10n(lang, "settings.linux_privacy.input_unavailable"),
+                        theme::WARN,
+                    ),
+                    CheckState::Unknown => (
+                        tr_l10n(lang, "settings.linux_privacy.not_checked"),
+                        theme::INK_4,
+                    ),
+                }
+            };
             status_row(
                 ui,
                 tr_l10n(lang, "settings.linux_privacy.input_label"),
                 tr_l10n(lang, "settings.linux_privacy.input_desc"),
-                "Fcitx5 / Wayland / X11",
-                theme::INK_3,
+                input_text,
+                input_color,
             );
+            let (network_text, network_color) = if checking {
+                (
+                    tr_l10n(lang, "settings.permissions.checking").to_string(),
+                    theme::INK_4,
+                )
+            } else {
+                match vm.linux_access.network {
+                    CheckState::Ready => (
+                        fmt_l10n(
+                            lang,
+                            "settings.linux_privacy.network_online",
+                            &[&vm.linux_access.network_latency_ms.unwrap_or(0)],
+                        ),
+                        theme::OK,
+                    ),
+                    CheckState::Unavailable => (
+                        tr_l10n(lang, "settings.linux_privacy.network_unavailable").to_string(),
+                        theme::WARN,
+                    ),
+                    CheckState::Unknown => (
+                        tr_l10n(lang, "settings.linux_privacy.not_checked").to_string(),
+                        theme::INK_4,
+                    ),
+                }
+            };
             status_row(
                 ui,
-                tr_l10n(lang, "settings.permissions.network_label"),
-                tr_l10n(lang, "settings.linux_privacy.network_desc"),
-                tr_l10n(lang, "settings.linux_privacy.verify_channels"),
-                theme::INK_3,
+                tr_l10n(lang, "settings.linux_privacy.network_label"),
+                tr_l10n(lang, "settings.linux_privacy.network_probe_desc"),
+                &network_text,
+                network_color,
             );
         },
     );
@@ -2405,34 +2465,65 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         tr_l10n(lang, "settings.linux_privacy.keyring_title"),
         "",
         |ui| {
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.keyring_desc"))
-                    .size(11.5)
-                    .color(theme::INK_3),
-            );
+            privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.keyring_desc"));
             ui.add_space(6.0);
-            status_row(
+            let (text, color) = if checking {
+                (tr_l10n(lang, "settings.permissions.checking"), theme::INK_4)
+            } else {
+                match vm.linux_access.keyring {
+                    KeyringState::Ready => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_ready"),
+                        theme::OK,
+                    ),
+                    KeyringState::Locked => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_locked"),
+                        theme::WARN,
+                    ),
+                    KeyringState::MissingService => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_missing_service"),
+                        theme::WARN,
+                    ),
+                    KeyringState::MissingCollection => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_missing_collection"),
+                        theme::WARN,
+                    ),
+                    KeyringState::Unavailable => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_unavailable"),
+                        theme::WARN,
+                    ),
+                    KeyringState::RestartRequired => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_restart"),
+                        theme::WARN,
+                    ),
+                    KeyringState::Unknown => (
+                        tr_l10n(lang, "settings.linux_privacy.not_checked"),
+                        theme::INK_4,
+                    ),
+                }
+            };
+            status_row(ui, "Secret Service", "", text, color);
+            privacy_note(
                 ui,
-                "Secret Service",
-                "",
-                tr_l10n(lang, "settings.linux_privacy.keyring_required"),
-                theme::INK_3,
+                tr_l10n(lang, "settings.linux_privacy.keyring_probe_desc"),
             );
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.keyring_recovery"))
-                    .size(11.5)
-                    .color(theme::INK_3),
-            );
+            if !checking
+                && !matches!(
+                    vm.linux_access.keyring,
+                    KeyringState::Ready | KeyringState::Unknown
+                )
+            {
+                privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.keyring_recovery"));
+            }
         },
     );
+}
 
-    // Keep Core retention controls, but describe Linux's actual storage split.
+fn privacy_data(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
+    let lang = vm.lang;
     card(ui, tr_l10n(lang, "settings.data_storage.title"), "", |ui| {
-        ui.label(
-            egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.storage_desc"))
-                .size(11.5)
-                .color(theme::INK_3),
-        );
+        privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.intro_desc"));
+        ui.add_space(6.0);
+        privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.storage_desc"));
         ui.add_space(6.0);
         row_desc(
             ui,
@@ -2444,7 +2535,11 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 } else {
                     &vm.application_data_directory
                 };
-                ui.add(egui::Label::new(egui::RichText::new(directory).monospace()).wrap());
+                ui.add(
+                    egui::Label::new(egui::RichText::new(directory).monospace())
+                        .wrap()
+                        .halign(egui::Align::Min),
+                );
             },
         );
         let retention = vm.settings.retention_days.clone();
@@ -4888,6 +4983,9 @@ fn text_edit_row(
             ui.available_width().min(300.0),
             false,
         );
+        if response.gained_focus() {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
         if response.changed() {
             on_change();
         }
@@ -4896,7 +4994,11 @@ fn text_edit_row(
 
 fn status_row(ui: &mut egui::Ui, label: &str, desc: &str, status: &str, color: egui::Color32) {
     row_desc(ui, label, desc, |ui| {
-        ui.label(egui::RichText::new(status).size(12.0).color(color));
+        ui.add(
+            egui::Label::new(egui::RichText::new(status).size(12.0).color(color))
+                .wrap()
+                .halign(egui::Align::Min),
+        );
     });
 }
 
@@ -4951,10 +5053,17 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
                     // 「都被向左对齐了」）。Tauri 的 `minmax(0,200px)` 是硬列宽。
                     ui.set_min_width(label_width);
                     if !label.is_empty() {
-                        ui.label(
-                            egui::RichText::new(label)
-                                .font(theme::medium_font(14.0))
-                                .color(theme::INK),
+                        let text_width =
+                            (label_width - if desc.is_empty() { 0.0 } else { 20.0 }).max(20.0);
+                        ui.add_sized(
+                            egui::vec2(text_width, 46.0),
+                            egui::Label::new(
+                                egui::RichText::new(label)
+                                    .font(theme::medium_font(14.0))
+                                    .color(theme::INK),
+                            )
+                            .wrap()
+                            .halign(egui::Align::Min),
                         );
                     }
                     if !desc.is_empty() {
@@ -5105,6 +5214,13 @@ mod tests {
         let mut vm = FrontendViewModel {
             lang: Lang::En,
             application_data_directory: "/tmp/openless-user-data".into(),
+            linux_access: openless_linux_egui::linux_access::LinuxAccessSnapshot {
+                keyring: openless_linux_egui::linux_access::KeyringState::Ready,
+                input: openless_linux_egui::linux_access::CheckState::Ready,
+                network: openless_linux_egui::linux_access::CheckState::Ready,
+                network_latency_ms: Some(12),
+                ..Default::default()
+            },
             permissions: super::super::view_model::SettingsPermissions {
                 microphone: super::super::view_model::PermissionState::Granted,
                 hotkey: super::super::view_model::PermissionState::Granted,
@@ -5131,7 +5247,7 @@ mod tests {
         let text = text.replace('\n', "");
         for expected in [
             tr_l10n(Lang::En, "settings.linux_privacy.keyring_title"),
-            tr_l10n(Lang::En, "settings.linux_privacy.keyring_required"),
+            tr_l10n(Lang::En, "settings.linux_privacy.keyring_ready"),
             tr_l10n(Lang::En, "settings.linux_privacy.mic_detected"),
             tr_l10n(Lang::En, "settings.linux_privacy.hotkey_ready"),
             "org.freedesktop.secrets",
@@ -5145,6 +5261,97 @@ mod tests {
             actions.is_empty(),
             "rendering must not access or mutate credentials"
         );
+    }
+
+    #[test]
+    fn unavailable_or_unchecked_keyrings_are_never_painted_as_ready() {
+        use openless_linux_egui::linux_access::{KeyringState, LinuxAccessSnapshot};
+        for (state, checking, expected) in [
+            (
+                KeyringState::Unknown,
+                false,
+                "settings.linux_privacy.not_checked",
+            ),
+            (
+                KeyringState::Locked,
+                false,
+                "settings.linux_privacy.keyring_locked",
+            ),
+            (
+                KeyringState::MissingService,
+                false,
+                "settings.linux_privacy.keyring_missing_service",
+            ),
+            (
+                KeyringState::MissingCollection,
+                false,
+                "settings.linux_privacy.keyring_missing_collection",
+            ),
+            (
+                KeyringState::RestartRequired,
+                false,
+                "settings.linux_privacy.keyring_restart",
+            ),
+            (KeyringState::Ready, true, "settings.permissions.checking"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: Lang::En,
+                linux_access: LinuxAccessSnapshot {
+                    keyring: state,
+                    checking,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            let output = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 1800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| privacy_access(ui, &mut vm, &mut actions),
+            );
+            let mut text = String::new();
+            for clipped in &output.shapes {
+                collect_shape_text(&clipped.shape, &mut text);
+            }
+            let text = text.replace('\n', "");
+            assert!(
+                text.contains(tr_l10n(Lang::En, expected)),
+                "{state:?}: {text}"
+            );
+            assert!(
+                !text.contains(tr_l10n(Lang::En, "settings.linux_privacy.keyring_ready")),
+                "{state:?}: {text}"
+            );
+            assert!(actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn privacy_paragraphs_keep_wrapped_lines_left_aligned() {
+        let ctx = egui::Context::default();
+        let output = crate::ui::frontend::run_pass(&ctx, egui::RawInput::default(), |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                privacy_note(ui, "short\na substantially longer second line");
+            });
+        });
+        let text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text),
+                _ => None,
+            })
+            .expect("privacy paragraph must be painted");
+        assert_eq!(text.galley.job.halign, egui::Align::Min);
+        assert!(text.galley.rows.len() >= 2);
+        assert!(text.galley.rows.iter().all(|row| row.pos.x.abs() < 0.5));
     }
 
     #[test]

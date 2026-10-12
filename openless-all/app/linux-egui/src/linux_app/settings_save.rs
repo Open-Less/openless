@@ -572,6 +572,12 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsActionField,
     ) {
         match field {
+            frontend::view_model::SettingsActionField::RefreshLinuxAccess => {
+                if !self.frontend_vm.linux_access.checking {
+                    self.refresh_linux_access();
+                    self.load_microphones();
+                }
+            }
             frontend::view_model::SettingsActionField::RetrySave => {
                 self.settings_save.error = None;
                 self.save_settings_if_dirty();
