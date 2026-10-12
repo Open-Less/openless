@@ -230,6 +230,26 @@ fn vulkan_effects_are_visible_local_independent_and_transparent() {
             }
         }
     }
+    // One distance field must meet both endpoints without a handoff pop.
+    // Check the near-endpoint too, not merely an exact-zero special case.
+    for (resolved, reference) in [
+        (1.0, SiriEffect::wave(1.35, 0.52)),
+        (1.0 - 1e-6, SiriEffect::wave(1.35, 0.52)),
+        (0.0, SiriEffect::orb(1.35, 1.0)),
+        (1e-6, SiriEffect::orb(1.35, 1.0)),
+    ] {
+        let morph = SiriEffect::capsule(1.35, 0.52, resolved, 1.0);
+        let actual = draw(&device, &queue, 1, 1.0, &[(morph, [0.0, 0.0])], false);
+        let expected = draw(&device, &queue, 1, 1.0, &[(reference, [0.0, 0.0])], false);
+        assert!(
+            actual
+                .iter()
+                .zip(&expected)
+                .all(|(a, b)| a.abs_diff(*b) <= 2),
+            "capsule endpoint discontinuity at resolved={resolved}"
+        );
+    }
+
     let effects = [
         (SiriEffect::wave(1.35, 0.52), [32.0, 128.0]),
         (SiriEffect::orb(0.7, 0.5), [192.0, 128.0]),

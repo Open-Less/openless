@@ -19,6 +19,8 @@ pub enum SiriMode {
     Orb,
     /// Rounded-rectangle perimeter used by the composer ring.
     Ring,
+    /// One distance-field morph for the entire dictation lifecycle.
+    Capsule,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +63,15 @@ impl SiriEffect {
             thickness: 2.0,
             tint: [1.0; 3],
             opacity: 1.0,
+        }
+    }
+
+    pub fn capsule(time: f32, level: f32, resolved: f32, gather: f32) -> Self {
+        Self {
+            mode: SiriMode::Capsule,
+            level,
+            resolved: resolved.clamp(0.0, 1.0),
+            ..Self::orb(time, gather.clamp(0.0, 1.0))
         }
     }
 
@@ -291,6 +302,11 @@ fn wave(frag: vec2<f32>) -> vec4<f32> {
     p.x *= aspect;
     p /= 0.6;
     let res = clamp(u.resolved, 0.0, 1.0);
+    let capsule = u.mode > 2.5;
+    var field: FluidField;
+    if capsule { field = fluid_field(frag); }
+    let point_distance = max(field.distance, vec3<f32>(0.0)) / 0.6;
+    var point_material = vec3<f32>(0.0);
     let level = clamp(u.level, 0.0, 1.0);
     let low = clamp(0.45 + 0.45 * sin(u.time * 0.8) * sin(u.time * 0.37 + 1.0), 0.0, 1.0) * level;
     let mid = clamp(0.40 + 0.40 * sin(u.time * 1.7 + 2.0) * sin(u.time * 0.53), 0.0, 1.0) * level;
@@ -317,51 +333,121 @@ fn wave(frag: vec2<f32>) -> vec4<f32> {
         let hue = mix(vec3<f32>(1.0), spectral4(s), res);
         let ab = mix(-aberr, aberr, f32(s) / 3.0);
         let y_line = a2 * envelope * res * sin(pw.x + drift + ab);
-        let distance = mix(unres, abs(p.y - y_line), res);
-        let lorentz = mix(1.0 / (1.0 + pow(0.02 * distance, 2.0)), 1.0, res);
-        let line = intensity / (sqrt(distance * distance + soft * soft) + thickness);
-        let band_distance = max(0.0, max(p.y - max(y_main, y_line), min(y_main, y_line) - p.y));
-        let band = band_amount / (band_distance + 0.08);
+        var distance = vec3<f32>(mix(unres, abs(p.y - y_line), res));
+        var band_distance = vec3<f32>(max(0.0, max(p.y - max(y_main, y_line), min(y_main, y_line) - p.y)));
+        if capsule {
+            // Morph geometry before shading. Both materials see this same
+            // field; no separately rendered wave/orb images are cross-faded.
+            distance = mix(point_distance, vec3<f32>(abs(p.y - y_line)), res);
+            band_distance = mix(point_distance, band_distance, res);
+            point_material += fluid_material(field, distance * 0.6) * 0.25;
+        }
+        let lorentz = mix(vec3<f32>(1.0) / (vec3<f32>(1.0) + pow(0.02 * distance, vec3<f32>(2.0))), vec3<f32>(1.0), res);
+        let line = vec3<f32>(intensity) / (sqrt(distance * distance + vec3<f32>(soft * soft)) + vec3<f32>(thickness));
+        let band = vec3<f32>(band_amount) / (band_distance + vec3<f32>(0.08));
         numerator += hue * lorentz * (line + band);
         denominator += hue;
     }
-    let main_distance = mix(unres, abs(p.y - y_main), res);
-    let main_lorentz = mix(1.0 / (1.0 + pow(0.02 * main_distance, 2.0)), 1.0, res);
+    var main_distance = vec3<f32>(mix(unres, abs(p.y - y_main), res));
+    if capsule { main_distance = mix(point_distance, vec3<f32>(abs(p.y - y_main)), res); }
+    let main_lorentz = mix(vec3<f32>(1.0) / (vec3<f32>(1.0) + pow(0.02 * main_distance, vec3<f32>(2.0))), vec3<f32>(1.0), res);
     let boost = (1.0 - res) * (3.0 * low + 1.2);
     var col = numerator / denominator;
-    col += vec3<f32>(0.5 * intensity * (main_lorentz + boost) / (sqrt(main_distance * main_distance + soft * soft) + thickness));
+    col += 0.5 * intensity * (main_lorentz + vec3<f32>(boost)) / (sqrt(main_distance * main_distance + vec3<f32>(soft * soft)) + vec3<f32>(thickness));
     col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.5));
     let edge_t = clamp((abs(y_screen) - 1.0) / -0.4, 0.0, 1.0);
     let edge = edge_t * edge_t * (3.0 - 2.0 * edge_t);
     let gaussian = exp(-pow(x_norm * 1.7, 2.0));
     col *= edge * gaussian * mix(0.55, 1.0, res);
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    if capsule { col = mix(point_material, col, res); }
     let alpha = clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0);
     return vec4<f32>(col, alpha);
 }
 
-fn orb(frag: vec2<f32>) -> vec4<f32> {
-    let aspect = u.size.x / max(u.size.y, 1.0);
-    var p = (frag / u.size) * 2.0 - vec2<f32>(1.0);
+// Direct WGSL translation of SiriGL.tsx's siriFluidDotsCore. The six
+// signed-distance fields are smooth-unioned, not six additive bloom layers.
+struct FluidField {
+    distance: vec3<f32>,
+    color: vec3<f32>,
+    brightness: f32,
+};
+
+fn fluid_hash(n: f32) -> f32 { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
+fn fluid_settle(t: f32) -> f32 {
+    if t <= 0.0 { return 0.0; }
+    return 1.0 - exp(-3.2 * t) * cos(4.6 * t);
+}
+fn fluid_smin(a: f32, b: f32) -> f32 {
+    let h = max(0.08 - abs(a - b), 0.0) / 0.08;
+    return min(a, b) - h * h * 0.08 * 0.25;
+}
+fn fluid_radius(i: f32, seed: f32, t: f32) -> f32 {
+    return 0.036 + 0.010 * sin(t * 1.3 + seed * 6.28318530718) + 0.005 * sin(t * 2.4 + i * 1.3);
+}
+fn fluid_distance(p: vec2<f32>, pos: vec2<f32>, r: f32, i: f32, damp: f32) -> f32 {
+    let d = p - pos;
+    let sq = 0.075 * (0.5 + 0.5 * sin(u.time * 0.9 + i * 2.0)) * damp;
+    let ca = cos(u.time * 0.35 + i);
+    let sa = sin(u.time * 0.35 + i);
+    let rotated = vec2<f32>(ca * d.x + sa * d.y, -sa * d.x + ca * d.y);
+    return length(rotated * vec2<f32>(1.0 + sq, 1.0 - sq)) - r;
+}
+fn fluid_field(frag: vec2<f32>) -> FluidField {
+    var p = (2.0 * frag - u.size) / min(u.size.x, u.size.y);
     p.y = -p.y;
-    p.x *= aspect;
+    p /= 1.0 + 0.03 * sin(u.time);
     let gather = clamp(u.gather, 0.0, 1.0);
-    let radius = mix(0.17, 0.008, gather);
-    var col = vec3<f32>(0.0);
+    let cycle = floor(u.time / 6.0);
+    let te = fract(u.time / 6.0) * 6.0;
+    var total = vec3<f32>(1e5);
+    var color = vec3<f32>(0.0);
+    var weight = 1e-6;
     for (var i: i32 = 0; i < 6; i = i + 1) {
         let fi = f32(i);
+        let seed = fluid_hash(fi);
         let angle = fi / 6.0 * 6.28318530718 + u.time * 0.35;
-        let pos = vec2<f32>(cos(angle), sin(angle)) * radius;
-        let dot_radius = mix(0.036, 0.030, gather) + 0.006 * sin(u.time * 1.3 + fi);
-        let distance = max(length(p - pos) - dot_radius, 0.0);
-        let bloom = exp(-pow(distance * 18.0, 1.35));
-        let hue = hue2rgb(fi / 6.0 + u.time * 0.06);
-        col += bloom * mix(vec3<f32>(1.0), hue, 0.22) * (1.0 + 0.30 * gather);
+        let dir = vec2<f32>(cos(angle), sin(angle));
+        let radius = 0.17 + 0.010 * sin(u.time) + 0.007 * sin(u.time * 1.3 + seed * 6.28318530718);
+        let pair = fi % 3.0;
+        let low = (cycle + pair) % 2.0;
+        let mover = select(step(0.5, low), step(low, 0.5), fi < 2.5);
+        let go = pair * 0.33;
+        let back = 3.0 * 0.33 + pair * 0.33;
+        let travel = (fluid_settle(te - go) - fluid_settle(te - back)) * mover;
+        let recoil = (fluid_settle(te - go - 0.11) - fluid_settle(te - back - 0.11)) * (1.0 - mover);
+        let self_r = mix(fluid_radius(fi, seed, u.time), 0.036, gather);
+        let partner = (fi + 3.0) % 6.0;
+        let partner_r = fluid_radius(partner, fluid_hash(partner), u.time);
+        let deep = -(radius + 0.035) - 0.12 * partner_r;
+        let radial = mix(mix(radius, deep, travel) + 0.035 * recoil, 0.008, gather);
+        let pos = radial * dir;
+        let sd = vec3<f32>(
+            fluid_distance(p, pos, self_r, fi, 1.0 - gather),
+            fluid_distance(p - 0.0025 * dir, pos, self_r, fi, 1.0 - gather),
+            fluid_distance(p - 0.005 * dir, pos, self_r, fi, 1.0 - gather)
+        );
+        total = vec3<f32>(fluid_smin(total.r, sd.r), fluid_smin(total.g, sd.g), fluid_smin(total.b, sd.b));
+        let hue = fract(fi / 6.0 + u.time * 0.06) * 0.667;
+        let dot_color = mix(vec3<f32>(1.0), hue2rgb(hue), 0.01);
+        let w = exp(-sd.g * 0.5);
+        color += w * dot_color;
+        weight += w;
     }
-    col += exp(-length(p) * 15.0) * gather * vec3<f32>(0.7, 0.8, 1.0);
-    col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
-    let alpha = clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0);
-    return vec4<f32>(col, alpha);
+    let brightness = mix(1.0, 0.85, gather) * (1.0 + 0.30 * gather) * (1.0 + 0.05 * sin(u.time + 1.0));
+    return FluidField(total, color / weight, brightness);
+}
+fn fluid_material(field: FluidField, distance: vec3<f32>) -> vec3<f32> {
+    let sd = max(distance, vec3<f32>(0.0)) + vec3<f32>(1e-4);
+    let core = clamp(vec3<f32>(0.0025) / pow(sd, vec3<f32>(1.35)), vec3<f32>(0.0), vec3<f32>(1.0));
+    let edge = vec3<f32>(1.0) - smoothstep(vec3<f32>(0.02), vec3<f32>(0.56), sd);
+    let col = core * edge * field.brightness * field.color;
+    return min(pow(col, vec3<f32>(1.0 / 1.2)), vec3<f32>(1.0));
+}
+fn orb(frag: vec2<f32>) -> vec4<f32> {
+    let field = fluid_field(frag);
+    let col = fluid_material(field, field.distance);
+    return vec4<f32>(col, max(col.r, max(col.g, col.b)));
 }
 
 fn round_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
@@ -394,7 +480,9 @@ fn fade(color: vec4<f32>) -> vec4<f32> {
 fn mode_color(local: vec2<f32>) -> vec4<f32> {
     if u.mode < 0.5 { return wave(local); }
     if u.mode < 1.5 { return orb(local); }
-    return ring(local);
+    if u.mode < 2.5 { return ring(local); }
+    if u.resolved <= 0.0 { return orb(local); }
+    return wave(local);
 }
 
 // Match egui's framebuffer handling: an sRGB target will encode RGB again,
@@ -426,6 +514,7 @@ fn uniform_bytes(uniforms: SiriUniforms) -> [u8; 64] {
         SiriMode::Wave => 0.0,
         SiriMode::Orb => 1.0,
         SiriMode::Ring => 2.0,
+        SiriMode::Capsule => 3.0,
     };
     let values = [
         uniforms.effect.time,

@@ -1197,7 +1197,7 @@ mod tests {
     fn touch_button_frame(ctx: &egui::Context, state: &mut LayerState) -> bool {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
         let mut clicked = false;
-        crate::ui::frontend::run_pass(ctx, state.take_input(rect), |ui| {
+        let mut output = ctx.run_ui(state.take_input(rect), |ui| {
             clicked |= ui
                 .put(
                     egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(80.0, 40.0)),
@@ -1205,6 +1205,7 @@ mod tests {
                 )
                 .clicked();
         });
+        output.textures_delta.clear();
         clicked
     }
 

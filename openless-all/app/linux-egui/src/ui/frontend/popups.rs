@@ -1230,8 +1230,8 @@ pub fn dictation_capsule(
                 phase.as_str(),
                 "completed" | "done" | "inserted" | "cancelled" | "failed" | "error"
             );
-            // 相位时序（扫光周期、wave 淡出）与「新会话复位」：Tauri 那边靠 CSS / 组件
-            // 重新挂载，egui 没这两样，节奏都在 `capsule_motion` 里算并有单测。
+            // One capsule timeline and one animation clock survive every phase.
+            // Only a new recording session resets them.
             let now = ui.input(|input| input.time);
             let motion_id = egui::Id::new("openless-capsule-motion");
             let mut motion = ui.ctx().data_mut(|data| {
@@ -1239,16 +1239,37 @@ pub fn dictation_capsule(
                     .unwrap_or_default()
             });
             let new_session = motion.update(&phase, now);
-            let wave_opacity = motion.wave_opacity(now);
             let shine_cycle = motion.shine_cycle_seconds(now);
+            if new_session {
+                siri_wgpu::reset(ui.ctx(), "capsule-siri");
+            }
+            let listening = matches!(phase.as_str(), "starting" | "recording");
+            let siri_effect = if siri && (listening || processing || terminal) {
+                let clock = siri_wgpu::tick(
+                    ui.ctx(),
+                    "capsule-siri",
+                    siri_wgpu::SiriDrive {
+                        level: state.audio_level.unwrap_or_default(),
+                        resolved: if listening { 1.0 } else { 0.0 },
+                        speed: if processing { 1.5 } else { 1.0 },
+                        warming: listening && state.audio_level.is_none(),
+                        warmup_ms,
+                        merging: terminal,
+                    },
+                    ui.input(|input| input.stable_dt),
+                );
+                let shape = motion.siri_shape(now, clock.resolved);
+                Some(siri_wgpu::SiriEffect::capsule(
+                    clock.time,
+                    clock.level,
+                    shape.resolved,
+                    shape.gather,
+                ))
+            } else {
+                None
+            };
             ui.ctx()
                 .data_mut(|data| data.insert_temp(motion_id, motion));
-            if new_session {
-                // 两个窗口进程都常驻：新会话必须显式复位，否则上一轮的光条是展开的、
-                // 圆点环也已经散开了，入场动画就没了（Tauri 每次重新挂载天然是新的）。
-                siri_wgpu::reset(ui.ctx(), "capsule-siri-wave");
-                siri_wgpu::reset(ui.ctx(), "capsule-siri-orb");
-            }
             // Siri is a clean, transparent listening indicator. Classic keeps
             // both actions visible; Typeless follows Tauri and shows the two
             // large actions only while recording, then only its small stop
@@ -1364,154 +1385,86 @@ pub fn dictation_capsule(
                     egui::pos2(confirm_rect.left() - 4.0, rect.bottom() - 4.0),
                 )
             };
-            if phase == "recording" {
-                // Siri capsules are transparent overlays. Queue the spectral
-                // ribbon through the shared WGPU callback used by both eframe
-                // windows and the native layer-shell surface.
-                let drive = siri_wgpu::SiriDrive {
-                    level: state.audio_level.unwrap_or_default(),
-                    resolved: 1.0,
-                    speed: 1.0,
-                    warming: state.audio_level.is_none(),
-                    warmup_ms,
-                    merging: false,
+            if siri {
+                if let Some(effect) = siri_effect {
+                    let _ = siri_wgpu::paint(ui, center, effect);
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                }
+                if matches!(phase.as_str(), "failed" | "error") {
+                    paint_siri_error(ui, center, state, lang);
+                }
+            } else if phase == "recording" {
+                audio_bars(
+                    ui,
+                    center,
+                    state.audio_level.unwrap_or_default(),
+                    bar_count,
+                    pill_ink,
+                );
+            } else if processing {
+                // 经典 / typeless 的「思考中」：文案 + 扫光（Tauri `cap-shine`）。
+                paint_thinking_label(
+                    ui,
+                    center,
+                    tr_l10n(lang, "capsule.thinking"),
+                    egui::FontId::proportional(if typeless { TYPELESS_TEXT_SIZE } else { 17.0 }),
+                    if typeless { TYPELESS_INK } else { theme::INK },
+                    shine_cycle,
+                    now,
+                );
+            } else if state.text.is_empty() {
+                let label = if processing {
+                    tr_l10n(lang, "capsule.thinking")
+                } else if phase == "cancelled" {
+                    tr_l10n(lang, "capsule.cancelled")
+                } else if phase == "failed" {
+                    tr_l10n(lang, "capsule.error")
+                } else {
+                    tr_l10n(lang, "capsule.thinking")
                 };
-                let dt = ui.input(|input| input.stable_dt);
-                let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-wave", drive, dt);
-                if siri {
-                    let _ = siri_wgpu::paint(
-                        ui,
-                        center,
-                        siri_wgpu::SiriEffect::wave(clock.time, clock.level),
-                    );
-                    ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(16));
+                let size = if typeless {
+                    TYPELESS_TEXT_SIZE
+                } else if processing || matches!(phase.as_str(), "completed" | "done" | "idle") {
+                    // A terminal snapshot can briefly have no result text. Keep
+                    // its thinking placeholder at the processing size until the
+                    // popup is actually dismissed; never render a tiny final
+                    // "thinking" frame.
+                    17.0
                 } else {
-                    audio_bars(
-                        ui,
-                        center,
-                        state.audio_level.unwrap_or_default(),
-                        bar_count,
-                        pill_ink,
-                    );
-                }
+                    11.0
+                };
+                ui.painter().text(
+                    center.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(size),
+                    if phase == "failed" {
+                        theme::ERR
+                    } else if typeless {
+                        TYPELESS_INK
+                    } else {
+                        theme::INK
+                    },
+                );
             } else {
-                // 思考态 / 终态：Siri 舞台画光点（终态是「六点合回一颗圆」的收尾），
-                // 经典 / typeless 只画文案。
-                if siri {
-                    // wave → orb 的交叉淡出：切态后 0.55s 内保持可见，再用 0.6s 淡出，
-                    // 期间波形继续向圆心收拢（Tauri `opacity .6s ease-out .55s`）。
-                    if let Some(opacity) = wave_opacity {
-                        let fade_drive = siri_wgpu::SiriDrive {
-                            level: state.audio_level.unwrap_or_default(),
-                            resolved: 0.0,
-                            speed: 1.0,
-                            warming: false,
-                            warmup_ms,
-                            merging: false,
-                        };
-                        let dt = ui.input(|input| input.stable_dt);
-                        let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-wave", fade_drive, dt);
-                        let _ = siri_wgpu::paint(
-                            ui,
-                            center,
-                            siri_wgpu::SiriEffect::wave(clock.time, clock.level)
-                                .with_opacity(opacity),
-                        );
-                    }
-                    if processing || terminal {
-                        // 思考中 1.5 速转；终态回落到 1.0 并让六点合并成中央一颗圆
-                        //（Tauri `VoiceOrbStage` 的 speed / merging）。
-                        let drive = siri_wgpu::SiriDrive {
-                            level: 0.0,
-                            resolved: 0.0,
-                            speed: if processing { 1.5 } else { 1.0 },
-                            warming: false,
-                            warmup_ms,
-                            merging: terminal,
-                        };
-                        let dt = ui.input(|input| input.stable_dt);
-                        // 聚拢度 / 出场 hold 由时钟算（Tauri `GATHER_HOLD_S` + `merging`）。
-                        let clock = siri_wgpu::tick(ui.ctx(), "capsule-siri-orb", drive, dt);
-                        let effect = siri_wgpu::SiriEffect::orb(clock.time, clock.gather);
-                        let _ = siri_wgpu::paint(ui, center, effect);
-                    }
-                    ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(16));
-                    // Siri 舞台只有出错时给文字（Tauri `VoiceOrbStage` —— 没有「思考中」
-                    // 文案，也没有「已插入 N 字」，反馈全靠光效）。
-                    if matches!(phase.as_str(), "failed" | "error") {
-                        paint_siri_error(ui, center, state, lang);
-                    }
-                } else if processing {
-                    // 经典 / typeless 的「思考中」：文案 + 扫光（Tauri `cap-shine`）。
-                    paint_thinking_label(
-                        ui,
-                        center,
-                        tr_l10n(lang, "capsule.thinking"),
-                        egui::FontId::proportional(if typeless {
-                            TYPELESS_TEXT_SIZE
-                        } else {
-                            17.0
-                        }),
-                        if typeless { TYPELESS_INK } else { theme::INK },
-                        shine_cycle,
-                        now,
-                    );
-                } else if state.text.is_empty() {
-                    let label = if processing {
-                        tr_l10n(lang, "capsule.thinking")
-                    } else if phase == "cancelled" {
-                        tr_l10n(lang, "capsule.cancelled")
-                    } else if phase == "failed" {
-                        tr_l10n(lang, "capsule.error")
-                    } else {
-                        tr_l10n(lang, "capsule.thinking")
-                    };
-                    let size = if typeless {
-                        TYPELESS_TEXT_SIZE
-                    } else if processing || matches!(phase.as_str(), "completed" | "done" | "idle")
-                    {
-                        // A terminal snapshot can briefly have no result text. Keep
-                        // its thinking placeholder at the processing size until the
-                        // popup is actually dismissed; never render a tiny final
-                        // "thinking" frame.
-                        17.0
-                    } else {
-                        11.0
-                    };
-                    ui.painter().text(
-                        center.center(),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        egui::FontId::proportional(size),
-                        if phase == "failed" {
-                            theme::ERR
-                        } else if typeless {
-                            TYPELESS_INK
-                        } else {
-                            theme::INK
-                        },
-                    );
-                } else {
-                    // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
-                    let galley = layout::text_galley(
-                        ui,
-                        &state.text,
-                        pill_ink,
-                        if typeless { TYPELESS_TEXT_SIZE } else { 11.0 },
-                        center.width().min(84.0),
-                        1,
-                    );
-                    ui.painter().galley(
-                        egui::pos2(
-                            center.center().x - galley.rect.width() / 2.0,
-                            center.center().y - galley.rect.height() / 2.0,
-                        ),
-                        galley,
-                        pill_ink,
-                    );
-                }
+                // 11px/500 单行居中，超长省略（Tauri `getCapsuleMessageLayout`）。
+                let galley = layout::text_galley(
+                    ui,
+                    &state.text,
+                    pill_ink,
+                    if typeless { TYPELESS_TEXT_SIZE } else { 11.0 },
+                    center.width().min(84.0),
+                    1,
+                );
+                ui.painter().galley(
+                    egui::pos2(
+                        center.center().x - galley.rect.width() / 2.0,
+                        center.center().y - galley.rect.height() / 2.0,
+                    ),
+                    galley,
+                    pill_ink,
+                );
             }
         });
     action
@@ -3180,10 +3133,9 @@ mod tests {
         );
     }
 
-    /// wave → orb 的交叉淡出（Tauri `opacity .6s ease-out .55s`）：刚切到思考态时波形
-    /// 还在（两个回调），淡出之后只剩圆点环。
+    /// The entire lifecycle uses one morph callback, including a fast LLM.
     #[test]
-    fn the_wave_cross_fades_into_the_orb_after_recording() {
+    fn the_capsule_morph_never_overlays_two_callbacks() {
         let ctx = egui::Context::default();
         let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(460.0, 180.0));
         let render = |time: f64, phase: &str| {
@@ -3218,13 +3170,13 @@ mod tests {
         );
         assert_eq!(
             render(0.2, "polishing"),
-            2,
-            "right after the switch the wave must still be fading over the orb"
+            1,
+            "contraction must remain a single distance-field draw"
         );
         assert_eq!(
             render(2.0, "polishing"),
             1,
-            "once the fade is over only the orb remains"
+            "fluid dots must use the same single callback"
         );
     }
 
