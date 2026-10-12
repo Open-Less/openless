@@ -49,7 +49,7 @@ impl SettingsSection {
             Self::Shortcuts => tr_l10n(lang, "modal.descriptions.shortcuts"),
             Self::Services => tr_l10n(lang, "modal.descriptions.services"),
             Self::Appearance => tr_l10n(lang, "modal.descriptions.appearance"),
-            Self::Privacy => tr_l10n(lang, "modal.descriptions.privacy"),
+            Self::Privacy => tr_l10n(lang, "settings.linux_privacy.section_desc"),
             Self::Advanced => tr_l10n(lang, "modal.descriptions.advanced"),
             Self::About => tr_l10n(lang, "modal.descriptions.about"),
         }
@@ -2322,14 +2322,14 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.vertical(|ui| {
                 ui.label(
-                    egui::RichText::new(tr_l10n(lang, "settings.about.local_first"))
+                    egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.intro_title"))
                         .strong()
                         .color(theme::BLUE),
                 );
                 ui.label(
-                    egui::RichText::new(tr_l10n(lang, "settings.about.privacy_desc"))
+                    egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.intro_desc"))
                         .size(11.5)
                         .color(theme::INK_3),
                 );
@@ -2337,93 +2337,159 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         });
     ui.add_space(10.0);
 
-    // 权限：状态全部来自宿主快照（Linux 没有系统级授权弹窗，标为「不适用」）。
+    // Linux capabilities are not macOS-style authorization grants. In
+    // particular, device enumeration does not prove capture access, and the
+    // keyring requirement below is not a claim that a wallet is unlocked.
     card(
         ui,
-        tr_l10n(lang, "settings.permissions.title"),
-        tr_l10n(lang, "settings.permissions.desc_no_acc"),
+        tr_l10n(lang, "settings.linux_privacy.title"),
+        "",
         |ui| {
-            permission_row(
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.desc"))
+                    .size(11.5)
+                    .color(theme::INK_3),
+            );
+            ui.add_space(6.0);
+            let microphone_detected =
+                vm.permissions.microphone == super::view_model::PermissionState::Granted;
+            status_row(
                 ui,
                 tr_l10n(lang, "settings.permissions.mic_label"),
-                "",
-                vm.permissions.microphone,
-                lang,
+                tr_l10n(lang, "settings.linux_privacy.mic_desc"),
+                if microphone_detected {
+                    tr_l10n(lang, "settings.linux_privacy.mic_detected")
+                } else {
+                    tr_l10n(lang, "settings.permissions.indeterminate")
+                },
+                if microphone_detected {
+                    theme::OK
+                } else {
+                    theme::INK_4
+                },
             );
-            permission_row(
-                ui,
-                tr_l10n(lang, "settings.permissions.acc_label"),
-                "",
-                vm.permissions.accessibility,
-                lang,
-            );
-            permission_row(
+            let hotkey_ready = vm.permissions.hotkey == super::view_model::PermissionState::Granted;
+            status_row(
                 ui,
                 tr_l10n(lang, "settings.permissions.hotkey_label"),
-                "",
-                vm.permissions.hotkey,
-                lang,
+                tr_l10n(lang, "settings.linux_privacy.hotkey_desc"),
+                if hotkey_ready {
+                    tr_l10n(lang, "settings.linux_privacy.hotkey_ready")
+                } else {
+                    tr_l10n(lang, "settings.permissions.indeterminate")
+                },
+                if hotkey_ready {
+                    theme::OK
+                } else {
+                    theme::INK_4
+                },
             );
-            permission_row(
+            status_row(
+                ui,
+                tr_l10n(lang, "settings.linux_privacy.input_label"),
+                tr_l10n(lang, "settings.linux_privacy.input_desc"),
+                "Fcitx5 / Wayland / X11",
+                theme::INK_3,
+            );
+            status_row(
                 ui,
                 tr_l10n(lang, "settings.permissions.network_label"),
+                tr_l10n(lang, "settings.linux_privacy.network_desc"),
+                tr_l10n(lang, "settings.linux_privacy.verify_channels"),
+                theme::INK_3,
+            );
+        },
+    );
+    card(
+        ui,
+        tr_l10n(lang, "settings.linux_privacy.keyring_title"),
+        "",
+        |ui| {
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.keyring_desc"))
+                    .size(11.5)
+                    .color(theme::INK_3),
+            );
+            ui.add_space(6.0);
+            status_row(
+                ui,
+                "Secret Service",
                 "",
-                vm.permissions.network,
-                lang,
+                tr_l10n(lang, "settings.linux_privacy.keyring_required"),
+                theme::INK_3,
+            );
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.keyring_recovery"))
+                    .size(11.5)
+                    .color(theme::INK_3),
             );
         },
     );
 
-    // 数据存储（Tauri DataStorageSection：保留时长 / 上限 / 润色上下文 / 光标上下文）。
-    card(
-        ui,
-        tr_l10n(lang, "settings.data_storage.title"),
-        tr_l10n(lang, "settings.data_storage.desc"),
-        |ui| {
-            let retention = vm.settings.retention_days.clone();
-            text_edit_row(
-                ui,
-                tr_l10n(lang, "settings.recording.history_retention_label"),
-                "",
-                &mut vm.settings.retention_days,
-                "0",
-                || {
-                    actions.push(FrontendAction::SettingsText(
-                        SettingsTextField::RetentionDays,
-                        retention,
-                    ));
-                },
-            );
-            let entries = vm.settings.history_max_entries.clone();
-            text_edit_row(
-                ui,
-                tr_l10n(lang, "settings.recording.history_max_entries_label"),
-                "",
-                &mut vm.settings.history_max_entries,
-                "200",
-                || {
-                    actions.push(FrontendAction::SettingsText(
-                        SettingsTextField::HistoryMaxEntries,
-                        entries,
-                    ));
-                },
-            );
-            let window = vm.settings.polish_context_window.clone();
-            text_edit_row(
-                ui,
-                tr_l10n(lang, "settings.recording.polish_context_window_label"),
-                tr_l10n(lang, "settings.recording.polish_context_window_desc"),
-                &mut vm.settings.polish_context_window,
-                "0",
-                || {
-                    actions.push(FrontendAction::SettingsText(
-                        SettingsTextField::PolishContextWindow,
-                        window,
-                    ));
-                },
-            );
-        },
-    );
+    // Keep Core retention controls, but describe Linux's actual storage split.
+    card(ui, tr_l10n(lang, "settings.data_storage.title"), "", |ui| {
+        ui.label(
+            egui::RichText::new(tr_l10n(lang, "settings.linux_privacy.storage_desc"))
+                .size(11.5)
+                .color(theme::INK_3),
+        );
+        ui.add_space(6.0);
+        row_desc(
+            ui,
+            tr_l10n(lang, "settings.linux_privacy.data_directory"),
+            "",
+            |ui| {
+                let directory = if vm.application_data_directory.is_empty() {
+                    tr_l10n(lang, "settings.permissions.indeterminate")
+                } else {
+                    &vm.application_data_directory
+                };
+                ui.add(egui::Label::new(egui::RichText::new(directory).monospace()).wrap());
+            },
+        );
+        let retention = vm.settings.retention_days.clone();
+        text_edit_row(
+            ui,
+            tr_l10n(lang, "settings.recording.history_retention_label"),
+            "",
+            &mut vm.settings.retention_days,
+            "0",
+            || {
+                actions.push(FrontendAction::SettingsText(
+                    SettingsTextField::RetentionDays,
+                    retention,
+                ));
+            },
+        );
+        let entries = vm.settings.history_max_entries.clone();
+        text_edit_row(
+            ui,
+            tr_l10n(lang, "settings.recording.history_max_entries_label"),
+            "",
+            &mut vm.settings.history_max_entries,
+            "200",
+            || {
+                actions.push(FrontendAction::SettingsText(
+                    SettingsTextField::HistoryMaxEntries,
+                    entries,
+                ));
+            },
+        );
+        let window = vm.settings.polish_context_window.clone();
+        text_edit_row(
+            ui,
+            tr_l10n(lang, "settings.recording.polish_context_window_label"),
+            tr_l10n(lang, "settings.recording.polish_context_window_desc"),
+            &mut vm.settings.polish_context_window,
+            "0",
+            || {
+                actions.push(FrontendAction::SettingsText(
+                    SettingsTextField::PolishContextWindow,
+                    window,
+                ));
+            },
+        );
+    });
 }
 
 fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
@@ -4834,29 +4900,6 @@ fn status_row(ui: &mut egui::Ui, label: &str, desc: &str, status: &str, color: e
     });
 }
 
-/// A permission row: the host state is rendered as text, colored by severity.
-fn permission_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    desc: &str,
-    state: super::view_model::PermissionState,
-    lang: Lang,
-) {
-    use super::view_model::PermissionState;
-    let (text, color) = match state {
-        PermissionState::Granted => (tr_l10n(lang, "settings.permissions.granted"), theme::OK),
-        PermissionState::Unsupported => (
-            tr_l10n(lang, "settings.permissions.not_applicable"),
-            theme::INK_4,
-        ),
-        PermissionState::Unknown => (
-            tr_l10n(lang, "settings.permissions.indeterminate"),
-            theme::INK_4,
-        ),
-    };
-    status_row(ui, label, desc, text, color);
-}
-
 /// A row whose right-hand control is an action button.
 fn action_row(
     ui: &mut egui::Ui,
@@ -5055,6 +5098,54 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn linux_privacy_describes_session_services_without_claiming_authorization() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::En,
+            application_data_directory: "/tmp/openless-user-data".into(),
+            permissions: super::super::view_model::SettingsPermissions {
+                microphone: super::super::view_model::PermissionState::Granted,
+                hotkey: super::super::view_model::PermissionState::Granted,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| privacy(ui, &mut vm, &mut actions),
+        );
+        let mut text = String::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut text);
+        }
+        let text = text.replace('\n', "");
+        for expected in [
+            tr_l10n(Lang::En, "settings.linux_privacy.keyring_title"),
+            tr_l10n(Lang::En, "settings.linux_privacy.keyring_required"),
+            tr_l10n(Lang::En, "settings.linux_privacy.mic_detected"),
+            tr_l10n(Lang::En, "settings.linux_privacy.hotkey_ready"),
+            "org.freedesktop.secrets",
+            "/tmp/openless-user-data",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?}: {text}");
+        }
+        assert!(!text.contains(tr_l10n(Lang::En, "settings.permissions.granted")));
+        assert!(!text.contains(tr_l10n(Lang::En, "settings.permissions.acc_label")));
+        assert!(
+            actions.is_empty(),
+            "rendering must not access or mutate credentials"
+        );
+    }
 
     #[test]
     fn quick_note_shortcut_value_and_menu_align_left_with_arrow_at_row_end() {

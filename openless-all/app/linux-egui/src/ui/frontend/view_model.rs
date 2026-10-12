@@ -299,9 +299,9 @@ pub struct MarketplaceMinePack {
 
 // ── Settings types ──────────────────────────────────────────────────────────
 
-/// Host permission state, mirroring the Tauri permission rows. Linux has no
-/// OS permission prompts, so most of these stay `Unsupported` — but the value
-/// now comes from the host snapshot instead of a hardcoded label.
+/// Legacy wire names for host capabilities, not OS authorization grants.
+/// On Linux, `Granted` means a microphone was enumerated or the hotkey listener
+/// was initialized; neither proves that every capture/input operation will work.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PermissionState {
     #[default]
@@ -877,6 +877,9 @@ pub struct FrontendViewModel {
     pub style_hotkey_draft_pack: usize,
     /// Real host permission snapshot for 隐私与数据（不再写死「已授权」）。
     pub permissions: SettingsPermissions,
+    /// Actual backend data directory; empty until the backend is available.
+    #[serde(default)]
+    pub application_data_directory: String,
     /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
     pub remote_running: bool,
     /// 服务报出的地址已过期：继续展示旧网址会诱导用户在错误的地址上配对，
@@ -1077,6 +1080,7 @@ impl Default for FrontendViewModel {
             style_hotkey_draft_open: false,
             style_hotkey_draft_pack: 0,
             permissions: SettingsPermissions::default(),
+            application_data_directory: String::new(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
             quick_note_hotkey: String::new(),

@@ -2273,6 +2273,143 @@ pub const CATALOG: &[Msg] = &[
             "시스템 프록시 사용",
         ),
     },
+    // Linux-only settings: session services and the real data/credential split.
+    Msg {
+        key: "settings.linux_privacy.section_desc",
+        text: row(
+            "Linux 会话、Keyring / Secret Service，以及本地历史、录音和偏好。",
+            "Linux 工作階段、Keyring / Secret Service，以及本機歷史、錄音和偏好。",
+            "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
+            "Linux セッション、Keyring / Secret Service、ローカル履歴、録音、設定。",
+            "Linux 세션, Keyring / Secret Service, 로컬 기록, 녹음 및 설정.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.intro_title",
+        text: row("Linux 数据与隐私", "Linux 資料與隱私", "Linux data & privacy", "Linux データとプライバシー", "Linux 데이터 및 개인정보"),
+    },
+    Msg {
+        key: "settings.linux_privacy.intro_desc",
+        text: row(
+            "记录保存在本机；使用云端服务时，相应音频、文本及已启用的上下文会发送至配置的服务商。",
+            "記錄儲存在本機；使用雲端服務時，相關音訊、文字及已啟用的上下文會傳送至設定的服務商。",
+            "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
+            "記録はローカルに保存されます。クラウド利用時は、関連する音声、テキスト、有効なコンテキストが設定したプロバイダーに送信されます。",
+            "기록은 로컬에 저장됩니다. 클라우드 사용 시 관련 오디오, 텍스트 및 활성화된 컨텍스트가 설정한 제공업체로 전송됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.title",
+        text: row("Linux 会话与访问", "Linux 工作階段與存取", "Linux session & access", "Linux セッションとアクセス", "Linux 세션 및 접근"),
+    },
+    Msg {
+        key: "settings.linux_privacy.desc",
+        text: row(
+            "Linux 使用桌面会话服务；设备检测和后端就绪不代表每次录音或输入均获准。",
+            "Linux 使用桌面工作階段服務；偵測到裝置及後端就緒不代表每次錄音或輸入皆獲准。",
+            "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
+            "Linux はデスクトップのセッションサービスを使います。デバイス検出やバックエンド初期化は録音・入力アクセスの保証ではありません。",
+            "Linux는 데스크톱 세션 서비스를 사용합니다. 장치 감지 및 백엔드 초기화가 녹음이나 입력 접근을 보장하지는 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.mic_desc",
+        text: row(
+            "经 PipeWire/PulseAudio/ALSA 录音；检测到设备不等于允许录音，访问限制需在音频或沙盒设置中处理。",
+            "透過 PipeWire/PulseAudio/ALSA 錄音；偵測到裝置不等於允許錄音，存取限制需在音訊或沙箱設定中處理。",
+            "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
+            "録音は PipeWire/PulseAudio/ALSA を使います。デバイス検出は録音許可ではありません。失敗時は音声やサンドボックスの制限を確認してください。",
+            "녹음은 PipeWire/PulseAudio/ALSA를 사용합니다. 장치 감지는 녹음 허가가 아닙니다. 녹음 실패 시 오디오 또는 샌드박스 제한을 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.mic_detected",
+        text: row("已检测到设备", "已偵測到裝置", "Device detected", "デバイス検出済み", "장치 감지됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.hotkey_desc",
+        text: row(
+            "Fcitx5/OpenLess 全局快捷键监听后端须初始化；窗口内按键生效不代表全局监听可用。",
+            "Fcitx5/OpenLess 全域快捷鍵監聽後端須初始化；視窗內按鍵生效不代表全域監聽可用。",
+            "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
+            "グローバルショートカットには Fcitx5/OpenLess の監視バックエンドが必要です。アプリ内のキー動作だけではグローバル監視を確認できません。",
+            "전역 단축키에는 Fcitx5/OpenLess 수신 백엔드가 필요합니다. 앱 내 키 동작만으로 전역 수신이 가능하다고 판단할 수 없습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.hotkey_ready",
+        text: row("监听后端已初始化", "監聽後端已初始化", "Listener initialized", "監視バックエンド初期化済み", "수신 백엔드 초기화됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_label",
+        text: row("选区与文字插入", "選取範圍與文字插入", "Selection & text insertion", "選択範囲とテキスト挿入", "선택 영역 및 텍스트 삽입"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_desc",
+        text: row(
+            "跨应用文本输入和选区服务由 Fcitx5/OpenLess 插件提供；Wayland 限制模拟按键和选区访问。后端不可用时可能只能复制到剪贴板。",
+            "跨應用程式文字輸入和選取服務由 Fcitx5/OpenLess 外掛提供；Wayland 限制模擬按鍵和選取存取。後端無法使用時可能只能複製到剪貼簿。",
+            "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
+            "Fcitx5/OpenLess プラグインがアプリ間のテキスト入力と選択を提供します。Wayland はキー送信と選択へのアクセスを制限します。バックエンド不在時はコピーのみになる場合があります。",
+            "Fcitx5/OpenLess 플러그인이 앱 간 텍스트 입력과 선택 서비스를 제공합니다. Wayland는 키 합성과 선택 접근을 제한합니다. 백엔드를 사용할 수 없으면 클립보드 복사만 가능할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_desc",
+        text: row(
+            "云端 ASR/LLM 需能访问服务端；请在 AI 服务页验证渠道连接，而不是寻找统一的系统网络授权按钮。",
+            "雲端 ASR/LLM 需能連線至服務端；請在 AI 服務頁驗證渠道連線，而不是尋找統一的系統網路授權按鈕。",
+            "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
+            "クラウド ASR/LLM にはプロバイダーへの接続が必要です。汎用のネットワーク許可ボタンではなく、AI サービスで各チャネルを検証してください。",
+            "클라우드 ASR/LLM은 제공업체 엔드포인트에 접근해야 합니다. 일반 시스템 네트워크 권한 버튼 대신 AI 서비스에서 각 채널을 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.verify_channels",
+        text: row("按渠道验证", "依渠道驗證", "Verify per channel", "チャネルごとに検証", "채널별 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_title",
+        text: row("凭据保险库（Keyring）", "憑證保管庫（Keyring）", "Credential vault (Keyring)", "認証情報保管庫（Keyring）", "자격 증명 보관소 (Keyring)"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_desc",
+        text: row(
+            "API 密钥和敏感请求头保存在用户会话的 Secret Service（org.freedesktop.secrets）。需启用 GNOME Keyring 或提供兼容接口的 KWallet，并解锁保险库。",
+            "API 金鑰和敏感請求標頭儲存在使用者工作階段的 Secret Service（org.freedesktop.secrets）。需啟用 GNOME Keyring 或提供相容介面的 KWallet，並解鎖保管庫。",
+            "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
+            "API キーと機密ヘッダーはセッションの Secret Service（org.freedesktop.secrets）に保存されます。GNOME Keyring または互換の KWallet サービスを有効にして保管庫を解除してください。",
+            "API 키와 민감한 헤더는 사용자 세션의 Secret Service (org.freedesktop.secrets)에 저장됩니다. GNOME Keyring 또는 호환 KWallet 서비스를 활성화하고 보관소 잠금을 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_required",
+        text: row("需运行并解锁", "需執行並解鎖", "Must run and be unlocked", "起動とロック解除が必要", "실행 및 잠금 해제 필요"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_recovery",
+        text: row(
+            "会话 D-Bus/服务不可用或保险库锁定时，凭据保存可能失败。恢复服务并解锁后重启 OpenLess 再重试；错误不代表已有密钥被删除。",
+            "工作階段 D-Bus/服務無法使用或保管庫鎖定時，憑證儲存可能失敗。恢復服務並解鎖後重新啟動 OpenLess 再重試；錯誤不代表既有金鑰被刪除。",
+            "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
+            "セッションの D-Bus・サービスが使えない場合や保管庫がロック中の場合、保存に失敗することがあります。サービスを復旧し、保管庫を解除して OpenLess を再起動してください。エラーは既存キーの削除を意味しません。",
+            "세션 D-Bus/서비스를 사용할 수 없거나 보관소가 잠기면 저장이 실패할 수 있습니다. 서비스를 복구하고 잠금을 해제한 뒤 OpenLess를 다시 시작하여 재시도하세요. 오류가 기존 키 삭제를 의미하지는 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.storage_desc",
+        text: row(
+            "历史、偏好、词库与已保存的录音位于应用数据目录。API 密钥使用 Keyring 存储，不写入 credential-metadata.json；录音留存设置不清除保险库。",
+            "歷史、偏好、詞庫與已儲存的錄音位於應用程式資料目錄。API 金鑰使用 Keyring 儲存，不寫入 credential-metadata.json；錄音保留設定不清除保管庫。",
+            "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
+            "履歴、設定、辞書、保存した録音はアプリのデータディレクトリにあります。API キーは credential-metadata.json ではなく Keyring に保存されます。録音の保持設定は保管庫を消去しません。",
+            "기록, 설정, 어휘 및 저장된 녹음은 앱 데이터 디렉터리에 있습니다. API 키는 credential-metadata.json이 아닌 Keyring에 저장됩니다. 녹음 보존 설정은 보관소를 지우지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.data_directory",
+        text: row("应用数据目录", "應用程式資料目錄", "App data directory", "アプリデータの場所", "앱 데이터 디렉터리"),
+    },
     Msg {
         key: "settings.permissions.title",
         text: row("权限", "權限", "Permissions", "権限", "권한"),

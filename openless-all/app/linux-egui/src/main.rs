@@ -4523,6 +4523,10 @@ mod linux_app {
             // Capture overview error before taking a mutable borrow on frontend_vm.
             let overview_err = self.overview_error();
             let backend = self.backend();
+            self.frontend_vm.application_data_directory = backend
+                .as_ref()
+                .map(|backend| backend.config().data_dir.display().to_string())
+                .unwrap_or_default();
             let lang = self.lang;
             let permissions = self.permission_snapshot();
             // Style-pack icons must be read before `vm` borrows `frontend_vm`.
@@ -5049,9 +5053,9 @@ mod linux_app {
             }
         }
 
-        /// Apply a settings toggle from the frontend to the live preferences.
-        /// 隐私分区的真实状态：Linux 没有系统级授权弹窗，能列出的设备 / 已启动的
-        /// 热键适配器就是「已授权」，macOS 才有的辅助功能 / 本地网络一律「不适用」。
+        /// Capture Linux capability hints, not authorization grants. Device
+        /// enumeration does not prove capture access, and a native runtime alone
+        /// does not imply that its optional global-hotkey listener initialized.
         fn permission_snapshot(&self) -> frontend::view_model::SettingsPermissions {
             use frontend::view_model::PermissionState;
             frontend::view_model::SettingsPermissions {
@@ -5062,7 +5066,11 @@ mod linux_app {
                 },
                 accessibility: PermissionState::Unsupported,
                 network: PermissionState::Unsupported,
-                hotkey: if self.native.is_some() {
+                hotkey: if self
+                    .native
+                    .as_ref()
+                    .is_some_and(LinuxNativeRuntime::hotkeys_available)
+                {
                     PermissionState::Granted
                 } else {
                     PermissionState::Unknown
