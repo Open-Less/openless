@@ -676,6 +676,9 @@ impl WgpuSurface {
         // Auto may select Opaque: clearing to transparent would then present
         // a black rectangle. Both egui and Siri output premultiplied alpha.
         config.alpha_mode = capsule_alpha_mode(&surface.get_capabilities(&adapter).alpha_modes)?;
+        // Zero-delay animation requests are paced by the compositor, never an
+        // immediate/mailbox swapchain followed by an unrelated fixed timer.
+        config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
         let format = config.format;
         let mut renderer = eframe::egui_wgpu::Renderer::new(
@@ -703,7 +706,7 @@ impl WgpuSurface {
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &mut egui::TexturesDelta,
         scale: f32,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let width = size.0.max(1);
         let height = size.1.max(1);
         if self.config.width != width || self.config.height != height {
@@ -728,7 +731,7 @@ impl WgpuSurface {
                     self.renderer.free_texture(id);
                 }
                 textures_delta.clear();
-                return Ok(());
+                return Ok(false);
             }
             other => return Err(format!("vulkan acquire: {other:?}")),
         };
@@ -784,8 +787,28 @@ impl WgpuSurface {
             self.renderer.free_texture(id);
         }
         textures_delta.clear();
-        Ok(())
+        Ok(true)
     }
+}
+
+/// Honor egui's earliest root-viewport request, and budget rendering/acquisition
+/// inside the frame interval instead of adding a full sleep after presentation.
+fn frame_pause(frame: &LayerFrame, spent: Duration, presented: bool) -> Duration {
+    let requested = frame
+        .output
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map_or(frame.repaint_after, |root| {
+            root.repaint_delay.min(frame.repaint_after)
+        });
+    let interval = if !presented && requested.is_zero() {
+        // Occluded surfaces can return immediately without FIFO backpressure.
+        // Keep pumping IPC/input, but do not spin a hidden animation at full CPU.
+        Duration::from_millis(16)
+    } else {
+        requested
+    };
+    interval.min(MAX_FRAME_PAUSE).saturating_sub(spent)
 }
 
 // ── runner ──────────────────────────────────────────────────────────────────
@@ -912,6 +935,7 @@ where
     let animation_started = Instant::now();
 
     loop {
+        let frame_started = Instant::now();
         // dispatch_pending alone never reads the display socket. Without this,
         // pointer events arriving after initial configure cannot reach egui.
         if let Some(reader) = queue.prepare_read() {
@@ -953,7 +977,7 @@ where
         let mut frame = frame(&context, input, first);
         first = false;
         let primitives = context.tessellate(frame.output.shapes.clone(), scale);
-        renderer.paint(
+        let presented = renderer.paint(
             (rect.width().max(1.0) as u32, rect.height().max(1.0) as u32),
             &primitives,
             &mut frame.output.textures_delta,
@@ -986,7 +1010,10 @@ where
                     .map_err(|error| format!("wayland resize flush: {error}"))?;
             }
         }
-        std::thread::sleep(frame.repaint_after.min(MAX_FRAME_PAUSE));
+        let pause = frame_pause(&frame, frame_started.elapsed(), presented);
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
     }
 }
 
@@ -1152,6 +1179,64 @@ mod tests {
         assert_eq!(
             geometry.rect_for_configure((240, 120)).size(),
             egui::vec2(240.0, 120.0)
+        );
+    }
+
+    fn pacing_frame(delay: Duration) -> LayerFrame {
+        let mut output = egui::FullOutput::default();
+        output.viewport_output.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportOutput {
+                parent: egui::ViewportId::ROOT,
+                class: egui::ViewportClass::Root,
+                builder: egui::ViewportBuilder::default(),
+                viewport_ui_cb: None,
+                commands: Vec::new(),
+                repaint_delay: delay,
+            },
+        );
+        LayerFrame {
+            output,
+            exit: false,
+            capsule_layout: None,
+            repaint_after: Duration::from_millis(33),
+        }
+    }
+
+    #[test]
+    fn repaint_requests_win_and_render_time_is_not_added_twice() {
+        let frame = pacing_frame(Duration::from_millis(16));
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(5), true),
+            Duration::from_millis(11)
+        );
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(20), true),
+            Duration::ZERO
+        );
+        let immediate = pacing_frame(Duration::ZERO);
+        assert_eq!(
+            frame_pause(&immediate, Duration::from_millis(5), true),
+            Duration::ZERO
+        );
+        let mut idle = pacing_frame(Duration::MAX);
+        idle.repaint_after = Duration::from_secs(2);
+        assert_eq!(
+            frame_pause(&idle, Duration::from_millis(4), true),
+            Duration::from_millis(96)
+        );
+    }
+
+    #[test]
+    fn an_occluded_immediate_animation_does_not_busy_spin() {
+        let frame = pacing_frame(Duration::ZERO);
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(3), false),
+            Duration::from_millis(13)
+        );
+        assert_eq!(
+            frame_pause(&frame, Duration::from_millis(20), false),
+            Duration::ZERO
         );
     }
 
