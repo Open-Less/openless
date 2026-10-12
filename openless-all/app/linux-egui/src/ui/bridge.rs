@@ -918,6 +918,34 @@ mod tests {
 
     #[test]
     fn an_undrained_window_survives_hours_of_keepalive_snapshots() {
+        // /proc/self/statm measures the entire process. Run the same regression
+        // alone in a child test harness so concurrent UI/font/GPU tests cannot
+        // inflate its RSS. Keep all pressure, delivery and 8 MiB assertions.
+        const CHILD_ENV: &str = "OPENLESS_KEEPALIVE_RSS_CHILD";
+        if std::env::var_os(CHILD_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ui::bridge::tests::an_undrained_window_survives_hours_of_keepalive_snapshots",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("launch isolated keepalive RSS regression");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "isolated RSS regression failed: {}\n{stdout}\n{stderr}",
+                output.status
+            );
+            assert!(
+                stdout.contains("test result: ok. 1 passed; 0 failed"),
+                "the isolated harness must execute exactly the RSS regression:\n{stdout}\n{stderr}"
+            );
+            return;
+        }
         // 现场（21 小时 5.8 GB）：窗口被遮挡时 eframe 完全跳过 egui pass
         // （`if !show_ui`），`ui()` 一次都不跑，也就没有任何东西排空队列；而宿主每 2
         // 秒发一份保活快照。旧代码把快照放进无界通道 —— 21 小时≈3.7 万份全堆在内存里，
