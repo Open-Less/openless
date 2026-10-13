@@ -811,15 +811,36 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         transcriptViewRef.current = next;
         setLocalAsrText(next.text);
       });
+      let auxiliaryRevision = 0;
       const suggestHandle = await listen<PendingCorrection[]>('vocab:suggested', (event) => {
+        auxiliaryRevision += 1;
         setSuggestions(event.payload ?? []);
       });
       const fallbackHandle = await listen<InsertFallbackCardPayload | null>(
         'insert:fallback',
         (event) => {
+          auxiliaryRevision += 1;
           setInsertFallback(event.payload ?? null);
         },
       );
+      // A low-memory card WebView is created on demand. Its first event may
+      // precede React mounting; replay only after all listeners are installed.
+      if (!cancelled) {
+        try {
+          const replayRevision = auxiliaryRevision;
+          const { invoke } = await import('@tauri-apps/api/core');
+          const snapshot = await invoke<{
+            suggestions: PendingCorrection[];
+            fallback: InsertFallbackCardPayload | null;
+          }>('get_capsule_auxiliary_snapshot');
+          if (!cancelled && replayRevision === auxiliaryRevision) {
+            setSuggestions(snapshot.suggestions);
+            setInsertFallback(snapshot.fallback);
+          }
+        } catch {
+          /* Android and browser previews do not have desktop cards. */
+        }
+      }
       if (cancelled) {
         handle();
         transcriptHandle();

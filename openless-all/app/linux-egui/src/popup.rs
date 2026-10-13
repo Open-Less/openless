@@ -665,15 +665,7 @@ pub struct QaPopupState {
     pub viewer_login: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CapsulePopupState {
-    pub phase: String,
-    pub text: String,
-    pub audio_level: Option<f32>,
-    pub translation_active: bool,
-    /// 胶囊样式（`siri` / `classic` / `typeless`）。
-    pub style: String,
-}
+pub use openless_capsule::CapsulePopupState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LessComputerPopupState {

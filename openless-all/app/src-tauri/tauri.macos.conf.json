@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "npm run check:macos-metal-toolchain && npm run build:native-capsule && npm run build",
+    "beforeDevCommand": "npm run build:native-capsule:dev && npm run dev"
+  },
+  "bundle": {
+    "externalBin": ["binaries/openless-native-capsule"]
+  }
+}

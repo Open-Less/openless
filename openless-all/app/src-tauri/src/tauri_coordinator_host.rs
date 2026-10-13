@@ -474,6 +474,17 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     reassert_spaces: bool,
 ) {
+    #[cfg(target_os = "macos")]
+    if crate::desktop_resources::active() {
+        if let Ok(raw) = window.ns_window() {
+            unsafe {
+                use objc2::{msg_send, runtime::AnyObject};
+                let panel = raw as *mut AnyObject;
+                let _: () = msg_send![panel, orderFrontRegardless];
+            }
+        }
+        return;
+    }
     let mut needs_fallback = true;
     if capsule_show_strategy_for_platform() == CapsuleShowStrategy::NoActivate {
         needs_fallback = !show_capsule_window_no_activate(app, window, reassert_spaces);
@@ -697,6 +708,7 @@ struct CapsuleWindowState {
     style: AtomicU8,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
+    fallback_payload: Mutex<Option<crate::types::InsertFallbackCardPayload>>,
     deferred_payload: Mutex<Option<CapsulePayload>>,
     snapshot: Mutex<CapsuleSnapshotState>,
     layout_watch_active: AtomicBool,
@@ -714,6 +726,7 @@ impl Default for CapsuleWindowState {
             style: AtomicU8::new(0),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
+            fallback_payload: Mutex::new(None),
             deferred_payload: Mutex::new(None),
             snapshot: Mutex::new(CapsuleSnapshotState::default()),
             layout_watch_active: AtomicBool::new(false),
@@ -910,6 +923,7 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
+        crate::desktop_resources::ensure_card_window(&self.app)?;
         self.state
             .hit_test_mode
             .store(HIT_TEST_MODE_CARD, Ordering::SeqCst);
@@ -959,6 +973,13 @@ impl TauriCapsuleWindow {
         self.hide_transcript_overlay();
         if let Some(window) = self.window() {
             window.hide()?;
+            #[cfg(not(mobile))]
+            if crate::desktop_resources::active() {
+                self.state
+                    .hit_test_mode
+                    .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
+                window.destroy()?;
+            }
         }
         Ok(())
     }
@@ -1366,6 +1387,13 @@ impl TauriCapsuleWindow {
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
     capsule: Arc<CapsuleWindowState>,
+    #[cfg(not(mobile))]
+    native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
+    /// Last sidecar init failure, surfaced by `native_capsule_status` so the
+    /// settings page can explain a missing recording overlay instead of
+    /// failing silently.
+    #[cfg(not(mobile))]
+    native_capsule_error: Arc<Mutex<Option<String>>>,
 }
 
 impl TauriCoordinatorHost {
@@ -1373,11 +1401,93 @@ impl TauriCoordinatorHost {
         Self {
             app,
             capsule: Arc::new(CapsuleWindowState::default()),
+            #[cfg(not(mobile))]
+            native: Arc::new(Mutex::new(None)),
+            #[cfg(not(mobile))]
+            native_capsule_error: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) fn bind(&self, app: AppHandle) {
+        #[cfg(not(mobile))]
+        if crate::desktop_resources::active() {
+            match crate::native_capsule::NativeCapsule::new(app.clone()) {
+                Ok(native) => {
+                    *self.native.lock() = Some(Arc::new(native));
+                    *self.native_capsule_error.lock() = None;
+                }
+                Err(error) => {
+                    log::error!("[native-capsule] {error}; dictation remains available");
+                    *self.native_capsule_error.lock() = Some(error.to_string());
+                }
+            }
+        }
         *self.app.lock() = Some(app);
+    }
+
+    /// `(available, last_error)` for the disposable capsule sidecar.
+    #[cfg(not(mobile))]
+    pub(crate) fn native_capsule_status(&self) -> (bool, Option<String>) {
+        (
+            self.native.lock().is_some(),
+            self.native_capsule_error.lock().clone(),
+        )
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn present_native_capsule(
+        &self,
+        payload: &CapsulePayload,
+        epoch: u64,
+        previous: Option<CapsuleState>,
+    ) -> bool {
+        if !crate::desktop_resources::active() {
+            return false;
+        }
+        if let Some(app) = self.app() {
+            let preferences = app
+                .state::<Arc<crate::coordinator::Coordinator>>()
+                .backend()
+                .get_preferences();
+            if payload.state == CapsuleState::Recording && previous != Some(CapsuleState::Recording)
+            {
+                if preferences.audio_cue_on_record
+                    && !preferences.mute_during_recording
+                    && !payload.selection_polish
+                {
+                    crate::native_audio_cue::play_start();
+                }
+            } else if payload.state != CapsuleState::Recording
+                && previous == Some(CapsuleState::Recording)
+            {
+                crate::native_audio_cue::stop();
+            }
+        }
+        if let Some(native) = self.native.lock().as_ref() {
+            if self.capsule.fallback_card_visible.load(Ordering::SeqCst)
+                || self.capsule.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD
+            {
+                native.stop();
+            } else {
+                native.present(payload, epoch, self.capsule.snapshot.lock().text.clone());
+            }
+        }
+        true
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn set_native_capsule_locale(&self, locale: String) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.set_locale(locale);
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn stop_native_capsule(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.stop();
+        }
+        crate::native_audio_cue::stop();
     }
 
     fn app(&self) -> Option<AppHandle> {
@@ -1459,6 +1569,12 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn defer_capsule_if_fallback_active(&self, payload: &CapsulePayload) -> bool {
         self.capsule.defer_if_fallback_active(payload)
+    }
+
+    pub(crate) fn auxiliary_fallback_snapshot(
+        &self,
+    ) -> Option<crate::types::InsertFallbackCardPayload> {
+        self.capsule.fallback_payload.lock().clone()
     }
 
     pub(crate) fn active_insert_fallback_presentation_id(&self) -> Option<u64> {
@@ -1590,12 +1706,14 @@ impl TauriCoordinatorHost {
     }
 
     pub(crate) fn emit_insert_fallback(&self, payload: &crate::types::InsertFallbackCardPayload) {
+        *self.capsule.fallback_payload.lock() = Some(payload.clone());
         if let Some(app) = self.app() {
             let _ = app.emit_to("capsule", "insert:fallback", payload);
         }
     }
 
     pub(crate) fn clear_insert_fallback(&self) {
+        self.capsule.fallback_payload.lock().take();
         if let Some(app) = self.app() {
             let _ = app.emit_to(
                 "capsule",

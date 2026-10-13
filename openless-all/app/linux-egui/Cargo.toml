@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 openless-core = { path = "../crates/openless-core" }
+openless-capsule = { path = "../crates/openless-capsule", features = ["ui"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 fs2 = "0.4"
 futures-util = "0.3"

@@ -13,9 +13,16 @@ import {
   showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
-import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
+import {
+  getNativeCapsuleStatus,
+  isTauri,
+  listMicrophoneDevices,
+  restartApp,
+  setDictationHotkey,
+} from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import type {
+  NativeCapsuleStatus,
   CapsuleStyle,
   HotkeyMode,
   MicrophoneDevice,
@@ -28,7 +35,7 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Card, Collapsible } from '../_atoms';
+import { Btn, Card, Collapsible } from '../_atoms';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS } from '../../components/WindowChrome';
@@ -703,6 +710,18 @@ export function RecordingInputSection() {
       {showDesktopStartup && (
         <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
+          <SettingRow
+            label={t('settings.recording.lowMemoryBackgroundLabel')}
+            desc={t('settings.recording.lowMemoryBackgroundDesc')}
+          >
+            <Toggle
+              on={prefs.lowMemoryBackgroundEnabled ?? false}
+              onToggle={(lowMemoryBackgroundEnabled) =>
+                savePrefs({ ...prefs, lowMemoryBackgroundEnabled })
+              }
+            />
+          </SettingRow>
+          <LowMemoryRuntimeNotice enabled={prefs.lowMemoryBackgroundEnabled ?? false} />
           <SettingRow label={t('settings.recording.startMinimizedLabel')}>
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
@@ -717,6 +736,62 @@ export function RecordingInputSection() {
 
 // 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist /
 // windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
+// 低内存模式只在启动时读取一次开关；此处对比运行态与已保存的开关值，
+// 不一致时提示重启，并顺带显示 sidecar 初始化失败的健康告警。
+function LowMemoryRuntimeNotice({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
+  const [runtime, setRuntime] = useState<NativeCapsuleStatus | null>(null);
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    getNativeCapsuleStatus()
+      .then((status) => {
+        if (!cancelled) setRuntime(status);
+      })
+      .catch((err: unknown) => console.error('[low-memory] status failed', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  if (!runtime) return null;
+  const needsRestart = runtime.active !== enabled;
+  const capsuleBroken = runtime.active && !runtime.available;
+  if (!needsRestart && !capsuleBroken) return null;
+  return (
+    <>
+      {needsRestart ? (
+        <SettingRow
+          label={t('settings.recording.lowMemoryRestartLabel')}
+          desc={t('settings.recording.lowMemoryRestartDesc')}
+        >
+          <Btn variant="blue" size="sm" onClick={restartApp}>
+            {t('settings.recording.lowMemoryRestartNow')}
+          </Btn>
+        </SettingRow>
+      ) : null}
+      {capsuleBroken ? (
+        <SettingRow
+          label={t('settings.recording.lowMemoryCapsuleErrorLabel')}
+          desc={t('settings.recording.lowMemoryCapsuleErrorDesc')}
+        >
+          {runtime.error ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--ol-ink-3)',
+                maxWidth: 220,
+                wordBreak: 'break-all',
+              }}
+            >
+              {runtime.error}
+            </span>
+          ) : null}
+        </SettingRow>
+      ) : null}
+    </>
+  );
+}
+
 function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);

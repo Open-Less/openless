@@ -128,7 +128,9 @@ pub(crate) fn backend_dependencies(
     {
         let prefs = preferences.get();
         warm_hub.configure(
-            prefs.low_latency_dictation_enabled,
+            prefs.low_latency_dictation_enabled
+                && !prefs.low_memory_background_enabled
+                && !crate::desktop_resources::active(),
             (!prefs.microphone_device_name.trim().is_empty())
                 .then(|| prefs.microphone_device_name.clone()),
         );

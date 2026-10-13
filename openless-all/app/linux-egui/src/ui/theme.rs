@@ -59,9 +59,6 @@ pub const WARN_SOFT: egui::Color32 = egui::Color32::from_rgb(255, 247, 237);
 pub const WARN: egui::Color32 = egui::Color32::from_rgb(217, 119, 6);
 /// Tauri `--ol-err`: used by the denied permission state.
 /// Tauri `--ol-capsule-badge-bg` / `--ol-capsule-badge-border`（浅色）。
-pub const CAPSULE_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(250, 250, 250);
-pub const CAPSULE_BADGE_BORDER: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(9, 24, 58, 64);
 pub const ERR: egui::Color32 = egui::Color32::from_rgb(220, 38, 38);
 
 /// Font key of the registered Medium face (see [`medium_font`]).
