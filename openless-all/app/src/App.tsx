@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
+import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { detectOS, type OS } from './components/WindowChrome';
@@ -8,12 +9,14 @@ import {
   checkMicrophonePermission,
   getHotkeyStatus,
   getStartupSnapshot,
+  getVoiceEditState,
   getSettings,
   getPlatformCapabilities,
   handleWindowHotkeyEvent,
   isTauri,
   qaWindowDismiss,
 } from './lib/ipc';
+import { cancelAndCloseVoiceEditSession } from './lib/ipc/voice-edit-session';
 import type { PlatformCapabilities } from './lib/types';
 import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
@@ -36,6 +39,9 @@ const SelectionVoiceIntentPicker = lazy(() =>
     default: m.SelectionVoiceIntentPicker,
   })),
 );
+const VoiceEditPanel = lazy(() =>
+  import('./pages/VoiceEditPanel').then((m) => ({ default: m.VoiceEditPanel })),
+);
 // Tauri's Less Computer panel targets macOS and Windows; Linux gets the native egui
 // UI instead. TAURI_ENV_PLATFORM is a compile-time literal, so platforms that don't
 // run this WebView can drop the import, keeping the panel chunk out of mobile builds.
@@ -52,8 +58,10 @@ const LessComputerGlow = LESS_COMPUTER_BUNDLED
 
 interface AppProps {
   isCapsule: boolean;
+  isCapsuleRail: boolean;
   isQa: boolean;
   isSelectionVoiceIntent: boolean;
+  isVoiceEdit: boolean;
   isLessComputer: boolean;
   isLessComputerGlow: boolean;
   forcedOs?: OS | null;
@@ -96,12 +104,17 @@ export function App(props: AppProps) {
 
 function ReadyApp({
   isCapsule,
+  isCapsuleRail,
   isQa,
   isSelectionVoiceIntent,
+  isVoiceEdit,
   isLessComputer,
   isLessComputerGlow,
   forcedOs,
 }: AppProps) {
+  if (isCapsuleRail) {
+    return <CapsuleTranscriptOverlay />;
+  }
   if (isCapsule) {
     return <Capsule os={forcedOs} />;
   }
@@ -116,6 +129,13 @@ function ReadyApp({
     return (
       <Suspense fallback={null}>
         <SelectionVoiceIntentPicker />
+      </Suspense>
+    );
+  }
+  if (isVoiceEdit) {
+    return (
+      <Suspense fallback={null}>
+        <VoiceEditPanel />
       </Suspense>
     );
   }
@@ -140,6 +160,8 @@ function ReadyApp({
   const [startupError, setStartupError] = useState<string | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [mobileQaOpen, setMobileQaOpen] = useState(false);
+  const [mobileVoiceEditOpen, setMobileVoiceEditOpen] = useState(false);
+  const [mobileVoiceEditCloseError, setMobileVoiceEditCloseError] = useState('');
   const completeOnboarding = () => {
     if (platformCaps?.platform === 'android') {
       localStorage.setItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY, '1');
@@ -163,24 +185,60 @@ function ReadyApp({
     if (!isTauri || platformCaps?.platform !== 'android') return;
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
+    let unlistenVoiceEditShow: (() => void) | undefined;
+    let unlistenVoiceEditDismiss: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const stateHandle = await listen('qa:state', () => {
+        const stateHandle = await listen('qa:state', async () => {
           console.info('[qa] android qa:state received; opening embedded panel');
-          setMobileQaOpen(true);
+          setMobileVoiceEditCloseError('');
+          try {
+            await cancelAndCloseVoiceEditSession();
+            if (cancelled) return;
+            setMobileVoiceEditOpen(false);
+            setMobileQaOpen(true);
+          } catch (error) {
+            if (cancelled) return;
+            setMobileVoiceEditCloseError(error instanceof Error ? error.message : String(error));
+            setMobileVoiceEditOpen(true);
+          }
         });
         const dismissHandle = await listen('qa:dismiss', () => {
           console.info('[qa] android qa:dismiss received; closing embedded panel');
           setMobileQaOpen(false);
         });
+        const voiceEditShowHandle = await listen('voice-edit:show', () => {
+          console.info('[voice-edit] android show requested; opening embedded panel');
+          setMobileVoiceEditCloseError('');
+          setMobileQaOpen(false);
+          setMobileVoiceEditOpen(true);
+        });
+        const voiceEditDismissHandle = await listen('voice-edit:dismiss', () => {
+          console.info('[voice-edit] android dismiss requested; closing embedded panel');
+          setMobileVoiceEditOpen(false);
+        });
         if (cancelled) {
           stateHandle();
           dismissHandle();
+          voiceEditShowHandle();
+          voiceEditDismissHandle();
         } else {
           unlistenState = stateHandle;
           unlistenDismiss = dismissHandle;
+          unlistenVoiceEditShow = voiceEditShowHandle;
+          unlistenVoiceEditDismiss = voiceEditDismissHandle;
+          const current = await getVoiceEditState();
+          if (
+            !cancelled &&
+            current &&
+            current.phase !== 'completed' &&
+            current.phase !== 'cancelled'
+          ) {
+            setMobileQaOpen(false);
+            setMobileVoiceEditOpen(true);
+          }
         }
       } catch (error) {
         console.warn('[qa] mobile route listener setup failed', error);
@@ -190,6 +248,8 @@ function ReadyApp({
       cancelled = true;
       unlistenState?.();
       unlistenDismiss?.();
+      unlistenVoiceEditShow?.();
+      unlistenVoiceEditDismiss?.();
     };
   }, [platformCaps?.platform]);
 
@@ -207,6 +267,11 @@ function ReadyApp({
       window.removeEventListener('popstate', onPopState);
     };
   }, [mobileQaOpen, platformCaps?.platform]);
+
+  useEffect(() => {
+    if (!mobileVoiceEditOpen || platformCaps?.platform !== 'android') return;
+    window.history.pushState({ openlessVoiceEdit: true }, '', window.location.href);
+  }, [mobileVoiceEditOpen, platformCaps?.platform]);
 
   useEffect(() => {
     if (!isTauri || !platformCaps) return;
@@ -384,7 +449,23 @@ function ReadyApp({
             />
           </div>
         )}
+        {platformCaps?.platform === 'android' && (
+          <div style={{ display: mobileVoiceEditOpen ? 'block' : 'none', height: '100%' }}>
+            <VoiceEditPanel
+              embedded
+              active={mobileVoiceEditOpen}
+              closeError={mobileVoiceEditCloseError}
+              onRequestClose={() => {
+                setMobileVoiceEditOpen(false);
+                if (window.history.state?.openlessVoiceEdit === true) {
+                  window.history.back();
+                }
+              }}
+            />
+          </div>
+        )}
         {!mobileQaOpen &&
+          !mobileVoiceEditOpen &&
           (gate === 'onboarding' ? (
             <Onboarding onComplete={completeOnboarding} />
           ) : (

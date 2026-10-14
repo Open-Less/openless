@@ -4,7 +4,51 @@ import type { zhCN } from './zh-CN';
 
 // Type-level guarantee that en mirrors the zh-CN shape.
 export const en: typeof zhCN = {
+  voiceEdit: {
+    title: 'Voice editing session',
+    description:
+      'Dictate a draft or load the target text, edit it with voice instructions, then confirm to write it back.',
+    targetHint: 'Place the cursor in the target input field, or select the text to edit.',
+    androidTargetHint:
+      'Assign Voice editing to an overlay swipe. Record in the target app, then swipe to preview. Confirmation writes back to the original field.',
+    startDraft: 'Start dictating a draft',
+    status: 'Status: {{phase}}',
+    turns: 'Turns: {{count}}',
+    draft: 'Draft',
+    preview: 'Current preview',
+    history: 'Instruction history',
+    turn: 'Turn {{count}}',
+    polishedInstruction: 'Polished: {{text}}',
+    turnPreview: 'Preview: {{text}}',
+    finishDraft: 'Finish draft',
+    nextInstruction: 'Record next instruction',
+    finishInstruction: 'Finish instruction',
+    commit: 'Confirm and write back',
+    restart: 'Start again',
+    openPanel: 'Open panel',
+    errors: {
+      voiceEditFieldChanged: 'The original field text changed. Start a new editing session.',
+      voiceEditTargetUnavailable:
+        'The target field or its full text could not be read. Select the target again.',
+    },
+    phase: {
+      dictating: 'Dictating draft',
+      draft_ready: 'Draft ready',
+      editing: 'Recording instruction',
+      applying: 'Applying edit plan',
+      preview: 'Awaiting confirmation',
+      committing: 'Writing to input field',
+      completed: 'Written',
+      cancelled: 'Cancelled',
+    },
+  },
   cloudSyncE2ee: {
+    customServerTitle: 'Self-hosted sync server (advanced)',
+    customServerOrigin: 'Server address (https://...)',
+    customServerToken: 'Sign-in token',
+    customServerSave: 'Save',
+    customServerHint:
+      'Leave blank to use the official sync server. The address must start with https:// and be a root URL.',
     protocolTitle: 'Cloud sync agreement and privacy notice',
     protocolIntro:
       'OpenLess and its independent developers respect your privacy and work to protect your data. Read this notice before continuing.',
@@ -1276,7 +1320,7 @@ export const en: typeof zhCN = {
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
+        'Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',
@@ -1442,6 +1486,9 @@ export const en: typeof zhCN = {
       stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
+      lowLatencyDictationLabel: 'Low-latency capture',
+      lowLatencyDictationDesc:
+        'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',
@@ -1507,6 +1554,9 @@ export const en: typeof zhCN = {
         'Entries older than this are pruned on new writes; 0 = no time-based pruning.',
       historyMaxEntriesLabel: 'Max history entries',
       historyMaxEntriesDesc: 'Max sessions retained locally. Blank = 200. Range 5–200.',
+      polishSkipMaxCharsLabel: 'Skip polish for short dictations (max characters)',
+      polishSkipMaxCharsDesc:
+        'Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.',
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
@@ -1664,6 +1714,7 @@ export const en: typeof zhCN = {
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek Realtime ASR',
         asrTencentCloud: 'Tencent Cloud Hunyuan Realtime ASR',
+        asrGemini: 'Google Gemini Transcribe',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: 'Local sherpa-onnx (Experimental)',
         asrFoundryLocalWhisper: 'Local Whisper (Foundry Local)',
@@ -1676,6 +1727,12 @@ export const en: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe uses verbatim transcription here, followed by your configured LLM. For built-in Smart transcription, select this model in Multimodal mode. Audio is uploaded after recording stops; live transcription is not supported. Base URL: https://generativelanguage.googleapis.com/v1beta (also accepts /v1beta/interactions).',
+      geminiTranscribeOmniNotice:
+        'Use gemini-3.5-transcribe for Smart transcription: removes fillers, applies spoken corrections and formats the transcript after recording stops. Working languages and dictionary terms are supported. This model does not use style prompts or support translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
+      validateSuccessAudio:
+        'Audio connectivity passed using a short silence sample. Confirm transcription quality with a short recording.',
       elevenLabsUploadNotice:
         'ElevenLabs uploads recorded audio to the configured endpoint for batch transcription.',
       zenmuxVocabularyNote:
@@ -1762,6 +1819,9 @@ export const en: typeof zhCN = {
       thinkingBudget: 'Fixed budget',
       maxTokensLabel: 'Maximum output tokens',
       thinkingBudgetLabel: 'Thinking budget tokens',
+      serviceTierLabel: 'Ark low-latency inference (fast)',
+      serviceTierHint:
+        'Only supported Ark models can use this option; unsupported models may return 400.',
       responsesThinkingHint:
         'Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.',
       messagesThinkingHint:
@@ -1771,6 +1831,7 @@ export const en: typeof zhCN = {
       llmTokenLimitInvalid: 'Token limits must be positive integers.',
       llmThinkingBudgetInvalid:
         'Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.',
+      llmServiceTierInvalid: 'Invalid low-latency inference option. Select it again.',
       llmResponseIncomplete:
         'The response was incomplete or reached its output limit. Already emitted text is retained.',
       llmProtocolHeaderConflict:
@@ -1907,7 +1968,7 @@ export const en: typeof zhCN = {
       hotkeyFailed: 'Listener failed',
       windowsImeLabel: 'Windows input method backend',
       windowsImeDesc:
-        'Temporarily switches to the OpenLess TSF IME during voice sessions to avoid clipboard insertion limits.',
+        'Inserts dictated text through the OpenLess TSF text service, which stays active alongside your input method, to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
       windowsImeUnavailable: 'Unavailable',
       androidImeLabel: 'Input method (IME)',
@@ -2063,6 +2124,7 @@ export const en: typeof zhCN = {
         right: 'Right',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Voice editing',
         none: 'No action',
         quick_note: 'Quick note',
         translation: 'Translation',

@@ -21,6 +21,7 @@ const values: ProtocolValues = {
   'ark.messages_thinking': '',
   'ark.max_tokens': '',
   'ark.thinking_budget': '',
+  'ark.service_tier': '',
 };
 assert(
   protocolValidationError(values, 'messages') === null,
@@ -30,6 +31,11 @@ assert(
   protocolValidationError({ ...values, 'ark.request_format': 'invalid' }, 'messages') ===
     'llmRequestFormatInvalid',
   'Unknown formats must not silently fall back',
+);
+assert(
+  protocolValidationError({ ...values, 'ark.service_tier': 'turbo' }, 'messages') ===
+    'llmServiceTierInvalid',
+  'Unknown Ark service tiers must be rejected',
 );
 assert(
   protocolValidationError({ ...values, 'ark.max_tokens': '0' }, 'messages') ===
@@ -149,10 +155,20 @@ assert(
   (await listChannels('llm')).find((c) => c.id === first)?.lastTest === null,
   'Credential mutation invalidates old validation',
 );
+await setChannelProviderType('llm', first, 'ark');
+await setCredential('ark.service_tier', 'fast', first);
+assert(
+  (await readCredential('ark.service_tier', first)) === 'fast',
+  'ARK low-latency option must survive reload',
+);
 await setChannelProviderType('llm', first, 'custom_responses');
 assert(
   (await readCredential('ark.request_format', first)) === null,
   'Changing preset resets the format override',
+);
+assert(
+  (await readCredential('ark.service_tier', first)) === null,
+  'Changing preset clears the ARK-only low-latency option',
 );
 assert(
   (await readCredential('ark.api_key', first)) === 'fixture-key',

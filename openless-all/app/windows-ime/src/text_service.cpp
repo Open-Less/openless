@@ -1,7 +1,8 @@
 #include "text_service.h"
 
-#include <memory>
+#include <cstring>
 #include <new>
+#include <utility>
 
 #include "edit_session.h"
 
@@ -11,80 +12,35 @@ extern HINSTANCE g_module;
 namespace {
 
 constexpr wchar_t kMessageWindowClassName[] = L"OpenLessImeMessageWindow";
-constexpr UINT kSubmitTextMessage = WM_APP + 1;
-constexpr UINT kSubmitTextTimeoutMs = 2000;
+constexpr UINT kRunSubmitMessage = WM_APP + 1;
 
-struct SubmitTextRequest {
-  SubmitTextRequest()
-      : cancellation(std::make_shared<std::atomic<bool>>(false)),
-        completion_event(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
-    if (completion_event == nullptr) {
-      create_error = GetLastError();
-    }
-  }
+// WM_COPYDATA protocol, mirrored in src-tauri/src/windows_ime_protocol.rs.
+//
+// UIPI is left in place on purpose: the window never opts in to WM_COPYDATA
+// from lower-integrity senders, so a non-elevated process cannot inject text
+// into an elevated host through this DLL.
+constexpr ULONG_PTR kCopyDataSubmit = 0x4F4C5331; // "OLS1": uint32 token + UTF-16LE text
+constexpr ULONG_PTR kCopyDataQuery = 0x4F4C5131;  // "OLQ1": uint32 token
+constexpr DWORD kMaxSubmitBytes = 1024 * 1024;
 
-  ~SubmitTextRequest() {
-    if (completion_event != nullptr) {
-      CloseHandle(completion_event);
-      completion_event = nullptr;
-    }
-  }
+// Replies are nonzero so they differ from an unhandled message (0). A failed
+// commit is reported as its HRESULT, which always has the high bit set.
+constexpr LRESULT kStatusAccepted = 0x4F4C0001;
+constexpr LRESULT kStatusPending = 0x4F4C0002;
+constexpr LRESULT kStatusCommitted = 0x4F4C0003;
+constexpr LRESULT kStatusUnknownToken = 0x4F4C0004;
+constexpr LRESULT kStatusBadRequest = 0x4F4C0005;
 
-  bool IsValid() const { return completion_event != nullptr; }
-
-  std::wstring session_id;
-  std::wstring text;
-  std::shared_ptr<OpenLessAsyncEditState> async_completion;
-  bool wait_for_async_completion = false;
-  HRESULT result = E_UNEXPECTED;
-  std::shared_ptr<std::atomic<bool>> cancellation;
-  HANDLE completion_event = nullptr;
-  DWORD create_error = ERROR_SUCCESS;
-};
-
-using PostedSubmitRequest = std::shared_ptr<SubmitTextRequest>;
-
-HRESULT WaitForCompletionOrCancellation(HANDLE completion_event, HANDLE cancellation_event,
-                                        const std::shared_ptr<std::atomic<bool>> &cancellation) {
-  if (completion_event == nullptr) {
-    return HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE);
-  }
-  if (cancellation_event != nullptr &&
-      WaitForSingleObject(cancellation_event, 0) == WAIT_OBJECT_0) {
-    cancellation->store(true);
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-  }
-
-  const HANDLE wait_handles[2] = {completion_event, cancellation_event};
-  const DWORD wait_count = cancellation_event != nullptr ? 2 : 1;
-  const DWORD wait_result =
-      WaitForMultipleObjects(wait_count, wait_handles, FALSE, kSubmitTextTimeoutMs);
-  if (wait_result == WAIT_OBJECT_0) {
-    return S_OK;
-  }
-
-  cancellation->store(true);
-  if (wait_count == 2 && wait_result == WAIT_OBJECT_0 + 1) {
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-  }
-  if (wait_result == WAIT_TIMEOUT) {
-    return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-  }
-  const DWORD error = GetLastError();
-  return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
+LRESULT StatusFromHResult(HRESULT hr) {
+  return SUCCEEDED(hr) ? kStatusCommitted : static_cast<LRESULT>(hr);
 }
 
-HRESULT WaitForAsyncEditCompletion(const std::shared_ptr<OpenLessAsyncEditState> &completion,
-                                   HANDLE cancellation_event,
-                                   const std::shared_ptr<std::atomic<bool>> &cancellation) {
-  if (!completion || !completion->IsValid()) {
-    return HRESULT_FROM_WIN32(completion && completion->create_error != ERROR_SUCCESS
-                                  ? completion->create_error
-                                  : ERROR_INVALID_HANDLE);
+bool ReadToken(const COPYDATASTRUCT *copy_data, uint32_t *token) {
+  if (copy_data->lpData == nullptr || copy_data->cbData < sizeof(uint32_t)) {
+    return false;
   }
-  const HRESULT wait_result =
-      WaitForCompletionOrCancellation(completion->event, cancellation_event, cancellation);
-  return FAILED(wait_result) ? wait_result : completion->result;
+  std::memcpy(token, copy_data->lpData, sizeof(uint32_t));
+  return *token != 0;
 }
 
 } // namespace
@@ -138,19 +94,11 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientI
 
   Deactivate();
 
-  owner_thread_id_ = GetCurrentThreadId();
-
   thread_mgr_ = thread_mgr;
   thread_mgr_->AddRef();
   client_id_ = client_id;
 
-  HRESULT hr = EnsureMessageWindow();
-  if (FAILED(hr)) {
-    Deactivate();
-    return hr;
-  }
-
-  hr = StartIpcServer();
+  const HRESULT hr = EnsureMessageWindow();
   if (FAILED(hr)) {
     Deactivate();
     return hr;
@@ -159,8 +107,10 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientI
   return S_OK;
 }
 
+// Must stay wait-free: TSF can call this while the host thread is being torn
+// down, where blocking on another thread deadlocks the whole host process.
 STDMETHODIMP OpenLessTextService::Deactivate() {
-  StopIpcServer();
+  CancelPendingSubmit();
   DestroyMessageWindow();
 
   if (thread_mgr_ != nullptr) {
@@ -168,65 +118,9 @@ STDMETHODIMP OpenLessTextService::Deactivate() {
     thread_mgr_ = nullptr;
   }
   client_id_ = TF_CLIENTID_NULL;
-  owner_thread_id_ = 0;
 
   return S_OK;
 }
-
-HRESULT OpenLessTextService::SubmitTextFromPipe(const std::wstring &session_id,
-                                                const std::wstring &text,
-                                                HANDLE cancellation_event) {
-  try {
-    if (GetCurrentThreadId() == owner_thread_id_) {
-      auto cancellation = std::make_shared<std::atomic<bool>>(false);
-      return CommitTextOnOwnerThread(session_id, text, nullptr, nullptr, cancellation);
-    }
-
-    if (message_window_ == nullptr) {
-      return E_UNEXPECTED;
-    }
-
-    auto request = std::make_shared<SubmitTextRequest>();
-    if (!request->IsValid()) {
-      return HRESULT_FROM_WIN32(request->create_error != ERROR_SUCCESS ? request->create_error
-                                                                       : ERROR_INVALID_HANDLE);
-    }
-    request->session_id = session_id;
-    request->text = text;
-
-    auto *posted_request = new (std::nothrow) PostedSubmitRequest(request);
-    if (posted_request == nullptr) {
-      return E_OUTOFMEMORY;
-    }
-
-    if (!PostMessageW(message_window_, kSubmitTextMessage, 0,
-                      reinterpret_cast<LPARAM>(posted_request))) {
-      const DWORD error = GetLastError();
-      delete posted_request;
-      return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
-    }
-
-    const HRESULT wait_result = WaitForCompletionOrCancellation(
-        request->completion_event, cancellation_event, request->cancellation);
-    if (FAILED(wait_result)) {
-      return wait_result;
-    }
-
-    if (request->wait_for_async_completion) {
-      return WaitForAsyncEditCompletion(request->async_completion, cancellation_event,
-                                        request->cancellation);
-    }
-    return request->result;
-  } catch (const std::bad_alloc &) {
-    return E_OUTOFMEMORY;
-  } catch (...) {
-    return E_UNEXPECTED;
-  }
-}
-
-HRESULT OpenLessTextService::StartIpcServer() { return pipe_server_.Start(this); }
-
-void OpenLessTextService::StopIpcServer() { pipe_server_.Stop(); }
 
 HRESULT OpenLessTextService::EnsureMessageWindow() {
   if (message_window_ != nullptr) {
@@ -256,27 +150,116 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
 
 void OpenLessTextService::DestroyMessageWindow() {
   if (message_window_ != nullptr) {
-    MSG message = {};
-    while (PeekMessageW(&message, message_window_, kSubmitTextMessage, kSubmitTextMessage,
-                        PM_REMOVE)) {
-      delete reinterpret_cast<PostedSubmitRequest *>(message.lParam);
-    }
-    DestroyWindow(message_window_);
+    const HWND window = message_window_;
     message_window_ = nullptr;
+    SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+    DestroyWindow(window);
   }
 }
 
-HRESULT OpenLessTextService::CommitTextOnOwnerThread(
-    const std::wstring &session_id, const std::wstring &text,
-    std::shared_ptr<OpenLessAsyncEditState> *async_completion, bool *wait_for_async_completion,
-    const std::shared_ptr<std::atomic<bool>> &cancellation) {
-  UNREFERENCED_PARAMETER(session_id);
+LRESULT OpenLessTextService::HandleCopyData(const COPYDATASTRUCT *copy_data) {
+  if (copy_data == nullptr) {
+    return kStatusBadRequest;
+  }
+  if (copy_data->dwData == kCopyDataSubmit) {
+    return AcceptSubmit(copy_data);
+  }
+  if (copy_data->dwData == kCopyDataQuery) {
+    return QuerySubmit(copy_data);
+  }
+  return kStatusBadRequest;
+}
 
+LRESULT OpenLessTextService::AcceptSubmit(const COPYDATASTRUCT *copy_data) {
+  uint32_t token = 0;
+  if (!ReadToken(copy_data, &token) || copy_data->cbData > kMaxSubmitBytes ||
+      (copy_data->cbData - sizeof(uint32_t)) % sizeof(wchar_t) != 0) {
+    return kStatusBadRequest;
+  }
+
+  CancelPendingSubmit();
+
+  const size_t text_bytes = copy_data->cbData - sizeof(uint32_t);
+  submit_text_.assign(text_bytes / sizeof(wchar_t), L'\0');
+  std::memcpy(submit_text_.data(), static_cast<const BYTE *>(copy_data->lpData) + sizeof(uint32_t),
+              text_bytes);
+  submit_token_ = token;
+  submit_status_ = kStatusPending;
+
+  // The sender's SendMessage can be dispatched while the host is in the middle
+  // of something else. Commit from a posted message instead, so the edit
+  // session is requested from the top of the host message loop.
+  if (!PostMessageW(message_window_, kRunSubmitMessage, token, 0)) {
+    const DWORD error = GetLastError();
+    CancelPendingSubmit();
+    return StatusFromHResult(HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE));
+  }
+  return kStatusAccepted;
+}
+
+LRESULT OpenLessTextService::QuerySubmit(const COPYDATASTRUCT *copy_data) {
+  uint32_t token = 0;
+  if (!ReadToken(copy_data, &token)) {
+    return kStatusBadRequest;
+  }
+  if (token != submit_token_) {
+    return kStatusUnknownToken;
+  }
+
+  if (async_edit_ && async_edit_->completed) {
+    submit_status_ = StatusFromHResult(async_edit_->result);
+    async_edit_.reset();
+  }
+  return submit_status_;
+}
+
+void OpenLessTextService::RunPendingSubmit(uint32_t token) {
+  if (token != submit_token_ || submit_status_ != kStatusPending || async_edit_) {
+    return; // Superseded, cancelled, or already running.
+  }
+
+  std::shared_ptr<OpenLessAsyncEditState> async_edit;
+  HRESULT hr = E_UNEXPECTED;
+  try {
+    const std::wstring text = std::move(submit_text_);
+    submit_text_.clear();
+    hr = CommitTextOnOwnerThread(text, &async_edit);
+  } catch (const std::bad_alloc &) {
+    hr = E_OUTOFMEMORY;
+  } catch (...) {
+    hr = E_UNEXPECTED;
+  }
+
+  // The edit session can re-enter the message loop, so a newer submit or
+  // Deactivate may have replaced this one in the meantime.
+  if (token != submit_token_) {
+    if (async_edit) {
+      async_edit->cancelled = true;
+    }
+    return;
+  }
+
+  if (SUCCEEDED(hr) && async_edit) {
+    async_edit_ = std::move(async_edit); // QuerySubmit reports it once TSF runs the session.
+    return;
+  }
+  submit_status_ = StatusFromHResult(hr);
+}
+
+void OpenLessTextService::CancelPendingSubmit() {
+  if (async_edit_) {
+    async_edit_->cancelled = true;
+    async_edit_.reset();
+  }
+  submit_text_.clear();
+  submit_token_ = 0;
+  submit_status_ = 0;
+}
+
+HRESULT OpenLessTextService::CommitTextOnOwnerThread(
+    const std::wstring &text, std::shared_ptr<OpenLessAsyncEditState> *async_edit) {
   if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
     return E_UNEXPECTED;
-  }
-  if (cancellation && cancellation->load()) {
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
   }
 
   ITfDocumentMgr *document_mgr = nullptr;
@@ -299,14 +282,15 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return E_FAIL;
   }
 
-  auto *session = new (std::nothrow) OpenLessEditSession(context, text, nullptr, cancellation);
+  const TfClientId client_id = client_id_;
+  auto *session = new (std::nothrow) OpenLessEditSession(context, text);
   if (session == nullptr) {
     context->Release();
     return E_OUTOFMEMORY;
   }
 
   HRESULT edit_result = S_OK;
-  hr = context->RequestEditSession(client_id_, session, TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
+  hr = context->RequestEditSession(client_id, session, TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
   session->Release();
 
   const bool synchronous_rejected =
@@ -319,35 +303,17 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return edit_result;
   }
 
-  if (async_completion == nullptr || wait_for_async_completion == nullptr) {
-    context->Release();
-    if (FAILED(hr)) {
-      return hr;
-    }
-    return edit_result;
-  }
-
-  if (cancellation && cancellation->load()) {
-    context->Release();
-    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-  }
-
+  // Hosts such as Word refuse a synchronous lock; queue the edit instead and
+  // let the caller poll for its completion.
   auto completion = std::make_shared<OpenLessAsyncEditState>();
-  if (!completion->IsValid()) {
-    context->Release();
-    return HRESULT_FROM_WIN32(completion->create_error != ERROR_SUCCESS ? completion->create_error
-                                                                        : ERROR_INVALID_HANDLE);
-  }
-
-  auto *async_session =
-      new (std::nothrow) OpenLessEditSession(context, text, completion, cancellation);
+  auto *async_session = new (std::nothrow) OpenLessEditSession(context, text, completion);
   if (async_session == nullptr) {
     context->Release();
     return E_OUTOFMEMORY;
   }
 
   HRESULT async_edit_result = S_OK;
-  hr = context->RequestEditSession(client_id_, async_session, TF_ES_ASYNC | TF_ES_READWRITE,
+  hr = context->RequestEditSession(client_id, async_session, TF_ES_ASYNC | TF_ES_READWRITE,
                                    &async_edit_result);
   async_session->Release();
   context->Release();
@@ -359,15 +325,12 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return async_edit_result;
   }
 
-  *async_completion = std::move(completion);
-  *wait_for_async_completion = true;
+  *async_edit = std::move(completion);
   return S_OK;
 }
 
 LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT message, WPARAM wparam,
                                                         LPARAM lparam) {
-  UNREFERENCED_PARAMETER(wparam);
-
   if (message == WM_NCCREATE) {
     const auto *create = reinterpret_cast<CREATESTRUCTW *>(lparam);
     SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
@@ -375,30 +338,26 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT messag
   }
 
   auto *service = reinterpret_cast<OpenLessTextService *>(GetWindowLongPtrW(window, GWLP_USERDATA));
-  if (message == kSubmitTextMessage && service != nullptr) {
-    std::unique_ptr<PostedSubmitRequest> posted_request(
-        reinterpret_cast<PostedSubmitRequest *>(lparam));
-    if (!posted_request || !*posted_request) {
-      return 0;
-    }
-
-    const auto request = *posted_request;
-    if (request->cancellation->load()) {
-      request->result = HRESULT_FROM_WIN32(ERROR_CANCELLED);
-    } else {
-      try {
-        request->result = service->CommitTextOnOwnerThread(
-            request->session_id, request->text, &request->async_completion,
-            &request->wait_for_async_completion, request->cancellation);
-      } catch (const std::bad_alloc &) {
-        request->result = E_OUTOFMEMORY;
-      } catch (...) {
-        request->result = E_UNEXPECTED;
-      }
-    }
-    SetEvent(request->completion_event);
-    return 1;
+  if (service == nullptr || (message != WM_COPYDATA && message != kRunSubmitMessage)) {
+    return DefWindowProcW(window, message, wparam, lparam);
   }
 
-  return DefWindowProcW(window, message, wparam, lparam);
+  // Keep the service alive: committing can re-enter and let TSF deactivate and
+  // release it before this call returns.
+  service->AddRef();
+  LRESULT result = 0;
+  try {
+    if (message == WM_COPYDATA) {
+      result = service->HandleCopyData(reinterpret_cast<const COPYDATASTRUCT *>(lparam));
+    } else {
+      service->RunPendingSubmit(static_cast<uint32_t>(wparam));
+    }
+  } catch (const std::bad_alloc &) {
+    // Never let an allocation or STL exception terminate the host process.
+    result = StatusFromHResult(E_OUTOFMEMORY);
+  } catch (...) {
+    result = StatusFromHResult(E_UNEXPECTED);
+  }
+  service->Release();
+  return result;
 }

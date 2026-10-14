@@ -729,8 +729,14 @@ async fn fetch_models(
             ProviderKind::Omni => default_omni_endpoint(&resolved.provider_type),
         })
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
-    let url = models_url(endpoint)?;
-    let is_gemini = resolved.provider_type == "gemini";
+    let is_gemini = resolved.kind != ProviderKind::Asr && resolved.provider_type == "gemini";
+    let url = if is_gemini {
+        let base = crate::asr::gemini::endpoint_url(endpoint, "")
+            .map_err(|_| invalid_request("provider endpoint is invalid"))?;
+        models_url(&base)?
+    } else {
+        models_url(endpoint)?
+    };
     let tokenhub_chat_only = resolved.provider_type == "tencentTokenHub";
     let orcarouter_filter = (resolved.provider_type == "orcarouter").then(|| {
         let endpoint_type = match (resolved.kind, resolved.protocol.format) {

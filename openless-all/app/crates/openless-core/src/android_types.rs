@@ -59,6 +59,7 @@ pub enum AndroidOverlayGestureAction {
     StylePack,
     Cancel,
     Qa,
+    VoiceEdit,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

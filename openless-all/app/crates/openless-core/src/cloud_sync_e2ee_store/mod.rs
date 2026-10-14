@@ -87,6 +87,36 @@ impl CoreSyncStore {
     pub fn device(&self) -> SourceDevice {
         self.inner.device.clone()
     }
+    pub fn custom_server_origin(&self) -> Option<String> {
+        self.inner
+            .repositories
+            .preferences
+            .get()
+            .sync_custom_server_origin
+    }
+    pub(crate) fn set_custom_server_origin(
+        &self,
+        origin: Option<String>,
+    ) -> Result<(), crate::BackendError> {
+        self.inner
+            .repositories
+            .preferences
+            .update(|prefs| prefs.sync_custom_server_origin = origin)
+    }
+
+    pub(crate) async fn legacy_baseline_matches(
+        &self,
+        scope: SyncScope,
+        documents: DocumentSet,
+        revision: Revision,
+    ) -> DocumentResult<bool> {
+        let state = state::ScopeState::decode(
+            &scope,
+            self.inner.extensions.read_scope(scope.clone()).await?,
+        )?;
+        Ok(state.baseline_revision == revision && state.baseline.as_ref() == Some(&documents))
+    }
+
     pub fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.inner.gate.subscribe()
     }

@@ -3,6 +3,7 @@ import {
   appendedBirthAdvance,
   clampInsertContentWidth,
   diffInsertUnits,
+  diffInsertWindowUnits,
   firstBornIndex,
   planCapsuleInsertMotion,
   planCharDelays,
@@ -10,6 +11,8 @@ import {
   propagationDelayMs,
   resetInsertUnitKeys,
   rightAnchoredPositions,
+  selectInsertRenderWindow,
+  selectInsertTextWindow,
   segmentInsertUnits,
   type InsertUnit,
 } from './insertTextAnimation';
@@ -180,3 +183,100 @@ assertEqual(
   32,
   'append enters beyond old tail',
 );
+
+const longUnits = diffInsertUnits([], 'abcdefghijklmnop');
+let measuredGlyphs = 0;
+const boundedWindow = selectInsertRenderWindow(
+  longUnits,
+  () => {
+    measuredGlyphs += 1;
+    return 10;
+  },
+  58,
+  8,
+  { maxUnits: 6, overflowBufferUnits: 2 },
+);
+assertEqual(
+  boundedWindow.units.map((unit) => unit.text).join(''),
+  'klmnop',
+  'window keeps latest suffix',
+);
+assertEqual(
+  boundedWindow.units.length,
+  6,
+  'window includes only a bounded visible suffix and buffer',
+);
+assertEqual(
+  boundedWindow.widths.length,
+  boundedWindow.units.length,
+  'window carries measured widths',
+);
+assertEqual(measuredGlyphs, boundedWindow.units.length, 'window does not measure discarded glyphs');
+assert(measuredGlyphs < longUnits.length, 'discarded glyphs are never measured');
+assert(
+  selectInsertRenderWindow(longUnits, () => 10, 58, 8, { maxUnits: 3 }).units.length <= 3,
+  'hard max keeps motion nodes bounded even for wide glyphs',
+);
+
+console.log('bounded insert render window passed');
+
+const longTranscript = '0123456789'.repeat(200);
+const textWindow = selectInsertTextWindow(longTranscript, { maxUnits: 8, overflowBufferUnits: 2 });
+assertEqual(textWindow, '0123456789', 'text window keeps the latest bounded graphemes');
+
+let rollingUnits: InsertUnit[] = [];
+for (let length = 1; length <= longTranscript.length; length += 1) {
+  const previousUnits = rollingUnits;
+  rollingUnits = diffInsertWindowUnits(previousUnits, longTranscript.slice(0, length), {
+    maxUnits: 8,
+    overflowBufferUnits: 2,
+  });
+  assert(rollingUnits.length <= 10, 'rolling animation units stay bounded during long transcript');
+  assertEqual(
+    rollingUnits.filter((unit) => unit.born).length,
+    1,
+    `rolling append only births the newest glyph at length ${length}`,
+  );
+  const previousByOffset = new Map(
+    previousUnits
+      .filter((unit) => unit.sourceOffset != null)
+      .map((unit) => [unit.sourceOffset as number, unit.key]),
+  );
+  for (const unit of rollingUnits) {
+    if (unit.sourceOffset != null && previousByOffset.has(unit.sourceOffset)) {
+      assertEqual(
+        unit.key,
+        previousByOffset.get(unit.sourceOffset),
+        `rolling overlap reuses key at offset ${unit.sourceOffset}`,
+      );
+    }
+  }
+}
+assertEqual(
+  rollingUnits.map((unit) => unit.text).join(''),
+  '0123456789',
+  'rolling window ends at the current transcript tail',
+);
+
+const correctionSource = 'a'.repeat(40) + 'weather today';
+let correctionUnits = diffInsertWindowUnits([], correctionSource, { maxUnits: 20 });
+const stableTailKey = correctionUnits[correctionUnits.length - 1]?.key;
+  correctionUnits = diffInsertWindowUnits(correctionUnits, correctionSource.replace('weather', 'whether'), {
+  maxUnits: 20,
+});
+assertEqual(
+  correctionUnits[correctionUnits.length - 1]?.key,
+  stableTailKey,
+  'window correction preserves keys for the unchanged visible suffix',
+);
+assertEqual(
+  correctionUnits.filter((unit) => unit.born).length,
+  2,
+  'window correction only births the changed graphemes',
+);
+assert(
+  correctionUnits.length <= 23,
+  'window correction does not restore the discarded transcript history',
+);
+
+console.log('bounded transcript diff passed');

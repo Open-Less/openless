@@ -11,7 +11,8 @@ export type AndroidOverlayGestureAction =
   | 'translation'
   | 'style_pack'
   | 'cancel'
-  | 'qa';
+  | 'qa'
+  | 'voice_edit';
 
 export interface AndroidOverlayGestureActions {
   up: AndroidOverlayGestureAction;

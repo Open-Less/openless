@@ -121,6 +121,12 @@ fn preferences_json_preserving_unknown(
     Ok(value)
 }
 
+fn strip_local_only_preferences(value: &mut serde_json::Value) {
+    if let serde_json::Value::Object(object) = value {
+        object.remove("lowLatencyDictationEnabled");
+    }
+}
+
 fn preserve_unknown_fields(
     canonical: &mut serde_json::Value,
     old: &serde_json::Value,
@@ -257,8 +263,12 @@ impl PreferencesStore {
         )
     }
 
-    pub fn set(&self, preferences: UserPreferences) -> Result<(), BackendError> {
-        self.update(|current| *current = preferences)
+    pub fn set(&self, mut preferences: UserPreferences) -> Result<(), BackendError> {
+        self.update(|current| {
+            // The sync transaction owns this field; stale whole-document saves cannot reroute its token.
+            preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
+            *current = preferences;
+        })
     }
 
     pub(crate) fn sync_snapshot(
@@ -280,23 +290,31 @@ impl PreferencesStore {
             *state = serde_json::from_slice(&bytes)
                 .map_err(|_| persistence_error("decode sync preferences"))?;
         }
-        preferences_json_preserving_unknown(&self.path, &state)
+        let mut value = preferences_json_preserving_unknown(&self.path, &state)?;
+        strip_local_only_preferences(&mut value);
+        Ok(value)
     }
 
     pub(crate) fn sync_replace_raw(
         &self,
-        value: serde_json::Value,
+        mut value: serde_json::Value,
         permit: &crate::cloud_sync_e2ee_store::gate::ExclusivePermit,
     ) -> Result<(), BackendError> {
         crate::cloud_sync_e2ee_store::gate::require_exclusive(&self.path, permit)?;
-        let parsed: UserPreferences = serde_json::from_value(value.clone())
-            .map_err(|_| persistence_error("validate restored preferences"))?;
-        let bytes = serde_json::to_vec_pretty(&value)
-            .map_err(|_| persistence_error("encode restored preferences"))?;
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let serde_json::Value::Object(object) = &mut value {
+            object.insert(
+                "lowLatencyDictationEnabled".to_string(),
+                serde_json::Value::Bool(state.low_latency_dictation_enabled),
+            );
+        }
+        let parsed: UserPreferences = serde_json::from_value(value.clone())
+            .map_err(|_| persistence_error("validate restored preferences"))?;
+        let bytes = serde_json::to_vec_pretty(&value)
+            .map_err(|_| persistence_error("encode restored preferences"))?;
         crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)?;
         *state = parsed;
         Ok(())
@@ -352,6 +370,7 @@ impl PreferencesStore {
     ) -> Result<(), BackendError> {
         self.update(|current| {
             preferences.preserve_style_preferences_from(current);
+            preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
             *current = preferences;
         })
     }
@@ -456,9 +475,55 @@ mod tests {
     }
 
     #[test]
+    fn cloud_snapshot_omits_local_microphone_warm_capture_preference() {
+        let mut value = serde_json::json!({
+            "lowLatencyDictationEnabled": true,
+            "microphoneDeviceName": "Built-in Mic",
+        });
+        strip_local_only_preferences(&mut value);
+        assert!(value.get("lowLatencyDictationEnabled").is_none());
+        assert_eq!(value["microphoneDeviceName"], "Built-in Mic");
+    }
+
+    #[test]
+    fn missing_low_latency_preference_defaults_off() {
+        let preferences: UserPreferences = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!preferences.low_latency_dictation_enabled);
+    }
+
+    #[test]
     fn in_memory_store_refuses_implicit_persistence() {
         let store = PreferencesStore::in_memory();
         let error = store.set(UserPreferences::default()).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::Persistence);
+    }
+}
+
+#[cfg(test)]
+mod sync_origin_tests {
+    use super::*;
+
+    #[test]
+    fn stale_preference_documents_cannot_reroute_a_saved_sync_token() {
+        let dir =
+            std::env::temp_dir().join(format!("openless-sync-origin-{}", uuid::Uuid::new_v4()));
+        let store = PreferencesStore::open(dir.join("preferences.json")).unwrap();
+        let stale = store.get();
+        store
+            .update(|prefs| prefs.sync_custom_server_origin = Some("https://sync.example".into()))
+            .unwrap();
+        store.set(stale.clone()).unwrap();
+        assert_eq!(
+            store.get().sync_custom_server_origin.as_deref(),
+            Some("https://sync.example")
+        );
+        store
+            .set_preserving_current_style_preferences(stale)
+            .unwrap();
+        assert_eq!(
+            store.get().sync_custom_server_origin.as_deref(),
+            Some("https://sync.example")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

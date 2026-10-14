@@ -12,11 +12,13 @@ pub const REQUEST_FORMAT_ACCOUNT: &str = "ark.request_format";
 pub const MESSAGES_THINKING_ACCOUNT: &str = "ark.messages_thinking";
 pub const MAX_TOKENS_ACCOUNT: &str = "ark.max_tokens";
 pub const THINKING_BUDGET_ACCOUNT: &str = "ark.thinking_budget";
-pub const CONFIG_ACCOUNTS: [&str; 4] = [
+pub const SERVICE_TIER_ACCOUNT: &str = "ark.service_tier";
+pub const CONFIG_ACCOUNTS: [&str; 5] = [
     REQUEST_FORMAT_ACCOUNT,
     MESSAGES_THINKING_ACCOUNT,
     MAX_TOKENS_ACCOUNT,
     THINKING_BUDGET_ACCOUNT,
+    SERVICE_TIER_ACCOUNT,
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,12 +117,21 @@ pub enum MessagesThinking {
     Budget,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmServiceTier {
+    #[default]
+    Off,
+    Fast,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmProtocolConfig {
     pub format: LlmRequestFormat,
     pub messages_thinking: MessagesThinking,
     pub max_tokens: u32,
     pub thinking_budget: u32,
+    pub service_tier: LlmServiceTier,
 }
 
 impl Default for LlmProtocolConfig {
@@ -130,6 +141,7 @@ impl Default for LlmProtocolConfig {
             messages_thinking: MessagesThinking::Adaptive,
             max_tokens: 8192,
             thinking_budget: 1024,
+            service_tier: LlmServiceTier::Off,
         }
     }
 }
@@ -194,6 +206,12 @@ impl LlmProtocolConfig {
                     return Err(config_error("llmThinkingBudgetInvalid"));
                 }
             }
+            SERVICE_TIER_ACCOUNT => {
+                self.service_tier = match value {
+                    "fast" => LlmServiceTier::Fast,
+                    _ => return Err(config_error("llmServiceTierInvalid")),
+                }
+            }
             _ => return Err(config_error("llmRequestFormatInvalid")),
         }
         Ok(())
@@ -208,6 +226,12 @@ impl LlmProtocolConfig {
             return Err(config_error("llmThinkingBudgetInvalid"));
         }
         Ok(())
+    }
+
+    pub(crate) fn apply_service_tier(&self, provider_id: &str, body: &mut Value) {
+        if provider_id.trim() == "ark" && self.service_tier == LlmServiceTier::Fast {
+            body["service_tier"] = json!("fast");
+        }
     }
 }
 
@@ -293,6 +317,9 @@ pub(crate) fn request_body(
             body["temperature"] = crate::polish::temperature_json(temperature);
         }
     }
+    config
+        .protocol
+        .apply_service_tier(&config.provider_id, &mut body);
     body
 }
 
@@ -723,6 +750,36 @@ mod tests {
                     assert!(body.get(absent).is_none());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn service_tier_is_validated_and_applied_only_to_ark_requests() {
+        let mut protocol = LlmProtocolConfig::default();
+        assert!(protocol.apply(SERVICE_TIER_ACCOUNT, "invalid").is_err());
+        protocol.apply(SERVICE_TIER_ACCOUNT, "fast").unwrap();
+        assert_eq!(protocol.service_tier, LlmServiceTier::Fast);
+
+        let messages = vec![json!({"role":"user","content":"hi"})];
+        for format in [LlmRequestFormat::Responses, LlmRequestFormat::Messages] {
+            let mut config = OpenAICompatibleConfig::new(
+                "ark",
+                "test",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "key",
+                "test-model",
+            )
+            .with_protocol(LlmProtocolConfig {
+                format,
+                service_tier: LlmServiceTier::Fast,
+                ..Default::default()
+            });
+            let body = request_body(&config, false, messages.clone());
+            assert_eq!(body["service_tier"], "fast");
+
+            config.provider_id = "openai".into();
+            let body = request_body(&config, false, messages.clone());
+            assert!(body.get("service_tier").is_none());
         }
     }
 

@@ -156,6 +156,29 @@ impl OpenLessBackend {
         self.encrypted_sync_service()?.sign_out().await
     }
 
+    pub async fn cloud_sync_e2ee_configure_server(
+        &self,
+        origin: Option<String>,
+        token: String,
+    ) -> Result<EncryptedSyncStatus, BackendError> {
+        let result = self
+            .encrypted_sync_service()?
+            .configure_server(origin, token)
+            .await;
+        if result.is_ok() {
+            self.publish_preferences_changed();
+        }
+        result
+    }
+
+    pub async fn cloud_sync_e2ee_sign_in_with_token(
+        &self,
+    ) -> Result<EncryptedSyncStatus, BackendError> {
+        self.encrypted_sync_service()?
+            .sign_in_with_custom_token()
+            .await
+    }
+
     pub async fn cloud_sync_e2ee_begin_sign_in(&self) -> Result<EncryptedSyncSignIn, BackendError> {
         self.encrypted_sync_service()?.begin_sign_in().await
     }

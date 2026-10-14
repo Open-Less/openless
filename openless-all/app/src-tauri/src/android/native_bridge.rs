@@ -487,6 +487,14 @@ struct ImeCommand {
     quick_note: bool,
     #[serde(default)]
     cloud: bool,
+    // Sent with "start" only: the editor's package and the text around the caret,
+    // snapshotted by the IME when recording begins.
+    #[serde(default)]
+    front_app: Option<String>,
+    #[serde(default)]
+    cursor_before: Option<String>,
+    #[serde(default)]
+    cursor_after: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -524,6 +532,22 @@ fn ime_command(json: &str) -> Result<(), String> {
                     );
                     return;
                 }
+                // Core owns the window budget and the envelope format; Kotlin only hands
+                // over the two sides of the caret. Metadata only in the log, never the text.
+                let cursor_context = openless_core::host_document::window_from_split(
+                    command.cursor_before.as_deref().unwrap_or_default(),
+                    command.cursor_after.as_deref().unwrap_or_default(),
+                    crate::host_document::DEFAULT_BUDGET_CHARS,
+                )
+                .map(|window| {
+                    log::info!(
+                        "[cursor-context] status=ok source=input_connection chars_before={} chars_after={} app={:?}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        command.front_app,
+                    );
+                    openless_core::prompts::cursor_context_input(window.before(), window.after())
+                });
                 let mut starting =
                     Box::pin(backend.start_dictation_with_options(DictationStartOptions {
                         insert_text: false,
@@ -532,6 +556,8 @@ fn ime_command(json: &str) -> Result<(), String> {
                         } else {
                             openless_core::DictationOutputTarget::ForegroundApp
                         },
+                        front_app: command.front_app.clone(),
+                        cursor_context,
                         ..Default::default()
                     }));
                 // The first poll reserves the Core session before any async preparation.
@@ -932,6 +958,41 @@ fn spawn_finalize_qa_from_overlay() {
     });
 }
 
+fn spawn_finalize_voice_edit_from_overlay() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.finalize_voice_edit_from_overlay().await {
+            log::warn!("[android-native] finalize voice edit failed: {error}");
+            // A failed capture leaves the original recording available for retry/cancel.
+            let recording = CORE_BACKEND.get().is_some_and(|backend| {
+                matches!(
+                    backend.snapshot().dictation.phase,
+                    openless_core::DictationPhase::Starting
+                        | openless_core::DictationPhase::Recording
+                )
+            });
+            #[cfg(target_os = "android")]
+            let _ = crate::android::jni::android::with_android_env(|env, context| {
+                crate::android::jni::android::notify_overlay_bridge(
+                    env,
+                    context,
+                    if recording { "recording" } else { "error" },
+                    recording.then_some("无法启动语音编辑，请确认已启用该功能并聚焦外部输入框"),
+                    0.0,
+                )?;
+                crate::android::jni::android::show_overlay_toast(
+                    env,
+                    context,
+                    "无法启动语音编辑，请确认已启用该功能并聚焦外部输入框",
+                )
+            });
+            let _ = recording;
+        }
+    });
+}
+
 fn capsule_state_name(state: CapsuleState) -> &'static str {
     match state {
         CapsuleState::Idle => "idle",
@@ -1232,6 +1293,14 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_finalize_qa_from_overlay();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeFinalizeVoiceEditFromOverlay(
+        _env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+    ) {
+        spawn_finalize_voice_edit_from_overlay();
     }
 
     // Registered from OpenLessRuntimeService.onCreate()/onDestroy() (a

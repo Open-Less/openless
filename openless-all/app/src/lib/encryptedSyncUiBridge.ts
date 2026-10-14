@@ -1,6 +1,6 @@
 // The main native window owns the device-local UI mirror. Every write shares
 // this queue and a native revision, including the initial consent preparation.
-import { invokeOrMock, isTauri } from './ipc/shared';
+import { invokeOrMock, isTauriNow } from './ipc/shared';
 import {
   getLocalePreference,
   setLocalePreference,
@@ -29,7 +29,7 @@ export async function flushEncryptedSyncUiPreferences(): Promise<void> {
 }
 
 export function installEncryptedSyncUiBridge(): Promise<void> {
-  if (!isTauri || new URLSearchParams(location.search).has('window')) return Promise.resolve();
+  if (!isTauriNow() || new URLSearchParams(location.search).has('window')) return Promise.resolve();
   return (installation ??= install());
 }
 

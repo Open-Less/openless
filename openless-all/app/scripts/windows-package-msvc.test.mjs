@@ -242,13 +242,13 @@ assert.match(
 );
 assert.match(
   imeTextService,
-  /WaitForSingleObject/,
-  'IME pipe submit should wait for async edit-session completion',
+  /async_edit_->completed/,
+  'IME submit queries should report async edit-session completion',
 );
 assert.match(
   imeEditSession,
-  /SetEvent/,
-  'IME edit session should signal async completion back to the pipe submitter',
+  /async_state_->completed = true/,
+  'IME edit session should record async completion for the submit query',
 );
 assert.match(
   imeEditSession,
@@ -443,7 +443,7 @@ assert.match(
 );
 assert.match(
   imeInstallSmoke,
-  /OpenLessImeSubmit/,
+  /OpenLessImeMessageWindow/,
   'install smoke should preserve TSF backend context',
 );
 assert.match(
@@ -463,13 +463,13 @@ assert.match(
 );
 assert.match(
   imeInstallSmoke,
-  /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/,
+  /LanguageProfile\\0x0000ffff\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/,
   'install smoke should check the TSF language profile',
 );
 assert.match(
   imeInstallSmoke,
-  /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/,
-  'install smoke should check the keyboard TSF category',
+  /Category\\Category\\\{B5A73CD1-8355-426B-A161-259808F26B14\}/,
+  'install smoke should check the speech TSF category',
 );
 assert.match(
   imeInstallSmoke,

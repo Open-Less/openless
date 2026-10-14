@@ -634,6 +634,12 @@ struct CredsRoot {
     metadata_revision: u64,
     #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server (an
+    /// alternative to GitHub OAuth). Isolated from `marketplace` on purpose:
+    /// it authenticates a different, optional server and must never be
+    /// confused with the GitHub identity used for account-change detection.
+    #[serde(default, skip_serializing_if = "CredsCloudSync::is_empty")]
+    cloud_sync: CredsCloudSync,
 }
 
 fn credsroot_default_version() -> u32 {
@@ -758,6 +764,29 @@ impl CredsMarketplace {
 struct MarketplaceGithubToken(String);
 
 impl std::fmt::Debug for MarketplaceGithubToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[allow(non_snake_case)]
+struct CredsCloudSync {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    customToken: Option<CloudSyncCustomToken>,
+}
+
+impl CredsCloudSync {
+    fn is_empty(&self) -> bool {
+        self.customToken.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
+struct CloudSyncCustomToken(String);
+
+impl std::fmt::Debug for CloudSyncCustomToken {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("[REDACTED]")
     }
@@ -955,6 +984,8 @@ struct CredsLlmEntry {
     maxTokens: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinkingBudget: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serviceTier: Option<String>,
 }
 
 impl CredsLlmEntry {
@@ -965,6 +996,7 @@ impl CredsLlmEntry {
             MESSAGES_THINKING_ACCOUNT => Ok(&mut self.messagesThinking),
             MAX_TOKENS_ACCOUNT => Ok(&mut self.maxTokens),
             THINKING_BUDGET_ACCOUNT => Ok(&mut self.thinkingBudget),
+            SERVICE_TIER_ACCOUNT => Ok(&mut self.serviceTier),
             _ => anyhow::bail!("unsupported LLM protocol option"),
         }
     }
@@ -990,6 +1022,7 @@ impl CredsLlmEntry {
             && self.messagesThinking.is_none()
             && self.maxTokens.is_none()
             && self.thinkingBudget.is_none()
+            && self.serviceTier.is_none()
             && self
                 .extraHeaders
                 .as_ref()
@@ -1694,6 +1727,25 @@ fn write_marketplace_github_token(root: &mut CredsRoot, value: Option<String>) {
             None
         } else {
             Some(MarketplaceGithubToken(token))
+        }
+    });
+}
+
+fn lookup_cloud_sync_custom_token(root: &CredsRoot) -> Option<String> {
+    root.cloud_sync
+        .customToken
+        .as_ref()
+        .map(|token| token.0.as_str())
+        .filter(|token| !token.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn write_cloud_sync_custom_token(root: &mut CredsRoot, value: Option<String>) {
+    root.cloud_sync.customToken = value.and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(CloudSyncCustomToken(token))
         }
     });
 }
@@ -3116,7 +3168,8 @@ fn export_sync_credentials_root(
         ));
         let mut values = accounts!(entry, "ark.api_key"=>apiKey, "ark.endpoint"=>baseURL, "ark.model_id"=>model,
             "ark.request_format"=>requestFormat, "ark.messages_thinking"=>messagesThinking,
-            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget);
+            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget,
+            "ark.service_tier"=>serviceTier);
         if let Some(value) = entry.temperature {
             values.insert("ark.temperature".into(), value.to_string());
         }
@@ -3385,6 +3438,7 @@ fn apply_sync_credentials_root(
                     "ark.messages_thinking",
                     "ark.max_tokens",
                     "ark.thinking_budget",
+                    "ark.service_tier",
                 ] {
                     if let Some(value) = values.get(key) {
                         protocol.apply(key, value)?;
@@ -3417,6 +3471,7 @@ fn apply_sync_credentials_root(
                         messagesThinking: value("ark.messages_thinking"),
                         maxTokens: value("ark.max_tokens"),
                         thinkingBudget: value("ark.thinking_budget"),
+                        serviceTier: value("ark.service_tier"),
                     },
                 );
                 if channel.active {
@@ -3685,6 +3740,34 @@ impl CredentialsVault {
             load_credentials_for_update,
             save_credentials,
         )
+    }
+
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server. Unlike
+    /// the GitHub token, this has no OAuth revocation/verification semantics
+    /// (no "rejected" tombstone) — it is a plain opaque secret, same tier as
+    /// an ASR/LLM API key.
+    pub fn get_cloud_sync_custom_token() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(lookup_cloud_sync_custom_token(
+            &load_credentials_for_update()?,
+        ))
+    }
+
+    pub fn set_cloud_sync_custom_token(value: &str) -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(
+                root,
+                (!value.trim().is_empty()).then(|| value.to_string()),
+            );
+            Ok(true)
+        })
+    }
+
+    pub fn remove_cloud_sync_custom_token() -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(root, None);
+            Ok(true)
+        })
     }
 
     #[cfg(test)]
@@ -4273,7 +4356,7 @@ mod tests {
         use openless_core::llm_protocol::*;
         let mut root = CredsRoot::default();
         let entry = root.providers.llm.entry("channel-b".into()).or_default();
-        let values = ["messages", "budget", "8192", "2048"];
+        let values = ["messages", "budget", "8192", "2048", "fast"];
         for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
             *entry.protocol_option(account).unwrap() = Some(value.into());
         }
@@ -5645,6 +5728,7 @@ mod encrypted_sync_tests {
                 messagesThinking: Some("adaptive".into()),
                 maxTokens: Some("4096".into()),
                 thinkingBudget: None,
+                serviceTier: Some("fast".into()),
             },
         );
         root.omni.active = "custom".into();

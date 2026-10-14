@@ -613,6 +613,20 @@
     "validationProbe": "asr_silence_allows_no_final"
   },
   {
+    "authRequirement": "api_key",
+    "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
+    "defaultModel": "gemini-3.5-transcribe",
+    "defaultRequestFormat": null,
+    "kind": "asr",
+    "labelKey": "asrGemini",
+    "providerType": "gemini",
+    "staticModels": [
+      "gemini-3.5-transcribe"
+    ],
+    "supportedRequestFormats": [],
+    "validationProbe": "asr_silence"
+  },
+  {
     "authRequirement": "none",
     "defaultEndpoint": null,
     "defaultModel": null,
