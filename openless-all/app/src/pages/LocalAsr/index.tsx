@@ -13,6 +13,8 @@ import { LocalModelMetadataCache } from '../../lib/localModelMetadataCache';
 import type { LocalAsrRemoteInfo, SherpaOnnxRemoteInfo } from '../../lib/localAsr';
 import { restartApp } from '../../lib/ipc/permissions';
 import { isTauri } from '../../lib/ipc';
+import { getCredentials } from '../../lib/ipc/asr-credentials';
+import type { CredentialsStatus } from '../../lib/types';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack } from '../../lib/useMobileLayout';
 import {
@@ -185,6 +187,46 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }));
   const stackLayout = useLayoutStack(1000);
   const { prefs, updatePrefs } = useHotkeySettings();
+  // The selected channel owns routing. Preferences only remember local model
+  // configuration and may still contain a legacy provider after switching away.
+  const [activeAsrProvider, setResolvedAsrProvider] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const refreshActive = async () => {
+      const requestedRevision = revision;
+      try {
+        const status = await getCredentials();
+        if (!cancelled && requestedRevision === revision) {
+          setResolvedAsrProvider(status.activeAsrProvider);
+        }
+      } catch {
+        if (!cancelled && requestedRevision === revision) setResolvedAsrProvider(null);
+      }
+    };
+    void (async () => {
+      if (isTauri) {
+        const { listen } = await import('@tauri-apps/api/event');
+        const off = await listen<CredentialsStatus>('credentials:changed', ({ payload }) => {
+          revision += 1;
+          if (!cancelled) setResolvedAsrProvider(payload.activeAsrProvider);
+        });
+        if (cancelled) {
+          off();
+          return;
+        }
+        unlisten = off;
+      }
+      await refreshActive();
+    })().catch(() => {
+      if (!cancelled) setResolvedAsrProvider(null);
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   // Wait for the native capability query so Intel Macs never flash the MLX channel first.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
@@ -1458,7 +1500,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   // the built-in audio test, so Qwen3 and Whisper can be compared for load/transcribe latency on one page.
   const handleTest = async (
     modelId: string,
-    provider: 'local-qwen3-mlx' | 'local-qwen3-c' | 'local-whisper' = prefs?.activeAsrProvider ===
+    provider: 'local-qwen3-mlx' | 'local-qwen3-c' | 'local-whisper' = activeAsrProvider ===
     'local-qwen3-c'
       ? 'local-qwen3-c'
       : supportsQwen3Mlx
@@ -1515,7 +1557,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const foundryAvailable =
     foundryStatus?.available === true ||
     (foundryPlatformAvailable && foundryStatus?.available !== false);
-  const foundryDefault = prefs?.activeAsrProvider === 'foundry-local-whisper';
+  const foundryDefault = activeAsrProvider === 'foundry-local-whisper';
   const selectedFoundryModel =
     FOUNDRY_LOCAL_ASR_MODELS.find((model) => model.alias === selectedFoundryAlias) ??
     FOUNDRY_LOCAL_ASR_MODELS[0];
@@ -1548,7 +1590,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const sherpaAvailable =
     sherpaStatus?.available === true ||
     (foundryPlatformAvailable && sherpaStatus?.available !== false);
-  const sherpaDefault = prefs?.activeAsrProvider === 'sherpa-onnx-local';
+  const sherpaDefault = activeAsrProvider === 'sherpa-onnx-local';
   const selectedSherpaModel =
     SHERPA_ONNX_ASR_MODELS.find((model) => model.alias === selectedSherpaAlias) ??
     SHERPA_ONNX_ASR_MODELS[0];
@@ -1701,9 +1743,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         isActive:
           settings?.activeModel === m.id &&
           (isWhisper
-            ? prefs?.activeAsrProvider === 'local-whisper'
+            ? activeAsrProvider === 'local-whisper'
             : ['local-qwen3', 'local-qwen3-mlx', 'local-qwen3-c'].includes(
-                prefs?.activeAsrProvider ?? '',
+                activeAsrProvider ?? '',
               )),
         engine: isWhisper ? 'whisper' : 'qwen3',
         runtimeLabel: isWhisper
@@ -1741,7 +1783,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             : null
           : null,
         isActive:
-          sherpaStatus?.activeModel === c.alias && prefs?.activeAsrProvider === 'sherpa-onnx-local',
+          sherpaStatus?.activeModel === c.alias && activeAsrProvider === 'sherpa-onnx-local',
         engine: 'sherpa',
         runtimeLabel: 'Windows · sherpa-onnx',
         downloadError:
@@ -1768,8 +1810,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         isDownloading,
         percent: isDownloading && foundryProgress?.percent != null ? foundryProgress.percent : null,
         isActive:
-          foundryStatus?.activeModel === c.alias &&
-          prefs?.activeAsrProvider === 'foundry-local-whisper',
+          foundryStatus?.activeModel === c.alias && activeAsrProvider === 'foundry-local-whisper',
         engine: 'foundry',
         runtimeLabel: 'Windows · Foundry Local',
       });
@@ -1781,7 +1822,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     remoteSizes,
     progress,
     settings?.activeModel,
-    prefs?.activeAsrProvider,
+    activeAsrProvider,
     sherpaCatalog,
     sherpaRemoteSizes,
     sherpaDownloadProgress,

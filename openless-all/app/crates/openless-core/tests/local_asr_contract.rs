@@ -1405,19 +1405,31 @@ async fn failed_activation_restores_the_channel_selected_during_native_preparati
         })
         .await
         .unwrap();
+    let ChannelMutationResult::Created(cloud_id) = credentials
+        .mutate_channel(ChannelMutation::Create {
+            kind: ChannelKind::Asr,
+            provider_type: "openai-compatible".into(),
+            name: "Cloud channel selected during preparation".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected cloud channel")
+    };
+    let expected_cloud_id = cloud_id.clone();
     let backend = Arc::new(backend);
     let weak = Arc::downgrade(&backend);
     *runtime.during_prepare.lock().unwrap() = Some(Box::new(move || {
         // The in-memory store completes synchronously. This models the user
         // choosing C while preparation for B is still awaiting native work.
         credentials
-            .set_active_provider(ProviderSlot::Asr, "openai-compatible".into())
+            .set_active_provider(ProviderSlot::Asr, cloud_id.clone())
             .now_or_never()
             .unwrap()
             .unwrap();
         let backend = weak.upgrade().unwrap();
         let mut next = backend.get_preferences();
-        next.active_asr_provider = "openai-compatible".into();
+        next.active_asr_provider = cloud_id.clone();
         backend
             .update_settings(
                 next,
@@ -1438,11 +1450,11 @@ async fn failed_activation_restores_the_channel_selected_during_native_preparati
         .is_err());
     assert_eq!(
         backend.get_preferences().active_asr_provider,
-        "openai-compatible"
+        expected_cloud_id
     );
     assert_eq!(
         backend.active_provider(ProviderSlot::Asr).await.unwrap(),
-        "openai-compatible"
+        expected_cloud_id
     );
     let _ = std::fs::remove_dir_all(data_dir);
 }
