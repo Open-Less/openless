@@ -31,6 +31,7 @@ import {
   visibleAdvancedPages,
   type AdvancedPageId,
   type SettingsSectionId,
+  type ServiceViewId,
 } from '../pages/settings/navigation';
 import { ChannelEditorHostContext } from '../pages/settings/ChannelEditorHostContext';
 import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
@@ -42,6 +43,7 @@ interface SettingsModalProps {
   os: OS;
   onClose: () => void;
   initialSettingsSection?: SettingsSectionId;
+  initialServiceView?: ServiceViewId;
   /** Keeps the closing surface mounted until its exit finishes. */
   closing?: boolean;
 }
@@ -55,6 +57,7 @@ export function SettingsModal({
   os,
   onClose,
   initialSettingsSection,
+  initialServiceView,
   closing = false,
 }: SettingsModalProps) {
   const { t, i18n } = useTranslation();
@@ -693,7 +696,7 @@ export function SettingsModal({
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}
-                      {section === 'services' && <ServicesTab />}
+                      {section === 'services' && <ServicesTab initialView={initialServiceView} />}
                       {section === 'privacy' && <PrivacyTab />}
                       {section === 'advanced' && (
                         <AdvancedTab

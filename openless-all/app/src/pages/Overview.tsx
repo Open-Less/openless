@@ -9,6 +9,7 @@ import {
   listHistory,
   listProviderDescriptors,
   readCredential,
+  type ProviderKind,
 } from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
@@ -46,7 +47,7 @@ function useModeLabels(): Record<PolishMode, string> {
 
 interface OverviewProps {
   onOpenHistory?: () => void;
-  onOpenSettings?: (section: 'general' | 'services' | 'privacy' | 'shortcuts') => void;
+  onOpenSettings?: (section: OverviewSettingsSection, serviceView?: ProviderKind) => void;
 }
 
 // id → i18n nameKey; this keeps display labels only, provider behavior comes from the Core descriptor.
@@ -281,7 +282,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hotkeyAvailable: prefs && capability ? capability.adapter !== 'unavailable' : null,
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
-  const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
   const providerName = (provider: (typeof setup.providers)[number]) => {
     const nameKey =
       provider.id &&
@@ -336,7 +336,9 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
             providerId={provider.id}
             details={serviceDetails[provider.kind]}
             status={provider.configured ? 'configured' : 'notConfigured'}
-            onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
+            onConfigure={
+              onOpenSettings ? () => onOpenSettings('services', provider.kind) : undefined
+            }
           />
         ))}
         {setup.providers.length === 0 && (
