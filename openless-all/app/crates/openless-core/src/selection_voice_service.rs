@@ -16,7 +16,7 @@ use crate::domains::{
     SelectionVoiceEditPreviewResult, SelectionVoiceEditRequest, SelectionVoiceHotkeyAction,
     SelectionVoiceHotkeyEdge, SelectionVoiceInstructionRequest, SelectionVoiceIntentPrompt,
     SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate, SelectionVoiceRoute,
-    SelectionVoiceSnapshot,
+    SelectionVoiceSnapshot, VoiceEditPlanRequest, VoiceEditPlanResult,
 };
 use crate::edit_plan::{apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -501,6 +501,17 @@ impl SelectionVoiceWorkflow {
         draft: &str,
         instruction: &str,
     ) -> Result<EditPlan, BackendError> {
+        self.generate_edit_plan_with_context(session_id, "", draft, instruction)
+            .await
+    }
+
+    async fn generate_edit_plan_with_context(
+        &self,
+        session_id: SessionId,
+        field_context: &str,
+        draft: &str,
+        instruction: &str,
+    ) -> Result<EditPlan, BackendError> {
         let preferences = self.preferences.get();
         if selection_voice_instruction_looks_like_translation(instruction) {
             let target = infer_selection_voice_translation_target(instruction, &preferences);
@@ -511,11 +522,13 @@ impl SelectionVoiceWorkflow {
             }
         }
 
+        let safe_field_context =
+            crate::prompts::sanitize_for_xml_envelope(field_context, "field_context");
         let safe_draft = crate::prompts::sanitize_for_xml_envelope(draft, "draft");
         let safe_instruction =
             crate::prompts::sanitize_for_xml_envelope(instruction, "instruction");
         let input = format!(
-            "<field_context></field_context>\n<draft>\n{safe_draft}\n</draft>\n\n<instruction>\n{safe_instruction}\n</instruction>"
+            "<field_context>\n{safe_field_context}\n</field_context>\n<draft>\n{safe_draft}\n</draft>\n\n<instruction>\n{safe_instruction}\n</instruction>"
         );
         let pack_prompt = self
             .style_packs
@@ -1339,6 +1352,67 @@ impl SelectionVoiceApi for SelectionVoiceService {
             Ok(SelectionVoiceEditPreviewResult {
                 preview,
                 replaced_existing: false,
+            })
+        })
+    }
+
+    fn voice_edit_plan(
+        &self,
+        request: VoiceEditPlanRequest,
+    ) -> BoxFuture<'static, Result<VoiceEditPlanResult, BackendError>> {
+        let service = self.clone();
+        Box::pin(async move {
+            let _runtime = service.begin_runtime_work()?;
+            let raw = request.instruction_raw.trim();
+            let supplied_polished = request.instruction_polished.trim();
+            if request.draft.trim().is_empty() {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "voice edit draft must not be empty",
+                ));
+            }
+            if raw.is_empty() && supplied_polished.is_empty() {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "voice edit instruction must not be empty",
+                ));
+            }
+            let corrected = if raw.is_empty() {
+                supplied_polished.to_string()
+            } else {
+                service.workflow.corrected_instruction(raw)?
+            };
+            let preferences = service.workflow.preferences.get();
+            let polished = if supplied_polished.is_empty() {
+                service
+                    .workflow
+                    .polish_instruction(request.session_id, &preferences, corrected)
+                    .await?
+            } else {
+                supplied_polished.to_string()
+            };
+            let plan = service
+                .workflow
+                .generate_edit_plan_with_context(
+                    request.session_id,
+                    &request.field_context,
+                    &request.draft,
+                    &polished,
+                )
+                .await?;
+            let preview = apply_edit_plan(&request.draft, &plan).map_err(|error| {
+                BackendError::new(BackendErrorCode::Provider, error.to_string())
+            })?;
+            if preview.trim().is_empty() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "voice edit plan produced an empty preview",
+                ));
+            }
+            Ok(VoiceEditPlanResult {
+                instruction_polished: polished,
+                plan,
+                preview,
             })
         })
     }

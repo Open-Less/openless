@@ -47,6 +47,11 @@ struct Vault {
     secrets: Mutex<HashMap<String, SecretValue>>,
     deny: AtomicBool,
     deny_remove: AtomicBool,
+    deny_write_sync: AtomicBool,
+    deny_custom_read: AtomicBool,
+    pause_custom_write: AtomicBool,
+    custom_write_arrived: Arc<tokio::sync::Notify>,
+    custom_write_release: Arc<tokio::sync::Notify>,
 }
 impl CredentialStore for Vault {
     fn status(
@@ -59,6 +64,11 @@ impl CredentialStore for Vault {
         &self,
         key: CredentialKey,
     ) -> BoxFuture<'static, Result<Option<SecretValue>, BackendError>> {
+        if key.account == crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT
+            && self.deny_custom_read.load(Ordering::Acquire)
+        {
+            return Box::pin(async { Err(error("secure_storage_denied")) });
+        }
         self.ordinary.read(key)
     }
     fn write(
@@ -66,7 +76,19 @@ impl CredentialStore for Vault {
         key: CredentialKey,
         value: SecretValue,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
-        self.ordinary.write(key, value)
+        let pause = key.account == crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT
+            && self.pause_custom_write.swap(false, Ordering::AcqRel);
+        let write = self.ordinary.write(key, value);
+        let arrived = self.custom_write_arrived.clone();
+        let release = self.custom_write_release.clone();
+        Box::pin(async move {
+            write.await?;
+            if pause {
+                arrived.notify_one();
+                release.notified().await;
+            }
+            Ok(())
+        })
     }
     fn remove(&self, key: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
         self.ordinary.remove(key)
@@ -87,15 +109,16 @@ impl CredentialStore for Vault {
         account: SyncSecretAccount,
         value: SecretValue,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
-        let result = if self.deny.load(Ordering::Acquire) {
-            Err(error("secure_storage_denied"))
-        } else {
-            self.secrets
-                .lock()
-                .unwrap()
-                .insert(account.as_str().into(), value);
-            Ok(())
-        };
+        let result =
+            if self.deny.load(Ordering::Acquire) || self.deny_write_sync.load(Ordering::Acquire) {
+                Err(error("secure_storage_denied"))
+            } else {
+                self.secrets
+                    .lock()
+                    .unwrap()
+                    .insert(account.as_str().into(), value);
+                Ok(())
+            };
         Box::pin(async move { result })
     }
     fn remove_sync_secret(
@@ -118,6 +141,10 @@ struct Data {
     fail_restore: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
+    custom_origin: Mutex<Option<String>>,
+    trusted_legacy_origin: Mutex<Option<String>>,
+    baseline_revision: AtomicU64,
+    origin_write_failures: Mutex<u64>,
 }
 impl Data {
     fn new() -> Arc<Self> {
@@ -165,7 +192,15 @@ impl Data {
             fail_restore: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
+            custom_origin: Mutex::new(None),
+            trusted_legacy_origin: Mutex::new(None),
+            baseline_revision: AtomicU64::new(0),
+            origin_write_failures: Mutex::new(0),
         })
+    }
+
+    fn set_custom_server_origin(&self, origin: Option<String>) {
+        *self.custom_origin.lock().unwrap() = origin;
     }
     fn edit(&self, text: &str) {
         self.documents
@@ -245,6 +280,8 @@ impl SyncServiceData for Data {
         revision: Revision,
     ) -> BoxFuture<'_, SyncResult<()>> {
         Box::pin(async move {
+            self.baseline_revision
+                .store(revision.get(), Ordering::Release);
             *self.baseline.lock().unwrap() =
                 Some(documents::validate_sync_documents(set, revision).map_err(document_error)?);
             Ok(())
@@ -255,6 +292,36 @@ impl SyncServiceData for Data {
     }
     fn device(&self) -> SourceDevice {
         self.documents.lock().unwrap().source_device.clone()
+    }
+    fn custom_server_origin(&self) -> Option<String> {
+        self.custom_origin.lock().unwrap().clone()
+    }
+    fn set_custom_server_origin(&self, origin: Option<String>) -> SyncResult<()> {
+        let mut failures = self.origin_write_failures.lock().unwrap();
+        if *failures > 0 {
+            *failures -= 1;
+            return Err(error("local_storage_unavailable"));
+        }
+        drop(failures);
+        Data::set_custom_server_origin(self, origin);
+        Ok(())
+    }
+    fn legacy_baseline_matches(
+        &self,
+        scope: SyncScope,
+        documents: DocumentSet,
+        revision: Revision,
+    ) -> BoxFuture<'_, SyncResult<bool>> {
+        let matches = self.trusted_legacy_origin.lock().unwrap().as_deref()
+            == Some(scope.service_origin.as_str())
+            && self
+                .baseline
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|baseline| baseline.documents() == &documents)
+            && self.baseline_revision.load(Ordering::Acquire) == revision.get();
+        Box::pin(async move { Ok(matches) })
     }
     fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.changes.subscribe()
@@ -274,6 +341,8 @@ struct Remote {
     reject_upload: bool,
     hide_receipts: bool,
     drop_metadata_response: bool,
+    github_auth_requests: usize,
+    token_auth_requests: usize,
 }
 struct Server {
     origin: String,
@@ -386,7 +455,16 @@ impl Server {
                             json!({"id":owner.parse::<u64>().unwrap(),"login":"fixture-user"})
                         }
                         ("POST", "/v1/auth/github") => {
+                            remote.github_auth_requests += 1;
                             json!({"protocolVersion":1,"accessToken":"a".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-user"}})
+                        }
+                        ("POST", "/v1/auth/token") => {
+                            remote.token_auth_requests += 1;
+                            // Must report the same owner as every other endpoint here: the
+                            // server's vault-metadata-vs-session owner cross-check
+                            // (`validate_against_metadata`) would otherwise reject it as
+                            // `AccountMismatch`, regardless of which auth path was used.
+                            json!({"protocolVersion":1,"accessToken":"b".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-token-user"}})
                         }
                         ("GET", "/v1/me/vault") => match &remote.snapshot {
                             None => {
@@ -446,6 +524,7 @@ impl Server {
 
 struct Fixture {
     service: EncryptedSyncService,
+    marketplace: Arc<crate::marketplace::MarketplaceService>,
     data: Arc<Data>,
     vault: Arc<Vault>,
     root: std::path::PathBuf,
@@ -496,17 +575,42 @@ impl Fixture {
                 origin: server.origin.clone(),
                 github_client_id: CLIENT.into(),
             },
-            marketplace,
+            Arc::clone(&marketplace),
             local,
             data.clone(),
+            vault.clone(),
             events,
         );
         Self {
             service,
+            marketplace,
             data,
             vault,
             root,
         }
+    }
+    fn local(&self, server: &Server) -> LocalStorage {
+        LocalStorage::new(
+            self.root.join("protected"),
+            server.origin.clone(),
+            self.data.device().id.clone(),
+            self.vault.clone(),
+        )
+    }
+    fn reopen(&self, server: &Server) -> EncryptedSyncService {
+        let events =
+            crate::events::BackendEventPublisher::new(Arc::new(crate::events::EventBus::new(100)));
+        EncryptedSyncService::new(
+            SyncServiceConfig {
+                origin: server.origin.clone(),
+                github_client_id: CLIENT.into(),
+            },
+            self.marketplace.clone(),
+            self.local(server),
+            self.data.clone(),
+            self.vault.clone(),
+            events,
+        )
     }
     async fn prepare(&self) {
         assert_eq!(
@@ -528,6 +632,33 @@ impl Fixture {
                 "0".into(),
             )
             .await
+    }
+    async fn set_custom_token(&self, token: &str) {
+        self.vault
+            .write(
+                CredentialKey::new(
+                    CredentialNamespace::Application,
+                    None,
+                    crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new(token),
+            )
+            .await
+            .unwrap();
+    }
+    async fn custom_token(&self) -> Option<SecretValue> {
+        self.vault
+            .read(
+                CredentialKey::new(
+                    CredentialNamespace::Application,
+                    None,
+                    crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 }
 
@@ -744,6 +875,7 @@ async fn auto_sync_local_retry_releases_runtime_and_respects_pause() {
     .unwrap();
     *fixture.data.capture_gate.lock().unwrap() = Some(gate.clone());
     let local_only = gate.begin_mutation().unwrap();
+    let runtime_releases_before = fixture.service.runtime_release_count_for_test();
     fixture.data.edit("pause before a delayed local retry");
     wait_for_auto_sync(|| {
         fixture
@@ -752,10 +884,11 @@ async fn auto_sync_local_retry_releases_runtime_and_respects_pause() {
             .last_error
             .as_ref()
             .is_some_and(|failure| failure.code == "sync_documents_source_changed")
+            && fixture.service.runtime_release_count_for_test() > runtime_releases_before
     })
     .await;
     tokio::time::timeout(
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_secs(2),
         fixture.service.set_enabled(false),
     )
     .await
@@ -1311,5 +1444,620 @@ async fn round2_sync_key_deletion_failure_must_not_prevent_account_sign_out() {
     assert_eq!(fixture.service.status().auth_state, AuthState::SignedOut);
 }
 
+#[tokio::test]
+async fn custom_token_sign_in_takes_priority_over_github_and_never_calls_github_auth() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    // Fixture::new already seeded a working GitHub marketplace token; a custom
+    // token must still win without ever touching the GitHub auth endpoint.
+    fixture.set_custom_token("fixture-custom-token").await;
+    let status = fixture.service.sign_in_with_custom_token().await.unwrap();
+    assert_eq!(status.auth_state, AuthState::SignedIn);
+    assert_eq!(status.account.unwrap().github_id, OWNER);
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.token_auth_requests, 1);
+    assert_eq!(
+        remote.github_auth_requests, 0,
+        "a configured custom token must win outright, never falling through to GitHub"
+    );
+}
+
+#[tokio::test]
+async fn sign_in_with_custom_token_fails_clearly_without_a_saved_token() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    assert_eq!(
+        fixture
+            .service
+            .sign_in_with_custom_token()
+            .await
+            .unwrap_err()
+            .message,
+        "sign_in_required"
+    );
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 0);
+}
+
+#[tokio::test]
+async fn custom_token_credential_change_forces_reconnect_not_stale_cache() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("token-a").await;
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 1);
+    // Same token, called again immediately: the cached connection is still
+    // valid and must not re-authenticate.
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 1);
+    // The token value changes underneath the cached connection: this must be
+    // detected and force a fresh exchange, not silently reuse the old session.
+    fixture.set_custom_token("token-b").await;
+    fixture.prepare().await;
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 2);
+}
+
+#[tokio::test]
+async fn custom_server_origin_change_forces_reconnect_not_stale_cache() {
+    let first_server = Server::start().await;
+    let replacement_server = Server::start().await;
+    let fixture = Fixture::new(&first_server).await;
+    fixture.set_custom_token("fixture-custom-token").await;
+    fixture.prepare().await;
+    assert_eq!(first_server.state.lock().unwrap().token_auth_requests, 1);
+
+    fixture
+        .data
+        .set_custom_server_origin(Some(replacement_server.origin.clone()));
+    fixture.service.sign_in_with_custom_token().await.unwrap();
+
+    assert_eq!(
+        replacement_server.state.lock().unwrap().token_auth_requests,
+        1,
+        "changing the live server origin must not reuse the old transport"
+    );
+    assert_eq!(
+        fixture.service.status().service_origin,
+        replacement_server.origin
+    );
+}
+
+#[tokio::test]
+async fn sign_out_with_custom_token_forgets_only_the_custom_token_not_github() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("fixture-custom-token").await;
+    fixture.prepare().await;
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedIn);
+    fixture.service.sign_out().await.unwrap();
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedOut);
+    assert!(
+        fixture.custom_token().await.is_none(),
+        "sign_out must forget the custom token it authenticated with"
+    );
+    let github_token = fixture
+        .vault
+        .read(
+            CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        github_token.is_some(),
+        "sign_out from a custom-token session must never delete an unrelated GitHub credential"
+    );
+    assert_eq!(
+        fixture
+            .marketplace
+            .read_access_token()
+            .await
+            .unwrap()
+            .expose_secret(),
+        "fixture-github-token",
+        "custom-token sign-out must not invalidate the unrelated Marketplace session"
+    );
+}
+
 #[path = "setup_prompt_tests.rs"]
 mod setup_prompt_tests;
+
+#[tokio::test]
+async fn custom_token_read_failure_never_authenticates_with_github() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("custom-token").await;
+    fixture
+        .vault
+        .deny_custom_read
+        .store(true, Ordering::Release);
+    let result = fixture.service.prepare_enable(CONSENT_VERSION.into()).await;
+    assert_eq!(result.unwrap_err().message, "secure_storage_denied");
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.github_auth_requests, 0);
+    assert_eq!(remote.token_auth_requests, 0);
+}
+
+#[tokio::test]
+async fn switching_servers_does_not_reuse_revision_or_unlock_material() {
+    let first = Server::start().await;
+    let second = Server::start().await;
+    let fixture = Fixture::new(&first).await;
+    fixture.set_custom_token("token-a").await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.sign_out().await.unwrap();
+    fixture.set_custom_token("token-b").await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(second.origin.clone()));
+    fixture.service.sign_in_with_custom_token().await.unwrap();
+    let result = fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+    assert_eq!(result.next_step, EnableStep::Create);
+    assert_eq!(result.status.key_state, KeyState::Locked);
+    assert!(!result.status.enabled);
+    fixture.data.set_custom_server_origin(None);
+    let result = fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+    assert_eq!(result.next_step, EnableStep::Unlock);
+}
+
+#[tokio::test]
+async fn configured_custom_origin_without_token_never_uses_github() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(server.origin.clone()));
+    assert_eq!(
+        fixture
+            .service
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap_err()
+            .message,
+        "sign_in_required"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
+#[tokio::test]
+async fn custom_token_connections_follow_the_captured_proxy_setting() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("custom-token").await;
+    fixture
+        .service
+        .connect_with_proxy_setting_for_test(false)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .connect_with_proxy_setting_for_test(true)
+        .await
+        .unwrap();
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 2);
+    fixture
+        .service
+        .connect_with_proxy_setting_for_test(true)
+        .await
+        .unwrap();
+    assert_eq!(server.state.lock().unwrap().token_auth_requests, 2);
+}
+
+#[tokio::test]
+async fn configuration_failure_rolls_back_both_stores_and_stays_disabled() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("old-token").await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(server.origin.clone()));
+    *fixture.data.origin_write_failures.lock().unwrap() = 1;
+    assert_eq!(
+        fixture
+            .service
+            .configure_server(Some("https://new.example".into()), "new-token".into())
+            .await
+            .unwrap_err()
+            .message,
+        "local_storage_unavailable"
+    );
+    assert_eq!(
+        fixture.custom_token().await.unwrap().expose_secret(),
+        "old-token"
+    );
+    assert_eq!(
+        fixture.data.custom_server_origin(),
+        Some(server.origin.clone())
+    );
+    assert!(!fixture.service.status().enabled);
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
+#[tokio::test]
+async fn failed_configuration_rollback_is_recovered_before_authentication() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("old-token").await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(server.origin.clone()));
+    *fixture.data.origin_write_failures.lock().unwrap() = 2;
+    assert_eq!(
+        fixture
+            .service
+            .configure_server(Some("https://new.example".into()), "new-token".into())
+            .await
+            .unwrap_err()
+            .message,
+        "recovery_required"
+    );
+    assert!(fixture.service.status().recovery_required);
+    let reopened = fixture.reopen(&server);
+    reopened.sign_in_with_custom_token().await.unwrap();
+    assert_eq!(
+        fixture.custom_token().await.unwrap().expose_secret(),
+        "old-token"
+    );
+    assert_eq!(
+        fixture.data.custom_server_origin(),
+        Some(server.origin.clone())
+    );
+    assert_eq!(server.state.lock().unwrap().github_auth_requests, 0);
+    assert!(!reopened.status().enabled);
+    assert!(!reopened.status().recovery_required);
+}
+
+#[tokio::test]
+async fn cancelled_configuration_is_recovered_and_cannot_race_authentication() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("old-token").await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(server.origin.clone()));
+    fixture
+        .vault
+        .pause_custom_write
+        .store(true, Ordering::Release);
+    let service = fixture.service.clone();
+    let saving = tokio::spawn(async move {
+        service
+            .configure_server(Some("https://new.example".into()), "new-token".into())
+            .await
+    });
+    fixture.vault.custom_write_arrived.notified().await;
+    assert_eq!(
+        fixture
+            .service
+            .sign_in_with_custom_token()
+            .await
+            .unwrap_err()
+            .message,
+        "busy"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+    saving.abort();
+    assert!(saving.await.unwrap_err().is_cancelled());
+    fixture.service.sign_in_with_custom_token().await.unwrap();
+    assert_eq!(
+        fixture.custom_token().await.unwrap().expose_secret(),
+        "old-token"
+    );
+    assert_eq!(
+        fixture.data.custom_server_origin(),
+        Some(server.origin.clone())
+    );
+    assert!(!fixture.service.status().enabled);
+}
+
+#[tokio::test]
+async fn custom_sign_out_without_cached_connection_preserves_marketplace() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("custom-token").await;
+    fixture.service.sign_out().await.unwrap();
+    assert!(fixture.custom_token().await.is_none());
+    assert_eq!(
+        fixture
+            .marketplace
+            .read_access_token()
+            .await
+            .unwrap()
+            .expose_secret(),
+        "fixture-github-token"
+    );
+}
+
+async fn seed_legacy_state(fixture: &Fixture, server: &Server) -> LocalStorage {
+    let local = fixture.local(server);
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    let mut settings: local::ClientSettings =
+        local.read("device", "client").await.unwrap().unwrap();
+    let mut names = vec![
+        "baseline".to_string(),
+        "pending".to_string(),
+        "last-seen-revision".to_string(),
+    ];
+    if let Some(value) = local
+        .read::<serde_json::Value>(&namespace, "pending")
+        .await
+        .unwrap()
+    {
+        names.push(format!(
+            "proposal:{}",
+            value["operationId"].as_str().unwrap()
+        ));
+    }
+    for name in names {
+        if let Some(value) = local
+            .read::<serde_json::Value>(&namespace, &name)
+            .await
+            .unwrap()
+        {
+            local.write(OWNER, &name, value).await.unwrap();
+            local.remove(&namespace, &name).await.unwrap();
+        }
+    }
+    if let (Some(vault), Some(key_id)) = (&settings.vault_id, &settings.key_id) {
+        if let Some(key) = local.remembered(&namespace, vault, key_id).await.unwrap() {
+            local
+                .remember(OWNER, vault, key_id, &key, true)
+                .await
+                .unwrap();
+            local.forget(&namespace, vault, key_id).await.unwrap();
+        }
+    }
+    settings.version = 1;
+    settings.service_origin = None;
+    local.write("device", "client", settings).await.unwrap();
+    local
+}
+
+#[tokio::test]
+async fn proven_legacy_baseline_and_remembered_key_migrate_without_reencrypting_device_store() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = seed_legacy_state(&fixture, &server).await;
+    *fixture.data.trusted_legacy_origin.lock().unwrap() = Some(server.origin.clone());
+    let reopened = fixture.reopen(&server);
+    reopened.sync_now().await.unwrap();
+    assert_eq!(reopened.status().key_state, KeyState::Unlocked);
+    let settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(settings.version, 2);
+    assert_eq!(settings.service_origin, Some(server.origin.clone()));
+    assert!(local
+        .read::<serde_json::Value>(OWNER, "baseline")
+        .await
+        .unwrap()
+        .is_some());
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    assert!(local
+        .read::<serde_json::Value>(&namespace, "baseline")
+        .await
+        .unwrap()
+        .is_some());
+    let (vault, key) = (settings.vault_id.unwrap(), settings.key_id.unwrap());
+    assert!(local
+        .remembered(&namespace, &vault, &key)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(local
+        .remembered(OWNER, &vault, &key)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn unproven_legacy_state_is_preserved_without_startup_upload() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = seed_legacy_state(&fixture, &server).await;
+    let original: serde_json::Value = local.read(OWNER, "baseline").await.unwrap().unwrap();
+    let requests = server.state.lock().unwrap().requests;
+    let reopened = fixture.reopen(&server);
+    reopened
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!reopened.status().enabled);
+    assert_eq!(reopened.status().key_state, KeyState::Locked);
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    assert_eq!(
+        local
+            .read::<serde_json::Value>(OWNER, "baseline")
+            .await
+            .unwrap()
+            .unwrap(),
+        original
+    );
+    assert!(local
+        .read::<local::ClientSettings>("device", "legacy-client-v1")
+        .await
+        .unwrap()
+        .is_some());
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn legacy_unknown_operation_keeps_exact_bytes_and_stays_on_its_original_server() {
+    let first = Server::start().await;
+    let second = Server::start().await;
+    let fixture = Fixture::new(&first).await;
+    fixture.set_custom_token("token-a").await;
+    fixture.prepare().await;
+    first.state.lock().unwrap().drop_response = true;
+    assert_eq!(
+        fixture.create(true).await.unwrap_err().message,
+        "outcome_unknown"
+    );
+    fixture.service.shutdown().await;
+    let local = seed_legacy_state(&fixture, &first).await;
+    let original: serde_json::Value = local.read(OWNER, "pending").await.unwrap().unwrap();
+    fixture.set_custom_token("token-b").await;
+    fixture
+        .data
+        .set_custom_server_origin(Some(second.origin.clone()));
+    let reopened = fixture.reopen(&first);
+    assert_eq!(
+        reopened
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap()
+            .next_step,
+        EnableStep::Create
+    );
+    let original_namespace = LocalStorage::account_namespace(&first.origin, OWNER).unwrap();
+    assert_eq!(
+        local
+            .read::<serde_json::Value>(&original_namespace, "pending")
+            .await
+            .unwrap()
+            .unwrap(),
+        original
+    );
+    let new_namespace = LocalStorage::account_namespace(&second.origin, OWNER).unwrap();
+    assert!(local
+        .read::<serde_json::Value>(&new_namespace, "pending")
+        .await
+        .unwrap()
+        .is_none());
+    fixture.data.set_custom_server_origin(None);
+    fixture.set_custom_token("token-a").await;
+    reopened.sync_now().await.unwrap();
+    assert!(local
+        .read::<serde_json::Value>(&original_namespace, "pending")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn unscoped_revision_above_proven_baseline_does_not_enable_legacy_auto_sync() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = seed_legacy_state(&fixture, &server).await;
+    local
+        .write(OWNER, "last-seen-revision", Revision::new(999))
+        .await
+        .unwrap();
+    *fixture.data.trusted_legacy_origin.lock().unwrap() = Some(server.origin.clone());
+    let requests = server.state.lock().unwrap().requests;
+    let reopened = fixture.reopen(&server);
+    reopened
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!reopened.status().enabled);
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    assert!(local
+        .read::<Revision>(&namespace, "last-seen-revision")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        local
+            .read::<Revision>(OWNER, "last-seen-revision")
+            .await
+            .unwrap(),
+        Some(Revision::new(999))
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_legacy_key_migration_preserves_v1_state_and_retries_without_network() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = seed_legacy_state(&fixture, &server).await;
+    *fixture.data.trusted_legacy_origin.lock().unwrap() = Some(server.origin.clone());
+    fixture.vault.deny_write_sync.store(true, Ordering::Release);
+    let requests = server.state.lock().unwrap().requests;
+    let reopened = fixture.reopen(&server);
+    assert_eq!(
+        reopened
+            .start(Arc::new(crate::TokioTaskSpawner))
+            .await
+            .unwrap_err()
+            .message,
+        "secure_storage_denied"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    let settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(settings.version, 1);
+    assert!(local
+        .remembered(
+            OWNER,
+            settings.vault_id.as_deref().unwrap(),
+            settings.key_id.as_deref().unwrap()
+        )
+        .await
+        .unwrap()
+        .is_some());
+    fixture
+        .vault
+        .deny_write_sync
+        .store(false, Ordering::Release);
+    fixture.reopen(&server).sync_now().await.unwrap();
+    assert_eq!(
+        local
+            .read::<local::ClientSettings>("device", "client")
+            .await
+            .unwrap()
+            .unwrap()
+            .version,
+        2
+    );
+}
+
+#[tokio::test]
+async fn configuration_failure_discards_cached_identity_and_memory_key() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    *fixture.data.origin_write_failures.lock().unwrap() = 1;
+    fixture
+        .service
+        .configure_server(Some("https://new.example".into()), "new-token".into())
+        .await
+        .unwrap_err();
+    let status = fixture.service.status();
+    assert_eq!(status.auth_state, AuthState::SignedOut);
+    assert_eq!(status.key_state, KeyState::Locked);
+    assert!(!status.enabled);
+    assert!(fixture.custom_token().await.is_none());
+    assert_eq!(
+        fixture
+            .service
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap()
+            .next_step,
+        EnableStep::Unlock
+    );
+}

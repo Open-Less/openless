@@ -157,7 +157,6 @@
     <ClCompile Include="src\class_factory.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\edit_session.cpp" />
-    <ClCompile Include="src\ipc_client.cpp" />
     <ClCompile Include="src\registry.cpp" />
     <ClCompile Include="src\text_service.cpp" />
   </ItemGroup>
@@ -165,7 +164,6 @@
     <ClInclude Include="src\class_factory.h" />
     <ClInclude Include="src\edit_session.h" />
     <ClInclude Include="src\guids.h" />
-    <ClInclude Include="src\ipc_client.h" />
     <ClInclude Include="src\registry.h" />
     <ClInclude Include="src\text_service.h" />
   </ItemGroup>

@@ -8,7 +8,9 @@
 //!    后读出新内容 → 还原原剪贴板。
 //!
 //! Truncation policy: selections over 4000 chars keep head 2000 + tail 2000 + the
-//! `[…truncated…]` marker, avoiding an overly long LLM context.
+//! `[…truncated…]` marker for QA context only. `omits_middle` is set so selection
+//! polish and selection voice refuse to paste a rewrite of that stand-in over the
+//! real selection (the omitted middle would otherwise be deleted).
 //!
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
 //! Linux 桌面已改由 egui 前端（`openless-all/app/linux-egui`）承担，Tauri 版不再提供
@@ -24,12 +26,16 @@ const SELECTION_TRUNCATE_TAIL: usize = 2000;
 const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
 
 /// Selection context read from the foreground app.
-/// `text` is already truncated; `source_app` is a human-readable label for the foreground app
-/// (optional).
+/// `text` may be a head/tail stand-in when `omits_middle` is set. Replacement
+/// flows must refuse those captures; QA may still use the stand-in as context.
+/// `source_app` is a human-readable label for the foreground app (optional).
 #[derive(Debug, Clone)]
 pub struct SelectionContext {
     pub text: String,
     pub source_app: Option<String>,
+    /// True when `text` dropped the middle of a selection longer than
+    /// [`SELECTION_MAX_CHARS`]. Pasting a rewrite of `text` would delete that middle.
+    pub omits_middle: bool,
 }
 
 /// The target that was active when Selection Polish began.  This deliberately
@@ -72,6 +78,8 @@ struct WindowsSelectionTarget {
 struct MacosSelectionTarget {
     /// Foreground app at capture time (NSWorkspace frontmostApplication, `name (bundle)` form).
     front_app: Option<String>,
+    /// Bundle identifier captured with the foreground app, used by the host-document safety gate.
+    bundle_id: Option<String>,
     /// Foreground app pid at capture time — used to return focus to the original app after the
     /// preview is confirmed.
     front_app_pid: Option<i32>,
@@ -333,10 +341,18 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 
     #[cfg(target_os = "macos")]
     {
+        let (front_app_name, bundle_id, front_app_pid) = current_front_app_snapshot();
+        let front_app = match (front_app_name.as_deref(), bundle_id.as_deref()) {
+            (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
+            (Some(name), None) => Some(name.to_string()),
+            (None, Some(bundle)) => Some(bundle.to_string()),
+            (None, None) => None,
+        };
         return SelectionInsertionTarget {
             macos: Some(MacosSelectionTarget {
-                front_app: current_front_app(),
-                front_app_pid: current_front_app_pid(),
+                front_app,
+                bundle_id,
+                front_app_pid,
             }),
         };
     }
@@ -368,6 +384,36 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // 移动端不提供选区润色；此处保留非桌面平台的类型兜底。
+        let _ = target;
+        true
+    }
+}
+
+/// Check that the foreground/focused target fingerprint has not changed since capture.
+/// Windows callers use this as a document-read fence, before and after synchronous UIA calls.
+pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionTarget) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(captured) = target.windows else {
+            return false;
+        };
+        return capture_windows_selection_target().as_ref() == Some(&captured);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let Some(captured_pid) = target
+            .macos
+            .as_ref()
+            .and_then(|captured| captured.front_app_pid)
+        else {
+            return false;
+        };
+        return current_front_app_pid() == Some(captured_pid);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
         let _ = target;
         true
     }
@@ -440,21 +486,22 @@ pub(crate) fn validate_selection_insertion_target(
     }
 }
 
-/// macOS only: re-read the current selection in the same form as at capture time (trim +
-/// truncate) for validate to compare against expected_selection. Degrades to simulated
-/// Cmd+C + clipboard snapshot when AX is unauthorized or the direct read fails (same fallback as
-/// `capture_selection_with_status`).
+/// macOS only: re-read the full current selection (trimmed, not head/tail truncated)
+/// for validate to compare against expected_selection. A truncated stand-in must not
+/// compare equal to the live selection, or paste would delete the omitted middle.
+/// Degrades to simulated Cmd+C + clipboard snapshot when AX is unauthorized or the
+/// direct read fails (same fallback as `capture_selection_with_status`).
 #[cfg(target_os = "macos")]
 fn read_selection_for_validation() -> Option<String> {
     if let Some(text) = macos_ax::read_selected_text() {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
-            return Some(truncate_selection(trimmed));
+            return Some(trimmed.to_string());
         }
     }
     let text = simulate_copy_and_read()?;
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Return focus to the original selection target after the preview is confirmed. The preview
@@ -594,11 +641,13 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
+            let (text, omits_middle) = stored_selection_text(trimmed);
             return (
                 SelectionCaptureOutcome {
                     selection: Some(SelectionContext {
-                        text: truncate_selection(trimmed),
+                        text,
                         source_app,
+                        omits_middle,
                     }),
                 },
                 SelectionCaptureMissReason::Ok,
@@ -628,11 +677,13 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
                             .map(|a| format!(" front_app={a}"))
                             .unwrap_or_default()
                     );
+                    let (text, omits_middle) = stored_selection_text(trimmed);
                     return (
                         SelectionCaptureOutcome {
                             selection: Some(SelectionContext {
-                                text: truncate_selection(trimmed),
+                                text,
                                 source_app,
+                                omits_middle,
                             }),
                         },
                         SelectionCaptureMissReason::Ok,
@@ -669,6 +720,25 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         SelectionCaptureOutcome { selection: None },
         SelectionCaptureMissReason::NoCapturePath,
     )
+}
+
+/// True when `text` is the head/tail stand-in produced for an over-long selection.
+/// The stand-in length is fixed, so ordinary text that merely mentions the marker
+/// is not treated as a truncated capture.
+pub(crate) fn is_truncated_selection_stand_in(text: &str) -> bool {
+    let marker_len = SELECTION_TRUNCATED_MARKER.chars().count();
+    text.contains(SELECTION_TRUNCATED_MARKER)
+        && text.chars().count() == SELECTION_TRUNCATE_HEAD + marker_len + SELECTION_TRUNCATE_TAIL
+}
+
+/// Store a trimmed selection. Over-long text keeps a head/tail stand-in for QA
+/// context and sets `omits_middle` so replacement flows can refuse to paste it.
+fn stored_selection_text(trimmed: &str) -> (String, bool) {
+    if trimmed.chars().count() > SELECTION_MAX_CHARS {
+        (truncate_selection(trimmed), true)
+    } else {
+        (trimmed.to_string(), false)
+    }
 }
 
 /// Truncate lengthwise to head + tail + marker.
@@ -782,14 +852,15 @@ fn classify_simulated_copy_result(
     Ok(captured)
 }
 
-/// Read the current selection in the same normalized/truncated form stored by
-/// [`SelectionContext`].  This is used only by the Windows final safety check;
-/// the clipboard helper snapshots and restores the user's clipboard.
+/// Read the full current selection (trimmed, not head/tail truncated). This is
+/// used only by the Windows final safety check; the clipboard helper snapshots
+/// and restores the user's clipboard. Comparing against the untruncated text
+/// stops a head/tail stand-in from authorizing a paste over the omitted middle.
 #[cfg(target_os = "windows")]
 fn selected_text_for_validation() -> Option<String> {
     let text = simulate_copy_and_read()?;
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -1236,6 +1307,39 @@ mod windows_paste {
 
 // ─────────────────────────── front-app label ───────────────────────────
 
+/// Read the frontmost application identity from one `NSRunningApplication` snapshot.
+///
+/// The name, bundle identifier, and pid must come from the same application object: querying
+/// `NSWorkspace.frontmostApplication` separately for each field can combine metadata from two apps
+/// if focus changes between calls.
+#[cfg(target_os = "macos")]
+fn current_front_app_snapshot() -> (Option<String>, Option<String>, Option<i32>) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        let Some(cls) = AnyClass::get("NSWorkspace") else {
+            return (None, None, None);
+        };
+        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
+        if workspace.is_null() {
+            return (None, None, None);
+        }
+        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return (None, None, None);
+        }
+        let name_obj: *mut AnyObject = msg_send![app, localizedName];
+        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
+        let pid: i32 = msg_send![app, processIdentifier];
+        (
+            ns_string_to_rust(name_obj),
+            ns_string_to_rust(bundle_obj),
+            (pid > 0).then_some(pid),
+        )
+    }
+}
+
 /// The foreground app's **structured** identity: `(localizedName, bundleIdentifier)`.
 ///
 /// [`current_front_app`]'s `"Safari (com.apple.Safari)"` display string is for the LLM prompt;
@@ -1247,25 +1351,8 @@ mod windows_paste {
 /// used to carry a near-verbatim duplicate and now calls this function.
 #[cfg(target_os = "macos")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let Some(cls) = AnyClass::get("NSWorkspace") else {
-            return (None, None);
-        };
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return (None, None);
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return (None, None);
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        (ns_string_to_rust(name_obj), ns_string_to_rust(bundle_obj))
-    }
+    let (name, bundle, _) = current_front_app_snapshot();
+    (name, bundle)
 }
 
 /// The bundle id of **one process** — not "who is frontmost" but "who is this pid".
@@ -1297,31 +1384,66 @@ pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_window_title(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
+    unsafe {
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let copied = GetWindowTextW(hwnd, &mut buf);
+        if copied <= 0 {
+            return None;
+        }
+        let title = String::from_utf16_lossy(&buf[..copied as usize]);
+        (!title.is_empty()).then_some(title)
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    use windows::Win32::Foundation::HWND;
+
+    target
+        .windows
+        .as_ref()
+        .and_then(|captured| windows_window_title(HWND(captured.foreground_window as *mut _)))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn front_app_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    target
+        .macos
+        .as_ref()
+        .and_then(|captured| captured.front_app.clone())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn bundle_id_for_target(target: &SelectionInsertionTarget) -> Option<String> {
+    target
+        .macos
+        .as_ref()
+        .and_then(|captured| captured.bundle_id.clone())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
     // Windows has no bundle id concept; the window title is the only identity we get for free.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
             return (None, None);
         }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return (None, None);
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return (None, None);
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            (None, None)
-        } else {
-            (Some(title), None)
-        }
+        (windows_window_title(hwnd), None)
     }
 }
 
@@ -1362,22 +1484,7 @@ unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option
 
 #[cfg(target_os = "macos")]
 fn current_front_app_pid() -> Option<i32> {
-    use objc2::msg_send;
-    use objc2::runtime::AnyClass;
-
-    unsafe {
-        let cls = AnyClass::get("NSWorkspace")?;
-        let workspace: *mut objc2::runtime::AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return None;
-        }
-        let app: *mut objc2::runtime::AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return None;
-        }
-        let pid: i32 = msg_send![app, processIdentifier];
-        (pid > 0).then_some(pid)
-    }
+    current_front_app_snapshot().2
 }
 
 #[cfg(test)]
@@ -1402,6 +1509,35 @@ mod tests {
         assert!(out.ends_with(&"c".repeat(50)));
         // The middle "b" run must be cut
         assert!(!out.contains(&"b".repeat(20)));
+    }
+
+    #[test]
+    fn overlong_selection_is_flagged_and_does_not_match_the_live_text() {
+        let head: String = "a".repeat(SELECTION_TRUNCATE_HEAD);
+        let middle: String = "b".repeat(2_000);
+        let tail: String = "c".repeat(SELECTION_TRUNCATE_TAIL);
+        let live = format!("{head}{middle}{tail}");
+        let (stored, omits_middle) = stored_selection_text(&live);
+        assert!(omits_middle);
+        assert!(stored.contains("[…truncated…]"));
+        assert!(!stored.contains(&"b".repeat(20)));
+        // Final paste validation compares the stored stand-in with the full
+        // live selection. They must not match, or the paste deletes `middle`.
+        assert!(!selection_text_matches(&stored, Some(&live)));
+        assert!(is_truncated_selection_stand_in(&stored));
+        assert!(!is_truncated_selection_stand_in(&live));
+        assert!(!is_truncated_selection_stand_in(
+            "keep this\n[…truncated…]\nnote"
+        ));
+    }
+
+    #[test]
+    fn selection_at_the_replacement_limit_is_kept_whole() {
+        let live = "字".repeat(SELECTION_MAX_CHARS);
+        let (stored, omits_middle) = stored_selection_text(&live);
+        assert!(!omits_middle);
+        assert_eq!(stored, live);
+        assert!(selection_text_matches(&stored, Some(&live)));
     }
 
     #[test]

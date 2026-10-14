@@ -11,6 +11,9 @@
 //! - Default model: `Hy-ASR-3.0-preview` (Tencent Cloud's latest Hunyuan ASR
 //!   Preview at the time of writing).
 
+mod segmented;
+pub use segmented::TencentCloudStreamingASR;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +42,7 @@ pub const DEFAULT_MODEL: &str = "Hy-ASR-3.0-preview";
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 
 const BYTES_PER_MS: u64 = 32;
-const MAX_AUDIO_SEND_RATE: u64 = 2;
+const MAX_AUDIO_SEND_RATE: u64 = 1;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -107,13 +110,14 @@ struct SyncState {
     bytes_sent: u64,
     started: bool,
     finished: bool,
+    ending: bool,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, TencentCloudASRError>>>,
     final_segments: BTreeMap<i64, String>,
     partial_segments: BTreeMap<i64, String>,
     last_result_text: String,
 }
 
-pub struct TencentCloudStreamingASR {
+struct TencentCloudSession {
     credentials: TencentCloudCredentials,
     endpoint: String,
     task_spawner: Arc<dyn TaskSpawner>,
@@ -125,11 +129,13 @@ pub struct TencentCloudStreamingASR {
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
 }
 
-impl TencentCloudStreamingASR {
+impl TencentCloudSession {
+    #[cfg(test)]
     pub fn new(credentials: TencentCloudCredentials) -> Self {
         Self::with_task_spawner(credentials, Arc::new(TokioTaskSpawner))
     }
 
+    #[cfg(test)]
     pub fn with_task_spawner(
         credentials: TencentCloudCredentials,
         task_spawner: Arc<dyn TaskSpawner>,
@@ -216,6 +222,9 @@ impl TencentCloudStreamingASR {
                         (result, None)
                     }
                     SendItem::End(done) => {
+                        if let Some(this) = weak_self.upgrade() {
+                            this.state.lock().ending = true;
+                        }
                         (send_text(&writer, r#"{"type":"end"}"#).await, Some(done))
                     }
                 };
@@ -255,10 +264,13 @@ impl TencentCloudStreamingASR {
                     Ok(_) => {}
                     Err(_) => {
                         log::error!("[tencent-cloud-asr] receive loop failed");
-                        this.finish_with_partial_or_error(TencentCloudASRError::ConnectionFailed);
+                        this.finish_error(TencentCloudASRError::ConnectionFailed);
                         break;
                     }
                 }
+            }
+            if let Some(this) = weak_self.upgrade() {
+                this.finish_on_close();
             }
         }));
 
@@ -381,6 +393,10 @@ impl TencentCloudStreamingASR {
             self.record_result(result);
         }
         if value.get("final").and_then(Value::as_i64) == Some(1) {
+            if !self.state.lock().ending {
+                self.finish_error(TencentCloudASRError::NoFinalResult);
+                return false;
+            }
             self.finish_success();
             return false;
         }
@@ -413,6 +429,9 @@ impl TencentCloudStreamingASR {
             .unwrap_or(1);
         let snapshot = {
             let mut state = self.state.lock();
+            if state.finished {
+                return;
+            }
             state.last_result_text = text.to_string();
             if slice_type == 2 {
                 state.final_segments.insert(index, text.to_string());
@@ -437,21 +456,9 @@ impl TencentCloudStreamingASR {
             let _ = sender.send(Err(TencentCloudASRError::ConnectionFailed));
             return;
         }
-        self.finish_with_partial_or_error(TencentCloudASRError::NoFinalResult);
-    }
-
-    fn finish_with_partial_or_error(&self, error: TencentCloudASRError) {
-        let has_text = {
-            let state = self.state.lock();
-            !state.last_result_text.trim().is_empty()
-                || !state.final_segments.is_empty()
-                || !state.partial_segments.is_empty()
-        };
-        if has_text {
-            self.finish_success();
-        } else {
-            self.finish_error(error);
-        }
+        // A partial transcript does not prove all queued audio was recognized.
+        // Require final=1, especially when assembling several long-audio segments.
+        self.finish_error(TencentCloudASRError::NoFinalResult);
     }
 
     fn finish_success(&self) {
@@ -516,7 +523,7 @@ impl TencentCloudStreamingASR {
     }
 }
 
-impl AudioConsumer for TencentCloudStreamingASR {
+impl AudioConsumer for TencentCloudSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         let chunks = {
             let mut state = self.state.lock();
@@ -648,7 +655,7 @@ mod tests {
 
     #[test]
     fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
-        let asr = TencentCloudStreamingASR::new(credentials());
+        let asr = TencentCloudSession::new(credentials());
         let sink = Arc::new(super::super::TranscriptCapture::default());
         asr.set_partial_sink(sink.clone());
         for (id, text, final_result) in [
@@ -730,7 +737,7 @@ mod tests {
 
     #[test]
     fn stable_segments_replace_partials_and_keep_order() {
-        let asr = TencentCloudStreamingASR::new(credentials());
+        let asr = TencentCloudSession::new(credentials());
         asr.record_result(&serde_json::json!({
             "slice_type": 1,
             "index": 1,
@@ -816,7 +823,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+        let asr = Arc::new(TencentCloudSession::with_endpoint(
             credentials(),
             Arc::new(TokioTaskSpawner),
             endpoint,
@@ -861,7 +868,7 @@ mod tests {
             .unwrap();
         });
         let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+        let asr = Arc::new(TencentCloudSession::with_endpoint(
             credentials(),
             Arc::new(DelayedFirstSpawner {
                 spawned: AtomicUsize::new(0),
@@ -929,7 +936,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+        let asr = Arc::new(TencentCloudSession::with_endpoint(
             credentials(),
             Arc::new(TokioTaskSpawner),
             endpoint,
@@ -941,7 +948,7 @@ mod tests {
         asr.await_final_result().await.unwrap();
 
         assert!(
-            elapsed_rx.await.unwrap() >= Duration::from_millis(180),
+            elapsed_rx.await.unwrap() >= Duration::from_millis(380),
             "buffered audio must be paced instead of sent as one burst"
         );
         server.await.unwrap();
@@ -964,7 +971,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+        let asr = Arc::new(TencentCloudSession::with_endpoint(
             credentials(),
             Arc::new(TokioTaskSpawner),
             endpoint,
@@ -996,7 +1003,7 @@ mod tests {
             );
             closed_tx.send(closed).unwrap();
         });
-        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+        let asr = Arc::new(TencentCloudSession::with_endpoint(
             credentials(),
             Arc::new(TokioTaskSpawner),
             endpoint,

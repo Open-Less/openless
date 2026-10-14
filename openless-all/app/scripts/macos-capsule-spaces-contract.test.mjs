@@ -105,19 +105,152 @@ assertMatch(
 const coordinatorRs = (
   await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')
 ).replace(/\r\n/g, '\n');
-assertMatch(
-  coordinatorHostRs,
-  /fn set_cursor_passthrough[\s\S]*?window\.set_ignore_cursor_events\(passthrough\)[\s\S]*?cursor_passthrough[\s\S]*?store\(passthrough, Ordering::SeqCst\)/,
-  'the narrow capsule-window capability must update the Tauri window and its host-owned passthrough cache together',
-);
+
+function extractBalancedBlock(source, openBrace) {
+  let depth = 0;
+  let inString = false;
+  let inChar = false;
+  let escaped = false;
+  let inLineComment = false;
+  let blockCommentDepth = 0;
+  let rawStringHashes = null;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (inLineComment) {
+      if (char === '\n') inLineComment = false;
+      continue;
+    }
+    if (blockCommentDepth > 0) {
+      if (char === '/' && next === '*') {
+        blockCommentDepth += 1;
+        index += 1;
+      } else if (char === '*' && next === '/') {
+        blockCommentDepth -= 1;
+        index += 1;
+      }
+      continue;
+    }
+    if (rawStringHashes !== null) {
+      const terminator = `"${'#'.repeat(rawStringHashes)}`;
+      if (source.startsWith(terminator, index)) {
+        index += terminator.length - 1;
+        rawStringHashes = null;
+      }
+      continue;
+    }
+    if (inString || inChar) {
+      const terminator = inString ? '"' : "'";
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === terminator) {
+        inString = false;
+        inChar = false;
+      }
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      inLineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockCommentDepth = 1;
+      index += 1;
+      continue;
+    }
+    if (char === 'r') {
+      let hashEnd = index + 1;
+      while (source[hashEnd] === '#') hashEnd += 1;
+      if (source[hashEnd] === '"') {
+        rawStringHashes = hashEnd - index - 1;
+        index = hashEnd;
+        continue;
+      }
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    // Rust lifetimes start with a letter after the apostrophe; only enter the
+    // character-literal state when the closing apostrophe is locally evident.
+    if (char === "'" && (next === '\\' || source[index + 2] === "'")) {
+      inChar = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}' && --depth === 0) {
+      return source.slice(openBrace, index + 1);
+    }
+  }
+  throw new Error('unterminated Rust block');
+}
 
 function extractFn(source, name) {
-  const match = source.match(new RegExp(`(?:pub\\(crate\\) )?fn ${name}[\\s\\S]*?\\n}\\n`));
+  const signature = new RegExp(
+    `(?:pub\\([^)]*\\)\\s*)?(?:async\\s+)?fn\\s+${name}(?:<[^>{}]*>)?\\s*\\(`,
+  );
+  const match = signature.exec(source);
   if (!match) {
-    throw new Error(`${name}: function not found in coordinator.rs`);
+    throw new Error(`${name}: function not found`);
   }
-  return match[0];
+  const openBrace = source.indexOf('{', match.index);
+  if (openBrace === -1) {
+    throw new Error(`${name}: function body not found`);
+  }
+  const body = extractBalancedBlock(source, openBrace);
+  return source.slice(match.index, openBrace) + body;
 }
+
+function extractCfgBlock(source, target) {
+  const marker = `#[cfg(target_os = "${target}")]`;
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex === -1) {
+    throw new Error(`${target}: cfg block not found`);
+  }
+  const openBrace = source.indexOf('{', markerIndex + marker.length);
+  if (openBrace === -1) {
+    throw new Error(`${target}: cfg block body not found`);
+  }
+  return source.slice(markerIndex, openBrace) + extractBalancedBlock(source, openBrace);
+}
+
+const setCursorPassthroughRs = extractFn(coordinatorHostRs, 'set_cursor_passthrough');
+assertMatch(
+  setCursorPassthroughRs,
+  /window\.set_ignore_cursor_events\(passthrough\)[\s\S]*?cursor_passthrough[\s\S]*?store\(passthrough, Ordering::SeqCst\)/,
+  'the narrow capsule-window capability must update the Tauri window and its host-owned passthrough cache together',
+);
+const setCardHitTestModeRs = extractFn(coordinatorHostRs, 'set_card_hit_test_mode');
+const restoreCapsuleHitTestModeRs = extractFn(coordinatorHostRs, 'restore_capsule_hit_test_mode');
+assertMatch(
+  setCardHitTestModeRs,
+  /hit_test_mode[\s\S]*?store\(HIT_TEST_MODE_CARD, Ordering::SeqCst\)[\s\S]*?window\.set_ignore_cursor_events\(false\)[\s\S]*?cursor_passthrough[\s\S]*?store\(false, Ordering::SeqCst\)[\s\S]*?configure_card_hit_test/,
+  'card mode must make the shared window interactive and keep its host-owned hit-test cache in sync',
+);
+assertMatch(
+  restoreCapsuleHitTestModeRs,
+  /hit_test_mode[\s\S]*?store\(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst\)[\s\S]*?set_cursor_passthrough\(true\)[\s\S]*?invalidate_layout\(\)[\s\S]*?maybe_position_capsule_bottom_center/,
+  'restoring capsule mode must restore passthrough and style-aware position through the host capability',
+);
+const maybePositionCapsuleRs = extractFn(coordinatorHostRs, 'maybe_position_capsule_bottom_center');
+assertMatch(
+  maybePositionCapsuleRs,
+  /position_capsule_bottom_center_with_style_and_transcript/,
+  'capsule restore must route through the style-aware geometry helper',
+);
+const positionCapsuleRs = extractFn(
+  libRs,
+  'position_capsule_bottom_center_with_style_and_transcript',
+);
+const macosPositionCapsuleRs = extractCfgBlock(positionCapsuleRs, 'macos');
+assertMatch(
+  macosPositionCapsuleRs,
+  /window\.set_size[\s\S]*?window\.set_position/,
+  'macOS style-aware capsule restoration must update both window size and position',
+);
 
 // Showing a card = moving the shared window away; the dedup cache must be invalidated on the spot.
 for (const name of ['show_vocab_suggestion_card', 'show_insert_fallback_card']) {
@@ -129,8 +262,8 @@ for (const name of ['show_vocab_suggestion_card', 'show_insert_fallback_card']) 
   );
   assertMatch(
     body,
-    /capsule\.set_cursor_passthrough\(false\)/,
-    `${name} must change cursor passthrough through the host capability that keeps its cache in sync`,
+    /capsule\.set_card_hit_test_mode\(\)/,
+    `${name} must enter card hit-test mode through the host capability that keeps its cache in sync`,
   );
 }
 
@@ -139,32 +272,19 @@ for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) 
   const body = extractFn(coordinatorRs, name);
   assertMatch(
     body,
-    /set_cursor_passthrough\(true\)/,
-    `${name} must restore cursor passthrough, or the capsule keeps blocking that strip of screen`,
+    /capsule\.restore_capsule_hit_test_mode\(\)/,
+    `${name} must restore passthrough and capsule geometry through the host capability`,
   );
   assertMatch(
     body,
-    /capsule_window_bounds\(false\)[\s\S]*?set_size/,
-    `${name} must restore the capsule window size, or the next capsule is squeezed into a card-sized window`,
+    /capsule\.hide\(\)[\s\S]*?capsule\.restore_capsule_hit_test_mode\(\)/,
+    `${name} must hide the window before the host restores its geometry`,
   );
-  assertMatch(
-    body,
-    /capsule\.invalidate_layout\(\)/,
-    `${name} must invalidate the capsule_layout dedup cache, or the next recording skips repositioning and the capsule stays bottom-right`,
-  );
-  assertMatch(
-    body,
-    /position_capsule_bottom_center\(false\)/,
-    `${name} must move the capsule window back to bottom-center; restoring size alone leaves it in the card's bottom-right corner`,
-  );
-  // Ordering invariant: size and position must change together; changing them while the window is
-  // still visible can composite a frame of "card stretched wide, still flying across half the
-  // screen".
+  // Ordering invariant: geometry restoration must happen after hiding, or the restore can
+  // composite a frame of "card stretched wide, still flying across half the screen".
   const hideAt = body.indexOf('capsule.hide()');
-  const resizeAt = body.indexOf('set_size');
-  if (hideAt === -1 || hideAt > resizeAt) {
-    throw new Error(
-      `${name} must hide the window before changing its geometry, or the restore animates on screen`,
-    );
+  const restoreAt = body.indexOf('restore_capsule_hit_test_mode()');
+  if (hideAt === -1 || hideAt > restoreAt) {
+    throw new Error(`${name} must hide the window before restoring its geometry`);
   }
 }

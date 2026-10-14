@@ -272,15 +272,18 @@ pub async fn less_computer_task_cancel(
 /// Text testing entry from the main settings page. The panel itself neither
 /// needs nor is allowed to call this command in reverse.
 #[tauri::command]
-pub fn less_computer_window_open(
+pub async fn less_computer_window_open(
     window: Window,
     coord: CoordinatorState<'_>,
 ) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Less Computer can only be opened from the main window".to_string());
     }
-    coord.tauri_host().show_less_computer();
-    Ok(())
+    let host = coord.tauri_host();
+    // Windows WebView creation deadlocks inside a synchronous IPC handler.
+    tauri::async_runtime::spawn_blocking(move || host.show_less_computer())
+        .await
+        .map_err(|error| format!("Less Computer window task failed: {error}"))?
 }
 
 /// Pulls the current session's event buffer (seq ascending) when the panel

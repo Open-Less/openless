@@ -51,6 +51,26 @@ class OpenLessAccessibilityTargetTest {
     }
 
     @Test
+    fun selectionRangeValidationRejectsEmptyAndOutOfBoundsRanges() {
+        assertTrue(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 1, 4))
+        assertTrue(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 4, 1))
+        assertFalse(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 2, 2))
+        assertFalse(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", -1, 2))
+        assertFalse(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 1, 8))
+        assertFalse(OpenLessAccessibilityTarget.isSelectionRangeValid(null, 1, 2))
+    }
+
+    @Test
+    fun fieldTargetValidationAllowsCaretButStillChecksBounds() {
+        assertTrue(OpenLessAccessibilityTarget.isFieldTargetValid("hello", 2, 2))
+        assertTrue(OpenLessAccessibilityTarget.isFieldTargetValid("hello", 4, 1))
+        assertTrue(OpenLessAccessibilityTarget.isFieldTargetValid("", 0, 0))
+        assertFalse(OpenLessAccessibilityTarget.isFieldTargetValid("hello", -1, 1))
+        assertFalse(OpenLessAccessibilityTarget.isFieldTargetValid("hello", 1, 6))
+        assertFalse(OpenLessAccessibilityTarget.isFieldTargetValid(null, 0, 0))
+    }
+
+    @Test
     fun accessibilityPasteResultRoundTripsCodes() {
         AccessibilityPasteResult.entries.forEach { expected ->
             assertEquals(expected, AccessibilityPasteResult.fromCode(expected.code))

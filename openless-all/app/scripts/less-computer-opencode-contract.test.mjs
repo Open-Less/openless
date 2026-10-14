@@ -139,6 +139,46 @@ assert(
     qaCommands.includes('window.label() != "main"'),
   'Advanced settings must expose a main-window-only text entry point for Less Computer',
 );
+const openWindowStart = qaCommands.indexOf('pub async fn less_computer_window_open');
+assert(openWindowStart !== -1, 'Less Computer must open through an async Tauri command');
+const openWindowEnd = qaCommands.indexOf('/// Pulls the current session', openWindowStart);
+const openWindow = qaCommands.slice(openWindowStart, openWindowEnd);
+assert(
+  openWindow.includes('tauri::async_runtime::spawn_blocking(move || host.show_less_computer())') &&
+    /\.await\s*\.map_err\([^;]+\)\?/.test(openWindow) &&
+    openWindow.indexOf('window.label() != "main"') < openWindow.indexOf('spawn_blocking') &&
+    !openWindow.includes('Ok(())'),
+  'Windows window creation must leave the IPC thread and propagate worker and window errors',
+);
+const hostShowStart = coordinatorHost.indexOf('pub(crate) fn show_less_computer(');
+const hostShowEnd = coordinatorHost.indexOf('pub(crate) fn ', hostShowStart + 1);
+const hostShow = coordinatorHost.slice(hostShowStart, hostShowEnd);
+assert(
+  hostShow.includes('Result<(), String>') &&
+    hostShow.includes('.ok_or_else(') &&
+    hostShow.includes('crate::show_less_computer_window(&app)'),
+  'Less Computer host must propagate an unbound AppHandle or window failure',
+);
+assert(
+  /HostAction::ShowLessComputer\s*=>\s*\{?\s*crate::show_less_computer_window\(&app\)\s*\.map_err\(map_tauri_error\)\?/.test(
+    coreAdapters,
+  ),
+  'Core host actions must propagate Less Computer window errors as platform errors',
+);
+const openPanelStart = settings.indexOf('const openPanel = async () =>');
+const openPanelEnd = settings.indexOf('\n  };', openPanelStart);
+const openPanel = settings.slice(openPanelStart, openPanelEnd);
+assert(
+  openPanelStart !== -1 &&
+    openPanel.includes('await lessComputerWindowOpen()') &&
+    openPanel.includes('error instanceof Error ? error.message : String(error)') &&
+    /finally\s*\{\s*setOpenPanelBusy\(false\)/.test(openPanel) &&
+    settings.includes('disabled={openPanelBusy}') &&
+    settings.includes('aria-busy={openPanelBusy}') &&
+    settings.includes('role="alert"') &&
+    settings.includes("t('common.operationFailed')"),
+  'Less Computer settings must show opening and failure states and restore the button for retry',
+);
 const showLessComputerStart = lib.indexOf('pub(crate) fn show_less_computer_window');
 const showLessComputerEnd = lib.indexOf('pub(crate) fn hide_less_computer_window');
 const showLessComputer = lib.slice(showLessComputerStart, showLessComputerEnd);
@@ -152,7 +192,20 @@ assert(
   'Less Computer NSPanel positioning must run on the AppKit main thread',
 );
 const submitTextStart = qaCommands.indexOf('pub fn less_computer_submit_text');
-const submitTextEnd = qaCommands.indexOf('pub fn less_computer_window_open', submitTextStart);
+const windowsShowStart = showLessComputer.indexOf('#[cfg(target_os = "windows")]');
+const windowsShowEnd = showLessComputer.indexOf('#[cfg(not(', windowsShowStart);
+const windowsShow = showLessComputer.slice(windowsShowStart, windowsShowEnd);
+assert(
+  windowsShow.includes('Result<(), String>') &&
+    windowsShow.includes('ensure_less_computer_window(app)?') &&
+    /window\.show\(\)\.map_err\([\s\S]+?\)\?;/.test(windowsShow) &&
+    windowsShow.indexOf('window.show()') < windowsShow.indexOf('Ok(())'),
+  'Windows Less Computer must return creation/show failures before reporting success',
+);
+const submitTextEnd = qaCommands.indexOf(
+  '/// Text testing entry from the main settings page',
+  submitTextStart,
+);
 const submitText = qaCommands.slice(submitTextStart, submitTextEnd);
 assert(
   submitText.includes('host.spawn') &&

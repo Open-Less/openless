@@ -751,6 +751,27 @@ assert.match(
   /onCreate\(\)[\s\S]*?OpenLessNative\.requireBackendContract\(\)[\s\S]*?stopSelf\(\)/,
   'Android overlay startup must execute the JNI contract handshake before accepting actions',
 );
+const voiceEditNativeMethod = androidKotlinBridge.match(
+  /@JvmStatic\s+external fun (nativeFinalizeVoiceEditFromOverlay)\(\)/,
+)?.[1];
+assert.ok(voiceEditNativeMethod, 'the overlay Voice Edit JNI method must remain static and argument-free');
+assert.match(
+  androidNativeBridge,
+  new RegExp(`extern "system" fn Java_com_openless_app_OpenLessNative_${voiceEditNativeMethod}\\(\\s*_env: jni::JNIEnv,\\s*_class: jni::objects::JClass,\\s*\\)`),
+  'the exported JNI symbol and receiver signature must match the Kotlin Voice Edit declaration',
+);
+const androidJni = await read('src-tauri/src/android/jni.rs');
+const warmupActivity = await read('android/kotlin/OpenLessBackendWarmupActivity.kt');
+assert.match(
+  androidJni,
+  /"com\.openless\.app\.OpenLessBackendWarmupActivity",\s*"backgroundForVoiceEdit",\s*"\(Landroid\/content\/Context;\)Z"/,
+  'Voice Edit background JNI must bind the tracked Activity with a Context-to-boolean signature',
+);
+assert.match(
+  warmupActivity,
+  /@androidx\.annotation\.Keep\s+@JvmStatic\s+fun backgroundForVoiceEdit\(context: Context\): Boolean/,
+  'the background Activity method must retain its JNI signature and survive release shrinking',
+);
 assert.match(
   mobileHotkey,
   /pub fn next_press_id\(\) -> u64/,

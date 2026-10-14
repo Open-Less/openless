@@ -408,6 +408,10 @@ pub struct UserPreferences {
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
+    /// Keep a native microphone stream warm and retain a bounded in-memory pre-roll.
+    /// This is opt-in because the OS microphone indicator remains active while enabled.
+    #[serde(default)]
+    pub low_latency_dictation_enabled: bool,
     /// Play an instantly synthesized cue when the recording hotkey enters the
     /// recording state ("recording started"). Default on; can be disabled in
     /// the "Recording & Input" settings. The cue is synthesized by the capsule
@@ -546,6 +550,9 @@ pub struct UserPreferences {
     /// Selection voice editing (issue #987 desktop MVP). Default off.
     #[serde(default)]
     pub selection_voice_enabled: bool,
+    /// Standalone Voice Edit Session (issue #900). Default off.
+    #[serde(default)]
+    pub voice_edit_enabled: bool,
     #[serde(default)]
     pub selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
@@ -702,6 +709,13 @@ pub struct UserPreferences {
     /// Default 5 minutes.
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
+    /// Skip LLM polish for dictations whose transcript has at most N
+    /// non-whitespace characters (issue #1032). Short fragments are inserted
+    /// as the raw ASR text, avoiding a polish round-trip that costs far more
+    /// than the transcription itself. 0 = off (default). Translation sessions
+    /// always polish regardless of this value.
+    #[serde(default = "default_polish_skip_max_chars")]
+    pub polish_skip_max_chars: u32,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -846,6 +860,12 @@ pub struct UserPreferences {
     /// saves can't wipe it.
     #[serde(default)]
     pub splash_seen_version: String,
+    /// Self-hosted encrypted-sync server origin (e.g. "https://sync.example.com/"),
+    /// overriding `DEFAULT_SYNC_SERVICE_ORIGIN`. `None` means use the default.
+    /// Validated against the same rules as the protocol's own `parse_origin`
+    /// (https-only, no userinfo/query/fragment, root path) before being saved.
+    #[serde(default)]
+    pub sync_custom_server_origin: Option<String>,
 }
 
 impl UserPreferences {
@@ -880,6 +900,10 @@ fn default_history_retention_days() -> u32 {
 
 fn default_polish_context_window_minutes() -> u32 {
     5
+}
+
+fn default_polish_skip_max_chars() -> u32 {
+    0
 }
 
 fn default_local_asr_mirror() -> String {
@@ -938,6 +962,8 @@ struct UserPreferencesWire {
     mute_during_recording: bool,
     #[serde(default)]
     stable_transcription_enabled: bool,
+    #[serde(default)]
+    low_latency_dictation_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -998,6 +1024,8 @@ struct UserPreferencesWire {
     selection_polish_output_mode: SelectionPolishOutputMode,
     #[serde(default)]
     selection_voice_enabled: bool,
+    #[serde(default)]
+    voice_edit_enabled: bool,
     #[serde(default)]
     selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
@@ -1074,6 +1102,8 @@ struct UserPreferencesWire {
     history_retention_days: u32,
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
+    #[serde(default = "default_polish_skip_max_chars")]
+    polish_skip_max_chars: u32,
     #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
@@ -1125,6 +1155,8 @@ struct UserPreferencesWire {
     android_overlay_size_dp: u32,
     #[serde(default)]
     splash_seen_version: String,
+    #[serde(default)]
+    sync_custom_server_origin: Option<String>,
 }
 
 fn deserialize_selection_polish_hotkey<'de, D>(
@@ -1187,6 +1219,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
+            low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1216,6 +1249,7 @@ impl Default for UserPreferencesWire {
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
             selection_voice_enabled: prefs.selection_voice_enabled,
+            voice_edit_enabled: prefs.voice_edit_enabled,
             selection_voice_intent_mode: prefs.selection_voice_intent_mode,
             selection_voice_manual_intent: prefs.selection_voice_manual_intent,
             selection_voice_edit_keywords: prefs.selection_voice_edit_keywords,
@@ -1259,6 +1293,7 @@ impl Default for UserPreferencesWire {
             update_channel_explicit: None,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
+            polish_skip_max_chars: prefs.polish_skip_max_chars,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
@@ -1285,6 +1320,7 @@ impl Default for UserPreferencesWire {
             android_overlay_gesture_actions: None,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             splash_seen_version: prefs.splash_seen_version,
+            sync_custom_server_origin: prefs.sync_custom_server_origin,
         }
     }
 }
@@ -1384,6 +1420,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             stable_transcription_enabled: wire.stable_transcription_enabled,
+            low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1419,6 +1456,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
             selection_voice_enabled: wire.selection_voice_enabled,
+            voice_edit_enabled: wire.voice_edit_enabled,
             selection_voice_intent_mode: wire.selection_voice_intent_mode,
             selection_voice_manual_intent: wire.selection_voice_manual_intent,
             selection_voice_edit_keywords: wire.selection_voice_edit_keywords,
@@ -1469,6 +1507,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             update_channel_explicit,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
+            polish_skip_max_chars: wire.polish_skip_max_chars,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
@@ -1499,6 +1538,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_overlay_size_dp,
             ),
             splash_seen_version: wire.splash_seen_version,
+            sync_custom_server_origin: wire.sync_custom_server_origin,
         })
     }
 }
@@ -1758,6 +1798,7 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             stable_transcription_enabled: false,
+            low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -1787,6 +1828,7 @@ impl Default for UserPreferences {
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),
             selection_voice_enabled: false,
+            voice_edit_enabled: false,
             selection_voice_intent_mode: SelectionVoiceIntentMode::default(),
             selection_voice_manual_intent: SelectionVoiceManualIntent::default(),
             selection_voice_edit_keywords: default_selection_voice_edit_keywords(),
@@ -1827,6 +1869,7 @@ impl Default for UserPreferences {
             update_channel_explicit: false,
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
+            polish_skip_max_chars: default_polish_skip_max_chars(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
@@ -1854,6 +1897,7 @@ impl Default for UserPreferences {
             android_overlay_gesture_actions: default_android_overlay_gesture_actions(),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             splash_seen_version: String::new(),
+            sync_custom_server_origin: None,
         }
     }
 }
@@ -2402,6 +2446,8 @@ pub struct PlatformCapabilities {
     pub supports_local_qwen3_mlx: bool,
     pub supports_in_app_dictation: bool,
     pub supports_auto_update: bool,
+    #[serde(default)]
+    pub supports_voice_edit: bool,
 }
 
 impl PlatformCapabilities {
@@ -2418,6 +2464,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: true,
                 supports_auto_update: true,
+                supports_voice_edit: true,
             }
         }
 
@@ -2436,6 +2483,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: false,
+                supports_voice_edit: false,
             }
         }
 
@@ -2455,6 +2503,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: cfg!(all(target_os = "macos", target_arch = "aarch64")),
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
+                supports_voice_edit: true,
             }
         }
     }
@@ -2472,6 +2521,7 @@ impl Default for PlatformCapabilities {
             supports_local_qwen3_mlx: false,
             supports_in_app_dictation: false,
             supports_auto_update: false,
+            supports_voice_edit: false,
         }
     }
 }
@@ -2558,6 +2608,11 @@ pub enum CapsuleStyle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapsulePayload {
+    /// Session generation that owns this capsule frame. Keeping this on the
+    /// payload lets a Recording -> Recording transition reset the transcript
+    /// without depending on the order of backend:event and capsule:state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub state: CapsuleState,
     pub level: f32, // 0..1 RMS
     pub elapsed_ms: u64,
@@ -3401,6 +3456,20 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_skip_max_chars_defaults_off_and_round_trips() {
+        // Issue #1032: the short-input polish skip is opt-in, so existing users keep polishing.
+        assert_eq!(UserPreferences::default().polish_skip_max_chars, 0);
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(from_empty.polish_skip_max_chars, 0);
+
+        let configured: UserPreferences =
+            serde_json::from_str(r#"{"polishSkipMaxChars":8}"#).unwrap();
+        assert_eq!(configured.polish_skip_max_chars, 8);
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishSkipMaxChars"], 8);
     }
 
     /// issue #440: old versions wrote the default `streamingInsert:false`

@@ -2,7 +2,48 @@ import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 export const zhTW: typeof zhCN = {
+  voiceEdit: {
+    title: '語音編輯工作階段',
+    description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
+    targetHint: '請先將游標放入目標輸入欄位，或選取需要編輯的文字。',
+    androidTargetHint:
+      '請將一個懸浮窗滑動動作設為「語音編輯」。在目標應用錄音後滑動進入預覽，確認後寫回原輸入欄位。',
+    startDraft: '開始口述草稿',
+    status: '狀態：{{phase}}',
+    turns: '回合：{{count}}',
+    draft: '草稿',
+    preview: '目前預覽',
+    history: '指令記錄',
+    turn: '第 {{count}} 輪',
+    polishedInstruction: '潤飾後：{{text}}',
+    turnPreview: '預覽：{{text}}',
+    finishDraft: '完成草稿',
+    nextInstruction: '錄製下一條語音指令',
+    finishInstruction: '完成語音指令',
+    commit: '確認並寫回',
+    restart: '再來一次',
+    openPanel: '開啟面板',
+    errors: {
+      voiceEditFieldChanged: '原輸入欄位內容已變更，請重新開始編輯。',
+      voiceEditTargetUnavailable: '無法讀取目標輸入欄位或完整文字，請重新選取目標。',
+    },
+    phase: {
+      dictating: '口述草稿',
+      draft_ready: '草稿就緒',
+      editing: '錄製指令',
+      applying: '套用編輯計畫',
+      preview: '等待確認',
+      committing: '寫回輸入欄位',
+      completed: '已寫回',
+      cancelled: '已取消',
+    },
+  },
   cloudSyncE2ee: {
+    customServerTitle: '自建同步伺服器（進階）',
+    customServerOrigin: '伺服器位址（https://...）',
+    customServerToken: '登入 Token',
+    customServerSave: '儲存',
+    customServerHint: '留空則使用官方同步伺服器。位址必須以 https:// 開頭的根位址。',
     protocolTitle: '雲端同步協議與隱私提醒',
     protocolIntro:
       'OpenLess 及個人開發者尊重您的隱私，並致力於保護您的資料。請閱讀以下說明，再決定是否繼續。',
@@ -24,7 +65,7 @@ export const zhTW: typeof zhCN = {
     setupPromptLater: '暫不開啟',
     setupPromptOpen: '了解加密同步',
     title: '加密雲端同步',
-    description: '在本機加密後，透過 GitHub 帳號跨裝置同步。',
+    description: '在本機加密後，透過 GitHub 帳號或 Token 跨裝置同步。',
     enable: '啟用加密同步',
     setPassword: '設定同步密碼',
     stepEnableTitle: '第 1 步，共 3 步：開啟同步',
@@ -1221,7 +1262,7 @@ export const zhTW: typeof zhCN = {
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
+        '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',
@@ -1375,6 +1416,9 @@ export const zhTW: typeof zhCN = {
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
+      lowLatencyDictationLabel: '低延遲錄音',
+      lowLatencyDictationDesc:
+        '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',
@@ -1434,6 +1478,9 @@ export const zhTW: typeof zhCN = {
       historyRetentionDesc: '超過保留天數的歷史在寫入新條目時被清理；0 = 不按時間清理。',
       historyMaxEntriesLabel: '歷史條數上限',
       historyMaxEntriesDesc: '本地保留會話上限，留空 = 200。範圍 5–200。',
+      polishSkipMaxCharsLabel: '短句跳過潤色（最大字數）',
+      polishSkipMaxCharsDesc:
+        '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
       polishContextWindowLabel: '對話上下文視窗（分鐘）',
       polishContextWindowDesc: '把最近 N 分鐘內已潤色的轉寫作為多輪上下文，0 = 關閉。',
       recordAudioForDebugLabel: '保留原始錄音（除錯）',
@@ -1582,6 +1629,7 @@ export const zhTW: typeof zhCN = {
         asrXiaomiMimo: '小米 MiMo ASR',
         asrIflytek: '訊飛即時語音轉寫',
         asrTencentCloud: '騰訊雲混元即時 ASR',
+        asrGemini: 'Google Gemini 專用轉寫',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: '本地 sherpa-onnx（實驗性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
@@ -1594,6 +1642,11 @@ export const zhTW: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里雲百煉 Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe 在此使用逐字轉寫，再交給已設定的 LLM 處理。如需內建智慧轉寫，請在多模態模式中選擇此模型。錄音結束後上傳音訊，暫不支援即時轉寫。接口地址：https://generativelanguage.googleapis.com/v1beta，也相容 /v1beta/interactions。',
+      geminiTranscribeOmniNotice:
+        '使用 gemini-3.5-transcribe 可啟用智慧轉寫：錄音結束後去除口頭語、處理口述修正並整理排版。支援工作語言和詞典詞彙。此模型不使用風格提示詞，也不支援翻譯、純文字潤色或問答；這些任務請使用傳統模式搭配 LLM。',
+      validateSuccessAudio: '已通過短靜音音訊的連線驗證，請再用短錄音確認轉寫效果。',
       elevenLabsUploadNotice: 'ElevenLabs 會將錄音上傳至已設定的端點進行批次轉寫。',
       zenmuxVocabularyNote:
         'ZenMux 走 JSON 轉寫協定，不傳送詞典熱詞（prompt/hotwords）；詞典仍會進入潤色鏈路，但不會參與語音辨識偏置。',
@@ -1675,6 +1728,8 @@ export const zhTW: typeof zhCN = {
       thinkingBudget: '固定預算',
       maxTokensLabel: '最大輸出 tokens',
       thinkingBudgetLabel: '思考預算 tokens',
+      serviceTierLabel: '方舟低延遲推理（fast）',
+      serviceTierHint: '僅適用於支援低延遲的方舟模型；不支援的模型可能回傳 400。',
       responsesThinkingHint: '部分模型只能降低思考，無法完全關閉。推理請求不傳送溫度引數。',
       messagesThinkingHint:
         '舊模型或相容閘道可能需要固定預算；思考預算必須小於最大輸出。開啟思考時不傳送溫度引數。',
@@ -1682,6 +1737,7 @@ export const zhTW: typeof zhCN = {
       llmThinkingModeInvalid: '思考方式無效，請重新選擇。',
       llmTokenLimitInvalid: 'Token 上限必須為正整數。',
       llmThinkingBudgetInvalid: '思考預算至少為 1024，且固定預算必須小於最大輸出。',
+      llmServiceTierInvalid: '低延遲推理選項無效，請重新選擇。',
       llmResponseIncomplete: '回應未完整結束或達到輸出上限；已輸出正文會保留。',
       llmProtocolHeaderConflict:
         'Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。',
@@ -1800,7 +1856,8 @@ export const zhTW: typeof zhCN = {
       hotkeyStarting: '安裝中…',
       hotkeyFailed: '監聽失敗',
       windowsImeLabel: 'Windows 輸入法後端',
-      windowsImeDesc: '用於在語音會話期間臨時切換到 OpenLess TSF 輸入法，避免剪貼簿插入限制。',
+      windowsImeDesc:
+        '透過與輸入法並存的 OpenLess TSF 文字服務插入文字，不切換輸入法，避免剪貼簿插入限制。',
       windowsImeInstalled: '已安裝',
       windowsImeUnavailable: '不可用',
       androidImeLabel: '輸入法 (IME)',
@@ -1948,6 +2005,7 @@ export const zhTW: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '語音編輯',
         none: '無動作',
         quick_note: '速記',
         translation: '翻譯',

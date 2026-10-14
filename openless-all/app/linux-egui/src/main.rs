@@ -3960,6 +3960,7 @@ mod linux_app {
                         .unwrap_or_default();
                     s.retention_days = prefs.history_retention_days.to_string();
                     s.polish_context_window = prefs.polish_context_window_minutes.to_string();
+                    s.polish_skip_max_chars = prefs.polish_skip_max_chars.to_string();
                     s.audio_recording_max_entries = prefs
                         .audio_recording_max_entries
                         .map(|value| value.to_string())

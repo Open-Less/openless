@@ -6,7 +6,51 @@ import { en } from './en';
 // (keys not updated fall back to English via ...en).
 export const ja: typeof zhCN = {
   ...en,
+  voiceEdit: {
+    title: '音声編集セッション',
+    description:
+      '下書きを音声入力するか対象のテキストを読み込み、音声指示で編集してから確認して入力欄に反映します。',
+    targetHint: '対象の入力欄にカーソルを置くか、編集するテキストを選択してください。',
+    androidTargetHint:
+      'オーバーレイのスワイプ操作に「音声編集」を設定してください。対象アプリで録音後にスワイプしてプレビューを開き、確認すると元の入力欄へ書き戻します。',
+    startDraft: '下書きの音声入力を開始',
+    status: '状態：{{phase}}',
+    turns: '指示回数：{{count}}',
+    draft: '下書き',
+    preview: '現在のプレビュー',
+    history: '指示履歴',
+    turn: '{{count}} 回目',
+    polishedInstruction: '整形後：{{text}}',
+    turnPreview: 'プレビュー：{{text}}',
+    finishDraft: '下書きを完了',
+    nextInstruction: '次の音声指示を録音',
+    finishInstruction: '音声指示を完了',
+    commit: '確認して反映',
+    restart: 'もう一度開始',
+    openPanel: 'パネルを開く',
+    errors: {
+      voiceEditFieldChanged: '元の入力欄の内容が変更されました。編集をやり直してください。',
+      voiceEditTargetUnavailable:
+        '対象の入力欄または全文を取得できませんでした。対象を選び直してください。',
+    },
+    phase: {
+      dictating: '下書きを音声入力中',
+      draft_ready: '下書き準備完了',
+      editing: '指示を録音中',
+      applying: '編集計画を適用中',
+      preview: '確認待ち',
+      committing: '入力欄に反映中',
+      completed: '反映済み',
+      cancelled: 'キャンセル済み',
+    },
+  },
   cloudSyncE2ee: {
+    customServerTitle: '自前の同期サーバー（上級者向け）',
+    customServerOrigin: 'サーバーアドレス（https://...）',
+    customServerToken: 'サインイン Token',
+    customServerSave: '保存',
+    customServerHint:
+      '空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。',
     protocolTitle: 'クラウド同期の同意事項とプライバシー',
     protocolIntro:
       'OpenLess と開発者はプライバシーを尊重し、データの保護に取り組んでいます。続行する前に、以下をご確認ください。',
@@ -1262,7 +1306,7 @@ export const ja: typeof zhCN = {
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
+        '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',
@@ -1430,6 +1474,9 @@ export const ja: typeof zhCN = {
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
+      lowLatencyDictationLabel: '低遅延キャプチャ',
+      lowLatencyDictationDesc:
+        'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1495,6 +1542,9 @@ export const ja: typeof zhCN = {
         '保持日数を超えた履歴は新規書き込み時に削除されます。0 = 時間で削除しない。',
       historyMaxEntriesLabel: '履歴件数の上限',
       historyMaxEntriesDesc: 'ローカル保持セッション上限。空欄 = 200。範囲 5–200。',
+      polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
+      polishSkipMaxCharsDesc:
+        '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
@@ -1650,6 +1700,7 @@ export const ja: typeof zhCN = {
         asrOpenAiCompatible: 'カスタム OpenAI 互換',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek リアルタイム音声認識',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan リアルタイム ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: 'ローカル sherpa-onnx（実験的）',
@@ -1663,6 +1714,12 @@ export const ja: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'ここでは gemini-3.5-transcribe で逐語的に文字起こしし、設定済みの LLM で処理します。スマート文字起こしには、マルチモーダルモードでこのモデルを選択してください。録音終了後にアップロードします。リアルタイムには未対応です。ベース URL：https://generativelanguage.googleapis.com/v1beta（/v1beta/interactions も使用可能）。',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe はスマート文字起こしに対応し、録音終了後にフィラーの除去、言い直しの反映、文章の整形を行います。作業言語と辞書を利用できます。スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
+      validateSuccessAudio:
+        '短い無音データで音声接続を確認しました。短い録音で文字起こしの品質も確認してください。',
       elevenLabsUploadNotice:
         'ElevenLabs は録音音声を設定済みのエンドポイントへアップロードしてバッチ文字起こしします。',
       zenmuxVocabularyNote:
@@ -1749,6 +1806,9 @@ export const ja: typeof zhCN = {
       thinkingBudget: '固定予算',
       maxTokensLabel: '最大出力トークン数',
       thinkingBudgetLabel: '思考トークン予算',
+      serviceTierLabel: 'Ark 低レイテンシ推論（fast）',
+      serviceTierHint:
+        '対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。',
       responsesThinkingHint:
         '一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。',
       messagesThinkingHint:
@@ -1757,6 +1817,7 @@ export const ja: typeof zhCN = {
       llmThinkingModeInvalid: '思考方式が無効です。選択し直してください。',
       llmTokenLimitInvalid: 'トークン上限は正の整数にしてください。',
       llmThinkingBudgetInvalid: '思考予算は1024以上、固定予算では最大出力未満にしてください。',
+      llmServiceTierInvalid: '低レイテンシ推論の設定が無効です。もう一度選択してください。',
       llmResponseIncomplete: '応答が未完了か出力上限に達しました。出力済みテキストは保持されます。',
       llmProtocolHeaderConflict:
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
@@ -1891,7 +1952,7 @@ export const ja: typeof zhCN = {
       hotkeyFailed: '監視失敗',
       windowsImeLabel: 'Windows 入力メソッドバックエンド',
       windowsImeDesc:
-        '音声セッション中に OpenLess TSF IME へ一時的に切り替え、クリップボード入力の制限を回避します。',
+        '入力方式と併存する OpenLess TSF テキストサービス経由で文字を挿入し、IME を切り替えずにクリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
       windowsImeUnavailable: '利用不可',
       androidImeLabel: '入力メソッド (IME)',
@@ -2033,6 +2094,7 @@ export const ja: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '音声編集',
         none: '操作なし',
         quick_note: '速記',
         translation: '翻訳',
