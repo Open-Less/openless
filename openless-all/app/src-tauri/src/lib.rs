@@ -289,6 +289,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::cloud_sync_e2ee_change_password,
             commands::cloud_sync_e2ee_delete_remote,
             commands::cloud_sync_e2ee_sign_out,
+            commands::cloud_sync_e2ee_sign_in_with_token,
+            commands::cloud_sync_e2ee_configure_server,
             commands::cloud_sync_e2ee_begin_sign_in,
             commands::cloud_sync_e2ee_poll_sign_in,
             commands::cloud_sync_e2ee_cancel_sign_in,
@@ -580,6 +582,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::cloud_sync_e2ee_change_password,
             $crate::commands::cloud_sync_e2ee_delete_remote,
             $crate::commands::cloud_sync_e2ee_sign_out,
+            $crate::commands::cloud_sync_e2ee_sign_in_with_token,
+            $crate::commands::cloud_sync_e2ee_configure_server,
             $crate::commands::cloud_sync_e2ee_begin_sign_in,
             $crate::commands::cloud_sync_e2ee_poll_sign_in,
             $crate::commands::cloud_sync_e2ee_cancel_sign_in,
@@ -952,6 +956,7 @@ fn run_desktop() {
             }
             RunEvent::Exit => {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
+                crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
@@ -3349,66 +3354,9 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     true
 }
 
-/// Physical rect (virtual desktop coordinates) of the input target monitor + DPI scale.
-#[cfg(target_os = "windows")]
-pub(crate) struct ForegroundMonitor {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    /// Work-area rect (physical px, taskbar excluded). Consistent across platforms: the
-    /// capsule clamps into the work area first, avoiding the taskbar. Falls back to the
-    /// full-screen rect when unavailable. issue #470.
-    pub(crate) work_left: i32,
-    pub(crate) work_top: i32,
-    pub(crate) work_right: i32,
-    pub(crate) work_bottom: i32,
-    /// The monitor's effective DPI scale (1.0 = 96dpi).
-    pub(crate) scale: f64,
-}
-
-/// Locates, via Win32, the monitor of "the current foreground window (= the app the user
-/// is typing in)". With multiple monitors, places the capsule on "the screen being typed
-/// on". `window.current_monitor()` returns the monitor the capsule window itself is on, so
-/// it cannot be used to follow the input position.
-#[cfg(target_os = "windows")]
-pub(crate) fn foreground_window_monitor() -> Option<ForegroundMonitor> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        if hmon.is_invalid() {
-            return None;
-        }
-        let mut mi = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if !GetMonitorInfoW(hmon, &mut mi).as_bool() {
-            return None;
-        }
-        let mut dpi_x: u32 = 96;
-        let mut dpi_y: u32 = 96;
-        // Fall back to 96dpi when unreadable; positioning must not fail as a whole.
-        let _ = GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-        Some(ForegroundMonitor {
-            left: mi.rcMonitor.left,
-            top: mi.rcMonitor.top,
-            right: mi.rcMonitor.right,
-            bottom: mi.rcMonitor.bottom,
-            work_left: mi.rcWork.left,
-            work_top: mi.rcWork.top,
-            work_right: mi.rcWork.right,
-            work_bottom: mi.rcWork.bottom,
-            scale: (dpi_x as f64 / 96.0).max(0.1),
-        })
-    }
-}
+/// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
+/// inside the module stays `cfg(windows)`.
+mod capsule_mirrors;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
 /// current style explicitly.
@@ -3453,47 +3401,24 @@ pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri:
         native_transcript_visible,
         translation_active,
     );
-    const EDGE_GAP: f64 = 12.0;
-    // Typeless hugs the work-area bottom edge (the work area already excludes Dock / taskbar).
-    let bottom_gap = match style {
-        types::CapsuleStyle::Typeless => 0.0,
-        _ => EDGE_GAP,
-    };
+    let bottom_gap = capsule_bottom_gap(style);
 
-    // Windows: follow the monitor of "the app being typed in", so the capsule doesn't
-    // always land on the primary screen / the capsule's own screen on multi-monitor setups.
+    // Windows: the primary capsule stays on the OS primary monitor. Every other monitor
+    // gets its own mirror (see capsule_mirrors), so the capsule is visible on all screens
+    // instead of only the one that happens to hold the focused window (issue #1057).
     #[cfg(target_os = "windows")]
     {
-        if let Some(mon) = foreground_window_monitor() {
-            let scale = mon.scale;
-            let phys_w = (bounds.width * scale).round() as i32;
-            let phys_h = (bounds.height * scale).round() as i32;
-            window.set_size(PhysicalSize::new(
-                phys_w.max(1) as u32,
-                phys_h.max(1) as u32,
-            ))?;
-
-            let (work_l, work_t, work_r, work_b) =
-                if mon.work_right > mon.work_left && mon.work_bottom > mon.work_top {
-                    (mon.work_left, mon.work_top, mon.work_right, mon.work_bottom)
-                } else {
-                    (mon.left, mon.top, mon.right, mon.bottom)
-                };
-            let x = work_l + ((work_r - work_l - phys_w) / 2).max(0);
-            let y = work_b - phys_h - (bottom_gap * scale).round() as i32;
-            let (clamped_x, clamped_y) =
-                clamp_to_monitor(x, y, phys_w, phys_h, work_l, work_t, work_r, work_b);
+        if let Some(mon) = capsule_mirrors::primary_monitor_rect(window) {
+            let (phys_w, phys_h, x, y) =
+                capsule_mirrors::capsule_placement(bounds.width, bounds.height, bottom_gap, mon);
+            window.set_size(PhysicalSize::new(phys_w, phys_h))?;
             log::debug!(
-                "[capsule] win position: mon=({},{})..({},{}) work=({},{})..({},{}) scale={:.2} size=({}x{}) -> raw=({},{}) clamped=({},{})",
-                mon.left, mon.top, mon.right, mon.bottom,
-                work_l, work_t, work_r, work_b,
-                scale, phys_w, phys_h, x, y, clamped_x, clamped_y
+                "[capsule] win position: primary mon=({},{})..({},{}) scale={:.2} size=({}x{}) -> ({},{})",
+                mon.left, mon.top, mon.right, mon.bottom, mon.scale, phys_w, phys_h, x, y
             );
-            window.set_position(PhysicalPosition::new(clamped_x, clamped_y))?;
+            window.set_position(PhysicalPosition::new(x, y))?;
             return Ok(());
         }
-        // Only fall back to the current_monitor logic below when Win32 can't find the
-        // foreground monitor.
     }
 
     // macOS: follow the monitor under the mouse cursor, not the monitor the capsule window
@@ -3552,6 +3477,16 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     // in src/lib/capsuleLayout.ts.
     let _ = translation_active;
     capsule_window_bounds_for_style(types::CapsuleStyle::Siri)
+}
+
+/// Logical gap between the capsule and the work-area bottom edge (the work area already
+/// excludes the Dock / taskbar). Typeless hugs the edge.
+fn capsule_bottom_gap(style: types::CapsuleStyle) -> f64 {
+    const EDGE_GAP: f64 = 12.0;
+    match style {
+        types::CapsuleStyle::Typeless => 0.0,
+        _ => EDGE_GAP,
+    }
 }
 
 fn capsule_window_bounds_for_style(style: types::CapsuleStyle) -> CapsuleWindowBounds {

@@ -18,12 +18,16 @@ use crate::cloud_sync_e2ee_documents::{
 };
 use crate::cloud_sync_e2ee_protocol::{
     crypto::{self, DerivedKey, EncryptContext, NormalizedPassword},
-    transport::{Metadata, MetadataResult, OperationStatus, ProxyPolicy, SyncSession, Transport},
+    transport::{
+        canonical_origin, Metadata, MetadataResult, OperationStatus, PreparedOperation,
+        ProxyPolicy, SyncSession, Transport,
+    },
     types::*,
 };
+use crate::credentials::{CredentialKey, CredentialNamespace, CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::marketplace::MarketplaceService;
-use crate::{BackendError, SecretValue};
+use crate::{BackendError, CredentialStore, SecretValue};
 
 use super::{
     document_error,
@@ -51,6 +55,18 @@ pub(crate) trait SyncServiceData: Send + Sync {
     ) -> BoxFuture<'_, SyncResult<()>>;
     fn generation(&self) -> SyncResult<Revision>;
     fn device(&self) -> SourceDevice;
+    /// Live read of the user's self-hosted server preference. A Settings-page
+    /// save must take effect on the next connection attempt, never only after
+    /// a full process restart — this is the one thing `SyncServiceConfig.origin`
+    /// (a fixed snapshot from backend construction) cannot provide by itself.
+    fn custom_server_origin(&self) -> Option<String>;
+    fn set_custom_server_origin(&self, origin: Option<String>) -> SyncResult<()>;
+    fn legacy_baseline_matches(
+        &self,
+        scope: SyncScope,
+        documents: DocumentSet,
+        revision: Revision,
+    ) -> BoxFuture<'_, SyncResult<bool>>;
     fn changes(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::cloud_sync_e2ee_store::gate::SyncChange>;
@@ -61,10 +77,19 @@ pub(crate) struct SyncServiceConfig {
     pub github_client_id: String,
 }
 
+/// How the current `Connection` authenticated. Re-validated on every use so a
+/// credential change (GitHub sign-out, or the custom token being edited) is
+/// detected the same way `current_account` already detects a GitHub account
+/// switch — never trust a cached `Connection` past a credential mismatch.
+enum ConnectionCredential {
+    Github(SecretValue),
+    CustomToken(SecretValue),
+}
+
 struct Connection {
     transport: Transport,
     session: SyncSession,
-    github_token: SecretValue,
+    credential: ConnectionCredential,
     expires_at: Instant,
 }
 
@@ -100,6 +125,12 @@ struct PreviewState {
     key_id: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ServerConfiguration {
+    origin: Option<String>,
+    token: Option<String>,
+}
+
 struct Runtime {
     initialized: bool,
     settings: ClientSettings,
@@ -117,6 +148,7 @@ struct Shared {
     marketplace: Arc<MarketplaceService>,
     data: Arc<dyn SyncServiceData>,
     local: LocalStorage,
+    credential_store: Arc<dyn CredentialStore>,
     events: BackendEventPublisher,
     runtime: tokio::sync::Mutex<Runtime>,
     status: Mutex<EncryptedSyncStatus>,
@@ -139,14 +171,20 @@ impl EncryptedSyncService {
         marketplace: Arc<MarketplaceService>,
         local: LocalStorage,
         data: Arc<dyn SyncServiceData>,
+        credential_store: Arc<dyn CredentialStore>,
         events: BackendEventPublisher,
     ) -> Self {
-        let status = EncryptedSyncStatus::initial(config.origin.clone());
+        let initial_origin = data
+            .custom_server_origin()
+            .filter(|origin| !origin.trim().is_empty())
+            .unwrap_or_else(|| config.origin.clone());
+        let status = EncryptedSyncStatus::initial(initial_origin);
         Self(Arc::new(Shared {
             config,
             marketplace,
             data,
             local,
+            credential_store,
             events,
             runtime: tokio::sync::Mutex::new(Runtime {
                 initialized: false,
@@ -171,6 +209,17 @@ impl EncryptedSyncService {
         }))
     }
 
+    /// Live remote origin for every connection attempt. The local encrypted
+    /// store intentionally keeps the stable built-in origin as its AAD/key
+    /// identity; remote collection buckets include this origin separately.
+    fn remote_origin(&self) -> String {
+        self.0
+            .data
+            .custom_server_origin()
+            .filter(|origin| !origin.trim().is_empty())
+            .unwrap_or_else(|| self.0.config.origin.clone())
+    }
+
     #[cfg(test)]
     pub(crate) fn runtime_release_count_for_test(&self) -> u64 {
         self.0.runtime_release_count.load(Ordering::Acquire)
@@ -184,6 +233,7 @@ impl EncryptedSyncService {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         value.sequence = self.0.sequence.load(Ordering::Acquire).to_string();
+        value.service_origin = self.remote_origin();
         match self.0.data.generation() {
             Ok(generation) => value.local_generation = generation.as_str().into(),
             Err(_) => {
@@ -235,19 +285,50 @@ impl EncryptedSyncService {
         }
     }
 
+    fn custom_token_key() -> SyncResult<CredentialKey> {
+        CredentialKey::new(
+            CredentialNamespace::Application,
+            None,
+            CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+        )
+        .map_err(|_| error("service_unavailable"))
+    }
+
+    async fn read_custom_token(&self) -> SyncResult<Option<SecretValue>> {
+        self.0
+            .credential_store
+            .read(Self::custom_token_key()?)
+            .await
+            .map_err(|_| error("secure_storage_denied"))
+    }
+
+    async fn credential_is_current(&self, credential: &ConnectionCredential) -> SyncResult<bool> {
+        let custom = self.read_custom_token().await?;
+        Ok(match credential {
+            ConnectionCredential::Github(token) => {
+                custom.is_none()
+                    && self.0.data.custom_server_origin().is_none()
+                    && self
+                        .0
+                        .marketplace
+                        .read_access_token()
+                        .await
+                        .map_err(|_| error("sign_in_required"))?
+                        == *token
+            }
+            ConnectionCredential::CustomToken(token) => custom.as_ref() == Some(token),
+        })
+    }
+
     async fn current_account(&self, runtime: &Runtime) -> SyncResult<()> {
         self.check_cancelled()?;
         let connection = runtime
             .connection
             .as_ref()
             .ok_or_else(|| error("sign_in_required"))?;
-        if self
-            .0
-            .marketplace
-            .read_access_token()
-            .await
-            .map_err(|_| error("sign_in_required"))?
-            != connection.github_token
+        if canonical_origin(&self.remote_origin()).map_err(protocol_error)?
+            != connection.transport.service_origin().trim_end_matches('/')
+            || !self.credential_is_current(&connection.credential).await?
         {
             return Err(error("account_changed"));
         }
@@ -317,6 +398,7 @@ impl EncryptedSyncService {
                 };
                 s.last_error = Some(failure);
             } else {
+                s.recovery_required = false;
                 s.last_error = None;
                 s.sync_state = if runtime.preview.is_some() {
                     SyncState::Conflict
@@ -343,6 +425,7 @@ impl EncryptedSyncService {
         // Recovery precedes all ordinary mutations and backend-ready reporting.
         // It also handles a dropped IPC future without requiring a process restart.
         self.0.data.recover().await?;
+        self.recover_configuration().await?;
         if runtime.initialized {
             return Ok(());
         }
@@ -353,8 +436,10 @@ impl EncryptedSyncService {
                 .read("device", "client")
                 .await?
                 .ok_or_else(|| error("recovery_required"))?;
-            if runtime.settings.version != 1 {
-                return Err(error("recovery_required"));
+            match runtime.settings.version {
+                1 => self.migrate_legacy(runtime).await?,
+                2 => {}
+                _ => return Err(error("recovery_required")),
             }
         }
         if self.0.local.locked_out().await? {
@@ -366,6 +451,267 @@ impl EncryptedSyncService {
         Ok(())
     }
 
+    async fn migrate_legacy(&self, runtime: &mut Runtime) -> SyncResult<()> {
+        let old = runtime.settings.clone();
+        if self
+            .0
+            .local
+            .read::<ClientSettings>("device", "legacy-client-v1")
+            .await?
+            .is_none()
+        {
+            self.0
+                .local
+                .write("device", "legacy-client-v1", old.clone())
+                .await?;
+        }
+        let mut trusted = None;
+        if let Some(owner) = old.owner_id.as_deref() {
+            let baseline: Option<Baseline> = self.0.local.read(owner, "baseline").await?;
+            let pending: Option<Pending> = self.0.local.read(owner, "pending").await?;
+            let pending_origin = pending
+                .as_ref()
+                .map(|pending| {
+                    PreparedOperation::from_pending_record(pending.record.as_bytes())
+                        .and_then(|operation| {
+                            operation.migration_origin(
+                                owner,
+                                &pending.operation_id,
+                                &pending.vault_id,
+                            )
+                        })
+                        .map_err(|_| error("recovery_required"))
+                })
+                .transpose()?;
+            if let (Some(origin), Some(pending)) = (pending_origin.as_ref(), pending.as_ref()) {
+                let namespace = LocalStorage::account_namespace(origin, owner)?;
+                self.0
+                    .local
+                    .write(&namespace, "pending", pending.clone())
+                    .await?;
+                if !pending.deleted {
+                    let name = format!("proposal:{}", pending.operation_id);
+                    let proposal: DocumentSet = self
+                        .0
+                        .local
+                        .read(owner, &name)
+                        .await?
+                        .ok_or_else(|| error("recovery_required"))?;
+                    self.0.local.write(&namespace, &name, proposal).await?;
+                }
+            }
+            let seen: Option<Revision> = self.0.local.read(owner, "last-seen-revision").await?;
+            if let Some(baseline) = baseline.as_ref() {
+                if old.vault_id.as_deref() == Some(baseline.vault_id.as_str()) {
+                    if let Some(key) = old.key_id.as_deref() {
+                        let mut candidates =
+                            vec![self.0.config.origin.clone(), self.remote_origin()];
+                        candidates.extend(pending_origin.clone());
+                        let mut candidates: Vec<_> = candidates
+                            .iter()
+                            .filter_map(|origin| canonical_origin(origin).ok())
+                            .collect();
+                        candidates.sort();
+                        candidates.dedup();
+                        let mut matches = Vec::new();
+                        for origin in candidates {
+                            if pending_origin
+                                .as_ref()
+                                .is_some_and(|pending| pending != &origin)
+                            {
+                                continue;
+                            }
+                            let scope = SyncScope {
+                                service_origin: origin.clone(),
+                                owner_github_id: owner.into(),
+                                vault_id: baseline.vault_id.as_str().into(),
+                                key_id: key.into(),
+                                device_id: self.0.data.device().id.clone(),
+                            };
+                            if self
+                                .0
+                                .data
+                                .legacy_baseline_matches(
+                                    scope,
+                                    baseline.documents.clone(),
+                                    baseline.revision,
+                                )
+                                .await?
+                            {
+                                matches.push(origin);
+                            }
+                        }
+                        // A higher unscoped observation could belong to another server.
+                        if matches.len() == 1 && seen.is_none_or(|seen| seen <= baseline.revision) {
+                            trusted = matches.pop();
+                        }
+                    }
+                }
+            }
+            if let Some(origin) = trusted.as_ref() {
+                let namespace = LocalStorage::account_namespace(origin, owner)?;
+                for name in ["baseline", "last-seen-revision"] {
+                    if let Some(value) = self.0.local.read::<serde_json::Value>(owner, name).await?
+                    {
+                        self.0.local.write(&namespace, name, value).await?;
+                    }
+                }
+                let mut bindings = Vec::new();
+                if let (Some(vault), Some(key)) = (old.vault_id.as_ref(), old.key_id.as_ref()) {
+                    bindings.push((vault.clone(), key.clone()));
+                }
+                if let Some(pending) = pending.as_ref() {
+                    for key in [pending.key_id.as_ref(), pending.old_key_id.as_ref()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        bindings.push((pending.vault_id.clone(), key.clone()));
+                    }
+                }
+                bindings.sort();
+                bindings.dedup();
+                let locked_out = self.0.local.locked_out().await?;
+                for (vault, key_id) in bindings {
+                    if !locked_out {
+                        if let Some(key) = self.0.local.remembered(owner, &vault, &key_id).await? {
+                            self.0
+                                .local
+                                .remember(&namespace, &vault, &key_id, &key, true)
+                                .await?;
+                        }
+                    }
+                    self.0.local.forget(owner, &vault, &key_id).await?;
+                }
+            }
+        }
+        if let Some(origin) = trusted {
+            runtime.settings.service_origin = Some(origin);
+            runtime.settings.version = 2;
+        } else {
+            // Preferences are not provenance: keep legacy evidence but require a reviewed unlock.
+            runtime.settings = ClientSettings {
+                prompted: old.prompted,
+                key_preference_epoch: old
+                    .key_preference_epoch
+                    .checked_add(1)
+                    .ok_or_else(|| error("recovery_required"))?,
+                ..Default::default()
+            };
+        }
+        self.save_settings(runtime).await
+    }
+
+    async fn write_custom_token(&self, token: Option<&str>) -> SyncResult<()> {
+        let key = Self::custom_token_key()?;
+        match token {
+            Some(token) => {
+                self.0
+                    .credential_store
+                    .write(key, SecretValue::new(token))
+                    .await
+            }
+            None => self.0.credential_store.remove(key).await,
+        }
+        .map_err(|_| error("secure_storage_denied"))
+    }
+
+    async fn recover_configuration(&self) -> SyncResult<()> {
+        let Some(before) = self
+            .0
+            .local
+            .read::<ServerConfiguration>("device", "server-configuration-pending")
+            .await?
+        else {
+            return Ok(());
+        };
+        // Attempt both restorations even when one store is temporarily unavailable.
+        let token = self.write_custom_token(before.token.as_deref()).await;
+        let origin = self.0.data.set_custom_server_origin(before.origin);
+        token.and(origin)?;
+        self.0
+            .local
+            .remove("device", "server-configuration-pending")
+            .await
+    }
+
+    pub(crate) async fn configure_server(
+        &self,
+        origin: Option<String>,
+        token: String,
+    ) -> SyncResult<EncryptedSyncStatus> {
+        let origin = origin
+            .map(|origin| canonical_origin(&origin).map_err(protocol_error))
+            .transpose()?;
+        let token = token.trim();
+        if origin.is_some() != !token.is_empty() {
+            return Err(error("unsupported_protocol"));
+        }
+        self.0.auto_suspended.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
+        let mut runtime = self.0.runtime.lock().await;
+        let result = async {
+            self.initialize(&mut runtime).await?;
+            runtime.connection = None;
+            runtime.metadata = None;
+            runtime.snapshot = None;
+            runtime.baseline = None;
+            runtime.retry_at = None;
+            self.update(|status| {
+                status.auth_state = AuthState::SignedOut;
+                status.account = None;
+                status.has_cloud_snapshot = None;
+                status.remote_revision = None;
+                status.vault_id = None;
+                status.key_id = None;
+                status.pending_operation_id = None;
+            });
+            runtime.settings.enabled = false;
+            runtime.settings.remember_key = false;
+            runtime.settings.key_preference_epoch = runtime
+                .settings
+                .key_preference_epoch
+                .checked_add(1)
+                .ok_or_else(|| error("recovery_required"))?;
+            runtime.key = None;
+            runtime.preview = None;
+            self.0.local.set_lockout(true).await?;
+            self.save_settings(&runtime).await?;
+            self.forget_unlock_material(&runtime).await?;
+            let before = ServerConfiguration {
+                origin: self.0.data.custom_server_origin(),
+                token: self
+                    .read_custom_token()
+                    .await?
+                    .map(|token| token.expose_secret().to_owned()),
+            };
+            // This device-only encrypted journal recovers a dropped IPC future before reconnect.
+            self.0
+                .local
+                .write("device", "server-configuration-pending", before)
+                .await?;
+            let saved = async {
+                self.write_custom_token((!token.is_empty()).then_some(token))
+                    .await?;
+                self.0.data.set_custom_server_origin(origin)?;
+                self.0
+                    .local
+                    .remove("device", "server-configuration-pending")
+                    .await
+            }
+            .await;
+            if let Err(failure) = saved {
+                self.recover_configuration()
+                    .await
+                    .map_err(|_| error("recovery_required"))?;
+                return Err(failure);
+            }
+            Ok(())
+        }
+        .await;
+        self.finish(&mut runtime, &result);
+        result.map(|()| self.status())
+    }
+
     async fn save_settings(&self, runtime: &Runtime) -> SyncResult<()> {
         self.0
             .local
@@ -375,27 +721,54 @@ impl EncryptedSyncService {
 
     async fn connect(&self, runtime: &mut Runtime) -> SyncResult<()> {
         self.initialize(runtime).await?;
+        self.connect_initialized(runtime, crate::net::use_system_proxy(), false)
+            .await
+    }
+
+    async fn connect_initialized(
+        &self,
+        runtime: &mut Runtime,
+        use_system_proxy: bool,
+        require_custom: bool,
+    ) -> SyncResult<()> {
         self.check_cancelled()?;
         if runtime.retry_at.is_some_and(|at| at > Instant::now()) {
             return Err(error("rate_limited"));
         }
-        // Capture once after recovery has applied the current preferences. Both
-        // cache validation and client construction use this exact policy.
-        let proxy_policy =
-            ProxyPolicy::for_origin(&self.0.config.origin, crate::net::use_system_proxy());
-        self.connect_with_proxy_policy(runtime, proxy_policy).await
+        let origin = canonical_origin(&self.remote_origin()).map_err(protocol_error)?;
+        let custom_token = self.read_custom_token().await?;
+        if custom_token.is_none()
+            && (require_custom || self.0.data.custom_server_origin().is_some())
+        {
+            return Err(error("sign_in_required"));
+        }
+        let policy = ProxyPolicy::for_origin(&origin, use_system_proxy);
+        self.connect_with_proxy_policy(runtime, policy, origin, custom_token)
+            .await
     }
 
     async fn connect_with_proxy_policy(
         &self,
         runtime: &mut Runtime,
         proxy_policy: ProxyPolicy,
+        origin: String,
+        custom_token: Option<SecretValue>,
     ) -> SyncResult<()> {
         let valid = if let Some(connection) = &runtime.connection {
-            connection.expires_at > Instant::now() + Duration::from_secs(30)
-                && connection.transport.proxy_policy() == proxy_policy
-                && self.0.marketplace.read_access_token().await.ok().as_ref()
-                    == Some(&connection.github_token)
+            let credential_unchanged = match (&connection.credential, &custom_token) {
+                (ConnectionCredential::CustomToken(existing), Some(current)) => existing == current,
+                (ConnectionCredential::Github(existing), None) => {
+                    self.0.marketplace.read_access_token().await.ok().as_ref() == Some(existing)
+                }
+                // Switching between GitHub and custom-token mode (token just
+                // added, or just cleared) always forces a fresh connect.
+                _ => false,
+            };
+            let expires = connection.expires_at > Instant::now() + Duration::from_secs(30);
+            let origin_matches = connection.transport.service_origin().trim_end_matches('/')
+                == origin.trim_end_matches('/');
+            let proxy_matches = connection.transport.proxy_policy() == proxy_policy;
+            expires && origin_matches && proxy_matches && credential_unchanged
         } else {
             false
         };
@@ -403,61 +776,89 @@ impl EncryptedSyncService {
             return Ok(());
         }
         #[cfg(not(test))]
-        let transport = Transport::new(
-            &self.0.config.origin,
-            &self.0.config.github_client_id,
-            proxy_policy,
-        )
-        .await
-        .map_err(protocol_error)?;
+        let transport =
+            match Transport::new(&origin, &self.0.config.github_client_id, proxy_policy).await {
+                Ok(transport) => transport,
+                Err(e) => {
+                    log::warn!("[e2ee-token] Transport::new failed: {e:?}");
+                    return Err(protocol_error(e));
+                }
+            };
         #[cfg(test)]
-        let transport = if self.0.config.origin.starts_with("http://127.0.0.1:") {
+        let transport = if origin.starts_with("http://127.0.0.1:") {
             Transport::for_test_with_proxy_policy(
-                &self.0.config.origin,
+                &origin,
                 &self.0.config.github_client_id,
                 proxy_policy,
             )
             .await
             .map_err(protocol_error)?
         } else {
-            Transport::new(
-                &self.0.config.origin,
-                &self.0.config.github_client_id,
-                proxy_policy,
-            )
-            .await
-            .map_err(protocol_error)?
+            Transport::new(&origin, &self.0.config.github_client_id, proxy_policy)
+                .await
+                .map_err(protocol_error)?
         };
-        let (token, account) = self
-            .0
-            .marketplace
-            .sync_identity()
-            .await
-            .map_err(|_| error("sign_in_required"))?;
+        let (session, credential, account) = if let Some(token) = custom_token {
+            self.check_cancelled()?;
+            log::warn!(
+                "[e2ee-token] calling exchange_with_token against {}",
+                origin
+            );
+            let session = match transport.exchange_with_token(token.expose_secret()).await {
+                Ok(session) => {
+                    log::warn!("[e2ee-token] exchange_with_token succeeded");
+                    session
+                }
+                Err(e) => {
+                    log::warn!("[e2ee-token] exchange_with_token failed: {e:?}");
+                    return Err(protocol_error(e));
+                }
+            };
+            if transport.service_origin().trim_end_matches('/') != origin.trim_end_matches('/') {
+                return Err(error("account_changed"));
+            }
+            let account = session.account().clone();
+            (session, ConnectionCredential::CustomToken(token), account)
+        } else {
+            let (token, account) = self
+                .0
+                .marketplace
+                .sync_identity()
+                .await
+                .map_err(|_| error("sign_in_required"))?;
+            self.check_cancelled()?;
+            let session = transport
+                .exchange(token.expose_secret(), &account.github_id)
+                .await
+                .map_err(protocol_error)?;
+            if session.account().github_id != account.github_id
+                || transport.service_origin().trim_end_matches('/') != origin.trim_end_matches('/')
+            {
+                return Err(error("account_changed"));
+            }
+            if self
+                .0
+                .marketplace
+                .read_access_token()
+                .await
+                .map_err(|_| error("sign_in_required"))?
+                != token
+            {
+                return Err(error("account_changed"));
+            }
+            (session, ConnectionCredential::Github(token), account)
+        };
         self.check_cancelled()?;
-        let session = transport
-            .exchange(token.expose_secret(), &account.github_id)
-            .await
-            .map_err(protocol_error)?;
-        if session.account().github_id != account.github_id
-            || transport.service_origin().trim_end_matches('/')
-                != self.0.config.origin.trim_end_matches('/')
+        if canonical_origin(&self.remote_origin()).map_err(protocol_error)? != origin
+            || !self.credential_is_current(&credential).await?
         {
             return Err(error("account_changed"));
         }
         let backup_retention_days = transport.capabilities().max_backup_retention_days;
-        if self
-            .0
-            .marketplace
-            .read_access_token()
-            .await
-            .map_err(|_| error("sign_in_required"))?
-            != token
-        {
-            return Err(error("account_changed"));
-        }
         let owner = account.github_id.as_str().to_string();
-        if runtime.settings.owner_id.as_deref() != Some(&owner) {
+        if runtime.settings.owner_id.as_deref() != Some(&owner)
+            || runtime.settings.service_origin.as_deref() != Some(origin.as_str())
+        {
             if runtime.settings.owner_id.is_some() {
                 runtime.settings.enabled = false;
                 runtime.settings.remember_key = false;
@@ -471,6 +872,12 @@ impl EncryptedSyncService {
             runtime.settings.last_generation = None;
             runtime.settings.vault_id = None;
             runtime.settings.key_id = None;
+            runtime.settings.key_preference_epoch = runtime
+                .settings
+                .key_preference_epoch
+                .checked_add(1)
+                .ok_or_else(|| error("recovery_required"))?;
+            runtime.retry_at = None;
             runtime.key = None;
             runtime.baseline = None;
             runtime.preview = None;
@@ -478,15 +885,18 @@ impl EncryptedSyncService {
             runtime.snapshot = None;
         }
         runtime.settings.owner_id = Some(owner.clone());
+        runtime.settings.service_origin = Some(origin);
+        self.save_settings(runtime).await?;
         let expires_at = Instant::now() + Duration::from_secs(u64::from(session.expires_in()));
         runtime.connection = Some(Connection {
             transport,
             session,
-            github_token: token,
+            credential,
             expires_at,
         });
-        runtime.baseline = self.0.local.read(&owner, "baseline").await?;
-        let pending: Option<Pending> = self.0.local.read(&owner, "pending").await?;
+        let storage_owner = self.storage_owner(runtime)?;
+        runtime.baseline = self.0.local.read(&storage_owner, "baseline").await?;
+        let pending: Option<Pending> = self.0.local.read(&storage_owner, "pending").await?;
         self.update(|s| {
             s.account = Some(SyncAccount {
                 github_id: owner,
@@ -507,9 +917,8 @@ impl EncryptedSyncService {
     ) -> SyncResult<()> {
         let mut runtime = self.0.runtime.lock().await;
         self.initialize(&mut runtime).await?;
-        self.check_cancelled()?;
-        let policy = ProxyPolicy::for_origin(&self.0.config.origin, use_system_proxy);
-        self.connect_with_proxy_policy(&mut runtime, policy).await
+        self.connect_initialized(&mut runtime, use_system_proxy, false)
+            .await
     }
 
     async fn refresh_metadata(&self, runtime: &mut Runtime) -> SyncResult<()> {
@@ -529,7 +938,7 @@ impl EncryptedSyncService {
         };
         self.current_account(runtime).await?;
         let value = metadata.value();
-        let owner = self.owner(runtime)?.to_owned();
+        let owner = self.storage_owner(runtime)?;
         let seen: Option<Revision> = self.0.local.read(&owner, "last-seen-revision").await?;
         if seen.is_some_and(|seen| value.revision < seen)
             || runtime
@@ -584,6 +993,17 @@ impl EncryptedSyncService {
             .as_deref()
             .ok_or_else(|| error("sign_in_required"))
     }
+    fn storage_owner(&self, runtime: &Runtime) -> SyncResult<String> {
+        LocalStorage::account_namespace(
+            runtime
+                .settings
+                .service_origin
+                .as_deref()
+                .ok_or_else(|| error("sign_in_required"))?,
+            self.owner(runtime)?,
+        )
+    }
+
     fn unlocked(&self, runtime: &Runtime) -> SyncResult<Arc<DerivedKey>> {
         runtime.key.clone().ok_or_else(|| error("unlock_required"))
     }
@@ -630,7 +1050,7 @@ impl EncryptedSyncService {
         self.0
             .local
             .remember(
-                self.owner(runtime)?,
+                &self.storage_owner(runtime)?,
                 snapshot.vault_id.as_str(),
                 snapshot.key_id.as_str(),
                 &key,
@@ -679,7 +1099,7 @@ impl EncryptedSyncService {
         if let Some(key) = self
             .0
             .local
-            .remembered(self.owner(runtime)?, vault, key_id)
+            .remembered(&self.storage_owner(runtime)?, vault, key_id)
             .await?
         {
             let snapshot = self.download(runtime).await?;
@@ -702,7 +1122,7 @@ impl EncryptedSyncService {
         }
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.begin();
-        let result = async {
+        let result: SyncResult<EnableStep> = async {
             self.connect(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
             runtime.settings.consent_version = Some(consent_version);
@@ -727,6 +1147,14 @@ impl EncryptedSyncService {
             Ok(step)
         }
         .await;
+        match &result {
+            Ok(step) => log::warn!("[e2ee-token] prepare_enable: succeeded, next_step={step:?}"),
+            Err(e) => log::warn!(
+                "[e2ee-token] prepare_enable: failed code={:?} message={}",
+                e.code,
+                e.message
+            ),
+        }
         self.finish(&mut runtime, &result);
         result.map(|next_step| EnablePreparation {
             next_step,
@@ -770,7 +1198,7 @@ impl EncryptedSyncService {
                 if vault != snapshot.vault_id.as_str() || key_id != snapshot.key_id.as_str() {
                     self.0
                         .local
-                        .forget(self.owner(&runtime)?, vault, key_id)
+                        .forget(&self.storage_owner(&runtime)?, vault, key_id)
                         .await?;
                 }
             }
@@ -806,6 +1234,7 @@ impl EncryptedSyncService {
         if consent_version != CONSENT_VERSION {
             return Err(error("consent_required"));
         }
+        log::warn!("[e2ee-token] create: entered, observed_revision={observed_revision}");
         let observed = Revision::parse(&observed_revision).map_err(protocol_error)?;
         let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
         self.0.auto_suspended.store(false, Ordering::Release);
@@ -815,7 +1244,14 @@ impl EncryptedSyncService {
             self.reconcile_for_review(&mut runtime).await?;
             self.refresh_metadata(&mut runtime).await?;
             let metadata = self.metadata(&runtime)?.value();
+            log::warn!(
+                "[e2ee-token] create: server state={:?} server_revision={} observed={}",
+                metadata.state,
+                metadata.revision.as_str(),
+                observed.as_str()
+            );
             if metadata.state == VaultState::Active || metadata.revision != observed {
+                log::warn!("[e2ee-token] create: revision_conflict (state or revision mismatch)");
                 return Err(error("revision_conflict"));
             }
             if runtime.settings.consent_version.as_deref() != Some(CONSENT_VERSION) {
@@ -896,7 +1332,7 @@ impl EncryptedSyncService {
             base_revision: snapshot.base_revision,
             old_key_id,
         };
-        let owner = self.owner(runtime)?.to_string();
+        let owner = self.storage_owner(runtime)?;
         self.0
             .local
             .write(
@@ -952,7 +1388,7 @@ impl EncryptedSyncService {
     }
 
     async fn reconcile(&self, runtime: &mut Runtime) -> SyncResult<()> {
-        let owner = self.owner(runtime)?.to_owned();
+        let owner = self.storage_owner(runtime)?;
         let Some(pending): Option<Pending> = self.0.local.read(&owner, "pending").await? else {
             return Ok(());
         };
@@ -1010,7 +1446,8 @@ impl EncryptedSyncService {
         pending: &Pending,
         receipt: &OperationReceipt,
     ) -> SyncResult<()> {
-        let owner = self.owner(runtime)?.to_string();
+        self.current_account(runtime).await?;
+        let owner = self.storage_owner(runtime)?;
         if receipt.operation_id.as_str() != pending.operation_id
             || receipt.vault_id.as_str() != pending.vault_id
         {
@@ -1198,7 +1635,11 @@ impl EncryptedSyncService {
 
     fn scope(&self, runtime: &Runtime, vault: &str, key: &str) -> SyncResult<SyncScope> {
         Ok(SyncScope {
-            service_origin: self.0.config.origin.clone(),
+            service_origin: runtime
+                .settings
+                .service_origin
+                .clone()
+                .ok_or_else(|| error("sign_in_required"))?,
             owner_github_id: self.owner(runtime)?.into(),
             vault_id: vault.into(),
             key_id: key.into(),
@@ -1403,7 +1844,7 @@ impl EncryptedSyncService {
             };
             self.0
                 .local
-                .write(&scope.owner_github_id, "baseline", baseline.clone())
+                .write(&self.storage_owner(&runtime)?, "baseline", baseline.clone())
                 .await?;
             self.0
                 .data
@@ -1516,7 +1957,7 @@ impl EncryptedSyncService {
             };
             self.0
                 .local
-                .write(&scope.owner_github_id, "baseline", baseline.clone())
+                .write(&self.storage_owner(runtime)?, "baseline", baseline.clone())
                 .await?;
             self.0
                 .data
@@ -1687,7 +2128,7 @@ impl EncryptedSyncService {
             };
             self.0
                 .local
-                .write(self.owner(&runtime)?, "pending", pending.clone())
+                .write(&self.storage_owner(&runtime)?, "pending", pending.clone())
                 .await?;
             self.update(|s| s.pending_operation_id = Some(pending.operation_id.clone()));
             self.current_account(&runtime).await?;
@@ -1715,23 +2156,46 @@ impl EncryptedSyncService {
         use crate::domains::MarketplaceApi;
         self.0.auto_suspended.store(true, Ordering::Release);
         self.0.cancelled.store(true, Ordering::Release);
-        // Preserve the account API's existing fail-closed guarantee immediately,
-        // even while an earlier sync task is draining its native I/O worker.
-        self.0.marketplace.invalidate_authentication();
         let mut runtime = self.0.runtime.lock().await;
         runtime.key = None;
         runtime.preview = None;
         runtime.settings.enabled = false;
         runtime.settings.remember_key = false;
         let connection = runtime.connection.take();
-        // OAuth logout is independent of encrypted journal/key cleanup. Always
-        // attempt it; denied sync-key deletion cannot keep GitHub authorized.
-        let logout_result = self
-            .0
-            .marketplace
-            .logout()
-            .await
-            .map_err(|_| error("secure_storage_denied"));
+        // A custom-token session must never delete the marketplace's GitHub
+        // credential: that identity is unrelated to this sync server and may
+        // still be in active use by the unrelated plugin-marketplace feature.
+        let was_custom_token = matches!(
+            connection.as_ref().map(|c| &c.credential),
+            Some(ConnectionCredential::CustomToken(_))
+        ) || self.0.data.custom_server_origin().is_some();
+        let configured_token = self.read_custom_token().await;
+        let logout_result: SyncResult<()> =
+            if was_custom_token || matches!(&configured_token, Ok(Some(_))) {
+                async {
+                    let key = Self::custom_token_key()?;
+                    self.0
+                        .credential_store
+                        .remove(key)
+                        .await
+                        .map_err(|_| error("secure_storage_denied"))
+                }
+                .await
+            } else if let Err(failure) = configured_token {
+                Err(failure)
+            } else {
+                // OAuth logout is independent of encrypted journal/key cleanup. Always
+                // attempt it; denied sync-key deletion cannot keep GitHub authorized.
+                // Tombstone the Marketplace session only for an OAuth-backed sync
+                // session. A custom-token sign-out must leave the unrelated GitHub
+                // Marketplace session usable.
+                self.0.marketplace.invalidate_authentication();
+                self.0
+                    .marketplace
+                    .logout()
+                    .await
+                    .map_err(|_| error("secure_storage_denied"))
+            };
         let cleanup_result = async {
             self.0.local.set_lockout(true).await?;
             self.initialize(&mut runtime).await?;
@@ -1749,11 +2213,11 @@ impl EncryptedSyncService {
         if let Some(Connection {
             transport,
             session,
-            github_token,
+            credential,
             ..
         }) = connection
         {
-            drop(github_token);
+            drop(credential);
             // Local sign-out remains possible offline; the discarded session
             // also has a short server-enforced expiry.
             let _ = tokio::time::timeout(Duration::from_secs(5), transport.revoke_session(session))
@@ -1774,6 +2238,26 @@ impl EncryptedSyncService {
             s.pending_operation_id = None;
         });
         let result = cleanup_result.and(logout_result);
+        self.finish(&mut runtime, &result);
+        result.map(|()| self.status())
+    }
+
+    /// Single-shot equivalent of the GitHub device-flow sign-in for a
+    /// self-hosted server: there is no polling loop because the token
+    /// exchange is one HTTP round trip, not an out-of-band user approval.
+    /// Requires a custom token to already be saved (see `CloudSyncSection`'s
+    /// save action) — this never falls back to a GitHub identity, so clicking
+    /// it without a saved token fails clearly instead of silently doing the
+    /// wrong thing.
+    pub(crate) async fn sign_in_with_custom_token(&self) -> SyncResult<EncryptedSyncStatus> {
+        let mut runtime = self.0.runtime.try_lock().map_err(|_| error("busy"))?;
+        self.begin();
+        let result = async {
+            self.initialize(&mut runtime).await?;
+            self.connect_initialized(&mut runtime, crate::net::use_system_proxy(), true)
+                .await
+        }
+        .await;
         self.finish(&mut runtime, &result);
         result.map(|()| self.status())
     }
@@ -1804,20 +2288,21 @@ impl EncryptedSyncService {
     }
 
     async fn forget_unlock_material(&self, runtime: &Runtime) -> SyncResult<()> {
-        let Some(owner) = &runtime.settings.owner_id else {
+        if runtime.settings.owner_id.is_none() {
             return Ok(());
-        };
+        }
+        let owner = self.storage_owner(runtime)?;
         if let (Some(vault), Some(key)) = (&runtime.settings.vault_id, &runtime.settings.key_id) {
-            self.0.local.forget(owner, vault, key).await?;
+            self.0.local.forget(&owner, vault, key).await?;
         }
         // An interrupted password rotation can have two remembered keys. Lock
         // and sign-out clear both while retaining the encrypted replay record.
-        if let Some(pending) = self.0.local.read::<Pending>(owner, "pending").await? {
+        if let Some(pending) = self.0.local.read::<Pending>(&owner, "pending").await? {
             for key in [pending.key_id.as_ref(), pending.old_key_id.as_ref()]
                 .into_iter()
                 .flatten()
             {
-                self.0.local.forget(owner, &pending.vault_id, key).await?;
+                self.0.local.forget(&owner, &pending.vault_id, key).await?;
             }
         }
         Ok(())
@@ -1985,12 +2470,12 @@ impl EncryptedSyncService {
     }
 
     async fn discard_rejected(&self, runtime: &Runtime, pending: &Pending) -> SyncResult<()> {
-        let owner = self.owner(runtime)?;
-        self.0.local.remove(owner, "pending").await?;
+        let owner = self.storage_owner(runtime)?;
+        self.0.local.remove(&owner, "pending").await?;
         let _ = self
             .0
             .local
-            .remove(owner, &format!("proposal:{}", pending.operation_id))
+            .remove(&owner, &format!("proposal:{}", pending.operation_id))
             .await;
         self.update(|status| status.pending_operation_id = None);
         Ok(())
@@ -2004,7 +2489,11 @@ impl EncryptedSyncService {
     }
 
     async fn reviewable_pending(&self, runtime: &Runtime) -> SyncResult<Option<Pending>> {
-        let pending: Option<Pending> = self.0.local.read(self.owner(runtime)?, "pending").await?;
+        let pending: Option<Pending> = self
+            .0
+            .local
+            .read(&self.storage_owner(runtime)?, "pending")
+            .await?;
         if let Some(pending) = &pending {
             // Once a newer head is observed, the original If-Match can no
             // longer commit. Until then, only exact replay is safe.
@@ -2038,7 +2527,7 @@ impl EncryptedSyncService {
                 if !active {
                     self.0
                         .local
-                        .forget(self.owner(runtime)?, &pending.vault_id, key_id)
+                        .forget(&self.storage_owner(runtime)?, &pending.vault_id, key_id)
                         .await?;
                 }
             }
@@ -2048,12 +2537,15 @@ impl EncryptedSyncService {
             self.0
                 .local
                 .write(
-                    self.owner(runtime)?,
+                    &self.storage_owner(runtime)?,
                     &format!("reviewed-uncertain:{}", pending.operation_id),
                     pending.clone(),
                 )
                 .await?;
-            self.0.local.remove(self.owner(runtime)?, "pending").await?;
+            self.0
+                .local
+                .remove(&self.storage_owner(runtime)?, "pending")
+                .await?;
             self.update(|status| status.pending_operation_id = None);
         }
         Ok(())

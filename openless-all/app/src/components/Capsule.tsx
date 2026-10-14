@@ -18,7 +18,7 @@ import {
   getCapsuleTranscriptRailHeight,
   parseCapsuleStyle,
 } from '../lib/capsuleLayout';
-import { isTauri } from '../lib/ipc';
+import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
 import type {
   CapsulePayload,
   CapsuleState,
@@ -31,9 +31,12 @@ import { VocabSuggestionCard } from './VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
 import {
   applyTranscriptEvent,
+  applyTranscriptSessionId,
+  applyTranscriptSnapshot,
   beginTranscriptGeneration,
   clearTranscriptText,
   createTranscriptViewState,
+  shouldRetryTranscriptSnapshot,
   type BackendEvent,
   type TranscriptViewState,
 } from '../lib/backendEvent';
@@ -761,12 +764,27 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
 
   useEffect(() => {
     if (!isTauri) return;
-    let unlisten: (() => void) | undefined;
+    const unlisteners: (() => void)[] = [];
     let cancelled = false;
+    let stateRevision = 0;
+    const cleanupListeners = () => {
+      for (const unlisten of unlisteners.splice(0)) unlisten();
+    };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const handle = await listen<CapsulePayload>('capsule:state', (event) => {
-        const p = event.payload;
+      if (cancelled) return;
+      const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
+        const unlisten = await listen<T>(name, (event) => {
+          if (!cancelled) apply(event.payload);
+        });
+        if (cancelled) {
+          unlisten();
+          return false;
+        }
+        unlisteners.push(unlisten);
+        return true;
+      };
+      const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
           capsuleStateFirstLogged = true;
           // #470 diagnostics v2: confirm the capsule webview really received the backend
@@ -779,12 +797,14 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setMessage(p.message ?? undefined);
         const previous = capsuleStateRef.current;
         capsuleStateRef.current = p.state;
+        const previousTranscript = transcriptViewRef.current;
+        let nextTranscript = applyTranscriptSessionId(previousTranscript, p.sessionId);
+        const sessionChanged = nextTranscript !== previousTranscript;
         // Any new recording session must drop prior ASR text — including when
         // the previous capsule was still transcribing/polishing/done from
         // dictation (selection-voice Start used to keep the stale stream).
-        if (p.state === 'recording' && previous !== 'recording') {
-          transcriptViewRef.current = beginTranscriptGeneration(transcriptViewRef.current);
-          setLocalAsrText('');
+        if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
+          nextTranscript = beginTranscriptGeneration(nextTranscript);
         }
         if (
           p.state === 'idle' ||
@@ -795,9 +815,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           // Terminal payloads must release the native transcript rail before the exit/card
           // branch can leave the capsule webview. Keeping the old text here would make the
           // enlarged native window stay interactive after the session has ended.
-          transcriptViewRef.current = clearTranscriptText(transcriptViewRef.current);
-          setLocalAsrText('');
+          nextTranscript = clearTranscriptText(nextTranscript);
         }
+        transcriptViewRef.current = nextTranscript;
+        if (nextTranscript !== previousTranscript) setLocalAsrText(nextTranscript.text);
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
@@ -805,38 +826,66 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         if (style && !stylePreferenceReadyRef.current) setCapsuleStyle(style);
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
-      });
-      const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
-        const next = applyTranscriptEvent(transcriptViewRef.current, event.payload);
-        transcriptViewRef.current = next;
-        setLocalAsrText(next.text);
-      });
-      const suggestHandle = await listen<PendingCorrection[]>('vocab:suggested', (event) => {
-        setSuggestions(event.payload ?? []);
-      });
-      const fallbackHandle = await listen<InsertFallbackCardPayload | null>(
-        'insert:fallback',
-        (event) => {
-          setInsertFallback(event.payload ?? null);
-        },
-      );
-      if (cancelled) {
-        handle();
-        transcriptHandle();
-        suggestHandle();
-        fallbackHandle();
-      } else {
-        unlisten = () => {
-          handle();
-          transcriptHandle();
-          suggestHandle();
-          fallbackHandle();
-        };
+      };
+      if (
+        !(await subscribe<CapsulePayload>('capsule:state', (payload) => {
+          stateRevision += 1;
+          applyPayload(payload);
+        }))
+      )
+        return;
+      if (
+        !(await subscribe<BackendEvent>('backend:event', (payload) => {
+          const next = applyTranscriptEvent(transcriptViewRef.current, payload);
+          transcriptViewRef.current = next;
+          setLocalAsrText(next.text);
+        }))
+      )
+        return;
+      if (
+        !(await subscribe<PendingCorrection[]>('vocab:suggested', (payload) => {
+          setSuggestions(payload ?? []);
+        }))
+      )
+        return;
+      if (
+        !(await subscribe<InsertFallbackCardPayload | null>('insert:fallback', (payload) => {
+          setInsertFallback(payload ?? null);
+        }))
+      )
+        return;
+
+      // Lazy mirrors can miss the session start. Subscribe first, then replay a coherent
+      // frame only if no newer state arrived while the native request was in flight.
+      for (const delayMs of [0, 16, 32, 64, 128, 256]) {
+        if (cancelled) return;
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        if (cancelled) return;
+        const revisionAtRead = stateRevision;
+        const snapshot = await getCapsuleSnapshot().catch((error) => {
+          if (!cancelled) console.warn('[capsule] snapshot replay failed', error);
+          return undefined;
+        });
+        if (cancelled || snapshot === undefined) return;
+        if (!snapshot || stateRevision !== revisionAtRead) continue;
+        const previousTranscript = transcriptViewRef.current;
+        if (shouldRetryTranscriptSnapshot(previousTranscript, snapshot)) continue;
+        const nextTranscript = applyTranscriptSnapshot(previousTranscript, snapshot);
+        if (nextTranscript === previousTranscript) return;
+        transcriptViewRef.current = nextTranscript;
+        setLocalAsrText(nextTranscript.text);
+        applyPayload(snapshot);
+        return;
       }
-    })();
+    })().catch((error) => {
+      cleanupListeners();
+      if (!cancelled) console.warn('[capsule] subscription failed', error);
+    });
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      cleanupListeners();
     };
   }, []);
 

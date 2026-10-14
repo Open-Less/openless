@@ -118,7 +118,20 @@ pub use voice_edit::*;
 pub(crate) type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub(crate) type CoreState<'a> = State<'a, Arc<openless_core::OpenLessBackend>>;
 #[cfg(not(mobile))]
-pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
+pub struct MicrophoneMonitorState {
+    pub(crate) operation: Mutex<()>,
+    pub(crate) recorder: Mutex<Option<Recorder>>,
+}
+
+#[cfg(not(mobile))]
+impl MicrophoneMonitorState {
+    pub(crate) fn new(recorder: Option<Recorder>) -> Self {
+        Self {
+            operation: Mutex::new(()),
+            recorder: Mutex::new(recorder),
+        }
+    }
+}
 #[cfg(not(mobile))]
 pub type TrayMicrophoneMenuState = Mutex<Vec<TrayMicrophoneMenuItem>>;
 

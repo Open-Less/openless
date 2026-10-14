@@ -21,12 +21,13 @@ const defer = () => {
   });
   return { promise, resolve, reject };
 };
-function context({ fresh = false } = {}) {
+function context({ fresh = false, tauriInitially = true } = {}) {
   const window = new EventTarget(),
     handlers = new Map(),
     statusQueue = [],
     attempts = [];
   let errors = 0;
+  let tauriReady = tauriInitially;
   window.addEventListener('openless:sync-ui-persistence-failed', () => errors++);
   let locale = 'en',
     fontScale = 'medium',
@@ -81,7 +82,7 @@ function context({ fresh = false } = {}) {
     throw new Error(cmd);
   };
   const exports = {},
-    shared = { isTauri: true, invokeOrMock: invoke };
+    shared = { isTauriNow: () => tauriReady, invokeOrMock: invoke };
   const localRequire = (name) =>
     name === './ipc/shared'
       ? shared
@@ -115,6 +116,9 @@ function context({ fresh = false } = {}) {
     setStatus: (value) => {
       status = { ...status, ...value };
     },
+    setTauri: (value) => {
+      tauriReady = value;
+    },
     snapshot: () => ({ locale, fontScale, preferences, revision: revision(), errors }),
     externalWrite: (value = {}) => {
       preferences = { ...preferences, ...value };
@@ -143,6 +147,16 @@ async function test(name, fn) {
     console.log('FAIL ' + name + '\n' + e.message);
   }
 }
+await test('late Tauri injection still installs the live mirror bridge', async () => {
+  const c = context({ fresh: true, tauriInitially: false });
+  await c.install();
+  c.setTauri(true);
+  await c.flush();
+  c.setStatus({ account: { githubId: '1' }, vaultId: 'v1', consentVersion: 'yes' });
+  await c.userLocale('de');
+  await drain();
+  assert.equal(c.snapshot().preferences.locale, 'de');
+});
 await test('old mirror queued before restore cannot overwrite its native value', async () => {
   const c = context();
   await c.install();

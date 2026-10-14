@@ -7,7 +7,10 @@
 //! - OpenAI-compatible chat completions: the user content carries base64 WAV
 //!   in an `input_audio` part;
 //! - Gemini native generateContent: an `inlineData(audio/wav)` part
-//!   (reuses `llm_gemini.rs`).
+//!   (reuses `llm_gemini.rs`);
+//! - Gemini Transcribe: Files + Interactions with Smart transcription.
+
+mod gemini_transcribe;
 
 use std::collections::HashMap;
 
@@ -329,6 +332,10 @@ impl OpenAICompatibleOmni {
 /// Unified multimodal-channel entry point: routes by config to the Gemini
 /// native or OpenAI-compatible client.
 pub enum OmniProvider {
+    GeminiTranscribe {
+        provider: gemini_transcribe::GeminiTranscribeOmni,
+        label: OmniCallLabel,
+    },
     Gemini {
         provider: crate::llm_gemini::GeminiProvider,
         label: OmniCallLabel,
@@ -343,6 +350,12 @@ impl OmniProvider {
                 provider: config.provider_id.clone(),
                 model: config.model.clone(),
             };
+            if config.model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+                return Self::GeminiTranscribe {
+                    provider: gemini_transcribe::GeminiTranscribeOmni::new(config),
+                    label,
+                };
+            }
             let gemini_config = crate::llm_gemini::GeminiConfig::new(
                 config.api_key.clone(),
                 config.model.clone(),
@@ -362,9 +375,21 @@ impl OmniProvider {
         }
     }
 
+    /// Forward structured hints to dedicated transcription without injecting prompts.
+    pub fn with_transcription_hints(mut self, languages: &[String], hotwords: &[String]) -> Self {
+        if let Self::GeminiTranscribe { provider, .. } = &mut self {
+            provider.set_hints(languages, hotwords);
+        }
+        self
+    }
+
+    pub fn is_transcription_only(&self) -> bool {
+        matches!(self, Self::GeminiTranscribe { .. })
+    }
+
     pub fn call_label(&self) -> OmniCallLabel {
         match self {
-            Self::Gemini { label, .. } => label.clone(),
+            Self::Gemini { label, .. } | Self::GeminiTranscribe { label, .. } => label.clone(),
             Self::OpenAI(provider) => OmniCallLabel {
                 provider: provider.config.provider_id.clone(),
                 model: provider.config.model.clone(),
@@ -381,6 +406,9 @@ impl OmniProvider {
         wav_bytes: Option<&[u8]>,
     ) -> Result<String, LLMError> {
         match self {
+            Self::GeminiTranscribe { provider, .. } => {
+                provider.complete(user_text, wav_bytes).await
+            }
             Self::Gemini { provider, .. } => {
                 provider
                     .complete_omni(system_prompt, user_text, wav_bytes)
@@ -407,6 +435,11 @@ impl OmniProvider {
         C: Fn() -> bool + Send + Sync,
     {
         match self {
+            Self::GeminiTranscribe { provider, .. } => {
+                provider
+                    .complete_streaming(user_text, wav_bytes, on_delta, should_cancel)
+                    .await
+            }
             Self::Gemini { provider, .. } => {
                 let text = provider
                     .complete_omni(system_prompt, user_text, wav_bytes)
@@ -443,6 +476,25 @@ mod tests {
             temperature: Some(0.3),
             thinking_enabled: false,
         }
+    }
+
+    #[test]
+    fn dedicated_transcription_does_not_change_general_gemini_or_openai_routing() {
+        let mut gemini = config();
+        gemini.provider_id = "gemini".into();
+        gemini.model = "gemini-2.5-flash".into();
+        assert!(matches!(
+            OmniProvider::new(gemini.clone()),
+            OmniProvider::Gemini { .. }
+        ));
+        gemini.model = format!(" {} ", crate::asr::gemini::DEFAULT_MODEL);
+        assert!(OmniProvider::new(gemini).is_transcription_only());
+        let mut compatible = config();
+        compatible.model = crate::asr::gemini::DEFAULT_MODEL.into();
+        assert!(matches!(
+            OmniProvider::new(compatible),
+            OmniProvider::OpenAI(_)
+        ));
     }
 
     #[test]

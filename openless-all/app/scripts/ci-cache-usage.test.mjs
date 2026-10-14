@@ -54,6 +54,8 @@ writeFileSync(
 
 const pullStates = { 101: 'open', 102: 'closed', 103: 'merged' };
 
+const pythonCommand = process.platform === 'win32' ? 'python' : 'python3';
+
 // Stub `gh`: serves the cache listing, answers pull request lookups from the
 // fixture above, and records every deletion instead of performing it.
 writeFileSync(
@@ -66,7 +68,7 @@ case "$args" in
     printf '%s\\n' "$args" >>"$DELETE_LOG"
     ;;
   *actions/caches?per_page=100*)
-    python3 - "$CACHES_JSON" <<'PY'
+    ${pythonCommand} - "$CACHES_JSON" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 for entry in data["actions_caches"]:

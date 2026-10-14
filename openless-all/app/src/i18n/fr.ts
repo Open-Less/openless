@@ -6,7 +6,8 @@ export const fr: typeof zhCN = {
     description:
       'Dictez un brouillon ou chargez le texte cible, modifiez-le par instructions vocales, puis confirmez son insertion.',
     targetHint: 'Placez le curseur dans le champ cible ou sélectionnez le texte à modifier.',
-    androidTargetHint: "Attribuez l’édition vocale à un geste de la superposition. Enregistrez dans l’application cible, puis balayez pour ouvrir l’aperçu. La confirmation met à jour le champ d’origine.",
+    androidTargetHint:
+      'Attribuez l’édition vocale à un geste de la superposition. Enregistrez dans l’application cible, puis balayez pour ouvrir l’aperçu. La confirmation met à jour le champ d’origine.',
     startDraft: 'Dicter un brouillon',
     status: 'État : {{phase}}',
     turns: 'Instructions : {{count}}',
@@ -39,6 +40,12 @@ export const fr: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: 'Serveur de synchronisation auto-hébergé (avancé)',
+    customServerOrigin: 'Adresse du serveur (https://...)',
+    customServerToken: 'Jeton de connexion',
+    customServerSave: 'Enregistrer',
+    customServerHint:
+      "Laissez vide pour utiliser le serveur de synchronisation officiel. L'adresse doit commencer par https:// et être une URL racine.",
     protocolTitle: 'Accord de synchronisation et confidentialité',
     protocolIntro:
       'OpenLess et ses développeurs indépendants respectent votre vie privée et protègent vos données. Lisez cette notice avant de continuer.',
@@ -1350,7 +1357,7 @@ export const fr: typeof zhCN = {
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS uniquement). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe et les applications sensibles connues sont exclus.',
+        'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
     codingConsole: {
       title: 'Console Claude',
@@ -1520,6 +1527,11 @@ export const fr: typeof zhCN = {
       stableTranscriptionLabel: 'Mode stable (enregistrer puis transcrire)',
       stableTranscriptionDesc:
         'Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.',
+      lowLatencyDictationLabel: 'Capture à faible latence',
+      lowLatencyDictationDesc:
+        'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
+      audioEnhancementLabel: 'Amélioration légère du microphone',
+      audioEnhancementDesc: 'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',
@@ -1588,6 +1600,9 @@ export const fr: typeof zhCN = {
       historyMaxEntriesLabel: 'Nombre maximal d’entrées',
       historyMaxEntriesDesc:
         'Nombre maximal de sessions conservées localement. Vide = 200. Plage : 5–200.',
+      polishSkipMaxCharsLabel: 'Ignorer l’amélioration pour les courtes dictées (caractères max)',
+      polishSkipMaxCharsDesc:
+        'Les transcriptions d’au plus N caractères (espaces non comptés) sont insérées telles quelles, sans appel au LLM. 0 = désactivé. La traduction est toujours améliorée.',
       polishContextWindowLabel: 'Fenêtre de contexte d’amélioration (minutes)',
       polishContextWindowDesc:
         'Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.',
@@ -1738,6 +1753,7 @@ export const fr: typeof zhCN = {
         stepfun: 'StepFun',
         custom: 'Personnalisé',
         asrVolcengine: 'Volcengine bigasr',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'ASR temps réel Hunyuan de Tencent Cloud',
         asrBailian: 'Alibaba Bailian ASR en temps réel',
         asrBailianQwen3: 'Bailian Qwen3 ASR en temps réel',
@@ -1765,6 +1781,12 @@ export const fr: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe effectue ici une transcription mot à mot, suivie du LLM configuré. Pour la transcription intelligente, sélectionnez ce modèle en mode multimodal. L’audio est envoyé à la fin de l’enregistrement ; le direct n’est pas pris en charge. URL de base : https://generativelanguage.googleapis.com/v1beta (ou /v1beta/interactions).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe permet la transcription intelligente : suppression des hésitations, application des corrections orales et mise en forme après l’enregistrement. Les langues de travail et le dictionnaire sont pris en charge. Ce modèle n’utilise pas les consignes de style et ne permet pas la traduction, la révision de texte ou les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
+      validateSuccessAudio:
+        'Connexion audio vérifiée avec un court échantillon de silence. Confirmez la qualité de transcription avec un court enregistrement.',
       elevenLabsUploadNotice:
         'ElevenLabs envoie l’audio enregistré à l’adresse configurée pour une transcription par lots.',
       zenmuxVocabularyNote:

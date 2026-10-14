@@ -348,7 +348,7 @@ if (
 }
 assertMatch(
   capsuleTsx,
-  /p\.state === 'idle'\s*\|\|\s*p\.state === 'done'\s*\|\|\s*p\.state === 'cancelled'\s*\|\|\s*p\.state === 'error'[\s\S]*?setLocalAsrText\(''\)/,
+  /p\.state === 'idle'\s*\|\|\s*p\.state === 'done'\s*\|\|\s*p\.state === 'cancelled'\s*\|\|\s*p\.state === 'error'[\s\S]*?clearTranscriptText\(nextTranscript\)[\s\S]*?setLocalAsrText\(nextTranscript\.text\)/,
   'terminal capsule states should clear the transcript visibility source',
 );
 if (capsuleTsx.slice(conditionalReturn).includes('useEffect(')) {
@@ -477,8 +477,13 @@ assertMatch(
 );
 assertMatch(
   coordinatorRs,
-  /set_ignore_cursor_events\(true\)[\s\S]*?set_size\([\s\S]*?set_position\([\s\S]*?show_capsule_window_for_recording\(&self\.app, &rail, false\)/,
+  /set_ignore_cursor_events\(true\)[\s\S]*?set_size\([\s\S]*?set_position\([\s\S]*?show_capsule_window_for_recording\(app, rail, false\)/,
   'transcript rail should be positioned as its own click-through window',
+);
+assertMatch(
+  coordinatorRs,
+  /existing_mirror_labels\(&app, prefix\)[\s\S]*?emit_to\(label\.as_str\(\), "capsule:state"/,
+  'capsule state events should reach every per-monitor capsule and rail mirror (issue #1057)',
 );
 assertMatch(
   coordinatorRs,

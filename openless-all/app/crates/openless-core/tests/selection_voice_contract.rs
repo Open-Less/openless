@@ -11,7 +11,7 @@ use openless_core::{
     SelectionVoiceHotkeyEdge, SelectionVoiceInstructionRequest, SelectionVoiceIntent,
     SelectionVoiceIntentMode, SelectionVoiceManualIntent, SelectionVoicePhase,
     SelectionVoicePreviewUpdate, SelectionVoiceRoute, SelectionVoiceSnapshot, SessionId,
-    TextPolisher, TextStreamSink, UserPreferences,
+    TextPolisher, TextStreamSink, UserPreferences, VoiceEditPlanRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,6 +357,78 @@ async fn recording_fault_fails_only_the_current_selection_voice_session_and_rele
         .unwrap();
 
     let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn voice_edit_enforces_the_envelope_cap_for_preview_translation_and_context() {
+    let cap = openless_core::prompts::MAX_XML_ENVELOPE_CHARS;
+    for length in [cap - 1, cap, cap + 1] {
+        for translation in [false, true] {
+            for with_context in [false, true] {
+                let instruction = if translation {
+                    "翻译成英文"
+                } else {
+                    "润色全文"
+                };
+                let response = if translation {
+                    "translated text"
+                } else {
+                    "<edit_plan><full_rewrite><text>rewritten text</text></full_rewrite></edit_plan>"
+                };
+                let polisher = Arc::new(ScriptedPolisher::successful([response]));
+                let (backend, data_dir) =
+                    backend_with_model(UserPreferences::default(), Arc::clone(&polisher));
+                let voice = &backend.services().selection_voice;
+                let draft = "字".repeat(length);
+                let result = if with_context {
+                    voice
+                        .voice_edit_plan(VoiceEditPlanRequest {
+                            session_id: SessionId::new(),
+                            field_context: "surrounding editor text".to_string(),
+                            draft,
+                            instruction_raw: instruction.to_string(),
+                            instruction_polished: instruction.to_string(),
+                        })
+                        .await
+                        .map(|result| result.preview)
+                } else {
+                    voice
+                        .edit_preview(SelectionVoiceEditRequest {
+                            owner_session_id: SessionId::new(),
+                            capture: SelectionCapture {
+                                text: draft,
+                                source_app: Some("Fixture Editor".to_string()),
+                            },
+                            instruction: instruction.to_string(),
+                        })
+                        .await
+                        .map(|result| result.preview.text)
+                };
+                if length > cap {
+                    assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidArgument);
+                    assert!(polisher.calls().is_empty());
+                    assert!(voice.preview(None).await.unwrap().is_none());
+                } else {
+                    assert_eq!(
+                        result.unwrap(),
+                        if translation {
+                            "translated text"
+                        } else {
+                            "rewritten text"
+                        }
+                    );
+                    let calls = polisher.calls();
+                    assert_eq!(calls.len(), 1);
+                    assert_eq!(calls[0].translation_active, translation);
+                    assert!(!calls[0].input.contains("[truncated]"));
+                    if with_context && !translation {
+                        assert!(calls[0].input.contains("surrounding editor text"));
+                    }
+                }
+                let _ = std::fs::remove_dir_all(data_dir);
+            }
+        }
+    }
 }
 
 #[tokio::test]

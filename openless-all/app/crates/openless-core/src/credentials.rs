@@ -153,6 +153,9 @@ pub const OMNI_ENDPOINT_ACCOUNT: &str = "omni.endpoint";
 pub const OMNI_MODEL_ACCOUNT: &str = "omni.model";
 pub const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
 pub const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
+/// Static bearer token for a self-hosted `cloud_sync_e2ee` server, stored
+/// under `CredentialNamespace::Application` (an alternative to GitHub OAuth).
+pub const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = "cloud_sync.custom_token";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -905,6 +908,19 @@ pub struct InMemoryCredentialStore {
     values: RwLock<HashMap<CredentialKey, SecretValue>>,
     status: RwLock<CredentialsStatus>,
     metadata: RwLock<CredentialMetadata>,
+}
+
+#[cfg(test)]
+impl InMemoryCredentialStore {
+    /// Seed one secret synchronously for test fixtures (issue #1032 tests need a
+    /// configured LLM channel without an async write).
+    pub fn with_secret(self, key: CredentialKey, value: SecretValue) -> Self {
+        self.values
+            .write()
+            .expect("credential values lock poisoned")
+            .insert(key, value);
+        self
+    }
 }
 
 impl InMemoryCredentialStore {

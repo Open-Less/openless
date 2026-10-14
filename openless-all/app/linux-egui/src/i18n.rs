@@ -2535,6 +2535,16 @@ pub const CATALOG: &[Msg] = &[
         text: row("切换式", "切換式", "Toggle", "トグル式", "토글 방식"),
     },
     Msg {
+        key: "settings.recording.audio_enhancement_label",
+        text: row(
+            "轻量麦克风增强",
+            "輕量麥克風增強",
+            "Lightweight microphone enhancement",
+            "軽量マイク拡張",
+            "가벼운 마이크 향상",
+        ),
+    },
+    Msg {
         key: "settings.recording.mute_during_recording_label",
         text: row(
             "录音时静音",
@@ -4601,6 +4611,16 @@ pub const CATALOG: &[Msg] = &[
             "녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.",
         ),
     },
+    Msg {
+        key: "settings.recording.audio_enhancement_desc",
+        text: row(
+            "对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。",
+            "對本機麥克風套用輕量降噪、增益與軟限幅，不包含回聲消除。預設關閉。",
+            "Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.",
+            "ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。",
+            "로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.",
+        ),
+    },
         Msg {
         key: "settings.recording.paste_shortcut_desc",
         text: row(
@@ -4629,6 +4649,26 @@ pub const CATALOG: &[Msg] = &[
             "Polish context window (minutes)",
             "会話コンテキスト窓（分）",
             "대화 컨텍스트 윈도(분)",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_skip_max_chars_desc",
+        text: row(
+            "转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。",
+            "轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。",
+            "Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.",
+            "空白を除く文字数が N 以下の転写は LLM を呼ばず原文のまま挿入します。0 = 無効。翻訳モードは常に整形します。",
+            "공백을 제외한 글자 수가 N 이하인 전사는 LLM 없이 원문으로 삽입합니다. 0 = 끔. 번역 모드는 항상 다듬습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_skip_max_chars_label",
+        text: row(
+            "短句跳过润色（最大字数）",
+            "短句跳過潤色（最大字數）",
+            "Skip polish for short dictations (max characters)",
+            "短い入力は整形をスキップ（最大文字数）",
+            "짧은 입력은 다듬기 건너뛰기(최대 글자 수)",
         ),
     },
         Msg {

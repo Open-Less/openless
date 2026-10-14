@@ -104,6 +104,36 @@ fn capsule_transcript_rail_position(
     }
 }
 
+/// Places and shows (or hides) a transcript rail for the capsule whose outer origin is
+/// `capsule_origin`. Used for the primary rail and for every monitor's rail mirror, so the
+/// rail always sits on the same capsule it belongs to.
+#[cfg(target_os = "windows")]
+fn position_rail_for_capsule<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    rail: &tauri::WebviewWindow<R>,
+    capsule_origin: tauri::PhysicalPosition<i32>,
+    scale: f64,
+    style: CapsuleStyle,
+    translation_active: bool,
+    visible: bool,
+) -> tauri::Result<()> {
+    let Some(position) = capsule_transcript_rail_position(style, translation_active, visible)
+    else {
+        rail.hide()?;
+        return Ok(());
+    };
+    rail.set_ignore_cursor_events(true)?;
+    rail.set_size(tauri::LogicalSize::new(position.width, position.height))?;
+    rail.set_position(tauri::PhysicalPosition::new(
+        capsule_origin.x,
+        capsule_origin.y + (position.top_offset * scale).round() as i32,
+    ))?;
+    // The rail is a sibling overlay and must never steal focus from the
+    // application under the capsule, just like the main capsule HWND.
+    show_capsule_window_for_recording(app, rail, false);
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 #[derive(Clone, Copy)]
 struct CapsuleHitTestEntry {
@@ -675,6 +705,9 @@ struct CapsuleLayoutState {
     work_width: u32,
     work_height: u32,
     scale_bits: u64,
+    /// Hash of every connected monitor (Windows). Plugging a display in or out changes it
+    /// even when the primary monitor is untouched, so cached placements are not reused.
+    topology: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -701,6 +734,9 @@ struct CapsuleWindowState {
     snapshot: Mutex<CapsuleSnapshotState>,
     layout_watch_active: AtomicBool,
     layout_watch_epoch: AtomicU64,
+    /// Windows: fingerprint of the last mirror sync; `None` forces the next sync to apply.
+    #[cfg(target_os = "windows")]
+    mirror_fingerprint: Mutex<Option<u64>>,
 }
 
 impl Default for CapsuleWindowState {
@@ -718,6 +754,8 @@ impl Default for CapsuleWindowState {
             snapshot: Mutex::new(CapsuleSnapshotState::default()),
             layout_watch_active: AtomicBool::new(false),
             layout_watch_epoch: AtomicU64::new(0),
+            #[cfg(target_os = "windows")]
+            mirror_fingerprint: Mutex::new(None),
         }
     }
 }
@@ -814,23 +852,17 @@ impl TauriCapsuleWindow {
         let Some(rail) = self.rail_window() else {
             return Ok(());
         };
-        let Some(position) = capsule_transcript_rail_position(style, translation_active, visible)
-        else {
-            rail.hide()?;
-            return Ok(());
-        };
         let scale = capsule.scale_factor().unwrap_or(1.0);
         let main_position = capsule.outer_position()?;
-        rail.set_ignore_cursor_events(true)?;
-        rail.set_size(tauri::LogicalSize::new(position.width, position.height))?;
-        rail.set_position(tauri::PhysicalPosition::new(
-            main_position.x,
-            main_position.y + (position.top_offset * scale).round() as i32,
-        ))?;
-        // The rail is a sibling overlay and must never steal focus from the
-        // application under the capsule, just like the main capsule HWND.
-        show_capsule_window_for_recording(&self.app, &rail, false);
-        Ok(())
+        position_rail_for_capsule(
+            &self.app,
+            &rail,
+            main_position,
+            scale,
+            style,
+            translation_active,
+            visible,
+        )
     }
 
     pub(crate) fn is_available_for(&self, state: CapsuleState) -> bool {
@@ -891,6 +923,7 @@ impl TauriCapsuleWindow {
                 .cursor_passthrough
                 .store(passthrough, Ordering::SeqCst);
         }
+        self.sync_capsule_mirrors();
         Ok(())
     }
 
@@ -920,6 +953,7 @@ impl TauriCapsuleWindow {
             #[cfg(target_os = "windows")]
             configure_card_hit_test(&window)?;
         }
+        self.sync_capsule_mirrors();
         Ok(())
     }
 
@@ -951,6 +985,164 @@ impl TauriCapsuleWindow {
 
     pub(crate) fn invalidate_layout(&self) {
         *self.state.layout.lock() = None;
+        #[cfg(target_os = "windows")]
+        {
+            *self.state.mirror_fingerprint.lock() = None;
+        }
+    }
+
+    /// Windows: makes every mirror capsule / transcript rail match the primary window —
+    /// visibility, geometry, cursor passthrough and hit-testing — so the capsule shows on
+    /// all monitors (issue #1057). Queued on the main thread because window creation and
+    /// show/hide must run there. A no-op when nothing relevant changed.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sync_capsule_mirrors(&self) {
+        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn sync_capsule_mirrors(&self) {}
+
+    #[cfg(target_os = "windows")]
+    fn apply_capsule_mirrors(&self) {
+        use crate::capsule_mirrors::{
+            capsule_placement, ensure_capsule_mirror, ensure_rail_mirror, mirror_label,
+            mirror_targets, CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
+        };
+
+        let Some(primary) = self.window() else {
+            return;
+        };
+        let Some(primary_rect) = crate::capsule_mirrors::primary_monitor_rect(&primary) else {
+            return;
+        };
+        let monitors = crate::capsule_mirrors::all_monitor_rects(&primary);
+        let card_mode = self.state.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD;
+        // Card modes borrow the primary HWND; mirrors must not show a stale capsule over them.
+        let visible = self.state.capsule_visible.load(Ordering::SeqCst)
+            && !card_mode
+            && !self.state.fallback_card_visible.load(Ordering::SeqCst);
+        let style = self.state.cached_style();
+        let translation_active = self
+            .state
+            .snapshot
+            .lock()
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.translation);
+        let transcript_visible = self.state.transcript_visible.load(Ordering::SeqCst);
+        let passthrough = self.state.cursor_passthrough.load(Ordering::SeqCst);
+
+        let style_tag = match style {
+            CapsuleStyle::Siri => 0u8,
+            CapsuleStyle::Classic => 1,
+            CapsuleStyle::Typeless => 2,
+        };
+        let fingerprint = crate::capsule_mirrors::mirror_fingerprint(
+            visible,
+            passthrough,
+            style_tag,
+            translation_active,
+            transcript_visible,
+            primary_rect,
+            &monitors,
+        );
+        if *self.state.mirror_fingerprint.lock() == Some(fingerprint) {
+            return;
+        }
+
+        let app = self.app.clone();
+        let targets = if visible {
+            mirror_targets(&monitors, primary_rect)
+        } else {
+            Vec::new()
+        };
+
+        // Hide every mirror slot that has no monitor to sit on (or when the capsule is hidden).
+        for index in targets.len()..MAX_CAPSULE_MIRRORS {
+            for prefix in [CAPSULE_MIRROR_PREFIX, RAIL_MIRROR_PREFIX] {
+                if let Some(window) = app.get_webview_window(&mirror_label(prefix, index)) {
+                    let _ = window.hide();
+                }
+            }
+        }
+
+        let bounds = crate::capsule_window_bounds_for_style_with_transcript_and_translation(
+            style,
+            false,
+            translation_active,
+        );
+        let bottom_gap = crate::capsule_bottom_gap(style);
+
+        // Only a fully applied sync may be cached; a failed mirror must be retried by the next sync.
+        let mut complete = true;
+        for (index, monitor) in targets.iter().enumerate() {
+            let capsule_label = mirror_label(CAPSULE_MIRROR_PREFIX, index);
+            let mirror = match ensure_capsule_mirror(&app, &capsule_label) {
+                Ok(window) => window,
+                Err(error) => {
+                    log::warn!("[capsule] mirror {capsule_label} create failed: {error}");
+                    complete = false;
+                    continue;
+                }
+            };
+            let (phys_w, phys_h, x, y) =
+                capsule_placement(bounds.width, bounds.height, bottom_gap, *monitor);
+            // Geometry failures must not be fingerprint-cached: a skipped retry would leave
+            // the mirror stuck at the wrong size/position after a monitor reconnect.
+            if let Err(error) = mirror.set_size(tauri::PhysicalSize::new(phys_w, phys_h)) {
+                log::warn!("[capsule] mirror {capsule_label} set_size failed: {error}");
+                complete = false;
+                continue;
+            }
+            if let Err(error) = mirror.set_position(tauri::PhysicalPosition::new(x, y)) {
+                log::warn!("[capsule] mirror {capsule_label} set_position failed: {error}");
+                complete = false;
+                continue;
+            }
+            let hit_test = if passthrough {
+                clear_capsule_input_region_for_window(&mirror)
+            } else {
+                configure_capsule_hit_test(&mirror, style, transcript_visible, translation_active)
+            };
+            if let Err(error) = hit_test {
+                log::warn!("[capsule] mirror {capsule_label} hit-test setup failed: {error}");
+                complete = false;
+            }
+            if let Err(error) = mirror.set_ignore_cursor_events(passthrough) {
+                log::warn!("[capsule] mirror {capsule_label} passthrough failed: {error}");
+                complete = false;
+            }
+            show_capsule_window_for_recording(&app, &mirror, false);
+            if !mirror.is_visible().unwrap_or(false) {
+                log::warn!("[capsule] mirror {capsule_label} remained hidden after show");
+                complete = false;
+            }
+
+            let rail_label = mirror_label(RAIL_MIRROR_PREFIX, index);
+            match ensure_rail_mirror(&app, &rail_label) {
+                Ok(rail) => {
+                    if let Err(error) = position_rail_for_capsule(
+                        &app,
+                        &rail,
+                        tauri::PhysicalPosition::new(x, y),
+                        monitor.scale,
+                        style,
+                        translation_active,
+                        transcript_visible,
+                    ) {
+                        log::warn!("[capsule] mirror {rail_label} positioning failed: {error}");
+                        complete = false;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("[capsule] mirror {rail_label} create failed: {error}");
+                    complete = false;
+                }
+            }
+        }
+
+        *self.state.mirror_fingerprint.lock() = complete.then_some(fingerprint);
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
@@ -960,6 +1152,7 @@ impl TauriCapsuleWindow {
         if let Some(window) = self.window() {
             window.hide()?;
         }
+        self.sync_capsule_mirrors();
         Ok(())
     }
 
@@ -1093,7 +1286,9 @@ impl TauriCapsuleWindow {
     ) -> Option<CapsuleLayoutState> {
         #[cfg(target_os = "windows")]
         {
-            if let Some(mon) = crate::foreground_window_monitor() {
+            // The primary capsule lives on the OS primary monitor (see capsule_mirrors).
+            if let Some(mon) = crate::capsule_mirrors::primary_monitor_rect(window) {
+                let monitors = crate::capsule_mirrors::all_monitor_rects(window);
                 return Some(CapsuleLayoutState {
                     translation_active,
                     transcript_visible: self.state.transcript_visible.load(Ordering::SeqCst),
@@ -1107,6 +1302,7 @@ impl TauriCapsuleWindow {
                     work_width: (mon.work_right - mon.work_left).max(0) as u32,
                     work_height: (mon.work_bottom - mon.work_top).max(0) as u32,
                     scale_bits: mon.scale.to_bits(),
+                    topology: crate::capsule_mirrors::topology_signature(&monitors),
                 });
             }
         }
@@ -1126,6 +1322,7 @@ impl TauriCapsuleWindow {
                     work_width: mon.work_width,
                     work_height: mon.work_height,
                     scale_bits: mon.scale.to_bits(),
+                    topology: 0,
                 });
             }
         }
@@ -1143,6 +1340,7 @@ impl TauriCapsuleWindow {
             work_width: monitor.work_area().size.width,
             work_height: monitor.work_area().size.height,
             scale_bits: monitor.scale_factor().to_bits(),
+            topology: 0,
         })
     }
 
@@ -1180,6 +1378,7 @@ impl TauriCapsuleWindow {
         } else {
             self.hide_transcript_overlay();
         }
+        self.sync_capsule_mirrors();
         #[cfg(target_os = "windows")]
         if layout_changed
             && self.state.hit_test_mode.load(Ordering::SeqCst) != HIT_TEST_MODE_CARD
@@ -1201,6 +1400,7 @@ impl TauriCapsuleWindow {
         if let Some(window) = self.window() {
             show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
         }
+        self.sync_capsule_mirrors();
     }
 
     fn stop_layout_watch(&self) {
@@ -1321,8 +1521,15 @@ impl TauriCapsuleWindow {
                 CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
             }
 
+            if action == CapsuleWindowAction::ShowCapsule && !window.is_visible().unwrap_or(false)
+            {
+                // The OS can move a hidden window (e.g. when a monitor is unplugged), so a
+                // placement cached while it was visible must not be reused on the next show.
+                self.invalidate_layout();
+            }
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
             self.update_cursor_for_payload(payload, style);
+            self.sync_capsule_mirrors();
 
             match action {
                 CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
@@ -1609,6 +1816,15 @@ impl TauriCoordinatorHost {
         if let Some(app) = self.app() {
             let _ = app.emit_to("capsule", "capsule:state", payload);
             let _ = app.emit_to("capsule-rail", "capsule:state", payload);
+            #[cfg(target_os = "windows")]
+            for prefix in [
+                crate::capsule_mirrors::CAPSULE_MIRROR_PREFIX,
+                crate::capsule_mirrors::RAIL_MIRROR_PREFIX,
+            ] {
+                for label in crate::capsule_mirrors::existing_mirror_labels(&app, prefix) {
+                    let _ = app.emit_to(label.as_str(), "capsule:state", payload);
+                }
+            }
         }
     }
 
@@ -1645,7 +1861,8 @@ impl TauriCoordinatorHost {
             return;
         };
         let state = app.state::<crate::commands::MicrophoneMonitorState>();
-        let recorder = state.lock().take();
+        let _operation = state.operation.lock();
+        let recorder = state.recorder.lock().take();
         if let Some(recorder) = recorder {
             log::info!("[recorder] stopping microphone preview monitor before {owner}");
             recorder.stop();
@@ -1712,11 +1929,21 @@ mod tests {
             work_width: 1920,
             work_height: 1040,
             scale_bits: 1.0_f64.to_bits(),
+            topology: 7,
         };
         assert_ne!(
             initial,
             CapsuleLayoutState {
                 work_height: 1080,
+                ..initial
+            }
+        );
+        // Plugging a monitor in/out must invalidate the cached placement even when the
+        // primary monitor itself is unchanged.
+        assert_ne!(
+            initial,
+            CapsuleLayoutState {
+                topology: 8,
                 ..initial
             }
         );

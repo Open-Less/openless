@@ -163,6 +163,10 @@ export function RecordingInputSection() {
   const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
     savePrefs({ ...prefs, muteDuringRecording });
   const onAudioCueChange = (audioCueOnRecord: boolean) => savePrefs({ ...prefs, audioCueOnRecord });
+  const onLowLatencyDictationChange = (lowLatencyDictationEnabled: boolean) =>
+    savePrefs({ ...prefs, lowLatencyDictationEnabled });
+  const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
+    savePrefs({ ...prefs, audioEnhancementEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -442,6 +446,17 @@ export function RecordingInputSection() {
         </SettingRow>
         {!isAndroid && (
           <SettingRow
+            label={t('settings.recording.audioEnhancementLabel')}
+            desc={t('settings.recording.audioEnhancementDesc')}
+          >
+            <Toggle
+              on={prefs.audioEnhancementEnabled}
+              onToggle={onAudioEnhancementChange}
+            />
+          </SettingRow>
+        )}
+        {!isAndroid && (
+          <SettingRow
             label={t('settings.recording.capsuleLabel')}
             desc={t('settings.recording.capsuleDesc')}
           >
@@ -503,6 +518,17 @@ export function RecordingInputSection() {
             onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
           />
         </SettingRow>
+        {showDesktopHotkey && os === 'win' && (
+          <SettingRow
+            label={t('settings.recording.lowLatencyDictationLabel')}
+            desc={t('settings.recording.lowLatencyDictationDesc')}
+          >
+            <Toggle
+              on={prefs.lowLatencyDictationEnabled ?? false}
+              onToggle={onLowLatencyDictationChange}
+            />
+          </SettingRow>
+        )}
         <SettingRow
           label={t('settings.recording.muteDuringRecordingLabel')}
           desc={t('settings.recording.muteDuringRecordingDesc')}

@@ -11,7 +11,8 @@ export const ko: typeof zhCN = {
     description:
       '초안을 음성으로 입력하거나 대상 텍스트를 불러온 뒤 음성 지시로 편집하고 확인하여 입력란에 반영합니다.',
     targetHint: '대상 입력란에 커서를 놓거나 편집할 텍스트를 선택하세요.',
-    androidTargetHint: '오버레이 스와이프 동작에 음성 편집을 지정하세요. 대상 앱에서 녹음한 뒤 스와이프하면 미리보기가 열리며, 확인하면 원래 입력란에 반영됩니다.',
+    androidTargetHint:
+      '오버레이 스와이프 동작에 음성 편집을 지정하세요. 대상 앱에서 녹음한 뒤 스와이프하면 미리보기가 열리며, 확인하면 원래 입력란에 반영됩니다.',
     startDraft: '초안 음성 입력 시작',
     status: '상태: {{phase}}',
     turns: '지시 횟수: {{count}}',
@@ -44,6 +45,12 @@ export const ko: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '자체 동기화 서버 (고급)',
+    customServerOrigin: '서버 주소 (https://...)',
+    customServerToken: '로그인 Token',
+    customServerSave: '저장',
+    customServerHint:
+      '비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.',
     protocolTitle: '클라우드 동기화 약관 및 개인정보 안내',
     protocolIntro:
       'OpenLess와 독립 개발자는 개인정보를 존중하고 데이터를 보호하기 위해 노력합니다. 계속하기 전에 아래 안내를 읽어 주세요.',
@@ -1291,7 +1298,7 @@ export const ko: typeof zhCN = {
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
+        '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',
@@ -1455,6 +1462,11 @@ export const ko: typeof zhCN = {
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
+      lowLatencyDictationLabel: '저지연 캡처',
+      lowLatencyDictationDesc:
+        '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
+      audioEnhancementLabel: '가벼운 마이크 향상',
+      audioEnhancementDesc: '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -1520,6 +1532,9 @@ export const ko: typeof zhCN = {
         '보관 기간을 초과한 기록은 새 항목 작성 시 정리됩니다. 0 = 시간 기반 정리 비활성화.',
       historyMaxEntriesLabel: '기록 개수 상한',
       historyMaxEntriesDesc: '로컬 보관 세션 상한. 빈칸 = 200. 범위 5–200.',
+      polishSkipMaxCharsLabel: '짧은 입력은 다듬기 건너뛰기(최대 글자 수)',
+      polishSkipMaxCharsDesc:
+        '공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.',
       polishContextWindowLabel: '대화 컨텍스트 윈도(분)',
       polishContextWindowDesc:
         '최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.',
@@ -1675,6 +1690,7 @@ export const ko: typeof zhCN = {
         asrOpenAiCompatible: '커스텀 OpenAI 호환',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek 실시간 음성 인식',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan 실시간 ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: '로컬 sherpa-onnx(실험적)',
@@ -1688,6 +1704,12 @@ export const ko: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        '여기서는 gemini-3.5-transcribe로 그대로 전사한 뒤 설정된 LLM으로 처리합니다. 스마트 전사를 사용하려면 멀티모달 모드에서 이 모델을 선택하세요. 녹음이 끝나면 오디오를 업로드하며 실시간 전사는 지원하지 않습니다. 기본 URL: https://generativelanguage.googleapis.com/v1beta (/v1beta/interactions도 사용 가능).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe는 스마트 전사를 제공합니다. 녹음 후 군더더기 표현을 제거하고 말로 한 정정을 반영하며 문장을 정리합니다. 작업 언어와 사전 용어를 지원합니다. 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
+      validateSuccessAudio:
+        '짧은 무음 샘플로 오디오 연결을 확인했습니다. 짧은 녹음으로 전사 품질도 확인하세요.',
       elevenLabsUploadNotice:
         'ElevenLabs는 녹음 오디오를 설정된 엔드포인트에 업로드해 일괄 전사합니다.',
       zenmuxVocabularyNote:

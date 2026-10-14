@@ -875,6 +875,14 @@ export function ChannelCredentialFields({
           {t('settings.providers.elevenLabsUploadNotice')}
         </div>
       )}
+      {providerType === 'gemini' && (
+        <div
+          role="note"
+          style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}
+        >
+          {t('settings.providers.geminiTranscribeNotice')}
+        </div>
+      )}
       {providerType === 'zenmux' && (
         <div
           role="note"
@@ -1321,6 +1329,7 @@ function ProviderTools({
   showFetchModels = true,
   disabled = false,
   compact = false,
+  audioValidation = false,
 }: {
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
@@ -1332,6 +1341,7 @@ function ProviderTools({
   showFetchModels?: boolean;
   disabled?: boolean;
   compact?: boolean;
+  audioValidation?: boolean;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -1380,9 +1390,11 @@ function ProviderTools({
         result.ok ? 'success' : 'error',
         t(
           result.ok
-            ? kind === 'omni'
-              ? 'settings.providers.validateSuccessOmni'
-              : 'settings.providers.validateSuccess'
+            ? audioValidation
+              ? 'settings.providers.validateSuccessAudio'
+              : kind === 'omni'
+                ? 'settings.providers.validateSuccessOmni'
+                : 'settings.providers.validateSuccess'
             : 'settings.providers.validateFailed',
         ),
       );
@@ -1526,7 +1538,13 @@ function ProviderTools({
               : t('settings.channels.verify')}
           </button>
         </div>
-        <p className="ol-omni-tools-hint">{t('settings.channels.validationHintOmni')}</p>
+        <p className="ol-omni-tools-hint">
+          {t(
+            audioValidation
+              ? 'settings.channels.validationHint'
+              : 'settings.channels.validationHintOmni',
+          )}
+        </p>
         {resultMessage}
       </section>
     );
@@ -1588,7 +1606,7 @@ function ProviderTools({
             icon="bolt"
             title={t('settings.channels.validationTitle')}
             description={t(
-              kind === 'omni'
+              kind === 'omni' && !audioValidation
                 ? 'settings.channels.validationHintOmni'
                 : 'settings.channels.validationHint',
             )}
@@ -2109,6 +2127,7 @@ export function OmniChannelSection() {
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
   const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const [omniModel, setOmniModel] = useState('');
   const formRef = useRef<HTMLDivElement>(null);
   useContentMotion(formRef, committedOmniProvider);
 
@@ -2183,6 +2202,8 @@ export function OmniChannelSection() {
   };
 
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
+  const geminiTranscribe =
+    committedOmniProvider === 'gemini' && omniModel.trim() === 'gemini-3.5-transcribe';
 
   return (
     <Card className="ol-omni-settings" padding={16}>
@@ -2208,9 +2229,18 @@ export function OmniChannelSection() {
             label={t('settings.providers.modelLabel')}
             account="omni.model"
             placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+            onValueChange={setOmniModel}
             mono
           />
         </div>
+        {committedOmniProvider === 'gemini' && (
+          <div
+            role="note"
+            style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
+          >
+            {t('settings.providers.geminiTranscribeOmniNotice')}
+          </div>
+        )}
         <CredentialField
           key={`${committedOmniProvider}:api_key`}
           label={t('settings.providers.apiKeyLabel')}
@@ -2244,11 +2274,12 @@ export function OmniChannelSection() {
           </div>
         )}
         <ProviderTools
-          key={`omni:${committedOmniProvider}`}
+          key={`omni:${committedOmniProvider}:${geminiTranscribe}`}
           kind="omni"
           modelAccount="omni.model"
           onModelSelected={() => setOmniModelRevision((v) => v + 1)}
           compact
+          audioValidation={geminiTranscribe}
         />
       </div>
     </Card>
