@@ -955,7 +955,7 @@ async fn oversized_selection_polish_refuses_before_replacing_the_document() {
         .services()
         .selection
         .begin_polish(SelectionPolishRequest {
-            selected_text: Some(oversized),
+            selected_text: Some(oversized.clone()),
             mode: PolishMode::Formal,
             instruction: None,
         })
@@ -976,19 +976,38 @@ async fn oversized_selection_polish_refuses_before_replacing_the_document() {
         SelectionPhase::Failed
     );
 
-    let at_cap = "字".repeat(openless_core::prompts::MAX_XML_ENVELOPE_CHARS);
+    let cap = openless_core::prompts::MAX_XML_ENVELOPE_CHARS;
+    for length in [cap - 1, cap] {
+        backend
+            .services()
+            .selection
+            .begin_polish(SelectionPolishRequest {
+                selected_text: Some("字".repeat(length)),
+                mode: PolishMode::Formal,
+                instruction: None,
+            })
+            .await
+            .expect("a selection within the envelope cap still polishes");
+    }
+    assert_eq!(polisher.call_count(), 2);
+    assert_eq!(runtime.applied().len(), 2);
+
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_style_pack_id =
+        openless_core::BUILTIN_STYLE_PACK_RAW_ID.to_string();
+    write_preferences(&backend, preferences);
     backend
         .services()
         .selection
         .begin_polish(SelectionPolishRequest {
-            selected_text: Some(at_cap),
-            mode: PolishMode::Formal,
+            selected_text: Some(oversized.clone()),
+            mode: PolishMode::Raw,
             instruction: None,
         })
         .await
-        .expect("a selection at the envelope cap still polishes");
-    assert_eq!(polisher.call_count(), 1);
-    assert_eq!(runtime.applied().len(), 1);
+        .expect("oversized raw text must pass through without a model");
+    assert_eq!(polisher.call_count(), 2);
+    assert_eq!(runtime.applied()[2].2, oversized);
 
     backend.shutdown().await.expect("backend should stop");
     let _ = std::fs::remove_dir_all(data_dir);
