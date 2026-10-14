@@ -932,6 +932,50 @@ mod tests {
     }
 
     #[test]
+    fn settings_modal_tessellates_after_opening_and_resizing() {
+        // 回归：某次设置页的波形端点算出 NaN，egui tessellation 直接崩溃并带走了
+        // 窗口进程。文字快照不足以证明绘制成功，必须真的 tessellate 并检查顶点有限。
+        use super::view_model::SettingsSection;
+        for section in [
+            SettingsSection::General,
+            SettingsSection::Shortcuts,
+            SettingsSection::Services,
+            SettingsSection::Appearance,
+            SettingsSection::Privacy,
+            SettingsSection::Advanced,
+            SettingsSection::About,
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: openless_linux_egui::Lang::En,
+                settings_open: true,
+                settings_section: section,
+                ..Default::default()
+            };
+            for size in [egui::vec2(1300.0, 835.0), egui::vec2(960.0, 640.0)] {
+                for _ in 0..3 {
+                    ctx.begin_pass(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    });
+                    render(&ctx, &mut vm, &mut Vec::new());
+                    let output = crate::ui::frontend::end_pass(&ctx);
+                    let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+                    assert!(!primitives.is_empty(), "{section:?} must paint a frame");
+                    for primitive in primitives {
+                        if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                            assert!(
+                                mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()),
+                                "{section:?} produced non-finite vertices at {size:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn sidebar_settings_row_stays_reachable_in_a_short_window() {
         // Regression: the sidebar painted against `ui.max_rect()` (the whole
         // screen), so the rounded bottom-left corner and the pinned settings row

@@ -178,6 +178,20 @@ pub enum HostToPopup {
 }
 
 impl HostToPopup {
+    /// 宿主是弹窗序列号的唯一所有者：窗口动作与失败可能在**没有新 Core 事件**时
+    /// 发生，只有递增序号才能让弹窗接受新的快照（同序号会被当成旧消息丢弃）。
+    pub fn set_sequence(&mut self, value: u64) {
+        match self {
+            Self::PolishPreview { sequence, .. }
+            | Self::QaSnapshot { sequence, .. }
+            | Self::Capsule { sequence, .. }
+            | Self::LessComputer { sequence, .. }
+            | Self::Hotkeys { sequence, .. }
+            | Self::Hide { sequence, .. }
+            | Self::Shutdown { sequence, .. } => *sequence = value,
+        }
+    }
+
     pub fn version(&self) -> u16 {
         match self {
             Self::PolishPreview { version, .. }

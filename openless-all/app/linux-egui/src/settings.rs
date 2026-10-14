@@ -9,6 +9,37 @@ use openless_core::{
 
 use crate::LinuxCredentialStore;
 
+/// Linux 上实际注册的是 X11 keysym，而不是 macOS 的「Option」命名：界面上显示
+/// `RightOption` 会与「按下右 Alt」对不上，所以把旧名换成实际按键名。
+pub fn shortcut_display_label(binding: &ShortcutBinding) -> String {
+    let primary = match legacy_modifier_trigger(binding) {
+        Some(HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt) => "Right Alt",
+        Some(HotkeyTrigger::LeftOption) => "Left Alt",
+        Some(HotkeyTrigger::RightControl) => "Right Ctrl",
+        Some(HotkeyTrigger::LeftControl) => "Left Ctrl",
+        Some(HotkeyTrigger::RightCommand) => "Right Super",
+        Some(HotkeyTrigger::LeftCommand) => "Left Super",
+        Some(HotkeyTrigger::LeftShift) => "Left Shift",
+        Some(HotkeyTrigger::RightShift) => "Right Shift",
+        _ => match binding.primary.trim() {
+            "AltRight" => "Right Alt",
+            "AltLeft" => "Left Alt",
+            "ControlRight" => "Right Ctrl",
+            "ControlLeft" => "Left Ctrl",
+            "ShiftRight" => "Right Shift",
+            "ShiftLeft" => "Left Shift",
+            "MetaRight" | "OSRight" => "Right Super",
+            "MetaLeft" | "OSLeft" => "Left Super",
+            _ => return binding.display_label(),
+        },
+    };
+    ShortcutBinding {
+        primary: primary.to_string(),
+        modifiers: binding.modifiers.clone(),
+    }
+    .display_label()
+}
+
 /// Executes Linux-only settings effects from an explicit Core target.
 ///
 /// Implementations must not read or write `UserPreferences`. This narrow seam
