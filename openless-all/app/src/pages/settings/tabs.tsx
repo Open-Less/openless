@@ -113,14 +113,14 @@ export function AppearanceTab() {
 }
 
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
-export function ServicesTab() {
+export function ServicesTab({ initialView = 'llm' }: { initialView?: ServiceViewId }) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
   const showLocalModel = platformCaps?.supportsLocalAsr === true;
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
-  const [view, setView] = useState<ServiceViewId>('llm');
+  const [view, setView] = useState<ServiceViewId>(initialView);
   const views = availableServiceViews(showLocalModel);
   const selectedView = resolveServiceView(view, views, multimodal);
   const contentRef = useRef<HTMLDivElement>(null);

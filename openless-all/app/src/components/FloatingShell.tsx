@@ -33,6 +33,7 @@ import {
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import { type SettingsSectionId } from './SettingsModal';
+import type { ServiceViewId } from '../pages/settings/navigation';
 import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileStyleSheet } from './MobileStyleSheet';
 import { subItemLabelKey } from '../lib/navLabels';
@@ -129,6 +130,7 @@ function FloatingShellBody({
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSectionId | undefined
   >();
+  const [settingsInitialServiceView, setSettingsInitialServiceView] = useState<ServiceViewId>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
@@ -222,8 +224,9 @@ function FloatingShellBody({
     setHotkeyModePromptOpen(false);
   };
 
-  const openSettings = (section?: SettingsSectionId) => {
+  const openSettings = (section?: SettingsSectionId, serviceView?: ServiceViewId) => {
     setSettingsInitialSection(section);
+    setSettingsInitialServiceView(serviceView);
     setSettingsOpen(true);
     setMoreOpen(false);
     setStyleOpen(false);
@@ -614,10 +617,11 @@ function FloatingShellBody({
       {/* Settings modal — rendered inside this window; settingsMount gates the exit animation */}
       {settingsMount.mounted && (
         <SettingsModal
-          key={settingsInitialSection ?? 'default'}
+          key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
           os={os}
           closing={settingsMount.closing}
           initialSettingsSection={settingsInitialSection}
+          initialServiceView={settingsInitialServiceView}
           onClose={() => setSettingsOpen(false)}
         />
       )}
