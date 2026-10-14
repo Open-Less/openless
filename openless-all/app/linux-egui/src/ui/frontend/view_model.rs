@@ -205,7 +205,7 @@ pub enum FrontendAction {
     },
     /// Switch a channel to another provider type (Core's `set_channel_provider_type`).
     SettingsChannelProviderType {
-        index: usize,
+        channel_id: String,
         provider_type: String,
     },
     /// Make a channel the active provider (Core's `set_active_provider`).

@@ -4651,14 +4651,14 @@ pub const CATALOG: &[Msg] = &[
             "대화 컨텍스트 윈도(분)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_skip_max_chars_desc",
         text: row(
             "转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。",
             "轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。",
             "Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.",
-            "空白を除く文字数が N 以下の転写は LLM を呼ばず原文のまま挿入します。0 = 無効。翻訳モードは常に整形します。",
-            "공백을 제외한 글자 수가 N 이하인 전사는 LLM 없이 원문으로 삽입합니다. 0 = 끔. 번역 모드는 항상 다듬습니다.",
+            "空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。",
+            "공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.",
         ),
     },
     Msg {

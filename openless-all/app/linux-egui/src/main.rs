@@ -68,7 +68,11 @@ mod linux_app {
             session_id: String,
         },
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
-        Providers(Result<ProviderPanel, String>),
+        Providers {
+            kind: openless_core::ChannelKind,
+            request: u64,
+            result: Result<ProviderPanel, String>,
+        },
         /// Credential channels for the settings modal's AI-services tab.
         SettingsChannels {
             kind: openless_core::ChannelKind,
@@ -78,6 +82,15 @@ mod linux_app {
         ChannelCreated {
             kind: openless_core::ChannelKind,
             result: Result<String, String>,
+        },
+        ChannelsChanged {
+            kind: openless_core::ChannelKind,
+            result: Result<String, String>,
+        },
+        ProviderTypeChanged {
+            kind: openless_core::ChannelKind,
+            channel_id: String,
+            result: Box<Result<ProviderEditor, String>>,
         },
         ServiceConfigured([bool; 2]),
         LinuxAccess(openless_linux_egui::linux_access::LinuxAccessSnapshot),
@@ -94,6 +107,8 @@ mod linux_app {
         ProviderModels {
             kind: openless_core::ChannelKind,
             channel_id: String,
+            endpoint: String,
+            provider_type: String,
             result: Result<Vec<String>, String>,
         },
         Library(Result<LibraryPanel, String>),
@@ -572,6 +587,7 @@ mod linux_app {
         remote_access: Option<(openless_core::RemoteInputStatus, String)>,
         provider_kind: openless_core::ChannelKind,
         providers: ProvidersState,
+        providers_request: u64,
         selected_channel_id: Option<String>,
         /// 用户（或刚建好的草稿）要求打开渠道编辑器。面板加载时只有当它为真才打开：
         /// 以前只要面板加载就会为「当前选中的渠道」把编辑器拉起来，改成整栏覆盖后就是
@@ -587,6 +603,8 @@ mod linux_app {
         provider_editor_form: Option<ProviderEditorForm>,
         provider_jobs: tokio::sync::mpsc::UnboundedSender<ProviderJob>,
         provider_save_pending: bool,
+        provider_switch_pending: bool,
+        channel_create_pending: bool,
         provider_save_again: bool,
         provider_close_pending: bool,
         provider_models: Vec<String>,
@@ -769,7 +787,7 @@ mod linux_app {
                     let preferences = backend.get_preferences();
                     let history = HistoryCache::new(&preferences);
                     let subscription = backend.subscribe();
-                    let app = Self {
+                    let mut app = Self {
                         tokio,
                         native: Some(native),
                         subscription: Some(subscription),
@@ -810,6 +828,7 @@ mod linux_app {
                         remote_access: None,
                         provider_kind: openless_core::ChannelKind::Asr,
                         providers: ProvidersState::Loading,
+                        providers_request: 0,
                         selected_channel_id: None,
                         editor_requested: false,
                         provider_editor: ProviderEditorState::Idle,
@@ -818,6 +837,8 @@ mod linux_app {
                         provider_editor_form: None,
                         provider_jobs,
                         provider_save_pending: false,
+                        provider_switch_pending: false,
+                        channel_create_pending: false,
                         provider_save_again: false,
                         provider_close_pending: false,
                         provider_models: Vec::new(),
@@ -921,6 +942,7 @@ mod linux_app {
                     remote_access: None,
                     provider_kind: openless_core::ChannelKind::Asr,
                     providers: ProvidersState::Loading,
+                    providers_request: 0,
                     selected_channel_id: None,
                     editor_requested: false,
                     provider_editor: ProviderEditorState::Idle,
@@ -929,6 +951,8 @@ mod linux_app {
                     provider_editor_form: None,
                     provider_jobs,
                     provider_save_pending: false,
+                    provider_switch_pending: false,
+                    channel_create_pending: false,
                     provider_save_again: false,
                     provider_close_pending: false,
                     provider_models: Vec::new(),
@@ -2131,10 +2155,12 @@ mod linux_app {
             });
         }
 
-        fn load_providers(&self, kind: openless_core::ChannelKind) {
+        fn load_providers(&mut self, kind: openless_core::ChannelKind) {
             let Some(backend) = self.backend() else {
                 return;
             };
+            self.providers_request = self.providers_request.wrapping_add(1);
+            let request = self.providers_request;
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
                 let result = async {
@@ -2152,7 +2178,11 @@ mod linux_app {
                 }
                 .await
                 .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::Providers(result));
+                let _ = tx.send(UiResult::Providers {
+                    kind,
+                    request,
+                    result,
+                });
             });
         }
 
@@ -2741,6 +2771,9 @@ mod linux_app {
         }
 
         fn queue_provider_save(&mut self) -> bool {
+            if self.provider_switch_pending {
+                return false;
+            }
             if self.provider_save_pending {
                 self.provider_save_again = true;
                 return true;
@@ -2778,6 +2811,9 @@ mod linux_app {
         }
 
         fn request_provider_editor_close(&mut self) {
+            if self.provider_switch_pending {
+                return;
+            }
             if self.provider_save_pending {
                 self.provider_close_pending = true;
                 return;
@@ -2798,13 +2834,10 @@ mod linux_app {
                 if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id) {
                     let kind = self.settings_channel_kind;
                     let lang = self.lang;
-                    self.spawn(async move {
-                        backend.delete_channel(kind, channel_id).await?;
+                    self.spawn_channel_change(kind, async move {
+                        backend.delete_channel_if_blank(kind, channel_id).await?;
                         Ok(tr_l10n(lang, "status.channel_deleted").to_string())
                     });
-                    self.load_settings_channels();
-                    self.load_service_configured();
-                    self.load_providers(kind);
                 }
             }
             self.close_provider_editor();
@@ -2823,28 +2856,62 @@ mod linux_app {
 
         /// Core owns the model catalog; the host only forwards the request.
         fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
+            if self.provider_switch_pending {
+                return;
+            }
             let Some(backend) = self.backend() else {
                 return;
             };
+            let editor = self
+                .editor_from_form()
+                .filter(|editor| editor.kind == kind && editor.channel.id == channel_id);
+            let Some(editor) = editor else {
+                return;
+            };
+            let endpoint = editor.endpoint.clone();
+            let provider_type = editor.descriptor.provider_type.as_str().to_owned();
             let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let result = backend
-                    .services()
-                    .provider
-                    .list_models(openless_core::ProviderRequest {
-                        kind: provider_kind(kind),
-                        thinking_enabled: backend.get_preferences().llm_thinking_enabled,
-                        channel_id: Some(channel_id.clone()),
-                    })
-                    .await
-                    .map(|models| models.models)
-                    .map_err(|error| error.to_string());
+            let wake = std::thread::current();
+            let job = Box::pin(async move {
+                let result = async {
+                    save_provider_editor(backend.clone(), editor).await?;
+                    backend
+                        .services()
+                        .provider
+                        .list_models(openless_core::ProviderRequest {
+                            kind: provider_kind(kind),
+                            thinking_enabled: backend.get_preferences().llm_thinking_enabled,
+                            channel_id: Some(channel_id.clone()),
+                        })
+                        .await
+                        .map(|models| models.models)
+                }
+                .await
+                .map_err(|error: BackendError| error.to_string());
                 let _ = tx.send(UiResult::ProviderModels {
                     kind,
                     channel_id,
+                    endpoint,
+                    provider_type,
                     result,
                 });
+                wake.unpark();
             });
+            let _ = self.provider_jobs.send(job);
+        }
+
+        fn spawn_channel_change<F>(&self, kind: openless_core::ChannelKind, future: F)
+        where
+            F: std::future::Future<Output = Result<String, BackendError>> + Send + 'static,
+        {
+            let tx = self.tx.clone();
+            let wake = std::thread::current();
+            let job = Box::pin(async move {
+                let result = future.await.map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::ChannelsChanged { kind, result });
+                wake.unpark();
+            });
+            let _ = self.provider_jobs.send(job);
         }
 
         fn load_provider_editor(
@@ -3947,69 +4014,89 @@ mod linux_app {
                     }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
                     UiResult::Remote(Err(error)) => self.status = error,
-                    UiResult::Providers(Ok(panel)) => {
-                        if panel.kind != self.provider_kind {
+                    UiResult::Providers {
+                        kind,
+                        request,
+                        result,
+                    } => {
+                        if kind != self.provider_kind || request != self.providers_request {
                             continue;
                         }
-                        if !panel.descriptors.iter().any(|descriptor| {
-                            descriptor.provider_type.as_str() == self.new_provider_type
-                        }) {
-                            self.new_provider_type = panel
-                                .descriptors
-                                .first()
-                                .map(|descriptor| descriptor.provider_type.as_str().to_string())
-                                .unwrap_or_default();
-                        }
-                        let selected = self
-                            .selected_channel_id
-                            .as_ref()
-                            .filter(|id| panel.channels.iter().any(|channel| &channel.id == *id))
-                            .cloned()
-                            .or_else(|| {
-                                panel
-                                    .channels
-                                    .iter()
-                                    .find(|channel| channel.id == panel.active_provider)
-                                    .map(|channel| channel.id.clone())
-                            })
-                            .or_else(|| panel.channels.first().map(|channel| channel.id.clone()));
-                        self.selected_channel_id = selected.clone();
-                        if self.pending_channel_delete.as_ref().is_some_and(|id| {
-                            !panel.channels.iter().any(|channel| &channel.id == id)
-                        }) {
-                            self.pending_channel_delete = None;
-                        }
-                        self.providers = ProvidersState::Loaded(panel.clone());
-                        self.provider_models.clear();
-                        // 只把「面板刚加载好」当成一个时机，是否打开编辑器看用户意图：
-                        // 保存 / 验证 / 切换页面都会刷新面板，不能顺手把编辑器拉起来。
-                        let editor_wanted = self.editor_requested;
-                        self.editor_requested = false;
-                        if let Some(channel_id) = selected {
-                            // A refresh (enable toggle, save, validation) must not
-                            // throw away the editor draft the user is editing: only
-                            // a different channel re-reads the descriptor.
-                            let already_loaded = matches!(
-                                &self.provider_editor,
-                                ProviderEditorState::Loaded(editor)
-                                    if editor.channel.id == channel_id
-                            );
-                            if !already_loaded && editor_wanted {
-                                if let Some((channel, descriptor)) =
-                                    provider_channel_descriptor(&panel, &channel_id)
-                                {
-                                    self.provider_editor = ProviderEditorState::Loading;
-                                    self.provider_editor_form = None;
-                                    self.load_provider_editor(panel.kind, channel, descriptor);
+                        match result {
+                            Ok(panel) => {
+                                if panel.kind != self.provider_kind {
+                                    continue;
+                                }
+                                if !panel.descriptors.iter().any(|descriptor| {
+                                    descriptor.provider_type.as_str() == self.new_provider_type
+                                }) {
+                                    self.new_provider_type = panel
+                                        .descriptors
+                                        .first()
+                                        .map(|descriptor| {
+                                            descriptor.provider_type.as_str().to_string()
+                                        })
+                                        .unwrap_or_default();
+                                }
+                                let selected = self
+                                    .selected_channel_id
+                                    .as_ref()
+                                    .filter(|id| {
+                                        panel.channels.iter().any(|channel| &channel.id == *id)
+                                    })
+                                    .cloned()
+                                    .or_else(|| {
+                                        panel
+                                            .channels
+                                            .iter()
+                                            .find(|channel| channel.id == panel.active_provider)
+                                            .map(|channel| channel.id.clone())
+                                    })
+                                    .or_else(|| {
+                                        panel.channels.first().map(|channel| channel.id.clone())
+                                    });
+                                self.selected_channel_id = selected.clone();
+                                if self.pending_channel_delete.as_ref().is_some_and(|id| {
+                                    !panel.channels.iter().any(|channel| &channel.id == id)
+                                }) {
+                                    self.pending_channel_delete = None;
+                                }
+                                self.providers = ProvidersState::Loaded(panel.clone());
+                                self.provider_models.clear();
+                                // 只把「面板刚加载好」当成一个时机，是否打开编辑器看用户意图：
+                                // 保存 / 验证 / 切换页面都会刷新面板，不能顺手把编辑器拉起来。
+                                let editor_wanted = self.editor_requested;
+                                self.editor_requested = false;
+                                if let Some(channel_id) = selected {
+                                    // A refresh (enable toggle, save, validation) must not
+                                    // throw away the editor draft the user is editing: only
+                                    // a different channel re-reads the descriptor.
+                                    let already_loaded = matches!(
+                                        &self.provider_editor,
+                                        ProviderEditorState::Loaded(editor)
+                                            if editor.channel.id == channel_id
+                                    );
+                                    if !already_loaded && editor_wanted {
+                                        if let Some((channel, descriptor)) =
+                                            provider_channel_descriptor(&panel, &channel_id)
+                                        {
+                                            self.provider_editor = ProviderEditorState::Loading;
+                                            self.provider_editor_form = None;
+                                            self.load_provider_editor(
+                                                panel.kind, channel, descriptor,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    self.provider_editor = ProviderEditorState::Idle;
                                 }
                             }
-                        } else {
-                            self.provider_editor = ProviderEditorState::Idle;
+                            Err(error) => {
+                                self.providers = ProvidersState::Failed;
+                                self.frontend_vm.settings_notice = Some(error.clone());
+                                self.status = error;
+                            }
                         }
-                    }
-                    UiResult::Providers(Err(error)) => {
-                        self.providers = ProvidersState::Failed;
-                        self.status = error;
                     }
                     UiResult::ProviderSaved { editor, result } => {
                         self.provider_save_pending = false;
@@ -4017,6 +4104,7 @@ mod linux_app {
                             Err(error) => {
                                 self.provider_save_again = false;
                                 self.provider_close_pending = false;
+                                self.frontend_vm.settings_notice = Some(error.clone());
                                 self.status = error;
                             }
                             Ok(()) => {
@@ -4055,6 +4143,7 @@ mod linux_app {
                                         form.protocol.extra_headers.clear();
                                     }
                                 }
+                                self.frontend_vm.settings_notice = None;
                                 self.status = tr_l10n(self.lang, "status.channel_saved").to_owned();
                                 self.load_settings_channels();
                                 self.load_service_configured();
@@ -4083,6 +4172,7 @@ mod linux_app {
                     } => {
                         if kind != self.provider_kind
                             || self.selected_channel_id.as_deref() != Some(channel_id.as_str())
+                            || !matches!(self.provider_editor, ProviderEditorState::Loading)
                         {
                             continue;
                         }
@@ -4112,6 +4202,7 @@ mod linux_app {
                             Err(error) => {
                                 self.provider_editor = ProviderEditorState::Failed;
                                 self.provider_editor_form = None;
+                                self.frontend_vm.settings_notice = Some(error.clone());
                                 self.status = error;
                             }
                         }
@@ -4119,10 +4210,15 @@ mod linux_app {
                     UiResult::ProviderModels {
                         kind,
                         channel_id,
+                        endpoint,
+                        provider_type,
                         result,
                     } => {
                         if kind == self.provider_kind
                             && self.selected_channel_id.as_deref() == Some(channel_id.as_str())
+                            && self.provider_editor_form.as_ref().is_some_and(|form| {
+                                form.endpoint == endpoint && form.provider_type == provider_type
+                            })
                         {
                             match result {
                                 Ok(models) => {
@@ -4141,6 +4237,7 @@ mod linux_app {
                                         form.models = models.clone();
                                         form.models_loading = false;
                                     }
+                                    self.frontend_vm.settings_notice = None;
                                     self.provider_models = models;
                                 }
                                 Err(error) => {
@@ -4148,6 +4245,7 @@ mod linux_app {
                                         form.models.clear();
                                         form.models_loading = false;
                                     }
+                                    self.frontend_vm.settings_notice = Some(error.clone());
                                     self.status = error;
                                 }
                             }
@@ -4380,22 +4478,84 @@ mod linux_app {
                     UiResult::ServiceConfigured(configured) => {
                         self.service_configured = configured;
                     }
-                    UiResult::ChannelCreated { kind, result } => match result {
-                        Ok(channel_id) => {
-                            self.settings_channel_kind = kind;
-                            self.provider_kind = kind;
-                            // 草稿：面板加载完就自动打开编辑器，未交互关闭时回收。
-                            self.close_provider_editor();
-                            self.selected_channel_id = Some(channel_id);
-                            self.editor_draft = true;
-                            self.draft_touched = false;
-                            self.editor_requested = true;
+                    UiResult::ChannelsChanged { kind, result } => {
+                        match result {
+                            Ok(message) => {
+                                self.frontend_vm.settings_notice = None;
+                                self.status = message;
+                            }
+                            Err(error) => self.frontend_vm.settings_notice = Some(error),
+                        }
+                        if kind == self.settings_channel_kind {
                             self.load_settings_channels();
                             self.load_service_configured();
                             self.load_providers(kind);
                         }
-                        Err(error) => self.frontend_vm.settings_notice = Some(error),
-                    },
+                    }
+                    UiResult::ProviderTypeChanged {
+                        kind,
+                        channel_id,
+                        result,
+                    } => {
+                        self.provider_switch_pending = false;
+                        let selected = self
+                            .provider_editor_form
+                            .as_ref()
+                            .is_some_and(|form| form.kind == kind && form.channel_id == channel_id);
+                        match *result {
+                            Ok(editor) => {
+                                self.frontend_vm.settings_notice = None;
+                                if selected {
+                                    self.provider_editor_form =
+                                        Some(ProviderEditorForm::from_editor(&editor, self.lang));
+                                    self.provider_editor =
+                                        ProviderEditorState::Loaded(Box::new(editor));
+                                    if self
+                                        .provider_editor_form
+                                        .as_ref()
+                                        .is_some_and(|form| form.provider_type == "orcarouter")
+                                    {
+                                        if let Some(form) = self.provider_editor_form.as_mut() {
+                                            form.models_loading = true;
+                                        }
+                                        self.request_provider_models(kind, channel_id);
+                                    }
+                                }
+                                self.load_settings_channels();
+                                self.load_service_configured();
+                                self.load_providers(self.provider_kind);
+                            }
+                            Err(error) => self.frontend_vm.settings_notice = Some(error),
+                        }
+                    }
+                    UiResult::ChannelCreated { kind, result } => {
+                        self.channel_create_pending = false;
+                        match result {
+                            Ok(channel_id) => {
+                                if kind != self.settings_channel_kind
+                                    || !self.frontend_vm.settings_open
+                                    || !matches!(self.frontend_vm.services_view, 0 | 1)
+                                {
+                                    if kind == self.settings_channel_kind {
+                                        self.load_settings_channels();
+                                    }
+                                    continue;
+                                }
+                                self.settings_channel_kind = kind;
+                                self.provider_kind = kind;
+                                // 草稿：面板加载完就自动打开编辑器，未交互关闭时回收。
+                                self.close_provider_editor();
+                                self.selected_channel_id = Some(channel_id);
+                                self.editor_draft = true;
+                                self.draft_touched = false;
+                                self.editor_requested = true;
+                                self.load_settings_channels();
+                                self.load_service_configured();
+                                self.load_providers(kind);
+                            }
+                            Err(error) => self.frontend_vm.settings_notice = Some(error),
+                        }
+                    }
                     UiResult::MarketplaceDetail(Ok(detail)) => {
                         self.status =
                             fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
@@ -4889,7 +5049,7 @@ mod linux_app {
                 ),
             })
             .collect();
-            vm.channels_loading = self.settings_channels_loading;
+            vm.channels_loading = self.settings_channels_loading || self.channel_create_pending;
             let active_channel = self
                 .settings_channels
                 .iter()
@@ -4948,7 +5108,8 @@ mod linux_app {
                     has_models_url: form.models_url.is_some(),
                     custom_model: form.custom_model,
                     protocol: form.protocol.clone(),
-                    busy: matches!(self.provider_editor, ProviderEditorState::Loading),
+                    busy: self.provider_switch_pending
+                        || matches!(self.provider_editor, ProviderEditorState::Loading),
                 }
             });
 
@@ -6410,6 +6571,9 @@ mod linux_app {
                     // 再打开同一个编辑器——草稿卡片只是为了让凭据有渠道 id 可落盘；
                     // 用户完全没交互就关掉时会被回收（见 `SettingsProviderClose`）。
                     frontend::view_model::FrontendAction::SettingsChannelDraft => {
+                        if self.channel_create_pending || self.provider_switch_pending {
+                            continue;
+                        }
                         let kind = self.settings_channel_kind;
                         // 供应商面板还没加载完时也照 Tauri 的 `presets[0]?.id ?? ''` 建
                         // 一张空供应商的草稿：弹窗里可以再选。
@@ -6420,15 +6584,16 @@ mod linux_app {
                             .map(|provider| provider.provider_type.clone())
                             .unwrap_or_default();
                         if let Some(backend) = self.backend() {
-                            self.editor_draft = true;
-                            self.draft_touched = false;
+                            self.channel_create_pending = true;
                             let tx = self.tx.clone();
+                            let wake = std::thread::current();
                             self.tokio.spawn(async move {
                                 let result = backend
                                     .create_channel(kind, provider_type, String::new())
                                     .await
                                     .map_err(|error| error.to_string());
                                 let _ = tx.send(UiResult::ChannelCreated { kind, result });
+                                wake.unpark();
                             });
                         }
                     }
@@ -6503,37 +6668,51 @@ mod linux_app {
                             ids.swap(index, target as usize);
                             if let Some(backend) = self.backend() {
                                 let lang = self.lang;
-                                self.spawn(async move {
+                                self.spawn_channel_change(kind, async move {
                                     backend.reorder_channels(kind, ids).await?;
                                     Ok(tr_l10n(lang, "status.channel_reordered").to_string())
                                 });
-                                self.load_settings_channels();
                             }
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsChannelProviderType {
-                        index,
+                        channel_id: id,
                         provider_type,
                     } => {
                         let kind = self.settings_channel_kind;
-                        let id = self
-                            .settings_channels
-                            .get(index)
-                            .map(|channel| channel.id.clone());
-                        if let (Some(backend), Some(id)) = (self.backend(), id) {
-                            let lang = self.lang;
-                            self.spawn(async move {
-                                backend
-                                    .set_channel_provider_type(kind, id, provider_type)
-                                    .await?;
-                                Ok(tr_l10n(lang, "status.provider_type_updated").to_string())
+                        if let Some(backend) = self.backend() {
+                            if self.provider_switch_pending {
+                                continue;
+                            }
+                            let Some(editor) = self
+                                .editor_from_form()
+                                .filter(|editor| editor.channel.id == id)
+                            else {
+                                continue;
+                            };
+                            if editor.protocol.validate().is_err() {
+                                continue;
+                            }
+                            self.draft_touched = true;
+                            self.provider_switch_pending = true;
+                            let tx = self.tx.clone();
+                            let wake = std::thread::current();
+                            let job = Box::pin(async move {
+                                let result = switch_provider_editor(backend, editor, provider_type)
+                                    .await
+                                    .map_err(|error| error.to_string());
+                                let _ = tx.send(UiResult::ProviderTypeChanged {
+                                    kind,
+                                    channel_id: id,
+                                    result: Box::new(result),
+                                });
+                                wake.unpark();
                             });
-                            // The descriptor changed with the provider type: the
-                            // editor must re-read it instead of keeping old fields.
-                            self.close_provider_editor();
-                            self.selected_channel_id = None;
-                            self.load_settings_channels();
-                            self.load_providers(kind);
+                            if self.provider_jobs.send(job).is_err() {
+                                self.provider_switch_pending = false;
+                                self.frontend_vm.settings_notice =
+                                    Some(tr_l10n(self.lang, "common.operationFailed").to_owned());
+                            }
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsChannelActivate(index) => {
@@ -6544,15 +6723,16 @@ mod linux_app {
                             .map(|channel| channel.id.clone());
                         if let (Some(backend), Some(id)) = (self.backend(), id) {
                             let lang = self.lang;
-                            self.spawn(async move {
+                            self.spawn_channel_change(kind, async move {
                                 backend.set_active_provider(provider_slot(kind), id).await?;
                                 Ok(tr_l10n(lang, "status.channel_active").to_string())
                             });
-                            self.load_settings_channels();
-                            self.load_service_configured();
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderField(field, value) => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
                         self.draft_touched = true;
                         if let Some(form) = self.provider_editor_form.as_mut() {
                             match field {
@@ -6560,6 +6740,16 @@ mod linux_app {
                                     form.name = value
                                 }
                                 frontend::view_model::SettingsProviderField::Endpoint => {
+                                    if form.endpoint != value {
+                                        form.models.clear();
+                                        form.models_loading = false;
+                                        if let ProviderEditorState::Loaded(editor) =
+                                            &self.provider_editor
+                                        {
+                                            form.models_url =
+                                                provider_models_url(&editor.descriptor, &value);
+                                        }
+                                    }
                                     form.endpoint = value
                                 }
                                 frontend::view_model::SettingsProviderField::Model => {
@@ -6605,6 +6795,9 @@ mod linux_app {
                         self.queue_provider_save();
                     }
                     frontend::view_model::FrontendAction::SettingsProviderClearSecrets => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
                         if let Some(editor) = self.editor_from_form() {
                             if let Some(backend) = self.backend() {
                                 let tx = self.tx.clone();
@@ -6632,6 +6825,9 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderModels => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
                         let kind = self.settings_channel_kind;
                         let channel_id = self
                             .provider_editor_form
@@ -6645,33 +6841,21 @@ mod linux_app {
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsProviderModelSelected(model) => {
-                        // Tauri `applyModel`：选中即写入模型字段并立刻落地凭据，不需要
-                        // 再按一次保存；失败时错误直接顶到状态栏。
-                        let kind = self.settings_channel_kind;
-                        let channel_id = self
-                            .provider_editor_form
-                            .as_ref()
-                            .map(|form| form.channel_id.clone());
+                        if self.provider_switch_pending {
+                            continue;
+                        }
+                        self.draft_touched = true;
                         if let Some(form) = self.provider_editor_form.as_mut() {
-                            form.model = model.clone();
+                            form.model = model;
                             form.custom_model = false;
                         }
-                        if let (Some(backend), Some(channel_id)) = (self.backend(), channel_id) {
-                            let lang = self.lang;
-                            self.spawn(async move {
-                                write_or_remove_provider_value(
-                                    &backend,
-                                    kind,
-                                    &channel_id,
-                                    model_account(kind),
-                                    &model,
-                                )
-                                .await?;
-                                Ok(fmt_l10n(lang, "settings.providers.modelSaved", &[&model]))
-                            });
-                        }
+                        // Use the same FIFO and revision receipt as typed edits.
+                        self.queue_provider_save();
                     }
                     frontend::view_model::FrontendAction::SettingsProviderModelCustom(custom) => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
                         if let Some(form) = self.provider_editor_form.as_mut() {
                             form.custom_model = custom;
                         }
@@ -6696,12 +6880,10 @@ mod linux_app {
                             .map(|channel| (channel.id.clone(), channel.enabled));
                         if let (Some(backend), Some((id, enabled))) = (self.backend(), target) {
                             let lang = self.lang;
-                            self.spawn(async move {
+                            self.spawn_channel_change(kind, async move {
                                 backend.set_channel_enabled(kind, id, !enabled).await?;
                                 Ok(tr_l10n(lang, "status.channel_enabled").to_string())
                             });
-                            self.load_settings_channels();
-                            self.load_service_configured();
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsChannelValidate(index) => {
@@ -6712,11 +6894,15 @@ mod linux_app {
                             .map(|channel| channel.id.clone());
                         if let (Some(backend), Some(id)) = (self.backend(), id) {
                             let lang = self.lang;
-                            self.spawn(async move {
+                            let editor = self
+                                .editor_from_form()
+                                .filter(|editor| editor.kind == kind && editor.channel.id == id);
+                            self.spawn_channel_change(kind, async move {
+                                if let Some(editor) = editor {
+                                    save_provider_editor(backend.clone(), editor).await?;
+                                }
                                 validate_provider_channel(lang, backend, kind, id).await
                             });
-                            self.load_settings_channels();
-                            self.load_service_configured();
                         }
                     }
                     frontend::view_model::FrontendAction::SettingsChannelDelete(index) => {
@@ -6727,12 +6913,11 @@ mod linux_app {
                             .map(|channel| channel.id.clone());
                         if let (Some(backend), Some(id)) = (self.backend(), id) {
                             let lang = self.lang;
-                            self.spawn(async move {
+                            self.close_provider_editor();
+                            self.spawn_channel_change(kind, async move {
                                 backend.delete_channel(kind, id).await?;
                                 Ok(tr_l10n(lang, "status.channel_deleted").to_string())
                             });
-                            self.load_settings_channels();
-                            self.load_service_configured();
                         }
                     }
                     frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
@@ -7391,6 +7576,67 @@ mod linux_app {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Drain the old form before replacing its descriptor. Never refresh the
+    /// editor from a list requested before the provider mutation completed.
+    async fn switch_provider_editor(
+        backend: Arc<openless_core::OpenLessBackend>,
+        editor: ProviderEditor,
+        provider_type: String,
+    ) -> Result<ProviderEditor, BackendError> {
+        let descriptor = openless_core::provider_rules::provider_descriptor(
+            provider_kind(editor.kind),
+            &provider_type,
+        )
+        .ok_or_else(|| {
+            BackendError::new(
+                openless_core::BackendErrorCode::InvalidArgument,
+                "unknown provider type",
+            )
+        })?;
+        let kind = editor.kind;
+        let id = editor.channel.id.clone();
+        save_provider_editor(backend.clone(), editor).await?;
+        backend
+            .set_channel_provider_type(kind, id.clone(), provider_type.clone())
+            .await?;
+        for (account, default) in [
+            (
+                endpoint_account(kind),
+                descriptor.default_endpoint.as_deref(),
+            ),
+            (model_account(kind), descriptor.default_model.as_deref()),
+        ] {
+            if let Some(default) = default.filter(|value| !value.trim().is_empty()) {
+                let current = read_provider_value(&backend, kind, &id, account).await?;
+                if provider_type == "orcarouter"
+                    || current
+                        .as_deref()
+                        .is_none_or(|value| value.trim().is_empty())
+                {
+                    write_or_remove_provider_value(&backend, kind, &id, account, default).await?;
+                }
+            }
+        }
+        let mut channel = backend
+            .list_channels(kind)
+            .await?
+            .into_iter()
+            .find(|channel| channel.id == id)
+            .ok_or_else(|| {
+                BackendError::new(
+                    openless_core::BackendErrorCode::InvalidArgument,
+                    "unknown channel",
+                )
+            })?;
+        if provider_type == "orcarouter" && channel.name.trim().is_empty() {
+            backend
+                .rename_channel(kind, id, "OrcaRouter".to_owned())
+                .await?;
+            channel.name = "OrcaRouter".to_owned();
+        }
+        load_provider_editor(backend, kind, channel, descriptor).await
     }
 
     async fn load_provider_editor(
@@ -9456,6 +9702,142 @@ Internal flags (set by OpenLess itself, not for regular use):
                 collect(&clipped.shape, &mut out);
             }
             out
+        }
+
+        fn fixture_editor(provider_type: &str) -> ProviderEditor {
+            ProviderEditor {
+                kind: openless_core::ChannelKind::Llm,
+                channel: openless_core::ChannelSummary {
+                    id: "draft-channel".into(),
+                    name: "typed name".into(),
+                    provider_type: provider_type.into(),
+                    enabled: true,
+                    order: 0,
+                    last_test: None,
+                },
+                descriptor: openless_core::provider_rules::provider_descriptor(
+                    openless_core::ProviderKind::Llm,
+                    provider_type,
+                )
+                .unwrap(),
+                name: "typed name".into(),
+                endpoint: "https://example.invalid/v1".into(),
+                model: "custom-model".into(),
+                volcengine_service: String::new(),
+                protocol: Default::default(),
+                auth_mode: String::new(),
+                resource_id: String::new(),
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+            }
+        }
+
+        #[test]
+        fn stale_provider_panels_cannot_consume_the_new_draft_open_request() {
+            let mut app = fixture_app(true);
+            app.providers_request = 2;
+            app.editor_requested = true;
+            app.selected_channel_id = Some("draft-channel".into());
+            app.tx
+                .send(UiResult::Providers {
+                    kind: app.provider_kind,
+                    request: 1,
+                    result: Err("stale panel".into()),
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert!(matches!(app.providers, ProvidersState::Loading));
+            assert!(app.editor_requested);
+            assert_eq!(app.selected_channel_id.as_deref(), Some("draft-channel"));
+            assert!(app.frontend_vm.settings_notice.is_none());
+        }
+
+        #[test]
+        fn provider_switch_receipt_keeps_the_touched_draft_editor_open() {
+            let mut app = fixture_app(true);
+            let old = fixture_editor("custom");
+            app.provider_kind = old.kind;
+            app.settings_channel_kind = old.kind;
+            app.selected_channel_id = Some(old.channel.id.clone());
+            app.provider_editor_form = Some(ProviderEditorForm::from_editor(&old, app.lang));
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(old));
+            app.editor_draft = true;
+            app.draft_touched = true;
+            app.provider_switch_pending = true;
+            let next = fixture_editor("custom_messages");
+            app.tx
+                .send(UiResult::ProviderTypeChanged {
+                    kind: next.kind,
+                    channel_id: next.channel.id.clone(),
+                    result: Box::new(Ok(next)),
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert!(!app.provider_switch_pending);
+            assert!(app.editor_draft && app.draft_touched);
+            let form = app.provider_editor_form.as_ref().unwrap();
+            assert_eq!(form.provider_type, "custom_messages");
+            assert_eq!(form.name, "typed name");
+            assert_eq!(form.model, "custom-model");
+            assert!(matches!(
+                app.provider_editor,
+                ProviderEditorState::Loaded(_)
+            ));
+        }
+
+        #[test]
+        fn model_selection_marks_new_channels_touched_and_switching_blocks_stale_input() {
+            let mut app = fixture_app(true);
+            let editor = fixture_editor("custom");
+            app.provider_editor_form = Some(ProviderEditorForm::from_editor(&editor, app.lang));
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor));
+            app.editor_draft = true;
+            app.apply_frontend_actions(
+                vec![
+                    frontend::view_model::FrontendAction::SettingsProviderModelSelected(
+                        "selected-model".into(),
+                    ),
+                ],
+                &egui::Context::default(),
+            );
+            assert!(app.draft_touched);
+            assert_eq!(
+                app.provider_editor_form.as_ref().unwrap().model,
+                "selected-model"
+            );
+            app.provider_switch_pending = true;
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::SettingsProviderField(
+                    frontend::view_model::SettingsProviderField::Model,
+                    "stale-input".into(),
+                )],
+                &egui::Context::default(),
+            );
+            assert_eq!(
+                app.provider_editor_form.as_ref().unwrap().model,
+                "selected-model"
+            );
+        }
+
+        #[test]
+        fn model_catalog_for_the_previous_endpoint_is_ignored() {
+            let mut app = fixture_app(true);
+            let editor = fixture_editor("custom");
+            app.provider_kind = editor.kind;
+            app.selected_channel_id = Some(editor.channel.id.clone());
+            app.provider_editor_form = Some(ProviderEditorForm::from_editor(&editor, app.lang));
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor.clone()));
+            app.tx
+                .send(UiResult::ProviderModels {
+                    kind: editor.kind,
+                    channel_id: editor.channel.id,
+                    endpoint: "https://old.example.invalid".into(),
+                    provider_type: "custom".into(),
+                    result: Ok(vec!["old-model".into()]),
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert!(app.provider_editor_form.as_ref().unwrap().models.is_empty());
         }
 
         fn fixture_app(window_should_be_open: bool) -> OpenLessEguiApp {

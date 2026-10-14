@@ -3572,10 +3572,13 @@ fn channel_editor_panel(
         return;
     };
     let lang = vm.lang;
+    if editor.busy {
+        ui.disable();
+    }
     // Tauri：字段修改后自动保存（300ms 防抖 + 失焦/离开前 flush）。这里到点就推一次
     // `SettingsProviderSave`；没到点则请求下一帧再看。
     let protocol_valid = editor.protocol.validate().is_ok();
-    if protocol_valid {
+    if protocol_valid && !editor.busy {
         editor_auto_save(ui, actions);
     }
     let edited = vm
@@ -3950,7 +3953,7 @@ fn provider_editor_body(
     ui: &mut egui::Ui,
     editor: &SettingsProviderEditor,
     providers: &[SettingsChannelProvider],
-    channel_index: Option<usize>,
+    _channel_index: Option<usize>,
     lang: Lang,
     llm_thinking_enabled: bool,
     actions: &mut Vec<FrontendAction>,
@@ -3998,12 +4001,10 @@ fn provider_editor_body(
                         }
                     });
                 if picked != selected {
-                    if let Some(index) = channel_index {
-                        actions.push(FrontendAction::SettingsChannelProviderType {
-                            index,
-                            provider_type: providers[picked].provider_type.clone(),
-                        });
-                    }
+                    actions.push(FrontendAction::SettingsChannelProviderType {
+                        channel_id: editor.channel_id.clone(),
+                        provider_type: providers[picked].provider_type.clone(),
+                    });
                 }
             },
         );
@@ -5069,8 +5070,14 @@ fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mu
                     // 「都被向左对齐了」）。Tauri 的 `minmax(0,200px)` 是硬列宽。
                     ui.set_min_width(label_width);
                     if !label.is_empty() {
-                        let text_width =
-                            (label_width - if desc.is_empty() { 0.0 } else { 20.0 }).max(20.0);
+                        // Reserve both the help glyph and egui's inter-item gap;
+                        // otherwise described rows grow the label column by 4px.
+                        let help_width = if desc.is_empty() {
+                            0.0
+                        } else {
+                            16.0 + ui.spacing().item_spacing.x
+                        };
+                        let text_width = (label_width - help_width).max(1.0);
                         ui.add_sized(
                             egui::vec2(text_width, 46.0),
                             egui::Label::new(
