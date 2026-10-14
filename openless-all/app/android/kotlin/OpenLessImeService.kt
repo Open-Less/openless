@@ -3454,9 +3454,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val text = lastDictationText ?: return
         if (dictationTextUndone) return
         val connection = currentInputConnection ?: return
-        for (len in text.length downTo 1) {
-            if (connection.getTextBeforeCursor(len, 0)?.toString() == text.substring(0, len)) return
-        }
+        val beforeCursor = connection.getTextBeforeCursor(text.length, 0) ?: return
+        if (DictationSpan.hasRemainingPrefix(beforeCursor, text)) return
         lastDictationText = null
         updateDictationResultControls()
     }
@@ -3470,6 +3469,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // Selecting another span must not discard the user's pending undo/redo.
+        if (newSelStart < 0 || newSelStart != newSelEnd) return
         invalidateDictationResultIfTextChanged()
     }
 
@@ -3958,20 +3959,39 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
     }
 
+    private fun requireCollapsedDictationCursor(
+        connection: android.view.inputmethod.InputConnection,
+        selectionMessage: String,
+    ): Boolean {
+        val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+        val length = extracted?.text?.length ?: -1
+        if (extracted == null || extracted.selectionStart !in 0..length || extracted.selectionEnd !in 0..length) {
+            setState("error", ui("无法确认光标位置，未修改文字", "Cannot verify cursor position; text unchanged"))
+            return false
+        }
+        if (extracted.selectionStart != extracted.selectionEnd) {
+            setState("error", selectionMessage)
+            return false
+        }
+        return true
+    }
+
     /** Toggles between removing this dictation's committed text and restoring it. */
     private fun toggleUndoRedoDictation() {
         val text = lastDictationText ?: return
         if (sessionEpoch != lastDictationEpoch) return
         val connection = currentInputConnection ?: return
+        if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再撤销/重做", "Clear the selection before undo/redo"))) return
         if (!dictationTextUndone) {
             // deleteSurroundingText is length-based. If the utterance is no
             // longer exactly before the cursor (backspaced away, or the caret
             // sits inside it), deleting would erase neighboring text.
-            if (!DictationSpan.matchesBeforeCursor(
-                    connection.getTextBeforeCursor(text.length, 0),
-                    text,
-                )
-            ) {
+            val beforeCursor = connection.getTextBeforeCursor(text.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未撤销", "Cannot read original text; undo cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, text)) {
                 lastDictationText = null
                 updateDictationResultControls()
                 return
@@ -4012,7 +4032,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         } else {
             val whole = lastDictationText ?: return
             if (sessionEpoch != lastDictationEpoch || dictationTextUndone) return
-            if (!DictationSpan.matchesBeforeCursor(connection.getTextBeforeCursor(whole.length, 0), whole)) {
+            if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) return
+            val beforeCursor = connection.getTextBeforeCursor(whole.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未替换", "Cannot read original text; replacement cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, whole)) {
                 lastDictationText = null
                 updateDictationResultControls()
                 Toast.makeText(this, ui("原文已变化，无法整段替换", "Original text changed; cannot replace it"), Toast.LENGTH_SHORT).show()
@@ -4100,6 +4126,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val connection = currentInputConnection
         if (connection != null) {
             if (replacesWhole) {
+                if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) {
+                    refreshInputView()
+                    return
+                }
                 if (!DictationSpan.matchesBeforeCursor(
                         connection.getTextBeforeCursor(original.length, 0),
                         original,
@@ -4111,11 +4141,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 }
             }
             if (!connection.commitText(text, 1)) {
-                if (replacesWhole) connection.commitText(original, 1)
-                setState("error", ui("替换失败", "Replace failed"))
+                val restored = !replacesWhole || connection.commitText(original, 1)
+                setState("error", if (restored) ui("替换失败", "Replace failed") else ui("替换失败，原文恢复失败", "Replace failed; original text could not be restored"))
                 refreshInputView()
                 return
             }
+        } else {
+            setState("error", ui("输入连接已失效，未替换", "Input connection lost; not replaced"))
+            refreshInputView()
+            return
         }
         if (shouldAddToDictionary && text != original) {
             runNativeAction("加入词典") {
