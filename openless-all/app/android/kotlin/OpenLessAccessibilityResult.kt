@@ -10,7 +10,8 @@ enum class AccessibilityPasteResult(val code: Int) {
     NO_FOCUSED_EDITOR(3),
     PASTE_REJECTED(4),
     TIMEOUT(5),
-    IPC_PROTOCOL_ERROR(6);
+    IPC_PROTOCOL_ERROR(6),
+    TARGET_CHANGED(7);
 
     val reason: String
         get() = name

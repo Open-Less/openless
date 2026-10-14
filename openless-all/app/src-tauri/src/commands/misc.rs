@@ -132,9 +132,16 @@ pub async fn start_microphone_level_monitor(
     app: AppHandle,
     device_name: String,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let warm_hub = crate::recorder::warm_capture_hub();
+    let warm_hub_for_error = Arc::clone(&warm_hub);
+    let app_for_error = app.clone();
+    let result = match tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<MicrophoneMonitorState>();
-        if let Some(existing) = state.lock().take() {
+        let _operation = state.operation.lock();
+        if !warm_hub.begin_preview() {
+            return Err("dictation is using the microphone".into());
+        }
+        if let Some(existing) = state.recorder.lock().take() {
             existing.stop();
         }
 
@@ -150,13 +157,29 @@ pub async fn start_microphone_level_monitor(
             let _ = level_app.emit("microphone:level", serde_json::json!({ "level": level }));
         });
         let (recorder, _runtime_errors, _archive_active) =
-            Recorder::start(microphone_device_name, consumer, level_handler, None)
-                .map_err(|e| e.to_string())?;
-        *state.lock() = Some(recorder);
+            match Recorder::start(microphone_device_name, consumer, level_handler, None) {
+                Ok(started) => started,
+                Err(error) => {
+                    warm_hub.end_preview();
+                    return Err(error.to_string());
+                }
+            };
+        *state.recorder.lock() = Some(recorder);
         Ok(())
     })
     .await
-    .map_err(|e| format!("start microphone monitor task failed: {e}"))?
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let state = app_for_error.state::<MicrophoneMonitorState>();
+            let _operation = state.operation.lock();
+            if state.recorder.lock().is_none() {
+                warm_hub_for_error.end_preview();
+            }
+            return Err(format!("start microphone monitor task failed: {error}"));
+        }
+    };
+    result
 }
 
 #[tauri::command]
@@ -167,14 +190,32 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
         return;
     }
     #[cfg(not(mobile))]
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    let warm_hub = crate::recorder::warm_capture_hub();
+    #[cfg(not(mobile))]
+    let warm_hub_for_error = Arc::clone(&warm_hub);
+    #[cfg(not(mobile))]
+    let app_for_error = app.clone();
+    #[cfg(not(mobile))]
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<MicrophoneMonitorState>();
-        let recorder = state.lock().take();
+        let _operation = state.operation.lock();
+        let recorder = state.recorder.lock().take();
         if let Some(recorder) = recorder {
             recorder.stop();
         }
+        warm_hub.end_preview();
     })
     .await;
+    #[cfg(not(mobile))]
+    if result.is_err() {
+        let state = app_for_error.state::<MicrophoneMonitorState>();
+        let _operation = state.operation.lock();
+        if state.recorder.lock().is_none() {
+            warm_hub_for_error.end_preview();
+        }
+    }
+    #[cfg(not(mobile))]
+    let _ = result;
 }
 
 /// Copy the current session's openless.log to a user-chosen location (the frontend obtains
@@ -271,17 +312,16 @@ pub async fn debug_read_cursor_context(
     }
     let budget = budget_chars
         .filter(|chars| *chars > 0)
-        .unwrap_or(crate::host_document::DEFAULT_BUDGET_CHARS);
+        .unwrap_or(crate::host_document::DEFAULT_BUDGET_CHARS)
+        .min(crate::host_document::MAX_BUDGET_CHARS);
 
     let result = crate::host_document::probe_around_cursor(budget).await;
     // Also log it: install verification usually involves switching to another app and clicking
     // manually, and digging through the log is easier than digging through devtools.
     log::info!(
-        "[cursor-context] status={:?} reason={:?} app={:?} bundle={:?} chars={} elapsed={}ms",
+        "[cursor-context] status={:?} reason={:?} chars={} elapsed={}ms",
         result.status,
         result.reason,
-        result.app_name,
-        result.bundle_id,
         result
             .window
             .as_ref()

@@ -501,6 +501,8 @@ pub enum SettingsTextField {
     RetentionDays,
     /// 润色上下文窗口（分钟，0 = 关闭）。
     PolishContextWindow,
+    /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
+    PolishSkipMaxChars,
     /// 调试录音最多保留条数。
     AudioRecordingMaxEntries,
     CodingAgentModel,
@@ -1066,6 +1068,8 @@ pub struct SettingsFields {
     pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
     /// 润色上下文窗口分钟数（0 = 只用当前这条转写）。
     pub polish_context_window: String,
+    /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
+    pub polish_skip_max_chars: String,
     /// 调试录音最多保留条数。
     pub audio_recording_max_entries: String,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
@@ -1113,6 +1117,7 @@ impl Default for SettingsFields {
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),
+            polish_skip_max_chars: String::new(),
             audio_recording_max_entries: String::new(),
             selection_polish_delivery: 0,
             activity_heatmap: true,

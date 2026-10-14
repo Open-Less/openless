@@ -113,6 +113,8 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeFinalizeQaFromOverlay()
 
+    @JvmStatic external fun nativeFinalizeVoiceEditFromOverlay()
+
     @JvmStatic external fun nativeNotifyOverlayDestroyed()
 
     /**

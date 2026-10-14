@@ -159,6 +159,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "low_latency_dictation_enabled",
+        key: "lowLatencyDictationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "active_asr_provider",
         key: "activeAsrProvider",
         class: PreferenceClass::Excluded,
@@ -206,6 +213,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::Boolean,
         reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "sync_custom_server_origin",
+        key: "syncCustomServerOrigin",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::OptionalText,
+        reason: "local_consent_or_secret",
     },
     PreferenceField {
         rust_name: "restore_clipboard_after_paste",
@@ -329,6 +343,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "selection_voice_enabled",
         key: "selectionVoiceEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "voice_edit_enabled",
+        key: "voiceEditEnabled",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
         reason: "portable_setting",
@@ -609,6 +630,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "polish_context_window_minutes",
         key: "polishContextWindowMinutes",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned32,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_skip_max_chars",
+        key: "polishSkipMaxChars",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Unsigned32,
         reason: "portable_setting",
@@ -912,6 +940,7 @@ pub const LLM_ACCOUNTS: &[&str] = &[
     "ark.messages_thinking",
     "ark.max_tokens",
     "ark.thinking_budget",
+    "ark.service_tier",
 ];
 pub const OMNI_ACCOUNTS: &[&str] = &[
     "omni.api_key",

@@ -73,6 +73,7 @@ pub mod style_packs;
 pub mod testing;
 pub mod types;
 pub mod vocabulary;
+pub mod voice_edit_session;
 mod voice_session;
 
 mod local_asr_catalog;
@@ -135,7 +136,7 @@ pub mod contract {
         SelectionVoiceDisposition, SelectionVoiceEditAction, SelectionVoiceEditPreviewResult,
         SelectionVoiceEditRequest, SelectionVoiceInstructionRequest, SelectionVoiceIntentPrompt,
         SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate,
-        SelectionVoiceSnapshot,
+        SelectionVoiceSnapshot, VoiceEditPlanRequest, VoiceEditPlanResult,
     };
     pub use crate::host_document::{
         edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, plan_window,
@@ -182,8 +183,8 @@ pub mod contract {
     pub use crate::{
         require_backend_contract_version, ActivityDay, AudioConsumer, AudioRecorder, BackendConfig,
         BackendDependencies, BackendError, BackendErrorCode, BackendEvent, BackendEventKind,
-        BackendSnapshot, CliDispatchOutcome, CliIntent, Clock, CorrectionRule, CredentialKey,
-        CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
+        BackendSnapshot, CapturedTextTarget, CliDispatchOutcome, CliIntent, Clock, CorrectionRule,
+        CredentialKey, CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
         DictationContext, DictationEngine, DictationHotkeyDispatchOptions, DictationHotkeyEdge,
         DictationInsertStatus, DictationOutputTarget, DictationPhase, DictationResult,
         DictationSession, DictationStartOptions, DictationStateSnapshot, DictionaryEntry,
@@ -288,14 +289,15 @@ pub use model_store::{
 };
 pub use ports::PreparedTranscription;
 pub use ports::{
-    ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, DirectoryResourceResolver,
-    EditObservationAdapter, EditObservationSink, EngineFailure, EngineFailureStage, EngineProgress,
-    EngineProgressSink, EngineResult, EngineStage, HostAction, HostActions, HostContextAdapter,
-    HostContextCapture, InsertOutcome, InsertWriteResult, NoopEditObservationAdapter,
-    NoopHostActions, NoopHostContextAdapter, PolishOutput, RecordingArchive, RecordingControlSink,
-    RecordingEvent, RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession,
-    TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine,
-    TranscriptionSession, UnsupportedTextInserter, VoiceCapture,
+    ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
+    DictationEngine, DirectoryResourceResolver, EditObservationAdapter, EditObservationSink,
+    EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
+    EngineStage, HostAction, HostActions, HostContextAdapter, HostContextCapture, InsertOutcome,
+    InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
+    PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
+    RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
+    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    UnsupportedTextInserter, VoiceCapture,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -368,6 +370,10 @@ pub use types::{
 pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
+};
+pub use voice_edit_session::{
+    TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,
+    VoiceEditSession, VoiceEditSnapshot, VoiceEditTarget, VoiceEditTurn,
 };
 
 pub mod preference_patch;

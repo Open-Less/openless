@@ -471,6 +471,19 @@ mod tests {
         ));
         let recorder = FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(20, 0.5)]);
         let transcription = FixtureTranscriptionEngine::successful("fixture raw", 20);
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        credentials
+            .write(
+                openless_core::CredentialKey::new(
+                    openless_core::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    "ark.api_key",
+                )
+                .unwrap(),
+                openless_core::SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
         let runtime = LinuxBackendBuilder::new(
             BackendConfig {
                 data_dir: data_dir.clone(),
@@ -483,7 +496,7 @@ mod tests {
         .with_text_inserter(Arc::new(FixtureTextInserter::with_outcome(
             InsertOutcome::Inserted,
         )))
-        .with_credential_store(Arc::new(InMemoryCredentialStore::default()))
+        .with_credential_store(credentials)
         .build()
         .unwrap();
 

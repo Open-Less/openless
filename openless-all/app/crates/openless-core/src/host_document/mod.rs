@@ -12,7 +12,9 @@ pub use diff::{
     minimal_edit, EditPair, LearnedRule,
 };
 pub use observation::ObservedInsertion;
-pub use window::{plan_window, utf16_offset_to_char_offset, window_around_cursor, WindowSpan};
+pub use window::{
+    plan_window, utf16_offset_to_char_offset, window_around_cursor, window_from_split, WindowSpan,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -533,6 +533,25 @@ pub struct SelectionVoiceEditRequest {
     pub instruction: String,
 }
 
+/// Host-independent request for the standalone Voice Edit Session flow.
+/// `field_context` is kept separate from `draft` so a caret target can still
+/// be revalidated and replaced as a complete field on Android.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceEditPlanRequest {
+    pub session_id: SessionId,
+    pub field_context: String,
+    pub draft: String,
+    pub instruction_raw: String,
+    pub instruction_polished: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceEditPlanResult {
+    pub instruction_polished: String,
+    pub plan: crate::edit_plan::EditPlan,
+    pub preview: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionVoiceEditPreviewResult {
     pub preview: SelectionVoicePreview,
@@ -762,6 +781,14 @@ pub trait SelectionVoiceApi: Send + Sync {
         &self,
         request: SelectionVoiceEditRequest,
     ) -> BoxFuture<'static, Result<SelectionVoiceEditPreviewResult, BackendError>>;
+    /// Generate and validate one deterministic EditPlan. This method never
+    /// performs native insertion.
+    fn voice_edit_plan(
+        &self,
+        _request: VoiceEditPlanRequest,
+    ) -> BoxFuture<'static, Result<VoiceEditPlanResult, BackendError>> {
+        unsupported("voice edit session")
+    }
     fn set_preview(
         &self,
         update: SelectionVoicePreviewUpdate,
@@ -1785,6 +1812,12 @@ impl SelectionVoiceApi for UnsupportedDomainServices {
         _: SelectionVoiceEditRequest,
     ) -> BoxFuture<'static, Result<SelectionVoiceEditPreviewResult, BackendError>> {
         unsupported("selection voice")
+    }
+    fn voice_edit_plan(
+        &self,
+        _: VoiceEditPlanRequest,
+    ) -> BoxFuture<'static, Result<VoiceEditPlanResult, BackendError>> {
+        unsupported("voice edit session")
     }
     fn set_preview(
         &self,

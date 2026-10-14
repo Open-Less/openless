@@ -61,7 +61,6 @@ jobs:
     needs: [changes]
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     defaults:
       run:
         working-directory: openless-all/app
@@ -289,6 +288,11 @@ jobs:
           cache: npm
           cache-dependency-path: openless-all/app/package-lock.json
 
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.x"
+
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
       - uses: dtolnay/rust-toolchain@1.88.0
         if: runner.os == 'Windows'
@@ -394,6 +398,11 @@ jobs:
         # compile coverage from the step above.
         if: runner.os == 'Windows'
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
+
+      - name: Run native recorder module tests (Windows)
+        # Exercise the production recorder module without hardware, Tauri, MLX, or ASR submodules.
+        if: runner.os == 'Windows'
+        run: python scripts/test-recorder-module.py
 
       - name: Check Tauri backend with Rust 1.88 MSRV
         if: runner.os == 'Windows'

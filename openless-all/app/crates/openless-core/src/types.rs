@@ -59,6 +59,7 @@ pub enum HistorySource {
     QuickNote,
     SelectionPolish,
     SelectionVoiceEdit,
+    VoiceEdit,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -487,6 +488,7 @@ mod tests {
             supports_local_qwen3_mlx: false,
             supports_in_app_dictation: false,
             supports_auto_update: false,
+            supports_voice_edit: false,
         })
         .unwrap();
         assert_eq!(value["supportsDesktopHotkey"], true);

@@ -759,17 +759,16 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
             },
         );
-        let port = vm.settings.remote_port.clone();
         text_edit_row(
             ui,
             tr_l10n(lang, "settings.remote_input.port_label"),
             "",
             &mut vm.settings.remote_port,
             "8765",
-            || {
+            |text| {
                 actions.push(FrontendAction::SettingsText(
                     SettingsTextField::RemotePort,
-                    port,
+                    text.to_owned(),
                 ));
             },
         );
@@ -2059,45 +2058,55 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         tr_l10n(lang, "settings.data_storage.title"),
         tr_l10n(lang, "settings.data_storage.desc"),
         |ui| {
-            let retention = vm.settings.retention_days.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.history_retention_label"),
                 "",
                 &mut vm.settings.retention_days,
                 "0",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::RetentionDays,
-                        retention,
+                        text.to_owned(),
                     ));
                 },
             );
-            let entries = vm.settings.history_max_entries.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.history_max_entries_label"),
                 "",
                 &mut vm.settings.history_max_entries,
                 "200",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::HistoryMaxEntries,
-                        entries,
+                        text.to_owned(),
                     ));
                 },
             );
-            let window = vm.settings.polish_context_window.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.polish_context_window_label"),
                 tr_l10n(lang, "settings.recording.polish_context_window_desc"),
                 &mut vm.settings.polish_context_window,
                 "0",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::PolishContextWindow,
-                        window,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_label"),
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_desc"),
+                &mut vm.settings.polish_skip_max_chars,
+                "0",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::PolishSkipMaxChars,
+                        text.to_owned(),
                     ));
                 },
             );
@@ -2200,45 +2209,42 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
-                let model = vm.settings.coding_agent_model.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_agent.model"),
                     tr_l10n(lang, "settings.coding_agent.model_hint"),
                     &mut vm.settings.coding_agent_model,
                     tr_l10n(lang, "settings.coding_agent.model_placeholder"),
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentModel,
-                            model,
+                            text.to_owned(),
                         ));
                     },
                 );
-                let workdir = vm.settings.coding_agent_workdir.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_console.workdir"),
                     tr_l10n(lang, "settings.coding_console.workdir_desc"),
                     &mut vm.settings.coding_agent_workdir,
                     tr_l10n(lang, "settings.coding_console.workdir_placeholder"),
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentWorkdir,
-                            workdir,
+                            text.to_owned(),
                         ));
                     },
                 );
-                let exe = vm.settings.coding_agent_exe.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_agent.exe"),
                     "",
                     &mut vm.settings.coding_agent_exe,
                     "claude",
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentExe,
-                            exe,
+                            text.to_owned(),
                         ));
                     },
                 );
@@ -2256,17 +2262,16 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
-                let entries = vm.settings.audio_recording_max_entries.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
                     &mut vm.settings.audio_recording_max_entries,
                     "50",
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::AudioRecordingMaxEntries,
-                            entries,
+                            text.to_owned(),
                         ));
                     },
                 );
@@ -3614,7 +3619,7 @@ fn text_edit_row(
     desc: &str,
     value: &mut String,
     hint: &str,
-    on_change: impl FnOnce(),
+    on_change: impl FnOnce(&str),
 ) {
     row_desc(ui, label, desc, |ui| {
         let response = layout::text_input(
@@ -3626,7 +3631,7 @@ fn text_edit_row(
             false,
         );
         if response.changed() {
-            on_change();
+            on_change(value);
         }
     });
 }
@@ -3755,6 +3760,68 @@ pub(crate) fn test_render_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_polish_threshold_row_emits_the_edited_value_only_when_changed() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            ..Default::default()
+        };
+        vm.settings.polish_skip_max_chars = "0".to_string();
+        let mut actions = Vec::new();
+        let label = tr_l10n(vm.lang, "settings.recording.polish_skip_max_chars_label");
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        for (events, expected) in [
+            (Vec::new(), None),
+            (
+                vec![
+                    egui::Event::Key {
+                        key: egui::Key::A,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    egui::Event::Text("8".to_string()),
+                ],
+                Some("8"),
+            ),
+            (Vec::new(), None),
+        ] {
+            actions.clear();
+            let _ = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760.0, 2200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    privacy(ui, &mut vm, &mut actions);
+                },
+            );
+            if let Some(expected) = expected {
+                assert_eq!(vm.settings.polish_skip_max_chars, expected);
+                assert_eq!(actions.len(), 1);
+                assert!(
+                    matches!(&actions[0], FrontendAction::SettingsText(SettingsTextField::PolishSkipMaxChars, text) if text == expected)
+                );
+            } else {
+                assert!(actions.is_empty());
+            }
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new(("openless-settings-text", label)))
+            });
+        }
+    }
 
     #[test]
     fn quick_note_shortcut_value_and_menu_align_left_with_arrow_at_row_end() {

@@ -80,6 +80,7 @@ pub(crate) fn build(
         credentials.clone(),
     );
     log::error!("[e2ee-adapter] stage=store_new");
+    let credential_store_for_service = credentials.clone();
     let store = Arc::new(
         CoreSyncStore::new(
             repositories,
@@ -104,6 +105,7 @@ pub(crate) fn build(
         marketplace,
         local,
         store.clone(),
+        credential_store_for_service,
         events,
     );
     Ok((service, store))
@@ -317,6 +319,25 @@ impl SyncServiceData for CoreSyncStore {
     }
     fn device(&self) -> SourceDevice {
         CoreSyncStore::device(self)
+    }
+    fn custom_server_origin(&self) -> Option<String> {
+        CoreSyncStore::custom_server_origin(self)
+    }
+    fn set_custom_server_origin(&self, origin: Option<String>) -> SyncResult<()> {
+        CoreSyncStore::set_custom_server_origin(self, origin)
+            .map_err(|_| super::error("local_storage_unavailable"))
+    }
+    fn legacy_baseline_matches(
+        &self,
+        scope: SyncScope,
+        documents: DocumentSet,
+        revision: Revision,
+    ) -> BoxFuture<'_, SyncResult<bool>> {
+        Box::pin(async move {
+            CoreSyncStore::legacy_baseline_matches(self, scope, documents, revision)
+                .await
+                .map_err(document_error)
+        })
     }
     fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         CoreSyncStore::changes(self)

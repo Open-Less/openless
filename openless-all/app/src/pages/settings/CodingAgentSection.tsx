@@ -80,6 +80,21 @@ export function CodingAgentSection() {
   const [opencodeModels, setOpencodeModels] = useState<string[]>([]);
   const [opencodeModelsStatus, setOpencodeModelsStatus] = useState<OpenCodeModelsStatus>('idle');
   const [opencodeModelsError, setOpencodeModelsError] = useState('');
+  const [openPanelBusy, setOpenPanelBusy] = useState(false);
+  const [openPanelError, setOpenPanelError] = useState('');
+
+  const openPanel = async () => {
+    if (openPanelBusy) return;
+    setOpenPanelBusy(true);
+    setOpenPanelError('');
+    try {
+      await lessComputerWindowOpen();
+    } catch (error) {
+      setOpenPanelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenPanelBusy(false);
+    }
+  };
 
   const provider: CodingAgentProviderId = prefs?.codingAgentProvider ?? 'claude-code-cli';
   const useOpencode = prefs?.codingAgentEnabled && provider === 'opencode-cli';
@@ -467,13 +482,22 @@ export function CodingAgentSection() {
             label={t('settings.codingAgent.openPanel')}
             desc={t('settings.codingAgent.openPanelHint')}
           >
-            <button
-              type="button"
-              onClick={() => void lessComputerWindowOpen()}
-              style={{ ...inputStyle, width: 'auto', cursor: 'pointer' }}
-            >
-              {t('settings.codingAgent.openPanelAction')}
-            </button>
+            <div>
+              <button
+                type="button"
+                disabled={openPanelBusy}
+                aria-busy={openPanelBusy}
+                onClick={() => void openPanel()}
+                style={{ ...inputStyle, width: 'auto', cursor: openPanelBusy ? 'wait' : 'pointer' }}
+              >
+                {openPanelBusy ? t('common.loading') : t('settings.codingAgent.openPanelAction')}
+              </button>
+              {openPanelError && (
+                <div role="alert" style={{ fontSize: 11, color: 'var(--ol-err)', marginTop: 4 }}>
+                  {t('common.operationFailed')}: {openPanelError}
+                </div>
+              )}
+            </div>
           </SettingRow>
         </>
       )}

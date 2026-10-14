@@ -672,7 +672,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                     style={selectStyle}
                   >
                     {(
-                      ['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa'] as const
+                      ['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'qa', 'voice_edit'] as const
                     ).map((action) => (
                       <option key={action} value={action}>
                         {t(

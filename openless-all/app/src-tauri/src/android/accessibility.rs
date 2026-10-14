@@ -62,6 +62,34 @@ pub fn paste_via_accessibility_with_result(text: &str) -> String {
     PASTE_RESULT_SERVICE_NOT_CONNECTED.to_string()
 }
 
+/// Capture the focused Android editor as a short-lived, generation-bound
+/// target. The returned token is intentionally opaque to callers outside the
+/// Android adapter; Rust only parses its field text and offsets.
+pub fn capture_voice_edit_target() -> Result<Option<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return android_impl::capture_voice_edit_target();
+    }
+
+    #[cfg(not(target_os = "android"))]
+    Ok(None)
+}
+
+/// Replace the captured Android target after Kotlin revalidates package,
+/// window, source text and selection generation.
+pub fn replace_voice_edit_target(generation: i64, text: &str) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        return android_impl::replace_voice_edit_target(generation, text);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (generation, text);
+        Ok(PASTE_RESULT_SERVICE_NOT_CONNECTED.to_string())
+    }
+}
+
 pub fn is_accessibility_enabled() -> bool {
     #[cfg(target_os = "android")]
     {
@@ -272,6 +300,20 @@ mod android_impl {
             log::warn!("[android-a11y] paste failed reason={first}");
         }
         first
+    }
+
+    pub fn capture_voice_edit_target() -> Result<Option<String>, String> {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_selection_target(env, context)
+        })
+    }
+
+    pub fn replace_voice_edit_target(generation: i64, text: &str) -> Result<String, String> {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_replace_captured_selection(
+                env, context, generation, text,
+            )
+        })
     }
 }
 

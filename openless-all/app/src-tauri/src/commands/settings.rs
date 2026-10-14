@@ -4,6 +4,7 @@ use super::*;
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
     let mut prefs = core.get_preferences();
     prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
+    sync_low_latency_capture_preferences(&prefs);
     prefs
 }
 
@@ -211,9 +212,23 @@ pub(crate) fn persist_strict_settings(
             openless_core::SettingsUpdateOptions::STRICT,
             &TauriSettingsRuntime::new(coord),
         )
-        .map(|_| ())
+        .map(|_| {
+            sync_low_latency_capture_preferences(&coord.backend().get_preferences());
+        })
         .map_err(settings_save_error)
 }
+
+#[cfg(target_os = "windows")]
+fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
+    crate::recorder::warm_capture_hub().configure(
+        prefs.low_latency_dictation_enabled,
+        (!prefs.microphone_device_name.trim().is_empty())
+            .then(|| prefs.microphone_device_name.clone()),
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
 
 async fn invalidate_llm_tests_if_thinking_changed(
     coord: &Coordinator,
@@ -259,6 +274,7 @@ pub async fn set_settings(
         persist_settings_preserving_update_channel(&coord, prefs)?;
     }
     let prefs = coord.backend().get_preferences();
+    sync_low_latency_capture_preferences(&prefs);
     // Sync the capsule-style atom on save: the next recording's entrance frame carries the
     // new style instead of depending on emit_capsule's ~30Hz main-thread closure sync (a
     // congested Windows main thread delays the closure → the whole session shows the old
@@ -333,6 +349,7 @@ pub async fn set_settings(
         persist_settings_preserving_update_channel(&coord, prefs)?;
     }
     let prefs = coord.backend().get_preferences();
+    sync_low_latency_capture_preferences(&prefs);
     // Sync the capsule-style atom on save (same source as the Android notification capsule
     // payload; see emit_capsule).
     coord.sync_capsule_style_from_preferences();

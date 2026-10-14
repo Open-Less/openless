@@ -292,6 +292,7 @@ export const ASR_LABELS = [
   { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo' },
   { id: 'iflytek', nameKey: 'asrIflytek' },
   { id: 'tencent-cloud', nameKey: 'asrTencentCloud' },
+  { id: 'gemini', nameKey: 'asrGemini' },
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper' },
   { id: 'local-whisper', nameKey: 'asrLocalWhisper' },
   { id: 'sherpa-onnx-local', nameKey: 'asrSherpaOnnxLocal' },

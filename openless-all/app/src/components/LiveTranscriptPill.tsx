@@ -1,21 +1,56 @@
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import './CapsuleStyles.css';
 import {
   INSERT_TEXT_MOTION,
   appendedBirthAdvance,
   clampInsertContentWidth,
-  diffInsertUnits,
+  diffInsertWindowUnits,
   firstBornIndex,
   planCapsuleInsertMotion,
+  INSERT_TEXT_RENDER_WINDOW,
   planCharDelays,
   prefixWidths,
   rightAnchoredPositions,
+  selectInsertRenderWindow,
   type InsertUnit,
 } from '../lib/insertTextAnimation';
 import { Icon } from './Icon';
+import {
+  applyTranscriptEvent,
+  applyTranscriptSessionId,
+  applyTranscriptSnapshot,
+  beginTranscriptGeneration,
+  clearTranscriptText,
+  createTranscriptViewState,
+  shouldRetryTranscriptSnapshot,
+  type BackendEvent,
+  type TranscriptViewState,
+} from '../lib/backendEvent';
+import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
+import { getCapsuleTranscriptRailHeight } from '../lib/capsuleLayout';
+import { getSettings } from '../lib/ipc/settings';
+import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
+import type {
+  CapsulePayload,
+  CapsuleSnapshot,
+  CapsuleState,
+  CapsuleStyle,
+  UserPreferences,
+} from '../lib/types';
 
 export type LiveTranscriptTone = 'frost' | 'dark';
+
+export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div className="ol-classic-translation" data-visible={visible}>
+      <span />
+      {t('capsule.translating')}
+    </div>
+  );
+}
 
 export interface LiveTranscriptPillProps {
   text: string;
@@ -48,19 +83,201 @@ function getSansFont(): string {
   return token || 'system-ui, sans-serif';
 }
 
-function measureGlyphWidths(glyphs: string[], fontSize: number): number[] {
-  if (glyphs.length === 0) return [];
+function measureGlyphWidth(glyph: string, fontSize: number): number {
   if (typeof document === 'undefined') {
-    return glyphs.map((glyph) => Math.max(fontSize * 0.92, glyph.length * fontSize));
+    return Math.max(fontSize * 0.92, glyph.length * fontSize);
   }
   if (!measureCanvas) measureCanvas = document.createElement('canvas');
   const ctx = measureCanvas.getContext('2d');
-  if (!ctx) return glyphs.map(() => fontSize);
+  if (!ctx) return fontSize;
   ctx.font = `${FONT_WEIGHT} ${fontSize}px ${getSansFont()}`;
-  return glyphs.map((glyph) => {
-    const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
-    return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
-  });
+  const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
+  return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
+}
+
+export interface CapsuleTranscriptRailProps {
+  text: string;
+  tone?: LiveTranscriptTone;
+  stageWidth: number;
+  maxWidth: number;
+  height?: number;
+  fontSize?: number;
+}
+
+/** Transcript is deliberately a sibling rail: the capsule body remains responsible for audio feedback and controls. */
+export function CapsuleTranscriptRail({
+  text,
+  tone = 'frost',
+  stageWidth,
+  maxWidth,
+  height = DEFAULT_PILL_HEIGHT,
+  fontSize = FONT_SIZE,
+}: CapsuleTranscriptRailProps) {
+  const liveText = text.trim();
+  if (!liveText) return null;
+  return (
+    <div className="ol-capsule-transcript-rail" data-tone={tone} data-transcript-rail="true">
+      <LiveTranscriptPill
+        text={liveText}
+        tone={tone}
+        stageWidth={stageWidth}
+        maxWidth={maxWidth}
+        height={height}
+        fontSize={fontSize}
+      />
+    </div>
+  );
+}
+
+/**
+ * Windows renders the transcript in a separate, permanently click-through HWND.
+ * The capsule HWND can therefore keep a small, reliable native hit region for
+ * its controls while this rail never participates in cross-process hit testing.
+ */
+export function CapsuleTranscriptOverlay() {
+  const { t } = useTranslation();
+  const [state, setState] = useState<CapsuleState>('idle');
+  const [style, setStyle] = useState<CapsuleStyle>('siri');
+  const [text, setText] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [fontSize, setFontSize] = useState(14);
+  const [selectionPolish, setSelectionPolish] = useState(false);
+  const [translation, setTranslation] = useState(false);
+  const transcriptRef = useRef<TranscriptViewState>(createTranscriptViewState());
+  const stateRef = useRef<CapsuleState>('idle');
+  const snapshotRetryDelays = [0, 16, 32, 64, 128, 256] as const;
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const stateHandle = await listen<CapsulePayload>('capsule:state', (event) => {
+        const payload = event.payload;
+        const previousState = stateRef.current;
+        const previousTranscript = transcriptRef.current;
+        const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
+        const sessionChanged = sessionTranscript !== previousTranscript;
+        transcriptRef.current = sessionTranscript;
+        stateRef.current = payload.state;
+        setState(payload.state);
+        if (payload.capsuleStyle) setStyle(payload.capsuleStyle);
+        setSelectionPolish(payload.selectionPolish === true);
+        setTranslation(payload.translation === true);
+        if (payload.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
+          transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
+          setText(transcriptRef.current.text);
+        } else if (sessionChanged) {
+          setText(sessionTranscript.text);
+        }
+        if (['idle', 'done', 'cancelled', 'error'].includes(payload.state)) {
+          transcriptRef.current = clearTranscriptText(transcriptRef.current);
+          setText('');
+        }
+      });
+      const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
+        const next = applyTranscriptEvent(transcriptRef.current, event.payload);
+        transcriptRef.current = next;
+        setText(next.text);
+      });
+      const preferenceHandle = await listen<UserPreferences>('prefs:changed', (event) => {
+        setEnabled(event.payload.capsuleTranscriptEnabled ?? true);
+        setFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
+        if (event.payload.capsuleStyle) setStyle(event.payload.capsuleStyle);
+      });
+      const applySnapshot = (
+        snapshot: CapsuleSnapshot,
+        fallbackStyle: CapsuleStyle,
+      ): 'retry' | 'done' => {
+        const previousTranscript = transcriptRef.current;
+        if (shouldRetryTranscriptSnapshot(previousTranscript, snapshot)) return 'retry';
+        const nextTranscript = applyTranscriptSnapshot(previousTranscript, snapshot);
+        if (nextTranscript === previousTranscript) return 'done';
+        const sessionChanged =
+          snapshot.sessionId !== null && snapshot.sessionId !== previousTranscript.sessionId;
+        transcriptRef.current = nextTranscript;
+        setText(nextTranscript.text);
+
+        const previousState = stateRef.current;
+        stateRef.current = snapshot.state;
+        setState(snapshot.state);
+        setStyle(snapshot.capsuleStyle ?? fallbackStyle);
+        setSelectionPolish(snapshot.selectionPolish === true);
+        setTranslation(snapshot.translation === true);
+        if (snapshot.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
+          transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
+          setText(transcriptRef.current.text);
+        }
+        if (['idle', 'done', 'cancelled', 'error'].includes(snapshot.state)) {
+          transcriptRef.current = clearTranscriptText(transcriptRef.current);
+          setText('');
+        }
+        return 'done';
+      };
+      const replaySnapshot = async (fallbackStyle: CapsuleStyle) => {
+        for (const delayMs of snapshotRetryDelays) {
+          if (cancelled) return;
+          if (delayMs > 0) {
+            await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+          }
+          if (cancelled) return;
+          const snapshot = await getCapsuleSnapshot();
+          if (cancelled) return;
+          if (!snapshot) continue;
+          if (applySnapshot(snapshot, fallbackStyle) === 'done') return;
+        }
+      };
+      if (cancelled) {
+        stateHandle();
+        transcriptHandle();
+        preferenceHandle();
+      } else {
+        unlisten = () => {
+          stateHandle();
+          transcriptHandle();
+          preferenceHandle();
+        };
+        const preferences = await getSettings();
+        if (!cancelled) {
+          setEnabled(preferences.capsuleTranscriptEnabled ?? true);
+          setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+          setStyle(preferences.capsuleStyle);
+          await replaySnapshot(preferences.capsuleStyle);
+        }
+      }
+    })().catch((error) => console.warn('[capsule-rail] subscription failed', error));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const liveText = visibleCapsuleTranscript(text, enabled, state, selectionPolish);
+  const typeless = style === 'typeless';
+  const railHeight = getCapsuleTranscriptRailHeight(style);
+  return (
+    <div
+      className={`ol-capsule-transcript-overlay${typeless ? ' ol-typeless-capsule-wrap ol-capsule-transcript-overlay--typeless' : ''}`}
+      data-style={style}
+      data-transcript-visible={liveText ? 'true' : 'false'}
+    >
+      <CapsuleTranscriptRail
+        text={liveText}
+        fontSize={typeless ? fontSize / 0.447 : fontSize}
+        tone={typeless ? 'dark' : 'frost'}
+        stageWidth={460}
+        maxWidth={440}
+        height={railHeight}
+      />
+      {translation && !selectionPolish && style === 'classic' && <CapsuleTranslationBadge />}
+      {translation && !selectionPolish && typeless && (
+        <div className="ol-typeless-translation-row">
+          <span className="ol-typeless-translation">{t('capsule.translating')}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function LiveTranscriptPill({
@@ -83,21 +300,26 @@ export function LiveTranscriptPill({
   const hasControls = Boolean(onCancel || onConfirm);
   const padX = INSERT_TEXT_MOTION.padX + (hasControls ? controlSize + 6 : 0);
   const pillMinWidth = hasControls ? Math.max(minWidth, controlSize * 2 + 72) : minWidth;
-  const [units, setUnits] = useState<InsertUnit[]>(() => diffInsertUnits([], text));
+  const [units, setUnits] = useState<InsertUnit[]>(() => diffInsertWindowUnits([], text));
   const [seenText, setSeenText] = useState(text);
   if (text !== seenText) {
     setSeenText(text);
-    setUnits((prev) => diffInsertUnits(prev, text));
+    setUnits((prev) => diffInsertWindowUnits(prev, text));
   }
 
-  const widths = useMemo(
+  const renderWindow = useMemo(
     () =>
-      measureGlyphWidths(
-        units.map((unit) => unit.text),
-        fontSize,
+      selectInsertRenderWindow(
+        units,
+        (glyph) => measureGlyphWidth(glyph, fontSize),
+        maxWidth,
+        padX,
+        INSERT_TEXT_RENDER_WINDOW,
       ),
-    [units, fontSize],
+    [units, fontSize, maxWidth, padX],
   );
+  const renderUnits = renderWindow.units;
+  const widths = renderWindow.widths;
   const contentWidth = useMemo(
     () =>
       clampInsertContentWidth(
@@ -110,11 +332,11 @@ export function LiveTranscriptPill({
   const positions = useMemo(() => rightAnchoredPositions(widths), [widths]);
   // Start appended glyphs beyond the old tail, so they never appear on top of
   // retained text while the displacement spring is still gathering speed.
-  const birthAdvance = appendedBirthAdvance(units, widths);
-  const originIndex = firstBornIndex(units);
+  const birthAdvance = appendedBirthAdvance(renderUnits, widths);
+  const originIndex = firstBornIndex(renderUnits);
   const starts = useMemo(() => prefixWidths(widths), [widths]);
   const originX = (starts[originIndex] ?? 0) + (widths[originIndex] ?? 0) / 2;
-  const insertedCount = units.filter((unit) => unit.born).length;
+  const insertedCount = renderUnits.filter((unit) => unit.born).length;
   const delays = useMemo(
     () => planCharDelays(widths, originIndex, insertedCount),
     [widths, originIndex, insertedCount],
@@ -233,7 +455,7 @@ export function LiveTranscriptPill({
           height,
         }}
       >
-        {units.map((unit, index) => (
+        {renderUnits.map((unit, index) => (
           <motion.span
             key={unit.key}
             className="ol-live-transcript-position"
