@@ -493,6 +493,19 @@ jobs:
             "$out_dir/OpenLess_${version}_x86.apk" \
             "$out_dir/OpenLess_${version}_x86_64.apk"
 
+      - name: Stage direct download aliases
+        if: needs.plan.outputs.is_tag_release == 'true'
+        working-directory: openless-all/app
+        env:
+          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ steps.stage.outputs.out_dir }}
+          OPENLESS_DOWNLOAD_OUTPUT_DIR: ${{ steps.stage.outputs.out_dir }}
+        run: |
+          set -euo pipefail
+          for arch in aarch64 armv7 i686 x86_64; do
+            OPENLESS_DOWNLOAD_TARGET=android OPENLESS_DOWNLOAD_ARCH="$arch" \
+              node scripts/stage-release-download-aliases.mjs
+          done
+
       - name: Write Android updater manifests
         working-directory: openless-all/app
         env:
@@ -516,7 +529,7 @@ jobs:
           out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json; do
+            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json "$out_dir"/OpenLess_android_*.apk "$out_dir"/OpenLess_android_*.apk.sig; do
               [ -e "$f" ] && echo "$f"
             done
           } > "$RUNNER_TEMP/android-release-files.txt"

@@ -148,6 +148,9 @@ assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO/);
 assert.match(workflow, /first ABI may compile twice|android-studio-script/);
 assert.match(workflow, /publish-android-release/);
 assert.match(workflow, /download-artifact/);
+assert.match(workflow, /stage-release-download-aliases\.mjs/);
+assert.match(workflow, /OpenLess_android_\*\.apk/);
+assert.match(workflow, /OpenLess_android_\*\.apk\.sig/);
 assert.match(workflow, /Rust cache/);
 
 console.log('android-apk-workflow-contract checks passed');

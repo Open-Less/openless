@@ -157,6 +157,22 @@ jobs:
           ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
           bash scripts/verify-linux-egui-packages.sh
 
+      - name: Stage direct download aliases
+        if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
+        shell: bash
+        run: |
+          set -euo pipefail
+          output=openless-all/app/target/linux-egui-packages
+          alias_dir="$RUNNER_TEMP/openless-linux-egui-direct-download"
+          rm -rf "$alias_dir"
+          mkdir -p "$alias_dir"
+          debs=("$output"/OpenLess-Linux-egui-*.deb)
+          rpms=("$output"/OpenLess-Linux-egui-*.rpm)
+          test "${#debs[@]}" -eq 1
+          test "${#rpms[@]}" -eq 1
+          cp "${debs[0]}" "$alias_dir/OpenLess_linux_x86_64.deb"
+          cp "${rpms[0]}" "$alias_dir/OpenLess_linux_x86_64.rpm"
+
       - name: Upload verified Linux packages as workflow artifacts
         # Push builds keep the release path warm but do not publish artifacts;
         # the tag release and pull request runs are the consumers.
@@ -165,4 +181,12 @@ jobs:
         with:
           name: openless-linux-egui-x86_64
           path: openless-all/app/target/linux-egui-packages/*
+          if-no-files-found: error
+
+      - name: Upload direct download aliases
+        if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
+        uses: actions/upload-artifact@v7
+        with:
+          name: openless-linux-egui-direct-download
+          path: ${{ runner.temp }}/openless-linux-egui-direct-download/*
           if-no-files-found: error
