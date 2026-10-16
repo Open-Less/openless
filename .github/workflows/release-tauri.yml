@@ -24,10 +24,15 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Desktop platforms to build (manual builds do not publish a release)
+        description: Desktop platforms to build (branch builds do not publish)
         type: choice
-        options: [all, macos]
+        options: [all, macos, windows]
         default: all
+      release_tag:
+        description: Existing draft Stable tag to repair (admin only, Windows only)
+        type: string
+        required: false
+        default: ''
 
 # Repeated pushes of the same tag run only the latest run; workflow_dispatch isolates by run_id
 # to avoid mutual cancellation.
@@ -39,10 +44,11 @@ jobs:
   build:
     permissions:
       contents: write
+      actions: read
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # A release build takes ~33 minutes from a cold cache; anything past this is
     # a hang that would otherwise hold the runner and the release for hours.
@@ -58,11 +64,29 @@ jobs:
       #                       convention for backward compatibility)
       # On workflow_dispatch / non-tag triggers github.ref_name is not a tag string, endsWith
       # returns false, and it falls back to stable — dispatch behavior unchanged.
-      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+      OPENLESS_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      OPENLESS_RELEASE_IS_TAG: ${{ (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')) || inputs.release_tag != '' }}
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(inputs.release_tag || github.ref_name, '-beta-tauri') || contains(inputs.release_tag || github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
+      - name: Validate targeted draft release repair
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          [ "$INPUT_PLATFORM" = windows ] || { echo "::error::Repair dispatch is Windows-only"; exit 1; }
+          [[ "$OPENLESS_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-tauri$ ]] || { echo "::error::Expected an existing Stable Tauri tag"; exit 1; }
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .permission)
+          [ "$permission" = admin ] || { echo "::error::Release repair requires an administrator"; exit 1; }
+          draft=$(gh release view "$OPENLESS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '(.isDraft and (.isPrerelease | not))')
+          [ "$draft" = true ] || { echo "::error::Only an existing Stable draft may be repaired"; exit 1; }
+
       - uses: actions/checkout@v4
         with:
-          # Optional inference dependencies are installed only by explicit user opt-in.
+          # Repair packaging against the immutable, already-tested tag, never the tooling branch.
+          ref: ${{ inputs.release_tag || github.ref }}
           submodules: false
 
       - uses: actions/setup-node@v4
@@ -70,6 +94,24 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: 'openless-all/app/package-lock.json'
+
+      - name: Verify repair source CI and version
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          version=$(node -p "require('./openless-all/app/src-tauri/tauri.conf.json').version")
+          tag_version="${OPENLESS_RELEASE_TAG#v}"
+          tag_version="${tag_version%-tauri}"
+          [ "${version%%+*}" = "$tag_version" ] || { echo "::error::Tag/application version mismatch"; exit 1; }
+          ci_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$source_sha&status=success&per_page=100" --jq "[.workflow_runs[] | select(.name == \"CI\" and .head_sha == \"$source_sha\" and .conclusion == \"success\")][0].id")
+          [[ "$ci_id" =~ ^[0-9]+$ ]] || { echo "::error::No green CI for the exact tagged commit"; exit 1; }
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" --jq '(.total_count == 7 and all(.jobs[]; .conclusion == "success"))')
+          [ "$green" = true ] || { echo "::error::All seven tagged-commit CI gates must pass"; exit 1; }
+          echo "Repair source verified: $source_sha ($version)"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -106,7 +148,7 @@ jobs:
         run: npm ci
 
       - name: Check updater signing availability
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: env.OPENLESS_RELEASE_IS_TAG == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -117,7 +159,7 @@ jobs:
           fi
 
       - name: Check Apple signing availability
-        if: startsWith(matrix.platform, 'macos') && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: startsWith(matrix.platform, 'macos') && env.OPENLESS_RELEASE_IS_TAG == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -279,6 +321,21 @@ jobs:
           # Pass 2: MSI alone — allowed to fail; the Repair step re-links with light.exe.
           # Beta skips MSI: Windows Installer / WiX cannot represent non-numeric prerelease
           # identifiers like `1.2.3-Beta.1`; stable still produces MSI as usual.
+          # MSI ProductVersion is numeric and 16-bit bounded. Keep the full app
+          # version (including +build.YYYYMMDD) untouched; override WiX only.
+          node <<'MSI_CONFIG'
+          const fs = require('node:fs');
+          const version = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
+          const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+          if (!match) throw new Error('Invalid application version for MSI');
+          const [major, minor, patch] = match.slice(1).map(Number);
+          if (major > 255 || minor > 255 || patch > 65535) throw new Error('MSI version component exceeds Windows limits');
+          const overlay = { bundle: { windows: { wix: { version: [major, minor, patch, 0].join('.') } } } };
+          if (process.env.TAURI_SIGNING_PRIVATE_KEY) overlay.bundle.createUpdaterArtifacts = true;
+          fs.writeFileSync('src-tauri/tauri.msi-version.json', JSON.stringify(overlay));
+          MSI_CONFIG
+          msi_config_exit=$?
+          if [ "$msi_config_exit" -ne 0 ]; then exit "$msi_config_exit"; fi
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
             nsis_exit=$?
@@ -288,7 +345,7 @@ jobs:
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+              npm run tauri -- build --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           else
@@ -300,7 +357,7 @@ jobs:
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build --bundles msi
+              npm run tauri -- build --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           fi
@@ -418,7 +475,7 @@ jobs:
           # via url would fetch the wrong file).
           # On workflow_dispatch github.ref_name is not a tag — but then channel=stable and the
           # script does not read this field, so it is safe.
-          OPENLESS_RELEASE_TAG: ${{ github.ref_name }}
+          OPENLESS_RELEASE_TAG: ${{ env.OPENLESS_RELEASE_TAG }}
         run: node scripts/write-updater-manifest.mjs
 
       # ── Collect artifacts ──
@@ -495,7 +552,7 @@ jobs:
       # body when body is empty, so each matrix job does not append the same prelude again and
       # duplicate the release notes N times.
       - name: Prepare release body prelude
-        if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && env.OPENLESS_RELEASE_IS_TAG == 'true'
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/release-body.md" << 'EOF'
@@ -520,12 +577,21 @@ jobs:
           EOF
           echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
+      - name: Confirm repair target remains draft
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ "$(gh release view "$OPENLESS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ] || { echo "::error::Repair target was published; refusing to overwrite it"; exit 1; }
+
       - name: Create / update release
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: env.OPENLESS_RELEASE_IS_TAG == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: 'OpenLess ${{ github.ref_name }}'
+          tag_name: ${{ env.OPENLESS_RELEASE_TAG }}
+          name: 'OpenLess ${{ env.OPENLESS_RELEASE_TAG }}'
           # Both channels stay draft until all desktop/Android assets are verified.
           # The administrator explicitly publishes the shared release afterwards.
           draft: true
