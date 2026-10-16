@@ -6,9 +6,11 @@ use openless_core::{
 
 #[test]
 fn clearing_required_legacy_shortcuts_survives_save_and_reload() {
-    let mut prefs = UserPreferences::default();
-    prefs.dictation_hotkey = ShortcutBinding::unassigned();
-    prefs.translation_hotkey = ShortcutBinding::unassigned();
+    let mut prefs = UserPreferences {
+        dictation_hotkey: ShortcutBinding::unassigned(),
+        translation_hotkey: ShortcutBinding::unassigned(),
+        ..Default::default()
+    };
     sync_dictation_hotkey_legacy_fields(&mut prefs);
     assert!(reject_hotkey_collisions(&prefs).is_ok());
     assert!(prefs.custom_combo_hotkey.is_none());
