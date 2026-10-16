@@ -215,6 +215,13 @@ pub(crate) fn backend_dependencies(
             .register(provider_type, Arc::clone(&native_asr))
             .expect("native ASR provider ids are non-empty");
     }
+    #[cfg(target_os = "macos")]
+    transcription
+        .register(
+            crate::asr::apple_speech::PROVIDER_ID,
+            Arc::new(crate::asr::apple_speech::AppleSpeechTranscriptionEngine),
+        )
+        .expect("Apple system speech provider ID");
     let polisher = Arc::new(openless_core::TextPolisherRouter::default());
     let production_polisher: Arc<dyn TextPolisher> = Arc::new(
         openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store)),

@@ -621,12 +621,14 @@ export function ChannelList({
                   >
                     {channel.name.trim() && <span>{providerLabel} · </span>}
                     <span style={{ fontFamily: model ? 'var(--ol-font-mono)' : undefined }}>
-                      {model ||
-                        t(
-                          localEngine
-                            ? 'settings.channels.localModelManaged'
-                            : 'settings.channels.modelNotSet',
-                        )}
+                      {channel.providerType === 'apple-speech'
+                        ? t('settings.providers.appleSpeechLocalNote')
+                        : model ||
+                          t(
+                            localEngine
+                              ? 'settings.channels.localModelManaged'
+                              : 'settings.channels.modelNotSet',
+                          )}
                     </span>
                   </div>
                   {retired && <p role="note">{t('experimentalAsr.retiredHint')}</p>}
@@ -1041,7 +1043,7 @@ function ChannelModal({
   };
 
   const descriptor = presets.find((item) => item.id === providerType);
-  const isLocalEngine = descriptor?.authRequirement === 'none';
+  const isLocalEngine = descriptor?.authRequirement === 'none' && providerType !== 'apple-speech';
 
   const content = (
     <ProviderFormContext.Provider value={form}>

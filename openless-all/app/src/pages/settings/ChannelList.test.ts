@@ -36,7 +36,7 @@ const localProviders = [
 ] as const;
 
 const expectedByPlatform: Record<OS, readonly string[]> = {
-  mac: [],
+  mac: ['apple-speech'],
   win: ['foundry-local-whisper', 'sherpa-onnx-local'],
   android: [],
 };

@@ -8,6 +8,9 @@ use openless_core::{
     AudioConsumer, BackendError, BackendErrorCode, DictationContext, SessionId, TextStreamSink,
     TranscriptOutput, TranscriptionEngine, TranscriptionSession,
 };
+#[path = "experimental/compute_policy.rs"]
+mod compute_policy;
+
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -27,6 +30,7 @@ fn failure(e: impl std::fmt::Display) -> BackendError {
 }
 struct Loaded {
     directory: PathBuf,
+    cpu_threads: i32,
     engine: Engine,
 }
 enum Engine {
@@ -38,6 +42,7 @@ enum Engine {
     Gemma(gemma::Handle),
 }
 pub struct ExperimentalNativeRuntime {
+    work: Arc<Mutex<()>>,
     loaded: [Arc<Mutex<Option<Loaded>>>; Model::ALL.len()],
     generation: [Arc<AtomicU64>; Model::ALL.len()],
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -53,6 +58,7 @@ fn index(model: Model) -> usize {
 impl ExperimentalNativeRuntime {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            work: Arc::new(Mutex::new(())),
             loaded: std::array::from_fn(|_| Arc::new(Mutex::new(None))),
             generation: std::array::from_fn(|_| Arc::new(AtomicU64::new(0))),
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -98,8 +104,19 @@ impl ExperimentalNativeRuntime {
         let loaded = Arc::clone(&self.loaded[index(model)]);
         let generation = Arc::clone(&self.generation[index(model)]);
         let expected = generation.load(Ordering::Acquire);
+        let work = Arc::clone(&self.work);
         Box::pin(async move {
+            let timeout_cancelled = Arc::clone(&cancelled);
             let task = tokio::task::spawn_blocking(move || {
+                let _background = compute_policy::BackgroundScope::enter();
+                let _work = work.try_lock().map_err(|_| {
+                    BackendError::new(
+                        BackendErrorCode::Busy,
+                        "Another local model is computing; retry shortly",
+                    )
+                })?;
+                let budget = compute_policy::Budget::capture();
+                let pacer = compute_policy::Pacer::new(budget);
                 let mut guard = loaded.lock().map_err(failure)?;
                 let ready = guard
                     .as_mut()
@@ -142,11 +159,18 @@ impl ExperimentalNativeRuntime {
                                 .ok_or_else(|| failure("SenseVoice returned no result"))?
                                 .text;
                             parts.push(text);
+                            if !pacer.checkpoint(|| check().is_err()) {
+                                check()?;
+                            }
                         }
                         openless_core::asr::whisper::join_transcript_chunks(&parts)
                     }
                     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-                    Engine::Gemma(handle) => handle.transcribe(&samples)?,
+                    Engine::Gemma(handle) => {
+                        let result = handle.transcribe(&samples, budget, &|| check().is_err());
+                        check()?;
+                        result?
+                    }
                 };
                 check()?;
                 Ok(text)
@@ -155,7 +179,10 @@ impl ExperimentalNativeRuntime {
             // for native work before deleting its mapped files.
             tokio::time::timeout(std::time::Duration::from_secs(180), task)
                 .await
-                .map_err(|_| failure("Experimental transcription timed out"))?
+                .map_err(|_| {
+                    timeout_cancelled.store(true, Ordering::Release);
+                    failure("Experimental transcription timed out")
+                })?
                 .map_err(failure)?
         })
     }
@@ -194,16 +221,28 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
         let loaded = Arc::clone(&self.loaded[index(model)]);
         let generation = Arc::clone(&self.generation[index(model)]);
         let expected = generation.load(Ordering::Acquire);
+        let work = Arc::clone(&self.work);
         Box::pin(async move {
             if let Some(reason) = Self::unavailable(model) {
                 return Err(failure(reason));
             }
             tokio::task::spawn_blocking(move || {
+                let _background = compute_policy::BackgroundScope::enter();
+                let _work = work.try_lock().map_err(|_| {
+                    BackendError::new(
+                        BackendErrorCode::Busy,
+                        "Another local model is computing; retry shortly",
+                    )
+                })?;
+                let budget = compute_policy::Budget::capture();
                 let mut slot = loaded.lock().map_err(failure)?;
                 if generation.load(Ordering::Acquire) != expected {
                     return Err(failure("Experimental model was disabled while loading"));
                 }
-                if slot.as_ref().is_some_and(|v| v.directory == directory) {
+                if slot.as_ref().is_some_and(|v| {
+                    v.directory == directory
+                        && (model != Model::SenseVoice || v.cpu_threads <= budget.threads)
+                }) {
                     return Ok(());
                 }
                 openless_core::experimental_asr::verify_package(model, &directory)?;
@@ -211,9 +250,7 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     Model::SenseVoice => {
                         let mut config = sherpa_onnx::OfflineRecognizerConfig::default();
-                        config.model_config.num_threads = std::thread::available_parallelism()
-                            .map(|n| n.get().clamp(1, 4) as i32)
-                            .unwrap_or(2);
+                        config.model_config.num_threads = budget.threads;
                         config.model_config.provider = Some("cpu".into());
                         config.model_config.tokens =
                             Some(directory.join("tokens.txt").to_string_lossy().into());
@@ -231,14 +268,22 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
                         )
                     }
                     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-                    Model::EmbeddingGemma => Engine::Gemma(gemma::Handle::load(&directory)?),
+                    Model::EmbeddingGemma => {
+                        Engine::Gemma(gemma::Handle::load(&directory, budget, &|| {
+                            generation.load(Ordering::Acquire) != expected
+                        })?)
+                    }
                     #[allow(unreachable_patterns)]
                     _ => return Err(failure("Unsupported experimental runtime")),
                 };
                 if generation.load(Ordering::Acquire) != expected {
                     return Err(failure("Experimental model was disabled while loading"));
                 }
-                *slot = Some(Loaded { directory, engine });
+                *slot = Some(Loaded {
+                    directory,
+                    cpu_threads: budget.threads,
+                    engine,
+                });
                 Ok(())
             })
             .await

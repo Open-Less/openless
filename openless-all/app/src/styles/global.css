@@ -1163,7 +1163,9 @@ html[data-ol-platform='android'] .ol-capsule-pill {
   background: var(--ol-sidebar-bg);
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-header {
-  padding: 18px 24px;
+  /* The embedded editor starts at the window edge, beneath the native drag strip. */
+  padding: calc(18px + var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)) 24px
+    18px;
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-body {
   padding: 8px 24px 22px;
@@ -1273,7 +1275,8 @@ html[data-ol-platform='android'] .ol-capsule-pill {
 }
 @media (max-width: 600px) {
   .ol-channel-dialog-embedded .ol-channel-dialog-header {
-    padding: 18px 16px;
+    padding: calc(18px + var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)) 16px
+      18px;
   }
   .ol-channel-dialog-embedded .ol-channel-dialog-body {
     padding: 4px 12px 18px;

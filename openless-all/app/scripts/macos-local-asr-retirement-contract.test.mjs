@@ -13,7 +13,12 @@ const router = adapters.slice(
   adapters.indexOf('let native_asr:'),
   adapters.indexOf('let polisher ='),
 );
-assert.doesNotMatch(router, /LOCAL_QWEN3|LOCAL_WHISPER|APPLE_SPEECH|Qwen|Whisper/);
+assert.doesNotMatch(router, /LOCAL_QWEN3|LOCAL_WHISPER|Qwen|Whisper/);
+assert.match(router, /cfg\(target_os = "macos"\)[^]*?apple_speech::PROVIDER_ID/);
+assert.match(router, /apple_speech::AppleSpeechTranscriptionEngine/);
+const apple = read('src-tauri/src/asr/apple_speech.rs');
+assert.doesNotMatch(apple, /ModelStore|ExperimentalNativeRuntime|download_model/);
+assert.match(read('src-tauri/Info.plist'), /NSSpeechRecognitionUsageDescription/);
 assert.match(adapters, /cfg\(target_os = "windows"\)\]\s+struct TauriNativeTranscriptionEngine/);
 const availability = adapters.slice(
   adapters.indexOf('impl openless_core::ModelRuntimeAdapter'),

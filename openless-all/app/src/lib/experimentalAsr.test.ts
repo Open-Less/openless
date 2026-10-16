@@ -19,10 +19,14 @@ import {
   deleteExperimentalAsr,
   getExperimentalAsrStatus,
   isExperimentalAsrProvider,
+  isRetiredMacAsrProvider,
   needsModelGuidance,
   setExperimentalAsrEnabled,
 } from './experimentalAsr';
 
+assert(!isRetiredMacAsrProvider('apple-speech'), 'Apple system speech must remain usable');
+assert(!isExperimentalAsrProvider('apple-speech'), 'system speech is not a downloaded experiment');
+assert(isRetiredMacAsrProvider('apple-whisper'), 'retired models stay retired');
 assert(isExperimentalAsrProvider('experimental-textstream'));
 assert(isExperimentalAsrProvider('experimental-sensevoice'));
 assert(isExperimentalAsrProvider('experimental-embedding-gemma'));
@@ -63,7 +67,10 @@ try {
   assert.equal(sense.phase, 'disabled');
   assert.equal(sense.downloadedBytes, sense.totalBytes, 'disable keeps downloaded files');
   await deleteExperimentalAsr('sense-voice');
-  assert.equal((await getExperimentalAsrStatus()).find((s) => s.model === 'sense-voice')!.downloadedBytes, 0);
+  assert.equal(
+    (await getExperimentalAsrStatus()).find((s) => s.model === 'sense-voice')!.downloadedBytes,
+    0,
+  );
   assert.equal(status[0].phase, 'ready', 'switch-off must not delete the TextStream package');
   assert.equal((await listChannels('asr')).length, before.length + 2);
   await setExperimentalAsrEnabled('embedding-gemma', false);

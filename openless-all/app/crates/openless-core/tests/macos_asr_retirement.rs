@@ -77,6 +77,30 @@ fn retirement_disables_renamed_legacy_channels_but_preserves_cloud_windows_and_e
 }
 
 #[test]
+fn apple_system_recognition_is_not_retired_or_deselected() {
+    let mut metadata = CredentialMetadata::from_parts(
+        vec![
+            channel("apple", "apple-speech", true, 0),
+            channel("legacy", "local-whisper", true, 1),
+        ],
+        vec![],
+        "apple",
+        "",
+        "",
+        4,
+    );
+    assert!(metadata.retire_macos_local_asr());
+    assert_eq!(metadata.active_provider(ProviderSlot::Asr), "apple");
+    let channels = metadata.list_channels(ChannelKind::Asr);
+    assert!(channels.iter().find(|c| c.id == "apple").unwrap().enabled);
+    assert!(!channels.iter().find(|c| c.id == "legacy").unwrap().enabled);
+    assert!(
+        !metadata.retire_macos_local_asr(),
+        "migration remains idempotent"
+    );
+}
+
+#[test]
 fn retirement_does_not_turn_on_a_disabled_cloud_channel_or_break_metadata_revisions() {
     let metadata = CredentialMetadata::from_parts(
         vec![

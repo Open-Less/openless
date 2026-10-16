@@ -2,10 +2,10 @@
 //! No process/socket/native import exists until a recording explicitly starts.
 #[path = "textstream/install.rs"]
 mod install;
-#[path = "textstream/protocol.rs"]
-mod protocol;
 #[path = "textstream/process.rs"]
 mod process;
+#[path = "textstream/protocol.rs"]
+mod protocol;
 use process::Process;
 
 use base64::Engine;
@@ -97,14 +97,17 @@ impl Runtime {
         partials: Arc<dyn TextStreamSink>,
     ) -> Result<Arc<dyn TranscriptionSession>, BackendError> {
         let expected_runtime = self.generation.load(Ordering::Acquire);
+        install::refresh_worker(&directory).await?;
         if !installed(&directory) {
             return Err(error(
                 "TextStream runtime is not installed; explicitly retry its experimental switch",
             ));
         }
         let verify = directory.clone();
-        tokio::task::spawn_blocking(move || {
-            openless_core::experimental_asr::verify_package(Model::TextStream, &verify)
+        let budget = tokio::task::spawn_blocking(move || {
+            let _background = super::compute_policy::BackgroundScope::enter();
+            openless_core::experimental_asr::verify_package(Model::TextStream, &verify)?;
+            Ok::<_, BackendError>(super::compute_policy::Budget::capture())
         })
         .await
         .map_err(error)??;
@@ -140,6 +143,7 @@ impl Runtime {
                 .env("TRANSFORMERS_OFFLINE", "1")
                 .env("HF_HUB_DISABLE_TELEMETRY", "1")
                 .env("PYTHONUNBUFFERED", "1")
+                .env("OPENLESS_CPU_BUDGET_CORES", budget.cores.to_string())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())

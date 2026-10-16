@@ -741,7 +741,7 @@
     "defaultEndpoint": null,
     "defaultModel": null,
     "authRequirement": "none",
-    "validationProbe": "unsupported",
+    "validationProbe": "asr_native_silence",
     "staticModels": [],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []

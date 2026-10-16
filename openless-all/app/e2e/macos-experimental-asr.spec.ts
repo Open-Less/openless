@@ -88,6 +88,33 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
   expect(errors).toEqual([]);
 });
 
+test('Apple system recognition remains selectable without local-model controls', async ({
+  page,
+}) => {
+  await settings(page);
+  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: /^语音识别。/ }).click();
+  await page.getByRole('button', { name: '添加渠道', exact: true }).click();
+  const form = page.getByRole('dialog', { name: '添加渠道', exact: true });
+  await form.getByRole('combobox', { name: '供应商', exact: true }).click();
+  await page.getByRole('option', { name: '苹果识别（macOS）', exact: true }).click();
+  await expect(form).toContainText('Apple 语音识别使用系统内置引擎，无需选择模型。');
+  await expect(form.locator('.ol-channel-local-hint')).toHaveCount(0);
+  await expect(form.locator('.ol-local-model-picker')).toHaveCount(0);
+  await expect(form.getByRole('textbox', { name: /API Key|Base URL/ })).toHaveCount(0);
+  await form.getByRole('button', { name: '返回渠道列表', exact: true }).click();
+  const card = page.locator('[data-channel-provider="apple-speech"]');
+  await expect(card).toHaveCount(1);
+  await expect(card).not.toHaveAttribute('data-retired-local-asr', 'true');
+  const toggle = card.getByRole('switch');
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+});
+
 test('closing settings does not auto-enable a channel or lose completion guidance', async ({
   page,
 }) => {

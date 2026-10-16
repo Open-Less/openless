@@ -740,7 +740,16 @@ export function ChannelCredentialFields({
     );
   }
 
-  // Local engines (qwen3 / sherpa / foundry / Apple speech) have no key or address; model
+  // Apple Speech uses the OS recognizer and its authorization, not a model catalog.
+  if (kind === 'asr' && providerType === 'apple-speech') {
+    return (
+      <p className="ol-channel-system-recognition-hint">
+        {t('settings.providers.appleSpeechLocalNote')}
+      </p>
+    );
+  }
+
+  // Downloaded engines (qwen3 / sherpa / foundry) have no key or address; model
   // download and switching stay with <LocalAsr embedded /> under "Advanced -> Local models",
   // so only a one-line note here.
   if (descriptor?.authRequirement === 'none') {

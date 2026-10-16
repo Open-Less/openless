@@ -10,7 +10,12 @@ assert.doesNotMatch(build, /stage-macos-mlx|check:macos-metal|KEEP_QWEN_DIR/);
 assert.doesNotMatch(build, /--bundles app|codesign --force|hdiutil create/);
 assert.match(build, /stapler validate/);
 assert.match(build, /包含已下架的 MLX 运行资源/);
-assert.equal(JSON.parse(read('src-tauri/tauri.conf.json')).build.beforeBuildCommand, 'npm run build');
-assert.doesNotMatch(read('src-tauri/Info.plist'), /NSSpeechRecognitionUsageDescription/);
+assert.equal(
+  JSON.parse(read('src-tauri/tauri.conf.json')).build.beforeBuildCommand,
+  'npm run build',
+);
+// Apple Speech is a system service, independent of the retired MLX runtime.
+assert.match(read('src-tauri/Info.plist'), /NSSpeechRecognitionUsageDescription/);
+assert.match(read('src-tauri/build.rs'), /cargo:rustc-link-lib=framework=Speech/);
 assert.match(build, /check-macos-audio-usage-description/);
 console.log('macOS optional runtime bundle contracts passed');

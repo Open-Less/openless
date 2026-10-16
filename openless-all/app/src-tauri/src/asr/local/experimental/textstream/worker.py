@@ -6,12 +6,14 @@ server, this module NEVER opens a microphone, downloads models, opens a browser
 or writes into ~/Documents. OpenLess owns capture, history and process lifetime.
 Only run() imports native inference libraries, after explicit recording starts.
 """
+
 from __future__ import annotations
 
 import argparse
 import base64
 import contextlib
 import json
+import math
 import os
 import queue
 import sys
@@ -25,8 +27,55 @@ MAX_LINE = 1_000_000
 MAX_AUDIO_BYTES = 32_000 * 600
 
 
+class CpuBudget:
+    """Cooperative CPU-seconds budget; GPU wait is not charged as CPU work."""
+
+    def __init__(self, cores: float) -> None:
+        if not math.isfinite(cores) or not 0 < cores <= (os.cpu_count() or 1):
+            raise ValueError("invalid CPU budget")
+        self.cores = cores
+        self.cpu_start = time.process_time()
+        self.wall_start = time.monotonic()
+
+    def checkpoint(self) -> None:
+        """Yield between decoder steps without suspending OpenLess capture/UI."""
+        debt = max(
+            0.0,
+            (time.process_time() - self.cpu_start) / self.cores
+            - (time.monotonic() - self.wall_start),
+        )
+        resume = time.monotonic() + debt
+        while True:
+            remaining = resume - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(remaining, 0.05))
+        # Watchdog/SSE CPU during the wait must not create an endless debt loop.
+        self.cpu_start = time.process_time()
+        self.wall_start = time.monotonic()
+
+
+def configure_cpu_threads() -> float:
+    """Set native-library limits before NumPy/MLX/VAD are imported."""
+    cores = float(os.environ.get("OPENLESS_CPU_BUDGET_CORES", "1"))
+    if not math.isfinite(cores) or not 0 < cores <= (os.cpu_count() or 1):
+        raise ValueError("invalid CPU budget")
+    threads = str(max(1, min(2, math.floor(cores))))
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[name] = threads
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    return cores
+
+
 class Snapshots:
     """Whole snapshots, not append-only deltas: drafts can shrink or be replaced."""
+
     def __init__(self):
         self.finalized = ""
         self.draft = ""
@@ -36,13 +85,17 @@ class Snapshots:
         # A decoder may revise its tail during accuracy-mode finalization. The
         # final result is authoritative; drafts are never silently promoted by us.
         if terminal:
-            finalized, full = full, full
+            finalized = full
         if not full.startswith(finalized):
             raise ValueError("decoder snapshot does not contain its finalized prefix")
-        self.finalized, self.draft = finalized, full[len(finalized):]
+        self.finalized, self.draft = finalized, full[len(finalized) :]
         self.sequence += 1
-        return {"type": "final" if terminal else "stream", "sequence": self.sequence,
-                "finalized": self.finalized, "draft": self.draft}
+        return {
+            "type": "final" if terminal else "stream",
+            "sequence": self.sequence,
+            "finalized": self.finalized,
+            "draft": self.draft,
+        }
 
 
 class Broadcast:
@@ -92,7 +145,9 @@ def sse_server(events: Broadcast, port: int):
             # DNS rebinding. CLI/local apps (no Origin) may subscribe explicitly.
             host = self.headers.get("Host", "").split(":")[0]
             origin = self.headers.get("Origin")
-            if host not in ("localhost", "127.0.0.1") or (origin and urlparse(origin).hostname not in ("localhost", "127.0.0.1")):
+            if host not in ("localhost", "127.0.0.1") or (
+                origin and urlparse(origin).hostname not in ("localhost", "127.0.0.1")
+            ):
                 self.send_error(403)
                 return
             if self.path != "/stream":
@@ -117,7 +172,11 @@ def sse_server(events: Broadcast, port: int):
                         if events.closed.is_set():
                             break
                         continue
-                    self.wfile.write(("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode())
+                    self.wfile.write(
+                        (
+                            "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                        ).encode()
+                    )
                     self.wfile.flush()
                     if event.get("done"):
                         break
@@ -144,12 +203,19 @@ def parent_watch(parent: int):
 
 
 def run(model_dir: Path, port: int, parent: int):
-    if not (model_dir / "model.safetensors").is_file() or not (model_dir / "config.json").is_file():
+    if (
+        not (model_dir / "model.safetensors").is_file()
+        or not (model_dir / "config.json").is_file()
+    ):
         raise ValueError("model files are missing; enable/download explicitly first")
     # Offline is mandatory even if the parent environment was misconfigured.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    budget = CpuBudget(configure_cpu_threads())
+    # This is the dedicated worker, never the GUI/audio process. Lowering its
+    # priority lets foreground work win even during one indivisible native call.
+    os.nice(10)
     threading.Thread(target=parent_watch, args=(parent,), daemon=True).start()
     events = Broadcast()
     server = sse_server(events, port)  # Fail a port conflict BEFORE native imports.
@@ -163,14 +229,29 @@ def run(model_dir: Path, port: int, parent: int):
 
     try:
         with contextlib.redirect_stdout(sys.stderr):
+            import mlx.core as mx
+
+            if not mx.metal.is_available():
+                raise RuntimeError(
+                    "TextStream requires Metal GPU; CPU fallback is disabled"
+                )
+            mx.set_default_device(mx.gpu)
             import numpy as np
             from mlx_qwen3_asr import Session
             from silero_vad_lite import SileroVAD
+
             session = Session(model=str(model_dir))
-            state = session.init_streaming(chunk_size_sec=2.0, max_context_sec=30.0,
-                sample_rate=16000, unfixed_chunk_num=2, unfixed_token_num=5,
-                language=None, finalization_mode="accuracy")
+            state = session.init_streaming(
+                chunk_size_sec=2.0,
+                max_context_sec=30.0,
+                sample_rate=16000,
+                unfixed_chunk_num=2,
+                unfixed_token_num=5,
+                language=None,
+                finalization_mode="accuracy",
+            )
             vad = SileroVAD(16000)
+        budget.checkpoint()
         emit({"type": "ready", "protocol": 1})
         snapshots = Snapshots()
         pending = bytearray()
@@ -182,7 +263,7 @@ def run(model_dir: Path, port: int, parent: int):
             audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
             if not heard_speech:
                 for start in range(0, len(audio) - 511, 512):
-                    frame = np.ascontiguousarray(audio[start:start + 512])
+                    frame = np.ascontiguousarray(audio[start : start + 512])
                     if vad.process(memoryview(frame.data)) >= 0.4:
                         heard_speech = True
                         break
@@ -190,6 +271,7 @@ def run(model_dir: Path, port: int, parent: int):
             if heard_speech:
                 with contextlib.redirect_stdout(sys.stderr):
                     state = session.feed_audio(audio, state)
+                budget.checkpoint()
                 emit(snapshots.update(state.stable_text, state.text))
 
         while True:
@@ -214,6 +296,7 @@ def run(model_dir: Path, port: int, parent: int):
                 if heard_speech:
                     with contextlib.redirect_stdout(sys.stderr):
                         state = session.finish_streaming(state)
+                    budget.checkpoint()
                     # finish_streaming's completed text, not our last draft.
                     emit(snapshots.update(state.stable_text, state.text, terminal=True))
                 else:
@@ -238,7 +321,8 @@ def main():
     args = parser.parse_args()
     try:
         run(args.model_dir, args.port, args.parent)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
+        # Native-library failures must cross IPC as structured protocol errors.
         print(json.dumps({"type": "error", "message": str(error)}), flush=True)
         return 1
     return 0

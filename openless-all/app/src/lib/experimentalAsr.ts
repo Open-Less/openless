@@ -42,7 +42,6 @@ export function isRetiredMacAsrProvider(provider: string): boolean {
     'local-qwen3-c',
     'local-whisper',
     'apple-whisper',
-    'apple-speech',
   ].includes(provider);
 }
 export function isExperimentalAsrProvider(provider: string): boolean {

@@ -598,6 +598,9 @@ fn local_asr_configured(
     provider: &str,
     model_store: Option<&openless_core::ModelStore>,
 ) -> Option<bool> {
+    if provider == "apple-speech" {
+        return Some(cfg!(target_os = "macos"));
+    }
     if openless_core::credentials::is_retired_macos_asr_provider(provider) { return Some(false); }
     if let Some(model) =
         openless_core::experimental_asr::ExperimentalAsrModel::from_provider(provider)

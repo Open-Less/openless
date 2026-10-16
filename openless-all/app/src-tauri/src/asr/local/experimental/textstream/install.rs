@@ -212,10 +212,128 @@ async fn installation_lock(root: &Path) -> Result<std::fs::File, BackendError> {
     Ok(file)
 }
 
+/// Upgrade only our worker when the pinned Python/dependency environment is
+/// unchanged. Never redownload weights or clear a working venv for a script fix.
+pub async fn refresh_worker(directory: &Path) -> Result<bool, BackendError> {
+    if installed(directory) {
+        return Ok(true);
+    }
+    let root = directory.join(".runtime");
+    if !std::fs::symlink_metadata(&root).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
+        return Ok(false);
+    }
+    let _lock = installation_lock(&root).await?;
+    refresh_worker_locked(directory)
+}
+
+fn refresh_worker_locked(directory: &Path) -> Result<bool, BackendError> {
+    if installed(directory) {
+        return Ok(true);
+    }
+    const PREVIOUS_ENV: &str = "f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243";
+    const PREVIOUS_WORKER: &str =
+        "6c6e1ce76c0e3e220b35160744c5253b499d364095e294c45d712ed7b0922184";
+    let root = directory.join(".runtime");
+    let previous = format!(
+        "{PYTHON}:{UV_SHA256}:{}:{PREVIOUS_ENV}",
+        directory.display()
+    );
+    if !python(directory).is_file()
+        || !std::fs::read_to_string(root.join("installed")).is_ok_and(|s| s == previous)
+        || !std::fs::read_to_string(root.join("requirements.lock")).is_ok_and(|s| s == REQUIREMENTS)
+    {
+        return Ok(false);
+    }
+    let Ok(worker) = std::fs::read(script(directory)) else {
+        return Ok(false);
+    };
+    // The current script also permits recovery after a crash between renames.
+    if format!("{:x}", Sha256::digest(&worker)) != PREVIOUS_WORKER && worker != WORKER.as_bytes() {
+        return Ok(false);
+    }
+    fn replace(path: &Path, bytes: &[u8]) -> Result<(), BackendError> {
+        use std::io::Write;
+        let temporary = path.with_extension(format!("{}.update", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&temporary)
+                .map_err(error)?;
+            file.write_all(bytes).map_err(error)?;
+            file.sync_all().map_err(error)?;
+            std::fs::rename(&temporary, path).map_err(error)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temporary);
+        }
+        result
+    }
+    replace(&script(directory), WORKER.as_bytes())?;
+    replace(&root.join("installed"), marker(directory).as_bytes())?;
+    Ok(installed(directory))
+}
+
+#[cfg(test)]
+mod worker_update_tests {
+    use super::*;
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    #[tokio::test]
+    async fn worker_upgrade_preserves_the_pinned_environment_and_rejects_unknown_receipts() {
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("openless-worker-upgrade-{}", uuid::Uuid::new_v4())),
+        );
+        let directory = &fixture.0;
+        std::fs::create_dir_all(python(directory).parent().unwrap()).unwrap();
+        std::fs::write(
+            python(directory),
+            b"existing managed Python, never execute in test",
+        )
+        .unwrap();
+        let root = directory.join(".runtime");
+        std::fs::write(root.join("requirements.lock"), REQUIREMENTS).unwrap();
+        std::fs::write(script(directory), WORKER).unwrap();
+        let previous = format!("{PYTHON}:{UV_SHA256}:{}:f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243", directory.display());
+        std::fs::write(root.join("installed"), &previous).unwrap();
+        assert!(
+            refresh_worker(directory).await.unwrap(),
+            "recover script/receipt upgrade without reinstalling Python"
+        );
+        assert!(installed(directory));
+        assert_eq!(
+            std::fs::read(python(directory)).unwrap(),
+            b"existing managed Python, never execute in test"
+        );
+        std::fs::write(root.join("installed"), "unknown environment").unwrap();
+        assert!(!refresh_worker(directory).await.unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.join("installed")).unwrap(),
+            "unknown environment"
+        );
+        std::fs::write(root.join("installed"), previous).unwrap();
+        std::fs::write(script(directory), "user-modified worker").unwrap();
+        assert!(
+            !refresh_worker(directory).await.unwrap(),
+            "never overwrite an unknown worker"
+        );
+        assert_eq!(
+            std::fs::read_to_string(script(directory)).unwrap(),
+            "user-modified worker"
+        );
+    }
+}
+
 pub async fn install(directory: PathBuf) -> Result<(), BackendError> {
     std::fs::create_dir_all(&directory).map_err(error)?;
     std::fs::write(directory.join("LICENSE-TextStream"), LICENSE).map_err(error)?;
-    if installed(&directory) {
+    if refresh_worker(&directory).await? {
         return Ok(());
     }
     let root = directory.join(".runtime");

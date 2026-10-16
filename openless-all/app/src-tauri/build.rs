@@ -16,6 +16,8 @@ fn main() {
         link_windows_common_controls_v6_manifest_dependency();
     }
     if target_os == "macos" {
+        // Apple system recognition is independent of downloadable model runtimes.
+        println!("cargo:rustc-link-lib=framework=Speech");
         link_macos_compiler_runtime();
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         if target_arch == "aarch64" {

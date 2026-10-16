@@ -135,7 +135,7 @@ pub enum ValidationProbe {
     Unsupported,
     AsrSilence,
     AsrSilenceAllowsNoFinal,
-    /// Local engine probe (Apple Speech): the host injects its native
+    /// System recognition probe (Apple Speech): the host injects its native
     /// transcription engine and validation runs the same silence WAV through it,
     /// exercising authorization and recognizer availability for real.
     AsrNativeSilence,
@@ -228,6 +228,13 @@ fn provider_descriptor_with_label(
     let provider_type = ProviderType::new(provider_type).ok()?;
     let id = provider_type.as_str().to_string();
     let (default_endpoint, default_model, auth_requirement, validation_probe) = match kind {
+        // Apple Speech is an OS recognition service, not a downloadable model runtime.
+        ProviderKind::Asr if id == "apple-speech" => (
+            None,
+            None,
+            AuthRequirement::None,
+            ValidationProbe::AsrNativeSilence,
+        ),
         ProviderKind::Asr if is_local_asr_provider(&id) => (
             None,
             crate::experimental_asr::ExperimentalAsrModel::from_provider(&id).map(|m| m.model_id()),
@@ -350,7 +357,6 @@ fn is_local_asr_provider(provider_type: &str) -> bool {
             | "local-qwen3-mlx"
             | "local-qwen3-c"
             | "local-qwen3"
-            | "apple-speech"
     )
 }
 
@@ -1588,7 +1594,8 @@ mod tests {
     #[test]
     fn retired_and_experimental_models_never_probe_inference_through_credentials() {
         let apple = provider_descriptor(ProviderKind::Asr, "apple-speech").unwrap();
-        assert_eq!(apple.validation_probe, ValidationProbe::Unsupported);
+        assert_eq!(apple.validation_probe, ValidationProbe::AsrNativeSilence);
+        assert!(apple.default_model.is_none());
         assert_eq!(apple.auth_requirement, AuthRequirement::None);
         for provider in ["local-whisper", "local-qwen3", "sherpa-onnx-local", "experimental-textstream", "experimental-sensevoice", "experimental-embedding-gemma"] {
             assert_eq!(

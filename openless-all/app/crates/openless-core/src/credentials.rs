@@ -188,7 +188,7 @@ pub enum ProviderSlot {
 /// Legacy macOS engines retained only as disabled channel metadata.
 pub fn is_retired_macos_asr_provider(provider: &str) -> bool {
     matches!(provider, "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c"
-        | "local-whisper" | "apple-whisper" | "apple-speech")
+        | "local-whisper" | "apple-whisper")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -377,7 +377,7 @@
       "providerType": "apple-speech",
       "staticModels": [],
       "supportedRequestFormats": [],
-      "validationProbe": "unsupported"
+      "validationProbe": "asr_native_silence"
     }
   ],
   "llm": [

@@ -1653,7 +1653,7 @@ export const zhCN = {
         asrLocalQwen3: '本地 Qwen3-ASR',
         asrLocalQwen3Mlx: '本地 Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
-        asrAppleSpeech: 'Apple 语音（macOS）',
+        asrAppleSpeech: '苹果识别（macOS）',
         omniOpenai: 'OpenAI（支持音频）',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里云百炼 Omni',
