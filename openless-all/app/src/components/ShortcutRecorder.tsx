@@ -24,13 +24,10 @@ export function ShortcutRecorder({
   disabled = false,
   onDisable,
   disableLabel,
-  disableDisabled = false,
-  disableHint,
   onReset,
   resetLabel,
   comboOnly = false,
   sideSpecificModifiers = false,
-  allowMacDictationKey = false,
   allowMouseButtons = false,
 }: {
   value: ShortcutBinding | null;
@@ -39,9 +36,6 @@ export function ShortcutRecorder({
   /** When provided, the menu's Disable is clickable (shortcuts that may be disabled, e.g. QA / style switch). */
   onDisable?: () => void | Promise<void>;
   disableLabel?: string;
-  /** Grays out Disable (core shortcuts can't be disabled); pair with disableHint for the reason. */
-  disableDisabled?: boolean;
-  disableHint?: string;
   /** When provided, renders Reset in the menu — restores the shortcut's default binding. */
   onReset?: () => void | Promise<void>;
   resetLabel?: string;
@@ -49,15 +43,13 @@ export function ShortcutRecorder({
   comboOnly?: boolean;
   /** Dictation start/stop only: record side-specific modifiers like cmd-left / ctrl-right. */
   sideSpecificModifiers?: boolean;
-  /** macOS dictation only: choose the dedicated key as the single trigger. */
-  allowMacDictationKey?: boolean;
   /** Windows dictation only; other shortcut consumers cannot install mouse hooks. */
   allowMouseButtons?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const nativeSelected = allowMacDictationKey && value?.primary === 'MacDictationKey';
+  const assigned = Boolean(value?.primary.trim());
   const nativeError =
     error &&
     ['Permission', 'Busy', 'Unavailable', 'Changed'].find((kind) =>
@@ -276,10 +268,6 @@ export function ShortcutRecorder({
     }
   };
 
-  // Disable is clickable: onDisable exists and it isn't grayed out (the dictation
-  // shortcut is grayed; core hotkeys can't be disabled).
-  const canDisable = Boolean(onDisable) && !disableDisabled;
-
   const rootStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
@@ -309,12 +297,6 @@ export function ShortcutRecorder({
     cursor: 'pointer',
     transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
   };
-  const menuPrimaryStyle: CSSProperties = {
-    ...menuButtonStyle,
-    background: 'rgba(37,99,235,0.08)',
-    borderColor: 'rgba(37,99,235,0.25)',
-    color: 'var(--ol-blue)',
-  };
 
   return (
     <div style={rootStyle} className="ol-shortcut-recorder">
@@ -336,20 +318,8 @@ export function ShortcutRecorder({
             onClick={startRecording}
             aria-label={t('settings.recording.comboRecordBtn')}
           >
-            {value ? <KbdGroup keys={formatComboParts(value)} /> : <span>＋</span>}
+            {assigned && value ? <KbdGroup keys={formatComboParts(value)} /> : <span>＋</span>}
           </Popover.Trigger>
-          {allowMacDictationKey && (
-            <button
-              type="button"
-              aria-pressed={nativeSelected}
-              disabled={disabled || recording}
-              title={t('macDictationKey.description')}
-              style={nativeSelected ? menuPrimaryStyle : menuButtonStyle}
-              onClick={() => void finish({ primary: 'MacDictationKey', modifiers: [] })}
-            >
-              {t('macDictationKey.label')}
-            </button>
-          )}
           {onReset && (
             <button
               type="button"
@@ -362,13 +332,13 @@ export function ShortcutRecorder({
               <Icon name="refresh" size={13} />
             </button>
           )}
-          {(onDisable || disableDisabled) && (
+          {onDisable && (
             <button
               type="button"
               onClick={() => void doDisable()}
-              disabled={disabled || recording || !canDisable}
-              title={canDisable ? (disableLabel ?? t('settings.shortcuts.disable')) : disableHint}
-              aria-label={disableLabel ?? t('settings.shortcuts.disable')}
+              disabled={disabled || recording}
+              title={disableLabel ?? t('common.clear')}
+              aria-label={disableLabel ?? t('common.clear')}
               style={menuButtonStyle}
             >
               <Icon name="close" size={13} />
@@ -379,7 +349,8 @@ export function ShortcutRecorder({
           <Popover.Positioner
             className="ol-select-positioner"
             positionMethod="fixed"
-            side="right"
+            side="bottom"
+            collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
             align="start"
             sideOffset={8}
             collisionPadding={8}

@@ -800,8 +800,10 @@ pub(crate) fn replace_dictation_hotkey(
 ) -> Result<(), String> {
     let _host_guard = coord.lock_settings_host();
     let mut prefs = coord.backend().get_preferences();
-    crate::shortcut_binding::validate_binding(&binding).map_err(|error| error.to_string())?;
-    reject_bare_shift_dictation_shortcut(&binding)?;
+    if !binding.is_unassigned() {
+        crate::shortcut_binding::validate_binding(&binding).map_err(|error| error.to_string())?;
+        reject_bare_shift_dictation_shortcut(&binding)?;
+    }
     #[cfg(target_os = "macos")]
     {
         let native = crate::macos_dictation_key::PRIMARY;

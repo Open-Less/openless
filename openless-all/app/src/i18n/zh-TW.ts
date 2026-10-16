@@ -2252,6 +2252,7 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回實驗與擴充',
     backToTestingFeatures: '返回正在測試中的功能',
     advancedPages: {
+      customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
       localModels: experimentalAsr.description,
       testingFeatures: '依需要開啟尚在測試中的功能。',
       vocabularyLearning: '從聽寫後的手動改詞中學習，設定觀察時長、確認時間和詞長。',

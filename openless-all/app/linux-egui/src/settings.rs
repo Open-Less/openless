@@ -303,10 +303,12 @@ fn apply_dictation_hotkey(binding: &ShortcutBinding) -> Result<(), BackendError>
     // Linux 侧的限制不在注册，而在**吞键**：插件只对非修饰键
     // `filterAndAccept()`，按住期间若又按下别的键则判定为组合键并放弃触发
     // （见 hotkey_match.h 的 shouldConsume）。所以这里照常注册。
-    if let Some(trigger) = legacy_modifier_trigger(binding) {
-        let symbol = modifier_trigger_keysym(trigger)?;
-        let result = crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", symbol, 0);
-        log_registration_result("SetHotkeyRaw", (symbol, 0), &result);
+    // Zero unregisters all plugin dictation paths and persists the cleared key.
+    // Passing an empty custom-key string only rejects it, leaving the old key live.
+    if binding.is_unassigned() || legacy_modifier_trigger(binding).is_some() {
+        let raw = registerable_raw(binding)?;
+        let result = crate::fcitx5::set_raw_hotkey("SetHotkeyRaw", raw.0, raw.1);
+        log_registration_result("SetHotkeyRaw", raw, &result);
         return result;
     }
     let key = binding_to_fcitx_key(binding);
@@ -472,6 +474,9 @@ fn normalize_fcitx_primary(primary: &str) -> String {
 }
 
 pub(crate) fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
+    if binding.is_unassigned() {
+        return Ok((0, 0));
+    }
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         return Ok((modifier_trigger_keysym(trigger)?, 0));
     }
@@ -584,6 +589,18 @@ fn unsupported_primary(primary: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unassigned_shortcuts_map_to_native_unregister_without_weakening_other_keys() {
+        let binding = ShortcutBinding::unassigned();
+        assert_eq!(registerable_raw(&binding).unwrap(), (0, 0));
+        assert!(!is_bare_modifier_binding(&binding));
+        assert!(registerable_raw(&ShortcutBinding {
+            primary: String::new(),
+            modifiers: vec!["ctrl".into()],
+        })
+        .is_err());
+    }
 
     #[test]
     fn mouse_shortcuts_are_rejected_by_the_linux_host() {

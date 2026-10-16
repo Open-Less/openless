@@ -378,13 +378,21 @@ impl OpenLessEguiApp {
         self.save_settings_if_dirty();
     }
 
-    /// 停用某个快捷键绑定（核心录音快捷键没有停用，UI 里也不给按钮）。
+    /// 清空快捷键；录音和翻译使用显式空绑定，避免重新加载时恢复默认键。
     pub(super) fn apply_shortcut_disable(&mut self, field: frontend::view_model::ShortcutField) {
         let Some(preferences) = self.preferences.as_mut() else {
             return;
         };
         use frontend::view_model::ShortcutField;
         match field {
+            ShortcutField::Dictation => {
+                preferences.dictation_hotkey =
+                    openless_core::shared_types::ShortcutBinding::unassigned()
+            }
+            ShortcutField::Translation => {
+                preferences.translation_hotkey =
+                    openless_core::shared_types::ShortcutBinding::unassigned()
+            }
             ShortcutField::Qa => preferences.qa_hotkey = None,
             ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
@@ -399,8 +407,8 @@ impl OpenLessEguiApp {
                         .retain(|entry| entry.pack_id != pack_id);
                 }
             }
-            // 录音/翻译必须保留一个绑定；草稿行还没有内容。
-            ShortcutField::Dictation | ShortcutField::Translation | ShortcutField::StyleDraft => {
+            // 草稿行还没有已保存的绑定。
+            ShortcutField::StyleDraft => {
                 return;
             }
         }
@@ -672,6 +680,30 @@ impl OpenLessEguiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_dictation_and_translation_survives_the_settings_patch() {
+        let mut app = OpenLessEguiApp::new(
+            Arc::new(tokio::runtime::Runtime::new().unwrap()),
+            Err("fixture".into()),
+            None,
+            false,
+        );
+        let initial = UserPreferences::default();
+        app.preferences = Some(initial.clone());
+        app.settings_save = SettingsSave::new(&initial);
+        app.apply_shortcut_disable(frontend::view_model::ShortcutField::Dictation);
+        app.apply_shortcut_disable(frontend::view_model::ShortcutField::Translation);
+        let current = app.preferences.as_ref().unwrap();
+        assert!(current.dictation_hotkey.is_unassigned());
+        assert!(current.translation_hotkey.is_unassigned());
+        let (_, edits) = app.settings_save.begin().unwrap();
+        let persisted = openless_linux_egui::patch_preferences(&initial, &edits).unwrap();
+        let loaded: UserPreferences =
+            serde_json::from_value(serde_json::to_value(persisted).unwrap()).unwrap();
+        assert!(loaded.dictation_hotkey.is_unassigned());
+        assert!(loaded.translation_hotkey.is_unassigned());
+    }
 
     #[test]
     fn short_polish_threshold_saves_and_hydrates_the_current_text() {

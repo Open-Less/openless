@@ -45,7 +45,8 @@ export function Select({
         <BaseSelect.Positioner
           className="ol-select-positioner"
           positionMethod="fixed"
-          side="right"
+          side="bottom"
+          collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
           align="start"
           sideOffset={8}
           collisionPadding={8}

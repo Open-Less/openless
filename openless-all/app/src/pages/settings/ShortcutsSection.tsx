@@ -77,6 +77,10 @@ export function ShortcutsSection() {
         await setDictationHotkey(binding);
         await refresh();
       },
+      disable: async () => {
+        await setDictationHotkey(null);
+        await refresh();
+      },
       reset: async () => {
         await setDictationHotkey(defaultDictationHotkey());
         await refresh();
@@ -90,6 +94,10 @@ export function ShortcutsSection() {
       save: async (binding) => {
         await setTranslationHotkey(binding);
         await updatePrefs((current) => ({ ...current, translationHotkey: binding }));
+      },
+      disable: async () => {
+        await setTranslationHotkey(null);
+        await refresh();
       },
     },
     {
@@ -208,10 +216,10 @@ export function ShortcutsSection() {
     });
   const matches = (label: string, binding: ShortcutBinding | null) =>
     (!search ||
-      `${label} ${binding ? `${formatComboLabel(binding)} ${binding.modifiers.join(' ')} ${binding.primary}` : tr('unassigned')}`
+      `${label} ${binding?.primary.trim() ? `${formatComboLabel(binding)} ${binding.modifiers.join(' ')} ${binding.primary}` : tr('unassigned')}`
         .toLocaleLowerCase()
         .includes(search)) &&
-    (status === 'all' || (status === 'assigned') === !!binding);
+    (status === 'all' || (status === 'assigned') === Boolean(binding?.primary.trim()));
   const visible = commands.filter(
     (command) =>
       (category === 'all' || category === command.group) && matches(command.label, command.binding),
@@ -317,9 +325,6 @@ export function ShortcutsSection() {
                 onDisable={command.disable}
                 onReset={command.reset}
                 sideSpecificModifiers={command.id === 'dictation'}
-                allowMacDictationKey={command.id === 'dictation' && os === 'mac'}
-                disableDisabled={!command.disable}
-                disableHint={t('settings.recording.comboDisableHint')}
               />
             </div>
           ))}
@@ -345,6 +350,9 @@ export function ShortcutsSection() {
               />
               <ShortcutRecorder
                 value={entry.binding}
+                onDisable={() =>
+                  savePacks(packHotkeys.filter((item) => item.packId !== entry.packId))
+                }
                 onSave={(binding) =>
                   savePacks(
                     packHotkeys.map((item) =>

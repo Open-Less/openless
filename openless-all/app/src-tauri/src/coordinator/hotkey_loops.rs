@@ -1503,7 +1503,8 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         }
 
         let binding = hotkey_runtime_target(&inner).translation;
-        if is_builtin_translation_shift(&binding)
+        if is_unconfigured_shortcut(&binding)
+            || is_builtin_translation_shift(&binding)
             || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some()
         {
             take_translation_hotkey_on_main_thread(&inner);

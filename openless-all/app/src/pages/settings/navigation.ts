@@ -17,6 +17,7 @@ export const ADVANCED_PAGES = [
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
   { id: 'claudeConsole', icon: 'chevLR', titleKey: 'settings.codingConsole.title' },
   { id: 'vocabularyLearning', icon: 'sparkle', titleKey: 'settings.vocabularyLearning.title' },
+  { id: 'customSyncServer', icon: 'cloud', titleKey: 'cloudSyncE2ee.customServerTitle' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
 ] as const;
 

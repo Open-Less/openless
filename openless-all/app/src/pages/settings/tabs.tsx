@@ -21,7 +21,7 @@ import { NetworkSection } from './NetworkSection';
 import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';
 import { DataStorageSection } from './DataStorageSection';
-import { CloudSyncSection } from './CloudSyncSection';
+import { CloudSyncSection, CustomSyncServerSection } from './CloudSyncSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
@@ -484,6 +484,7 @@ export function AdvancedTab({
             {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
             {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
             {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}
           </section>
         ))}

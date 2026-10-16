@@ -1490,7 +1490,8 @@ export const ja: typeof zhCN = {
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       audioEnhancementLabel: '軽量マイク拡張',
-      audioEnhancementDesc: 'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+      audioEnhancementDesc:
+        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -2356,6 +2357,7 @@ export const ja: typeof zhCN = {
     backToAdvanced: '実験と拡張に戻る',
     backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
+      customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
       localModels: experimentalAsr.description,
       testingFeatures: 'テスト中の機能を必要に応じて有効にします。',
       vocabularyLearning:

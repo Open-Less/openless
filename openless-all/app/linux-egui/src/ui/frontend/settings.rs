@@ -499,7 +499,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     field: ShortcutField::Dictation,
                     label: tr_l10n(lang, "settings.recording.hotkey_label"),
                     value: vm.dictation_hotkey.clone(),
-                    can_disable: false,
+                    can_disable: true,
                     hint: recording_mode_hint(lang, vm.settings.recording_mode),
                 },
             );
@@ -887,14 +887,14 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
             value: vm.dictation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: dictation_hint,
         },
         ShortcutRow {
             field: ShortcutField::Translation,
             label: tr_l10n(lang, "hotkey.translation"),
             value: vm.translation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: String::new(),
         },
         ShortcutRow {
@@ -998,7 +998,7 @@ pub(super) struct ShortcutRow {
     label: &'static str,
     /// 已格式化的键帽文本（`Ctrl+Shift+;`），空串 = 未设置。
     value: String,
-    /// 核心热键（录音）不可停用，Tauri 用 `comboDisableHint` 说明原因。
+    /// 已配置的快捷键均可清空；尚未保存的草稿不提供停用操作。
     can_disable: bool,
     /// 行下方的补充说明（录音行显示当前录音方式后缀）。
     hint: String,

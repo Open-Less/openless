@@ -35,10 +35,12 @@
 }
 .ol-select-popup {
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   zoom: var(--ol-interface-scale, 1);
-  width: calc(var(--anchor-width) / var(--ol-interface-scale, 1));
-  max-width: calc(var(--available-width) / var(--ol-interface-scale, 1));
-  max-height: calc(var(--available-height) / var(--ol-interface-scale, 1));
+  width: calc(var(--anchor-width, 160px) / var(--ol-interface-scale, 1));
+  max-width: calc(var(--available-width, 100vw) / var(--ol-interface-scale, 1));
+  max-height: calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1));
   padding: 4px;
   border: 0.5px solid var(--ol-select-popover-border);
   border-radius: 10px;
@@ -60,7 +62,13 @@
   transform: scale(0.98);
 }
 .ol-select-list {
-  max-height: min(280px, calc(var(--available-height) / var(--ol-interface-scale, 1) - 10px));
+  /* Bound the first measurement too: positioning variables do not exist until
+     Base UI measures the popup. An initially unbounded long list flips upward. */
+  min-height: 0;
+  max-height: min(
+    280px,
+    calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1) - 10px)
+  );
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -110,6 +118,7 @@
   background: transparent;
 }
 .ol-select-search {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 7px;

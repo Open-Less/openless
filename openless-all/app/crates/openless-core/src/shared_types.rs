@@ -1939,6 +1939,19 @@ pub struct StylePackHotkey {
 }
 
 impl ShortcutBinding {
+    /// Explicitly unbound, distinct from an absent legacy preference field.
+    /// Keep the existing wire shape so old preferences and host adapters round-trip.
+    pub fn unassigned() -> Self {
+        Self {
+            primary: String::new(),
+            modifiers: Vec::new(),
+        }
+    }
+
+    pub fn is_unassigned(&self) -> bool {
+        self.primary.is_empty() && self.modifiers.is_empty()
+    }
+
     pub fn default_qa() -> Self {
         #[cfg(target_os = "macos")]
         {

@@ -114,8 +114,8 @@ for (const zoom of ['0.9', '1', '1.1']) {
     await expect(popup).toHaveCSS('opacity', '1');
     const anchor = (await trigger.boundingBox())!;
     const bounds = (await popup.boundingBox())!;
-    const beside = bounds.x >= anchor.x + anchor.width || bounds.x + bounds.width <= anchor.x;
-    expect(beside).toBe(true);
+    expect(bounds.y).toBeGreaterThanOrEqual(anchor.y + anchor.height - 1);
+    expect(Math.abs(bounds.x - anchor.x)).toBeLessThan(2);
     expect(Math.abs(bounds.width - anchor.width)).toBeLessThan(2);
     await page.keyboard.press('Escape');
     await expect(popup).toHaveCount(0);

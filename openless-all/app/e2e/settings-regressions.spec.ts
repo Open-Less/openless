@@ -74,6 +74,7 @@ for (const scale of [1, 1.1]) {
   test(`long official menus keep user scroll through live option updates at ${Math.round(scale * 100)}%`, async ({
     page,
   }) => {
+    await page.setViewportSize({ width: 1100, height: 1200 });
     await page.goto(fixture);
     await page.evaluate((scale) => {
       document.documentElement.style.zoom = String(scale);
@@ -85,7 +86,8 @@ for (const scale of [1, 1.1]) {
     await expect(popup).toBeVisible();
     const anchor = (await trigger.boundingBox())!;
     const bounds = (await popup.boundingBox())!;
-    expect(bounds.x >= anchor.x + anchor.width || bounds.x + bounds.width <= anchor.x).toBe(true);
+    expect(bounds.y).toBeGreaterThanOrEqual(anchor.y + anchor.height - 1);
+    expect(Math.abs(bounds.x - anchor.x)).toBeLessThan(2);
     const list = page.locator('.ol-select-list');
     await list.evaluate((element) => {
       element.scrollTop = element.scrollHeight;

@@ -91,7 +91,7 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['testingFeatures', 'vocabularyLearning', 'debug'],
+  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
@@ -128,8 +128,16 @@ assert.equal(
   'Windows keeps model management',
 );
 
-assert.equal(isServiceViewInactive('models', false, 'mac'), true, 'Mac legacy entry is always disabled');
-assert.equal(resolveServiceView('models', availableServiceViews(false, 'mac'), false, 'mac'), 'llm', 'retired entry never opens old model controls');
+assert.equal(
+  isServiceViewInactive('models', false, 'mac'),
+  true,
+  'Mac legacy entry is always disabled',
+);
+assert.equal(
+  resolveServiceView('models', availableServiceViews(false, 'mac'), false, 'mac'),
+  'llm',
+  'retired entry never opens old model controls',
+);
 const serviceViews = availableServiceViews(true);
 assert.deepEqual(
   serviceViews,

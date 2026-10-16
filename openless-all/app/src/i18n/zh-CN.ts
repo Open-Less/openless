@@ -2252,6 +2252,7 @@ export const zhCN = {
     backToAdvanced: '返回实验与扩展',
     backToTestingFeatures: '返回正在测试中的功能',
     advancedPages: {
+      customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
       localModels: experimentalAsr.description,
       testingFeatures: '按需开启尚在测试中的功能。',
       vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',

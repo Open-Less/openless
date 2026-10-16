@@ -60,9 +60,12 @@ export function validateShortcutBinding(binding: ShortcutBinding): Promise<void>
   return invokeOrMock('validate_shortcut_binding', { binding }, () => undefined);
 }
 
-export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
+export function setDictationHotkey(binding: ShortcutBinding | null): Promise<void> {
   return invokeOrMock('set_dictation_hotkey', { binding }, () => {
-    mockSetSettings({ ...mockSettings, dictationHotkey: binding });
+    mockSetSettings({
+      ...mockSettings,
+      dictationHotkey: binding ?? { primary: '', modifiers: [] },
+    });
   });
 }
 
@@ -74,8 +77,13 @@ export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promi
   });
 }
 
-export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
-  return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
+export function setTranslationHotkey(binding: ShortcutBinding | null): Promise<void> {
+  return invokeOrMock('set_translation_hotkey', { binding }, () => {
+    mockSetSettings({
+      ...mockSettings,
+      translationHotkey: binding ?? { primary: '', modifiers: [] },
+    });
+  });
 }
 
 // binding = null disables (clears the global key), matching set_qa_hotkey (issue #576).

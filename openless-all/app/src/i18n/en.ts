@@ -1502,7 +1502,8 @@ export const en: typeof zhCN = {
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       audioEnhancementLabel: 'Lightweight microphone enhancement',
-      audioEnhancementDesc: 'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
+      audioEnhancementDesc:
+        'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',
@@ -2387,6 +2388,7 @@ export const en: typeof zhCN = {
     backToAdvanced: 'Back to Experiments & extensions',
     backToTestingFeatures: 'Back to features under testing',
     advancedPages: {
+      customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
       localModels: experimentalAsr.description,
       testingFeatures: 'Opt in to features that are still being tested.',
       vocabularyLearning:
