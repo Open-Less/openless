@@ -10,8 +10,9 @@
 - [x] CPU 检查点可以取消；超时设置取消标志；等待期间不把 UI/录音 CPU 累加成永远还不完的欠账。
 - [x] TextStream 只升级已知、受管的 worker，不重装其 Python 环境、不重下模型。
 - [x] 修复渠道编辑页返回按钮与 macOS 标题栏拖动区重叠。
-- [x] 最终测试与 diff 检查通过。
-- [ ] 提交修复、创建 PR，记录 CI 结果。
+- [x] 本地定向测试、前端完整测试与 diff 检查通过。
+- [x] 提交修复，创建 [PR #1207](https://github.com/Open-Less/openless/pull/1207)。
+- [ ] 云端 CI 全绿后合并；实时结果以 PR 检查与记录为准。
 
 ## 已验证证据
 
@@ -22,6 +23,10 @@
 - 已有 SenseVoice 权重配合本地生成的固定英文合成语音，真实识别通过；音频 3.502 秒、推理约 604ms。没有读取或导出用户录音。
 - Swift 以 macOS 14 部署基线完成 typecheck。Python 单元 11/11，Ruff、Black 和新增预算代码的 mypy strict 通过。
 - 前端测试 runner 最终完整通过。浏览器原有 6 项通过；新增 Apple 渠道创建、分类、标题栏返回、停用/启用在 Chromium/WebKit 2/2 通过。
+
+### CI 收尾
+
+首轮 CI `38847638369`：Android、macOS Rust 1.88、UI 双浏览器、Windows、Linux 和 Changed areas 通过。macOS 完整原生单元测试为 579 passed / 1 failed / 4 ignored：剩余旧断言把 Apple 系统识别当作已退役模型。已把该断言改为「macOS 无需云凭据、其他平台不可用」，保留旧 Whisper 模型不可用的断言。本地完整原生测试还暴露 CPU 计时测试的并发测量边界问题：它把其他测试线程在推理让出期间的 CPU 也算进了推理预算。修正为在让出前冻结计量，不修改生产节流、不放宽预算断言。修正后使用正常原生依赖执行 `cargo test --lib --bins`：**580 passed / 0 failed / 4 explicit model-file-dependent ignored**。后续结果见 PR #1207，已有成功记录不删除、不伪装为新源码的检查结果。
 
 ## 明确边界
 

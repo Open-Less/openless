@@ -358,9 +358,15 @@ mod tests {
             assert!(!asr_configured_for_provider(provider, &snapshot()));
         }
         #[cfg(target_os = "macos")]
-        for provider in ["local-whisper", "apple-whisper", "apple-speech"] {
+        for provider in ["local-whisper", "apple-whisper"] {
             assert!(!asr_configured_for_provider(provider, &snapshot()));
         }
+        // System recognition needs no cloud credential, but only the macOS
+        // host registers its native engine. Retired models remain unavailable.
+        assert_eq!(
+            asr_configured_for_provider("apple-speech", &snapshot()),
+            cfg!(target_os = "macos")
+        );
         #[cfg(target_os = "windows")]
         assert!(asr_configured_for_provider(
             crate::asr::local::foundry::PROVIDER_ID,

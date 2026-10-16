@@ -272,8 +272,11 @@ mod tests {
                 std::hint::black_box((i as f64).sqrt());
             }
         }
-        assert!(pacer.checkpoint(|| false));
+        // The budget charges CPU work before yielding, not other app/test
+        // threads running while inference is asleep. Freeze the same boundary
+        // here; measuring process CPU after the yield races parallel tests.
         let used = cpu_seconds().unwrap() - cpu;
+        assert!(pacer.checkpoint(|| false));
         assert!(
             used / wall.elapsed().as_secs_f64() < 0.28,
             "measured CPU work must include the enforced yield"
