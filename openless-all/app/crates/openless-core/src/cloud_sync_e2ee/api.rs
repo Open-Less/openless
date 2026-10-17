@@ -2,6 +2,65 @@ use super::OpenLessBackend;
 use crate::{cloud_sync_e2ee::*, BackendError};
 
 impl OpenLessBackend {
+    pub async fn export_local_migration_bundle(
+        &self,
+        options: crate::local_migration_bundle::BundleExportOptions,
+    ) -> Result<crate::local_migration_bundle::BundleArtifact, BackendError> {
+        self.local_migration_store
+            .export_local_bundle(options)
+            .await
+            .map_err(|error| {
+                BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
+            })
+    }
+
+    pub fn inspect_local_migration_bundle(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::local_migration_bundle::BundleInspection, BackendError> {
+        crate::cloud_sync_e2ee_store::CoreSyncStore::inspect_local_bundle(bytes).map_err(|error| {
+            BackendError::new(crate::BackendErrorCode::InvalidArgument, error.to_string())
+        })
+    }
+
+    pub async fn preview_local_migration_bundle(
+        &self,
+        bytes: &[u8],
+        password: Option<crate::local_migration_bundle::BundlePassword>,
+        portable_android_preferences: Option<serde_json::Value>,
+    ) -> Result<crate::local_migration_bundle::BundleMergePreview, BackendError> {
+        self.local_migration_store
+            .preview_local_bundle(bytes, password, portable_android_preferences)
+            .await
+            .map_err(|error| {
+                BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
+            })
+    }
+
+    pub async fn import_local_migration_bundle(
+        &self,
+        bytes: &[u8],
+        password: Option<crate::local_migration_bundle::BundlePassword>,
+        mode: crate::local_migration_bundle::RestoreMode,
+        choices: &[crate::cloud_sync_e2ee_documents::ConflictChoice],
+        expected_generation: Option<crate::cloud_sync_e2ee_documents::Revision>,
+        portable_android_preferences: Option<serde_json::Value>,
+    ) -> Result<crate::local_migration_bundle::BundleInspection, BackendError> {
+        self.local_migration_store
+            .import_local_bundle(
+                bytes,
+                password,
+                mode,
+                choices,
+                expected_generation,
+                portable_android_preferences,
+            )
+            .await
+            .map_err(|error| {
+                BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
+            })
+    }
+
     pub async fn sign_out_account(&self) -> Result<(), BackendError> {
         if let Some(service) = &self.encrypted_sync {
             service.sign_out().await.map(|_| ())

@@ -1334,6 +1334,16 @@ export const en: typeof zhCN = {
       cursorContextDesc:
         'Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
     },
+    localMigration: {
+      title: 'Local configuration migration',
+      description:
+        'Export all portable local configuration to a versioned bundle, or restore it on another Android device. Share mode is redacted by default; personal migration can carry credentials only with password protection. The native flow previews the source, version, categories, and changes before Merge or Replace.',
+      safetyNote:
+        'System permissions, OAuth sessions, device paths, and runtime state never migrate. A local backup is created before import.',
+      open: 'Open local migration',
+      opening: 'Opening…',
+      openFailed: 'Could not open the local migration flow. Try again from Settings.',
+    },
     codingConsole: {
       title: 'Claude Console',
       desc: 'Detect your local Claude Code and MCP (computer use) status, then run Claude headlessly behind guardrails and watch the streamed output and cost.',

@@ -15,6 +15,8 @@ import android.util.Log
 
 /** Registers activity lifecycle hooks for overlay background trigger mode. */
 class OpenLessApplication : Application() {
+    private var localMigrationStarted = false
+
     override fun onCreate() {
         super.onCreate()
         OpenLessAppContext.initialize(this)
@@ -54,6 +56,11 @@ class OpenLessApplication : Application() {
                 }
 
                 override fun onActivityStarted(activity: Activity) {
+                    if (activity is OpenLessLocalMigrationActivity) {
+                        localMigrationStarted = true
+                        maybeHideOverlayOnForeground()
+                        return
+                    }
                     // Must use `is MainActivity` — launcher opens
                     // OpenLessBackendWarmupActivity (subclass), whose class name
                     // does NOT end with "MainActivity", so endsWith() never fired
@@ -93,7 +100,11 @@ class OpenLessApplication : Application() {
                 }
 
                 override fun onActivityStopped(activity: Activity) {
-                    if (activity is MainActivity) {
+                    if (activity is OpenLessLocalMigrationActivity) {
+                        localMigrationStarted = false
+                        return
+                    }
+                    if (activity is MainActivity && !localMigrationStarted) {
                         // #region agent log
                         Log.i(
                             "OpenLessDbg58c22b",

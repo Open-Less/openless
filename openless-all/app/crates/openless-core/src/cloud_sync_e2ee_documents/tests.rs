@@ -79,6 +79,7 @@ pub(super) fn channel_snapshot() -> ExportSnapshot {
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "llm-one".into(),
@@ -116,6 +117,22 @@ fn all_current_preference_fields_have_an_explicit_registration() {
         "new persistent fields require a reviewed sync classification"
     );
     assert_eq!(registered.len(), registry::PREFERENCE_FIELDS.len());
+}
+
+#[test]
+fn public_endpoint_rejects_credential_like_hostnames() {
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://sk-live-abc123.example.test"
+    ));
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://token.example.test/v1"
+    ));
+    assert!(registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://api.example.test/v1"
+    ));
 }
 
 #[test]
@@ -183,6 +200,7 @@ fn local_asr_channels_are_archived_with_their_credentials_not_globally_activated
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "local-one".into(),

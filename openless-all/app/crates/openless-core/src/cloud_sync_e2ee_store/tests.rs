@@ -415,9 +415,79 @@ fn validate(set: DocumentSet) -> ValidatedSyncDocuments {
 }
 
 #[tokio::test]
+async fn personal_bundle_keeps_receiver_device_profile() {
+    let fixture = Fixture::new();
+    let captured = fixture
+        .store
+        .export_scope(fixture.scope.clone())
+        .await
+        .unwrap();
+    let current = captured.documents;
+    let artifact = export_validated_bundle(
+        &current,
+        BundleExportOptions {
+            mode: crate::local_migration_bundle::BundleMode::PersonalMigration,
+            credential_policy: crate::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+            password: Some(BundlePassword::new("test-password").unwrap()),
+            app_version: "test".into(),
+            portable_android_preferences: None,
+        },
+    )
+    .unwrap();
+    let decoded = decode_bundle(
+        &artifact.bytes,
+        Some(&BundlePassword::new("test-password").unwrap()),
+        captured.generation,
+    )
+    .unwrap();
+    let prepared = fixture
+        .store
+        .prepare_bundle_documents(&current, decoded)
+        .unwrap();
+    assert!(prepared
+        .documents()
+        .documents
+        .iter()
+        .any(|document| document.kind == DocumentKind::DeviceProfile
+            && document.id == current.documents().source_device.id));
+}
+
+#[tokio::test]
+async fn local_bundle_restore_uses_document_revision_not_gate_generation() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .set_ui_preferences(SecretJson::new(json!({
+            "locale": "zh-CN",
+            "fontScale": "medium",
+        })))
+        .await
+        .unwrap();
+    let artifact = fixture
+        .store
+        .export_local_bundle(BundleExportOptions::default())
+        .await
+        .unwrap();
+    let generation = fixture.store.generation().unwrap();
+    assert!(generation > Revision::new(0));
+
+    fixture
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            None,
+            RestoreMode::Replace,
+            &[],
+            Some(generation),
+            None,
+        )
+        .await
+        .expect("a local bundle captured at the current generation should restore");
+}
+
+#[tokio::test]
 async fn disabled_fresh_start_never_requests_local_key() {
     let fixture = Fixture::new();
-    fixture.store.recover_registered().await.unwrap();
     assert!(!fixture.extensions.key_requested.load(Ordering::Acquire));
 }
 

@@ -1371,6 +1371,16 @@ export const fr: typeof zhCN = {
       cursorContextDesc:
         'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
+    localMigration: {
+      title: 'Migration de la configuration locale',
+      description:
+        'Exportez toute la configuration locale portable dans un paquet versionné ou restaurez-la sur un autre appareil Android. Le mode partage est anonymisé par défaut ; une migration personnelle ne peut inclure des identifiants qu’avec une protection par mot de passe. Le flux natif affiche la source, la version, les catégories et les changements avant fusion ou remplacement.',
+      safetyNote:
+        'Les autorisations système, sessions OAuth, chemins de l’appareil et états d’exécution ne sont jamais migrés. Une sauvegarde locale est créée avant l’importation.',
+      open: 'Ouvrir la migration locale',
+      opening: 'Ouverture…',
+      openFailed: 'Impossible d’ouvrir la migration locale. Réessayez depuis les réglages.',
+    },
     codingConsole: {
       title: 'Console Claude',
       desc: 'Détectez Claude Code et le MCP de contrôle de l’ordinateur, puis exécutez Claude sans interface avec des protections. Consultez la sortie progressive et le coût.',

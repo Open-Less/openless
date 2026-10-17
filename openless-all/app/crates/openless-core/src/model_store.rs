@@ -1315,11 +1315,19 @@ impl ModelStore {
 
     /// File-only status for opt-in pinned packages. Runtime caches, Python
     /// environments and licenses are not model-download progress.
-    pub fn pinned_model_status(&self, target: &LocalAsrTarget) -> Result<ModelCacheStatus, BackendError> {
-        let entry = self.catalog.find(target.runtime, target.model_id())
+    pub fn pinned_model_status(
+        &self,
+        target: &LocalAsrTarget,
+    ) -> Result<ModelCacheStatus, BackendError> {
+        let entry = self
+            .catalog
+            .find(target.runtime, target.model_id())
             .ok_or_else(|| invalid("unknown local ASR model"))?;
         let ModelFileSelector::Pinned(files) = &entry.selector else {
-            return Err(BackendError::new(BackendErrorCode::Unsupported, "model does not use pinned files"));
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "model does not use pinned files",
+            ));
         };
         let manifest = ModelManifest::new(target.clone(), entry.repository.clone(), files.clone())?;
         self.status(&manifest)
@@ -1501,7 +1509,8 @@ impl ModelStore {
                 // Optional packages use smaller resumable ranges: large MLX/Core ML
                 // objects must not repeatedly restart a 32 MiB body on slow links.
                 // Existing Windows/native and legacy transfers retain their settings.
-                let chunk_bytes = model_download_chunk_bytes(&manifest.target, self.config.chunk_size_bytes);
+                let chunk_bytes =
+                    model_download_chunk_bytes(&manifest.target, self.config.chunk_size_bytes);
                 let end = (offset + chunk_bytes).min(file.size_bytes) - 1;
                 let mut response = None;
                 let mut last_error = None;
@@ -1897,8 +1906,8 @@ impl ModelStore {
             paths.push(root.join(staging_dir_name(&entry.target)));
             for path in paths {
                 let parent = path.parent().expect("known model path has a parent");
-                if parent != root && std::fs::symlink_metadata(parent)
-                    .is_ok_and(|m| m.file_type().is_symlink())
+                if parent != root
+                    && std::fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink())
                 {
                     // A user-created indirection must not grant delete authority
                     // over an arbitrary directory outside the managed root.
@@ -3146,14 +3155,24 @@ mod tests {
     #[test]
     fn experimental_ranges_are_bounded_without_changing_windows_transfers() {
         for model in crate::experimental_asr::ExperimentalAsrModel::ALL {
-            assert_eq!(model_download_chunk_bytes(&model.target(), DEFAULT_MODEL_CHUNK_BYTES), 4 * 1024 * 1024);
+            assert_eq!(
+                model_download_chunk_bytes(&model.target(), DEFAULT_MODEL_CHUNK_BYTES),
+                4 * 1024 * 1024
+            );
             assert_eq!(model_download_chunk_bytes(&model.target(), 4), 4);
             assert_eq!(model_download_chunk_bytes(&model.target(), 0), 1);
         }
-        let windows = LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "sense-voice-small-zh").unwrap();
-        assert_eq!(model_download_chunk_bytes(&windows, DEFAULT_MODEL_CHUNK_BYTES), DEFAULT_MODEL_CHUNK_BYTES);
+        let windows =
+            LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "sense-voice-small-zh").unwrap();
+        assert_eq!(
+            model_download_chunk_bytes(&windows, DEFAULT_MODEL_CHUNK_BYTES),
+            DEFAULT_MODEL_CHUNK_BYTES
+        );
         let legacy = LocalAsrTarget::parse(LocalAsrRuntime::Generic, "whisper-small").unwrap();
-        assert_eq!(model_download_chunk_bytes(&legacy, DEFAULT_MODEL_CHUNK_BYTES), DEFAULT_MODEL_CHUNK_BYTES);
+        assert_eq!(
+            model_download_chunk_bytes(&legacy, DEFAULT_MODEL_CHUNK_BYTES),
+            DEFAULT_MODEL_CHUNK_BYTES
+        );
     }
     use std::sync::atomic::AtomicUsize;
 

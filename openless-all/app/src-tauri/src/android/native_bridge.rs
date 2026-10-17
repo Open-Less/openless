@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use base64::Engine;
 use openless_core::{
     BackendError, BackendErrorCode, DictationStartOptions, DictationStopOptions, OpenLessBackend,
 };
@@ -185,6 +186,232 @@ fn import_provider_settings_json(json: &str, selection: bool, credentials: bool)
         }
     }
     serde_json::json!({"applied":applied,"errors":errors}).to_string()
+}
+
+fn local_bundle_error(error: impl std::fmt::Display) -> String {
+    serde_json::json!({"ok": false, "error": error.to_string()}).to_string()
+}
+
+fn export_local_migration_bundle_json(
+    mode: &str,
+    include_credentials: bool,
+    password: &str,
+    android_preferences_json: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let mode = match mode {
+            "share_redacted" => openless_core::local_migration_bundle::BundleMode::ShareRedacted,
+            "personal_migration" => {
+                openless_core::local_migration_bundle::BundleMode::PersonalMigration
+            }
+            _ => return Err("invalid migration bundle mode".into()),
+        };
+        let (credential_policy, password) = if include_credentials {
+            let password = openless_core::local_migration_bundle::BundlePassword::new(password)
+                .map_err(|error| error.to_string())?;
+            (
+                openless_core::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+                Some(password),
+            )
+        } else {
+            (
+                openless_core::local_migration_bundle::CredentialPolicy::Omit,
+                None,
+            )
+        };
+        let options = openless_core::local_migration_bundle::BundleExportOptions {
+            mode,
+            credential_policy,
+            password,
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            portable_android_preferences: if android_preferences_json.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::from_str(android_preferences_json)
+                        .map_err(|_| "invalid Android portable preferences")?,
+                )
+            },
+        };
+        let artifact =
+            tauri::async_runtime::block_on(backend.export_local_migration_bundle(options))
+                .map_err(|error| error.message)?;
+        Ok(serde_json::json!({
+            "inspection": artifact.inspection,
+            "bundleBase64": base64::engine::general_purpose::STANDARD.encode(&artifact.bytes),
+        }))
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn inspect_local_migration_bundle_json(bundle_base64: &str) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let inspection = backend
+            .inspect_local_migration_bundle(&bytes)
+            .map_err(|error| error.message)?;
+        serde_json::to_value(inspection).map_err(|_| "invalid bundle inspection".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn extract_local_migration_android_preferences_json(
+    bundle_base64: &str,
+    password: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let password = if password.is_empty() {
+            None
+        } else {
+            Some(
+                openless_core::local_migration_bundle::BundlePassword::new(password)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let decoded = openless_core::local_migration_bundle::decode_bundle(
+            &bytes,
+            password.as_ref(),
+            openless_core::cloud_sync_e2ee_documents::Revision::new(0),
+        )
+        .map_err(|error| error.to_string())?;
+        let preferences = decoded
+            .documents
+            .documents()
+            .documents
+            .iter()
+            .find(|document| {
+                document.kind
+                    == openless_core::cloud_sync_e2ee_documents::DocumentKind::UiPreferences
+                    && document.id == "androidPortableSettings"
+            })
+            .map(|document| document.value.clone())
+            .unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::json!({"preferences": preferences}))
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn preview_local_migration_bundle_json(
+    bundle_base64: &str,
+    password: &str,
+    android_preferences_json: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let password = if password.is_empty() {
+            None
+        } else {
+            Some(
+                openless_core::local_migration_bundle::BundlePassword::new(password)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let android_preferences = if android_preferences_json.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str(android_preferences_json)
+                    .map_err(|_| "invalid Android portable preferences")?,
+            )
+        };
+        let preview = tauri::async_runtime::block_on(
+            backend.preview_local_migration_bundle(&bytes, password, android_preferences),
+        )
+        .map_err(|error| error.message)?;
+        serde_json::to_value(preview).map_err(|_| "invalid bundle preview".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn import_local_migration_bundle_json(
+    bundle_base64: &str,
+    password: &str,
+    mode: &str,
+    choices_json: &str,
+    expected_generation: &str,
+    android_preferences_json: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let password = if password.is_empty() {
+            None
+        } else {
+            Some(
+                openless_core::local_migration_bundle::BundlePassword::new(password)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let restore_mode = match mode {
+            "merge" => openless_core::local_migration_bundle::RestoreMode::Merge,
+            "replace" => openless_core::local_migration_bundle::RestoreMode::Replace,
+            _ => return Err("invalid migration restore mode".into()),
+        };
+        let choices: Vec<openless_core::cloud_sync_e2ee_documents::ConflictChoice> =
+            serde_json::from_str(choices_json).map_err(|_| "invalid conflict choices")?;
+        let expected_generation = if expected_generation.is_empty() {
+            return Err("missing expected generation".into());
+        } else {
+            let value = expected_generation
+                .parse::<u64>()
+                .map_err(|_| "invalid expected generation")?;
+            if value.to_string() != expected_generation {
+                return Err("invalid expected generation".into());
+            }
+            Some(openless_core::cloud_sync_e2ee_documents::Revision::new(
+                value,
+            ))
+        };
+        let android_preferences = if android_preferences_json.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str(android_preferences_json)
+                    .map_err(|_| "invalid Android portable preferences")?,
+            )
+        };
+        let inspection = tauri::async_runtime::block_on(backend.import_local_migration_bundle(
+            &bytes,
+            password,
+            restore_mode,
+            &choices,
+            expected_generation,
+            android_preferences,
+        ))
+        .map_err(|error| error.message)?;
+        backend.publish_local_migration_state_changed();
+        tauri::async_runtime::block_on(backend.refresh_and_publish_credentials())
+            .map_err(|error| error.message)?;
+        serde_json::to_value(inspection).map_err(|_| "invalid bundle inspection".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
 }
 
 pub fn register_android_backend(backend: Arc<OpenLessBackend>) {
@@ -1412,6 +1639,170 @@ mod jni_exports {
         let response = match json {
             Ok(json) => import_provider_settings_json(&json, selection != 0, credentials != 0),
             Err(_) => serde_json::json!({"applied":[],"errors":{"providerSelection":"invalid JNI input","credentials":"invalid JNI input"}}).to_string(),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeExportLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        mode: jstring,
+        include_credentials: jboolean,
+        password: jstring,
+        android_preferences: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (mode, password, android_preferences) {
+            (Ok(mode), Ok(password), Ok(android_preferences)) => export_local_migration_bundle_json(
+                &mode,
+                include_credentials != 0,
+                &password,
+                &android_preferences,
+            ),
+            _ => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativePreviewLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+        password: jstring,
+        android_preferences: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (bundle_base64, password, android_preferences) {
+            (Ok(bundle), Ok(password), Ok(android_preferences)) => preview_local_migration_bundle_json(
+                &bundle,
+                &password,
+                &android_preferences,
+            ),
+            _ => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeInspectLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match bundle_base64 {
+            Ok(bundle) => inspect_local_migration_bundle_json(&bundle),
+            Err(_) => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeExtractLocalMigrationAndroidPreferences(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+        password: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (bundle_base64, password) {
+            (Ok(bundle), Ok(password)) => extract_local_migration_android_preferences_json(
+                &bundle,
+                &password,
+            ),
+            _ => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeImportLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+        password: jstring,
+        mode: jstring,
+        choices_json: jstring,
+        expected_generation: jstring,
+        android_preferences: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let choices_json = env
+            .get_string(&JString::from_raw(choices_json))
+            .map(|value| value.to_string_lossy().into_owned());
+        let expected_generation = env
+            .get_string(&JString::from_raw(expected_generation))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (
+            bundle_base64,
+            password,
+            mode,
+            choices_json,
+            expected_generation,
+            android_preferences,
+        ) {
+            (Ok(bundle), Ok(password), Ok(mode), Ok(choices), Ok(expected_generation), Ok(android_preferences)) => {
+                import_local_migration_bundle_json(
+                    &bundle,
+                    &password,
+                    &mode,
+                    &choices,
+                    &expected_generation,
+                    &android_preferences,
+                )
+            }
+            _ => local_bundle_error("invalid JNI input"),
         };
         crate::android::jni::android::export_jstring(&mut env, &response)
     }

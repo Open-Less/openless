@@ -161,7 +161,9 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         if let Some(update) = self.during_validation.lock().unwrap().take() {
             update();
         }
-        let installed = !self.missing_native.load(std::sync::atomic::Ordering::SeqCst);
+        let installed = !self
+            .missing_native
+            .load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             Ok(targets
                 .into_iter()
@@ -176,7 +178,8 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     }
 
     fn restart_required(&self, _: LocalAsrRuntime) -> bool {
-        self.restart_needed.load(std::sync::atomic::Ordering::SeqCst)
+        self.restart_needed
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn download_native_model(
@@ -185,8 +188,12 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         _: FoundryRuntimeSource,
         _: openless_core::ModelPrepareProgressSink,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
-        self.operations.lock().unwrap().push(format!("download:{}", target.model_id()));
-        self.restart_needed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.operations
+            .lock()
+            .unwrap()
+            .push(format!("download:{}", target.model_id()));
+        self.restart_needed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.release(target.runtime)
     }
 
@@ -650,8 +657,12 @@ async fn local_asr_activation_owns_channel_creation_and_enabling() {
 
             // Even an unavailable/broken native loader must not be called just
             // because a downloaded model is enabled.
-            runtime.fail_prepare.store(true, std::sync::atomic::Ordering::SeqCst);
-            runtime.fail_preload.store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_prepare
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_preload
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             runtime.operations.lock().unwrap().clear();
             let result = backend.activate_local_asr(request).await.unwrap();
             assert!(runtime.operations.lock().unwrap().is_empty());
@@ -1174,7 +1185,10 @@ async fn failed_old_runtime_release_preserves_selection_without_loading_any_repl
         backend.get_preferences().active_asr_provider,
         "local-qwen3-mlx"
     );
-    assert_eq!(*runtime.operations.lock().unwrap(), ["release-lease:qwen3-asr-0.6b:2"]);
+    assert_eq!(
+        *runtime.operations.lock().unwrap(),
+        ["release-lease:qwen3-asr-0.6b:2"]
+    );
     std::fs::remove_dir_all(data_dir).unwrap();
 }
 
@@ -1343,7 +1357,10 @@ async fn committed_channel_changes_are_published_even_when_runtime_release_fails
         .await
         .unwrap_err();
     assert_eq!(error.code, BackendErrorCode::Platform);
-    assert_eq!(backend.active_provider(ProviderSlot::Asr).await.unwrap(), cloud);
+    assert_eq!(
+        backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+        cloud
+    );
     assert!(matches!(
         events.try_recv().unwrap().kind,
         BackendEventKind::CredentialsChanged(_)

@@ -1276,6 +1276,16 @@ export const zhTW: typeof zhCN = {
       cursorContextDesc:
         '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
+    localMigration: {
+      title: '本機設定遷移',
+      description:
+        '將所有可遷移的本機設定匯出為帶版本的遷移檔案，或在另一部 Android 裝置上還原。分享模式預設會去識別化；個人遷移只有在密碼保護下才能攜帶憑證。原生流程會在合併或取代前顯示來源、版本、類別與變更摘要。',
+      safetyNote:
+        '系統權限、OAuth 工作階段、裝置路徑與執行狀態不會遷移。匯入前會自動建立本機備份。',
+      open: '開啟本機遷移',
+      opening: '正在開啟…',
+      openFailed: '無法開啟本機遷移流程，請從設定頁重試。',
+    },
     codingConsole: {
       title: 'Claude 主控臺',
       desc: '偵測本機 Claude Code 與 MCP（computer use）狀態，並以護欄方式無頭執行一次 Claude、串流檢視輸出與用量。',

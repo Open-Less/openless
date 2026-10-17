@@ -1276,6 +1276,15 @@ export const zhCN = {
       cursorContextDesc:
         '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
     },
+    localMigration: {
+      title: '本地配置迁移',
+      description:
+        '将所有可迁移的本地配置导出为带版本的迁移文件，或在另一台 Android 设备上恢复。分享模式默认脱敏；个人迁移只有在密码保护下才可以携带凭据。原生流程会在合并或替换前展示来源、版本、类别和变更摘要。',
+      safetyNote: '系统权限、OAuth 会话、设备路径和运行时状态不会迁移。导入前会自动创建本地备份。',
+      open: '打开本地迁移',
+      opening: '正在打开…',
+      openFailed: '无法打开本地迁移流程，请从设置页重试。',
+    },
     codingConsole: {
       title: 'Claude 控制台',
       desc: '检测本机 Claude Code 与 MCP（computer use）状态，并护栏化地无头跑一次 Claude、流式查看输出与用量。',

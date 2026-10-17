@@ -498,7 +498,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           OPENLESS_UPDATE_TARGET: ${{ matrix.updater-target }}
           OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
-          OPENLESS_UPDATE_REPO: Open-Less/openless
+          OPENLESS_UPDATE_REPO: ${{ github.repository }}
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
           # On the beta channel output latest-{tgt}-{arch}-beta.json; stable keeps the old filename.
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}

@@ -17,6 +17,9 @@ export {
 // shared
 export { isTauri, invokeOrMock, getPlatformCapabilities } from './shared';
 
+// local migration
+export { openAndroidLocalMigration } from './local-migration';
+
 // settings
 export type { StartupSnapshot } from './settings';
 export {

@@ -144,6 +144,8 @@ pub struct ChannelRecord {
     pub enabled: bool,
     pub order: u32,
     pub active: bool,
+    #[serde(default)]
+    pub configuration: BTreeMap<String, String>,
 }
 
 impl ChannelRecord {

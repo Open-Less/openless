@@ -3096,11 +3096,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3127,11 +3123,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture

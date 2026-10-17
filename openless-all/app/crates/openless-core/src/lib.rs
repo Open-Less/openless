@@ -42,6 +42,7 @@ pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
 pub mod llm_protocol;
+pub mod local_migration_bundle;
 mod marketplace;
 pub mod model_store;
 pub mod net;

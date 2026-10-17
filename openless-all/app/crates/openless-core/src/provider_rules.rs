@@ -1597,7 +1597,14 @@ mod tests {
         assert_eq!(apple.validation_probe, ValidationProbe::AsrNativeSilence);
         assert!(apple.default_model.is_none());
         assert_eq!(apple.auth_requirement, AuthRequirement::None);
-        for provider in ["local-whisper", "local-qwen3", "sherpa-onnx-local", "experimental-textstream", "experimental-sensevoice", "experimental-embedding-gemma"] {
+        for provider in [
+            "local-whisper",
+            "local-qwen3",
+            "sherpa-onnx-local",
+            "experimental-textstream",
+            "experimental-sensevoice",
+            "experimental-embedding-gemma",
+        ] {
             assert_eq!(
                 provider_descriptor(ProviderKind::Asr, provider)
                     .unwrap()
