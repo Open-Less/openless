@@ -2066,11 +2066,13 @@ export const ko: typeof zhCN = {
         background: '백그라운드',
         keyboard: '키보드 표시 시',
         always: '항상',
+        never: '표시 안 함',
       },
       androidOverlayTriggerHint: {
         background: '단순',
         keyboard: '이 모드는 보류되었습니다. 기존 설정은 백그라운드로 되돌립니다.',
         always: '항상 표시',
+        never: '자동으로 표시되지 않으며 키보드는 계속 사용할 수 있습니다.',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '키보드 표시 감지는 보류되었습니다. 이후 오버레이 제스처로 대체합니다.',

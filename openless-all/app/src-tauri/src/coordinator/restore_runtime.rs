@@ -77,7 +77,8 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     crate::android::replace_android_overlay()
                 }
                 crate::types::AndroidOverlayTrigger::Background
-                | crate::types::AndroidOverlayTrigger::Keyboard => {
+                | crate::types::AndroidOverlayTrigger::Keyboard
+                | crate::types::AndroidOverlayTrigger::Never => {
                     crate::android::hide_android_overlay()
                 }
             }

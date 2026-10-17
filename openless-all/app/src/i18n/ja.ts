@@ -2081,11 +2081,13 @@ export const ja: typeof zhCN = {
         background: 'バックグラウンド',
         keyboard: 'キーボード表示時',
         always: '常時',
+        never: '表示しない',
       },
       androidOverlayTriggerHint: {
         background: 'シンプル',
         keyboard: 'このモードは保留中です。既存設定はバックグラウンドに戻します。',
         always: '常に表示',
+        never: '自動表示しません。キーボードは引き続き使用できます。',
       },
       androidOverlayTriggerDisabled: {
         keyboard:

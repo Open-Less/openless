@@ -2102,11 +2102,13 @@ export const en: typeof zhCN = {
         background: 'When app is backgrounded',
         keyboard: 'When keyboard appears',
         always: 'Always visible',
+        never: 'Never show',
       },
       androidOverlayTriggerHint: {
         background: 'Simple and battery-friendly; no overlay while typing in other apps.',
         keyboard: 'This mode is shelved. Existing settings are moved back to background.',
         always: 'Always available, but permanently on screen.',
+        never: 'Never appears automatically; the keyboard remains available.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:

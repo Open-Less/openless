@@ -1,7 +1,7 @@
 /** Android-specific preference and status types (mirrors Rust IPC payloads). */
 
 export type AndroidInsertStrategy = 'accessibility' | 'clipboard';
-export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
+export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always' | 'never';
 export type AndroidOverlayActivationMode = 'tap' | 'long_press';
 export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
 export type AndroidOverlayCancelSwipeDirection = 'up' | 'down';

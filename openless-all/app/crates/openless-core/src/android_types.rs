@@ -17,6 +17,7 @@ pub enum AndroidOverlayTrigger {
     Background,
     Keyboard,
     Always,
+    Never,
 }
 
 impl AndroidOverlayTrigger {
@@ -398,6 +399,56 @@ mod android_overlay_tests {
                 to: AndroidOverlayTrigger::Always,
             },
         );
+    }
+
+    #[test]
+    fn never_trigger_is_preserved_by_normalization_and_json() {
+        assert_eq!(
+            AndroidOverlayTrigger::Never.normalized(),
+            AndroidOverlayTrigger::Never,
+        );
+        assert_eq!(
+            serde_json::to_string(&AndroidOverlayTrigger::Never).unwrap(),
+            "\"never\"",
+        );
+        assert_eq!(
+            serde_json::from_str::<AndroidOverlayTrigger>("\"never\"").unwrap(),
+            AndroidOverlayTrigger::Never,
+        );
+    }
+
+    #[test]
+    fn default_overlay_trigger_remains_background() {
+        assert_eq!(
+            default_android_overlay_trigger(),
+            AndroidOverlayTrigger::Background,
+        );
+    }
+
+    #[test]
+    fn every_distinct_trigger_transition_is_classified() {
+        let triggers = [
+            AndroidOverlayTrigger::Background,
+            AndroidOverlayTrigger::Always,
+            AndroidOverlayTrigger::Never,
+        ];
+        for from in triggers {
+            for to in triggers {
+                let expected = if from == to {
+                    AndroidOverlaySettingsAction::None
+                } else {
+                    AndroidOverlaySettingsAction::Transition { from, to }
+                };
+                assert_eq!(
+                    classify_android_overlay_settings_change(
+                        &overlay_prefs(from, 72, AndroidOverlayActivationMode::Tap),
+                        &overlay_prefs(to, 72, AndroidOverlayActivationMode::Tap),
+                    ),
+                    expected,
+                    "unexpected transition from {from:?} to {to:?}",
+                );
+            }
+        }
     }
 }
 

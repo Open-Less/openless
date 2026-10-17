@@ -1983,11 +1983,13 @@ export const zhTW: typeof zhCN = {
         background: '退到背景',
         keyboard: '鍵盤彈出時',
         always: '常駐',
+        never: '永不顯示',
       },
       androidOverlayTriggerHint: {
         background: '省電',
         keyboard: '此模式已暫緩，既有設定會改回退到背景。',
         always: '一直佔屏',
+        never: '不會自動出現，鍵盤仍可正常使用。',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '「鍵盤彈出時」暫緩開放，後續將以懸浮窗手勢取代鍵盤偵測。',

@@ -1982,11 +1982,13 @@ export const zhCN = {
         background: '应用退到后台',
         keyboard: '弹出键盘时',
         always: '始终显示',
+        never: '从不显示',
       },
       androidOverlayTriggerHint: {
         background: '省电、实现简单；其他 App 输入时不会自动出现。',
         keyboard: '该模式已暂缓，历史配置会自动改为“应用退到后台”。',
         always: '入口始终可见，但会一直占屏。',
+        never: '永不自动出现，键盘仍可正常使用。',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '“弹出键盘时”暂缓开放，后续将以悬浮窗手势替代键盘检测。',

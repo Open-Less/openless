@@ -2138,6 +2138,7 @@ export const es: typeof zhCN = {
         background: 'Con la aplicación en segundo plano',
         keyboard: 'Cuando aparece el teclado',
         always: 'Siempre visible',
+        never: 'Nunca mostrar',
       },
       androidOverlayTriggerHint: {
         background:
@@ -2145,6 +2146,7 @@ export const es: typeof zhCN = {
         keyboard:
           'Este modo se ha retirado. Los ajustes existentes vuelven al modo de segundo plano.',
         always: 'Siempre disponible, pero permanece en pantalla.',
+        never: 'Nunca aparece automáticamente; el teclado sigue disponible.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:

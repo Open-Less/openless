@@ -2167,12 +2167,14 @@ export const fr: typeof zhCN = {
         background: 'Lorsque l’application est en arrière-plan',
         keyboard: 'À l’apparition du clavier',
         always: 'Toujours visible',
+        never: 'Ne jamais afficher',
       },
       androidOverlayTriggerHint: {
         background:
           'Simple et économe en batterie ; aucune fenêtre flottante pendant la saisie dans d’autres applications.',
         keyboard: 'Ce mode a été retiré. Les réglages existants repassent en mode arrière-plan.',
         always: 'Toujours disponible, mais reste affichée en permanence.',
+        never: 'N’apparaît jamais automatiquement ; le clavier reste utilisable.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
