@@ -698,6 +698,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "windows_composition_input",
+        key: "windowsCompositionInput",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "cursor_context_enabled",
         key: "cursorContextEnabled",
         class: PreferenceClass::Excluded,

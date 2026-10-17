@@ -2227,6 +2227,9 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
+      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
+      windowsCompositionInputDesc:
+        'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',

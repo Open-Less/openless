@@ -722,6 +722,17 @@ export function RecordingInputSection() {
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
+          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
+            <SettingRow
+              label={t('settings.advanced.windowsCompositionInputLabel')}
+              desc={t('settings.advanced.windowsCompositionInputDesc')}
+            >
+              <Toggle
+                on={!!prefs.windowsCompositionInput}
+                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
+              />
+            </SettingRow>
+          )}
         </Collapsible>
       )}
       {/* ─── Startup (collapsed) ──────────────────────────────────────────── */}

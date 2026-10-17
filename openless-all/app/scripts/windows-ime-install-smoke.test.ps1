@@ -21,6 +21,7 @@ foreach ($name in @('Join-ProcessArguments', 'Invoke-CheckedProcess')) {
 function Start-Process {
   param([string]$FilePath, [string]$ArgumentList, [switch]$Wait, [switch]$PassThru)
   if (-not $Wait -or -not $PassThru) { throw 'Helper must wait for the installer exit code' }
+  $script:CapturedArgumentLine = $ArgumentList
   [pscustomobject]@{ ExitCode = $script:TestExitCode }
 }
 
@@ -43,5 +44,14 @@ foreach ($case in $cases) {
   if ($threw -ne $case.ShouldThrow) {
     throw "Wrong result for exit code $($case.Code), allowed $($case.Allowed -join ',')"
   }
+}
+$script:TestExitCode = 2
+$script:CapturedArgumentLine = $null
+try {
+  Invoke-CheckedProcess -FilePath 'test-only.exe' -ArgumentList @('/S', '/AllUsers', '/LOG="C:\runner temp\openless.log"') -Label 'quoted NSIS log'
+} catch {
+}
+if ($script:CapturedArgumentLine -ne '/S /AllUsers /LOG="C:\runner temp\openless.log"') {
+  throw "NSIS log argument was not preserved as a native quoted switch: $script:CapturedArgumentLine"
 }
 Write-Host 'windows-ime-install-smoke.test.ps1 passed: six real-helper exit-code cases, no installation'

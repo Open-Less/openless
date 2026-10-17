@@ -2140,6 +2140,9 @@ export const ko: typeof zhCN = {
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
         'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
+      windowsCompositionInputLabel: '실시간 원문을 입력창에 표시 (Windows)',
+      windowsCompositionInputDesc:
+        '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',

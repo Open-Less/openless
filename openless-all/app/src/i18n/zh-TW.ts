@@ -2060,6 +2060,9 @@ export const zhTW: typeof zhCN = {
       streamingInsertHintMac: '臨時切到 ABC 輸入源，避免 CJK IME 攔截，會話結束後自動切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字元，繞過 TSF / IME，不切輸入法。',
       streamingInsertHintLinux: '透過 fcitx5 外掛提交文字；串流輸入使用 enigo + XTest 合成按鍵。',
+      windowsCompositionInputLabel: '即時原文顯示在輸入框（Windows）',
+      windowsCompositionInputDesc:
+        '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪貼簿',
       streamingInsertSaveClipboardHint:
         '插入成功後把最終文字寫入剪貼簿，方便 Cmd+V 再次貼上；關閉後流式過程不動剪貼簿。',

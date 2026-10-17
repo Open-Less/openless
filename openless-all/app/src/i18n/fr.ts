@@ -2256,6 +2256,9 @@ export const fr: typeof zhCN = {
         'SendInput Unicode écrit directement, sans passer par TSF / IME et sans changer de méthode de saisie.',
       streamingInsertHintLinux:
         'Utilise le complément fcitx5 pour envoyer le texte ; l’insertion progressive simule les touches avec enigo + XTest.',
+      windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ (Windows)',
+      windowsCompositionInputDesc:
+        "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
       streamingInsertSaveClipboardHint:
         'Après une insertion réussie, copie le texte final dans le presse-papiers pour pouvoir le recoller avec Cmd+V. Désactivé : le presse-papiers n’est jamais modifié.',

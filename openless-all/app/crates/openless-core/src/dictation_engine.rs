@@ -761,8 +761,17 @@ impl DictationEngine for PipelineDictationEngine {
                 }),
             )?;
             // Issue #1032: short transcripts skip polish (user-configured threshold).
-            let uses_polisher = context.uses_llm_polisher()
-                && !context.skips_polish_for_short_text(&transcript.text);
+            let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
+            let uses_polisher = context.uses_llm_polisher() && !skips_polish_for_short_text;
+            log::info!(
+                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?}",
+                session_id,
+                uses_polisher,
+                skips_polish_for_short_text,
+                context.insertion.composition_input,
+                context.polish.translation_active,
+                context.polish.mode,
+            );
             let (polish_output, polish_failed, polish_ms) = if uses_polisher {
                 publish_progress(
                     &session,
@@ -1741,6 +1750,12 @@ struct TranscriptProgressForwarder {
 
 impl TextStreamSink for TranscriptProgressForwarder {
     fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
+        log::info!(
+            "[transcript] partial emitted session={} offset={} chars={}",
+            self.session_id,
+            chunk.offset,
+            chunk.text.chars().count(),
+        );
         self.progress.publish(
             self.session_id,
             EngineProgress::TranscriptDelta(TranscriptDelta {
@@ -2219,6 +2234,101 @@ mod tests {
             polish_calls,
             polish_contexts,
         }
+    }
+
+    struct GatedPolisher {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl TextPolisher for GatedPolisher {
+        fn polish(
+            &self,
+            _session_id: SessionId,
+            _context: Arc<DictationContext>,
+            _raw_text: String,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<crate::ports::PolishOutput, BackendError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let entered = Arc::clone(&self.entered);
+            let release = Arc::clone(&self.release);
+            Box::pin(async move {
+                entered.notify_one();
+                release.notified().await;
+                Ok(crate::ports::PolishOutput::text("polished final"))
+            })
+        }
+
+        fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_finish_waits_for_polish_and_returns_distinct_final_text() {
+        let polish_entered = Arc::new(tokio::sync::Notify::new());
+        let polish_release = Arc::new(tokio::sync::Notify::new());
+        let polish_calls = Arc::new(AtomicUsize::new(0));
+        let pcm = Arc::new(Mutex::new(Vec::new()));
+        let recorder_stops = Arc::new(AtomicUsize::new(0));
+        let archive_discards = Arc::new(AtomicUsize::new(0));
+        let transcriber = Arc::new(FixtureTranscriber {
+            session: Arc::new(FixtureTranscriptionSession {
+                pcm,
+                cancels: Arc::new(AtomicUsize::new(0)),
+                finish_entered: None,
+                finish_release: None,
+            }),
+            starts: Arc::new(AtomicUsize::new(0)),
+        });
+        let engine = Arc::new(PipelineDictationEngine::new(
+            Arc::new(FixtureRecorder {
+                stops: recorder_stops,
+                archive: Arc::new(FixtureArchive {
+                    available: AtomicBool::new(true),
+                    discards: archive_discards,
+                    pcm: vec![1, 0, 2, 0],
+                }),
+                fail: false,
+            }),
+            transcriber,
+            Arc::new(GatedPolisher {
+                entered: Arc::clone(&polish_entered),
+                release: Arc::clone(&polish_release),
+                calls: Arc::clone(&polish_calls),
+            }),
+        ));
+        let progress = Arc::new(RecordingProgress::default());
+        let session_id = SessionId::new();
+        let mut context = (*raw_dictation_context()).clone();
+        context.polish.mode = crate::types::PolishMode::Formal;
+        context.polish.style_system_prompt =
+            crate::style_packs::default_style_system_prompt_for_mode(
+                crate::types::PolishMode::Formal,
+            );
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
+
+        let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+        let finishing = Arc::clone(&engine);
+        tokio::spawn(async move {
+            let _ = result_tx.send(finishing.finish(session_id, progress).await);
+        });
+        polish_entered.notified().await;
+        assert_eq!(polish_calls.load(Ordering::Acquire), 1);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut result_rx)
+                .await
+                .is_err()
+        );
+
+        polish_release.notify_one();
+        let result = result_rx.await.expect("finish task must return").unwrap();
+        assert_eq!(result.raw_text, "raw text");
+        assert_eq!(result.polished_text, "polished final");
     }
 
     #[tokio::test]
@@ -3096,11 +3206,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3127,11 +3233,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture

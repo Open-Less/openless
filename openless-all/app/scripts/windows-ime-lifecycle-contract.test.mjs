@@ -7,7 +7,15 @@ const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const imeRoot = join(appRoot, 'windows-ime', 'src');
 const textService = readFileSync(join(imeRoot, 'text_service.cpp'), 'utf8');
 const editSession = readFileSync(join(imeRoot, 'edit_session.cpp'), 'utf8');
+const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'utf8');
+const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
+const ipc = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_ipc.rs'), 'utf8');
+const tauriLib = readFileSync(join(appRoot, 'src-tauri', 'src', 'lib.rs'), 'utf8');
+const windowsSingleInstance = readFileSync(
+  join(appRoot, 'src-tauri', 'src', 'windows_single_instance.rs'),
+  'utf8',
+);
 
 // The IME runs inside every host process. It must not own threads or block the
 // host UI thread: joining a worker from Deactivate deadlocked hosts whenever
@@ -67,11 +75,19 @@ assert.match(
 const sharedConstants = [
   ['kCopyDataSubmit', 'IME_COPYDATA_SUBMIT'],
   ['kCopyDataQuery', 'IME_COPYDATA_QUERY'],
+  ['kCopyDataUpdate', 'IME_COPYDATA_UPDATE'],
+  ['kCopyDataFinish', 'IME_COPYDATA_FINISH'],
+  ['kCopyDataCancel', 'IME_COPYDATA_CANCEL'],
+  ['kCopyDataVersion', 'IME_COPYDATA_VERSION'],
   ['kStatusAccepted', 'IME_STATUS_ACCEPTED'],
   ['kStatusPending', 'IME_STATUS_PENDING'],
   ['kStatusCommitted', 'IME_STATUS_COMMITTED'],
   ['kStatusUnknownToken', 'IME_STATUS_UNKNOWN_TOKEN'],
   ['kStatusBadRequest', 'IME_STATUS_BAD_REQUEST'],
+  ['kStatusNotDispatched', 'IME_STATUS_NOT_DISPATCHED'],
+  ['kStatusCompositionConflict', 'IME_STATUS_COMPOSITION_CONFLICT'],
+  ['kStatusCompositionRecoveryRequired', 'IME_STATUS_COMPOSITION_RECOVERY_REQUIRED'],
+  ['kStatusProtocolVersion', 'IME_STATUS_PROTOCOL_VERSION'],
 ];
 for (const [nativeName, rustName] of sharedConstants) {
   const nativeValue = textService.match(new RegExp(`${nativeName} = (0x[0-9A-Fa-f]+)`));
@@ -92,6 +108,78 @@ assert.ok(
 );
 
 assert.match(
+  ipc,
+  /option_env!\("OPENLESS_BUILD_ID"\)/,
+  'TSF diagnostics should read the immutable build provenance injected by CI',
+);
+assert.ok(
+  ipc.includes('\\"build_id\\":\\"{}\\"'),
+  'P1/P2/P3 diagnostics should carry the bounded artifact build identity',
+);
+assert.match(
+  ipc,
+  /diagnostic_build_id\(\)/,
+  'P1/P2/P3 diagnostics should sanitize the artifact build identity',
+);
+assert.ok(
+  ipc.includes('\\"protocol_revision\\":\\"0x{:08X}\\"'),
+  'P1/P2/P3 diagnostics should record the expected protocol revision',
+);
+assert.match(
+  ipc,
+  /IME_STATUS_PROTOCOL_VERSION/,
+  'P1/P2/P3 diagnostics should use the current protocol revision constant',
+);
+
+assert.match(
+  textService,
+  /kCopyDataVersion[\s\S]*kStatusProtocolVersion/,
+  'IME should answer the protocol probe so stale in-process DLLs are diagnosable',
+);
+
+assert.match(
+  tauriLib,
+  /#\[cfg\(target_os = "windows"\)\]\s*let builder = builder\.plugin\(windows_single_instance::init\(single_instance_callback\)\)/,
+  'Windows must use the path-scoped single-instance broker',
+);
+assert.match(
+  tauriLib,
+  /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let builder = builder\.plugin\(tauri_plugin_single_instance::init\(single_instance_callback\)\)/,
+  'Non-Windows desktop platforms must retain the upstream single-instance broker',
+);
+assert.match(
+  windowsSingleInstance,
+  /current_exe\(\)[\s\S]*canonicalize\(\)[\s\S]*instance_key_for_path\(&executable\)/,
+  'Windows single-instance identity must be derived from the canonical executable path',
+);
+assert.match(
+  windowsSingleInstance,
+  /fn instance_key_for_path[\s\S]*Sha256/,
+  'Windows single-instance identity must use a bounded hash',
+);
+assert.match(
+  windowsSingleInstance,
+  /executable_instance_key\(\)[\s\S]*CreateMutexW[\s\S]*FindWindowW/,
+  'Windows single-instance broker must use the path-scoped identity for its mutex and window',
+);
+
+assert.match(
+  ipc,
+  /fn ordered_ime_windows[\s\S]*window\.process_id == target\.process_id[\s\S]*window\.thread_id == target\.thread_id[\s\S]*allow_same_process_fallback/,
+  'Rust discovery should order exact-thread candidates before recovery candidates',
+);
+assert.match(
+  ipc,
+  /select_ime_window_with_probe[\s\S]*verify_protocol_version\(/,
+  'Rust discovery should probe each eligible message window before selecting it',
+);
+assert.match(
+  ipc,
+  /let window = find_ime_window_with_retry[\s\S]*send_copy_data\([\s\S]*request\.op\.copydata_tag/,
+  'Rust should complete protocol discovery before sending a real submit payload',
+);
+
+assert.match(
   editSession,
   /InterlockedIncrement\(&g_object_count\)/,
   'IME edit sessions should keep the COM DLL loaded while TSF holds them',
@@ -100,4 +188,143 @@ assert.match(
   editSession,
   /InterlockedDecrement\(&g_object_count\)/,
   'IME edit sessions should release the COM DLL lifetime count when destroyed',
+);
+
+// Live transcript composition: TSF owns the composition, so the IME must start,
+// update, and end it inside edit sessions, underline it, and learn when TSF ends it.
+assert.match(
+  editSession,
+  /HRESULT OpenLessEditSession::GetSelectionRange[\s\S]*?InsertTextAtSelection\([\s\S]*?TF_IAS_QUERYONLY/,
+  'IME should obtain a host-adjusted insertion range without modifying the document',
+);
+assert.match(
+  editSession,
+  /UpdateComposition[\s\S]*?SetText\([\s\S]*?Collapse\(edit_cookie, TF_ANCHOR_END\)[\s\S]*?context_->SetSelection/,
+  'IME composition updates should keep the host selection at the end of the live text',
+);
+assert.match(
+  editSession,
+  /context_composition->StartComposition\(/,
+  'IME should open the live transcript as a TSF composition',
+);
+assert.match(
+  editSession,
+  /composition_->composition->EndComposition\(/,
+  'IME should end the composition when the final text replaces it',
+);
+assert.match(
+  editSession,
+  /ApplyOpenLessInputDisplayAttribute\(/,
+  'IME composition text should carry the OpenLess input display attribute (underline)',
+);
+assert.match(
+  displayAttribute,
+  /TF_LS_SOLID[\s\S]*TF_ATTR_INPUT/,
+  'IME display attribute should paint a solid input underline',
+);
+assert.match(
+  displayAttribute,
+  /InterlockedIncrement\(&g_object_count\)/,
+  'IME display attribute COM objects should keep the DLL alive while hosts hold them',
+);
+assert.match(
+  textService,
+  /IID_ITfDisplayAttributeProvider/,
+  'IME should expose the display attribute provider for composition underline painting',
+);
+assert.match(
+  registry,
+  /GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER/,
+  'IME registration should advertise the display attribute provider category',
+);
+assert.match(
+  textService,
+  /STDMETHODIMP OpenLessTextService::OnCompositionTerminated\(/,
+  'IME should learn when TSF ends the composition',
+);
+assert.match(
+  editSession,
+  /terminated_text_captured[\s\S]*current_text[\s\S]*!= composition_->terminated_text/,
+  'IME must preserve user edits made after TSF terminates a composition',
+);
+assert.match(
+  textService,
+  /ReadOpenLessRangeText\(edit_cookie, composition_->terminated_range[\s\S]*terminated_text/,
+  'IME must snapshot the terminated composition text before finalization',
+);
+assert.match(
+  textService,
+  /OnCompositionTerminated[\s\S]*terminated_text_captured = true/,
+  'IME must record whether the terminated composition snapshot was readable',
+);
+assert.match(
+  editSession,
+  /if \(!composition_->terminated_text_captured\)[\s\S]*ReadOpenLessRangeText\(edit_cookie, composition_->terminated_range[\s\S]*current_text != composition_->terminated_text[\s\S]*composition_->terminated_range->SetText\(/,
+  'IME must verify terminated-range ownership before replacing it with final text',
+);
+assert.match(
+  editSession,
+  /else if \(composition_->terminated && composition_->terminated_range != nullptr\)[\s\S]*?else \{[\s\S]*?composition_->Reset\(\);[\s\S]*?return HRESULT_FROM_WIN32\(ERROR_OPERATION_ABORTED\);/,
+  'IME cancellation must release latched native state when TSF terminates without a usable range',
+);
+assert.match(
+  editSession,
+  /if \(!composition_->terminated_text_captured\)[\s\S]*?return kStatusCompositionConflict;/,
+  'IME must reject finalization when the terminated-range ownership snapshot is unavailable',
+);
+assert.match(
+  editSession,
+  /current_text != composition_->terminated_text[\s\S]*?return kStatusCompositionConflict;/,
+  'IME must reject finalization when the user edits a terminated composition range',
+);
+
+assert.match(
+  textService,
+  /kCopyDataUpdate[\s\S]*AcceptSubmit\(copy_data, OpenLessEditOp::kUpdate\)/,
+  'IME should route composition updates through the submit pipeline',
+);
+assert.match(
+  textService,
+  /submit_composition_owner_[\s\S]*CommitTextOnOwnerThread\([\s\S]*submit_composition_owner_/,
+  'IME should carry a stable composition owner across submit requests',
+);
+assert.match(
+  editSession,
+  /owner_token[\s\S]*composition_owner_/,
+  'IME edit sessions should associate composition state with its insertion owner',
+);
+assert.match(
+  textService,
+  /submit_composition_process_id_[\s\S]*CommitTextOnOwnerThread\([\s\S]*submit_composition_process_id_/,
+  'IME should carry the sender process instance for restart recovery',
+);
+assert.match(
+  textService,
+  /kCommitHeaderBytes[\s\S]*composition_process_id[\s\S]*target_window/,
+  'plain commits should carry sender process and captured focus for restart recovery',
+);
+assert.match(
+  protocol,
+  /encode_commit_submit_payload[\s\S]*sender_process[\s\S]*target_window/,
+  'Rust should encode plain-commit recovery metadata',
+);
+assert.match(
+  textService,
+  /restart_recovery[\s\S]*kStatusCompositionRecoveryRequired/,
+  'IME should require an explicit recovery cancel before restarting a composition',
+);
+assert.match(
+  textService,
+  /update_failed_before_composition[\s\S]*dispatched = false/,
+  'IME should classify pre-StartComposition update failures as not dispatched',
+);
+assert.match(
+  textService,
+  /op == OpenLessEditOp::kCancel[\s\S]*op == OpenLessEditOp::kFinish[\s\S]*accepted async update[\s\S]*dispatched = false/,
+  'IME cleanup should clear a latch when async composition never started',
+);
+assert.doesNotMatch(
+  textService,
+  /ITfComposition[^\n]*\bWait/,
+  'IME composition handling must not wait on the host',
 );

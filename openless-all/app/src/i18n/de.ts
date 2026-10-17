@@ -2246,6 +2246,9 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
+      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
+      windowsCompositionInputDesc:
+        'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',

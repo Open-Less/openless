@@ -2186,6 +2186,9 @@ export const en: typeof zhCN = {
         'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
       streamingInsertHintLinux:
         'Uses fcitx5 plugin for text submission; streaming insertion uses enigo + XTest for keystroke synthesis.',
+      windowsCompositionInputLabel: 'Show live transcript in the input box (Windows)',
+      windowsCompositionInputDesc:
+        'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
       streamingInsertSaveClipboardHint:
         'After a successful insert, write the final text to the clipboard so Cmd+V can paste it again. Off = clipboard is never touched.',

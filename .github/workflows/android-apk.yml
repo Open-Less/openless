@@ -16,6 +16,8 @@ name: Android APK (debug)
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*-tauri'
   workflow_dispatch:

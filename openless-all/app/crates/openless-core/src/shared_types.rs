@@ -774,6 +774,11 @@ pub struct UserPreferences {
     /// user habits).
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
+    /// Windows TSF only: show the live ASR transcript in the target document as an
+    /// underlined composition while recording, then replace it with the final text.
+    /// Off by default; with it off, the target only receives the final text.
+    #[serde(default)]
+    pub windows_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -1135,6 +1140,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_true")]
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
+    windows_composition_input: bool,
+    #[serde(default)]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
@@ -1322,6 +1329,7 @@ impl Default for UserPreferencesWire {
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
+            windows_composition_input: prefs.windows_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
@@ -1539,6 +1547,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
+            windows_composition_input: wire.windows_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
@@ -1904,6 +1913,7 @@ impl Default for UserPreferences {
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
+            windows_composition_input: false,
             cursor_context_enabled: false,
             vocabulary_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),

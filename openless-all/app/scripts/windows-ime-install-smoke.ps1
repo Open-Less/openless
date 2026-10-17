@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("nsis", "msi")]
   [string]$InstallerKind,
-  [switch]$SkipUninstall
+  [switch]$SkipUninstall,
+  [string]$InstallerLogPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,10 +44,10 @@ function Join-ProcessArguments {
       '""'
     } elseif ($argument -notmatch '[\s"]') {
       $argument
+    } elseif ($argument -notmatch '"') {
+      '"' + $argument + '"'
     } else {
-      $escaped = $argument -replace '(\\*)"', '$1$1\"'
-      $escaped = $escaped -replace '(\\+)$', '$1$1'
-      '"' + $escaped + '"'
+      $argument
     }
   }
   return ($quoted -join " ")
@@ -144,13 +145,16 @@ function Assert-OpenLessImeInstalled {
   }
 
   $installRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $x64Dll))
-  $expectedX64 = Join-Path $installRoot "windows-ime\x64\OpenLessIme.dll"
-  $expectedX86 = Join-Path $installRoot "windows-ime\x86\OpenLessIme.dll"
-  if ($x64Dll -ne $expectedX64) {
-    throw "x64 COM DLL path points outside the installed IME directory. Expected '$expectedX64', got '$x64Dll'"
-  }
-  if ($x86Dll -ne $expectedX86) {
-    throw "x86 COM DLL path points outside the installed IME directory. Expected '$expectedX86', got '$x86Dll'"
+  $expectedX64Directory = Join-Path $installRoot "windows-ime\x64"
+  $expectedX86Directory = Join-Path $installRoot "windows-ime\x86"
+  foreach ($registered in @(
+      @{ Path = $x64Dll; Directory = $expectedX64Directory; Label = "x64" },
+      @{ Path = $x86Dll; Directory = $expectedX86Directory; Label = "x86" }
+    )) {
+    if ((Split-Path -Parent $registered.Path) -ne $registered.Directory -or
+        (Split-Path -Leaf $registered.Path) -notmatch '^OpenLessIme-.+\.dll$') {
+      throw "$($registered.Label) COM DLL path is not a versioned installed IME DLL: $($registered.Path)"
+    }
   }
   if (-not (Test-Path -LiteralPath (Join-Path $installRoot "openless.exe") -PathType Leaf)) {
     throw "Installed OpenLess executable not found under $installRoot"
@@ -192,7 +196,59 @@ if (-not (Test-IsAdministrator)) {
 
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ($InstallerKind -eq "nsis") {
-  Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList @("/S", "/AllUsers") -Label "NSIS install"
+  $nsisArguments = @("/S", "/AllUsers")
+  $logDirectory = $null
+  if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath)) {
+    $logDirectory = Split-Path -Parent $InstallerLogPath
+    if (-not [string]::IsNullOrWhiteSpace($logDirectory)) {
+      New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    }
+    $nsisArguments += "/LOG=`"$InstallerLogPath`""
+  }
+  try {
+    Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList $nsisArguments -Label "NSIS install"
+  } catch {
+    if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath)) {
+      $logPresent = Test-Path -LiteralPath $InstallerLogPath -PathType Leaf
+      Write-Host "[diagnostic] NSIS log path present: $logPresent"
+      if ($logPresent) {
+        Write-Host "[diagnostic] NSIS installer log (last 200 lines):"
+        Get-Content -LiteralPath $InstallerLogPath -Tail 200 | ForEach-Object { Write-Host $_ }
+      } else {
+        $logDirectories = @(
+          $logDirectory,
+          $env:RUNNER_TEMP,
+          $env:TEMP,
+          $env:TMP,
+          (Split-Path -Parent $InstallerPath)
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        foreach ($directory in $logDirectories) {
+          if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            continue
+          }
+          $candidates = @(
+            Get-ChildItem -LiteralPath $directory -Filter '*.log' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 20
+          )
+          Write-Host "[diagnostic] NSIS log candidates in ${directory}: $($candidates.Count)"
+          foreach ($candidate in $candidates) {
+            Write-Host "[diagnostic] candidate=$($candidate.Name) bytes=$($candidate.Length)"
+          }
+          $markers = @(
+            Get-ChildItem -LiteralPath $directory -Filter 'openless-ime-install-diagnostic.ndjson' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          )
+          foreach ($marker in $markers) {
+            Write-Host "[diagnostic] NSIS stage markers (last 200 lines):"
+            Get-Content -LiteralPath $marker.FullName -Tail 200 | ForEach-Object { Write-Host $_ }
+          }
+        }
+      }
+    }
+    throw
+  }
 } else {
   Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/i", $InstallerPath, "/qn", "/norestart") -Label "MSI install" -SuccessExitCodes @(0, 3010)
 }

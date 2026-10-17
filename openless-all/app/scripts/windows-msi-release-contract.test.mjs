@@ -8,11 +8,28 @@ import yaml from 'js-yaml';
 const workflow = yaml.load(
   readFileSync(new URL('../../../.github/workflows/release-tauri.yml', import.meta.url), 'utf8'),
 );
+assert.deepEqual(workflow.on.push.branches, ['**']);
+assert.deepEqual(workflow.on.push.tags, ['v*-tauri']);
 assert.ok(workflow.on.workflow_dispatch.inputs.platform.options.includes('windows'));
 assert.equal(workflow.on.workflow_dispatch.inputs.release_tag.default, '');
 const job = workflow.jobs.build;
 assert.match(job.strategy.matrix.include, /inputs.platform == 'windows'/);
 const steps = job.steps;
+const provenance = steps.find((s) => s.name === 'Export source build provenance');
+assert.ok(provenance, 'Windows release must bind the build to the checked-out source SHA');
+assert.match(provenance.run, /git rev-parse HEAD/);
+assert.match(provenance.run, /OPENLESS_BUILD_ID=\$source_sha/);
+const manifest = steps.find((s) => s.name === 'Write Windows artifact provenance');
+assert.ok(manifest, 'Windows artifact must include a provenance manifest');
+assert.match(manifest.run, /openless\.artifact-provenance\.v1/);
+assert.match(manifest.run, /source_sha/);
+assert.match(manifest.run, /protocol_revision/);
+const windowsUpload = steps.find((s) => s.name === 'Upload Windows artifacts');
+assert.match(
+  windowsUpload.with.path,
+  /provenance\/openless-provenance\.json/,
+  'Windows artifact must publish the provenance manifest beside installers',
+);
 const checkout = steps.find((s) => s.uses === 'actions/checkout@v4');
 assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.ref }}');
 const guard = steps.find((s) => s.name === 'Validate targeted draft release repair');
@@ -71,6 +88,11 @@ assert.equal(smokeTooling.with['sparse-checkout'], 'openless-all/app/scripts/win
 assert.equal(smokeTooling.with['persist-credentials'], false);
 const smoke = steps.find((s) => s.name === 'Verify Windows installers register TSF IME');
 assert.match(smoke.run, /-File \$smokeScript/);
+assert.match(
+  smoke.run,
+  /-InstallerLogPath \$nsisLog/,
+  'Windows smoke should collect the NSIS installer log when silent install fails',
+);
 assert.ok(steps.indexOf(smokeTooling) < steps.indexOf(smoke));
 assert.equal(smoke.if, "matrix.platform == 'windows-latest'");
 assert.match(smoke.run, /DisableAutomaticApplicationShutdown/);
@@ -83,6 +105,29 @@ for (const kind of ['nsis', 'msi']) {
 }
 assert.doesNotMatch(smoke.run, /continue-on-error|SkipUninstall|exit 0/);
 const smokeSource = readFileSync(new URL('windows-ime-install-smoke.ps1', import.meta.url), 'utf8');
+const wixSource = readFileSync(new URL('../src-tauri/wix/openless-ime.wxs', import.meta.url), 'utf8');
+assert.match(
+  wixSource,
+  /Custom Action="UnregisterOpenLessImeX86"[\s\S]*?CDATA\[Installed\]/,
+  'MSI must unregister the x86 TSF DLL during uninstall as well as upgrade',
+);
+assert.match(
+  wixSource,
+  /Custom Action="UnregisterOpenLessImeX64"[\s\S]*?CDATA\[Installed\]/,
+  'MSI must unregister the x64 TSF DLL during uninstall as well as upgrade',
+);
+assert.doesNotMatch(
+  wixSource,
+  /UnregisterOpenLessIme(?:X86|X64)[\s\S]*?CDATA\[Installed AND NOT REMOVE\]/,
+  'MSI uninstall must not skip TSF registration cleanup when REMOVE=ALL',
+);
+assert.match(smokeSource, /\[string\]\$InstallerLogPath/);
+assert.match(smokeSource, /\/LOG=`"\$InstallerLogPath`"/);
+assert.match(smokeSource, /\[diagnostic\] NSIS log path present:/);
+assert.match(smokeSource, /Get-Content -LiteralPath \$InstallerLogPath -Tail 200/);
+assert.match(smokeSource, /Get-ChildItem -LiteralPath \$directory -Filter 'openless-ime-install-diagnostic\.ndjson'/);
+assert.match(smokeSource, /\[diagnostic\] NSIS stage markers/);
+assert.match(smokeSource, /Get-Content -LiteralPath \$marker\.FullName -Tail 200/);
 assert.match(smokeSource, /\[int\[\]\]\$SuccessExitCodes = @\(0\)/);
 assert.match(smokeSource, /\$process.ExitCode -notin \$SuccessExitCodes/);
 assert.match(smokeSource, /-Label "MSI install" -SuccessExitCodes @\(0, 3010\)/);

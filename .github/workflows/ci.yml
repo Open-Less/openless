@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [main, beta]
+    branches: ['**']
   pull_request:
     branches: [main, beta]
   workflow_dispatch:

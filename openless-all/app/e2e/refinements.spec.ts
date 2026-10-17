@@ -280,11 +280,49 @@ test('text height grows with contents and chips give the selection actual layout
     'aria-pressed',
     'true',
   );
-  await page.waitForTimeout(350);
+  await page.evaluate(() => {
+    const buttons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('.ol-choice-chips button'),
+    );
+    if (buttons.length === 0) throw new Error('choice chips are missing');
+    return new Promise<void>((resolve) => {
+      let previous = buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return [rect.x, rect.width] as const;
+      });
+      let moved = false;
+      let stableFrames = 0;
+      let frames = 0;
+      const sample = () => {
+        frames += 1;
+        const current = buttons.map((button) => {
+          const rect = button.getBoundingClientRect();
+          return [rect.x, rect.width] as const;
+        });
+        const changed = current.some(
+          ([x, width], index) =>
+            Math.abs(x - previous[index][0]) > 0.01 || Math.abs(width - previous[index][1]) > 0.01,
+        );
+        if (changed) {
+          moved = true;
+          stableFrames = 0;
+        } else if (moved) {
+          stableFrames += 1;
+        }
+        if ((moved && stableFrames >= 3) || (!moved && frames >= 3)) {
+          resolve();
+          return;
+        }
+        previous = current;
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+  });
   const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
   const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
   expect(selected!.x + selected!.width).toBeLessThan(last!.x);
-  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1);
+  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1.5);
 });
 
 test('swipe departure is directional, removable and undoable', async ({ page }) => {

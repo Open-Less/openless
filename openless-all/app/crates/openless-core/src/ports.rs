@@ -721,6 +721,18 @@ pub trait TextInsertionSession: Send + Sync {
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>>;
+    /// Shows the transcript so far as an in-place composition (underlined, not yet
+    /// committed) in the target document. Each call replaces the previous one; the
+    /// final text still arrives through `finish`, which replaces the composition.
+    fn update_composition(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        let _ = text;
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "composition display is unavailable on this platform",
+            ))
+        })
+    }
     fn copy(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>>;
     fn finish(&self, final_text: String)
         -> BoxFuture<'static, Result<InsertOutcome, BackendError>>;

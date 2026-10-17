@@ -110,6 +110,8 @@ mod unicode_keystroke;
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
 #[cfg(target_os = "windows")]
+mod windows_single_instance;
+#[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
@@ -686,6 +688,30 @@ macro_rules! app_invoke_handler_mobile {
 }
 
 #[cfg(not(mobile))]
+fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _cwd: String) {
+    if let Some(intent) = cli::parse_cli_intent(&argv) {
+        log::info!(
+            "[single-instance] another instance launched with intent={intent:?}, dispatching"
+        );
+        dispatch_cli_intent(app, intent);
+        return;
+    }
+    if let Some(coordinator) = app
+        .try_state::<Arc<coordinator::Coordinator>>()
+        .map(|state| Arc::clone(&*state))
+    {
+        if coordinator.startup_error().is_none()
+            && coordinator.backend().get_preferences().start_minimized
+        {
+            log::info!("[single-instance] start_minimized=true → skipping show on relaunch");
+            return;
+        }
+    }
+    log::info!("[single-instance] another instance launched, focusing existing main window");
+    show_main_window(app);
+}
+
+#[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
     init_file_logger();
@@ -708,44 +734,11 @@ fn run_desktop() {
     // this plugin registers; the plugin is macOS-only.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(windows_single_instance::init(single_instance_callback));
+    #[cfg(not(target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(single_instance_callback));
     builder
-        // Single-instance lock: the second process exits immediately and forwards the
-        // activation signal to the running instance's main window. Otherwise two OpenLess
-        // copies (e.g. /Applications/ + dev build) each grab the global hotkey, so one key
-        // press runs the pipeline in both processes and text gets inserted twice. See issue #50.
-        //
-        // 第二个进程的 argv 还会转发 CLI 意图给主实例 coordinator；
-        // Linux 桌面快捷键由 egui Host 处理。详见 issue #420 / `cli.rs`。
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(intent) = cli::parse_cli_intent(&argv) {
-                log::info!(
-                    "[single-instance] another instance launched with intent={intent:?}, dispatching"
-                );
-                dispatch_cli_intent(app, intent);
-                return;
-            }
-            // Silent-start mode: a second launch (Win11 "reopen apps after sign-in",
-            // autostart double-trigger, or the user clicking the icon again) must not pop
-            // the main window either, otherwise start_minimized=true is defeated entirely
-            // on Win11. Users open the main window via the tray menu / tray left-click.
-            // issue #468.
-            if let Some(coordinator) = app
-                .try_state::<Arc<coordinator::Coordinator>>()
-                .map(|s| Arc::clone(&*s))
-            {
-                if coordinator.startup_error().is_none()
-                    && coordinator.backend().get_preferences().start_minimized {
-                    log::info!(
-                        "[single-instance] start_minimized=true → skipping show on relaunch"
-                    );
-                    return;
-                }
-            }
-            log::info!(
-                "[single-instance] another instance launched, focusing existing main window"
-            );
-            show_main_window(app);
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())

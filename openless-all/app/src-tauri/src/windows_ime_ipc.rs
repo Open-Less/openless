@@ -3,8 +3,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::windows_ime_protocol::{
-    is_failed_hresult, ImeSubmitStatus, IME_STATUS_ACCEPTED, IME_STATUS_BAD_REQUEST,
-    IME_STATUS_COMMITTED, IME_STATUS_PENDING,
+    is_failed_hresult, ImeSubmitOp, ImeSubmitStatus, IME_STATUS_ACCEPTED, IME_STATUS_BAD_REQUEST,
+    IME_STATUS_COMMITTED, IME_STATUS_COMPOSITION_CONFLICT,
+    IME_STATUS_COMPOSITION_RECOVERY_REQUIRED, IME_STATUS_NOT_DISPATCHED, IME_STATUS_PENDING,
+    IME_STATUS_PROTOCOL_VERSION,
 };
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
@@ -22,6 +24,45 @@ const IME_WINDOW_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 const HRESULT_TIMEOUT: u32 = 0x8007_05B4;
 const HRESULT_CANCELLED: u32 = 0x8007_04C7;
+
+#[cfg(target_os = "windows")]
+fn diagnostic_build_id() -> &'static str {
+    let value = option_env!("OPENLESS_BUILD_ID").unwrap_or("unbound");
+    if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        value
+    } else {
+        "unbound"
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn emit_tsf_diagnostic_probe(
+    probe_id: &str,
+    hypothesis_ids: &str,
+    session_id: &str,
+    event: &str,
+    outcome: &str,
+    safe_fields: String,
+) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    log::info!(
+        target: "diagnosing-bugs",
+        "{{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"{}\",\"run_id\":\"tsf-runtime-{}\",\"build_id\":\"{}\",\"protocol_revision\":\"0x{:08X}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":{}}}",
+        session_id,
+        std::process::id(),
+        diagnostic_build_id(),
+        IME_STATUS_PROTOCOL_VERSION,
+        probe_id,
+        hypothesis_ids,
+        event,
+        outcome,
+        safe_fields,
+        ts,
+    );
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeIpcError {
@@ -68,7 +109,8 @@ fn classify_submit_reply(reply: u32) -> WindowsImeIpcResult<()> {
                 .to_string(),
         )),
         IME_STATUS_BAD_REQUEST => Err(WindowsImeIpcError::Protocol(
-            "IME rejected the submit payload".to_string(),
+            "IME rejected the submit payload; the target process may still have an older OpenLessIme.dll loaded; restart the target app after updating OpenLess"
+                .to_string(),
         )),
         code if is_failed_hresult(code) => Err(WindowsImeIpcError::Io(format!(
             "IME could not queue the submit: hresult:0x{code:08X}"
@@ -86,6 +128,11 @@ fn classify_query_reply(reply: u32) -> WindowsImeIpcResult<Option<ImeSubmitStatu
     match reply {
         IME_STATUS_PENDING => Ok(None),
         IME_STATUS_COMMITTED => Ok(Some(ImeSubmitStatus::Committed)),
+        IME_STATUS_COMPOSITION_CONFLICT => Ok(Some(ImeSubmitStatus::CompositionConflict)),
+        IME_STATUS_COMPOSITION_RECOVERY_REQUIRED => {
+            Ok(Some(ImeSubmitStatus::CompositionRecoveryRequired))
+        }
+        IME_STATUS_NOT_DISPATCHED => Ok(Some(ImeSubmitStatus::NotDispatched)),
         HRESULT_TIMEOUT | HRESULT_CANCELLED => {
             // Keep the 1.x classification: a native timeout/cancel reply
             // does not prove InsertTextAtSelection never committed. R01's
@@ -121,21 +168,71 @@ struct ImeWindow {
     thread_id: u32,
 }
 
-/// Prefer the IME window on the target thread; otherwise use another one in
-/// the same process (the focused control can live on a different thread than
-/// the one TSF activated the IME on).
-fn select_ime_window(target: ImeSubmitTarget, windows: &[ImeWindow]) -> Option<ImeWindow> {
-    windows
+/// Order eligible IME windows by safety: all windows on the captured target thread first,
+/// followed by same-process windows only for explicit native recovery. A request cannot use
+/// another UI thread's service during normal insertion because the native service resolves its
+/// focused document manager from its own thread manager.
+fn ordered_ime_windows(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+) -> Vec<ImeWindow> {
+    let mut ordered = windows
         .iter()
-        .find(|window| {
-            window.process_id == target.process_id && window.thread_id == target.thread_id
-        })
-        .or_else(|| {
-            windows
-                .iter()
-                .find(|window| window.process_id == target.process_id)
-        })
         .copied()
+        .filter(|window| {
+            window.process_id == target.process_id
+                && (window.thread_id == target.thread_id || allow_same_process_fallback)
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|window| window.thread_id != target.thread_id);
+    ordered
+}
+
+fn select_ime_window(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+) -> Option<ImeWindow> {
+    ordered_ime_windows(target, windows, allow_same_process_fallback)
+        .into_iter()
+        .next()
+}
+
+/// Probe candidates in priority order and return the first window running the current protocol.
+/// The caller supplies the probe so the selection policy can be tested without Win32 windows.
+fn select_ime_window_with_probe<F>(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+    mut probe: F,
+) -> WindowsImeIpcResult<Option<ImeWindow>>
+where
+    F: FnMut(ImeWindow) -> WindowsImeIpcResult<()>,
+{
+    let candidates = ordered_ime_windows(target, windows, allow_same_process_fallback);
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let mut last_error = None;
+    for window in candidates {
+        match probe(window) {
+            Ok(()) => return Ok(Some(window)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("non-empty candidate list must produce a probe result"))
+}
+
+fn classify_protocol_probe_reply(reply: u32) -> WindowsImeIpcResult<()> {
+    if reply == IME_STATUS_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(WindowsImeIpcError::Protocol(format!(
+            "the target process has no current OpenLessIme.dll protocol; protocol probe returned 0x{reply:08X}"
+        )))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,12 +241,24 @@ pub struct ImeSubmitRequest {
     pub text: String,
     pub created_at: String,
     pub target: Option<ImeSubmitTarget>,
+    pub op: ImeSubmitOp,
+    /// Stable owner for the live composition across submit/query tokens.
+    pub composition_owner: u32,
+    /// OpenLess process instance that owns the composition. A changed value permits native
+    /// recovery after the process that created an orphaned composition has exited.
+    pub composition_process_id: u32,
+    /// Allow a recovery Cancel to use another same-process IME window when the original target
+    /// thread has no registered OpenLess service. This is only safe for native recovery because
+    /// owner checks still reject a same-process composition owned by another insertion.
+    pub allow_same_process_fallback: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImeSubmitTarget {
     pub process_id: u32,
     pub thread_id: u32,
+    /// Focused control captured with the target, used by the native prime guard.
+    pub window_handle: usize,
 }
 
 #[derive(Clone)]
@@ -223,14 +332,16 @@ mod windows_message {
     use std::time::Instant;
 
     use super::{
-        classify_query_reply, classify_submit_reply, next_submit_token, select_ime_window,
+        classify_protocol_probe_reply, classify_query_reply, classify_submit_reply,
+        emit_tsf_diagnostic_probe, next_submit_token, select_ime_window_with_probe,
         ImeSubmitRequest, ImeSubmitTarget, ImeWindow, WindowsImeIpcError, WindowsImeIpcResult,
         IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS,
         IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
-        encode_query_payload, encode_submit_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
-        IME_COPYDATA_SUBMIT, IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
+        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus,
+        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES, IME_STATUS_ACCEPTED,
+        IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
 
     const HWND_MESSAGE: isize = -3;
@@ -274,12 +385,89 @@ mod windows_message {
         NotDelivered(u32),
     }
 
+    fn verify_protocol_version(hwnd: isize, timeout_ms: u32) -> WindowsImeIpcResult<()> {
+        match send_copy_data(hwnd, IME_COPYDATA_VERSION, &[], timeout_ms) {
+            Ok(reply) if reply == IME_STATUS_PROTOCOL_VERSION => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "current",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
+                log::debug!(
+                    "[windows-ime] protocol probe status=current raw_status=0x{:08X}",
+                    reply,
+                );
+                Ok(())
+            }
+            Ok(reply) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "rejected",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
+                log::warn!(
+                    "[windows-ime] protocol probe status=stale_or_unknown raw_status=0x{:08X}",
+                    reply,
+                );
+                classify_protocol_probe_reply(reply)
+            }
+            Err(SendFailure::TimedOut) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "timeout",
+                    "\"error_class\":\"timeout\"".to_string(),
+                );
+                Err(WindowsImeIpcError::Protocol(
+                    "the target process did not answer the OpenLessIme.dll protocol probe"
+                        .to_string(),
+                ))
+            }
+            Err(SendFailure::NotDelivered(code)) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "not_delivered",
+                    format!("\"error_code\":{}", code),
+                );
+                Err(WindowsImeIpcError::Io(format!(
+                    "sending the OpenLessIme.dll protocol probe failed: OS error {code}"
+                )))
+            }
+        }
+    }
+
     pub fn submit_text_to_window(
         request: ImeSubmitRequest,
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
         let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let token = next_submit_token();
-        let payload = encode_submit_payload(token, &request.text);
+        let payload = if request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit {
+            crate::windows_ime_protocol::encode_commit_submit_payload(
+                token,
+                request.composition_process_id,
+                target.window_handle as u64,
+                &request.text,
+            )
+        } else {
+            encode_composition_submit_payload(
+                token,
+                request.composition_owner,
+                request.composition_process_id,
+                target.window_handle as u64,
+                &request.text,
+            )
+        };
         if payload.len() > IME_MAX_SUBMIT_BYTES {
             return Err(WindowsImeIpcError::Protocol(format!(
                 "text is too large for one IME submit ({} bytes)",
@@ -287,16 +475,24 @@ mod windows_message {
             )));
         }
 
-        let window = find_ime_window_with_retry(target)?;
-        log::debug!(
-            "[windows-ime] submitting text to IME window pid={} tid={}",
+        let window = find_ime_window_with_retry(target, request.allow_same_process_fallback)?;
+        log::info!(
+            "[windows-ime] submit begin op={} target_pid={} target_tid={} target_hwnd=0x{:X} ime_pid={} ime_tid={} owner={} process={} payload_bytes={} same_process_fallback={}",
+            request.op.label(),
+            target.process_id,
+            target.thread_id,
+            target.window_handle,
             window.process_id,
-            window.thread_id
+            window.thread_id,
+            request.composition_owner,
+            request.composition_process_id,
+            payload.len(),
+            request.allow_same_process_fallback,
         );
 
         let reply = send_copy_data(
             window.hwnd,
-            IME_COPYDATA_SUBMIT,
+            request.op.copydata_tag(),
             &payload,
             IME_SEND_TIMEOUT_MS,
         )
@@ -312,6 +508,26 @@ mod windows_message {
                 WindowsImeIpcError::Io(format!("sending to the IME window failed: OS error {code}"))
             }
         })?;
+        log::info!(
+            "[windows-ime] submit ack op={} raw_status=0x{:08X}",
+            request.op.label(),
+            reply,
+        );
+        emit_tsf_diagnostic_probe(
+            "P3",
+            "[\"H4\"]",
+            &request.session_id,
+            "submit_ack",
+            if reply == IME_STATUS_ACCEPTED {
+                "accepted"
+            } else {
+                "rejected"
+            },
+            format!(
+                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                request.op.label()
+            ),
+        );
         classify_submit_reply(reply)?;
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
@@ -325,7 +541,37 @@ mod windows_message {
                 IME_QUERY_SEND_TIMEOUT_MS,
             ) {
                 Ok(reply) => {
+                    log::debug!(
+                        "[windows-ime] submit query op={} raw_status=0x{:08X}",
+                        request.op.label(),
+                        reply,
+                    );
                     if let Some(status) = classify_query_reply(reply)? {
+                        emit_tsf_diagnostic_probe(
+                            "P3",
+                            "[\"H4\"]",
+                            &request.session_id,
+                            "submit_complete",
+                            match status {
+                                ImeSubmitStatus::Committed => "committed",
+                                ImeSubmitStatus::NotDispatched => "not_dispatched",
+                                ImeSubmitStatus::CompositionConflict => "composition_conflict",
+                                ImeSubmitStatus::CompositionRecoveryRequired => {
+                                    "composition_recovery_required"
+                                }
+                                ImeSubmitStatus::Rejected => "rejected",
+                                ImeSubmitStatus::Failed => "failed",
+                            },
+                            format!(
+                                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                                request.op.label()
+                            ),
+                        );
+                        log::info!(
+                            "[windows-ime] submit complete op={} status={:?}",
+                            request.op.label(),
+                            status,
+                        );
                         return Ok(status);
                     }
                 }
@@ -345,22 +591,95 @@ mod windows_message {
         }
     }
 
-    fn find_ime_window_with_retry(target: ImeSubmitTarget) -> WindowsImeIpcResult<ImeWindow> {
+    fn find_ime_window_with_retry(
+        target: ImeSubmitTarget,
+        allow_same_process_fallback: bool,
+    ) -> WindowsImeIpcResult<ImeWindow> {
         let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
+        let mut last_probe_error = None;
         loop {
-            if let Some(window) = select_ime_window(target, &enumerate_ime_windows()) {
-                if window.thread_id != target.thread_id {
-                    log::info!(
-                        "[windows-ime] no IME window on target thread {}; using same-process thread {}",
-                        target.thread_id,
-                        window.thread_id
+            let windows = enumerate_ime_windows();
+            log::debug!(
+                "[windows-ime] discover target_pid={} target_tid={} candidates={} same_process_fallback={}",
+                target.process_id,
+                target.thread_id,
+                windows.len(),
+                allow_same_process_fallback,
+            );
+            match select_ime_window_with_probe(
+                target,
+                &windows,
+                allow_same_process_fallback,
+                |window| {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let timeout_ms = remaining.as_millis().min(u32::MAX as u128) as u32;
+                    let result = if timeout_ms == 0 {
+                        Err(WindowsImeIpcError::Protocol(
+                            "the IME protocol probe deadline expired".to_string(),
+                        ))
+                    } else {
+                        verify_protocol_version(window.hwnd, timeout_ms)
+                    };
+                    if let Err(error) = &result {
+                        log::debug!(
+                            "[windows-ime] protocol candidate rejected pid={} tid={} hwnd=0x{:X} error={}",
+                            window.process_id,
+                            window.thread_id,
+                            window.hwnd,
+                            error,
+                        );
+                    }
+                    emit_tsf_diagnostic_probe(
+                        "P2",
+                        "[\"H1\",\"H3\"]",
+                        "runtime",
+                        "ime_candidate_probe",
+                        if result.is_ok() { "accepted" } else { "rejected" },
+                        format!(
+                            "\"candidate_pid\":{},\"candidate_tid\":{},\"target_pid\":{},\"target_tid\":{},\"same_process_fallback\":{}",
+                            window.process_id,
+                            window.thread_id,
+                            target.process_id,
+                            target.thread_id,
+                            allow_same_process_fallback,
+                        ),
                     );
+                    result
+                },
+            ) {
+                Ok(Some(window)) => {
+                    if window.thread_id != target.thread_id {
+                        log::info!(
+                            "[windows-ime] no IME window on target thread {}; using current same-process thread {}",
+                            target.thread_id,
+                            window.thread_id
+                        );
+                    } else {
+                        log::debug!(
+                            "[windows-ime] selected current exact target thread pid={} tid={}",
+                            window.process_id,
+                            window.thread_id,
+                        );
+                    }
+                    return Ok(window);
                 }
-                return Ok(window);
+                Ok(None) => {}
+                Err(error) => {
+                    last_probe_error = Some(error);
+                }
             }
 
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if let Some(error) = last_probe_error {
+                    return Err(error);
+                }
+                log::warn!(
+                    "[windows-ime] no message window for target_pid={} target_tid={} after {:?}",
+                    target.process_id,
+                    target.thread_id,
+                    IME_CLIENT_WAIT_TIMEOUT,
+                );
                 return Err(WindowsImeIpcError::NoReadyClient);
             }
             std::thread::sleep(remaining.min(IME_WINDOW_RETRY_INTERVAL));
@@ -478,24 +797,181 @@ mod tests {
         let target = ImeSubmitTarget {
             process_id: 1234,
             thread_id: 5678,
+            window_handle: 0,
         };
         let windows = [
             window(1, 4321, 1111),
             window(2, 1234, 9999),
             window(3, 1234, 5678),
         ];
-        assert_eq!(select_ime_window(target, &windows), Some(windows[2]));
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[2]));
     }
 
     #[test]
-    fn same_process_window_is_used_when_target_thread_has_none() {
+    fn same_process_window_is_used_only_for_explicit_recovery() {
         let target = ImeSubmitTarget {
             process_id: 1234,
             thread_id: 5678,
+            window_handle: 0,
         };
         let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
-        assert_eq!(select_ime_window(target, &windows), Some(windows[1]));
-        assert_eq!(select_ime_window(target, &windows[..1]), None);
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[1]));
+        assert_eq!(select_ime_window(target, &windows, false), None);
+        assert_eq!(select_ime_window(target, &windows[..1], true), None);
+    }
+
+    #[test]
+    fn composition_requires_a_window_on_the_captured_thread() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        assert_eq!(select_ime_window(target, &windows, false), None);
+    }
+
+    #[test]
+    fn protocol_candidates_keep_exact_thread_first() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [
+            window(1, 1234, 9999),
+            window(2, 1234, 5678),
+            window(3, 1234, 9999),
+        ];
+        assert_eq!(
+            ordered_ime_windows(target, &windows, true),
+            vec![windows[1], windows[0], windows[2]]
+        );
+    }
+
+    #[test]
+    fn stale_protocol_candidate_is_skipped_for_current_candidate() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let mut probed = Vec::new();
+        let selected = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            probed.push(candidate.hwnd);
+            if candidate.hwnd == 2 {
+                Ok(())
+            } else {
+                classify_protocol_probe_reply(0x4F4C_0005)
+            }
+        })
+        .expect("a current candidate should be selected");
+        assert_eq!(selected, Some(windows[1]));
+        assert_eq!(probed, vec![1, 2]);
+    }
+
+    #[test]
+    fn current_protocol_candidate_short_circuits_probe() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let mut probed = Vec::new();
+        let selected = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            probed.push(candidate.hwnd);
+            Ok(())
+        })
+        .expect("the first current candidate should be selected");
+        assert_eq!(selected, Some(windows[0]));
+        assert_eq!(probed, vec![1]);
+    }
+
+    #[test]
+    fn ordinary_probe_does_not_cross_same_process_threads() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 9999)];
+        let mut probed = Vec::new();
+        assert_eq!(
+            select_ime_window_with_probe(target, &windows, false, |candidate| {
+                probed.push(candidate.hwnd);
+                Ok(())
+            })
+            .expect("no eligible candidate is not a probe error"),
+            None
+        );
+        assert!(probed.is_empty());
+    }
+
+    #[test]
+    fn recovery_probe_can_cross_to_same_process_thread() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        let selected = select_ime_window_with_probe(target, &windows, true, |_| Ok(()))
+            .expect("same-process recovery candidate should be eligible");
+        assert_eq!(selected, Some(windows[1]));
+    }
+
+    #[test]
+    fn all_protocol_candidates_return_the_last_probe_error() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let error = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            Err(WindowsImeIpcError::Protocol(format!(
+                "stale hwnd={}",
+                candidate.hwnd
+            )))
+        })
+        .expect_err("all stale candidates should preserve a definite protocol error");
+        assert_eq!(
+            error,
+            WindowsImeIpcError::Protocol("stale hwnd=2".to_string())
+        );
+    }
+
+    #[test]
+    fn no_eligible_protocol_candidate_is_not_a_probe_failure() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678)];
+        assert_eq!(
+            select_ime_window_with_probe(target, &windows, true, |_| {
+                panic!("other-process windows must not be probed")
+            })
+            .expect("other-process windows are ineligible"),
+            None
+        );
+    }
+
+    #[test]
+    fn protocol_probe_accepts_only_the_current_version() {
+        assert_eq!(
+            classify_protocol_probe_reply(IME_STATUS_PROTOCOL_VERSION),
+            Ok(())
+        );
+        for reply in [0, 0x4F4C_0005, IME_STATUS_BAD_REQUEST] {
+            assert!(matches!(
+                classify_protocol_probe_reply(reply),
+                Err(WindowsImeIpcError::Protocol(_))
+            ));
+        }
     }
 
     #[test]

@@ -519,6 +519,8 @@ export interface UserPreferences {
   /** Whether to write the final polished text back to the clipboard after a successful streaming insert.
    *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
+  /** Windows TSF: show the live transcript as an underlined composition in the target. */
+  windowsCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /

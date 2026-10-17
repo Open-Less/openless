@@ -129,6 +129,7 @@ export let mockSettings: UserPreferences = {
   streamingInsert: true,
   streamingInsertDefaultMigrated: true,
   streamingInsertSaveClipboard: true,
+  windowsCompositionInput: false,
   cursorContextEnabled: false,
   vocabularyLearningEnabled: false,
   vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },

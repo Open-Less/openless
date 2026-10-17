@@ -118,6 +118,8 @@ try {
 const workflow = readFileSync(workflowPath, 'utf8');
 const parsed = load(workflow);
 assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'workflow_dispatch']);
+assert.deepEqual(parsed.on.push.branches, ['**']);
+assert.deepEqual(parsed.on.push.tags, ['v*-tauri']);
 assert.equal(typeof parsed.concurrency.group, 'string');
 assert.equal(parsed.jobs['build-android-apk'].steps[0].with.submodules, false);
 assert.equal(parsed.on.workflow_dispatch.inputs.signed_debug.type, 'boolean');

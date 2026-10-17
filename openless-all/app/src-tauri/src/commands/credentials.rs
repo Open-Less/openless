@@ -5,7 +5,8 @@ const LLM_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::LLM_TEMPERATUR
 const OMNI_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::OMNI_EXTRA_HEADERS_ACCOUNT;
 const OMNI_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::OMNI_TEMPERATURE_ACCOUNT;
 const MARKETPLACE_GITHUB_TOKEN_ACCOUNT: &str = "github.oauth_token";
-const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
+const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str =
+    openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
 
 /// Tauri host adapter for the framework-independent core credential port.
 ///

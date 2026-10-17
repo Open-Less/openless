@@ -2157,6 +2157,9 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      windowsCompositionInputDesc:
+        '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',

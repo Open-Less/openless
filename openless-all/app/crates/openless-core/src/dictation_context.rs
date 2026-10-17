@@ -157,6 +157,8 @@ pub struct DictationInsertionContext {
     pub observe_edits: bool,
     pub streaming: bool,
     pub save_streamed_text_to_clipboard: bool,
+    /// Show the live transcript as an underlined composition in the target (Windows TSF).
+    pub composition_input: bool,
     pub restore_clipboard_after_paste: bool,
     pub paste_shortcut: PasteShortcut,
     pub windows_insertion_mode: WindowsInsertionMode,
@@ -373,6 +375,11 @@ impl DictationContext {
                         | DictationOutputTarget::VoiceEdit
                 ) && preferences.streaming_insert,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
+                // Composition display is a TSF text-service feature; other insertion
+                // modes have no underlined preedit channel.
+                composition_input: cfg!(target_os = "windows")
+                    && preferences.windows_composition_input
+                    && preferences.windows_insertion_mode == WindowsInsertionMode::Tsf,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
                 paste_shortcut: preferences.paste_shortcut,
                 windows_insertion_mode: preferences.windows_insertion_mode,

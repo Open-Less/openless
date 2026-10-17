@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -2812,6 +2812,8 @@ pub(crate) struct TauriTextInserter {
     backend: BackendSlot,
     insertion_target: Option<crate::selection::SelectionInsertionTarget>,
     #[cfg(target_os = "windows")]
+    ime_target: Option<crate::windows_ime_ipc::ImeSubmitTarget>,
+    #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
 }
 
@@ -2845,6 +2847,8 @@ impl TauriTextInserter {
             app,
             backend,
             insertion_target: None,
+            #[cfg(target_os = "windows")]
+            ime_target: None,
             #[cfg(target_os = "windows")]
             windows_ime: Arc::new(crate::windows_ime_session::WindowsImeSessionController::new()),
         }
@@ -3003,9 +3007,13 @@ where
 impl CoreTextInserter for TauriTextInserter {
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
+        #[cfg(target_os = "windows")]
+        let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
                 insertion_target: Some(insertion_target.clone()),
+                #[cfg(target_os = "windows")]
+                ime_target,
                 ..self.clone()
             }),
             host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
@@ -3020,6 +3028,10 @@ impl CoreTextInserter for TauriTextInserter {
         let app = Arc::clone(&self.app);
         let backend = Arc::clone(&self.backend);
         let insertion_target = self.insertion_target.clone();
+        #[cfg(target_os = "windows")]
+        let ime_target = self
+            .ime_target
+            .or_else(crate::windows_ime_target::capture_ime_submit_target);
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
@@ -3083,7 +3095,7 @@ impl CoreTextInserter for TauriTextInserter {
             };
             #[cfg(not(target_os = "macos"))]
             let _ = app;
-            Ok(Arc::new(TauriTextInsertionSession {
+            let session = Arc::new(TauriTextInsertionSession {
                 session_id,
                 backend,
                 context,
@@ -3091,6 +3103,8 @@ impl CoreTextInserter for TauriTextInserter {
                 finished: Arc::new(AtomicBool::new(false)),
                 #[cfg(target_os = "windows")]
                 windows_ime,
+                #[cfg(target_os = "windows")]
+                composition: Arc::new(WindowsComposition::new(ime_target)),
                 #[cfg(target_os = "macos")]
                 app: app_handle,
                 #[cfg(target_os = "macos")]
@@ -3103,7 +3117,33 @@ impl CoreTextInserter for TauriTextInserter {
                 cancel_requested,
                 #[cfg(target_os = "macos")]
                 terminal: Arc::new(MacInsertionTerminal::default()),
-            }) as Arc<dyn TextInsertionSession>)
+            });
+            #[cfg(target_os = "windows")]
+            if session.context.insertion.composition_input {
+                log::info!(
+                    "[core-adapter] TSF composition enabled mode={:?} target={:?} stable_transcription={}",
+                    session.context.insertion.windows_insertion_mode,
+                    session.composition_target(),
+                    session.context.recording.transcribe_after_stop,
+                );
+                // Re-activate the captured control immediately before the posted native prime. The
+                // DLL also validates the captured focus handle at dispatch time, so a focus change
+                // during the IPC round-trip cannot prime a different document.
+                if let Err(error) = session.restore_insertion_target() {
+                    log::warn!("[core-adapter] could not reactivate TSF composition target: {error}");
+                } else if let Err(error) = session.update_composition_text(String::new()).await {
+                    log::warn!("[core-adapter] could not prime TSF composition context: {error}");
+                } else {
+                    log::info!("[core-adapter] TSF composition context primed");
+                }
+            } else {
+                log::info!(
+                    "[core-adapter] TSF composition disabled mode={:?} stable_transcription={}",
+                    session.context.insertion.windows_insertion_mode,
+                    session.context.recording.transcribe_after_stop,
+                );
+            }
+            Ok(session as Arc<dyn TextInsertionSession>)
         })
     }
 }
@@ -3117,6 +3157,8 @@ struct TauriTextInsertionSession {
     finished: Arc<AtomicBool>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
+    #[cfg(target_os = "windows")]
+    composition: Arc<WindowsComposition>,
     #[cfg(target_os = "macos")]
     app: AppHandle,
     #[cfg(target_os = "macos")]
@@ -3131,7 +3173,355 @@ struct TauriTextInsertionSession {
     terminal: Arc<MacInsertionTerminal>,
 }
 
+/// Composition ownership is stable for one insertion session while submit tokens change per request.
+/// Seed the sequence from a fresh UUID so a restart cannot reliably reuse an owner that a host still
+/// associates with an abandoned native composition.
+#[cfg(target_os = "windows")]
+static NEXT_COMPOSITION_OWNER: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(target_os = "windows")]
+static COMPOSITION_OWNER_START: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn composition_process_instance_id() -> u32 {
+    *COMPOSITION_OWNER_START.get_or_init(|| (uuid::Uuid::new_v4().as_u128() as u32).max(1))
+}
+
+#[cfg(target_os = "windows")]
+fn next_composition_owner() -> u32 {
+    let start = composition_process_instance_id();
+    let sequence = NEXT_COMPOSITION_OWNER.fetch_add(1, Ordering::Relaxed);
+    start.wrapping_add(sequence).max(1)
+}
+
+/// Live composition state of one Windows TSF dictation.
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct WindowsComposition {
+    /// Stable owner for the composition across per-request IPC tokens.
+    owner: u32,
+    /// An update was sent, so the host may hold a composition or leftover DLL state. The
+    /// dictation must then end with a Finish, even if that update failed, so the next
+    /// dictation never inherits it.
+    attempted: AtomicBool,
+    /// At least one update was accepted and completed by the native host.
+    succeeded: AtomicBool,
+    /// The host refused or lost an update; the composition can no longer be trusted.
+    broken: AtomicBool,
+    /// Another insertion owns the native composition. This session never acquired native
+    /// ownership and must not attempt cleanup or use non-TSF fallback beside it.
+    conflicted: AtomicBool,
+    /// A plain TSF commit discovered native composition state that must be canceled before this
+    /// insertion can be released. Unlike `attempted`, this does not claim the current owner.
+    cleanup_required: AtomicBool,
+    /// Target captured before insertion begins. Every later call goes to the same thread, so the
+    /// composition can never leak into whatever window is focused at finish time.
+    target: std::sync::Mutex<Option<crate::windows_ime_ipc::ImeSubmitTarget>>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsComposition {
+    fn new(target: Option<crate::windows_ime_ipc::ImeSubmitTarget>) -> Self {
+        Self {
+            owner: next_composition_owner(),
+            target: std::sync::Mutex::new(target),
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+enum WindowsCompositionSubmitResult {
+    Status(crate::types::InsertStatus),
+    NotDispatched,
+    DefiniteFailure(BackendError),
+    CompositionConflict(BackendError),
+    CompositionRecoveryRequired(BackendError),
+}
+
 impl TauriTextInsertionSession {
+    #[cfg(target_os = "windows")]
+    fn composition_in_use(&self) -> bool {
+        self.composition.attempted.load(Ordering::Acquire)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn composition_in_use(&self) -> bool {
+        false
+    }
+
+    #[cfg(target_os = "windows")]
+    fn composition_conflicted(&self) -> bool {
+        self.composition.conflicted.load(Ordering::Acquire)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn composition_conflicted(&self) -> bool {
+        false
+    }
+
+    #[cfg(target_os = "windows")]
+    fn composition_cleanup_required(&self) -> bool {
+        self.composition.cleanup_required.load(Ordering::Acquire)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn composition_cleanup_required(&self) -> bool {
+        false
+    }
+
+    #[cfg(target_os = "windows")]
+    fn composition_conflict_error() -> BackendError {
+        BackendError::new(
+            BackendErrorCode::Platform,
+            "another dictation owns a live TSF composition",
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn composition_target(&self) -> Option<crate::windows_ime_ipc::ImeSubmitTarget> {
+        *self
+            .composition
+            .target
+            .lock()
+            .expect("composition target lock poisoned")
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn submit_composition_outcome(
+        &self,
+        op: crate::windows_ime_protocol::ImeSubmitOp,
+        text: String,
+        allow_same_process_fallback: bool,
+    ) -> Result<WindowsCompositionSubmitResult, BackendError> {
+        let request = crate::windows_ime_ipc::ImeSubmitRequest {
+            session_id: self.session_id.to_string(),
+            text,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            target: self.composition_target(),
+            op,
+            composition_owner: self.composition.owner,
+            composition_process_id: composition_process_instance_id(),
+            allow_same_process_fallback,
+        };
+        match self.windows_ime.submit(request).await {
+            Ok(status) => Ok(WindowsCompositionSubmitResult::Status(status)),
+            Err(error) if error.is_outcome_unknown() => Err(BackendError::new(
+                BackendErrorCode::OutcomeUnknown,
+                error.to_string(),
+            )),
+            Err(error) if error.is_not_dispatched() => {
+                Ok(WindowsCompositionSubmitResult::NotDispatched)
+            }
+            Err(error) if error.is_composition_conflict() => {
+                Ok(WindowsCompositionSubmitResult::CompositionConflict(
+                    BackendError::new(BackendErrorCode::Platform, error.to_string()),
+                ))
+            }
+            Err(error) if error.is_composition_recovery_required() => {
+                Ok(WindowsCompositionSubmitResult::CompositionRecoveryRequired(
+                    BackendError::new(BackendErrorCode::Platform, error.to_string()),
+                ))
+            }
+            Err(error) if error.is_target_unavailable() => {
+                Ok(WindowsCompositionSubmitResult::DefiniteFailure(
+                    BackendError::new(BackendErrorCode::Platform, error.to_string())
+                        .target_unavailable(),
+                ))
+            }
+            Err(error) => {
+                Ok(WindowsCompositionSubmitResult::DefiniteFailure(
+                    BackendError::new(BackendErrorCode::Platform, error.to_string()),
+                ))
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn submit_composition(
+        &self,
+        op: crate::windows_ime_protocol::ImeSubmitOp,
+        text: String,
+    ) -> Result<crate::types::InsertStatus, BackendError> {
+        match self
+            .submit_composition_outcome(op, text, false)
+            .await?
+        {
+            WindowsCompositionSubmitResult::Status(status) => Ok(status),
+            WindowsCompositionSubmitResult::NotDispatched => Ok(crate::types::InsertStatus::Failed),
+            WindowsCompositionSubmitResult::CompositionConflict(error) => Err(error),
+            WindowsCompositionSubmitResult::CompositionRecoveryRequired(error) => Err(error),
+            WindowsCompositionSubmitResult::DefiniteFailure(_) => {
+                Ok(crate::types::InsertStatus::Failed)
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn clear_composition(
+        &self,
+        allow_same_process_fallback: bool,
+    ) -> Result<(), BackendError> {
+        let mut last_error = BackendError::new(
+            BackendErrorCode::Platform,
+            "the host refused to clear the live composition",
+        );
+        for attempt in 0..3 {
+            match self
+                .submit_composition_outcome(
+                    crate::windows_ime_protocol::ImeSubmitOp::Cancel,
+                    String::new(),
+                    allow_same_process_fallback,
+                )
+                .await
+            {
+                Ok(WindowsCompositionSubmitResult::Status(
+                    crate::types::InsertStatus::Inserted,
+                ))
+                | Ok(WindowsCompositionSubmitResult::NotDispatched) => {
+                    self.composition.attempted.store(false, Ordering::Release);
+                    self.composition.succeeded.store(false, Ordering::Release);
+                    self.composition.broken.store(false, Ordering::Release);
+                    self.composition.conflicted.store(false, Ordering::Release);
+                    self.composition.cleanup_required.store(false, Ordering::Release);
+                    return Ok(());
+                }
+                Ok(WindowsCompositionSubmitResult::Status(_)) => {
+                    last_error = BackendError::new(
+                        BackendErrorCode::Platform,
+                        "the host refused to clear the live composition",
+                    );
+                }
+                Ok(WindowsCompositionSubmitResult::CompositionConflict(error))
+                | Ok(WindowsCompositionSubmitResult::CompositionRecoveryRequired(error))
+                | Ok(WindowsCompositionSubmitResult::DefiniteFailure(error)) => {
+                    last_error = error;
+                }
+                Err(error) => last_error = error,
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
+        Err(last_error)
+    }
+
+    /// Shows `text` as the live composition, replacing the previous update.
+    #[cfg(target_os = "windows")]
+    async fn update_composition_text(&self, text: String) -> Result<(), BackendError> {
+        if self.finished.load(Ordering::Acquire) {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "text insertion session is closed",
+            ));
+        }
+        if self.composition.broken.load(Ordering::Acquire) {
+            return Err(BackendError::new(
+                BackendErrorCode::Platform,
+                "the previous TSF composition submit failed",
+            ));
+        }
+        if self.composition_conflicted() {
+            return Err(Self::composition_conflict_error());
+        }
+        if self.context.insertion.windows_insertion_mode
+            != openless_core::shared_types::WindowsInsertionMode::Tsf
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "composition display requires TSF insertion",
+            ));
+        }
+
+        // A restarted OpenLess process may need one native cancel before the new process can open
+        // its composition. Keep this retry iterative: recursive async self-awaits do not compile
+        // because they create an infinitely sized future.
+        let mut recovered = false;
+        loop {
+            if self.finished.load(Ordering::Acquire) {
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "text insertion session is closed",
+                ));
+            }
+            let had_succeeded = self.composition.succeeded.load(Ordering::Acquire);
+            // Record the attempt before sending it: an outcome-unknown update may have reached the
+            // host, so the final write has to close it. A definite rejection before dispatch is
+            // distinguishable below and can still use the normal non-TSF fallback.
+            self.composition.attempted.store(true, Ordering::Release);
+            match self
+                .submit_composition_outcome(
+                    crate::windows_ime_protocol::ImeSubmitOp::Update,
+                    text.clone(),
+                    false,
+                )
+                .await
+            {
+                Ok(WindowsCompositionSubmitResult::Status(
+                    crate::types::InsertStatus::Inserted,
+                )) => {
+                    self.composition.succeeded.store(true, Ordering::Release);
+                    return Ok(());
+                }
+                Ok(WindowsCompositionSubmitResult::Status(_)) => {
+                    // The native request was dispatched. StartComposition may have succeeded before
+                    // a later range/edit operation rejected the update, so retain the cleanup latch.
+                    self.composition.broken.store(true, Ordering::Release);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "the host refused the composition update",
+                    ));
+                }
+                Ok(WindowsCompositionSubmitResult::CompositionRecoveryRequired(_)) => {
+                    if recovered {
+                        self.composition.broken.store(true, Ordering::Release);
+                        return Err(BackendError::new(
+                            BackendErrorCode::Platform,
+                            "the host still owns an abandoned TSF composition after recovery",
+                        ));
+                    }
+                    // Native recovery first cancels the prior process's context. Retry the same
+                    // update so the new composition is resolved from the current focused TSF context.
+                    self.clear_composition(false).await?;
+                    recovered = true;
+                }
+                Ok(WindowsCompositionSubmitResult::NotDispatched) => {
+                    // No native edit session started, so no composition cleanup is required.
+                    self.composition.attempted.store(false, Ordering::Release);
+                    self.composition.broken.store(true, Ordering::Release);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "the host rejected the composition before dispatch",
+                    ));
+                }
+                Ok(WindowsCompositionSubmitResult::DefiniteFailure(error)) => {
+                    // A message rejected before dispatch cannot have opened a native composition. If
+                    // no earlier update succeeded, normal non-TSF fallback remains safe.
+                    if !had_succeeded {
+                        self.composition.attempted.store(false, Ordering::Release);
+                    }
+                    self.composition.broken.store(true, Ordering::Release);
+                    return Err(error);
+                }
+                Ok(WindowsCompositionSubmitResult::CompositionConflict(error)) => {
+                    // Another insertion owns native composition state. This insertion never
+                    // acquired ownership, so it must not retry cleanup with its owner or fall back
+                    // beside the other insertion's live composition.
+                    self.composition.attempted.store(false, Ordering::Release);
+                    self.composition.succeeded.store(false, Ordering::Release);
+                    self.composition.conflicted.store(true, Ordering::Release);
+                    self.composition.broken.store(true, Ordering::Release);
+                    return Err(error);
+                }
+                Err(error) => {
+                    // An outcome-unknown request may already have reached the host.
+                    self.composition.broken.store(true, Ordering::Release);
+                    return Err(error);
+                }
+            }
+        }
+    }
+
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
         crate::selection::reactivate_selection_insertion_target(&self.insertion_target)
             .then_some(())
@@ -3166,6 +3556,14 @@ impl TauriTextInsertionSession {
         self.restore_insertion_target()?;
         #[cfg(target_os = "windows")]
         {
+            // Defense in depth: composition owns the document until Finish. Typing
+            // Unicode keystrokes now would leave the raw transcript behind.
+            if self.composition_in_use() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "streaming insertion is disabled while a composition is open",
+                ));
+            }
             let chunk = text.clone();
             #[cfg(target_os = "windows")]
             let newline_mode = self.context.insertion.windows_sendinput_newline_mode;
@@ -3207,6 +3605,60 @@ impl TauriTextInsertionSession {
     }
 
     async fn insert_final(&self, text: String) -> Result<InsertOutcome, BackendError> {
+        #[cfg(target_os = "windows")]
+        {
+            if self.composition_conflicted() {
+                return Err(Self::composition_conflict_error());
+            }
+            if self.composition_in_use() {
+                // An empty final result cancels the composition rather than deleting the text
+                // that was selected when dictation began.
+                if text.is_empty() {
+                    self.clear_composition(false).await?;
+                    return Ok(InsertOutcome::Inserted);
+                }
+                // A composition owns its original TSF context. Revalidating the foreground
+                // selection first would reject a valid finish after the user changed focus.
+                let status = self
+                    .submit_composition(
+                        crate::windows_ime_protocol::ImeSubmitOp::Finish,
+                        text.clone(),
+                    )
+                    .await?;
+                if status == crate::types::InsertStatus::Inserted {
+                    return map_insert_status(status);
+                }
+                // Do not report a successful clipboard fallback while the raw composition is
+                // still visible. The caller retains the session and retries cleanup on cancel.
+                self.clear_composition(false).await?;
+                if self.context.insertion.allow_non_tsf_fallback {
+                    return self.copy_fallback(text).await;
+                }
+                return map_insert_status(status);
+            }
+            if self.composition.broken.load(Ordering::Acquire) {
+                // A composition update that was rejected before dispatch leaves no native range,
+                // but retrying a plain TSF commit could select an unrelated same-process thread.
+                // Reactivate the captured target and use the configured Windows fallback instead.
+                match self.restore_insertion_target() {
+                    Ok(()) => {}
+                    Err(error) => {
+                        #[cfg(target_os = "windows")]
+                        if self.context.insertion.allow_non_tsf_fallback {
+                            return self.copy_fallback(text).await;
+                        }
+                        return Err(error);
+                    }
+                }
+                if self.context.insertion.allow_non_tsf_fallback {
+                    return map_insert_status(windows_unicode_fallback(&self.context, &text));
+                }
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "TSF composition could not be established on the captured target thread",
+                ));
+            }
+        }
         if let Err(error) = self.restore_insertion_target() {
             // When the original target is unavailable, copy only — never paste or send keystrokes to the current focus.
             #[cfg(target_os = "windows")]
@@ -3219,24 +3671,64 @@ impl TauriTextInsertionSession {
         {
             let status = match self.context.insertion.windows_insertion_mode {
                 openless_core::shared_types::WindowsInsertionMode::Tsf => {
-                    let request = crate::windows_ime_ipc::ImeSubmitRequest {
-                        session_id: self.session_id.to_string(),
-                        text: text.clone(),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        target: crate::windows_ime_target::capture_ime_submit_target(),
-                    };
-                    let status = match self.windows_ime.submit(request).await {
-                        Ok(status) => status,
-                        Err(error) if error.is_outcome_unknown() => {
-                            log::warn!("[core-adapter] TSF outcome is unknown: {error}");
-                            return Err(BackendError::new(
-                                BackendErrorCode::OutcomeUnknown,
-                                error.to_string(),
-                            ));
-                        }
-                        Err(error) => {
-                            log::warn!("[core-adapter] TSF submit failed: {error}");
-                            crate::types::InsertStatus::Failed
+                    let mut target = crate::windows_ime_target::capture_ime_submit_target();
+                    let mut recovered = false;
+                    let status = loop {
+                        let request = crate::windows_ime_ipc::ImeSubmitRequest {
+                            session_id: self.session_id.to_string(),
+                            text: text.clone(),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            target,
+                            op: crate::windows_ime_protocol::ImeSubmitOp::Commit,
+                            composition_owner: 0,
+                            composition_process_id: composition_process_instance_id(),
+            allow_same_process_fallback: false,
+                        };
+                        match self.windows_ime.submit(request).await {
+                            Ok(status) => break status,
+                            Err(error) if error.is_outcome_unknown() => {
+                                log::warn!("[core-adapter] TSF outcome is unknown: {error}");
+                                return Err(BackendError::new(
+                                    BackendErrorCode::OutcomeUnknown,
+                                    error.to_string(),
+                                ));
+                            }
+                            Err(error) if error.is_composition_conflict() => {
+                                // A same-process insertion owns the native composition. This
+                                // session never acquired ownership, so it must not send a
+                                // wrong-owner Cancel.
+                                self.composition.conflicted.store(true, Ordering::Release);
+                                return Err(BackendError::new(
+                                    BackendErrorCode::Platform,
+                                    error.to_string(),
+                                ));
+                            }
+                            Err(error) if error.is_composition_recovery_required() => {
+                                if recovered {
+                                    self.composition.cleanup_required.store(true, Ordering::Release);
+                                    self.composition.conflicted.store(true, Ordering::Release);
+                                    return Err(BackendError::new(
+                                        BackendErrorCode::Platform,
+                                        "the prior TSF composition could not be recovered",
+                                    ));
+                                }
+                                // Cancel the prior process's context, reactivate the captured
+                                // target, and retry this same plain commit exactly once.
+                                self.composition.cleanup_required.store(true, Ordering::Release);
+                                self.clear_composition(true).await?;
+                                if let Err(error) = self.restore_insertion_target() {
+                                    if self.context.insertion.allow_non_tsf_fallback {
+                                        return self.copy_fallback(text).await;
+                                    }
+                                    return Err(error);
+                                }
+                                target = crate::windows_ime_target::capture_ime_submit_target();
+                                recovered = true;
+                            }
+                            Err(error) => {
+                                log::warn!("[core-adapter] TSF submit failed: {error}");
+                                break crate::types::InsertStatus::Failed;
+                            }
                         }
                     };
                     if status == crate::types::InsertStatus::Failed
@@ -3411,6 +3903,12 @@ impl TextInsertionSession for TauriTextInsertionSession {
         Box::pin(async move { session.write_chunk(text).await })
     }
 
+    #[cfg(target_os = "windows")]
+    fn update_composition(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        let session = self.clone();
+        Box::pin(async move { session.update_composition_text(text).await })
+    }
+
     fn copy(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
         let session = self.clone();
         Box::pin(async move { session.copy_fallback(text).await.map(|_| ()) })
@@ -3440,7 +3938,11 @@ impl TextInsertionSession for TauriTextInsertionSession {
                         "text insertion session is already closed",
                     ));
                 }
-                let result = if final_text.is_empty() {
+                // An empty final text still has to clear a live composition.
+                let result = if final_text.is_empty()
+                    && !session.composition_in_use()
+                    && !session.composition_conflicted()
+                {
                     Ok(InsertOutcome::Inserted)
                 } else {
                     session.insert_final(final_text).await
@@ -3452,6 +3954,11 @@ impl TextInsertionSession for TauriTextInsertionSession {
                     log::warn!(
                         "[core-adapter] restore input state after insertion failed: {error}"
                     );
+                }
+                if result.is_err() {
+                    // Keep the session cancellable so a failed or uncertain composition finish
+                    // can still clear native TSF state before the registry entry is removed.
+                    session.finished.store(false, Ordering::Release);
                 }
                 result
             }
@@ -3470,7 +3977,29 @@ impl TextInsertionSession for TauriTextInsertionSession {
                 if session.finished.swap(true, Ordering::AcqRel) {
                     return Ok(());
                 }
-                session.restore_platform_state().await
+                let result = async {
+                    #[cfg(target_os = "windows")]
+                    {
+                        if session.composition_in_use() || session.composition_cleanup_required() {
+                            // Cancelled dictation must not leave its transcript in the document.
+                            // A plain TSF commit can also discover an orphaned composition before
+                            // this session has sent any update; clear that recovery obligation here.
+                            let allow_same_process_fallback =
+                                session.composition_cleanup_required();
+                            session
+                                .clear_composition(allow_same_process_fallback)
+                                .await?;
+                        }
+                    }
+                    session.restore_platform_state().await
+                }
+                .await;
+                if result.is_err() {
+                    // Keep a failed cancellation retryable so a transient native cleanup or
+                    // platform restore failure cannot strand the composition permanently.
+                    session.finished.store(false, Ordering::Release);
+                }
+                result
             }
         })
     }
