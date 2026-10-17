@@ -1,8 +1,9 @@
 import { type CSSProperties, type ReactNode } from 'react';
 
-export type OS = 'mac' | 'win' | 'android';
+export type OS = 'mac' | 'win' | 'android' | 'harmony';
 
 export function detectOS(): OS {
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') return 'harmony';
   if (typeof navigator === 'undefined') return 'mac';
   const uaDataPlatform =
     (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
@@ -28,11 +29,12 @@ interface WindowChromeProps {
 export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChromeProps) {
   // Windows: with decorations:true the shell draws no radius/border/shadow/titlebar,
   // avoiding overlap with the native window.
-  const shellRadius = os === 'mac' ? 0 : os === 'win' || os === 'android' ? 0 : 14;
+  const shellRadius =
+    os === 'mac' ? 0 : os === 'win' || os === 'android' || os === 'harmony' ? 0 : 14;
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 0;
   const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : 0;
 
-  const useSolidSurface = os === 'android';
+  const useSolidSurface = os === 'android' || os === 'harmony';
 
   return (
     <div

@@ -803,7 +803,7 @@ export type PermissionStatus =
   'granted' | 'denied' | 'notDetermined' | 'restricted' | 'notApplicable' | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
-export type PlatformKind = 'desktop' | 'android' | 'mobile';
+export type PlatformKind = 'desktop' | 'android' | 'harmony' | 'mobile';
 
 /** Feature flags for desktop vs Android APK UI gating. Mirrors src-tauri PlatformCapabilities. */
 export interface PlatformCapabilities {

@@ -167,7 +167,7 @@ assertMatch(
 
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
-if (!/os === 'win' \|\| os === 'android' \? 0 : 14/.test(windowChromeTsx)) {
+if (!/os === 'win' \|\| os === 'android'(?: \|\| os === 'harmony')? \? 0 : 14/.test(windowChromeTsx)) {
   throw new Error(
     'windows main shell should rely on native decorations instead of a frameless chrome shell',
   );

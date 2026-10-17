@@ -7,6 +7,7 @@ import tailwindcss from '@tailwindcss/vite';
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
 const host = process.env.TAURI_DEV_HOST;
+const isHarmony = process.env.VITE_OPENLESS_PLATFORM === 'harmony';
 const isMobileDev =
   process.env.TAURI_ENV_PLATFORM === 'android' || process.env.TAURI_ENV_PLATFORM === 'ios';
 
@@ -43,6 +44,13 @@ export default defineConfig(async () => ({
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
+    ...(isHarmony
+      ? {
+          modulePreload: false,
+          cssCodeSplit: false,
+          rollupOptions: { output: { format: 'iife' as const, inlineDynamicImports: true } },
+        }
+      : {}),
     target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,

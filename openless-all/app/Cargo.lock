@@ -3695,6 +3695,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "openless-harmony-host"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures-util",
+ "openless-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "openless-linux-egui"
 version = "0.1.0"
 dependencies = [

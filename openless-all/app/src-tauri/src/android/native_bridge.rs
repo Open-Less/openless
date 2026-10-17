@@ -1079,6 +1079,25 @@ mod jni_exports {
     }
 
     #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeCloudPinyin(
+        env: *mut JNIEnv,
+        _class: JClass,
+        pinyin: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let input = env.get_string(&JString::from_raw(pinyin)).map(String::from);
+        let result = input
+            .map(|query| tauri::async_runtime::block_on(openless_core::ime_cloud::query(&query)))
+            .unwrap_or_default();
+        crate::android::jni::android::export_jstring(
+            &mut env,
+            &serde_json::json!(result).to_string(),
+        )
+    }
+
+    #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeImeCommand(
         env: *mut JNIEnv,
         _class: JClass,

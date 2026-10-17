@@ -105,6 +105,7 @@ jobs:
         working-directory: openless-all/app
         run: |
           cargo test --locked -p openless-core
+          cargo test --locked -p openless-harmony-host
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --all-targets
           cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings

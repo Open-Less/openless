@@ -207,6 +207,8 @@ assert.deepEqual(
 );
 console.log('settings service view tests passed');
 
+assert.equal(visibleSettingsSections(false, 'harmony').some((item) => item.id === 'inputMethod'), false, 'Harmony wiring does not add an Android input-method navigation entry');
+assert.deepEqual(visibleAdvancedPages('harmony', 'harmony').map((item) => item.id), ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'], 'Harmony retains shared utility settings without desktop coding-agent controls');
 for (const os of ['mac', 'win', 'android'] as const) {
   assert.equal(
     visibleAdvancedPages('desktop', os).some((item) =>

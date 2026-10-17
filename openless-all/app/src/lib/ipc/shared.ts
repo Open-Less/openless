@@ -5,6 +5,7 @@ import type {
   WindowsImeStatus,
 } from '../types';
 import { getPlatformCapabilities as loadPlatformCapabilities } from '../platform';
+import { invokeHarmony, isHarmonyHost } from '../harmonyBridge';
 
 declare global {
   interface Window {
@@ -45,6 +46,11 @@ export function validateStartupSnapshot(snapshot: StartupSnapshot): StartupSnaps
 let backendReadyPromise: Promise<StartupSnapshot> | null = null;
 
 export function requireBackendReady(): Promise<StartupSnapshot> {
+  if (isHarmonyHost) {
+    backendReadyPromise ??=
+      invokeHarmony<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
+    return backendReadyPromise;
+  }
   if (!isTauriNow()) {
     return Promise.resolve({
       contractVersion: BACKEND_CONTRACT_VERSION,
@@ -73,6 +79,10 @@ export async function invokeOrMock<T>(
   args: Record<string, unknown> | undefined,
   mock: () => T,
 ): Promise<T> {
+  if (isHarmonyHost) {
+    await requireBackendReady();
+    return invokeHarmony<T>(cmd, args);
+  }
   if (!isTauriNow()) {
     return mock();
   }

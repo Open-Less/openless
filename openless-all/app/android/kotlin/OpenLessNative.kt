@@ -96,6 +96,7 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeBackendSnapshot(): String
     @JvmStatic external fun nativeImeCommand(json: String): String
+    @JvmStatic external fun nativeCloudPinyin(pinyin: String): String
 
     @JvmStatic
     fun requireBackendContract() {

@@ -1,3 +1,4 @@
+import { isHarmonyHost, invokeHarmony } from './harmonyBridge';
 const INVALID_FILE_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]+/g;
 
 function normalizeFileNamePart(value: string): string {
@@ -26,6 +27,7 @@ export async function pickStylePackZipTargetPath(
   defaultFileName: string,
   nativeApp: boolean,
 ): Promise<string | null> {
+  if (isHarmonyHost) return invokeHarmony<string | null>('pick_style_pack_zip_target', { fileName: defaultFileName });
   if (!nativeApp) return `~/Downloads/${defaultFileName}`;
 
   try {

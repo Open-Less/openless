@@ -27,7 +27,7 @@ internal object OpenLessSettingsExport {
         CLOUD_NOTES("cloudNotes", "云笔记地址 / Token", "Cloud notes URL / token"),
         HAPTIC("haptic", "震动反馈", "Haptic feedback"),
         STROKE_FREQUENCY("strokeFrequency", "笔画调频", "Stroke ranking"),
-        PINYIN_LEARNED_PHRASES("pinyinLearnedPhrases", "简拼优选", "Pinyin combo learning"),
+        PINYIN_LEARNED_PHRASES("pinyinLearnedPhrases", "旧版拼音备份", "Legacy pinyin backup"),
         PROVIDER_SELECTION("providerSelection", "ASR / LLM / 风格包 选择", "ASR / LLM / style pack selection"),
         CREDENTIALS("credentials", "ASR / LLM API Key（明文，敏感）", "ASR / LLM API keys (plaintext, sensitive)"),
     }
@@ -67,7 +67,7 @@ internal object OpenLessSettingsExport {
             root.put(Category.STROKE_FREQUENCY.key, JSONObject(StrokeUserFrequency(app).exportAll()))
         }
         if (Category.PINYIN_LEARNED_PHRASES in selected) {
-            root.put(Category.PINYIN_LEARNED_PHRASES.key, JSONObject(LitePinyinLearnedPhrases(app).exportAll()))
+            root.put(Category.PINYIN_LEARNED_PHRASES.key, JSONObject(LegacyPinyinBackup(app).exportAll()))
         }
         if (Category.PROVIDER_SELECTION in selected || Category.CREDENTIALS in selected) {
             val response = JSONObject(OpenLessNative.nativeExportProviderSettings(Category.CREDENTIALS in selected))
@@ -119,7 +119,7 @@ internal object OpenLessSettingsExport {
                     Category.PINYIN_LEARNED_PHRASES -> {
                         require(root.optInt("learningPrivacyVersion", 0) >= ImeLearningPolicy.PRIVACY_VERSION) { "Legacy learned phrases cannot be safely restored" }
                         check(ImeLearningPolicy.migrate(app)) { "Learning data cleanup failed" }
-                        LitePinyinLearnedPhrases(app).importAll(value.toStringMap())
+                        LegacyPinyinBackup(app).importAll(value.toStringMap())
                     }
                     else -> Unit
                 }

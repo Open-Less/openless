@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "ime_name",
+      "value": "OpenLess 输入法"
+    },
+    {
+      "name": "ime_description",
+      "value": "OpenLess 文字与语音输入"
+    },
+    {
+      "name": "app_name",
+      "value": "OpenLess"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "用于语音输入和麦克风音量测试"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "0.1.0",
+  "description": "ArkWeb host",
+  "dependencies": {
+    "libopenless_harmony.so": "file:./src/main/cpp/types/libopenless_harmony"
+  },
+  "modelVersion": "6.0.0"
+}

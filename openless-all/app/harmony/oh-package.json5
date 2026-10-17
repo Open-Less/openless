@@ -1,0 +1,7 @@
+{
+  "name": "openless-harmony",
+  "version": "0.1.0",
+  "description": "OpenLess HarmonyOS frontend host",
+  "dependencies": {},
+  "modelVersion": "6.0.0"
+}

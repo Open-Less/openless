@@ -274,17 +274,27 @@ test('text height grows with contents and chips give the selection actual layout
   await page.getByRole('button', { name: '展开全文' }).click();
   await expect(page.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(async () => (await clip.boundingBox())!.height).toBeGreaterThan(initial * 3);
-  const before = (await page.getByRole('button', { name: 'Three', exact: true }).boundingBox())!;
+  // This assertion concerns layout space, not the temporary FLIP/scale
+  // transforms applied by Framer Motion (which WebKit samples fractionally).
+  const before = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
   await page.getByRole('button', { name: 'Two', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Two', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await page.waitForTimeout(350);
-  const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
-  const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
-  expect(selected!.x + selected!.width).toBeLessThan(last!.x);
-  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1);
+  const selected = await page
+    .getByRole('button', { name: 'Two', exact: true })
+    .evaluate((el) => ({
+      x: (el as HTMLElement).offsetLeft,
+      width: (el as HTMLElement).offsetWidth,
+    }));
+  const last = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
+  expect(selected.x + selected.width).toBeLessThan(last);
+  expect(last).toBeGreaterThanOrEqual(before - 1);
 });
 
 test('swipe departure is directional, removable and undoable', async ({ page }) => {
