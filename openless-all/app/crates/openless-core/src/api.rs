@@ -4450,7 +4450,20 @@ impl OpenLessBackend {
                             .combo_cancelled(press_id);
                         Ok(CliDispatchOutcome::DictationCancelled)
                     }
-                    Ok(session_id) => Ok(CliDispatchOutcome::DictationStarted(session_id)),
+                    Ok(session_id) => {
+                        let early_release = self
+                            .hotkey
+                            .lock()
+                            .expect("hotkey interpreter lock poisoned")
+                            .take_early_hold_release(press_id);
+                        if early_release {
+                            self.stop_dictation_with_options(options.stop)
+                                .await
+                                .map(CliDispatchOutcome::DictationCompleted)
+                        } else {
+                            Ok(CliDispatchOutcome::DictationStarted(session_id))
+                        }
+                    }
                     Err(error) => {
                         if combined {
                             self.hotkey
@@ -15615,6 +15628,200 @@ mod tests {
             BackendErrorCode::Cancelled
         );
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+    }
+
+    struct EarlyReleaseCapture {
+        committed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl PendingAudioCapture for EarlyReleaseCapture {
+        fn commit(
+            self: Box<Self>,
+            _session_id: SessionId,
+            _context: Arc<DictationContext>,
+            _consumer: Arc<dyn AudioConsumer>,
+            _progress: Arc<dyn crate::ports::RecordingProgressSink>,
+        ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+            self.committed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            boxed(async { Ok(Box::new(EarlyReleaseRecording) as Box<dyn ActiveRecording>) })
+        }
+
+        fn discard(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+    }
+
+    struct EarlyReleaseRecording;
+
+    impl ActiveRecording for EarlyReleaseRecording {
+        fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+    }
+
+    struct EarlyReleaseEngine {
+        entered: Arc<tokio::sync::Notify>,
+        arm_release: Mutex<std::sync::mpsc::Receiver<()>>,
+        committed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl DictationEngine for EarlyReleaseEngine {
+        fn arm_audio_capture(
+            &self,
+            _request: CaptureStartRequest,
+        ) -> Result<Box<dyn PendingAudioCapture>, BackendError> {
+            self.entered.notify_one();
+            let _ = self
+                .arm_release
+                .lock()
+                .expect("arm gate poisoned")
+                .recv()
+                .expect("arm gate closed");
+            Ok(Box::new(EarlyReleaseCapture {
+                committed: Arc::clone(&self.committed),
+            }))
+        }
+
+        fn start_with_audio_capture(
+            &self,
+            session_id: SessionId,
+            context: Arc<DictationContext>,
+            _progress: Arc<dyn EngineProgressSink>,
+            capture: Box<dyn PendingAudioCapture>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            struct IgnoreAudio;
+            impl AudioConsumer for IgnoreAudio {
+                fn consume_pcm_chunk(&self, _pcm: &[u8]) {}
+            }
+            struct IgnoreLevels;
+            impl crate::ports::RecordingProgressSink for IgnoreLevels {
+                fn publish_level(&self, _elapsed_ms: u64, _level: f32) -> Result<(), BackendError> {
+                    Ok(())
+                }
+            }
+            boxed(async move {
+                let recording = capture
+                    .commit(
+                        session_id,
+                        context,
+                        Arc::new(IgnoreAudio),
+                        Arc::new(IgnoreLevels),
+                    )
+                    .await?;
+                recording.stop().await
+            })
+        }
+
+        fn start(
+            &self,
+            _session_id: SessionId,
+            _context: Arc<DictationContext>,
+            _progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+
+        fn finish(
+            &self,
+            _session_id: SessionId,
+            _progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            boxed(async {
+                Ok(EngineResult {
+                    raw_text: "heard".into(),
+                    asr_transcript: None,
+                    polished_text: "heard".into(),
+                    polish_source: None,
+                    duration_ms: 10,
+                    polish_failed: false,
+                    asr_ms: None,
+                    polish_ms: None,
+                    has_audio_recording: Some(false),
+                    asr_call_label: None,
+                    llm_call_label: None,
+                })
+            })
+        }
+
+        fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hold_release_during_capture_arm_finalizes_instead_of_dropping_audio() {
+        let (arm_tx, arm_rx) = std::sync::mpsc::channel();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let committed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-hold-early-release-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let backend = Arc::new(backend_with_dictation_engine(
+            data_dir.clone(),
+            Arc::new(EarlyReleaseEngine {
+                entered: Arc::clone(&entered),
+                arm_release: Mutex::new(arm_rx),
+                committed: Arc::clone(&committed),
+            }),
+        ));
+        backend.start().await.unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.hotkey.mode = crate::shared_types::HotkeyMode::Hold;
+        preferences.dictation_hotkey = crate::shared_types::ShortcutBinding {
+            primary: "F8".into(),
+            modifiers: Vec::new(),
+        };
+        backend.set_preferences(preferences).unwrap();
+
+        let pressed_at = std::time::Instant::now();
+        let starting = Arc::clone(&backend);
+        let press_task = tokio::spawn(async move {
+            starting
+                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed {
+                    press_id: 7,
+                    at: pressed_at,
+                })
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+            .await
+            .expect("capture arm did not start");
+        assert_eq!(
+            backend.snapshot().dictation.phase,
+            DictationPhase::Idle,
+            "key-up must be observed before the session leaves Idle"
+        );
+        assert_eq!(
+            backend
+                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                    press_id: 7,
+                    at: pressed_at + std::time::Duration::from_millis(20),
+                })
+                .await
+                .unwrap(),
+            CliDispatchOutcome::Noop
+        );
+        arm_tx.send(()).unwrap();
+        let press_outcome = tokio::time::timeout(std::time::Duration::from_secs(5), press_task)
+            .await
+            .expect("press dispatch timed out")
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(press_outcome, CliDispatchOutcome::DictationCompleted(_)),
+            "early hold release must finish the armed capture, got {press_outcome:?}"
+        );
+        assert!(
+            committed.load(std::sync::atomic::Ordering::SeqCst),
+            "provisional audio must be committed, not discarded"
+        );
+        assert_ne!(
+            backend.snapshot().dictation.phase,
+            DictationPhase::Recording
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[tokio::test]

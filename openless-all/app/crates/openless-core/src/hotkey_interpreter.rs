@@ -168,13 +168,21 @@ impl HotkeyInterpreter {
             // Cancelling during grace must not consume the debounce window;
             // the user's next intentional press should work immediately.
             self.clear_press(press_id);
+            let _ = self.take_released(press_id);
             return HotkeyIntent::Noop;
         }
-        if !self
+        if phase != DictationPhase::Idle {
+            let _ = self.take_released(press_id);
+            return HotkeyIntent::Noop;
+        }
+        // A Hold key-up during grace already ended the utterance. The press
+        // task still has to open the session so the audio armed before the
+        // grace sleep is transcribed, then stop it.
+        let released_early = self.pending_released.contains(&press_id);
+        let held_ok = self
             .held
-            .is_some_and(|press| press.id == press_id && press.accepted)
-            || phase != DictationPhase::Idle
-        {
+            .is_some_and(|press| press.id == press_id && press.accepted);
+        if !held_ok && !released_early {
             return HotkeyIntent::Noop;
         }
         self.session_press_id = Some(press_id);
@@ -206,10 +214,13 @@ impl HotkeyInterpreter {
             return HotkeyIntent::Noop;
         }
         let active = active_session;
-        if matches!(mode, HotkeyMode::Hold) && !active && self.session_press_id == Some(press_id) {
-            // A physical key-up may overtake synchronous native capture arming while Core is
-            // still Idle. Clear the start generation so the pending start cannot open afterward.
-            self.session_press_id = None;
+        if matches!(mode, HotkeyMode::Hold) && !active {
+            // Key-up can land while the microphone is still arming, or during
+            // modifier grace, while Core is still Idle. stop_dictation cannot
+            // run yet, and dropping the generation discards audio that the
+            // provisional capture already holds. Keep the generation and stop
+            // as soon as the session is live.
+            self.remember_released(press_id);
             return HotkeyIntent::Noop;
         }
         match mode {
@@ -257,9 +268,13 @@ impl HotkeyInterpreter {
     }
 
     pub(crate) fn start_is_current(&self, press_id: u64) -> bool {
-        self.session_press_id == Some(press_id)
-            && !self.pending_combined.contains(&press_id)
-            && !self.pending_released.contains(&press_id)
+        self.session_press_id == Some(press_id) && !self.pending_combined.contains(&press_id)
+    }
+
+    /// Hold key-up that arrived before the session left Idle. The press task
+    /// consumes this after a successful start and finalizes immediately.
+    pub(crate) fn take_early_hold_release(&mut self, press_id: u64) -> bool {
+        self.take_released(press_id)
     }
 
     pub(crate) fn terminal(&mut self, at: Instant) {
@@ -325,7 +340,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hold_release_while_idle_cancels_only_unreserved_start() {
+    fn hold_release_while_arming_keeps_the_start_and_requests_stop() {
         let start = Instant::now();
         let mut interpreter = HotkeyInterpreter::default();
 
@@ -342,7 +357,30 @@ mod tests {
             ),
             HotkeyIntent::Noop
         );
-        assert!(!interpreter.start_is_current(1));
+        assert!(interpreter.start_is_current(1));
+        assert!(interpreter.take_early_hold_release(1));
+        assert!(!interpreter.take_early_hold_release(1));
+
+        let mut grace = HotkeyInterpreter::default();
+        assert_eq!(
+            grace.press(2, start, HotkeyMode::Hold, DictationPhase::Idle, true),
+            HotkeyIntent::WaitForModifierGrace { press_id: 2 }
+        );
+        assert_eq!(
+            grace.release(
+                2,
+                start + Duration::from_millis(1),
+                HotkeyMode::Hold,
+                DictationPhase::Idle,
+            ),
+            HotkeyIntent::Noop
+        );
+        assert_eq!(
+            grace.after_modifier_grace(2, DictationPhase::Idle),
+            HotkeyIntent::Start { press_id: 2 }
+        );
+        assert!(grace.start_is_current(2));
+        assert!(grace.take_early_hold_release(2));
 
         let mut auto = HotkeyInterpreter::default();
         assert_eq!(

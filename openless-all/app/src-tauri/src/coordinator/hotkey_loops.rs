@@ -2199,12 +2199,11 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // never stops). block_on in this bridge thread makes the recv FIFO
             // order the handler execution order.
             // Note: handle_pressed_edge / handle_released_edge await internally
-            // (including network handshakes) and briefly block this thread. In
-            // Hold mode a short tap queues Released until begin_session
-            // finishes, but request_stop_during_starting already covers
-            // SessionPhase::Starting; once begin_session reaches Listening the
-            // bridge immediately recv's Released → end_session. Correct
-            // behavior, only a brief stop delay.
+            // (including network handshakes). Hold mode spawns the two edges so
+            // a key-up is not stuck behind microphone arming. Core keeps that
+            // generation and stops it as soon as the session is live, instead
+            // of dropping the provisional audio. Toggle and the other modes
+            // stay strictly serial on this thread.
             HotkeyEvent::Pressed { at, press_id } => {
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
