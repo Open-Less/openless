@@ -363,6 +363,14 @@ export interface UserPreferences {
   lowLatencyDictationEnabled: boolean;
   /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Enable local-only voice activation while idle (Windows desktop only). */
+  voiceActivationEnabled: boolean;
+  voiceActivationWakeEnabled: boolean;
+  voiceActivationFinishEnabled: boolean;
+  voiceActivationWakePhrase: string;
+  voiceActivationFinishPhrase: string;
+  voiceActivationTimeoutEnabled: boolean;
+  voiceActivationTimeoutSeconds: number;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;

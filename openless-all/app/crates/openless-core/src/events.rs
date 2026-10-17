@@ -407,6 +407,7 @@ pub enum BackendEventKind {
     BackendStarted,
     BackendStopping,
     DictationStateChanged(DictationStateSnapshot),
+    VoiceActivationStateChanged(crate::voice_activation::VoiceActivationStateSnapshot),
     TranscriptDelta(TranscriptDelta),
     PolishDelta(PolishDelta),
     DictationCompleted(DictationResult),

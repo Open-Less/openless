@@ -1629,6 +1629,18 @@ export const fr: typeof zhCN = {
       audioRecordingMaxEntriesLabel: 'Nombre maximal d’enregistrements bruts',
       audioRecordingMaxEntriesDesc:
         'Nombre maximal de fichiers WAV conservés localement. Vide = 200.',
+      voiceActivationLabel: 'Activation vocale',
+      voiceActivationDesc: 'Écouter localement une phrase d’activation pour démarrer la dictée.',
+      voiceActivationLocalOnly:
+        'La reconnaissance reste sur cet appareil ; l’audio en veille n’est ni envoyé ni archivé.',
+      voiceActivationModelMissing: 'Le modèle local Zipformer n’est pas installé.',
+      voiceActivationDownloadZipformer: 'Télécharger Zipformer',
+      voiceActivationWakeEnabled: 'Phrase d’activation',
+      voiceActivationWakePhrase: 'Phrase d’activation',
+      voiceActivationFinishEnabled: 'Phrase de fin',
+      voiceActivationFinishPhrase: 'Phrase de fin',
+      voiceActivationTimeoutEnabled: 'Arrêter après expiration',
+      voiceActivationTimeoutSeconds: 'Délai (secondes)',
       startupGroupTitle: 'Démarrage',
       startMinimizedLabel: 'Démarrer réduit (sans fenêtre principale)',
       startMinimizedDesc:

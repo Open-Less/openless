@@ -1571,6 +1571,18 @@ export const ja: typeof zhCN = {
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
       audioRecordingMaxEntriesDesc: 'ローカル保持 wav ファイル上限。空欄 = 200。',
+      voiceActivationLabel: '音声アクティベーション',
+      voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
+      voiceActivationLocalOnly:
+        '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
+      voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
+      voiceActivationDownloadZipformer: 'Zipformer をダウンロード',
+      voiceActivationWakeEnabled: '起動フレーズ',
+      voiceActivationWakePhrase: '起動フレーズ',
+      voiceActivationFinishEnabled: '終了フレーズ',
+      voiceActivationFinishPhrase: '終了フレーズ',
+      voiceActivationTimeoutEnabled: 'タイムアウトで停止',
+      voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:

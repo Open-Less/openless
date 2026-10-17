@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 
 use crate::asr::RawTranscript;
 
-use super::sherpa_runtime::{SherpaOnlineSession, SherpaOnnxRuntime};
+use super::sherpa_runtime::{SherpaOnlineSession, SherpaOnnxRuntime, SherpaTokenEmission};
 
 pub struct SherpaOnnxAsr {
     runtime: Arc<SherpaOnnxRuntime>,
@@ -54,7 +54,7 @@ enum OnlineWorkerMessage {
     Cancel,
 }
 
-pub type SherpaTokenHandler = Arc<dyn Fn(String) + Send + Sync + 'static>;
+pub type SherpaTokenHandler = Arc<dyn Fn(super::sherpa_runtime::SherpaTokenEmission) + Send + Sync + 'static>;
 
 impl SherpaOnnxAsr {
     pub fn new(
@@ -281,12 +281,12 @@ impl OnlineWorker {
         let join_handle = std::thread::Builder::new()
             .name(format!("openless-sherpa-online-{alias}"))
             .spawn(move || {
-                let emit = |piece: &str| {
-                    if piece.is_empty() || worker_cancelled.load(Ordering::SeqCst) {
+                let emit = |emission: &SherpaTokenEmission| {
+                    if emission.text.is_empty() || worker_cancelled.load(Ordering::SeqCst) {
                         return;
                     }
                     if let Some(handler) = token_handler.as_ref() {
-                        handler(piece.to_string());
+                        handler(emission.clone());
                     }
                 };
                 let result = loop {

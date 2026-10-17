@@ -1615,6 +1615,18 @@ export const de: typeof zhCN = {
         'Speichert das rohe Mikrofonaudio als WAV, um Erkennungsprobleme zu untersuchen.',
       audioRecordingMaxEntriesLabel: 'Maximale Rohaufnahmen',
       audioRecordingMaxEntriesDesc: 'Maximale Anzahl lokal gespeicherter WAV-Dateien. Leer = 200.',
+      voiceActivationLabel: 'Sprachaktivierung',
+      voiceActivationDesc: 'Lokal auf eine Aktivierungsphrase warten, um das Diktat zu starten.',
+      voiceActivationLocalOnly:
+        'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationModelMissing: 'Das lokale Zipformer-Modell ist nicht installiert.',
+      voiceActivationDownloadZipformer: 'Zipformer herunterladen',
+      voiceActivationWakeEnabled: 'Aktivierungsphrase',
+      voiceActivationWakePhrase: 'Aktivierungsphrase',
+      voiceActivationFinishEnabled: 'Abschlussphrase',
+      voiceActivationFinishPhrase: 'Abschlussphrase',
+      voiceActivationTimeoutEnabled: 'Nach Zeitüberschreitung stoppen',
+      voiceActivationTimeoutSeconds: 'Zeitüberschreitung (Sekunden)',
       startupGroupTitle: 'Startverhalten',
       startMinimizedLabel: 'Minimiert starten (ohne Hauptfenster)',
       startMinimizedDesc:

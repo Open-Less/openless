@@ -494,7 +494,7 @@ jobs:
         working-directory: openless-all/app
         env:
           OPENLESS_UPDATE_APK_DIR: ${{ steps.stage.outputs.out_dir }}
-          OPENLESS_UPDATE_REPO: Open-Less/openless
+          OPENLESS_UPDATE_REPO: ${{ github.repository }}
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
           OPENLESS_RELEASE_TAG: ${{ github.ref_name }}

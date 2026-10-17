@@ -26,6 +26,13 @@ use crate::asr::local::sherpa::{
 };
 
 const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
+#[derive(Clone, Debug)]
+pub struct SherpaTokenEmission {
+    pub text: String,
+    pub is_delta: bool,
+    pub is_new_segment: bool,
+}
+
 const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
 
 #[cfg(target_os = "windows")]
@@ -649,6 +656,7 @@ pub struct SherpaOnlineSession {
     committed_text: String,
     last_partial_text: String,
     last_emitted_text: String,
+    pending_new_segment: bool,
 }
 
 impl SherpaOnlineSession {
@@ -658,7 +666,7 @@ impl SherpaOnlineSession {
 
     pub fn accept_pcm_chunk<F>(&mut self, pcm: &[u8], on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         if pcm.is_empty() {
             return Ok(());
@@ -669,7 +677,7 @@ impl SherpaOnlineSession {
 
     pub fn finish<F>(&mut self, on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         self.finish_inner(on_token)
     }
@@ -677,7 +685,7 @@ impl SherpaOnlineSession {
     #[cfg(target_os = "windows")]
     fn accept_samples<F>(&mut self, samples: &[f32], on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         self.stream.accept_waveform(16_000, samples);
         self.drain_ready(on_token);
@@ -687,7 +695,7 @@ impl SherpaOnlineSession {
     #[cfg(not(target_os = "windows"))]
     fn accept_samples<F>(&mut self, _samples: &[f32], _on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         Ok(())
     }
@@ -695,7 +703,7 @@ impl SherpaOnlineSession {
     #[cfg(target_os = "windows")]
     fn finish_inner<F>(&mut self, on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         self.stream.input_finished();
         self.drain_ready(on_token);
@@ -706,7 +714,7 @@ impl SherpaOnlineSession {
     #[cfg(not(target_os = "windows"))]
     fn finish_inner<F>(&mut self, _on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         Ok(self.final_text())
     }
@@ -714,7 +722,7 @@ impl SherpaOnlineSession {
     #[cfg(target_os = "windows")]
     fn drain_ready<F>(&mut self, on_token: &F)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         while self.recognizer.is_ready(&self.stream) {
             self.recognizer.decode(&self.stream);
@@ -725,7 +733,7 @@ impl SherpaOnlineSession {
     #[cfg(target_os = "windows")]
     fn capture_result<F>(&mut self, on_token: &F, allow_endpoint_reset: bool)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         let Some(result) = self.recognizer.get_result(&self.stream) else {
             return;
@@ -740,24 +748,35 @@ impl SherpaOnlineSession {
             append_segment(&mut self.committed_text, &text);
             self.last_partial_text.clear();
             self.last_emitted_text.clear();
+            self.pending_new_segment = true;
             self.recognizer.reset(&self.stream);
         }
     }
 
     fn emit_delta<F>(&mut self, text: &str, on_token: &F)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         if text == self.last_emitted_text {
             return;
         }
+        let is_new_segment = self.pending_new_segment;
         if let Some(delta) = text.strip_prefix(&self.last_emitted_text) {
             if !delta.is_empty() {
-                on_token(delta);
+                on_token(&SherpaTokenEmission {
+                    text: delta.to_string(),
+                    is_delta: true,
+                    is_new_segment,
+                });
             }
         } else {
-            on_token(text);
+            on_token(&SherpaTokenEmission {
+                text: text.to_string(),
+                is_delta: false,
+                is_new_segment,
+            });
         }
+        self.pending_new_segment = false;
         self.last_emitted_text = text.to_string();
     }
 
@@ -791,6 +810,7 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
         committed_text: String::new(),
         last_partial_text: String::new(),
         last_emitted_text: String::new(),
+        pending_new_segment: false,
     })
 }
 
@@ -801,6 +821,7 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
         committed_text: String::new(),
         last_partial_text: String::new(),
         last_emitted_text: String::new(),
+        pending_new_segment: false,
     })
 }
 

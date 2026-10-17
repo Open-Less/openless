@@ -186,6 +186,9 @@ async fn forward_legacy_event(
             }
             emit_dictation_state(app, backend, snapshot)
         }
+        BackendEventKind::VoiceActivationStateChanged(state) => {
+            let _ = app.emit("voice-activation:state-changed", state);
+        }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
             capsule_owners.transcription_notice = None;

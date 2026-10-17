@@ -1534,13 +1534,21 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     };
 
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    if let Err(err) = coord
-        .backend()
-        .select_microphone_device(selected.device_name.clone())
-    {
+    let backend = coord.backend();
+    if let Err(err) = backend.select_microphone_device(selected.device_name.clone()) {
         log::warn!("[tray] save microphone preference failed: {err}");
         return;
     }
+    commands::sync_low_latency_capture_preferences(&backend.get_preferences());
+    let selected_device_name = selected.device_name.clone();
+    let backend_for_reconfigure = Arc::clone(&backend);
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = backend_for_reconfigure.configure_voice_activation().await {
+            log::warn!(
+                "[tray] reconfigure microphone-dependent voice runtime for {selected_device_name:?} failed: {err}"
+            );
+        }
+    });
 
     commands::sync_tray_microphone_selection(&items, &selected.device_name);
 }

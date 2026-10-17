@@ -360,6 +360,18 @@ fn default_silence_auto_stop_seconds() -> f32 {
     3.0
 }
 
+fn default_voice_activation_wake_phrase() -> String {
+    crate::voice_activation::DEFAULT_WAKE_PHRASE.into()
+}
+
+fn default_voice_activation_finish_phrase() -> String {
+    crate::voice_activation::DEFAULT_FINISH_PHRASE.into()
+}
+
+fn default_voice_activation_timeout_seconds() -> u32 {
+    crate::voice_activation::DEFAULT_TIMEOUT_SECONDS
+}
+
 fn resolve_windows_insertion_mode(
     mode: WindowsInsertionMode,
     legacy_sendinput_only: bool,
@@ -439,6 +451,21 @@ pub struct UserPreferences {
     /// Recording input device name. Empty string = system default microphone.
     #[serde(default)]
     pub microphone_device_name: String,
+    /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
+    #[serde(default)]
+    pub voice_activation_enabled: bool,
+    #[serde(default = "default_true")]
+    pub voice_activation_wake_enabled: bool,
+    #[serde(default = "default_true")]
+    pub voice_activation_finish_enabled: bool,
+    #[serde(default = "default_voice_activation_wake_phrase")]
+    pub voice_activation_wake_phrase: String,
+    #[serde(default = "default_voice_activation_finish_phrase")]
+    pub voice_activation_finish_phrase: String,
+    #[serde(default = "default_true")]
+    pub voice_activation_timeout_enabled: bool,
+    #[serde(default = "default_voice_activation_timeout_seconds")]
+    pub voice_activation_timeout_seconds: u32,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
     /// Recognition pipeline mode (experimental, issue #902). With
@@ -990,6 +1017,20 @@ struct UserPreferencesWire {
     silence_auto_stop_seconds: f32,
     #[serde(default)]
     microphone_device_name: String,
+    #[serde(default)]
+    voice_activation_enabled: bool,
+    #[serde(default = "default_true")]
+    voice_activation_wake_enabled: bool,
+    #[serde(default = "default_true")]
+    voice_activation_finish_enabled: bool,
+    #[serde(default = "default_voice_activation_wake_phrase")]
+    voice_activation_wake_phrase: String,
+    #[serde(default = "default_voice_activation_finish_phrase")]
+    voice_activation_finish_phrase: String,
+    #[serde(default = "default_true")]
+    voice_activation_timeout_enabled: bool,
+    #[serde(default = "default_voice_activation_timeout_seconds")]
+    voice_activation_timeout_seconds: u32,
     active_asr_provider: String,
     active_llm_provider: String,
     #[serde(default = "default_pipeline_mode")]
@@ -1246,6 +1287,13 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
+            voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
+            voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
+            voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
+            voice_activation_finish_phrase: prefs.voice_activation_finish_phrase,
+            voice_activation_timeout_enabled: prefs.voice_activation_timeout_enabled,
+            voice_activation_timeout_seconds: prefs.voice_activation_timeout_seconds,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
             pipeline_mode: prefs.pipeline_mode,
@@ -1450,6 +1498,16 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
+            voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
+            voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
+            voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
+            voice_activation_finish_phrase: wire.voice_activation_finish_phrase,
+            voice_activation_timeout_enabled: wire.voice_activation_timeout_enabled,
+            voice_activation_timeout_seconds: wire.voice_activation_timeout_seconds.clamp(
+                crate::voice_activation::MIN_TIMEOUT_SECONDS,
+                crate::voice_activation::MAX_TIMEOUT_SECONDS,
+            ),
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
             pipeline_mode: wire.pipeline_mode,
@@ -1831,6 +1889,13 @@ impl Default for UserPreferences {
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
+            voice_activation_enabled: false,
+            voice_activation_wake_enabled: true,
+            voice_activation_finish_enabled: true,
+            voice_activation_wake_phrase: default_voice_activation_wake_phrase(),
+            voice_activation_finish_phrase: default_voice_activation_finish_phrase(),
+            voice_activation_timeout_enabled: true,
+            voice_activation_timeout_seconds: default_voice_activation_timeout_seconds(),
             active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
             pipeline_mode: PipelineMode::Traditional,

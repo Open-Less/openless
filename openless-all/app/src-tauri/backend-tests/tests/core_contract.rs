@@ -28,6 +28,7 @@ async fn backend_tests_can_use_the_framework_independent_core_contract() {
             dictation_engine: Arc::new(FixtureDictationEngine::successful("raw", "polished")),
             task_spawner: Arc::new(TokioTaskSpawner),
             credential_store: Arc::new(InMemoryCredentialStore::default()),
+            voice_activation_runtime: None,
             services: openless_core::BackendServices::unsupported(),
             local_asr_runtime: None,
             selection_runtime: None,

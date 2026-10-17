@@ -8,6 +8,7 @@ use crate::audio::AudioProcessingConfig;
 use crate::dictation_context::DictationContext;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::types::{InsertStatus, PolishDelta, SessionId, TranscriptDelta};
+use crate::voice_activation::{VoiceActivationConfig, VoiceActivationSignal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostAction {
@@ -70,6 +71,85 @@ pub struct NoopHostActions;
 impl HostActions for NoopHostActions {
     fn request(&self, _action: HostAction) -> Result<(), BackendError> {
         Ok(())
+    }
+}
+
+/// Host-owned sink for semantic voice activation signals. Standby recognition
+/// must only publish wake/finish commands and runtime state; it must never
+/// publish the recognized standby text as a normal transcript delta.
+pub trait VoiceActivationSink: Send + Sync {
+    fn publish(&self, signal: VoiceActivationSignal) -> Result<(), BackendError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceActivationError {
+    Unsupported,
+    ModelMissing,
+    PermissionDenied,
+    MicBusy,
+    InvalidConfig(String),
+    Runtime(String),
+}
+
+impl std::fmt::Display for VoiceActivationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported => formatter.write_str("voice activation is unsupported"),
+            Self::ModelMissing => formatter.write_str("voice activation model is not installed"),
+            Self::PermissionDenied => formatter.write_str("microphone permission was denied"),
+            Self::MicBusy => formatter.write_str("microphone is already in use"),
+            Self::InvalidConfig(message) | Self::Runtime(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for VoiceActivationError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceDictationHandoffRequest {
+    pub activation_generation: u64,
+}
+
+pub struct VoiceDictationHandoff {
+    pub capture: Box<dyn PendingAudioCapture>,
+}
+
+/// A single host-owned microphone/runtime seam for voice activation. The Core
+/// decides lifecycle and stale-event policy; the host decides how local ASR and
+/// the native capture stream are implemented.
+pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    fn configure(
+        &self,
+        config: VoiceActivationConfig,
+        sink: Arc<dyn VoiceActivationSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn VoiceActivationHandle>, VoiceActivationError>>;
+}
+
+pub trait VoiceActivationHandle: Send + Sync {
+    /// Bind the Core-owned dictation session so finish signals can carry the
+    /// same session identity even though the host performs recognition.
+    fn bind_dictation_session(&self, _session_id: SessionId) {}
+
+    fn handoff_to_dictation(
+        &self,
+        request: VoiceDictationHandoffRequest,
+    ) -> BoxFuture<'static, Result<VoiceDictationHandoff, VoiceActivationError>>;
+
+    fn stop(
+        &self,
+        reason: crate::voice_activation::VoiceActivationStopReason,
+    ) -> BoxFuture<'static, Result<(), VoiceActivationError>>;
+}
+
+pub struct UnsupportedVoiceActivationRuntime;
+
+impl VoiceActivationRuntime for UnsupportedVoiceActivationRuntime {
+    fn configure(
+        &self,
+        _config: VoiceActivationConfig,
+        _sink: Arc<dyn VoiceActivationSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn VoiceActivationHandle>, VoiceActivationError>> {
+        Box::pin(async { Err(VoiceActivationError::Unsupported) })
     }
 }
 

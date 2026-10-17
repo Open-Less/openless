@@ -62,13 +62,13 @@ function usePlatformCaps(): PlatformCapabilities | null {
 }
 
 // Recording & input: from recording to text insertion, plus phone input.
-export function GeneralTab() {
+export function GeneralTab({ onOpenLocalModels }: { onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
 
   return (
     <>
-      <RecordingInputSection />
+      <RecordingInputSection onOpenLocalModels={onOpenLocalModels} />
       <SelectionWorkspaceSection showShortcut={false} />
       {showRemoteInput && <RemoteInputSection />}
     </>
@@ -116,21 +116,29 @@ export function AppearanceTab() {
 }
 
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
-export function ServicesTab({ asrNavigation = 0 }: { asrNavigation?: number } = {}) {
+export function ServicesTab({
+  initialView,
+  asrNavigation = 0,
+}: {
+  initialView?: ServiceViewId;
+  asrNavigation?: number;
+} = {}) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
   const showLocalModel = detectOS() !== 'mac' && platformCaps?.supportsLocalAsr === true;
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
-  const [view, setView] = useState<ServiceViewId>(asrNavigation ? 'asr' : 'llm');
+  const [view, setView] = useState<ServiceViewId>(initialView ?? (asrNavigation ? 'asr' : 'llm'));
   useEffect(() => {
     if (asrNavigation) setView('asr');
   }, [asrNavigation]);
   const views = availableServiceViews(showLocalModel, detectOS());
   const requestedView = resolveServiceView(view, views, multimodal, detectOS());
   const contentRef = useRef<HTMLDivElement>(null);
-  const selectedView = usePageTransition(requestedView, contentRef, false);
+  const transitionedView = usePageTransition(requestedView, contentRef, false);
+  const selectedView =
+    initialView === 'models' && view === 'models' && showLocalModel ? 'models' : transitionedView;
   const pipelineRef = useRef<HTMLDivElement>(null);
   const pipelineIndicatorRef = useRef<HTMLSpanElement>(null);
   const navigationRef = useRef<HTMLDivElement>(null);
