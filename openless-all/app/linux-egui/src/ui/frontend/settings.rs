@@ -1818,6 +1818,74 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
             },
         );
     });
+    // 排版（Tauri `TypographySection`）：字族 / 字号 / 阅读宽度。
+    let typography = vm.typography;
+    card(ui, tr_l10n(lang, "uiRefinement.typography"), "", |ui| {
+        use openless_linux_egui::typography::{ContentWidth, FontScale, TypographyField, UiFont};
+        let fonts: Vec<&str> = UiFont::ALL
+            .iter()
+            .map(|font| tr_l10n(lang, font.label_key()))
+            .collect();
+        let font_index = UiFont::ALL
+            .iter()
+            .position(|font| *font == typography.font)
+            .unwrap_or(0);
+        combo_index_row(
+            ui,
+            tr_l10n(lang, "uiRefinement.family"),
+            tr_l10n(lang, "uiRefinement.fontHint"),
+            font_index,
+            &fonts,
+            |val| {
+                if let Some(font) = UiFont::ALL.get(val) {
+                    actions.push(FrontendAction::SettingsTypography(TypographyField::Font(
+                        *font,
+                    )));
+                }
+            },
+        );
+        let scales: Vec<&str> = FontScale::ALL.iter().map(|scale| scale.label()).collect();
+        let scale_index = FontScale::ALL
+            .iter()
+            .position(|scale| *scale == typography.scale)
+            .unwrap_or(1);
+        combo_index_row(
+            ui,
+            tr_l10n(lang, "uiRefinement.fontSize"),
+            "",
+            scale_index,
+            &scales,
+            |val| {
+                if let Some(scale) = FontScale::ALL.get(val) {
+                    actions.push(FrontendAction::SettingsTypography(TypographyField::Scale(
+                        *scale,
+                    )));
+                }
+            },
+        );
+        let widths: Vec<&str> = ContentWidth::ALL
+            .iter()
+            .map(|width| tr_l10n(lang, width.label_key()))
+            .collect();
+        let width_index = ContentWidth::ALL
+            .iter()
+            .position(|width| *width == typography.width)
+            .unwrap_or(1);
+        combo_index_row(
+            ui,
+            tr_l10n(lang, "uiRefinement.width"),
+            "",
+            width_index,
+            &widths,
+            |val| {
+                if let Some(width) = ContentWidth::ALL.get(val) {
+                    actions.push(FrontendAction::SettingsTypography(TypographyField::Width(
+                        *width,
+                    )));
+                }
+            },
+        );
+    });
     card(
         ui,
         tr_l10n(lang, "settings.language.title"),
@@ -2340,6 +2408,8 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         // Keep editable retention controls reachable before the longer service
         // explanations. Wrapped paragraphs must never inherit centered text.
         privacy_data(ui, vm, actions);
+        // Tauri 的隐私页顺序是 权限 → 数据与存储 → 云端同步。
+        super::cloud_sync::cloud_sync_card(ui, vm, actions);
         privacy_access(ui, vm, actions);
     });
 }
@@ -4670,7 +4740,12 @@ fn experimental_card(
 /// A settings card. Tauri hides every `SectionDesc` (the only visible
 /// description is the one under the pane title), so the second argument is a
 /// hover hint attached to a 「?」 next to the card title.
-fn card(ui: &mut egui::Ui, title: &str, hint: &str, contents: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn card(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
     egui::Frame::new()
         .fill(theme::SURFACE)
         .stroke(egui::Stroke::new(0.5, theme::LINE))
@@ -4687,7 +4762,7 @@ fn card(ui: &mut egui::Ui, title: &str, hint: &str, contents: impl FnOnce(&mut e
 
 /// A collapsible card group (Tauri wraps 插入与剪贴板 / 启动 in a `Collapsible`).
 /// The open state lives in egui memory, keyed by the group title.
-fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
     let id = egui::Id::new(("openless-settings-group", title));
     let mut open = ui.data(|data| data.get_temp::<bool>(id).unwrap_or(true));
     egui::Frame::new()
@@ -4928,7 +5003,13 @@ fn close_button(ui: &mut egui::Ui) -> bool {
     response.clicked()
 }
 
-fn toggle_row(ui: &mut egui::Ui, label: &str, desc: &str, value: bool, on_toggle: impl FnOnce()) {
+pub(super) fn toggle_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    desc: &str,
+    value: bool,
+    on_toggle: impl FnOnce(),
+) {
     row_desc(ui, label, desc, |ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::hover());
         if layout::toggle(ui, rect, value, label).clicked() {
@@ -5179,7 +5260,7 @@ fn text_row(ui: &mut egui::Ui, label: &str, desc: &str, value: &str) {
     });
 }
 
-fn text_edit_row(
+pub(super) fn text_edit_row(
     ui: &mut egui::Ui,
     label: &str,
     desc: &str,
@@ -5240,11 +5321,16 @@ fn action_row(
     });
 }
 
-fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
     row_desc(ui, label, "", control);
 }
 
-fn row_desc(ui: &mut egui::Ui, label: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn row_desc(
+    ui: &mut egui::Ui,
+    label: &str,
+    desc: &str,
+    control: impl FnOnce(&mut egui::Ui),
+) {
     // Tauri `SettingRow` 是 grid `minmax(0,200px) minmax(0,1fr)` + gap 16，控件在第二列里
     // **左对齐**（`justify-content: flex-start`），所以每一行的控件起点都固定在同一 x，
     // 而不是各自贴右边缘 —— 贴右会让不同宽度的控件彼此错开。

@@ -2682,15 +2682,9 @@ pub const CATALOG: &[Msg] = &[
             "AI 서비스 및 모델",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.shortcuts",
-        text: row(
-            "快捷键与选区",
-            "快捷鍵與選取文字",
-            "Shortcuts & selection",
-            "ショートカットと選択",
-            "단축키 및 선택",
-        ),
+        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカットと選択", "단축키 및 선택"),
     },
         Msg {
         key: "settings.selection_workspace.hint",
@@ -4322,10 +4316,10 @@ pub const CATALOG: &[Msg] = &[
             "로컬 Qwen3-ASR(C / CPU)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrAppleSpeech",
         text: row(
-            "Apple 语音（macOS）",
+            "苹果识别（macOS）",
             "Apple 語音（macOS）",
             "Apple Speech (macOS)",
             "Apple 音声認識 (macOS)",
@@ -4505,12 +4499,12 @@ pub const CATALOG: &[Msg] = &[
             "음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.shortcuts",
         text: row(
-            "设置各功能的触发方式，以及选中文字后的操作。",
-            "設定各功能的觸發方式，以及選取文字後的操作。",
-            "Set up shortcuts and choose what happens when you select text.",
+            "搜索、分类与自定义各功能的快捷键。",
+            "搜尋、分類與自訂各功能的快捷鍵。",
+            "Search, browse and customize keyboard shortcuts.",
             "各機能のショートカットと、テキスト選択後の操作を設定します。",
             "기능별 단축키와 텍스트 선택 후 동작을 설정합니다.",
         ),
@@ -6625,6 +6619,524 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.providers.volcengineServiceLabel",
         text: row("服务", "服務", "Service", "サービス", "서비스"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.account",
+        text: row("同步账号", "同步帳號", "Sync account", "同期アカウント", "동기화 계정"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.backupRetention",
+        text: row(
+            "删除后，服务备份副本最多保留 {} 天。",
+            "刪除後，服務備份副本最多保留 {} 天。",
+            "After deletion, service backup copies may be retained for up to {} days.",
+            "削除後も、サービスのバックアップコピーは最長 {} 日間保持される場合があります。",
+            "삭제 후에도 서비스의 백업 사본이 최대 {}일 동안 보관될 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.cancelTask",
+        text: row(
+            "取消当前任务",
+            "取消目前工作",
+            "Cancel current task",
+            "現在の処理をキャンセル",
+            "현재 작업 취소",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.changePassword",
+        text: row(
+            "更改同步密码",
+            "變更同步密碼",
+            "Change sync password",
+            "同期パスワードを変更",
+            "동기화 비밀번호 변경",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmDelete",
+        text: row(
+            "删除云端备份",
+            "刪除雲端備份",
+            "Delete cloud backup",
+            "クラウドバックアップを削除",
+            "클라우드 백업 삭제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmDisable",
+        text: row(
+            "关闭同步",
+            "關閉同步",
+            "Turn off sync",
+            "同期をオフにする",
+            "동기화 끄기",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmPassword",
+        text: row(
+            "再次输入新密码",
+            "再次輸入新密碼",
+            "Confirm new password",
+            "新しいパスワードを再入力",
+            "새 비밀번호 확인",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentCheck",
+        text: row(
+            "我已了解完整范围，并同意加密同步这些资料。",
+            "我已了解完整範圍，並同意加密同步這些資料。",
+            "I understand the full scope and agree to sync this data in encrypted form.",
+            "対象範囲を理解し、これらのデータの暗号化同期に同意します。",
+            "전체 범위를 이해했으며 이 데이터를 암호화해 동기화하는 데 동의합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentDescription",
+        text: row(
+            "同步内容包含服务凭据和私密文本历史，资料会在本机加密后上传。请先了解完整范围。",
+            "同步內容包含服務憑證和私人文字歷史，資料會在本機加密後上傳。請先了解完整範圍。",
+            "This sync includes service credentials and private text history. Data is encrypted on your device before upload. Review the full scope first.",
+            "サービスの認証情報と非公開のテキスト履歴も同期します。アップロード前に端末で暗号化します。対象範囲を確認してください。",
+            "서비스 자격 증명과 비공개 텍스트 기록도 동기화됩니다. 업로드 전에 기기에서 암호화합니다. 전체 범위를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentTitle",
+        text: row(
+            "启用端到端加密同步",
+            "啟用端對端加密同步",
+            "Enable end-to-end encrypted sync",
+            "エンドツーエンド暗号化同期を有効にする",
+            "종단 간 암호화 동기화 사용",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.continue",
+        text: row("继续", "繼續", "Continue", "続ける", "계속"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.currentPassword",
+        text: row(
+            "当前同步密码",
+            "目前同步密碼",
+            "Current sync password",
+            "現在の同期パスワード",
+            "현재 동기화 비밀번호",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerHint",
+        text: row(
+            "留空则使用官方同步服务器。地址必须是 https:// 开头的根地址。",
+            "留空則使用官方同步伺服器。位址必須以 https:// 開頭的根位址。",
+            "Leave blank to use the official sync server. The address must start with https:// and be a root URL.",
+            "空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。",
+            "비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerSave",
+        text: row("保存", "儲存", "Save", "保存", "저장"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerTitle",
+        text: row(
+            "自建同步服务器（高级）",
+            "自建同步伺服器（進階）",
+            "Self-hosted sync server (advanced)",
+            "自前の同期サーバー（上級者向け）",
+            "자체 동기화 서버 (고급)",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerToken",
+        text: row(
+            "登录 Token",
+            "登入 Token",
+            "Sign-in token",
+            "サインイン Token",
+            "로그인 Token",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.delete",
+        text: row(
+            "删除云端备份",
+            "刪除雲端備份",
+            "Delete cloud backup",
+            "クラウドバックアップを削除",
+            "클라우드 백업 삭제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deleteDescription",
+        text: row(
+            "仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。",
+            "僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。",
+            "Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.",
+            "このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。",
+            "이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deleteTitle",
+        text: row(
+            "删除云端加密备份？",
+            "刪除雲端加密備份？",
+            "Delete the encrypted cloud backup?",
+            "暗号化クラウドバックアップを削除しますか？",
+            "암호화된 클라우드 백업을 삭제할까요?",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.description",
+        text: row(
+            "在本机加密后，通过 GitHub 账号或 Token 跨设备同步。",
+            "在本機加密後，透過 GitHub 帳號或 Token 跨裝置同步。",
+            "Encrypt on this device before syncing with your GitHub account.",
+            "この端末で暗号化してから、GitHub アカウントで端末間を同期します。",
+            "이 기기에서 암호화한 후 GitHub 계정으로 기기 간에 동기화합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.disableDescription",
+        text: row(
+            "关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。",
+            "關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。",
+            "This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.",
+            "以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。",
+            "이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.disableTitle",
+        text: row(
+            "关闭加密同步？",
+            "關閉加密同步？",
+            "Turn off encrypted sync?",
+            "暗号化同期をオフにしますか？",
+            "암호화 동기화를 끌까요?",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.enable",
+        text: row(
+            "启用加密同步",
+            "啟用加密同步",
+            "Enable encrypted sync",
+            "暗号化同期を有効にする",
+            "암호화 동기화 사용",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.hasSnapshot",
+        text: row(
+            "云端已有加密备份。",
+            "雲端已有加密備份。",
+            "An encrypted cloud backup is available.",
+            "暗号化されたクラウドバックアップがあります。",
+            "암호화된 클라우드 백업이 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.keyLocked",
+        text: row(
+            "此设备尚未解锁",
+            "此裝置尚未解鎖",
+            "Locked on this device",
+            "この端末ではロック中",
+            "이 기기에서 잠김",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.keyUnlocked",
+        text: row(
+            "此设备已解锁",
+            "此裝置已解鎖",
+            "Unlocked on this device",
+            "この端末でロック解除済み",
+            "이 기기에서 잠금 해제됨",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.loading",
+        text: row(
+            "正在读取同步状态…",
+            "正在讀取同步狀態…",
+            "Checking sync status…",
+            "同期状態を確認中…",
+            "동기화 상태 확인 중…",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.lock",
+        text: row(
+            "锁定此设备",
+            "鎖定此裝置",
+            "Lock this device",
+            "この端末をロック",
+            "이 기기 잠그기",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.noSnapshot",
+        text: row(
+            "云端尚无加密备份。",
+            "雲端尚無加密備份。",
+            "No encrypted cloud backup yet.",
+            "暗号化クラウドバックアップはまだありません。",
+            "아직 암호화된 클라우드 백업이 없습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordTitle",
+        text: row(
+            "更改同步密码",
+            "變更同步密碼",
+            "Change your sync password",
+            "同期パスワードを変更",
+            "동기화 비밀번호 변경",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordWarning",
+        text: row(
+            "请妥善保管同步密码。密码无法找回，遗失后可能无法读取云端资料。",
+            "請妥善保管同步密碼。密碼無法找回，遺失後可能無法讀取雲端資料。",
+            "Keep your sync password safe. It cannot be recovered; losing it can make cloud data unreadable.",
+            "同期パスワードは安全に保管してください。再発行できず、紛失するとクラウドのデータを読めなくなる場合があります。",
+            "동기화 비밀번호를 안전하게 보관하세요. 복구할 수 없으며, 분실하면 클라우드 데이터를 읽지 못할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolTitle",
+        text: row(
+            "云同步协议与隐私提醒",
+            "雲端同步協議與隱私提醒",
+            "Cloud sync agreement and privacy notice",
+            "クラウド同期の同意事項とプライバシー",
+            "클라우드 동기화 약관 및 개인정보 안내",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.refresh",
+        text: row(
+            "刷新状态",
+            "重新整理狀態",
+            "Refresh status",
+            "状態を更新",
+            "상태 새로고침",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.rememberKey",
+        text: row(
+            "在此设备的安全存储中记住解锁密钥",
+            "在此裝置的安全儲存空間記住解鎖金鑰",
+            "Remember the unlock key in this device’s secure storage",
+            "この端末の安全なストレージに解除キーを記憶する",
+            "이 기기의 보안 저장소에 잠금 해제 키 기억",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restore",
+        text: row(
+            "审阅云端恢复",
+            "檢閱雲端還原",
+            "Review cloud restore",
+            "クラウドからの復元を確認",
+            "클라우드 복원 검토",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreDescription",
+        text: row(
+            "请检查下列资料类别，敏感值不会展示。确认之前不会恢复任何内容。",
+            "請檢查下列資料類別，敏感值不會顯示。確認之前不會還原任何內容。",
+            "Review the categories below. Sensitive values stay hidden. Nothing is restored until you confirm.",
+            "データの種類を確認してください。機密の値は表示しません。確認するまで復元しません。",
+            "데이터 종류를 확인하세요. 민감한 값은 표시하지 않습니다. 확인 전에는 복원하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreTitle",
+        text: row(
+            "恢复前审阅",
+            "還原前檢閱",
+            "Review before restoring",
+            "復元前に確認",
+            "복원 전 검토",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.signIn",
+        text: row(
+            "使用 GitHub 登录",
+            "使用 GitHub 登入",
+            "Sign in with GitHub",
+            "GitHub でログイン",
+            "GitHub로 로그인",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.signOut",
+        text: row("退出登录", "登出", "Sign out", "ログアウト", "로그아웃"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.snapshotUnknown",
+        text: row(
+            "尚未检查云端备份。",
+            "尚未檢查雲端備份。",
+            "Cloud backup has not been checked yet.",
+            "クラウドバックアップは未確認です。",
+            "클라우드 백업을 아직 확인하지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.title",
+        text: row(
+            "加密云同步",
+            "加密雲端同步",
+            "Encrypted cloud sync",
+            "暗号化クラウド同期",
+            "암호화 클라우드 동기화",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.unlock",
+        text: row("解锁", "解鎖", "Unlock", "ロック解除", "잠금 해제"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.working",
+        text: row(
+            "正在处理…",
+            "正在處理…",
+            "Working securely…",
+            "処理中…",
+            "처리 중…",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.conflictProgress",
+        text: row(
+            "已处理 {} / {} 项冲突",
+            "已處理 {} / {} 項衝突",
+            "{} of {} conflicts resolved",
+            "{} 件中 {} 件を選択済み",
+            "충돌 {}개 중 {}개 해결",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deviceReview",
+        text: row(
+            "恢复后请核对 {} 项设备配置，包括快捷键、模型目录、麦克风及系统授权。",
+            "還原後請核對 {} 項裝置設定，包括快捷鍵、模型目錄、麥克風及系統授權。",
+            "After restoring, review {} device settings, including shortcuts, model paths, microphones and system permissions.",
+            "復元後は、ショートカット、モデルの場所、マイク、システム権限など {} 件の端末設定を確認してください。",
+            "복원 후 단축키, 모델 경로, 마이크, 시스템 권한 등 기기 설정 {}개를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.lastSync",
+        text: row(
+            "上次同步：{}",
+            "上次同步：{}",
+            "Last synced {}",
+            "最終同期：{}",
+            "마지막 동기화: {}",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.merge",
+        text: row(
+            "合并，并逐项处理冲突",
+            "合併，並逐項處理衝突",
+            "Merge and resolve conflicts",
+            "マージして競合を解決",
+            "병합하고 충돌 해결",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordPolicy",
+        text: row(
+            "使用 12–128 个字符，包含大写字母、小写字母和数字，避免常见弱密码。",
+            "使用 12–128 個字元，包含大寫字母、小寫字母和數字，避免常見弱密碼。",
+            "Use 12–128 characters with uppercase and lowercase letters and a number. Avoid common passwords.",
+            "12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。",
+            "12~128자로 영문 대문자, 소문자, 숫자를 포함하세요. 흔한 비밀번호는 피하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.replace",
+        text: row(
+            "使用云端资料替换本机同步资料",
+            "使用雲端資料取代本機同步資料",
+            "Replace synced local data with cloud data",
+            "同期対象のローカルデータをクラウドの内容で置換",
+            "동기화 대상 로컬 데이터를 클라우드 데이터로 교체",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreCheck",
+        text: row(
+            "我已检查恢复方式和冲突处理选择。",
+            "我已檢查還原方式和衝突處理選擇。",
+            "I have reviewed the restore mode and conflict choices.",
+            "復元方法と競合の選択を確認しました。",
+            "복원 방식과 충돌 선택을 확인했습니다.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.family",
+        text: row("字体系列", "字体系列", "Font family", "Font family", "Font family"),
+    },
+    Msg {
+        key: "uiRefinement.fontHint",
+        text: row(
+            "仅使用已安装字体，缺失时回退到系统字体。不下载、不扫描，也不发起字体网络请求。",
+            "仅使用已安装字体，缺失时回退到系统字体。不下载、不扫描，也不发起字体网络请求。",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.fontSize",
+        text: row(
+            "界面大小",
+            "界面大小",
+            "Interface size",
+            "Interface size",
+            "Interface size",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.storageError",
+        text: row(
+            "本地保存失败，本次会话仍使用当前选择。",
+            "本地保存失败，本次会话仍使用当前选择。",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.typography",
+        text: row("字体与排版", "字体与排版", "Typography", "Typography", "Typography"),
+    },
+    Msg {
+        key: "uiRefinement.width",
+        text: row(
+            "阅读宽度",
+            "阅读宽度",
+            "Reading width",
+            "Reading width",
+            "Reading width",
+        ),
     },
 ];
 

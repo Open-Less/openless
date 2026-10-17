@@ -10,6 +10,8 @@ mod audio_mute;
 mod audio_player;
 mod backend;
 mod capabilities;
+pub mod cloud_sync_ui;
+
 mod coding_agent;
 mod credentials;
 mod desktop;
@@ -37,6 +39,7 @@ mod selection;
 mod settings;
 mod single_instance;
 mod tray;
+pub mod typography;
 mod ui_state;
 pub mod wgpu_device;
 

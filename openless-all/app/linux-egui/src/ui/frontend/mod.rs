@@ -1,4 +1,5 @@
 pub mod capsule_motion;
+pub mod cloud_sync;
 pub mod corrections;
 pub mod format;
 pub mod history;
@@ -79,27 +80,21 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                     )
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        match page {
-                            Page::Marketplace => {
-                                marketplace::marketplace_page(ui, vm, actions, body);
-                            }
-                            Page::SelectionAsk => {
-                                selection_ask::page(ui, vm, actions);
-                            }
-                            Page::Translation => {
-                                translation::page(ui, vm, actions);
-                            }
-                            Page::Corrections => {
-                                corrections::page(ui, vm, actions);
-                            }
-                            Page::Overview
-                            | Page::History
-                            | Page::QuickNote
-                            | Page::Style
-                            | Page::Vocab
-                            | Page::Settings => {
-                                // Handled above or via overlay.
-                            }
+                        // 阅读宽度（外观 → 排版）：Tauri 用 `--ol-reading-width`
+                        // 限制内容列，这里等价地把滚动内容收窄并居中。
+                        let content_width =
+                            openless_linux_egui::typography::load().width.max_width();
+                        if ui.available_width() > content_width {
+                            let margin = (ui.available_width() - content_width) / 2.0;
+                            ui.horizontal(|ui| {
+                                ui.add_space(margin);
+                                ui.vertical(|ui| {
+                                    ui.set_max_width(content_width);
+                                    page_content(ui, vm, actions, page, body);
+                                });
+                            });
+                        } else {
+                            page_content(ui, vm, actions, page, body);
                         }
                         ui.add_space(32.0);
                     });
@@ -122,6 +117,9 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         // Settings overlay (rendered on top of everything).
         if vm.settings_open {
             settings::settings_overlay(ctx, vm, actions, body);
+            // 云同步的模态框必须在设置卡片之后创建：同层 Area 后创建的在上，
+            // 否则点「恢复/改密码」弹出的对话框会被设置面板盖住。
+            cloud_sync::cloud_sync_overlay(ctx, body, vm, actions);
         } else if vm.settings_saving || vm.settings_save_error.is_some() {
             egui::Area::new(egui::Id::new("preference-save-state"))
                 .order(egui::Order::Foreground)
@@ -137,6 +135,30 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
 
     if vm.runtime_warning.is_some() {
         runtime_warning_overlay(ctx, vm, actions);
+    }
+}
+
+/// Body of one non-overlay page: everything that scrolls inside the main area.
+fn page_content(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    page: Page,
+    body: egui::Rect,
+) {
+    match page {
+        Page::Marketplace => marketplace::marketplace_page(ui, vm, actions, body),
+        Page::SelectionAsk => selection_ask::page(ui, vm, actions),
+        Page::Translation => translation::page(ui, vm, actions),
+        Page::Corrections => corrections::page(ui, vm, actions),
+        Page::Overview
+        | Page::History
+        | Page::QuickNote
+        | Page::Style
+        | Page::Vocab
+        | Page::Settings => {
+            // Handled above or via the settings overlay.
+        }
     }
 }
 

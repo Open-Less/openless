@@ -343,6 +343,10 @@ pub(super) fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            // 字号缩放（90/100/110%）跟着外观页的偏好走：egui 的 zoom factor
+            // 缩放整棵 UI，等价于 Tauri 那边改根节点字号。
+            cc.egui_ctx
+                .set_zoom_factor(openless_linux_egui::typography::load().scale.factor());
             if let Some(state) = cc.wgpu_render_state.as_ref() {
                 crate::ui::frontend::siri_wgpu::install_wgpu(state, MAIN_MSAA_SAMPLES.into());
             }

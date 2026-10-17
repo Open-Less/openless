@@ -125,6 +125,76 @@ fn write_state_value(key: &str, value: serde_json::Value) -> Result<(), UiStateE
         })
 }
 
+/// Reading typography (font family / scale / content width). Missing or
+/// unreadable fields fall back to the Tauri defaults instead of failing.
+pub fn load_typography() -> crate::typography::Typography {
+    use crate::typography::{ContentWidth, FontScale, Typography, UiFont};
+    let document = read_state_object();
+    let read = |key: &str| document.get(key).and_then(serde_json::Value::as_str);
+    Typography {
+        font: read("font_family")
+            .and_then(UiFont::from_tag)
+            .unwrap_or_default(),
+        scale: read("font_scale")
+            .and_then(FontScale::from_tag)
+            .unwrap_or_default(),
+        width: read("content_width")
+            .and_then(ContentWidth::from_tag)
+            .unwrap_or_default(),
+    }
+}
+
+/// Persist the whole typography document. Every field is written so a partial
+/// write can never leave the three controls disagreeing with each other.
+pub fn save_typography(typography: crate::typography::Typography) -> Result<(), UiStateError> {
+    write_state_values(&[
+        (
+            "font_family",
+            serde_json::Value::String(typography.font.tag().to_string()),
+        ),
+        (
+            "font_scale",
+            serde_json::Value::String(typography.scale.tag().to_string()),
+        ),
+        (
+            "content_width",
+            serde_json::Value::String(typography.width.tag().to_string()),
+        ),
+    ])
+}
+
+/// Merge several keys in one atomic write (one temp file + one rename).
+fn write_state_values(entries: &[(&str, serde_json::Value)]) -> Result<(), UiStateError> {
+    let Some(dir) = ui_state_dir() else {
+        return Err(io_error(
+            "resolve ui-state directory",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    let Some(path) = ui_state_path() else {
+        return Err(io_error(
+            "resolve ui-state path",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    std::fs::create_dir_all(&dir).map_err(|error| io_error("create ui-state directory", error))?;
+    let mut document = read_state_object();
+    for (key, value) in entries {
+        document.insert((*key).to_string(), value.clone());
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(document))
+        .map_err(|error| UiStateError::Json(error.to_string()))?;
+    atomic_save(&path, &bytes)
+        .map(|_| ())
+        .map_err(|error| match error {
+            crate::desktop::DesktopError::InvalidInput(message) => UiStateError::Json(message),
+            crate::desktop::DesktopError::Io { operation, source } => {
+                UiStateError::Io { operation, source }
+            }
+            other => UiStateError::Json(other.to_string()),
+        })
+}
+
 /// Whether the user dismissed the shortcut card on the Quick Note page.
 /// A missing key keeps the card visible, matching the upstream default.
 pub fn load_quick_note_shortcut_hidden() -> bool {

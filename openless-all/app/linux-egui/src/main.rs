@@ -106,6 +106,10 @@ mod linux_app {
             submitted: Box<openless_linux_egui::omni_settings::OmniSettings>,
             result: Box<Result<openless_linux_egui::omni_settings::OmniSettings, String>>,
         },
+        /// 云同步卡片的一次往返：成功带回最新状态，失败带回稳定错误码。
+        CloudSyncDone {
+            result: Box<Result<openless_linux_egui::cloud_sync_ui::SyncOutcome, String>>,
+        },
         ProviderEditor {
             kind: openless_core::ChannelKind,
             channel_id: String,
@@ -755,6 +759,9 @@ mod linux_app {
             let (tx, rx) = mpsc::channel();
             let locale_pref = load_locale_pref();
             let lang = locale_pref.resolve();
+            // 外观页的排版偏好：宿主这份视图模型要在首帧就带上已存的选择，
+            // 否则组合框会先画默认值再跳一次。
+            let typography = openless_linux_egui::typography::load();
             let (provider_jobs, mut provider_rx) =
                 tokio::sync::mpsc::unbounded_channel::<ProviderJob>();
             tokio.spawn(async move {
@@ -1032,7 +1039,10 @@ mod linux_app {
                     locale_pref,
                     lang,
                     active_page: shell::Page::Overview,
-                    frontend_vm: FrontendViewModel::default(),
+                    frontend_vm: FrontendViewModel {
+                        typography,
+                        ..Default::default()
+                    },
                     tx,
                     rx,
                 },
@@ -2534,6 +2544,382 @@ mod linux_app {
             });
         }
 
+        /// 读一次云同步状态（顺带刷新市场登录态，决定能否走「用 GitHub 登录」这条路）。
+        fn load_cloud_sync(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let signed_in = backend
+                    .services()
+                    .marketplace
+                    .auth_status()
+                    .await
+                    .map(|status| status.signed_in)
+                    .unwrap_or(false);
+                let _ = tx.send(UiResult::MarketplaceAuth(Ok(signed_in)));
+                match backend.cloud_sync_e2ee_status() {
+                    Ok(status) => {
+                        let _ = tx.send(UiResult::CloudSyncDone {
+                            result: Box::new(Ok(
+                                openless_linux_egui::cloud_sync_ui::SyncOutcome::Status(Box::new(
+                                    status,
+                                )),
+                            )),
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(UiResult::CloudSyncDone {
+                            result: Box::new(Err(error.to_string())),
+                        });
+                    }
+                }
+            });
+        }
+
+        /// 云同步卡片的唯一入口：UI 只发动作，所有 Core 调用都在这里发生。
+        fn apply_cloud_sync_action(
+            &mut self,
+            action: openless_linux_egui::cloud_sync_ui::CloudSyncAction,
+        ) {
+            use openless_linux_egui::cloud_sync_ui::{
+                CloudSyncAction, CloudSyncDialog, CloudSyncIntent, CloudSyncOp, CONSENT_VERSION,
+            };
+
+            // 纯 UI 动作：改草稿、开关对话框，不碰 Core。
+            match &action {
+                CloudSyncAction::Password(value) => {
+                    self.frontend_vm.cloud_sync.password = value.clone();
+                    return;
+                }
+                CloudSyncAction::Confirmation(value) => {
+                    self.frontend_vm.cloud_sync.confirmation = value.clone();
+                    return;
+                }
+                CloudSyncAction::CurrentPassword(value) => {
+                    self.frontend_vm.cloud_sync.current_password = value.clone();
+                    return;
+                }
+                CloudSyncAction::RememberKey(value) => {
+                    self.frontend_vm.cloud_sync.remember_key = *value;
+                    return;
+                }
+                CloudSyncAction::ConsentChecked(value) => {
+                    self.frontend_vm.cloud_sync.consent_checked = *value;
+                    return;
+                }
+                CloudSyncAction::CustomOrigin(value) => {
+                    self.frontend_vm.cloud_sync.custom_origin = value.clone();
+                    return;
+                }
+                CloudSyncAction::CustomToken(value) => {
+                    self.frontend_vm.cloud_sync.custom_token = value.clone();
+                    return;
+                }
+                CloudSyncAction::OpenDialog(dialog) => {
+                    self.frontend_vm.cloud_sync.open(dialog.clone());
+                    return;
+                }
+                CloudSyncAction::CloseDialog => {
+                    self.frontend_vm.cloud_sync.close();
+                    return;
+                }
+                CloudSyncAction::Toggle(enabled) => {
+                    if !*enabled {
+                        self.frontend_vm.cloud_sync.open(CloudSyncDialog::Disable);
+                        return;
+                    }
+                    // 启用前必须过「同意 + 协议警告」两屏（除非该版本已经同意过）。
+                    let consent_stale = self
+                        .frontend_vm
+                        .cloud_sync
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.consent_version.clone())
+                        .as_deref()
+                        != Some(CONSENT_VERSION);
+                    self.frontend_vm.cloud_sync.open(if consent_stale {
+                        CloudSyncDialog::Consent {
+                            intent: CloudSyncIntent::Enable,
+                        }
+                    } else {
+                        CloudSyncDialog::Protocol {
+                            intent: CloudSyncIntent::Enable,
+                        }
+                    });
+                    return;
+                }
+                CloudSyncAction::ResolveConflict(id, side) => {
+                    self.frontend_vm.cloud_sync.resolve_conflict(id, *side);
+                    return;
+                }
+                CloudSyncAction::Reload => {
+                    self.load_cloud_sync();
+                    return;
+                }
+                _ => {}
+            }
+
+            if self.frontend_vm.cloud_sync.busy {
+                return;
+            }
+
+            // 把「要做什么」压成一个纯数据操作，再交给同一个异步任务执行：
+            // 每个 Core 调用返回的类型都不同，只有一个 await 点时才不会互相打架。
+            let state = &self.frontend_vm.cloud_sync;
+            let dialog = state.dialog.clone();
+            let status = state.status.clone();
+            let remember_key = state.remember_key;
+            let passwords = (
+                state.current_password.clone(),
+                state.password.clone(),
+                state.confirmation.clone(),
+            );
+            let custom = (state.custom_origin.clone(), state.custom_token.clone());
+            let origin = state.normalized_origin();
+            let conflicts = state.conflict_choices();
+            let conflicts_ready = state.conflicts_resolved();
+
+            let operation = match action {
+                CloudSyncAction::Prepare(intent) => {
+                    self.frontend_vm.cloud_sync.intent = Some(intent);
+                    CloudSyncOp::Prepare {
+                        consent_version: CONSENT_VERSION.to_string(),
+                    }
+                }
+                CloudSyncAction::SubmitPassword(intent) => {
+                    self.frontend_vm.cloud_sync.intent = Some(intent);
+                    let (current, password, confirmation) = passwords;
+                    match &dialog {
+                        CloudSyncDialog::Create { observed_revision } => CloudSyncOp::Create {
+                            password,
+                            confirmation,
+                            remember_key,
+                            consent_version: CONSENT_VERSION.to_string(),
+                            observed_revision: observed_revision.clone(),
+                        },
+                        CloudSyncDialog::ChangePassword => CloudSyncOp::ChangePassword {
+                            current_password: current,
+                            password,
+                            confirmation,
+                            remember_key,
+                        },
+                        _ => CloudSyncOp::Unlock {
+                            password,
+                            remember_key,
+                        },
+                    }
+                }
+                CloudSyncAction::SetEnabled(enabled) => CloudSyncOp::SetEnabled(enabled),
+                CloudSyncAction::Lock => CloudSyncOp::Lock,
+                CloudSyncAction::SyncNow => CloudSyncOp::SyncNow,
+                CloudSyncAction::Cancel(task) => CloudSyncOp::Cancel(task),
+                CloudSyncAction::PreviewRestore => {
+                    let Some(observed) = status
+                        .as_ref()
+                        .and_then(|status| status.remote_revision.clone())
+                    else {
+                        self.frontend_vm.cloud_sync.apply_error("stale_preview");
+                        return;
+                    };
+                    CloudSyncOp::PreviewRestore { observed }
+                }
+                CloudSyncAction::ApplyRestore(mode) => {
+                    let CloudSyncDialog::Restore { preview, .. } = &dialog else {
+                        return;
+                    };
+                    if !conflicts_ready {
+                        self.frontend_vm.cloud_sync.apply_error("conflict");
+                        return;
+                    }
+                    let stale = status.as_ref().is_none_or(|status| {
+                        status.remote_revision.as_deref()
+                            != Some(preview.observed_revision.as_str())
+                            || status.local_generation != preview.local_generation
+                    });
+                    if stale {
+                        self.frontend_vm.cloud_sync.apply_error("stale_preview");
+                        return;
+                    }
+                    CloudSyncOp::ApplyRestore {
+                        preview_id: preview.preview_id.clone(),
+                        mode,
+                        conflicts,
+                    }
+                }
+                CloudSyncAction::DeleteRemote => {
+                    let CloudSyncDialog::Delete { vault_id, revision } = &dialog else {
+                        return;
+                    };
+                    CloudSyncOp::DeleteRemote {
+                        vault_id: vault_id.clone(),
+                        revision: revision.clone(),
+                    }
+                }
+                CloudSyncAction::SignOut => CloudSyncOp::SignOut,
+                CloudSyncAction::ConfigureServer => {
+                    let (_, token) = custom;
+                    let origin = match origin {
+                        Ok(origin) => origin,
+                        Err(code) => {
+                            self.frontend_vm.cloud_sync.apply_error(code);
+                            return;
+                        }
+                    };
+                    CloudSyncOp::ConfigureServer { origin, token }
+                }
+                _ => return,
+            };
+
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            self.frontend_vm.cloud_sync.busy = true;
+            self.frontend_vm.cloud_sync.notice = None;
+            self.frontend_vm.cloud_sync.error = None;
+            // 密码框在派发后立刻清空：宿主不再持有用户刚输入的密钥材料。
+            self.frontend_vm.cloud_sync.forget_secrets_keep_origin();
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = CloudSyncOp::run(backend, operation).await;
+                let _ = tx.send(UiResult::CloudSyncDone {
+                    result: Box::new(result),
+                });
+            });
+        }
+
+        /// 处理一次云同步往返：状态、启用准备、恢复预览各有不同后续。
+        fn apply_cloud_sync_result(
+            &mut self,
+            result: Result<openless_linux_egui::cloud_sync_ui::SyncOutcome, String>,
+        ) {
+            use openless_linux_egui::cloud_sync_ui::{
+                CloudSyncAction, CloudSyncDialog, CloudSyncIntent, SyncOutcome,
+            };
+            self.frontend_vm.cloud_sync.busy = false;
+            self.frontend_vm.cloud_sync.loading = false;
+            let outcome = match result {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    self.frontend_vm.cloud_sync.apply_error(&error);
+                    return;
+                }
+            };
+            match outcome {
+                SyncOutcome::Status(status) => {
+                    if !self.frontend_vm.cloud_sync.accept_status(*status) {
+                        return;
+                    }
+                    let dialog = self.frontend_vm.cloud_sync.dialog.clone();
+                    match dialog {
+                        // 解锁只是启用流程中的一步：解锁成功后继续准备。
+                        CloudSyncDialog::Unlock { intent } => {
+                            self.apply_cloud_sync_action(CloudSyncAction::Prepare(intent));
+                        }
+                        CloudSyncDialog::Disable | CloudSyncDialog::Delete { .. } => {
+                            self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
+                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                        }
+                        CloudSyncDialog::Create { .. } | CloudSyncDialog::ChangePassword => {
+                            self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
+                            self.frontend_vm.cloud_sync.intent = None;
+                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                        }
+                        CloudSyncDialog::Restore { enable_after, .. } => {
+                            if enable_after
+                                && !self
+                                    .frontend_vm
+                                    .cloud_sync
+                                    .status
+                                    .as_ref()
+                                    .is_some_and(|status| status.enabled)
+                            {
+                                self.apply_cloud_sync_action(CloudSyncAction::SetEnabled(true));
+                            } else {
+                                self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
+                                self.frontend_vm.cloud_sync.notice = Some("restored".to_string());
+                            }
+                            self.load_settings_channels();
+                            self.load_service_configured();
+                        }
+                        CloudSyncDialog::None if self.frontend_vm.cloud_sync.notice.is_none() => {
+                            // 「立即同步」「锁定」「登出」这类单步动作：成功后给个提示。
+                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                SyncOutcome::Prepared(prepared) => {
+                    if !self
+                        .frontend_vm
+                        .cloud_sync
+                        .accept_status(prepared.status.clone())
+                    {
+                        return;
+                    }
+                    let intent = self.frontend_vm.cloud_sync.intent;
+                    let status = prepared.status.clone();
+                    match prepared.next_step {
+                        openless_core::cloud_sync_e2ee::EnableStep::Create => {
+                            // 只有在「云端还没有快照」且确实拿到了 revision 时才能建库。
+                            let Some(revision) = status.remote_revision.clone() else {
+                                self.frontend_vm.cloud_sync.apply_error("invalid_response");
+                                return;
+                            };
+                            if status.has_cloud_snapshot != Some(false)
+                                || intent != Some(CloudSyncIntent::Enable)
+                            {
+                                self.frontend_vm.cloud_sync.apply_error("invalid_response");
+                                return;
+                            }
+                            self.frontend_vm.cloud_sync.open(CloudSyncDialog::Create {
+                                observed_revision: revision,
+                            });
+                        }
+                        openless_core::cloud_sync_e2ee::EnableStep::Unlock => {
+                            self.frontend_vm.cloud_sync.open(CloudSyncDialog::Unlock {
+                                intent: intent.unwrap_or(CloudSyncIntent::Unlock),
+                            });
+                        }
+                        openless_core::cloud_sync_e2ee::EnableStep::RestoreReview => {
+                            self.frontend_vm.cloud_sync.intent = Some(CloudSyncIntent::Restore);
+                            self.apply_cloud_sync_action(CloudSyncAction::PreviewRestore);
+                        }
+                        openless_core::cloud_sync_e2ee::EnableStep::Ready => {
+                            if intent == Some(CloudSyncIntent::Enable) {
+                                self.apply_cloud_sync_action(CloudSyncAction::SetEnabled(true));
+                            } else {
+                                self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
+                                self.frontend_vm.cloud_sync.intent = None;
+                                self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                            }
+                        }
+                    }
+                }
+                SyncOutcome::Preview(preview) => {
+                    let Some(status) = self.frontend_vm.cloud_sync.status.clone() else {
+                        self.frontend_vm.cloud_sync.apply_error("stale_preview");
+                        return;
+                    };
+                    // 预览必须和刚读到的 revision/generation 对齐，否则是过期预览。
+                    if status.remote_revision.as_deref() != Some(preview.observed_revision.as_str())
+                        || status.local_generation != preview.local_generation
+                    {
+                        self.frontend_vm.cloud_sync.apply_error("stale_preview");
+                        return;
+                    }
+                    let enable_after =
+                        self.frontend_vm.cloud_sync.intent == Some(CloudSyncIntent::Enable);
+                    self.frontend_vm.cloud_sync.open(CloudSyncDialog::Restore {
+                        preview,
+                        enable_after,
+                    });
+                }
+                SyncOutcome::Done => {}
+            }
+        }
+
         fn start_marketplace_oauth(&mut self) {
             let Some(backend) = self.backend() else {
                 return;
@@ -3507,6 +3893,64 @@ mod linux_app {
                 }
                 BackendEventKind::RemoteInputStatusChanged(_)
                 | BackendEventKind::RemoteInputFailed(_) => self.load_remote_status(),
+                BackendEventKind::CloudSyncStateChanged(event) => {
+                    // 未经请求的事件不得把界面切到另一个账号/仓库。
+                    let same_scope =
+                        self.frontend_vm
+                            .cloud_sync
+                            .status
+                            .as_ref()
+                            .is_some_and(|current| {
+                                current
+                                    .account
+                                    .as_ref()
+                                    .map(|account| account.github_id.clone())
+                                    == event
+                                        .status
+                                        .account
+                                        .as_ref()
+                                        .map(|account| account.github_id.clone())
+                                    && current.vault_id == event.status.vault_id
+                                    && current.service_origin == event.status.service_origin
+                            });
+                    if same_scope {
+                        self.frontend_vm.cloud_sync.accept_status(event.status);
+                    } else {
+                        self.load_cloud_sync();
+                    }
+                }
+                BackendEventKind::CloudSyncConflictDetected(event) => {
+                    let same_scope =
+                        self.frontend_vm
+                            .cloud_sync
+                            .status
+                            .as_ref()
+                            .is_some_and(|current| {
+                                current.vault_id.as_deref() == Some(event.vault_id.as_str())
+                                    && current.account.as_ref().is_some_and(|account| {
+                                        account.github_id == event.account_id
+                                    })
+                            });
+                    if same_scope {
+                        self.frontend_vm.cloud_sync.open(
+                            openless_linux_egui::cloud_sync_ui::CloudSyncDialog::Restore {
+                                preview: Box::new(event.preview),
+                                enable_after: false,
+                            },
+                        );
+                        self.frontend_vm.cloud_sync.notice = Some("states.conflict".to_string());
+                    } else {
+                        self.load_cloud_sync();
+                    }
+                }
+                BackendEventKind::CloudSyncRestoreCompleted(_) => {
+                    self.frontend_vm.cloud_sync.dialog =
+                        openless_linux_egui::cloud_sync_ui::CloudSyncDialog::None;
+                    self.frontend_vm.cloud_sync.notice = Some("restored".to_string());
+                    self.load_cloud_sync();
+                    self.load_settings_channels();
+                    self.load_service_configured();
+                }
                 _ => {}
             }
         }
@@ -4614,6 +5058,9 @@ mod linux_app {
                             Err(error) => self.frontend_vm.settings_notice = Some(error),
                         }
                     }
+                    UiResult::CloudSyncDone { result } => {
+                        self.apply_cloud_sync_result(*result);
+                    }
                     UiResult::OmniFinished {
                         operation,
                         submitted,
@@ -5596,8 +6043,8 @@ mod linux_app {
             &mut self,
             actions: Vec<frontend::view_model::FrontendAction>,
             // 宿主没有窗口：窗口类动作由 UI 进程就地处理，这里保留参数是为了
-            // 让调用点保持「渲染层 → 动作 → 宿主」的形状。
-            _ctx: &egui::Context,
+            // 让调用点保持「渲染层 → 动作 → 宿主」的形状。排版改动需要它重装字体。
+            ctx_arg: &egui::Context,
         ) {
             for action in actions {
                 use frontend::view_model::FrontendAction as Action;
@@ -5678,6 +6125,7 @@ mod linux_app {
                             if self.settings_channels.is_empty() {
                                 self.load_settings_channels();
                             }
+                            self.load_cloud_sync();
                         }
                     }
                     frontend::view_model::FrontendAction::CloseSettings => {
@@ -6812,6 +7260,9 @@ mod linux_app {
                         self.frontend_vm.settings_section = section;
                         if section == frontend::view_model::SettingsSection::Privacy {
                             self.refresh_linux_access();
+                            // 云端同步卡片在这一页：切进来就读一次真实状态，
+                            // 不要让卡片停在「加载中」。
+                            self.load_cloud_sync();
                         }
                         if section == frontend::view_model::SettingsSection::Services {
                             self.select_services_view(self.frontend_vm.services_view);
@@ -6827,6 +7278,23 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::SettingsOmni(action) => {
                         self.apply_omni_action(action);
+                    }
+                    frontend::view_model::FrontendAction::SettingsCloudSync(action) => {
+                        self.apply_cloud_sync_action(action);
+                    }
+                    frontend::view_model::FrontendAction::SettingsTypography(field) => {
+                        // 排版是纯 UI 偏好：落盘后立刻重装字体并应用缩放，
+                        // 不需要经过 Core。
+                        let mut typography = self.frontend_vm.typography;
+                        typography.apply(field);
+                        self.frontend_vm.typography = typography;
+                        if openless_linux_egui::typography::save(typography).is_err() {
+                            self.status =
+                                tr_l10n(self.lang, "uiRefinement.storageError").to_owned();
+                        }
+                        crate::ui::theme::install(ctx_arg);
+                        ctx_arg.set_zoom_factor(typography.scale.factor());
+                        ctx_arg.request_repaint();
                     }
                     // Tauri `startCreate`：点「添加渠道」先在后台建一张空渠道（名字留空），
                     // 再打开同一个编辑器——草稿卡片只是为了让凭据有渠道 id 可落盘；

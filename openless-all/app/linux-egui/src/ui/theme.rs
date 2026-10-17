@@ -131,8 +131,17 @@ pub fn install(ctx: &egui::Context) {
     // 返回的是 CJK 面，而 CJK 面的 `…`（U+2026）是**居中**的点（全角省略号），
     // 于是「搜索转写内容…」的省略号看着像「···」；macOS 的 `system-ui` 是拉丁优先、
     // CJK 回退，所以我们要同样的顺序。缺字形时照样回退到下面的 CJK 面。
-    if let Some((path, index)) = fontconfig_match("sans-serif:lang=en") {
-        candidates.push(("openless-ui-latin".to_owned(), path, index, true, false));
+    // 外观页选中的字族（Tauri 的 `--ol-font-ui`）：拉丁面按用户选择解析，
+    // CJK 面仍走下面的 `:lang=zh-cn` 兜底，缺字形时自动回退。
+    let chosen = openless_linux_egui::typography::load().font;
+    if chosen == openless_linux_egui::typography::UiFont::System {
+        if let Some((path, index)) = fontconfig_match("sans-serif:lang=en") {
+            candidates.push(("openless-ui-latin".to_owned(), path, index, true, false));
+        }
+    } else if let Some((path, index)) =
+        fontconfig_match(&format!("{}:lang=en", chosen.fontconfig_query()))
+    {
+        candidates.push(("openless-ui-chosen".to_owned(), path, index, true, false));
     }
     if let Some((path, index)) = fontconfig_match("sans-serif") {
         candidates.push(("openless-ui-sans".to_owned(), path, index, true, false));

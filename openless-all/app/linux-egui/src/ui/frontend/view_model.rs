@@ -215,6 +215,10 @@ pub enum FrontendAction {
     /// Save the editor: rename + endpoint/model + credentials through Core.
     SettingsProviderSave,
     SettingsOmni(openless_linux_egui::omni_settings::OmniAction),
+    /// Encrypted cloud sync card (enable/unlock/restore/delete/custom server).
+    SettingsCloudSync(openless_linux_egui::cloud_sync_ui::CloudSyncAction),
+    /// Appearance → typography (font family, scale, reading width).
+    SettingsTypography(openless_linux_egui::typography::TypographyField),
     /// Drop the channel's stored secrets (Core's `remove_credential`).
     SettingsProviderClearSecrets,
     /// Ask Core for the provider's model list (Core's `provider.list_models`).
@@ -953,6 +957,12 @@ pub struct FrontendViewModel {
     pub pipeline_multimodal: bool,
     #[serde(default)]
     pub omni: openless_linux_egui::omni_settings::OmniSettings,
+    #[serde(default)]
+    pub cloud_sync: openless_linux_egui::cloud_sync_ui::CloudSyncUi,
+    /// Reading typography mirrors the saved UI state so the combos show the
+    /// live choice without re-reading the file each frame.
+    #[serde(default)]
+    pub typography: openless_linux_egui::typography::Typography,
 }
 
 impl Default for FrontendViewModel {
@@ -1080,6 +1090,8 @@ impl Default for FrontendViewModel {
             selection_polish_hotkey: String::new(),
             pipeline_multimodal: false,
             omni: Default::default(),
+            cloud_sync: Default::default(),
+            typography: Default::default(),
             remote_running: false,
             remote_urls_stale: false,
             remote_pin: String::new(),
