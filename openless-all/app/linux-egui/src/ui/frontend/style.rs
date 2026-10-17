@@ -266,6 +266,14 @@ fn pack_grid(
                 };
                 let card_width =
                     ((grid_width - GAP * (columns - 1) as f32) / columns as f32).max(1.0);
+                super::paging::load_more_footer(
+                    ui,
+                    lang,
+                    super::paging::Collection::StylePacks,
+                    vm,
+                    false,
+                    actions,
+                );
                 let pack_indices: Vec<usize> = vm
                     .style_packs
                     .iter()

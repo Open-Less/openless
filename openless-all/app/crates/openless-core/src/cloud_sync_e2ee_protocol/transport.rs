@@ -1269,7 +1269,7 @@ mod tests {
                 "iterations": 3, "parallelism": 4, "salt": URL_SAFE_NO_PAD.encode([0_u8; 16]) },
             "aead": "xchacha20poly1305-ietf", "codec": "json-pad64k-v1",
             "nonce": URL_SAFE_NO_PAD.encode([0_u8; 24]),
-            "ciphertextSha256": format!("{:x}", Sha256::digest(&ciphertext)),
+            "ciphertextSha256": hex::encode(Sha256::digest(&ciphertext)),
             "ciphertext": URL_SAFE_NO_PAD.encode(ciphertext)
         })
     }

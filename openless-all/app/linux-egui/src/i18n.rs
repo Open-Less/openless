@@ -149,6 +149,194 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
+    Msg {
+        key: "providers.extra_headers_hint",
+        text: row(
+            "不读取已保存的请求头。留空保留；清除密钥时一并移除。",
+            "不讀取已儲存的請求標頭。留空保留；清除密鑰時一併移除。",
+            "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
+            "保存済みヘッダーは読み戻しません。空欄なら保持し、秘密情報の削除時に一緒に削除します。",
+            "저장된 헤더는 다시 읽지 않습니다. 비워 두면 유지되며 비밀 정보 삭제 시 함께 제거됩니다.",
+        ),
+    },
+    Msg {
+        key: "selection.source_truncated",
+        text: row(
+            "选区包含截断占位，未替换，以免删除未读取的原文。",
+            "選取範圍含有截斷佔位，未替換，以免刪除未讀取的原文。",
+            "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
+            "選択範囲に省略されたテキストが含まれています。未取得の原文を保護するため、置換しませんでした。",
+            "선택 영역에 잘린 대체 텍스트가 포함되어 있습니다. 생략된 원문을 보호하기 위해 교체하지 않았습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptLabel",
+        text: row(
+            "显示流式原文",
+            "顯示串流原文",
+            "Show live transcript",
+            "文字起こしをリアルタイム表示",
+            "실시간 원문 표시",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptDesc",
+        text: row(
+            "在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。",
+            "在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。",
+            "Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.",
+            "音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。",
+            "오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.",
+        ),
+    },
+        Msg {
+        key: "settings.recording.capsuleTranscriptFontSize",
+        text: row(
+            "原文字号",
+            "原文字級",
+            "Transcript font size",
+            "文字起こしの文字サイズ",
+            "원문 글자 크기",
+        ),
+    },
+        Msg {
+        key: "settings.providers.requestFormatLabel",
+        text: row(
+            "请求格式",
+            "請求格式",
+            "Request format",
+            "リクエスト形式",
+            "요청 형식",
+        ),
+    },
+        Msg {
+        key: "settings.providers.responsesThinkingHint",
+        text: row(
+            "部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。",
+            "部分模型只能降低思考，無法完全關閉。推理請求不傳送溫度引數。",
+            "Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.",
+            "一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。",
+            "일부 모델은 사고를 줄일 수만 있으며 완전히 끌 수 없습니다. 추론 요청에는 온도를 보내지 않습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.serviceTierLabel",
+        text: row(
+            "方舟低延迟推理（fast）",
+            "方舟低延遲推理（fast）",
+            "Ark low-latency inference (fast)",
+            "Ark 低レイテンシ推論（fast）",
+            "Ark 저지연 추론(fast)",
+        ),
+    },
+        Msg {
+        key: "settings.providers.serviceTierHint",
+        text: row(
+            "仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。",
+            "僅適用於支援低延遲的方舟模型；不支援的模型可能回傳 400。",
+            "Only supported Ark models can use this option; unsupported models may return 400.",
+            "対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。",
+            "지원되는 Ark 모델에서만 사용할 수 있으며, 지원되지 않는 모델은 400을 반환할 수 있습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.messagesThinkingLabel",
+        text: row(
+            "思考方式",
+            "思考方式",
+            "Thinking mode",
+            "思考方式",
+            "사고 방식",
+        ),
+    },
+        Msg {
+        key: "settings.providers.thinkingAdaptive",
+        text: row("自适应", "自適應", "Adaptive", "適応型", "적응형"),
+    },
+        Msg {
+        key: "settings.providers.thinkingBudget",
+        text: row("固定预算", "固定預算", "Fixed budget", "固定予算", "고정 예산"),
+    },
+        Msg {
+        key: "settings.providers.maxTokensLabel",
+        text: row(
+            "最大输出 tokens",
+            "最大輸出 tokens",
+            "Maximum output tokens",
+            "最大出力トークン数",
+            "최대 출력 토큰",
+        ),
+    },
+        Msg {
+        key: "settings.providers.thinkingBudgetLabel",
+        text: row(
+            "思考预算 tokens",
+            "思考預算 tokens",
+            "Thinking budget tokens",
+            "思考トークン予算",
+            "사고 토큰 예산",
+        ),
+    },
+        Msg {
+        key: "settings.providers.messagesThinkingHint",
+        text: row(
+            "旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。",
+            "舊模型或相容閘道可能需要固定預算；思考預算必須小於最大輸出。開啟思考時不傳送溫度引數。",
+            "Older models or compatible gateways may need a fixed budget below the output limit. Thinking requests omit temperature.",
+            "旧モデルや互換ゲートウェイでは固定予算が必要な場合があります。予算は最大出力未満にしてください。思考時は温度を送信しません。",
+            "이전 모델이나 호환 게이트웨이는 고정 예산이 필요할 수 있습니다. 예산은 출력 한도보다 작아야 합니다. 사고 요청에는 온도를 보내지 않습니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmServiceTierInvalid",
+        text: row(
+            "低延迟推理选项无效，请重新选择。",
+            "低延遲推理選項無效，請重新選擇。",
+            "Invalid low-latency inference option. Select it again.",
+            "低レイテンシ推論の設定が無効です。もう一度選択してください。",
+            "저지연 추론 옵션이 잘못되었습니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmRequestFormatInvalid",
+        text: row(
+            "请求格式无效，请重新选择。",
+            "請求格式無效，請重新選擇。",
+            "Invalid request format. Select a supported format.",
+            "リクエスト形式が無効です。選択し直してください。",
+            "잘못된 요청 형식입니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmThinkingModeInvalid",
+        text: row(
+            "思考方式无效，请重新选择。",
+            "思考方式無效，請重新選擇。",
+            "Invalid thinking mode. Select a supported mode.",
+            "思考方式が無効です。選択し直してください。",
+            "잘못된 사고 방식입니다. 다시 선택하세요.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmTokenLimitInvalid",
+        text: row(
+            "Token 上限必须为正整数。",
+            "Token 上限必須為正整數。",
+            "Token limits must be positive integers.",
+            "トークン上限は正の整数にしてください。",
+            "토큰 한도는 양의 정수여야 합니다.",
+        ),
+    },
+        Msg {
+        key: "settings.providers.llmThinkingBudgetInvalid",
+        text: row(
+            "思考预算至少为 1024，且固定预算必须小于最大输出。",
+            "思考預算至少為 1024，且固定預算必須小於最大輸出。",
+            "Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.",
+            "思考予算は1024以上、固定予算では最大出力未満にしてください。",
+            "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
+        ),
+    },
     // ---- Shell / navigation ------------------------------------------------
 
     Msg {
@@ -1120,16 +1308,43 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
-        key: "startup.fcitx_help",
+        key: "startup.input_method_unavailable_title",
         text: row(
-            "请安装并启动 fcitx5，启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。必要时重新安装 OpenLess 软件包。修复后关闭此窗口并重新启动应用。",
-            "請安裝並啟動 fcitx5，啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。必要時重新安裝 OpenLess 套件。修復後關閉此視窗並重新啟動應用程式。",
-            "Install and start fcitx5, enable the OpenLess addon, and check the current desktop session's D-Bus. Reinstall the OpenLess package if needed. Close this window and restart the application after fixing the environment.",
-            "fcitx5 を起動し、OpenLess アドオンとデスクトップセッションの D-Bus を有効にしてください。必要なら OpenLess を再インストールしてください。修正後、このウィンドウを閉じてアプリを再起動してください。",
-            "fcitx5를 설치하고 시작한 후 OpenLess 애드온과 현재 데스크톱 세션의 D-Bus를 활성화하세요. 필요하면 OpenLess를 다시 설치하세요. 환경을 수정한 후 이 창을 닫고 앱을 다시 시작하세요。",
+            "输入法服务不可用",
+            "輸入法服務無法使用",
+            "Input method unavailable",
+            "入力メソッドを利用できません",
+            "입력기 서비스를 사용할 수 없음",
         ),
     },
-    Msg { key: "common.saving", text: row("正在保存…", "正在儲存…", "Saving…", "保存中…", "저장 중…") },
+    Msg {
+        key: "startup.input_method_unavailable",
+        text: row(
+            "输入法服务当前不可用。应用仍会继续运行，但全局快捷键和划词功能暂不可用。请安装并启动 fcitx5、启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。详情：{}",
+            "輸入法服務目前無法使用。應用程式仍會繼續執行，但全域快捷鍵和選取文字功能暫時無法使用。請安裝並啟動 fcitx5、啟用 OpenLess 插件，並確認目前桌面工作階段的 D-Bus 可用。詳情：{}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
+            "入力メソッドサービスを利用できません。アプリは起動を続けますが、グローバルショートカットと選択ツールは一時的に利用できません。fcitx5 と OpenLess アドオンを有効にし、デスクトップセッションの D-Bus を確認してください。詳細：{}",
+            "입력기 서비스를 사용할 수 없습니다. 앱은 계속 실행되지만 전역 단축키와 선택 도구를 일시적으로 사용할 수 없습니다. fcitx5와 OpenLess 애드온을 설치·시작하고 데스크톱 세션의 D-Bus를 확인하세요. 세부 정보: {}",
+        ),
+    },
+    Msg {
+        key: "common.load_more",
+        text: row("加载更多", "載入更多", "Load more", "もっと読み込む", "더 불러오기"),
+    },
+    Msg {
+        key: "common.loaded_of_total",
+        text: row(
+            "已载入 {} / 共 {}",
+            "已載入 {} / 共 {}",
+            "Loaded {} of {}",
+            "{} / {} 件を読み込み済み",
+            "{} / {}개 불러옴",
+        ),
+    },
+        Msg {
+        key: "common.saving",
+        text: row("保存中", "儲存中", "Saving…", "保存中", "저장 중"),
+    },
     Msg { key: "startup.connecting", text: row("正在连接 OpenLess…", "正在連線 OpenLess…", "Connecting to OpenLess…", "OpenLess に接続中…", "OpenLess에 연결 중…") },
     // ---- Buttons (models / providers / vocab / styles / marketplace / history)
 
@@ -1608,14 +1823,32 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.kicker",
         text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전"),
     },
-    Msg {
+        Msg {
+        key: "vocabCard.title",
+        text: row(
+            "要记住这个词吗？",
+            "要記住這個詞嗎？",
+            "Remember this word?",
+            "この語を覚えますか？",
+            "이 단어를 기억할까요?",
+        ),
+    },
+        Msg {
+        key: "vocabCard.accept",
+        text: row("记住", "記住", "Remember", "覚える", "기억하기"),
+    },
+        Msg {
+        key: "vocabCard.reject",
+        text: row("不用", "不用", "Skip", "不要", "건너뛰기"),
+    },
+        Msg {
         key: "vocab.learned_section",
         text: row(
-            "自动收集（{}）",
-            "自動收集（{}）",
-            "Auto-collected ({})",
-            "自動収集（{}）",
-            "자동 수집 ({})",
+            "确认收集（{}）",
+            "確認收集（{}）",
+            "Confirmed ({})",
+            "確認して追加（{}）",
+            "확인 후 수집 ({})",
         ),
     },
         Msg {
@@ -2040,6 +2273,219 @@ pub const CATALOG: &[Msg] = &[
             "시스템 프록시 사용",
         ),
     },
+    // Linux-only settings: session services and the real data/credential split.
+    Msg {
+        key: "settings.linux_privacy.refresh",
+        text: row("重新检查会话与网络", "重新檢查工作階段與網路", "Recheck session & network", "セッションとネットワークを再確認", "세션 및 네트워크 다시 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.not_checked",
+        text: row("尚未检查", "尚未檢查", "Not checked", "未確認", "확인 전"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_ready",
+        text: row("OpenLess 插件接口可达", "OpenLess 外掛介面可達", "OpenLess addon responds", "OpenLess プラグイン応答あり", "OpenLess 플러그인 응답 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_unavailable",
+        text: row("插件接口不可达", "外掛介面無法連線", "Addon interface unavailable", "プラグインに接続できません", "플러그인 인터페이스 사용 불가"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_label",
+        text: row("OpenLess 网络连接", "OpenLess 網路連線", "OpenLess network connection", "OpenLess ネットワーク接続", "OpenLess 네트워크 연결"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_online",
+        text: row("HTTP 可达（{} ms）", "HTTP 可達（{} ms）", "HTTP reachable ({} ms)", "HTTP 接続確認（{} ms）", "HTTP 연결 확인 ({} ms)"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_unavailable",
+        text: row("OpenLess 服务不可达", "OpenLess 服務無法連線", "OpenLess endpoint unreachable", "OpenLess サービスに接続できません", "OpenLess 서비스 연결 불가"),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_probe_desc",
+        text: row(
+            "与 Tauri 相同：GET OpenLess /packs，8 秒超时，收到 HTTP 响应才算可达。每 30 秒刷新；不代表 ASR/LLM 渠道鉴权有效，请在 AI 服务页验证渠道。",
+            "與 Tauri 相同：GET OpenLess /packs，8 秒逾時，收到 HTTP 回應才算可達。每 30 秒更新；不代表 ASR/LLM 渠道驗證有效，請在 AI 服務頁驗證渠道。",
+            "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
+            "Tauri と同じく OpenLess /packs に GET し、8 秒でタイムアウトします。HTTP 応答で接続を確認し、30 秒ごとに更新します。ASR/LLM 認証は AI サービスで別途検証してください。",
+            "Tauri와 동일하게 OpenLess /packs에 GET 요청하며 제한 시간은 8초입니다. HTTP 응답으로 연결을 확인하고 30초마다 갱신합니다. ASR/LLM 인증은 AI 서비스에서 별도로 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_ready",
+        text: row("默认保险库已解锁", "預設保管庫已解鎖", "Default vault unlocked", "既定保管庫は解除済み", "기본 보관소 잠금 해제됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_locked",
+        text: row("默认保险库已锁定", "預設保管庫已鎖定", "Default vault locked", "既定保管庫はロック中", "기본 보관소 잠김"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_missing_service",
+        text: row("Secret Service 未运行", "Secret Service 未執行", "Secret Service not running", "Secret Service 未起動", "Secret Service 실행 안 됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_missing_collection",
+        text: row("缺少默认保险库", "缺少預設保管庫", "No default vault", "既定保管庫がありません", "기본 보관소 없음"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_temporary",
+        text: row("默认保险库仅临时保存，原凭据可能在其他钱包中", "預設保管庫僅暫存，原憑據可能在其他錢包中", "Temporary default vault; existing credentials may be in another wallet", "既定保管庫は一時保存です。元の認証情報は別の保管庫にある可能性があります", "임시 기본 보관소입니다. 기존 자격 증명은 다른 보관소에 있을 수 있습니다"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unavailable",
+        text: row("会话或保险库检查失败", "工作階段或保管庫檢查失敗", "Session/vault check failed", "セッション・保管庫の確認失敗", "세션/보관소 확인 실패"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_restart",
+        text: row("服务已恢复，需重启 OpenLess", "服務已恢復，需重新啟動 OpenLess", "Service restored; restart OpenLess", "サービス復旧済み・OpenLess 再起動が必要", "서비스 복구됨, OpenLess 재시작 필요"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_probe_desc",
+        text: row(
+            "只检查会话 D-Bus、默认保险库的锁定状态与适配器初始化结果。不读取密钥、不自动解锁或写入测试密钥；实际保存权限仍以保存结果为准。",
+            "僅檢查工作階段 D-Bus、預設保管庫的鎖定狀態與介面初始化結果。不讀取金鑰、不自動解鎖或寫入測試金鑰；實際儲存權限仍以儲存結果為準。",
+            "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
+            "セッション D-Bus、既定保管庫のロック状態、接続初期化のみ確認します。キーの読み取り、自動解除、テスト書き込みは行いません。書き込み権限は実際の保存結果で確認してください。",
+            "세션 D-Bus, 기본 보관소 잠금 상태 및 어댑터 초기화만 확인합니다. 키 읽기, 자동 잠금 해제, 테스트 쓰기는 하지 않습니다. 실제 쓰기 권한은 저장 결과로 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.section_desc",
+        text: row(
+            "Linux 会话、Keyring / Secret Service，以及本地历史、录音和偏好。",
+            "Linux 工作階段、Keyring / Secret Service，以及本機歷史、錄音和偏好。",
+            "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
+            "Linux セッション、Keyring / Secret Service、ローカル履歴、録音、設定。",
+            "Linux 세션, Keyring / Secret Service, 로컬 기록, 녹음 및 설정.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.intro_title",
+        text: row("Linux 数据与隐私", "Linux 資料與隱私", "Linux data & privacy", "Linux データとプライバシー", "Linux 데이터 및 개인정보"),
+    },
+    Msg {
+        key: "settings.linux_privacy.intro_desc",
+        text: row(
+            "记录保存在本机；使用云端服务时，相应音频、文本及已启用的上下文会发送至配置的服务商。",
+            "記錄儲存在本機；使用雲端服務時，相關音訊、文字及已啟用的上下文會傳送至設定的服務商。",
+            "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
+            "記録はローカルに保存されます。クラウド利用時は、関連する音声、テキスト、有効なコンテキストが設定したプロバイダーに送信されます。",
+            "기록은 로컬에 저장됩니다. 클라우드 사용 시 관련 오디오, 텍스트 및 활성화된 컨텍스트가 설정한 제공업체로 전송됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.title",
+        text: row("Linux 会话与访问", "Linux 工作階段與存取", "Linux session & access", "Linux セッションとアクセス", "Linux 세션 및 접근"),
+    },
+    Msg {
+        key: "settings.linux_privacy.desc",
+        text: row(
+            "Linux 使用桌面会话服务；设备检测和后端就绪不代表每次录音或输入均获准。",
+            "Linux 使用桌面工作階段服務；偵測到裝置及後端就緒不代表每次錄音或輸入皆獲准。",
+            "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
+            "Linux はデスクトップのセッションサービスを使います。デバイス検出やバックエンド初期化は録音・入力アクセスの保証ではありません。",
+            "Linux는 데스크톱 세션 서비스를 사용합니다. 장치 감지 및 백엔드 초기화가 녹음이나 입력 접근을 보장하지는 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.mic_desc",
+        text: row(
+            "经 PipeWire/PulseAudio/ALSA 录音；检测到设备不等于允许录音，访问限制需在音频或沙盒设置中处理。",
+            "透過 PipeWire/PulseAudio/ALSA 錄音；偵測到裝置不等於允許錄音，存取限制需在音訊或沙箱設定中處理。",
+            "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
+            "録音は PipeWire/PulseAudio/ALSA を使います。デバイス検出は録音許可ではありません。失敗時は音声やサンドボックスの制限を確認してください。",
+            "녹음은 PipeWire/PulseAudio/ALSA를 사용합니다. 장치 감지는 녹음 허가가 아닙니다. 녹음 실패 시 오디오 또는 샌드박스 제한을 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.mic_detected",
+        text: row("已检测到设备", "已偵測到裝置", "Device detected", "デバイス検出済み", "장치 감지됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.hotkey_desc",
+        text: row(
+            "Fcitx5/OpenLess 全局快捷键监听后端须初始化；窗口内按键生效不代表全局监听可用。",
+            "Fcitx5/OpenLess 全域快捷鍵監聽後端須初始化；視窗內按鍵生效不代表全域監聽可用。",
+            "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
+            "グローバルショートカットには Fcitx5/OpenLess の監視バックエンドが必要です。アプリ内のキー動作だけではグローバル監視を確認できません。",
+            "전역 단축키에는 Fcitx5/OpenLess 수신 백엔드가 필요합니다. 앱 내 키 동작만으로 전역 수신이 가능하다고 판단할 수 없습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.hotkey_ready",
+        text: row("监听后端已初始化", "監聽後端已初始化", "Listener initialized", "監視バックエンド初期化済み", "수신 백엔드 초기화됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_label",
+        text: row("选区与文字插入", "選取範圍與文字插入", "Selection & text insertion", "選択範囲とテキスト挿入", "선택 영역 및 텍스트 삽입"),
+    },
+    Msg {
+        key: "settings.linux_privacy.input_desc",
+        text: row(
+            "跨应用文本输入和选区服务由 Fcitx5/OpenLess 插件提供；Wayland 限制模拟按键和选区访问。后端不可用时可能只能复制到剪贴板。",
+            "跨應用程式文字輸入和選取服務由 Fcitx5/OpenLess 外掛提供；Wayland 限制模擬按鍵和選取存取。後端無法使用時可能只能複製到剪貼簿。",
+            "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
+            "Fcitx5/OpenLess プラグインがアプリ間のテキスト入力と選択を提供します。Wayland はキー送信と選択へのアクセスを制限します。バックエンド不在時はコピーのみになる場合があります。",
+            "Fcitx5/OpenLess 플러그인이 앱 간 텍스트 입력과 선택 서비스를 제공합니다. Wayland는 키 합성과 선택 접근을 제한합니다. 백엔드를 사용할 수 없으면 클립보드 복사만 가능할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.network_desc",
+        text: row(
+            "云端 ASR/LLM 需能访问服务端；请在 AI 服务页验证渠道连接，而不是寻找统一的系统网络授权按钮。",
+            "雲端 ASR/LLM 需能連線至服務端；請在 AI 服務頁驗證渠道連線，而不是尋找統一的系統網路授權按鈕。",
+            "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
+            "クラウド ASR/LLM にはプロバイダーへの接続が必要です。汎用のネットワーク許可ボタンではなく、AI サービスで各チャネルを検証してください。",
+            "클라우드 ASR/LLM은 제공업체 엔드포인트에 접근해야 합니다. 일반 시스템 네트워크 권한 버튼 대신 AI 서비스에서 각 채널을 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.verify_channels",
+        text: row("按渠道验证", "依渠道驗證", "Verify per channel", "チャネルごとに検証", "채널별 확인"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_title",
+        text: row("凭据保险库（Keyring）", "憑證保管庫（Keyring）", "Credential vault (Keyring)", "認証情報保管庫（Keyring）", "자격 증명 보관소 (Keyring)"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_desc",
+        text: row(
+            "API 密钥和敏感请求头保存在用户会话的 Secret Service（org.freedesktop.secrets）。需启用 GNOME Keyring 或提供兼容接口的 KWallet，并解锁保险库。",
+            "API 金鑰和敏感請求標頭儲存在使用者工作階段的 Secret Service（org.freedesktop.secrets）。需啟用 GNOME Keyring 或提供相容介面的 KWallet，並解鎖保管庫。",
+            "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
+            "API キーと機密ヘッダーはセッションの Secret Service（org.freedesktop.secrets）に保存されます。GNOME Keyring または互換の KWallet サービスを有効にして保管庫を解除してください。",
+            "API 키와 민감한 헤더는 사용자 세션의 Secret Service (org.freedesktop.secrets)에 저장됩니다. GNOME Keyring 또는 호환 KWallet 서비스를 활성화하고 보관소 잠금을 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_required",
+        text: row("需运行并解锁", "需執行並解鎖", "Must run and be unlocked", "起動とロック解除が必要", "실행 및 잠금 해제 필요"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_recovery",
+        text: row(
+            "会话 D-Bus/服务不可用或保险库锁定时，凭据保存可能失败。恢复服务并解锁后重启 OpenLess 再重试；错误不代表已有密钥被删除。",
+            "工作階段 D-Bus/服務無法使用或保管庫鎖定時，憑證儲存可能失敗。恢復服務並解鎖後重新啟動 OpenLess 再重試；錯誤不代表既有金鑰被刪除。",
+            "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
+            "セッションの D-Bus・サービスが使えない場合や保管庫がロック中の場合、保存に失敗することがあります。サービスを復旧し、保管庫を解除して OpenLess を再起動してください。エラーは既存キーの削除を意味しません。",
+            "세션 D-Bus/서비스를 사용할 수 없거나 보관소가 잠기면 저장이 실패할 수 있습니다. 서비스를 복구하고 잠금을 해제한 뒤 OpenLess를 다시 시작하여 재시도하세요. 오류가 기존 키 삭제를 의미하지는 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.storage_desc",
+        text: row(
+            "历史、偏好、词库与已保存的录音位于应用数据目录。API 密钥使用 Keyring 存储，不写入 credential-metadata.json；录音留存设置不清除保险库。",
+            "歷史、偏好、詞庫與已儲存的錄音位於應用程式資料目錄。API 金鑰使用 Keyring 儲存，不寫入 credential-metadata.json；錄音保留設定不清除保管庫。",
+            "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
+            "履歴、設定、辞書、保存した録音はアプリのデータディレクトリにあります。API キーは credential-metadata.json ではなく Keyring に保存されます。録音の保持設定は保管庫を消去しません。",
+            "기록, 설정, 어휘 및 저장된 녹음은 앱 데이터 디렉터리에 있습니다. API 키는 credential-metadata.json이 아닌 Keyring에 저장됩니다. 녹음 보존 설정은 보관소를 지우지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.data_directory",
+        text: row("应用数据目录", "應用程式資料目錄", "App data directory", "アプリデータの場所", "앱 데이터 디렉터리"),
+    },
     Msg {
         key: "settings.permissions.title",
         text: row("权限", "權限", "Permissions", "権限", "권한"),
@@ -2236,22 +2682,16 @@ pub const CATALOG: &[Msg] = &[
             "AI 서비스 및 모델",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.shortcuts",
-        text: row(
-            "快捷键与选区",
-            "快捷鍵與選取文字",
-            "Shortcuts & selection",
-            "ショートカットと選択",
-            "단축키 및 선택",
-        ),
+        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカットと選択", "단축키 및 선택"),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.hint",
         text: row(
-            "选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。",
+            "有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。",
             "選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。",
-            "Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.",
+            "With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.",
             "テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。",
             "텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.",
         ),
@@ -2342,9 +2782,9 @@ pub const CATALOG: &[Msg] = &[
         key: "vocab.filter_all",
         text: row("所有", "所有", "All", "すべて", "전체"),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_auto",
-        text: row("自动添加", "自動新增", "Auto-Added", "自動追加", "자동 추가"),
+        text: row("确认收集", "確認收集", "Confirmed", "確認して追加", "확인 후 수집"),
     },
     Msg {
         key: "vocab.filter_manual",
@@ -2700,6 +3140,60 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.channels.connection_title",
+        text: row(
+            "服务连接",
+            "服務連線",
+            "Service connection",
+            "サービス接続",
+            "서비스 연결",
+        ),
+    },
+    Msg {
+        key: "settings.channels.edit_title",
+        text: row(
+            "编辑渠道",
+            "編輯渠道",
+            "Edit channel",
+            "チャネルを編集",
+            "채널 편집",
+        ),
+    },
+    Msg {
+        key: "settings.channels.create_title",
+        text: row(
+            "添加渠道",
+            "新增渠道",
+            "Add channel",
+            "チャネルを追加",
+            "채널 추가",
+        ),
+    },
+    Msg {
+        key: "settings.channels.auto_save_hint",
+        text: row(
+            "字段修改后自动保存；完成配置后，可手动验证连接。",
+            "修改欄位後會自動儲存；完成設定後，可手動驗證連線。",
+            "Changes save automatically. Once configured, you can check the connection manually.",
+            "変更は自動保存されます。設定が終わったら、手動で接続を確認できます。",
+            "변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.name_label",
+        text: row(
+            "渠道名称（可选）",
+            "名稱",
+            "Channel name (optional)",
+            "チャネル名（任意）",
+            "채널 이름 (선택)",
+        ),
+    },
+    Msg {
+        key: "settings.channels.done",
+        text: row("完成", "完成", "Done", "完了", "완료"),
+    },
+    Msg {
         key: "settings.channels.llm_title",
         text: row(
             "文字处理渠道",
@@ -2989,6 +3483,158 @@ pub const CATALOG: &[Msg] = &[
             "Credentials are stored in the OS credential vault.",
             "資格情報は OS の資格情報ストアに保存されます。",
             "자격 증명은 OS 자격 증명 저장소에 보관됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.provider_label",
+        text: row("供应商", "供應商", "Provider", "プロバイダー", "공급자"),
+    },
+    Msg {
+        key: "settings.channels.drag_hint",
+        text: row(
+            "按住拖动可调整优先级",
+            "按住拖曳可調整優先順序",
+            "Drag to change priority",
+            "ドラッグで優先順位を変更",
+            "드래그해서 우선순위 변경",
+        ),
+    },
+    Msg {
+        key: "settings.channels.delete_confirm",
+        text: row(
+            "删除后该渠道保存的密钥也会一并清除。",
+            "刪除後該渠道儲存的金鑰也會一併清除。",
+            "Deleting also clears the keys stored for this channel.",
+            "削除するとこのチャネルに保存された鍵も消去されます。",
+            "삭제하면 이 채널에 저장된 키도 함께 지워집니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.confirm_delete",
+        text: row("确认删除", "確認刪除", "Delete", "削除する", "삭제"),
+    },
+    Msg {
+        key: "settings.channels.last_check",
+        text: row(
+            "上次验证",
+            "上次驗證",
+            "Last check",
+            "前回の接続確認",
+            "마지막 확인",
+        ),
+    },
+    Msg {
+        key: "settings.channels.verifying",
+        text: row(
+            "正在验证…",
+            "正在驗證…",
+            "Checking…",
+            "確認中…",
+            "확인 중…",
+        ),
+    },
+    Msg {
+        key: "settings.channels.reverify",
+        text: row("重新验证", "重新驗證", "Check again", "再確認", "다시 확인"),
+    },
+    Msg {
+        key: "settings.channels.failed_plain",
+        text: row("验证失败", "驗證失敗", "Check failed", "確認に失敗", "확인 실패"),
+    },
+    Msg {
+        key: "settings.channels.failure_keeps_enabled",
+        text: row(
+            "验证失败不会自动停用。请求仍使用列表中第一个已启用的渠道，不会自动改用下一个。",
+            "驗證失敗不會自動停用。請求仍使用列表中第一個已啟用的渠道，不會自動改用下一個。",
+            "A failed check does not turn this service off. Requests still use the first enabled service and do not switch to the next one.",
+            "確認に失敗しても、このサービスは自動では停止しません。リクエストは有効な一覧の先頭を使い、次へは自動で切り替わりません。",
+            "확인에 실패해도 이 서비스는 자동으로 꺼지지 않습니다. 요청은 켜진 목록의 첫 항목을 쓰며, 다음 항목으로 자동 전환되지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.channels.stale_result",
+        text: row(
+            "结果已超过 24 小时",
+            "結果已超過 24 小時",
+            "Result is over 24 hours old",
+            "24 時間以上前の結果",
+            "24시간이 지난 결과",
+        ),
+    },
+    Msg {
+        key: "settings.channels.just_now",
+        text: row("刚刚", "剛剛", "just now", "たった今", "방금"),
+    },
+    Msg {
+        key: "settings.channels.minutes_ago",
+        text: row("{} 分钟前", "{} 分鐘前", "{}m ago", "{}分前", "{}분 전"),
+    },
+    Msg {
+        key: "settings.channels.hours_ago",
+        text: row("{} 小时前", "{} 小時前", "{}h ago", "{}時間前", "{}시간 전"),
+    },
+    Msg {
+        key: "settings.channels.days_ago",
+        text: row("{} 天前", "{} 天前", "{}d ago", "{}日前", "{}일 전"),
+    },
+    Msg {
+        key: "settings.channels.model_not_set",
+        text: row(
+            "模型未单独设置",
+            "未單獨設定模型",
+            "No model set explicitly",
+            "モデルの個別設定なし",
+            "모델을 별도로 설정하지 않음",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_label",
+        text: row(
+            "识别管线",
+            "識別管線",
+            "Pipeline mode",
+            "認識パイプライン",
+            "인식 파이프라인",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_hint",
+        text: row(
+            "传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。",
+            "傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。",
+            "Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.",
+            "従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。",
+            "전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_traditional",
+        text: row(
+            "传统模式",
+            "傳統模式",
+            "Traditional",
+            "従来モード",
+            "전통 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_mode_multimodal",
+        text: row(
+            "多模态模式",
+            "多模態模式",
+            "Multimodal",
+            "マルチモーダルモード",
+            "멀티모달 모드",
+        ),
+    },
+    Msg {
+        key: "settings.providers.pipeline_isolation_notice",
+        text: row(
+            "两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。",
+            "兩種模式使用完全獨立的憑證設定。切換模式不會刪除另一套設定，只是暫時停用；切回即還原。",
+            "The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.",
+            "2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。",
+            "두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.",
         ),
     },
     Msg {
@@ -3670,10 +4316,10 @@ pub const CATALOG: &[Msg] = &[
             "로컬 Qwen3-ASR(C / CPU)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrAppleSpeech",
         text: row(
-            "Apple 语音（macOS）",
+            "苹果识别（macOS）",
             "Apple 語音（macOS）",
             "Apple Speech (macOS)",
             "Apple 音声認識 (macOS)",
@@ -3803,14 +4449,14 @@ pub const CATALOG: &[Msg] = &[
             "현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.advanced",
         text: row(
-            "按需配置测试功能、多模态与调试工具。",
-            "依需要設定測試功能、多模態與除錯工具。",
-            "Configure testing features, multimodal processing, and debugging tools.",
-            "テスト機能、マルチモーダル処理、デバッグツールを設定します。",
-            "테스트 기능, 멀티모달 처리 및 디버깅 도구를 설정합니다.",
+            "按需配置测试功能与调试工具。",
+            "依需要設定測試功能與除錯工具。",
+            "Configure testing features and debugging tools as needed.",
+            "テスト機能とデバッグツールを設定します。",
+            "테스트 기능과 디버깅 도구를 설정합니다.",
         ),
     },
     Msg {
@@ -3853,12 +4499,12 @@ pub const CATALOG: &[Msg] = &[
             "음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.shortcuts",
         text: row(
-            "设置各功能的触发方式，以及选中文字后的操作。",
-            "設定各功能的觸發方式，以及選取文字後的操作。",
-            "Set up shortcuts and choose what happens when you select text.",
+            "搜索、分类与自定义各功能的快捷键。",
+            "搜尋、分類與自訂各功能的快捷鍵。",
+            "Search, browse and customize keyboard shortcuts.",
             "各機能のショートカットと、テキスト選択後の操作を設定します。",
             "기능별 단축키와 텍스트 선택 후 동작을 설정합니다.",
         ),
@@ -4043,14 +4689,14 @@ pub const CATALOG: &[Msg] = &[
             "대화 컨텍스트 윈도(분)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_skip_max_chars_desc",
         text: row(
             "转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。",
             "轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。",
             "Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.",
-            "空白を除く文字数が N 以下の転写は LLM を呼ばず原文のまま挿入します。0 = 無効。翻訳モードは常に整形します。",
-            "공백을 제외한 글자 수가 N 이하인 전사는 LLM 없이 원문으로 삽입합니다. 0 = 끔. 번역 모드는 항상 다듬습니다.",
+            "空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。",
+            "공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.",
         ),
     },
     Msg {
@@ -5772,6 +6418,726 @@ pub const CATALOG: &[Msg] = &[
         text: row("书面润色", "書面潤色", "Written polish", "書面の推敲", "서면 다듬기"),
     },
 
+    Msg {
+        key: "settings.channels.edit",
+        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+    },
+    Msg {
+        key: "settings.providers.extraHeadersLabel",
+        text: row(
+            "额外 Headers",
+            "額外 Headers",
+            "Extra headers",
+            "追加 Headers",
+            "추가 Headers",
+        ),
+    },
+    Msg {
+        key: "settings.providers.extraHeadersPlaceholder",
+        text: row(
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+        ),
+    },
+    Msg {
+        key: "settings.providers.temperatureLabel",
+        text: row("Temperature", "Temperature", "Temperature", "Temperature", "Temperature"),
+    },
+    Msg {
+        key: "settings.providers.temperaturePlaceholder",
+        text: row(
+            "留空则不发送；范围 0～2（含边界），例如 0.3",
+            "留空則不傳送；範圍 0～2（含邊界），例如 0.3",
+            "Leave empty to omit; range 0–2 inclusive, e.g. 0.3",
+            "空欄なら送信しません。範囲は 0〜2（両端を含む）。例: 0.3",
+            "비워 두면 보내지 않음. 범위 0~2(양 끝 포함), 예: 0.3",
+        ),
+    },
+    Msg {
+        key: "settings.providers.thinkingModeHint",
+        text: row(
+            "按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。",
+            "依所選請求格式與模型支援的引數啟用、關閉或降低思考，不在提示詞注入控制指令。",
+            "Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.",
+            "選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。",
+            "선택한 요청 형식과 모델이 지원하는 매개변수로 사고를 켜거나 끄거나 줄입니다. 프롬프트에 제어 지시를 추가하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.thinkingModeLabel",
+        text: row("思考", "思考", "Thinking", "思考", "사고"),
+    },
+    Msg {
+        key: "common.operationFailed",
+        text: row(
+            "操作失败",
+            "操作失敗",
+            "Operation failed",
+            "操作に失敗しました",
+            "작업 실패",
+        ),
+    },
+    Msg {
+        key: "common.saved",
+        text: row("已保存", "已儲存", "Saved", "保存しました", "저장됨"),
+    },
+    Msg {
+        key: "modal.service_views.inactive",
+        text: row(
+            "当前模式未使用",
+            "目前模式未使用",
+            "Not used in this mode",
+            "現在のモードでは未使用",
+            "현재 모드에서 사용 안 함",
+        ),
+    },
+    Msg {
+        key: "settings.providers.apiKeyLabel",
+        text: row("API 密钥", "API 金鑰", "API Key", "API キー", "API 키"),
+    },
+    Msg {
+        key: "settings.providers.baseUrlLabel",
+        text: row("接口地址", "介面地址", "Base URL", "エンドポイント", "엔드포인트"),
+    },
+    Msg {
+        key: "settings.providers.omniTitle",
+        text: row(
+            "多模态模型",
+            "多模態模型",
+            "Multimodal model",
+            "マルチモーダルモデル",
+            "멀티모달 모델",
+        ),
+    },
+    Msg {
+        key: "settings.providers.providerLabel",
+        text: row("供应商", "供應商", "Provider", "サプライヤー", "공급자"),
+    },
+    Msg {
+        key: "settings.providers.validateFailed",
+        text: row(
+            "连接检查未通过。",
+            "連線檢查未透過。",
+            "Connection check failed.",
+            "接続チェックに失敗しました。",
+            "연결 확인에 실패했습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.validateSuccessOmni",
+        text: row(
+            "文本连通性通过。这不代表音频听写可用，请再做一次短录音确认。",
+            "文字連通性通過。這不代表音訊聽寫可用，請再做一次短錄音確認。",
+            "Text connectivity passed. This does not mean audio dictation works—please confirm with a short recording.",
+            "テキスト疎通は成功しました。これは音声ディクテーションが使えることを意味しません。短い録音で確認してください。",
+            "텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudAppIdLabel",
+        text: row(
+            "腾讯云 AppID",
+            "騰訊雲 AppID",
+            "Tencent Cloud AppID",
+            "Tencent Cloud AppID",
+            "Tencent Cloud AppID",
+        ),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudNote",
+        text: row(
+            "使用腾讯云「语音识别」服务的 API 密钥。默认 Hy-ASR-3.0-preview 支持中英与 20 种方言；Preview 仅支持 60 秒以内的 16kHz 单声道 PCM，暂不支持上下文或热词增强。",
+            "使用騰訊雲「語音辨識」服務的 API 金鑰。預設 Hy-ASR-3.0-preview 支援中英與 20 種方言；Preview 僅支援 60 秒內的 16kHz 單聲道 PCM，暫不支援上下文或熱詞增強。",
+            "Uses Tencent Cloud Speech Recognition API credentials. The default Hy-ASR-3.0-preview supports Chinese, English, and 20 dialects; Preview accepts only mono 16 kHz PCM up to 60 seconds and does not yet support context or hotword boosting.",
+            "Tencent Cloud 音声認識 API の認証情報を使用します。既定の Hy-ASR-3.0-preview は中国語・英語・20 方言に対応します。Preview は 60 秒以内の 16kHz モノラル PCM のみ対応し、コンテキストとホットワード強化は未対応です。",
+            "Tencent Cloud 음성 인식 API 자격 증명을 사용합니다. 기본 Hy-ASR-3.0-preview는 중국어·영어·20개 방언을 지원합니다. Preview는 60초 이내의 16kHz 모노 PCM만 지원하며, 컨텍스트와 핫워드 강화는 아직 지원하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudSecretIdLabel",
+        text: row("SecretID", "SecretID", "SecretID", "SecretID", "SecretID"),
+    },
+    Msg {
+        key: "settings.providers.tencentCloudSecretKeyLabel",
+        text: row("SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAccessKeyLabel",
+        text: row("Access Token", "Access Token", "Access Token", "Access Token", "Access Token"),
+    },
+    Msg {
+        key: "settings.providers.volcengineApiKeyLabel",
+        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAppKeyLabel",
+        text: row("APP ID", "APP ID", "APP ID", "APP ID", "APP ID"),
+    },
+    Msg {
+        key: "settings.providers.volcengineAuthModeLabel",
+        text: row("鉴权模式", "鑑權模式", "Auth mode", "認証モード", "인증 모드"),
+    },
+    Msg {
+        key: "settings.providers.volcengineResourceIdLabel",
+        text: row("Resource ID", "Resource ID", "Resource ID", "Resource ID", "Resource ID"),
+    },
+    Msg {
+        key: "settings.providers.xfyunApiKeyLabel",
+        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+    },
+    Msg {
+        key: "settings.providers.xfyunAppIdLabel",
+        text: row("AppID", "AppID", "AppID", "AppID", "AppID"),
+    },
+    Msg {
+        key: "settings.permissions.checking",
+        text: row("检查中…", "檢查中…", "Checking…", "確認中…", "확인 중…"),
+    },
+    Msg {
+        key: "settings.permissions.hotkey_failed",
+        text: row(
+            "监听失败",
+            "監聽失敗",
+            "Listener failed",
+            "監視失敗",
+            "감지 실패",
+        ),
+    },
+    Msg {
+        key: "settings.providers.apiKeyOptionalLabel",
+        text: row(
+            "API 密钥（可选）",
+            "API 密鑰（選填）",
+            "API Key (optional)",
+            "API キー（任意）",
+            "API 키 (선택 사항)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.volcengineServiceLabel",
+        text: row("服务", "服務", "Service", "サービス", "서비스"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.account",
+        text: row("同步账号", "同步帳號", "Sync account", "同期アカウント", "동기화 계정"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.backupRetention",
+        text: row(
+            "删除后，服务备份副本最多保留 {} 天。",
+            "刪除後，服務備份副本最多保留 {} 天。",
+            "After deletion, service backup copies may be retained for up to {} days.",
+            "削除後も、サービスのバックアップコピーは最長 {} 日間保持される場合があります。",
+            "삭제 후에도 서비스의 백업 사본이 최대 {}일 동안 보관될 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.cancelTask",
+        text: row(
+            "取消当前任务",
+            "取消目前工作",
+            "Cancel current task",
+            "現在の処理をキャンセル",
+            "현재 작업 취소",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.changePassword",
+        text: row(
+            "更改同步密码",
+            "變更同步密碼",
+            "Change sync password",
+            "同期パスワードを変更",
+            "동기화 비밀번호 변경",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmDelete",
+        text: row(
+            "删除云端备份",
+            "刪除雲端備份",
+            "Delete cloud backup",
+            "クラウドバックアップを削除",
+            "클라우드 백업 삭제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmDisable",
+        text: row(
+            "关闭同步",
+            "關閉同步",
+            "Turn off sync",
+            "同期をオフにする",
+            "동기화 끄기",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.confirmPassword",
+        text: row(
+            "再次输入新密码",
+            "再次輸入新密碼",
+            "Confirm new password",
+            "新しいパスワードを再入力",
+            "새 비밀번호 확인",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentCheck",
+        text: row(
+            "我已了解完整范围，并同意加密同步这些资料。",
+            "我已了解完整範圍，並同意加密同步這些資料。",
+            "I understand the full scope and agree to sync this data in encrypted form.",
+            "対象範囲を理解し、これらのデータの暗号化同期に同意します。",
+            "전체 범위를 이해했으며 이 데이터를 암호화해 동기화하는 데 동의합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentDescription",
+        text: row(
+            "同步内容包含服务凭据和私密文本历史，资料会在本机加密后上传。请先了解完整范围。",
+            "同步內容包含服務憑證和私人文字歷史，資料會在本機加密後上傳。請先了解完整範圍。",
+            "This sync includes service credentials and private text history. Data is encrypted on your device before upload. Review the full scope first.",
+            "サービスの認証情報と非公開のテキスト履歴も同期します。アップロード前に端末で暗号化します。対象範囲を確認してください。",
+            "서비스 자격 증명과 비공개 텍스트 기록도 동기화됩니다. 업로드 전에 기기에서 암호화합니다. 전체 범위를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.consentTitle",
+        text: row(
+            "启用端到端加密同步",
+            "啟用端對端加密同步",
+            "Enable end-to-end encrypted sync",
+            "エンドツーエンド暗号化同期を有効にする",
+            "종단 간 암호화 동기화 사용",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.continue",
+        text: row("继续", "繼續", "Continue", "続ける", "계속"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.currentPassword",
+        text: row(
+            "当前同步密码",
+            "目前同步密碼",
+            "Current sync password",
+            "現在の同期パスワード",
+            "현재 동기화 비밀번호",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerHint",
+        text: row(
+            "留空则使用官方同步服务器。地址必须是 https:// 开头的根地址。",
+            "留空則使用官方同步伺服器。位址必須以 https:// 開頭的根位址。",
+            "Leave blank to use the official sync server. The address must start with https:// and be a root URL.",
+            "空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。",
+            "비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerSave",
+        text: row("保存", "儲存", "Save", "保存", "저장"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerTitle",
+        text: row(
+            "自建同步服务器（高级）",
+            "自建同步伺服器（進階）",
+            "Self-hosted sync server (advanced)",
+            "自前の同期サーバー（上級者向け）",
+            "자체 동기화 서버 (고급)",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.customServerToken",
+        text: row(
+            "登录 Token",
+            "登入 Token",
+            "Sign-in token",
+            "サインイン Token",
+            "로그인 Token",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.delete",
+        text: row(
+            "删除云端备份",
+            "刪除雲端備份",
+            "Delete cloud backup",
+            "クラウドバックアップを削除",
+            "클라우드 백업 삭제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deleteDescription",
+        text: row(
+            "仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。",
+            "僅刪除目前帳號的雲端備份，本機資料保留。之後在其他裝置還原前，需要重新建立備份。",
+            "Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.",
+            "このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。",
+            "이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deleteTitle",
+        text: row(
+            "删除云端加密备份？",
+            "刪除雲端加密備份？",
+            "Delete the encrypted cloud backup?",
+            "暗号化クラウドバックアップを削除しますか？",
+            "암호화된 클라우드 백업을 삭제할까요?",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.description",
+        text: row(
+            "在本机加密后，通过 GitHub 账号或 Token 跨设备同步。",
+            "在本機加密後，透過 GitHub 帳號或 Token 跨裝置同步。",
+            "Encrypt on this device before syncing with your GitHub account.",
+            "この端末で暗号化してから、GitHub アカウントで端末間を同期します。",
+            "이 기기에서 암호화한 후 GitHub 계정으로 기기 간에 동기화합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.disableDescription",
+        text: row(
+            "关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。",
+            "關閉後停止後續同步，雲端備份和本機資料都會保留。刪除雲端備份是另一項獨立操作。",
+            "This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.",
+            "以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。",
+            "이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.disableTitle",
+        text: row(
+            "关闭加密同步？",
+            "關閉加密同步？",
+            "Turn off encrypted sync?",
+            "暗号化同期をオフにしますか？",
+            "암호화 동기화를 끌까요?",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.enable",
+        text: row(
+            "启用加密同步",
+            "啟用加密同步",
+            "Enable encrypted sync",
+            "暗号化同期を有効にする",
+            "암호화 동기화 사용",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.hasSnapshot",
+        text: row(
+            "云端已有加密备份。",
+            "雲端已有加密備份。",
+            "An encrypted cloud backup is available.",
+            "暗号化されたクラウドバックアップがあります。",
+            "암호화된 클라우드 백업이 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.keyLocked",
+        text: row(
+            "此设备尚未解锁",
+            "此裝置尚未解鎖",
+            "Locked on this device",
+            "この端末ではロック中",
+            "이 기기에서 잠김",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.keyUnlocked",
+        text: row(
+            "此设备已解锁",
+            "此裝置已解鎖",
+            "Unlocked on this device",
+            "この端末でロック解除済み",
+            "이 기기에서 잠금 해제됨",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.loading",
+        text: row(
+            "正在读取同步状态…",
+            "正在讀取同步狀態…",
+            "Checking sync status…",
+            "同期状態を確認中…",
+            "동기화 상태 확인 중…",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.lock",
+        text: row(
+            "锁定此设备",
+            "鎖定此裝置",
+            "Lock this device",
+            "この端末をロック",
+            "이 기기 잠그기",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.noSnapshot",
+        text: row(
+            "云端尚无加密备份。",
+            "雲端尚無加密備份。",
+            "No encrypted cloud backup yet.",
+            "暗号化クラウドバックアップはまだありません。",
+            "아직 암호화된 클라우드 백업이 없습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordTitle",
+        text: row(
+            "更改同步密码",
+            "變更同步密碼",
+            "Change your sync password",
+            "同期パスワードを変更",
+            "동기화 비밀번호 변경",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordWarning",
+        text: row(
+            "请妥善保管同步密码。密码无法找回，遗失后可能无法读取云端资料。",
+            "請妥善保管同步密碼。密碼無法找回，遺失後可能無法讀取雲端資料。",
+            "Keep your sync password safe. It cannot be recovered; losing it can make cloud data unreadable.",
+            "同期パスワードは安全に保管してください。再発行できず、紛失するとクラウドのデータを読めなくなる場合があります。",
+            "동기화 비밀번호를 안전하게 보관하세요. 복구할 수 없으며, 분실하면 클라우드 데이터를 읽지 못할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolTitle",
+        text: row(
+            "云同步协议与隐私提醒",
+            "雲端同步協議與隱私提醒",
+            "Cloud sync agreement and privacy notice",
+            "クラウド同期の同意事項とプライバシー",
+            "클라우드 동기화 약관 및 개인정보 안내",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.refresh",
+        text: row(
+            "刷新状态",
+            "重新整理狀態",
+            "Refresh status",
+            "状態を更新",
+            "상태 새로고침",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.rememberKey",
+        text: row(
+            "在此设备的安全存储中记住解锁密钥",
+            "在此裝置的安全儲存空間記住解鎖金鑰",
+            "Remember the unlock key in this device’s secure storage",
+            "この端末の安全なストレージに解除キーを記憶する",
+            "이 기기의 보안 저장소에 잠금 해제 키 기억",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restore",
+        text: row(
+            "审阅云端恢复",
+            "檢閱雲端還原",
+            "Review cloud restore",
+            "クラウドからの復元を確認",
+            "클라우드 복원 검토",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreDescription",
+        text: row(
+            "请检查下列资料类别，敏感值不会展示。确认之前不会恢复任何内容。",
+            "請檢查下列資料類別，敏感值不會顯示。確認之前不會還原任何內容。",
+            "Review the categories below. Sensitive values stay hidden. Nothing is restored until you confirm.",
+            "データの種類を確認してください。機密の値は表示しません。確認するまで復元しません。",
+            "데이터 종류를 확인하세요. 민감한 값은 표시하지 않습니다. 확인 전에는 복원하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreTitle",
+        text: row(
+            "恢复前审阅",
+            "還原前檢閱",
+            "Review before restoring",
+            "復元前に確認",
+            "복원 전 검토",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.signIn",
+        text: row(
+            "使用 GitHub 登录",
+            "使用 GitHub 登入",
+            "Sign in with GitHub",
+            "GitHub でログイン",
+            "GitHub로 로그인",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.signOut",
+        text: row("退出登录", "登出", "Sign out", "ログアウト", "로그아웃"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.snapshotUnknown",
+        text: row(
+            "尚未检查云端备份。",
+            "尚未檢查雲端備份。",
+            "Cloud backup has not been checked yet.",
+            "クラウドバックアップは未確認です。",
+            "클라우드 백업을 아직 확인하지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.title",
+        text: row(
+            "加密云同步",
+            "加密雲端同步",
+            "Encrypted cloud sync",
+            "暗号化クラウド同期",
+            "암호화 클라우드 동기화",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.unlock",
+        text: row("解锁", "解鎖", "Unlock", "ロック解除", "잠금 해제"),
+    },
+    Msg {
+        key: "cloudSyncE2ee.working",
+        text: row(
+            "正在处理…",
+            "正在處理…",
+            "Working securely…",
+            "処理中…",
+            "처리 중…",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.conflictProgress",
+        text: row(
+            "已处理 {} / {} 项冲突",
+            "已處理 {} / {} 項衝突",
+            "{} of {} conflicts resolved",
+            "{} 件中 {} 件を選択済み",
+            "충돌 {}개 중 {}개 해결",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.deviceReview",
+        text: row(
+            "恢复后请核对 {} 项设备配置，包括快捷键、模型目录、麦克风及系统授权。",
+            "還原後請核對 {} 項裝置設定，包括快捷鍵、模型目錄、麥克風及系統授權。",
+            "After restoring, review {} device settings, including shortcuts, model paths, microphones and system permissions.",
+            "復元後は、ショートカット、モデルの場所、マイク、システム権限など {} 件の端末設定を確認してください。",
+            "복원 후 단축키, 모델 경로, 마이크, 시스템 권한 등 기기 설정 {}개를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.lastSync",
+        text: row(
+            "上次同步：{}",
+            "上次同步：{}",
+            "Last synced {}",
+            "最終同期：{}",
+            "마지막 동기화: {}",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.merge",
+        text: row(
+            "合并，并逐项处理冲突",
+            "合併，並逐項處理衝突",
+            "Merge and resolve conflicts",
+            "マージして競合を解決",
+            "병합하고 충돌 해결",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.passwordPolicy",
+        text: row(
+            "使用 12–128 个字符，包含大写字母、小写字母和数字，避免常见弱密码。",
+            "使用 12–128 個字元，包含大寫字母、小寫字母和數字，避免常見弱密碼。",
+            "Use 12–128 characters with uppercase and lowercase letters and a number. Avoid common passwords.",
+            "12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。",
+            "12~128자로 영문 대문자, 소문자, 숫자를 포함하세요. 흔한 비밀번호는 피하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.replace",
+        text: row(
+            "使用云端资料替换本机同步资料",
+            "使用雲端資料取代本機同步資料",
+            "Replace synced local data with cloud data",
+            "同期対象のローカルデータをクラウドの内容で置換",
+            "동기화 대상 로컬 데이터를 클라우드 데이터로 교체",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.restoreCheck",
+        text: row(
+            "我已检查恢复方式和冲突处理选择。",
+            "我已檢查還原方式和衝突處理選擇。",
+            "I have reviewed the restore mode and conflict choices.",
+            "復元方法と競合の選択を確認しました。",
+            "복원 방식과 충돌 선택을 확인했습니다.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.family",
+        text: row("字体系列", "字体系列", "Font family", "Font family", "Font family"),
+    },
+    Msg {
+        key: "uiRefinement.fontHint",
+        text: row(
+            "仅使用已安装字体，缺失时回退到系统字体。不下载、不扫描，也不发起字体网络请求。",
+            "仅使用已安装字体，缺失时回退到系统字体。不下载、不扫描，也不发起字体网络请求。",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.fontSize",
+        text: row(
+            "界面大小",
+            "界面大小",
+            "Interface size",
+            "Interface size",
+            "Interface size",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.storageError",
+        text: row(
+            "本地保存失败，本次会话仍使用当前选择。",
+            "本地保存失败，本次会话仍使用当前选择。",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.typography",
+        text: row("字体与排版", "字体与排版", "Typography", "Typography", "Typography"),
+    },
+    Msg {
+        key: "uiRefinement.width",
+        text: row(
+            "阅读宽度",
+            "阅读宽度",
+            "Reading width",
+            "Reading width",
+            "Reading width",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

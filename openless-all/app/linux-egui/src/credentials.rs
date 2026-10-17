@@ -531,7 +531,7 @@ impl CredentialStore for LinuxCredentialStore {
             }
             #[cfg(target_os = "linux")]
             {
-                tokio::task::spawn_blocking(move || read_secret(&key))
+                tokio::task::spawn_blocking(move || require_committed_value(read_secret(&key)?))
                     .await
                     .map_err(join_error)?
             }
@@ -737,8 +737,19 @@ fn persist_metadata(path: &Path, state: &PersistedCredentialMetadata) -> Result<
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn require_committed_value(
+    value: Option<SecretValue>,
+) -> Result<Option<SecretValue>, BackendError> {
+    value.map(Some).ok_or_else(|| BackendError::new(
+        BackendErrorCode::Persistence,
+        "A saved credential is missing from the active Secret Service vault. Restore the original wallet before editing this channel; its metadata has been retained.",
+    ))
+}
+
 #[cfg(target_os = "linux")]
 fn keyring_entry(key: &CredentialKey) -> Result<keyring::Entry, BackendError> {
+    crate::linux_access::ensure_persistent_vault()?;
     let account = serde_json::to_string(key).map_err(|error| {
         BackendError::new(
             BackendErrorCode::Internal,
@@ -750,6 +761,7 @@ fn keyring_entry(key: &CredentialKey) -> Result<keyring::Entry, BackendError> {
 
 #[cfg(target_os = "linux")]
 fn read_legacy_secret(account: &str) -> Result<Option<SecretValue>, BackendError> {
+    crate::linux_access::ensure_persistent_vault()?;
     let entry = keyring::Entry::new(
         openless_core::credentials_legacy::LEGACY_CREDENTIAL_SERVICE,
         account,
@@ -830,6 +842,13 @@ fn unsupported_keyring<T>() -> Result<T, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_committed_key_missing_from_the_current_vault_is_not_an_empty_form() {
+        let error = require_committed_value(None).unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Persistence);
+        assert!(error.message.contains("original wallet"));
+    }
 
     fn temporary_store() -> LinuxCredentialStore {
         let root = std::env::temp_dir().join(format!(

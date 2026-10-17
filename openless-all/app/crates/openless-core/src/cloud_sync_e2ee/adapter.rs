@@ -281,7 +281,7 @@ fn scope_bucket(scope: &SyncScope) -> DocumentResult<String> {
         &scope.device_id,
     ])
     .map_err(|_| DocumentError::InvalidDocument)?;
-    Ok(format!("scope:{:x}", Sha256::digest(bytes)))
+    Ok(format!("scope:{}", hex::encode(Sha256::digest(bytes))))
 }
 
 impl SyncServiceData for CoreSyncStore {

@@ -2,6 +2,13 @@ use super::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// 设置页里的外链目标，与 Tauri 的 `AboutSection` / `SettingsModal` 一字不差
+/// （`HELP_URL` / `RELEASE_NOTES_URL` 及仓库、issue 页）。
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/Open-Less/openless";
+pub(crate) const HELP_URL: &str = "https://github.com/Open-Less/openless#readme";
+pub(crate) const RELEASE_NOTES_URL: &str = "https://github.com/Open-Less/openless/releases";
+pub(crate) const ISSUES_URL: &str = "https://github.com/Open-Less/openless/issues";
+
 type Patch = BTreeMap<String, Value>;
 
 #[derive(Default)]
@@ -186,6 +193,12 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AudioCue => {
                 preferences.audio_cue_on_record = !preferences.audio_cue_on_record;
             }
+            frontend::view_model::SettingsField::LlmThinking => {
+                preferences.llm_thinking_enabled = !preferences.llm_thinking_enabled;
+            }
+            frontend::view_model::SettingsField::CapsuleTranscript => {
+                preferences.capsule_transcript_enabled = !preferences.capsule_transcript_enabled;
+            }
             frontend::view_model::SettingsField::ShowCapsule => {
                 preferences.show_capsule = !preferences.show_capsule;
 
@@ -279,8 +292,21 @@ impl OpenLessEguiApp {
                     _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
                 };
             }
+            frontend::view_model::SettingsComboField::PipelineMode => {
+                // Tauri's selector enables the pipeline flag in both modes;
+                // only the selected mode is consumed, and both namespaces survive.
+                preferences.multimodal_pipeline_enabled = true;
+                preferences.pipeline_mode = if index == 1 {
+                    openless_core::shared_types::PipelineMode::Multimodal
+                } else {
+                    openless_core::shared_types::PipelineMode::Traditional
+                };
+            }
             frontend::view_model::SettingsComboField::SilenceSeconds => {
                 preferences.silence_auto_stop_seconds = index as f32 + 1.0;
+            }
+            frontend::view_model::SettingsComboField::CapsuleTranscriptFontSize => {
+                preferences.capsule_transcript_font_size = (12 + 2 * index.min(4)) as u8;
             }
             frontend::view_model::SettingsComboField::CapsuleStyle => {
                 preferences.capsule_style = match index {
@@ -567,6 +593,12 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsActionField,
     ) {
         match field {
+            frontend::view_model::SettingsActionField::RefreshLinuxAccess => {
+                if !self.frontend_vm.linux_access.checking {
+                    self.refresh_linux_access();
+                    self.load_microphones();
+                }
+            }
             frontend::view_model::SettingsActionField::RetrySave => {
                 self.settings_save.error = None;
                 self.save_settings_if_dirty();
@@ -647,16 +679,16 @@ impl OpenLessEguiApp {
                 openless_linux_egui::play_cue_start();
             }
             frontend::view_model::SettingsActionField::OpenGitHub => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(REPOSITORY_URL);
             }
             frontend::view_model::SettingsActionField::OpenHelp => {
-                let _ = open_external("https://github.com/earendil-works/openless");
+                let _ = open_external(HELP_URL);
             }
             frontend::view_model::SettingsActionField::OpenReleaseNotes => {
-                let _ = open_external("https://github.com/earendil-works/openless/releases");
+                let _ = open_external(RELEASE_NOTES_URL);
             }
             frontend::view_model::SettingsActionField::OpenFeedback => {
-                let _ = open_external("https://github.com/earendil-works/openless/issues");
+                let _ = open_external(ISSUES_URL);
             }
             frontend::view_model::SettingsActionField::CopyQQ => {
                 match fcitx5_copy_to_clipboard("1078960553") {
@@ -813,5 +845,17 @@ mod tests {
             serde_json::to_value(draft).unwrap()
         );
         assert!(edits.contains_key("/hotkey/mode"));
+    }
+
+    /// 外链必须指向与 Tauri 相同的仓库/页面（回归：曾经指向 earendil-works）。
+    #[test]
+    fn settings_links_match_the_tauri_targets() {
+        assert_eq!(REPOSITORY_URL, "https://github.com/Open-Less/openless");
+        assert_eq!(HELP_URL, "https://github.com/Open-Less/openless#readme");
+        assert_eq!(
+            RELEASE_NOTES_URL,
+            "https://github.com/Open-Less/openless/releases"
+        );
+        assert_eq!(ISSUES_URL, "https://github.com/Open-Less/openless/issues");
     }
 }

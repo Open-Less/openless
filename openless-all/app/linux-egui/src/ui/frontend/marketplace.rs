@@ -294,6 +294,14 @@ pub fn marketplace_page(
         .map(|(index, _)| index)
         .collect();
 
+    super::paging::load_more_footer(
+        ui,
+        lang,
+        super::paging::Collection::Marketplace,
+        vm,
+        false,
+        actions,
+    );
     if visible.is_empty() {
         let (title, hint) = if liked_only {
             (

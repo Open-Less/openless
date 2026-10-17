@@ -68,6 +68,12 @@ pub enum FrontendAction {
     MarketplaceToggleLike(usize),
     MarketplaceCloseMine,
     /// Select a history entry (index into `history_entries`).
+    /// 拉取某个集合的下一页；宿主按同样的顺序切片回发（见 [`super::paging`]）。
+    /// `offset` 用窗口当前的已载入条数，因为宿主只知道完整集合、不知道窗口手上有多少。
+    LoadMore {
+        collection: super::paging::Collection,
+        offset: usize,
+    },
     HistorySelect(usize),
     /// Re-read the history list from Core.
     HistoryRefresh,
@@ -185,13 +191,11 @@ pub enum FrontendAction {
     /// Delete a channel (index into `settings.channels`).
     SettingsChannelDelete(usize),
     /// Open/close the "add channel" form.
-    SettingsChannelFormOpen(bool),
+    /// 「添加渠道」：宿主先建一张空渠道，再打开同一个编辑器（草稿模式）。
+    SettingsChannelDraft,
     /// Provider picked in the add-channel form.
-    SettingsChannelProvider(usize),
     /// Channel name typed in the add-channel form.
-    SettingsChannelName(String),
     /// Create the channel described by the form.
-    SettingsChannelCreate,
     /// Select a channel and open its provider editor (index into `channels`).
     SettingsChannelSelect(usize),
     /// Move a channel up/down; Core's `reorder_channels` owns the order.
@@ -201,7 +205,7 @@ pub enum FrontendAction {
     },
     /// Switch a channel to another provider type (Core's `set_channel_provider_type`).
     SettingsChannelProviderType {
-        index: usize,
+        channel_id: String,
         provider_type: String,
     },
     /// Make a channel the active provider (Core's `set_active_provider`).
@@ -210,6 +214,11 @@ pub enum FrontendAction {
     SettingsProviderField(SettingsProviderField, String),
     /// Save the editor: rename + endpoint/model + credentials through Core.
     SettingsProviderSave,
+    SettingsOmni(openless_linux_egui::omni_settings::OmniAction),
+    /// Encrypted cloud sync card (enable/unlock/restore/delete/custom server).
+    SettingsCloudSync(openless_linux_egui::cloud_sync_ui::CloudSyncAction),
+    /// Appearance → typography (font family, scale, reading width).
+    SettingsTypography(openless_linux_egui::typography::TypographyField),
     /// Drop the channel's stored secrets (Core's `remove_credential`).
     SettingsProviderClearSecrets,
     /// Ask Core for the provider's model list (Core's `provider.list_models`).
@@ -243,6 +252,8 @@ pub enum FrontendAction {
     OverviewPeriod(usize),
     /// Overview: metric toggle (0 = count, 1 = chars, 2 = duration).
     OverviewMetric(usize),
+    /// Dismiss a non-fatal runtime warning overlay.
+    DismissRuntimeWarning,
     /// Window close requested.
     WindowClose,
     /// Window maximize/minimize toggle.
@@ -292,9 +303,9 @@ pub struct MarketplaceMinePack {
 
 // ── Settings types ──────────────────────────────────────────────────────────
 
-/// Host permission state, mirroring the Tauri permission rows. Linux has no
-/// OS permission prompts, so most of these stay `Unsupported` — but the value
-/// now comes from the host snapshot instead of a hardcoded label.
+/// Legacy wire names for host capabilities, not OS authorization grants.
+/// On Linux, `Granted` means a microphone was enumerated or the hotkey listener
+/// was initialized; neither proves that every capture/input operation will work.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PermissionState {
     #[default]
@@ -351,6 +362,8 @@ pub enum ShortcutField {
 /// One credential channel shown in the AI-services settings tab.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
+    /// 渠道 id。宿主用它定位编辑目标（Tauri 的 `Channel.id` 同义）。
+    pub id: String,
     pub name: String,
     /// Model / endpoint summary shown under the channel name.
     pub model: String,
@@ -361,8 +374,14 @@ pub struct SettingsChannel {
     /// True for the channel currently serving requests.
     pub is_active: bool,
     pub enabled: bool,
-    /// Human-readable result of the last validation, if any.
-    pub last_check: Option<String>,
+    /// 最近一次验证是否通过；`None` = 从未验证（Tauri 的 `lastTest`）。
+    pub last_ok: Option<bool>,
+    /// 失败时的错误文本，Core 原样回显，不在这里二次解释。
+    pub last_error: Option<String>,
+    /// 通过时的往返耗时（毫秒）。
+    pub last_latency_ms: Option<u32>,
+    /// 距最近一次验证过了多少秒。宿主用 epoch 秒算好，窗口只负责本地化。
+    pub last_check_age_seconds: Option<i64>,
 }
 
 /// A field of the provider editor. Secret fields are write-only: opening an
@@ -376,6 +395,13 @@ pub enum SettingsProviderField {
     AuthMode,
     PrimarySecret,
     SecondarySecret,
+    RequestFormat,
+    MessagesThinking,
+    MaxTokens,
+    ThinkingBudget,
+    ServiceTier,
+    Temperature,
+    ExtraHeaders,
 }
 
 /// Which inputs the editor renders. Core's `AuthRequirement` decides this;
@@ -391,7 +417,9 @@ pub enum SettingsProviderAuth {
     Volcengine,
     /// Xfyun: AppID + API Key.
     Xfyun,
-    /// Another Core-defined shape (Tencent Cloud and friends).
+    /// Tencent Cloud: public AppID and two write-only secret fields.
+    TencentCloud,
+    /// Another Core-defined credential shape.
     Other,
     /// Endpoint + Model + API Key.
     ApiKey,
@@ -402,9 +430,19 @@ pub enum SettingsProviderAuth {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
     pub channel_id: String,
+    /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
+    pub is_asr: bool,
+    /// 草稿（刚从「添加渠道」建出来）：标题是「添加渠道」，且未交互就关闭时要回收。
+    pub is_draft: bool,
     /// Localized provider label (read-only).
     pub provider: String,
     pub provider_type: String,
+    #[serde(default)]
+    pub endpoint_presets: Vec<openless_core::provider_rules::ProviderEndpointPreset>,
+    #[serde(default)]
+    pub api_key_optional: bool,
+    #[serde(default)]
+    pub default_endpoint: String,
     pub name: String,
     pub endpoint: String,
     pub model: String,
@@ -429,6 +467,8 @@ pub struct SettingsProviderEditor {
     pub has_models_url: bool,
     /// 模型字段是否处于「自定义模型…」手输模式（Tauri `customModelMode`）。
     pub custom_model: bool,
+    #[serde(default)]
+    pub protocol: openless_linux_egui::provider_protocol::ProviderProtocolDraft,
     pub busy: bool,
 }
 
@@ -467,6 +507,8 @@ pub enum SettingsField {
     AudioCue,
     /// 录音胶囊是否显示（Tauri `showCapsule`；Linux 上同样生效）。
     ShowCapsule,
+    CapsuleTranscript,
+    LlmThinking,
     MuteWhileRecording,
     /// 轻量本机麦克风增益与软限幅。
     AudioEnhancement,
@@ -485,11 +527,15 @@ pub enum SettingsComboField {
     Microphone,
     /// 胶囊样式：0 = siri（流光），1 = classic（经典药丸），2 = typeless（深色胶囊）。
     CapsuleStyle,
+    CapsuleTranscriptFontSize,
     RecordingMode,
     SilenceSeconds,
     RemoteDefaultMode,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     SelectionPolishDelivery,
+    /// 识别管线模式：0 = 传统（ASR + LLM 两段），1 = 多模态（单模型一步）。
+    /// 与 Tauri 的 `pipelineMode` 同义：切换只改偏好，不动另一套凭据。
+    PipelineMode,
     /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
     CodingAgentProvider,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
@@ -516,6 +562,7 @@ pub enum SettingsTextField {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsActionField {
     RetrySave,
+    RefreshLinuxAccess,
     /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
     PreviewAudioCue,
     ExportDiagnostics,
@@ -685,6 +732,9 @@ pub struct FrontendViewModel {
     pub tools_open: bool,
     pub settings_open: bool,
 
+    /// Localized non-fatal runtime warning (for example, unavailable fcitx5).
+    pub runtime_warning: Option<String>,
+
     /// Resolved UI language, injected by the host each frame so the pure
     /// renderer can look up localized strings without touching global state.
     #[serde(with = "lang_tag")]
@@ -704,6 +754,11 @@ pub struct FrontendViewModel {
     pub history_query: String,
     pub history_selected: usize,
     pub history_entries: Vec<HistoryEntry>,
+    /// 列表里的历史总条数（概览页的 `history_total` 是「累计听写」统计口径，
+    /// 两者不是一回事）。历史按页下发（见 [`super::paging`]），`history_entries`
+    /// 只是已载入的前缀；`history_list_total > history_entries.len()` 时窗口显示
+    /// 「已载入 X / 共 Y」并可继续加载。
+    pub history_list_total: usize,
     pub quick_note_recording: bool,
     /// Whether the dismissible shortcut card on the Quick Note page is hidden.
     pub quick_note_shortcut_hidden: bool,
@@ -720,7 +775,11 @@ pub struct FrontendViewModel {
 
     // Vocab
     pub vocab_entries: Vec<VocabEntry>,
+    /// 词库总条数（`vocab_entries` 只是已载入的前缀）。
+    pub vocab_total: usize,
     pub vocab_rules: Vec<CorrectionRule>,
+    /// 纠错规则总条数（`vocab_rules` 只是已载入的前缀）。
+    pub correction_rule_total: usize,
     /// 纠正规则页的「只看自动收集」筛选（Tauri 的 `onlyLearnedRules`）。
     pub vocab_rules_only_learned: bool,
     /// 0 = all, 1 = auto-collected, 2 = manual.
@@ -739,6 +798,8 @@ pub struct FrontendViewModel {
 
     // Style
     pub style_packs: Vec<StylePack>,
+    /// 风格包总条数（`style_packs` 只是已载入的前缀；图标 data URL 很占体积）。
+    pub style_pack_total: usize,
     pub style_selected: usize,
     pub style_selection_workflow: bool,
     pub style_editor_open: bool,
@@ -774,6 +835,8 @@ pub struct FrontendViewModel {
     pub marketplace_query: String,
     pub marketplace_sort: MarketplaceSort,
     pub marketplace_packs: Vec<MarketplacePack>,
+    /// 市场列表总条数（`marketplace_packs` 只是已载入的前缀）。
+    pub marketplace_total: usize,
     pub marketplace_selected: Option<usize>,
     pub marketplace_detail_prompt: Option<String>,
     pub marketplace_mine_open: bool,
@@ -830,6 +893,11 @@ pub struct FrontendViewModel {
     pub style_hotkey_draft_pack: usize,
     /// Real host permission snapshot for 隐私与数据（不再写死「已授权」）。
     pub permissions: SettingsPermissions,
+    /// Actual backend data directory; empty until the backend is available.
+    #[serde(default)]
+    pub application_data_directory: String,
+    #[serde(default)]
+    pub linux_access: openless_linux_egui::linux_access::LinuxAccessSnapshot,
     /// 远程输入服务正在监听 → 显示配对码 / 访问网址 / 证书指纹。
     pub remote_running: bool,
     /// 服务报出的地址已过期：继续展示旧网址会诱导用户在错误的地址上配对，
@@ -843,9 +911,6 @@ pub struct FrontendViewModel {
     /// Provider kinds offered by the add-channel form.
     pub channel_providers: Vec<SettingsChannelProvider>,
     pub channels_loading: bool,
-    pub channel_form_open: bool,
-    pub channel_form_name: String,
-    pub channel_provider_index: usize,
     /// Open provider editor, or `None` when the channel list is the whole view.
     pub provider_editor: Option<SettingsProviderEditor>,
     /// Rail search query in the settings modal.
@@ -890,6 +955,14 @@ pub struct FrontendViewModel {
     pub selection_polish_hotkey: String,
     /// Pipeline mode is 多模态 → the task strip hides the legacy LLM/ASR views.
     pub pipeline_multimodal: bool,
+    #[serde(default)]
+    pub omni: openless_linux_egui::omni_settings::OmniSettings,
+    #[serde(default)]
+    pub cloud_sync: openless_linux_egui::cloud_sync_ui::CloudSyncUi,
+    /// Reading typography mirrors the saved UI state so the combos show the
+    /// live choice without re-reading the file each frame.
+    #[serde(default)]
+    pub typography: openless_linux_egui::typography::Typography,
 }
 
 impl Default for FrontendViewModel {
@@ -901,6 +974,7 @@ impl Default for FrontendViewModel {
             style_open: true,
             tools_open: true,
             settings_open: false,
+            runtime_warning: None,
             overview_loading: true,
             overview_error: None,
             overview: None,
@@ -909,6 +983,7 @@ impl Default for FrontendViewModel {
             history_query: String::new(),
             history_selected: 0,
             history_entries: Vec::new(),
+            history_list_total: 0,
             quick_note_recording: false,
             quick_note_shortcut_hidden: false,
             history_loading: true,
@@ -920,7 +995,9 @@ impl Default for FrontendViewModel {
             history_repolish_result: None,
             history_repolish_error: None,
             vocab_entries: Vec::new(),
+            vocab_total: 0,
             vocab_rules: Vec::new(),
+            correction_rule_total: 0,
             vocab_rules_only_learned: false,
             vocab_filter: 0,
             vocab_query: String::new(),
@@ -935,6 +1012,7 @@ impl Default for FrontendViewModel {
             vocab_error: None,
             vocab_unsupported: true,
             style_packs: Vec::new(),
+            style_pack_total: 0,
             style_selected: 0,
             style_selection_workflow: false,
             style_editor_open: false,
@@ -964,6 +1042,7 @@ impl Default for FrontendViewModel {
             marketplace_query: String::new(),
             marketplace_sort: MarketplaceSort::Popular,
             marketplace_packs: Vec::new(),
+            marketplace_total: 0,
             marketplace_selected: None,
             marketplace_detail_prompt: None,
             marketplace_mine_open: false,
@@ -992,9 +1071,6 @@ impl Default for FrontendViewModel {
             channels: Vec::new(),
             channel_providers: Vec::new(),
             channels_loading: false,
-            channel_form_open: false,
-            channel_form_name: String::new(),
-            channel_provider_index: 0,
             provider_editor: None,
             settings_query: String::new(),
             shortcut_pending_modifier: None,
@@ -1013,6 +1089,9 @@ impl Default for FrontendViewModel {
             status: String::new(),
             selection_polish_hotkey: String::new(),
             pipeline_multimodal: false,
+            omni: Default::default(),
+            cloud_sync: Default::default(),
+            typography: Default::default(),
             remote_running: false,
             remote_urls_stale: false,
             remote_pin: String::new(),
@@ -1027,6 +1106,8 @@ impl Default for FrontendViewModel {
             style_hotkey_draft_open: false,
             style_hotkey_draft_pack: 0,
             permissions: SettingsPermissions::default(),
+            application_data_directory: String::new(),
+            linux_access: Default::default(),
             dictation_hotkey: String::new(),
             qa_hotkey: String::new(),
             quick_note_hotkey: String::new(),
@@ -1066,6 +1147,10 @@ pub struct SettingsFields {
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
     pub show_capsule: bool,
     pub capsule_style: usize,
+    pub capsule_transcript: bool,
+    pub capsule_transcript_font_size: usize,
+    #[serde(default)]
+    pub llm_thinking_enabled: bool,
     pub record_audio_for_debug: bool,
     pub history_max_entries: String,
     /// 风格直达快捷键（可录制/停用/移除）。
@@ -1119,6 +1204,9 @@ impl Default for SettingsFields {
             audio_cue: false,
             show_capsule: true,
             capsule_style: 0,
+            capsule_transcript: true,
+            capsule_transcript_font_size: 14,
+            llm_thinking_enabled: false,
             record_audio_for_debug: false,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),

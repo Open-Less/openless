@@ -188,6 +188,14 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         .auto_shrink([false, false])
         .show(ui, |ui| {
             // ── Word list ──────────────────────────────────────────────────────────
+            super::paging::load_more_footer(
+                ui,
+                lang,
+                super::paging::Collection::Vocabulary,
+                vm,
+                !vm.vocab_query.trim().is_empty(),
+                actions,
+            );
             if visible.is_empty() {
                 ui.add_space(6.0);
                 let message = if vm.vocab_query.trim().is_empty() {

@@ -384,6 +384,18 @@ fn list_card(
                         }
                         return;
                     }
+                    // 宿主按页下发历史：没载入的条目在这里可以继续拉；搜索时窗口
+                    // 还会替用户自动往下拉（见 frontend::paging）。
+                    let searching = !vm.history_query.trim().is_empty();
+                    super::paging::load_more_footer(
+                        ui,
+                        lang,
+                        super::paging::Collection::History,
+                        vm,
+                        searching,
+                        actions,
+                    );
+                    ui.add_space(4.0);
                     if filtered.is_empty() {
                         let query = vm.history_query.trim();
                         let message = if query.is_empty() {

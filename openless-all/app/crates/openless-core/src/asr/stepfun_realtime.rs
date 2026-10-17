@@ -935,7 +935,7 @@ async fn send_text(writer: &SharedWriter, text: String) -> Result<(), StepfunASR
                 "websocket writer not available".to_string(),
             ));
         };
-        ws.send(Message::Text(text))
+        ws.send(Message::Text(text.into()))
             .await
             .map_err(|e| StepfunASRError::SendFailed(e.to_string()))
     })
@@ -1322,17 +1322,17 @@ mod tests {
                 ws.next().await.unwrap().unwrap(),
                 Message::Text(_)
             ));
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 json!({ "type": "session.updated" }).to_string(),
             ))
             .await
             .unwrap();
 
             release_events_rx.await.unwrap();
-            ws.send(Message::Text(speech_started_event()))
+            ws.send(Message::text(speech_started_event()))
                 .await
                 .unwrap();
-            ws.send(Message::Text(completed_event("delayed speech")))
+            ws.send(Message::text(completed_event("delayed speech")))
                 .await
                 .unwrap();
             // Keep the connection open until the client processes the completed and
@@ -1396,7 +1396,7 @@ mod tests {
                 ws.next().await.unwrap().unwrap(),
                 Message::Text(_)
             ));
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 json!({ "type": "session.updated" }).to_string(),
             ))
             .await
@@ -1407,7 +1407,7 @@ mod tests {
                     Message::Text(_) if !fired => {
                         fired = true;
                         for event in &events_on_first_audio {
-                            ws.send(Message::Text(event.clone())).await.unwrap();
+                            ws.send(Message::text(event.clone())).await.unwrap();
                         }
                     }
                     Message::Close(_) => break,

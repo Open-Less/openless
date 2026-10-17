@@ -1,4 +1,4 @@
-name: Linux egui build and backend checks
+name: Linux Core, egui and deb/rpm checks
 
 # CI and independent manual Linux builds share this deb/rpm verification path.
 # No standalone push trigger: a Linux PR must show one combined Linux check.
@@ -33,6 +33,9 @@ jobs:
       # red run still starts warm.
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
+      # The standalone TLS contract otherwise recompiles common dependencies in
+      # src-tauri/backend-tests/target, outside the host's restored cache.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/target
     steps:
       - uses: actions/checkout@v6
         with:
@@ -85,10 +88,13 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: inputs.scope != 'none'
         with:
-          workspaces: 'openless-all/app -> target'
-          # Saving after a failed test step keeps the next push incremental
-          # instead of repeating a cold build of the whole dependency tree.
+          workspaces: |
+            openless-all/app -> target
+            openless-all/app/src-tauri/backend-tests -> ../../target
+          # Failed beta checks can still warm the shared tree. PRs never write
+          # their own copy, even when tests fail or dependencies change.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Build and test fcitx5 plugin
         if: inputs.scope != 'none'

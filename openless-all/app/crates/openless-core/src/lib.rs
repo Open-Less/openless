@@ -12,6 +12,7 @@ pub mod audio;
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub use cloud_providers::parse_temperature;
 pub mod cloud_sync;
 pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;

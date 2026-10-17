@@ -296,19 +296,26 @@ impl HotkeyDeduplicator {
     /// 会被丢弃，这里的判定方向相反：插件信号刚处理过，本地边沿不再重复触发。
     pub fn accept_local(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
-        stamps.local = Some(at);
-        !stamps
+        let accepted = stamps
             .signal
-            .is_some_and(|signal| at.saturating_duration_since(signal) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|signal| at.saturating_duration_since(signal) >= HOTKEY_DEDUPE_WINDOW);
+        // A rejected echo must not suppress the originating source's key-up.
+        if accepted {
+            stamps.local = Some(at);
+        }
+        accepted
     }
 
     /// 采纳一条插件信号？本地刚命中过（同一窗口还是 XWayland 客户端）就丢弃。
     pub fn accept_signal(&mut self, hotkey: &LocalHotkey, at: Instant) -> bool {
         let stamps = self.seen.entry(hotkey.clone()).or_default();
-        stamps.signal = Some(at);
-        !stamps
+        let accepted = stamps
             .local
-            .is_some_and(|local| at.saturating_duration_since(local) < HOTKEY_DEDUPE_WINDOW)
+            .is_none_or(|local| at.saturating_duration_since(local) >= HOTKEY_DEDUPE_WINDOW);
+        if accepted {
+            stamps.signal = Some(at);
+        }
+        accepted
     }
 }
 
