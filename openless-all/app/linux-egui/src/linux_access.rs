@@ -19,6 +19,8 @@ pub enum KeyringState {
     Locked,
     MissingService,
     MissingCollection,
+    /// A session-only default cannot safely hold persistent channel credentials.
+    TemporaryVault,
     Unavailable,
     RestartRequired,
 }
@@ -84,6 +86,9 @@ pub fn probe_session() -> (KeyringState, CheckState) {
             match alias {
                 Err(_) => KeyringState::Unavailable,
                 Ok((path,)) if path == "/" => KeyringState::MissingCollection,
+                Ok((path,)) if temporary_collection(&path.to_string()) => {
+                    KeyringState::TemporaryVault
+                }
                 Ok((path,)) => {
                     let collection =
                         connection.with_proxy(owner.as_str(), path, Duration::from_secs(1));
@@ -125,6 +130,58 @@ pub fn probe_session() -> (KeyringState, CheckState) {
     )
 }
 
+fn temporary_collection(path: &str) -> bool {
+    path == "/org/freedesktop/secrets/collection/session"
+}
+
+/// Refuse to read/write persistent channel configuration through an ephemeral
+/// default. Never unlock, create a collection, or choose a different daemon.
+#[cfg(target_os = "linux")]
+pub(crate) fn ensure_persistent_vault() -> Result<(), openless_core::BackendError> {
+    use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+    use dbus::blocking::Connection;
+    let inspect = || -> Result<KeyringState, dbus::Error> {
+        let connection = Connection::new_session()?;
+        let bus = connection.with_proxy(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            Duration::from_secs(1),
+        );
+        let (owner,): (String,) = bus.method_call(
+            "org.freedesktop.DBus",
+            "GetNameOwner",
+            ("org.freedesktop.secrets",),
+        )?;
+        let service = connection.with_proxy(
+            owner.as_str(),
+            "/org/freedesktop/secrets",
+            Duration::from_secs(1),
+        );
+        let (path,): (dbus::Path<'static>,) =
+            service.method_call("org.freedesktop.Secret.Service", "ReadAlias", ("default",))?;
+        if path == "/" {
+            return Ok(KeyringState::MissingCollection);
+        }
+        if temporary_collection(&path.to_string()) {
+            return Ok(KeyringState::TemporaryVault);
+        }
+        let collection = connection.with_proxy(owner, path, Duration::from_secs(1));
+        let locked: bool = collection.get("org.freedesktop.Secret.Collection", "Locked")?;
+        Ok(if locked {
+            KeyringState::Locked
+        } else {
+            KeyringState::Ready
+        })
+    };
+    match inspect() {
+        Ok(KeyringState::Ready) => Ok(()),
+        Ok(KeyringState::TemporaryVault) => Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Persistence,
+            "The Secret Service default vault is temporary (session-only). Existing credentials may be in another wallet. Select the original persistent Secret Service vault and restart OpenLess; credentials have not been deleted or migrated.")),
+        Ok(_) | Err(_) => Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Persistence,
+            "The session Secret Service default vault could not be inspected. Restore the original persistent vault and restart OpenLess; no credentials were changed.")),
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn probe_session() -> (KeyringState, CheckState) {
     (KeyringState::Unavailable, CheckState::Unavailable)
@@ -149,6 +206,19 @@ fn input_interface_ready(xml: &str) -> bool {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_defaults_are_never_reported_as_persistent_vaults() {
+        assert!(temporary_collection(
+            "/org/freedesktop/secrets/collection/session"
+        ));
+        assert!(!temporary_collection(
+            "/org/freedesktop/secrets/collection/kdewallet"
+        ));
+        assert!(!temporary_collection(
+            "/org/freedesktop/secrets/collection/login"
+        ));
+    }
 
     #[test]
     fn a_dbus_peer_or_wrong_addon_is_not_a_text_service() {

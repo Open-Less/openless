@@ -433,6 +433,12 @@ pub struct SettingsProviderEditor {
     /// Localized provider label (read-only).
     pub provider: String,
     pub provider_type: String,
+    #[serde(default)]
+    pub endpoint_presets: Vec<openless_core::provider_rules::ProviderEndpointPreset>,
+    #[serde(default)]
+    pub api_key_optional: bool,
+    #[serde(default)]
+    pub default_endpoint: String,
     pub name: String,
     pub endpoint: String,
     pub model: String,

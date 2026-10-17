@@ -2329,6 +2329,10 @@ pub const CATALOG: &[Msg] = &[
         text: row("缺少默认保险库", "缺少預設保管庫", "No default vault", "既定保管庫がありません", "기본 보관소 없음"),
     },
     Msg {
+        key: "settings.linux_privacy.keyring_temporary",
+        text: row("默认保险库仅临时保存，原凭据可能在其他钱包中", "預設保管庫僅暫存，原憑據可能在其他錢包中", "Temporary default vault; existing credentials may be in another wallet", "既定保管庫は一時保存です。元の認証情報は別の保管庫にある可能性があります", "임시 기본 보관소입니다. 기존 자격 증명은 다른 보관소에 있을 수 있습니다"),
+    },
+    Msg {
         key: "settings.linux_privacy.keyring_unavailable",
         text: row("会话或保险库检查失败", "工作階段或保管庫檢查失敗", "Session/vault check failed", "セッション・保管庫の確認失敗", "세션/보관소 확인 실패"),
     },
@@ -6567,6 +6571,20 @@ pub const CATALOG: &[Msg] = &[
             "監視失敗",
             "감지 실패",
         ),
+    },
+    Msg {
+        key: "settings.providers.apiKeyOptionalLabel",
+        text: row(
+            "API 密钥（可选）",
+            "API 密鑰（選填）",
+            "API Key (optional)",
+            "API キー（任意）",
+            "API 키 (선택 사항)",
+        ),
+    },
+    Msg {
+        key: "settings.providers.volcengineServiceLabel",
+        text: row("服务", "服務", "Service", "サービス", "서비스"),
     },
 ];
 

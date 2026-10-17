@@ -2497,6 +2497,10 @@ fn privacy_access(
                         tr_l10n(lang, "settings.linux_privacy.keyring_missing_collection"),
                         theme::WARN,
                     ),
+                    KeyringState::TemporaryVault => (
+                        tr_l10n(lang, "settings.linux_privacy.keyring_temporary"),
+                        theme::WARN,
+                    ),
                     KeyringState::Unavailable => (
                         tr_l10n(lang, "settings.linux_privacy.keyring_unavailable"),
                         theme::WARN,
@@ -3314,7 +3318,11 @@ fn provider_model_block(
             }
             let mut pick = editor.model.clone();
             egui::ComboBox::from_id_salt("settings-provider-model-preset")
-                .selected_text(current)
+                .selected_text(if current.is_empty() {
+                    &editor.default_model
+                } else {
+                    current
+                })
                 .show_ui(ui, |ui| {
                     for option in &options {
                         if ui.selectable_label(current == option, option).clicked() {
@@ -3347,7 +3355,17 @@ fn provider_model_block(
                 let mut draft = editor.model.clone();
                 let id = egui::Id::new("openless-settings-provider-model");
                 let width = ui.available_width().min(420.0);
-                if layout::text_input_sized(ui, &mut draft, id, "", width, 38.0, false).changed() {
+                if layout::text_input_sized(
+                    ui,
+                    &mut draft,
+                    id,
+                    &editor.default_model,
+                    width,
+                    38.0,
+                    false,
+                )
+                .changed()
+                {
                     editor_mark_dirty(ui);
                     actions.push(FrontendAction::SettingsProviderField(
                         SettingsProviderField::Model,
@@ -3365,8 +3383,7 @@ fn provider_model_block(
             && !editor.default_model.is_empty()
             && provider_small_button(ui, lang, "settings.providers.fillDefault", false)
         {
-            actions.push(FrontendAction::SettingsProviderField(
-                SettingsProviderField::Model,
+            actions.push(FrontendAction::SettingsProviderModelSelected(
                 editor.default_model.clone(),
             ));
         }
@@ -3461,14 +3478,34 @@ fn provider_field(
     password: bool,
     actions: &mut Vec<FrontendAction>,
 ) {
+    provider_field_hint(ui, label, value, "", field, password, actions);
+}
+
+fn provider_field_hint(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    hint: &str,
+    field: SettingsProviderField,
+    password: bool,
+    actions: &mut Vec<FrontendAction>,
+) {
     /// Tauri 渠道弹窗里的输入框：整列宽、38px 高。
     const MODAL_INPUT_HEIGHT: f32 = 38.0;
     let mut row = |ui: &mut egui::Ui| {
         let mut draft = value.to_string();
         let id = egui::Id::new(("openless-settings-provider-field", format!("{field:?}")));
         let width = ui.available_width().min(420.0);
-        if layout::text_input_sized(ui, &mut draft, id, "", width, MODAL_INPUT_HEIGHT, password)
-            .changed()
+        if layout::text_input_sized(
+            ui,
+            &mut draft,
+            id,
+            hint,
+            width,
+            MODAL_INPUT_HEIGHT,
+            password,
+        )
+        .changed()
         {
             editor_mark_dirty(ui);
             actions.push(FrontendAction::SettingsProviderField(field, draft));
@@ -3506,13 +3543,13 @@ fn editor_autosave_id() -> egui::Id {
     egui::Id::new("openless-channel-editor-autosave")
 }
 
-/// 记一次改动并按 Tauri 的节奏安排落盘：输入停下 300ms（这里取 0.4s 留点余量）后保存。
+/// Match Tauri's debounce: persist 300ms after the last edit.
 fn editor_mark_dirty(ui: &egui::Ui) {
-    const AUTO_SAVE_DELAY: f64 = 0.4;
+    const AUTO_SAVE_DELAY: f64 = 0.3;
     let deadline = ui.input(|input| input.time) + AUTO_SAVE_DELAY;
     ui.data_mut(|data| data.insert_temp(editor_autosave_id(), deadline));
     ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(400));
+        .request_repaint_after(std::time::Duration::from_millis(300));
 }
 
 /// 到点就落盘。返回是否推了保存。
@@ -3524,7 +3561,7 @@ fn editor_auto_save(ui: &egui::Ui, actions: &mut Vec<FrontendAction>) -> bool {
     if now < deadline {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(
-                ((deadline - now) * 1000.0).clamp(16.0, 400.0) as u64,
+                ((deadline - now) * 1000.0).clamp(16.0, 300.0) as u64,
             ));
         return false;
     }
@@ -4161,20 +4198,77 @@ fn provider_editor_body(
         SettingsProviderAuth::ApiKey => {
             provider_field(
                 ui,
-                tr_l10n(lang, "settings.providers.apiKeyLabel"),
+                if editor.api_key_optional {
+                    tr_l10n(lang, "settings.providers.apiKeyOptionalLabel")
+                } else {
+                    tr_l10n(lang, "settings.providers.apiKeyLabel")
+                },
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
                 actions,
             );
-            provider_field(
+            if !editor.endpoint_presets.is_empty() {
+                modal_form_row(
+                    ui,
+                    tr_l10n(lang, "settings.providers.volcengineServiceLabel"),
+                    |ui| {
+                        let selected = editor.endpoint_presets.iter().position(|preset| {
+                            openless_core::provider_rules::matches_endpoint_preset(
+                                if editor.endpoint.trim().is_empty() {
+                                    &editor.default_endpoint
+                                } else {
+                                    &editor.endpoint
+                                },
+                                &preset.endpoint,
+                            )
+                        });
+                        egui::ComboBox::from_id_salt((
+                            "provider-endpoint-preset",
+                            &editor.channel_id,
+                        ))
+                        .selected_text(
+                            selected
+                                .map(|index| editor.endpoint_presets[index].name.as_str())
+                                .unwrap_or(&editor.endpoint),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (index, preset) in editor.endpoint_presets.iter().enumerate() {
+                                if ui
+                                    .selectable_label(selected == Some(index), &preset.name)
+                                    .clicked()
+                                {
+                                    editor_mark_dirty(ui);
+                                    actions.push(FrontendAction::SettingsProviderField(
+                                        SettingsProviderField::Endpoint,
+                                        preset.endpoint.clone(),
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    },
+                );
+            }
+            provider_field_hint(
                 ui,
                 tr_l10n(lang, "settings.providers.baseUrlLabel"),
                 &editor.endpoint,
+                &editor.default_endpoint,
                 SettingsProviderField::Endpoint,
                 false,
                 actions,
             );
+            if editor.endpoint.trim().is_empty()
+                && !editor.default_endpoint.is_empty()
+                && provider_small_button(ui, lang, "settings.providers.fillDefault", false)
+            {
+                editor_mark_dirty(ui);
+                actions.push(FrontendAction::SettingsProviderField(
+                    SettingsProviderField::Endpoint,
+                    editor.default_endpoint.clone(),
+                ));
+            }
         }
     }
     ui.add_space(6.0);
@@ -5375,6 +5469,11 @@ mod tests {
                 false,
                 "settings.linux_privacy.keyring_restart",
             ),
+            (
+                KeyringState::TemporaryVault,
+                false,
+                "settings.linux_privacy.keyring_temporary",
+            ),
             (KeyringState::Ready, true, "settings.permissions.checking"),
         ] {
             let ctx = egui::Context::default();
@@ -5591,6 +5690,9 @@ mod tests {
                 is_draft: false,
                 provider: "volcengine".to_string(),
                 provider_type: "volcengine".to_string(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
                 name: "main".to_string(),
                 endpoint: "https://example.invalid".to_string(),
                 model: "model".to_string(),
@@ -5631,6 +5733,9 @@ mod tests {
                 is_draft: false,
                 provider: "ark".to_string(),
                 provider_type: "ark".to_string(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
                 name: "main".to_string(),
                 endpoint: "https://example.invalid".to_string(),
                 model: "doubao-pro".to_string(),
@@ -5764,6 +5869,9 @@ mod tests {
                 is_draft: false,
                 provider: "DeepSeek".to_string(),
                 provider_type: "deepseek".to_string(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
                 name: "DeepSeek".to_string(),
                 endpoint: "https://api.deepseek.com/v1".to_string(),
                 model: "deepseek-v4-flash".to_string(),

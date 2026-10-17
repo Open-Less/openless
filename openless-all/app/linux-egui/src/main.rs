@@ -116,6 +116,7 @@ mod linux_app {
             channel_id: String,
             endpoint: String,
             provider_type: String,
+            request_format: openless_core::llm_protocol::LlmRequestFormat,
             result: Result<Vec<String>, String>,
         },
         Library(Result<LibraryPanel, String>),
@@ -453,6 +454,7 @@ mod linux_app {
         secondary_secret: String,
         models: Vec<String>,
         models_loading: bool,
+        catalog_format: Option<openless_core::llm_protocol::LlmRequestFormat>,
         /// Core descriptor 的高阶字段：模型块的「预设 / 默认 / 文档页」全部由它决定。
         static_models: Vec<String>,
         default_model: String,
@@ -487,6 +489,7 @@ mod linux_app {
                 secondary_secret: String::new(),
                 models: Vec::new(),
                 models_loading: false,
+                catalog_format: None,
                 static_models: editor.descriptor.static_models.clone(),
                 default_model: editor.descriptor.default_model.clone().unwrap_or_default(),
                 models_url: provider_models_url(&editor.descriptor, &editor.endpoint),
@@ -622,6 +625,7 @@ mod linux_app {
         channel_create_pending: bool,
         provider_save_again: bool,
         provider_close_pending: bool,
+        provider_after_save: Option<frontend::view_model::FrontendAction>,
         provider_models: Vec<String>,
         new_provider_type: String,
         pending_channel_delete: Option<String>,
@@ -859,6 +863,7 @@ mod linux_app {
                         channel_create_pending: false,
                         provider_save_again: false,
                         provider_close_pending: false,
+                        provider_after_save: None,
                         provider_models: Vec::new(),
                         new_provider_type: String::new(),
                         pending_channel_delete: None,
@@ -975,6 +980,7 @@ mod linux_app {
                     channel_create_pending: false,
                     provider_save_again: false,
                     provider_close_pending: false,
+                    provider_after_save: None,
                     provider_models: Vec::new(),
                     new_provider_type: String::new(),
                     pending_channel_delete: None,
@@ -2964,6 +2970,15 @@ mod linux_app {
             {
                 return;
             }
+            // Flush host-side edits even when no UI debounce timer was armed
+            // (e.g. a default-model button, navigation, or window teardown).
+            if self.draft_touched {
+                self.provider_close_pending = true;
+                if !self.queue_provider_save() {
+                    self.provider_close_pending = false;
+                }
+                return;
+            }
             let recycle = self.editor_draft && !self.draft_touched;
             let channel_id = self
                 .provider_editor_form
@@ -2984,6 +2999,7 @@ mod linux_app {
 
         fn close_provider_editor(&mut self) {
             self.provider_close_pending = false;
+            self.provider_after_save = None;
             self.provider_save_again = false;
             self.provider_editor = ProviderEditorState::Idle;
             self.provider_editor_form = None;
@@ -3008,6 +3024,7 @@ mod linux_app {
                 return;
             };
             let endpoint = editor.endpoint.clone();
+            let request_format = editor.protocol.format();
             let provider_type = editor.descriptor.provider_type.as_str().to_owned();
             let tx = self.tx.clone();
             let wake = std::thread::current();
@@ -3032,6 +3049,7 @@ mod linux_app {
                     channel_id,
                     endpoint,
                     provider_type,
+                    request_format,
                     result,
                 });
                 wake.unpark();
@@ -4254,6 +4272,7 @@ mod linux_app {
                             Err(error) => {
                                 self.provider_save_again = false;
                                 self.provider_close_pending = false;
+                                self.provider_after_save = None;
                                 self.frontend_vm.settings_notice = Some(error.clone());
                                 self.status = error;
                             }
@@ -4298,12 +4317,31 @@ mod linux_app {
                                 self.load_settings_channels();
                                 self.load_service_configured();
                                 let again = std::mem::take(&mut self.provider_save_again);
-                                if again || (self.provider_close_pending && changed) {
+                                if again
+                                    || ((self.provider_close_pending
+                                        || self.provider_after_save.is_some())
+                                        && changed)
+                                {
                                     if !self.queue_provider_save() {
                                         self.provider_close_pending = false;
+                                        self.provider_after_save = None;
                                     }
+                                } else if let Some(action) = self.provider_after_save.take() {
+                                    self.close_provider_editor();
+                                    self.pending_ui_actions.push(action);
                                 } else if self.provider_close_pending {
                                     self.close_provider_editor();
+                                } else if let Some(form) =
+                                    self.provider_editor_form.as_mut().filter(|form| {
+                                        form.provider_type == "orcarouter"
+                                            && !form.models_loading
+                                            && form.catalog_format != Some(form.protocol.format())
+                                    })
+                                {
+                                    form.models_loading = true;
+                                    let kind = form.kind;
+                                    let channel_id = form.channel_id.clone();
+                                    self.request_provider_models(kind, channel_id);
                                 }
                             }
                         }
@@ -4362,12 +4400,15 @@ mod linux_app {
                         channel_id,
                         endpoint,
                         provider_type,
+                        request_format,
                         result,
                     } => {
                         if kind == self.provider_kind
                             && self.selected_channel_id.as_deref() == Some(channel_id.as_str())
                             && self.provider_editor_form.as_ref().is_some_and(|form| {
-                                form.endpoint == endpoint && form.provider_type == provider_type
+                                form.endpoint == endpoint
+                                    && form.provider_type == provider_type
+                                    && form.protocol.format() == request_format
                             })
                         {
                             match result {
@@ -4385,6 +4426,7 @@ mod linux_app {
                                     };
                                     if let Some(form) = self.provider_editor_form.as_mut() {
                                         form.models = models.clone();
+                                        form.catalog_format = Some(request_format);
                                         form.models_loading = false;
                                     }
                                     self.frontend_vm.settings_notice = None;
@@ -4674,8 +4716,15 @@ mod linux_app {
                                 self.load_settings_channels();
                                 self.load_service_configured();
                                 self.load_providers(self.provider_kind);
+                                if let Some(action) = self.provider_after_save.take() {
+                                    self.close_provider_editor();
+                                    self.pending_ui_actions.push(action);
+                                }
                             }
-                            Err(error) => self.frontend_vm.settings_notice = Some(error),
+                            Err(error) => {
+                                self.provider_after_save = None;
+                                self.frontend_vm.settings_notice = Some(error);
+                            }
                         }
                     }
                     UiResult::ChannelCreated { kind, result } => {
@@ -5245,6 +5294,23 @@ mod linux_app {
                     is_draft: self.editor_draft,
                     provider: form.label.clone(),
                     provider_type: form.provider_type.clone(),
+                    endpoint_presets: match &self.provider_editor {
+                        ProviderEditorState::Loaded(editor) if form.provider_type == "ark" => {
+                            let mut presets = editor.descriptor.endpoint_presets.clone();
+                            if let Some(endpoint) = &editor.descriptor.default_endpoint {
+                                presets.insert(0, openless_core::provider_rules::ProviderEndpointPreset {
+                                    name: form.label.clone(), endpoint: endpoint.clone(), models_url: None,
+                                });
+                            }
+                            presets
+                        }
+                        _ => Vec::new(),
+                    },
+                    default_endpoint: match &self.provider_editor {
+                        ProviderEditorState::Loaded(editor) => editor.descriptor.default_endpoint.clone().unwrap_or_default(),
+                        _ => String::new(),
+                    },
+                    api_key_optional: matches!(&self.provider_editor, ProviderEditorState::Loaded(editor) if editor.descriptor.auth_requirement == openless_core::AuthRequirement::EndpointModelOptionalApiKey),
                     name: form.name.clone(),
                     endpoint: form.endpoint.clone(),
                     model: form.model.clone(),
@@ -5524,6 +5590,39 @@ mod linux_app {
             _ctx: &egui::Context,
         ) {
             for action in actions {
+                use frontend::view_model::FrontendAction as Action;
+                let leaving_editor = match &action {
+                    Action::CloseSettings
+                    | Action::Navigate(_)
+                    | Action::SettingsChannelSelect(_) => true,
+                    Action::ToggleSettings => self.frontend_vm.settings_open,
+                    Action::SettingsServicesView(view) => *view != self.frontend_vm.services_view,
+                    Action::SettingsSection(section) => {
+                        *section != frontend::view_model::SettingsSection::Services
+                    }
+                    _ => false,
+                };
+                if leaving_editor && self.provider_editor_form.is_some() {
+                    if self.provider_switch_pending {
+                        self.provider_after_save = Some(action);
+                        continue;
+                    }
+                    if self
+                        .provider_editor_form
+                        .as_ref()
+                        .is_some_and(|form| form.protocol.validate().is_err())
+                    {
+                        continue;
+                    }
+                    if self.draft_touched {
+                        self.provider_after_save = Some(action);
+                        if !self.queue_provider_save() {
+                            self.provider_after_save = None;
+                        }
+                        continue;
+                    }
+                    self.request_provider_editor_close();
+                }
                 match action {
                     frontend::view_model::FrontendAction::Navigate(page) => {
                         if self.frontend_vm.omni.dirty {
@@ -6920,6 +7019,11 @@ mod linux_app {
                                     form.secondary_secret = value
                                 }
                                 frontend::view_model::SettingsProviderField::RequestFormat => {
+                                    if form.protocol.values[0] != value {
+                                        form.models.clear();
+                                        form.models_loading = false;
+                                        form.catalog_format = None;
+                                    }
                                     form.protocol.values[0] = value
                                 }
                                 frontend::view_model::SettingsProviderField::MessagesThinking => {
@@ -7797,13 +7901,15 @@ mod linux_app {
         channel: openless_core::ChannelSummary,
         descriptor: openless_core::ProviderDescriptor,
     ) -> Result<ProviderEditor, BackendError> {
+        // Descriptor defaults are placeholders, not persisted field values.
+        // Otherwise flushing before a provider switch writes the OLD provider's
+        // defaults into empty slots, preventing the next provider's defaults
+        // from being installed (and sending its key to the previous endpoint).
         let endpoint = read_provider_value(&backend, kind, &channel.id, endpoint_account(kind))
             .await?
-            .or_else(|| descriptor.default_endpoint.clone())
             .unwrap_or_default();
         let model = read_provider_value(&backend, kind, &channel.id, model_account(kind))
             .await?
-            .or_else(|| descriptor.default_model.clone())
             .unwrap_or_default();
         let volcengine_service =
             if descriptor.auth_requirement == openless_core::AuthRequirement::Volcengine {
@@ -9897,6 +10003,82 @@ Internal flags (set by OpenLess itself, not for regular use):
         }
 
         #[test]
+        fn untouched_descriptor_defaults_do_not_become_saved_connection_values() {
+            let mut app = fixture_app(true);
+            let mut editor = fixture_editor("ark");
+            assert!(editor.descriptor.default_endpoint.is_some());
+            assert!(editor.descriptor.default_model.is_some());
+            editor.endpoint.clear();
+            editor.model.clear();
+            app.provider_editor_form = Some(ProviderEditorForm::from_editor(&editor, app.lang));
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor));
+            let snapshot = app.editor_from_form().unwrap();
+            assert!(snapshot.endpoint.is_empty());
+            assert!(snapshot.model.is_empty());
+            assert!(!app
+                .provider_editor_form
+                .as_ref()
+                .unwrap()
+                .default_model
+                .is_empty());
+        }
+
+        #[test]
+        fn leaving_a_channel_waits_for_save_and_failure_keeps_the_draft() {
+            let mut app = fixture_app(true);
+            let editor = fixture_editor("custom");
+            app.frontend_vm.settings_open = true;
+            app.frontend_vm.services_view = 0;
+            app.provider_editor_form = Some(ProviderEditorForm::from_editor(&editor, app.lang));
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor.clone()));
+            app.draft_touched = true;
+            app.provider_save_pending = true;
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::SettingsServicesView(
+                    1,
+                )],
+                &egui::Context::default(),
+            );
+            assert_eq!(app.frontend_vm.services_view, 0);
+            assert!(app.provider_after_save.is_some());
+            app.tx
+                .send(UiResult::ProviderSaved {
+                    editor: Box::new(editor),
+                    result: Err("vault unavailable".into()),
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert!(app.provider_after_save.is_none());
+            assert_eq!(app.frontend_vm.services_view, 0);
+            assert_eq!(
+                app.provider_editor_form.as_ref().unwrap().model,
+                "custom-model"
+            );
+            assert!(app.frontend_vm.settings_notice.is_some());
+        }
+
+        #[test]
+        fn changing_protocol_discards_the_previous_model_catalog() {
+            let mut app = fixture_app(true);
+            let editor = fixture_editor("orcarouter");
+            let mut form = ProviderEditorForm::from_editor(&editor, app.lang);
+            form.models = vec!["previous-format-model".into()];
+            form.catalog_format = Some(form.protocol.format());
+            app.provider_editor_form = Some(form);
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor));
+            app.apply_frontend_actions(
+                vec![frontend::view_model::FrontendAction::SettingsProviderField(
+                    frontend::view_model::SettingsProviderField::RequestFormat,
+                    "messages".into(),
+                )],
+                &egui::Context::default(),
+            );
+            let form = app.provider_editor_form.as_ref().unwrap();
+            assert!(form.models.is_empty());
+            assert!(form.catalog_format.is_none());
+        }
+
+        #[test]
         fn stale_provider_panels_cannot_consume_the_new_draft_open_request() {
             let mut app = fixture_app(true);
             app.providers_request = 2;
@@ -9993,6 +10175,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             app.provider_editor = ProviderEditorState::Loaded(Box::new(editor.clone()));
             app.tx
                 .send(UiResult::ProviderModels {
+                    request_format: editor.protocol.format(),
                     kind: editor.kind,
                     channel_id: editor.channel.id,
                     endpoint: "https://old.example.invalid".into(),
