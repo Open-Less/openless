@@ -297,6 +297,59 @@ pub fn encode_dictation_wav(pcm_i16_le: &[u8]) -> Result<Vec<u8>, crate::Backend
     Ok(wav)
 }
 
+/// Borrow canonical dictation PCM from a RIFF WAV, including files with metadata chunks.
+pub fn decode_dictation_wav(wav: &[u8]) -> Result<&[u8], crate::BackendError> {
+    let invalid = || {
+        crate::BackendError::new(
+            crate::BackendErrorCode::InvalidArgument,
+            "expected a complete 16 kHz mono signed 16-bit PCM WAV",
+        )
+    };
+    if wav.len() < 12
+        || &wav[..4] != b"RIFF"
+        || &wav[8..12] != b"WAVE"
+        || u32::from_le_bytes(wav[4..8].try_into().map_err(|_| invalid())?) as u64 + 8
+            != wav.len() as u64
+    {
+        return Err(invalid());
+    }
+    let mut offset = 12;
+    let mut pcm = None;
+    let mut format_ok = false;
+    while offset < wav.len() {
+        let header = wav.get(offset..offset + 8).ok_or_else(invalid)?;
+        let size = u32::from_le_bytes(header[4..8].try_into().map_err(|_| invalid())?) as usize;
+        let end = (offset + 8).checked_add(size).ok_or_else(invalid)?;
+        let chunk = wav.get(offset + 8..end).ok_or_else(invalid)?;
+        match &header[..4] {
+            b"fmt " => {
+                format_ok = chunk.len() >= 16
+                    && chunk[..2] == 1_u16.to_le_bytes()
+                    && chunk[2..4] == 1_u16.to_le_bytes()
+                    && chunk[4..8] == DICTATION_SAMPLE_RATE.to_le_bytes()
+                    && chunk[8..12] == (DICTATION_SAMPLE_RATE * 2).to_le_bytes()
+                    && chunk[12..14] == 2_u16.to_le_bytes()
+                    && chunk[14..16] == 16_u16.to_le_bytes();
+                if !format_ok {
+                    return Err(invalid());
+                }
+            }
+            b"data" => {
+                if pcm.is_some() || !size.is_multiple_of(2) {
+                    return Err(invalid());
+                }
+                pcm = Some(chunk);
+            }
+            _ => {}
+        }
+        offset = end.checked_add(size % 2).ok_or_else(invalid)?;
+    }
+    if !format_ok || offset != wav.len() {
+        return Err(invalid());
+    }
+    pcm.ok_or_else(invalid)
+}
+
 impl PcmNormalizer {
     pub fn process(
         &mut self,
@@ -591,9 +644,43 @@ mod tests {
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 16_000);
         assert_eq!(&wav[44..], &pcm);
+        assert_eq!(decode_dictation_wav(&wav).unwrap(), &pcm);
         assert_eq!(
             encode_dictation_wav(&[1]).unwrap_err().code,
             crate::BackendErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn wav_decoder_skips_padded_metadata_and_preserves_pcm() {
+        let pcm = [1, 0, 255, 127];
+        let original = encode_dictation_wav(&pcm).unwrap();
+        let mut wav = original[..36].to_vec();
+        wav.extend_from_slice(b"JUNK");
+        wav.extend_from_slice(&3_u32.to_le_bytes());
+        wav.extend_from_slice(&[8, 9, 10, 0]);
+        wav.extend_from_slice(&original[36..]);
+        let size = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(decode_dictation_wav(&wav).unwrap(), &pcm);
+    }
+
+    #[test]
+    fn wav_decoder_rejects_truncation_wrong_format_and_oversized_chunks() {
+        let original = encode_dictation_wav(&[1, 0, 2, 0]).unwrap();
+        for length in 0..original.len() {
+            assert!(decode_dictation_wav(&original[..length]).is_err());
+        }
+        for (offset, replacement) in [
+            (20, vec![3, 0]),
+            (22, vec![2, 0]),
+            (24, 48_000_u32.to_le_bytes().to_vec()),
+            (34, vec![8, 0]),
+            (40, u32::MAX.to_le_bytes().to_vec()),
+        ] {
+            let mut wav = original.clone();
+            wav[offset..offset + replacement.len()].copy_from_slice(&replacement);
+            assert!(decode_dictation_wav(&wav).is_err());
+        }
     }
 }

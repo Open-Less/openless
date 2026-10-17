@@ -1737,9 +1737,9 @@ export const ja: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'ここでは gemini-3.5-transcribe で逐語的に文字起こしし、設定済みの LLM で処理します。スマート文字起こしには、マルチモーダルモードでこのモデルを選択してください。録音終了後にアップロードします。リアルタイムには未対応です。ベース URL：https://generativelanguage.googleapis.com/v1beta（/v1beta/interactions も使用可能）。',
+        'どちらのモデルもここでは逐語的に文字起こしし、必要に応じて設定済みの LLM で処理できます。gemini-3.5-transcribe は録音終了後に音声をアップロードします。gemini-3.5-transcribe-live は話している間に結果を表示し、1 回の録音は最大 10 分です。スマート文字起こしにはマルチモーダルモードを使用してください。ベース URL：https://generativelanguage.googleapis.com/v1beta。',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe はスマート文字起こしに対応し、録音終了後にフィラーの除去、言い直しの反映、文章の整形を行います。作業言語と辞書を利用できます。スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
+        'gemini-3.5-transcribe と gemini-3.5-transcribe-live はスマート文字起こしに対応します。Live は話している間に下書きを表示し、1 回の録音は最大 10 分です。録音終了後にフィラーの除去、言い直しの反映、最終テキストの整形を行います。両モデルとも作業言語と辞書を利用できますが、スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
       validateSuccessAudio:
         '短い無音データで音声接続を確認しました。短い録音で文字起こしの品質も確認してください。',
       elevenLabsUploadNotice:

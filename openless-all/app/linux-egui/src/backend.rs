@@ -254,10 +254,12 @@ impl LinuxBackendBuilder {
                 .with_polish_failure_policy(self.polish_failure_policy),
         );
         let dictation_engine = Arc::new(DictationEngineRouter::new(traditional));
-        let omni: Arc<dyn DictationEngine> = Arc::new(SharedOmniDictationEngine::new(
-            Arc::clone(&credential_store),
-            recorder,
-        ));
+        let omni: Arc<dyn DictationEngine> =
+            Arc::new(SharedOmniDictationEngine::with_task_spawner(
+                Arc::clone(&credential_store),
+                recorder,
+                Arc::clone(&task_spawner),
+            ));
         for provider_type in SHARED_OMNI_PROVIDER_TYPES {
             dictation_engine.register_omni(*provider_type, Arc::clone(&omni))?;
         }

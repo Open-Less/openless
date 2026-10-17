@@ -1802,9 +1802,9 @@ export const fr: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe effectue ici une transcription mot à mot, suivie du LLM configuré. Pour la transcription intelligente, sélectionnez ce modèle en mode multimodal. L’audio est envoyé à la fin de l’enregistrement ; le direct n’est pas pris en charge. URL de base : https://generativelanguage.googleapis.com/v1beta (ou /v1beta/interactions).',
+        'Les deux modèles transcrivent ici mot à mot, avec traitement facultatif par le LLM configuré. gemini-3.5-transcribe envoie l’audio à la fin de l’enregistrement. gemini-3.5-transcribe-live affiche les résultats pendant que vous parlez, jusqu’à 10 minutes par enregistrement. Pour la transcription intelligente, utilisez le mode multimodal. URL de base : https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe permet la transcription intelligente : suppression des hésitations, application des corrections orales et mise en forme après l’enregistrement. Les langues de travail et le dictionnaire sont pris en charge. Ce modèle n’utilise pas les consignes de style et ne permet pas la traduction, la révision de texte ou les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
+        'gemini-3.5-transcribe et gemini-3.5-transcribe-live permettent la transcription intelligente. Live affiche un brouillon pendant que vous parlez, jusqu’à 10 minutes par enregistrement. À la fin, la transcription intelligente supprime les hésitations, applique les corrections orales et met en forme le texte final. Les deux modèles prennent en charge les langues de travail et le dictionnaire, mais pas les consignes de style, la traduction, la révision de texte ni les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
       validateSuccessAudio:
         'Connexion audio vérifiée avec un court échantillon de silence. Confirmez la qualité de transcription avec un court enregistrement.',
       elevenLabsUploadNotice:

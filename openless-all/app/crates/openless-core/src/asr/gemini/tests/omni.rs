@@ -258,3 +258,99 @@ async fn smart_stream_never_delivers_text_after_cancellation() {
         .await
         .unwrap();
 }
+
+/// Queue work for the host runtime even when called from a foreign thread.
+struct HostSpawner {
+    tasks: tokio::sync::mpsc::UnboundedSender<futures_util::future::BoxFuture<'static, ()>>,
+    spawned: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::TaskSpawner for HostSpawner {
+    fn spawn(&self, task: futures_util::future::BoxFuture<'static, ()>) {
+        self.spawned.fetch_add(1, Ordering::AcqRel);
+        assert!(self.tasks.send(task).is_ok(), "host scheduler stopped");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smart_audio_entrypoints_keep_host_scheduler_on_foreign_thread_drop() {
+    for verify in [false, true] {
+        let (ready, received) = tokio::sync::oneshot::channel();
+        let (endpoint, server) = transcription_server_with_poll(
+            "200 OK",
+            r#"{"id":"i-1","status":"in_progress"}"#,
+            assert_smart_request,
+            move || ready.send(()).unwrap(),
+        );
+        let credentials = omni_credentials(&endpoint).await;
+        let (tasks, mut queued) = tokio::sync::mpsc::unbounded_channel();
+        let dispatcher = tokio::spawn(async move {
+            while let Some(task) = queued.recv().await {
+                tokio::spawn(task);
+            }
+        });
+        let spawner = Arc::new(HostSpawner {
+            tasks,
+            spawned: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let progress = Arc::new(Progress::default());
+        let mut request: futures_util::future::BoxFuture<'static, ()> = if verify {
+            let service = ProviderService::new(credentials, spawner.clone());
+            Box::pin(async move {
+                let _ = service
+                    .validate(ProviderRequest {
+                        kind: ProviderKind::Omni,
+                        channel_id: None,
+                        thinking_enabled: false,
+                    })
+                    .await;
+            })
+        } else {
+            let engine = SharedOmniDictationEngine::with_task_spawner(
+                credentials,
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    Vec::new(),
+                    Vec::new(),
+                )),
+                spawner.clone(),
+            );
+            let context = DictationContext {
+                audio_source: DictationAudioSource::External,
+                pipeline_mode: crate::shared_types::PipelineMode::Multimodal,
+                omni: ProviderInvocation::for_provider(PROVIDER_ID),
+                ..Default::default()
+            };
+            let session = SessionId::new();
+            engine
+                .start(session, Arc::new(context), progress.clone())
+                .await
+                .unwrap();
+            engine.feed_audio(session, &[0; 16_000]).unwrap();
+            let finish = engine.finish(session, progress.clone());
+            Box::pin(async move {
+                let _ = finish.await;
+            })
+        };
+        tokio::select! {
+            _ = &mut request => panic!("transcription finished before cancellation"),
+            result = received => result.unwrap(),
+        }
+        // A fresh OS thread has no entered Tokio runtime.
+        thread::spawn(move || drop(request)).join().unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            spawner.spawned.load(Ordering::Acquire),
+            2,
+            "worker and cleanup must use the injected scheduler (verify={verify})"
+        );
+        assert!(!progress
+            .0
+            .lock()
+            .iter()
+            .any(|event| matches!(event, EngineProgress::PolishDelta(_))));
+        drop(spawner);
+        dispatcher.await.unwrap();
+    }
+}

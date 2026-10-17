@@ -1788,9 +1788,9 @@ export const de: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe transkribiert hier wortgetreu; danach verarbeitet das konfigurierte LLM den Text. Für Smart-Transkription wähle dieses Modell im multimodalen Modus. Audio wird nach Aufnahmeende hochgeladen; Live-Transkription wird nicht unterstützt. Basis-URL: https://generativelanguage.googleapis.com/v1beta (auch /v1beta/interactions möglich).',
+        'Beide Modelle transkribieren hier wortgetreu, auf Wunsch mit anschließender Verarbeitung durch das konfigurierte LLM. gemini-3.5-transcribe lädt Audio nach Aufnahmeende hoch. gemini-3.5-transcribe-live zeigt Ergebnisse während des Sprechens; jede Aufnahme darf bis zu 10 Minuten dauern. Für Smart-Transkription verwende den multimodalen Modus. Basis-URL: https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe bietet Smart-Transkription: Füllwörter entfernen, gesprochene Korrekturen übernehmen und den Text nach Aufnahmeende formatieren. Arbeitssprachen und Wörterbucheinträge werden unterstützt. Stil-Prompts, Übersetzung, reine Textüberarbeitung und Fragen werden nicht unterstützt; verwende dafür den traditionellen Modus mit einem LLM.',
+        'gemini-3.5-transcribe und gemini-3.5-transcribe-live unterstützen Smart-Transkription. Live zeigt während des Sprechens einen Entwurf; jede Aufnahme darf bis zu 10 Minuten dauern. Nach Aufnahmeende entfernt Smart Füllwörter, übernimmt gesprochene Korrekturen und formatiert den endgültigen Text. Beide Modelle unterstützen Arbeitssprachen und Wörterbucheinträge, aber keine Stil-Prompts, Übersetzung, Textüberarbeitung oder Fragen und Antworten. Verwende dafür den traditionellen Modus mit einem LLM.',
       validateSuccessAudio:
         'Audio-Verbindung mit einer kurzen Stilleprobe geprüft. Bestätige die Transkriptionsqualität mit einer kurzen Aufnahme.',
       elevenLabsUploadNotice:

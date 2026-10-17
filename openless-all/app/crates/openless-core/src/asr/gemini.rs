@@ -216,6 +216,11 @@ impl GeminiBatchASR {
             .to_owned();
         validate_upload_url(&url, &upload_url)?;
 
+        if self.cancelled.load(Ordering::Acquire) {
+            self.cancel_upload_session(&upload_url).await;
+            anyhow::bail!("Gemini ASR request cancelled");
+        }
+
         let response = match client
             .post(&upload_url)
             .header("x-goog-api-key", self.api_key.trim())
@@ -665,7 +670,7 @@ fn collect_text(value: &Value, pieces: &mut Vec<String>) {
     }
 }
 
-fn normalize_vocabulary(words: Vec<String>) -> Vec<String> {
+pub(crate) fn normalize_vocabulary(words: Vec<String>) -> Vec<String> {
     let mut normalized = Vec::new();
     for word in words {
         let word = word.trim();
@@ -680,7 +685,7 @@ fn normalize_vocabulary(words: Vec<String>) -> Vec<String> {
     normalized
 }
 
-fn language_code(language: &str) -> Option<String> {
+pub(crate) fn language_code(language: &str) -> Option<String> {
     let language = language.trim();
     if language.is_empty() {
         return None;

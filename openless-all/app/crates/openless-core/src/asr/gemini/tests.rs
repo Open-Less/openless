@@ -287,10 +287,21 @@ fn transcription_server_with_poll(
         check(&request_body);
         write_response(&mut request.2, status, &[], body);
 
+        let mut file_deleted = false;
         if body.contains("in_progress") {
             let mut on_poll = Some(on_poll);
             loop {
                 request = accept_request(&listener);
+                // The cancellation task and worker cleanup may reach the server in either order.
+                if request
+                    .0
+                    .starts_with("DELETE /v1beta/files/file-1 HTTP/1.1")
+                {
+                    assert!(!file_deleted, "audio file was deleted twice");
+                    file_deleted = true;
+                    write_response(&mut request.2, "200 OK", &[], "");
+                    continue;
+                }
                 if request
                     .0
                     .starts_with("POST /v1beta/interactions/i-1/cancel ")
@@ -305,15 +316,17 @@ fn transcription_server_with_poll(
                 }
             }
         }
-        request = accept_request(&listener);
-        assert!(
-            request
-                .0
-                .starts_with("DELETE /v1beta/files/file-1 HTTP/1.1"),
-            "expected file cleanup, received {:?}",
-            request.0.lines().next()
-        );
-        write_response(&mut request.2, "200 OK", &[], "");
+        if !file_deleted {
+            request = accept_request(&listener);
+            assert!(
+                request
+                    .0
+                    .starts_with("DELETE /v1beta/files/file-1 HTTP/1.1"),
+                "expected file cleanup, received {:?}",
+                request.0.lines().next()
+            );
+            write_response(&mut request.2, "200 OK", &[], "");
+        }
     });
 
     (format!("http://{address}/v1beta/interactions/"), server)
@@ -455,6 +468,65 @@ async fn cancelled_asr_upload_deletes_file_without_creating_interaction() {
         crate::BackendErrorCode::Cancelled
     );
     release.send(()).unwrap();
+    tokio::task::spawn_blocking(move || server.join().unwrap())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_upload_initialization_cancels_session_without_sending_audio() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (ready, received) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::sync_channel(1);
+    let server = thread::spawn(move || {
+        let mut initialization = accept_request(&listener);
+        assert!(initialization
+            .0
+            .starts_with("POST /upload/v1beta/files HTTP/1.1"));
+        ready.send(()).unwrap();
+        released.recv_timeout(Duration::from_secs(5)).unwrap();
+        write_response(
+            &mut initialization.2,
+            "200 OK",
+            &[(
+                "X-Goog-Upload-URL",
+                &format!("http://{address}/upload-session"),
+            )],
+            "",
+        );
+        let mut cleanup = accept_request(&listener);
+        assert!(cleanup.0.starts_with("POST /upload-session HTTP/1.1"));
+        assert!(cleanup
+            .0
+            .to_ascii_lowercase()
+            .contains("x-goog-upload-command: cancel"));
+        assert!(
+            cleanup.1.is_empty(),
+            "cancelled recording must not be uploaded"
+        );
+        write_response(&mut cleanup.2, "200 OK", &[], "");
+    });
+    let provider = Arc::new(GeminiBatchASR::new(
+        "key".into(),
+        format!("http://{address}/v1beta"),
+        DEFAULT_MODEL.into(),
+        None,
+        Vec::new(),
+    ));
+    provider.consume_pcm_chunk(&[0; 16_000]);
+    let worker = Arc::clone(&provider);
+    let task = tokio::spawn(async move { worker.transcribe().await });
+    received.await.unwrap();
+    provider.cancel().await;
+    release.send(()).unwrap();
+    assert!(task
+        .await
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("cancelled"));
     tokio::task::spawn_blocking(move || server.join().unwrap())
         .await
         .unwrap();

@@ -1750,9 +1750,9 @@ export const en: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe uses verbatim transcription here, followed by your configured LLM. For built-in Smart transcription, select this model in Multimodal mode. Audio is uploaded after recording stops; live transcription is not supported. Base URL: https://generativelanguage.googleapis.com/v1beta (also accepts /v1beta/interactions).',
+        'Both models return verbatim text here, with optional processing by your configured LLM. gemini-3.5-transcribe uploads audio after recording stops. gemini-3.5-transcribe-live shows results while you speak, for up to 10 minutes per recording. For Smart transcription, use Multimodal mode. Base URL: https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'Use gemini-3.5-transcribe for Smart transcription: removes fillers, applies spoken corrections and formats the transcript after recording stops. Working languages and dictionary terms are supported. This model does not use style prompts or support translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
+        'Use gemini-3.5-transcribe or gemini-3.5-transcribe-live for Smart transcription. Live shows a draft while you speak, for up to 10 minutes per recording. Smart removes fillers, applies spoken corrections and formats the final transcript after recording stops. Both models support working languages and dictionary terms, but not style prompts, translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
       validateSuccessAudio:
         'Audio connectivity passed using a short silence sample. Confirm transcription quality with a short recording.',
       elevenLabsUploadNotice:

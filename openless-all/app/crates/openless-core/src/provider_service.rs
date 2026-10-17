@@ -319,6 +319,7 @@ impl ProviderService {
                 let validation = crate::cloud_providers::validate_shared_omni_provider(
                     Arc::clone(&self.credentials),
                     context,
+                    Arc::clone(&self.task_spawner),
                 );
                 tokio::select! {
                     _ = wait_for_cancellation(cancellation) => return Err(cancelled_request()),

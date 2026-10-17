@@ -114,7 +114,10 @@ const DASHSCOPE_MODELS: &[&str] = &[
     crate::asr::dashscope_multimodal::QWEN_AUDIO_MODEL,
     crate::asr::dashscope_multimodal::DEFAULT_MODEL,
 ];
-const GEMINI_MODELS: &[&str] = &[crate::asr::gemini::DEFAULT_MODEL];
+const GEMINI_MODELS: &[&str] = &[
+    crate::asr::gemini::DEFAULT_MODEL,
+    crate::asr::gemini_live::MODEL,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -784,13 +787,13 @@ pub fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
 }
 
 pub fn validate_gemini_asr_model(model: &str) -> Result<(), String> {
-    if model.trim().is_empty() || model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+    if model.trim().is_empty() || GEMINI_MODELS.contains(&model.trim()) {
         Ok(())
     } else {
         Err(format!(
             "不支持的 Gemini ASR 模型：{}。当前仅支持 {}",
             model.trim(),
-            crate::asr::gemini::DEFAULT_MODEL
+            GEMINI_MODELS.join("、")
         ))
     }
 }
@@ -1480,7 +1483,10 @@ mod tests {
         );
         assert_eq!(
             descriptor.static_models,
-            vec![crate::asr::gemini::DEFAULT_MODEL.to_string()]
+            vec![
+                crate::asr::gemini::DEFAULT_MODEL.to_string(),
+                crate::asr::gemini_live::MODEL.to_string(),
+            ]
         );
         assert_eq!(descriptor.auth_requirement, AuthRequirement::ApiKey);
         assert_eq!(
@@ -1491,7 +1497,12 @@ mod tests {
             resolve_effective_asr_provider("gemini", ""),
             Ok("gemini".to_string())
         );
-        assert!(resolve_effective_asr_provider("gemini", "gemini-3.5-transcribe-live").is_err());
+        for model in GEMINI_MODELS {
+            assert_eq!(
+                resolve_effective_asr_provider("gemini", &format!(" {model} ")),
+                Ok("gemini".to_string())
+            );
+        }
         assert!(resolve_effective_asr_provider("gemini", "unknown").is_err());
     }
 
