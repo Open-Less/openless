@@ -2397,7 +2397,8 @@ mod linux_app {
                 return;
             };
             let kind = self.settings_channel_kind;
-            self.settings_channels_loading = true;
+            // 已有列表时后台静默刷新，不把界面切成“加载中”（会造成整页跳动）。
+            self.settings_channels_loading = self.settings_channels.is_empty();
             self.settings_channels_request = self.settings_channels_request.wrapping_add(1);
             let request = self.settings_channels_request;
             let tx = self.tx.clone();

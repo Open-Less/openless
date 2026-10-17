@@ -3545,10 +3545,15 @@ fn provider_field_hint(
     /// Tauri 渠道弹窗里的输入框：整列宽、38px 高。
     const MODAL_INPUT_HEIGHT: f32 = 38.0;
     let mut row = |ui: &mut egui::Ui| {
-        let mut draft = value.to_string();
         let id = egui::Id::new(("openless-settings-provider-field", format!("{field:?}")));
+        // 草稿按字段 id 跨帧保存：光标与编辑状态由同一个缓冲维护，不再每帧从
+        // 宿主回显的旧值重建（那会让光标错位、吞字）。
+        let draft_id = id.with("draft");
+        let mut draft = ui
+            .data(|data| data.get_temp::<String>(draft_id))
+            .unwrap_or_else(|| value.to_string());
         let width = ui.available_width().min(420.0);
-        if layout::text_input_sized(
+        let response = layout::text_input_sized(
             ui,
             &mut draft,
             id,
@@ -3556,12 +3561,12 @@ fn provider_field_hint(
             width,
             MODAL_INPUT_HEIGHT,
             password,
-        )
-        .changed()
-        {
+        );
+        if response.changed() {
             editor_mark_dirty(ui);
-            actions.push(FrontendAction::SettingsProviderField(field, draft));
+            actions.push(FrontendAction::SettingsProviderField(field, draft.clone()));
         }
+        ui.data_mut(|data| data.insert_temp(draft_id, draft));
     };
     if label.is_empty() {
         row(ui);
