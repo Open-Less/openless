@@ -1500,7 +1500,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val row2 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
                 row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
                 listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
-                    .zip(listOf("@", "#", "$", "%", "&", "-", "+", "(", ")"))
+                    .zip(listOf("~", "@", "#", "!", "%", "&", "*", "(", ")"))
                     .forEach { (key, symbol) -> row2.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
                 row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
                 root.addView(row2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -1508,7 +1508,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val row3 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
                 row3.addView(keyboardKey("⇧", 1.5f, action = { cycleEnglishShift() }))
                 listOf("z", "x", "c", "v", "b", "n", "m")
-                    .zip(listOf(":", ";", "'", ".", ",", "!", "?"))
+                    .zip(listOf("'", "/", "-", "_", ":", ";", "?"))
                     .forEach { (key, symbol) -> row3.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
                 row3.addView(
                     keyboardKey("⌫", 1.5f, action = { englishDeleteBackward() }, repeatOnLongPress = true, repeatAction = { englishDeleteBackward() }).apply {
@@ -1542,9 +1542,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // only these two English bottom-row labels are meant to match the
         // letters' new weight for now. Size/color/position left exactly as
         // keyboardKey() already set them.
-        val modeButton = keyboardKey(if (englishLayer == EnglishLayer.LETTERS) "123" else "ABC", 1.3f, action = {
-            handleEnglishBottomModeToggle()
-        }).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+        // Swipe up on "123" for a comma and on Space for a full stop — the
+        // two marks the letter grid's own swipe-up symbols leave out. Neither
+        // key shows a hint for it; the preview bubble names the mark mid-swipe.
+        val onLetters = englishLayer == EnglishLayer.LETTERS
+        val modeButton = keyboardKey(
+            if (onLetters) "123" else "ABC",
+            1.3f,
+            action = { handleEnglishBottomModeToggle() },
+            swipeUpAction = if (onLetters) ({ commitEnglishChar(",") }) else null,
+            swipePreview = if (onLetters) "," else null,
+        ).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
         // "Space" stays keyboardKey()'s own plain centered label (own
         // View, own vertical centering, untouched by the hint) — per
         // real-device feedback, side-by-side (hint right-aligned next to
@@ -1563,7 +1571,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             finalizeEnglishComposingWord()
             litePinyinController.clear()
             currentInputConnection?.commitText(" ", 1)
-        }, longPressAction = { toggleLatinInputMode() }).apply {
+        }, swipeUpAction = { commitEnglishChar(".") }, swipePreview = ".", longPressAction = { toggleLatinInputMode() }).apply {
             // Same size as Return (17sp — keyboardKey()'s own special case
             // for that label), per real-device feedback.
             textSize = 17f
@@ -2800,7 +2808,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * instead (a "sloppy key", same idea as most predictive keyboards).
      *
      * @param swipeSymbol Any key that has one — top-row digits (q..p ->
-     *   1..0), row2's @#$%&-+() and row3's :;'.,!? — swiping up commits
+     *   1..0), row2's ~@#!%&*() and row3's '/-_:;? — swiping up commits
      *   this symbol instead of the letter, same interaction as the stroke
      *   panel's own swipe-up keys (see keyboardKey()'s swipeUpAction/
      *   swipePreview). Shown as a small standalone hint pinned to the very
