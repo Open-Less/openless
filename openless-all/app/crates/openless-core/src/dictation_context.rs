@@ -301,7 +301,10 @@ impl DictationContext {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
                 capture_generation: None,
                 mute_during_recording: preferences.mute_during_recording,
-                transcribe_after_stop: preferences.stable_transcription_enabled,
+                // TextStream is explicitly a live ASR module; do not let an old
+                // batch-mode preference silently buffer its entire recording.
+                transcribe_after_stop: preferences.stable_transcription_enabled
+                    && asr.provider_type != "experimental-textstream",
                 archive_enabled: true,
                 archive_successful_recording: matches!(
                     options.output_target,
@@ -704,6 +707,24 @@ mod tests {
         let (_, user) = context.effective_polish_prompts("selected body");
         assert_eq!(user, crate::prompts::selection_user_prompt("selected body"));
         assert!(!user.contains("raw_transcript"));
+    }
+
+    #[test]
+    fn textstream_stays_live_without_changing_the_users_batch_preference() {
+        let preferences = UserPreferences { stable_transcription_enabled: true, ..UserPreferences::default() };
+        let pack = builtin_style_pack_for_mode(PolishMode::Structured);
+        for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
+            let context = DictationContext::capture(
+                &preferences, &pack,
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider(provider),
+                    ProviderInvocation::for_provider("openai"),
+                    ProviderInvocation::for_provider("omni"),
+                ), Vec::new(), Vec::new(), &DictationStartOptions::default(),
+            );
+            assert_eq!(context.recording.transcribe_after_stop, buffered);
+        }
+        assert!(preferences.stable_transcription_enabled);
     }
 
     #[test]

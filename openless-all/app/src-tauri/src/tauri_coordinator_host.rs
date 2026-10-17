@@ -1708,19 +1708,6 @@ impl TauriCoordinatorHost {
         tauri::async_runtime::block_on(future)
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn local_qwen_asr(
-        &self,
-        engine: std::sync::Arc<crate::asr::local::LocalQwenEngine>,
-    ) -> anyhow::Result<std::sync::Arc<crate::asr::local::LocalQwenAsr>> {
-        let app = self
-            .app()
-            .ok_or_else(|| anyhow::anyhow!("AppHandle 未绑定"))?;
-        Ok(std::sync::Arc::new(crate::asr::local::LocalQwenAsr::new(
-            app, engine,
-        )))
-    }
-
     pub(crate) fn show_less_computer(&self) -> Result<(), String> {
         let app = self
             .app()

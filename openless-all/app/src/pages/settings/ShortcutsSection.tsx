@@ -1,15 +1,18 @@
-// Shortcut settings: start/stop, translation, QA, switch style, style direct access, open app,
-// plus read-only cancel/confirm hints.
-
-import { useEffect, useState } from 'react';
+import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
+import { Kbd } from '../../components/Kbd';
 import { SelectLite } from '../../components/ui/SelectLite';
+import { PageSkeleton } from '../../components/ui/PageSkeleton';
+import { detectOS } from '../../components/WindowChrome';
 import {
+  defaultDictationHotkey,
   defaultLessComputerShortcut,
   defaultOpenAppShortcut,
   defaultQaShortcut,
+  defaultSelectionPolishShortcut,
   defaultSwitchStyleShortcut,
+  formatComboLabel,
   hotkeyModeSuffix,
 } from '../../lib/hotkey';
 import {
@@ -18,362 +21,403 @@ import {
   setOpenAppHotkey,
   setQaHotkey,
   setQuickNoteHotkey,
+  setSelectionPolishHotkey,
   setStylePackHotkeys,
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../lib/ipc';
-import { getPlatformCapabilities } from '../../lib/platform';
-import type { PlatformCapabilities, StylePack, StylePackHotkey } from '../../lib/types';
-import { useHotkeySettings } from '../../state/HotkeySettingsContext';
-import { Card } from '../_atoms';
-import { SettingRow } from './shared';
-import { detectOS } from '../../components/WindowChrome';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
+import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../lib/types';
+import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 
 export function ShortcutsSection() {
   const { t } = useTranslation();
   const os = detectOS();
-  const { prefs, hotkey, refresh, updatePrefs: savePrefs } = useHotkeySettings();
-  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
-  const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
-  // Draft state for a new row: pick the style pack first, record the shortcut second; only once
-  // both are set does anything persist.
+  const { prefs, hotkey, refresh, updatePrefs } = useHotkeySettings();
+  const [packs, setPacks] = useState<StylePack[]>([]);
+  const [query, setQuery] = useState('');
+  const search = useDeferredValue(query.trim().toLocaleLowerCase());
+  const [category, setCategory] = useState('all');
+  const [status, setStatus] = useState('all');
   const [draftOpen, setDraftOpen] = useState(false);
   const [draftPackId, setDraftPackId] = useState('');
-  const [stylePackError, setStylePackError] = useState<string | null>(null);
-
+  const [error, setError] = useState('');
+  const tr = (key: string) => t(`uiRefinement.${key}`);
   useEffect(() => {
-    void getPlatformCapabilities().then(setPlatformCaps);
+    let cancelled = false;
     void listStylePacks()
-      .then(setStylePacks)
-      .catch(() => setStylePacks([]));
+      .then((items) => {
+        if (!cancelled) setPacks(items);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
+  if (!prefs || !hotkey) return <PageSkeleton rows={6} />;
 
-  if (!prefs || !hotkey) {
-    return (
-      <Card>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
-      </Card>
-    );
-  }
-
-  if (platformCaps && !platformCaps.supportsDesktopHotkey) {
-    return null;
-  }
-
-  const stylePackHotkeys: StylePackHotkey[] = prefs.stylePackHotkeys ?? [];
-  // Dropdown lists all style packs (disabled ones included; the backend re-enables on
-  // activation); packs already bound by other rows are grayed out to prevent duplicates.
-  const stylePackOptions = (currentPackId: string) =>
-    stylePacks.map((pack) => {
-      const { name } = getStylePackPresentation(pack, t);
-      return {
-        value: pack.id,
-        label: pack.enabled ? name : `${name}${t('settings.shortcuts.stylePackDisabledSuffix')}`,
-        disabled:
-          pack.id !== currentPackId && stylePackHotkeys.some((entry) => entry.packId === pack.id),
-      };
+  type Command = {
+    id: string;
+    label: string;
+    desc?: string;
+    group: string;
+    binding: ShortcutBinding | null;
+    save: (binding: ShortcutBinding) => Promise<void>;
+    disable?: () => Promise<void>;
+    reset?: () => Promise<void>;
+  };
+  const commands: Command[] = [
+    {
+      id: 'dictation',
+      label: t('settings.shortcuts.startStop'),
+      desc: hotkeyModeSuffix(hotkey.mode),
+      group: 'recording',
+      binding: prefs.dictationHotkey,
+      save: async (binding) => {
+        await setDictationHotkey(binding);
+        await refresh();
+      },
+      disable: async () => {
+        await setDictationHotkey(null);
+        await refresh();
+      },
+      reset: async () => {
+        await setDictationHotkey(defaultDictationHotkey());
+        await refresh();
+      },
+    },
+    {
+      id: 'translation',
+      label: t('translation.title'),
+      group: 'recording',
+      binding: prefs.translationHotkey,
+      save: async (binding) => {
+        await setTranslationHotkey(binding);
+        await updatePrefs((current) => ({ ...current, translationHotkey: binding }));
+      },
+      disable: async () => {
+        await setTranslationHotkey(null);
+        await refresh();
+      },
+    },
+    {
+      id: 'qa',
+      label: t('selectionAsk.title'),
+      group: 'recording',
+      binding: prefs.qaHotkey,
+      save: async (binding) => {
+        await setQaHotkey(binding);
+        await updatePrefs((current) => ({ ...current, qaHotkey: binding }));
+      },
+      disable: async () => {
+        await setQaHotkey(null);
+        await updatePrefs((current) => ({ ...current, qaHotkey: null }));
+      },
+      reset: async () => {
+        const binding = defaultQaShortcut();
+        await setQaHotkey(binding);
+        await updatePrefs((current) => ({ ...current, qaHotkey: binding }));
+      },
+    },
+    {
+      id: 'note',
+      label: t('settings.shortcuts.quickNote'),
+      group: 'recording',
+      binding: prefs.quickNoteHotkey,
+      save: async (binding) => {
+        await setQuickNoteHotkey(binding);
+        await updatePrefs((current) => ({ ...current, quickNoteHotkey: binding }));
+      },
+      disable: async () => {
+        await setQuickNoteHotkey(null);
+        await updatePrefs((current) => ({ ...current, quickNoteHotkey: null }));
+      },
+    },
+    {
+      id: 'selection',
+      label: t('settings.selectionWorkspace.polishHotkey'),
+      group: 'recording',
+      binding: prefs.selectionPolishHotkey,
+      save: async (binding) => {
+        await setSelectionPolishHotkey(binding);
+        await refresh();
+      },
+      disable: async () => {
+        await setSelectionPolishHotkey(null);
+        await refresh();
+      },
+      reset: async () => {
+        await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
+        await refresh();
+      },
+    },
+    {
+      id: 'style',
+      label: t('settings.shortcuts.switchStyle'),
+      group: 'styles',
+      binding: prefs.switchStyleHotkey,
+      save: async (binding) => {
+        await setSwitchStyleHotkey(binding);
+        await updatePrefs((current) => ({ ...current, switchStyleHotkey: binding }));
+      },
+      disable: async () => {
+        await setSwitchStyleHotkey(null);
+        await updatePrefs((current) => ({ ...current, switchStyleHotkey: null }));
+      },
+      reset: async () => {
+        const binding = defaultSwitchStyleShortcut();
+        await setSwitchStyleHotkey(binding);
+        await updatePrefs((current) => ({ ...current, switchStyleHotkey: binding }));
+      },
+    },
+    {
+      id: 'open',
+      label: t('settings.shortcuts.openApp'),
+      group: 'system',
+      binding: prefs.openAppHotkey,
+      save: async (binding) => {
+        await setOpenAppHotkey(binding);
+        await updatePrefs((current) => ({ ...current, openAppHotkey: binding }));
+      },
+      disable: async () => {
+        await setOpenAppHotkey(null);
+        await updatePrefs((current) => ({ ...current, openAppHotkey: null }));
+      },
+      reset: async () => {
+        const binding = defaultOpenAppShortcut();
+        await setOpenAppHotkey(binding);
+        await updatePrefs((current) => ({ ...current, openAppHotkey: binding }));
+      },
+    },
+  ];
+  if (prefs.testingFeaturesEnabled && (os === 'mac' || os === 'win'))
+    commands.push({
+      id: 'computer',
+      label: t('settings.codingAgent.title'),
+      group: 'system',
+      binding: prefs.codingAgentVoiceHotkey,
+      save: async (binding) => {
+        await updatePrefs((current) => ({
+          ...current,
+          codingAgentEnabled: true,
+          codingAgentVoiceHotkey: binding,
+        }));
+      },
+      disable: async () => {
+        await updatePrefs((current) => ({ ...current, codingAgentVoiceHotkey: null }));
+      },
+      reset: async () => {
+        await updatePrefs((current) => ({
+          ...current,
+          codingAgentEnabled: true,
+          codingAgentVoiceHotkey: defaultLessComputerShortcut(),
+        }));
+      },
     });
-  // Full-table replace: on failure the error shows in this section and rethrows so
-  // ShortcutRecorder exits its recording state.
-  const saveStylePackHotkeys = async (next: StylePackHotkey[]) => {
-    setStylePackError(null);
+  const matches = (label: string, binding: ShortcutBinding | null) =>
+    (!search ||
+      `${label} ${binding?.primary.trim() ? `${formatComboLabel(binding)} ${binding.modifiers.join(' ')} ${binding.primary}` : tr('unassigned')}`
+        .toLocaleLowerCase()
+        .includes(search)) &&
+    (status === 'all' || (status === 'assigned') === Boolean(binding?.primary.trim()));
+  const visible = commands.filter(
+    (command) =>
+      (category === 'all' || category === command.group) && matches(command.label, command.binding),
+  );
+  const packHotkeys = prefs.stylePackHotkeys ?? [];
+  const savePacks = async (next: StylePackHotkey[]) => {
+    setError('');
     try {
       await setStylePackHotkeys(next);
-      await savePrefs({ ...prefs, stylePackHotkeys: next });
-    } catch (error) {
-      setStylePackError(String(error));
-      throw error;
+      await updatePrefs((current) => ({ ...current, stylePackHotkeys: next }));
+    } catch (reason) {
+      setError(String(reason));
+      throw reason;
     }
   };
-  const removeButtonStyle = {
-    border: 'none',
-    background: 'transparent',
-    color: 'var(--ol-ink-4)',
-    cursor: 'pointer',
-    fontSize: 13,
-    padding: '2px 4px',
-    lineHeight: 1,
-  } as const;
-
-  const readonlyRows: Array<[string, string]> = [
-    [t('settings.shortcuts.cancel'), 'Esc'],
-    // 胶囊右侧「✓ 确认插入」只在 macOS 胶囊上有，Windows 胶囊没有这个按钮；
-    // 展示给 Windows 会误导用户（issue #780）。
+  const packName = (id: string) => {
+    const pack = packs.find((item) => item.id === id);
+    return pack ? getStylePackPresentation(pack, t).name : id;
+  };
+  const packOptions = (id: string) =>
+    packs.map((pack) => ({
+      value: pack.id,
+      label: getStylePackPresentation(pack, t).name,
+      disabled: pack.id !== id && packHotkeys.some((item) => item.packId === pack.id),
+    }));
+  const showPacks = category === 'all' || category === 'styles';
+  const visiblePacks = showPacks
+    ? packHotkeys.filter((entry) => matches(packName(entry.packId), entry.binding))
+    : [];
+  const readonly = [
+    { label: t('settings.shortcuts.cancel'), key: 'Esc' },
     ...(os === 'mac'
-      ? ([[t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')]] as Array<
-          [string, string]
-        >)
+      ? [{ label: t('settings.shortcuts.confirm'), key: t('settings.shortcuts.confirmHint') }]
       : []),
-  ];
+  ].filter(
+    (row) =>
+      (category === 'all' || category === 'system') &&
+      status !== 'unassigned' &&
+      (!search || `${row.label} ${row.key}`.toLocaleLowerCase().includes(search)),
+  );
+  const count = visible.length + visiblePacks.length + readonly.length;
+
   return (
-    <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-        {t('settings.shortcuts.title')}
+    <section className="ol-shortcuts" aria-label={t('settings.shortcuts.title')}>
+      <div className="ol-shortcuts-toolbar">
+        <input
+          type="search"
+          className="ol-settings-search-field"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          aria-label={tr('shortcutsSearch')}
+          placeholder={tr('shortcutsSearch')}
+        />
+        <span aria-live="polite" className="ol-shortcuts-count">
+          {count} / {commands.length + packHotkeys.length + (os === 'mac' ? 2 : 1)}
+        </span>
       </div>
-      <SettingRow label={t('settings.shortcuts.startStop')}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-          <ShortcutRecorder
-            value={prefs.dictationHotkey}
-            sideSpecificModifiers
-            allowMacDictationKey={os === 'mac'}
-            // Consistent with the "Recording & Input" page: core hotkeys cannot be disabled;
-            // gray them out with a hint.
-            disableDisabled
-            disableHint={t('settings.recording.comboDisableHint')}
-            onSave={async (binding) => {
-              await setDictationHotkey(binding);
-              await refresh();
-            }}
-          />
-          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-            {hotkeyModeSuffix(hotkey.mode)}
-          </div>
-        </div>
-      </SettingRow>
-      <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
-        <ShortcutRecorder
-          value={prefs.translationHotkey}
-          onSave={async (binding) => {
-            await setTranslationHotkey(binding);
-            await savePrefs({ ...prefs, translationHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      <SettingRow label={t('selectionAsk.hotkey.title')}>
-        <ShortcutRecorder
-          value={prefs.qaHotkey}
-          onSave={async (binding) => {
-            await setQaHotkey(binding);
-            await savePrefs({ ...prefs, qaHotkey: binding });
-          }}
-          onDisable={async () => {
-            await setQaHotkey(null);
-            await savePrefs({ ...prefs, qaHotkey: null });
-          }}
-          onReset={async () => {
-            const binding = defaultQaShortcut();
-            await setQaHotkey(binding);
-            await savePrefs({ ...prefs, qaHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      <SettingRow
-        label={t('settings.shortcuts.quickNote', 'Quick note')}
-        desc={t(
-          'settings.shortcuts.quickNoteDesc',
-          'Press once to start a permanent audio note, and again to finish it.',
-        )}
-      >
-        <ShortcutRecorder
-          value={prefs.quickNoteHotkey}
-          onSave={async (binding) => {
-            await setQuickNoteHotkey(binding);
-            await savePrefs({ ...prefs, quickNoteHotkey: binding });
-          }}
-          onDisable={async () => {
-            await setQuickNoteHotkey(null);
-            await savePrefs({ ...prefs, quickNoteHotkey: null });
-          }}
-        />
-      </SettingRow>
-      <SettingRow label={t('settings.shortcuts.switchStyle')}>
-        <ShortcutRecorder
-          value={prefs.switchStyleHotkey}
-          onSave={async (binding) => {
-            await setSwitchStyleHotkey(binding);
-            await savePrefs({ ...prefs, switchStyleHotkey: binding });
-          }}
-          onDisable={async () => {
-            await setSwitchStyleHotkey(null);
-            await savePrefs({ ...prefs, switchStyleHotkey: null });
-          }}
-          onReset={async () => {
-            const binding = defaultSwitchStyleShortcut();
-            await setSwitchStyleHotkey(binding);
-            await savePrefs({ ...prefs, switchStyleHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      <div style={{ marginTop: 12, marginBottom: 6 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {t('settings.shortcuts.stylePackTitle')}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-          {t('settings.shortcuts.stylePackDesc')}
+      <div className="ol-shortcuts-layout">
+        <aside className="ol-shortcuts-filters">
+          <nav aria-label={tr('category')}>
+            <h3>{tr('category')}</h3>
+            {['all', 'recording', 'styles', 'system'].map((id) => (
+              <button
+                type="button"
+                key={id}
+                aria-pressed={category === id}
+                onClick={() => setCategory(id)}
+              >
+                {tr(id)}
+              </button>
+            ))}
+          </nav>
+          <nav aria-label={tr('status')}>
+            <h3>{tr('status')}</h3>
+            {['all', 'assigned', 'unassigned'].map((id) => (
+              <button
+                type="button"
+                key={id}
+                aria-pressed={status === id}
+                onClick={() => setStatus(id)}
+              >
+                {tr(id)}
+              </button>
+            ))}
+          </nav>
+        </aside>
+        <div className="ol-shortcut-results">
+          <p className="ol-section-note">{tr('shortcutHint')}</p>
+          {visible.map((command) => (
+            <div
+              className="ol-shortcut-row"
+              role="group"
+              aria-label={command.label}
+              key={command.id}
+            >
+              <div>
+                <span>{command.label}</span>
+                {command.desc && <small>{command.desc}</small>}
+              </div>
+              <ShortcutRecorder
+                value={command.binding}
+                onSave={command.save}
+                onDisable={command.disable}
+                onReset={command.reset}
+                sideSpecificModifiers={command.id === 'dictation'}
+              />
+            </div>
+          ))}
+          {readonly.map((row) => (
+            <div className="ol-shortcut-row" key={row.label}>
+              <span>{row.label}</span>
+              <Kbd>{row.key}</Kbd>
+            </div>
+          ))}
+          {visiblePacks.map((entry) => (
+            <div className="ol-shortcut-row ol-shortcut-pack" key={entry.packId}>
+              <SelectLite
+                value={entry.packId}
+                options={packOptions(entry.packId)}
+                ariaLabel={t('settings.shortcuts.stylePackSelect')}
+                onChange={(packId) =>
+                  void savePacks(
+                    packHotkeys.map((item) =>
+                      item.packId === entry.packId ? { ...item, packId } : item,
+                    ),
+                  ).catch(() => {})
+                }
+              />
+              <ShortcutRecorder
+                value={entry.binding}
+                onDisable={() =>
+                  savePacks(packHotkeys.filter((item) => item.packId !== entry.packId))
+                }
+                onSave={(binding) =>
+                  savePacks(
+                    packHotkeys.map((item) =>
+                      item.packId === entry.packId ? { ...item, binding } : item,
+                    ),
+                  )
+                }
+              />
+              <button
+                type="button"
+                className="ol-shortcut-remove"
+                aria-label={t('settings.shortcuts.stylePackRemove')}
+                onClick={() =>
+                  void savePacks(packHotkeys.filter((item) => item.packId !== entry.packId)).catch(
+                    () => {},
+                  )
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {!count && (
+            <p role="status" className="ol-shortcut-empty">
+              {tr('noResults')}
+            </p>
+          )}
+          {showPacks && !search && (
+            <div className="ol-shortcut-pack-add">
+              {draftOpen ? (
+                <div className="ol-shortcut-row ol-shortcut-pack">
+                  <SelectLite
+                    value={draftPackId}
+                    options={packOptions(draftPackId)}
+                    onChange={setDraftPackId}
+                    placeholder={t('settings.shortcuts.stylePackSelect')}
+                    ariaLabel={t('settings.shortcuts.stylePackSelect')}
+                  />
+                  <ShortcutRecorder
+                    value={null}
+                    disabled={!draftPackId}
+                    onSave={async (binding) => {
+                      await savePacks([...packHotkeys, { packId: draftPackId, binding }]);
+                      setDraftOpen(false);
+                      setDraftPackId('');
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDraftOpen(false)}
+                    aria-label={t('common.cancel')}
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <button className="ol-text-action" type="button" onClick={() => setDraftOpen(true)}>
+                  + {t('settings.shortcuts.stylePackAdd')}
+                </button>
+              )}
+            </div>
+          )}
+          {error && <p role="alert">{error}</p>}
         </div>
       </div>
-      {stylePackHotkeys.map((entry, index) => (
-        <div
-          key={entry.packId}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}
-        >
-          <SelectLite
-            value={entry.packId}
-            options={stylePackOptions(entry.packId)}
-            ariaLabel={t('settings.shortcuts.stylePackSelect')}
-            style={{ width: 170, flexShrink: 0 }}
-            onChange={(packId) => {
-              const next = stylePackHotkeys.map((item, i) =>
-                i === index ? { ...item, packId } : item,
-              );
-              void saveStylePackHotkeys(next).catch(() => undefined);
-            }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <ShortcutRecorder
-              value={entry.binding}
-              onSave={async (binding) => {
-                const next = stylePackHotkeys.map((item, i) =>
-                  i === index ? { ...item, binding } : item,
-                );
-                await saveStylePackHotkeys(next);
-              }}
-            />
-          </div>
-          <button
-            type="button"
-            aria-label={t('settings.shortcuts.stylePackRemove')}
-            title={t('settings.shortcuts.stylePackRemove')}
-            style={removeButtonStyle}
-            onClick={() => {
-              const next = stylePackHotkeys.filter((_, i) => i !== index);
-              void saveStylePackHotkeys(next).catch(() => undefined);
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-      {draftOpen && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <SelectLite
-            value={draftPackId}
-            options={stylePackOptions(draftPackId)}
-            placeholder={t('settings.shortcuts.stylePackSelect')}
-            ariaLabel={t('settings.shortcuts.stylePackSelect')}
-            style={{ width: 170, flexShrink: 0 }}
-            onChange={setDraftPackId}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <ShortcutRecorder
-              value={null}
-              disabled={!draftPackId}
-              onSave={async (binding) => {
-                await saveStylePackHotkeys([...stylePackHotkeys, { packId: draftPackId, binding }]);
-                setDraftOpen(false);
-                setDraftPackId('');
-              }}
-            />
-          </div>
-          <button
-            type="button"
-            aria-label={t('settings.shortcuts.stylePackRemove')}
-            title={t('settings.shortcuts.stylePackRemove')}
-            style={removeButtonStyle}
-            onClick={() => {
-              setDraftOpen(false);
-              setDraftPackId('');
-              setStylePackError(null);
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      {stylePackError && (
-        <div style={{ fontSize: 11, color: 'var(--ol-err)', marginBottom: 6 }}>
-          {stylePackError}
-        </div>
-      )}
-      {!draftOpen && (
-        <button
-          type="button"
-          style={{
-            border: '0.5px dashed var(--ol-line-strong)',
-            background: 'transparent',
-            color: 'var(--ol-ink-3)',
-            borderRadius: 6,
-            padding: '4px 10px',
-            fontSize: 12,
-            cursor: 'pointer',
-            marginBottom: 6,
-          }}
-          onClick={() => {
-            setDraftOpen(true);
-            setDraftPackId('');
-            setStylePackError(null);
-          }}
-        >
-          + {t('settings.shortcuts.stylePackAdd')}
-        </button>
-      )}
-      <SettingRow label={t('settings.shortcuts.openApp')}>
-        <ShortcutRecorder
-          value={prefs.openAppHotkey}
-          onSave={async (binding) => {
-            await setOpenAppHotkey(binding);
-            await savePrefs({ ...prefs, openAppHotkey: binding });
-          }}
-          onDisable={async () => {
-            await setOpenAppHotkey(null);
-            await savePrefs({ ...prefs, openAppHotkey: null });
-          }}
-          onReset={async () => {
-            const binding = defaultOpenAppShortcut();
-            await setOpenAppHotkey(binding);
-            await savePrefs({ ...prefs, openAppHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      {(os === 'mac' || os === 'win') && (
-        <SettingRow
-          label={t('settings.codingAgent.title')}
-          desc={t('settings.codingAgent.voiceHotkeyDesc')}
-        >
-          <ShortcutRecorder
-            value={prefs.codingAgentVoiceHotkey}
-            onSave={async (binding) => {
-              await savePrefs({
-                ...prefs,
-                codingAgentEnabled: true,
-                codingAgentVoiceHotkey: binding,
-              });
-            }}
-            onDisable={async () => {
-              await savePrefs({ ...prefs, codingAgentVoiceHotkey: null });
-            }}
-            onReset={async () => {
-              await savePrefs({
-                ...prefs,
-                codingAgentEnabled: true,
-                codingAgentVoiceHotkey: defaultLessComputerShortcut(),
-              });
-            }}
-          />
-        </SettingRow>
-      )}
-      {readonlyRows.map(([k, v]) => (
-        <SettingRow key={k} label={k}>
-          <kbd
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 10px',
-              fontSize: 12,
-              fontFamily: 'var(--ol-font-mono)',
-              borderRadius: 6,
-              background: 'var(--ol-surface-2)',
-              border: '0.5px solid var(--ol-line-strong)',
-              boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-              color: 'var(--ol-ink-2)',
-            }}
-          >
-            {v}
-          </kbd>
-        </SettingRow>
-      ))}
-    </Card>
+    </section>
   );
 }

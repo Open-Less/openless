@@ -1,4 +1,5 @@
 mod cloud_note;
+use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -2327,6 +2328,8 @@ pub struct OpenLessBackend {
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
     settings_write_gate: Arc<Mutex<()>>,
+    // Serialize channel ownership changes through runtime cleanup, not status reads.
+    local_asr_channel_gate: tokio::sync::Mutex<()>,
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
@@ -2627,6 +2630,10 @@ impl OpenLessBackend {
         let history_revision = Arc::new(AtomicU64::new(0));
         let vocabulary_revision = Arc::new(AtomicU64::new(0));
         let settings_write_gate = Arc::new(Mutex::new(()));
+        deps.services.less_computer.bind_testing_features(
+            Arc::clone(&repositories.preferences),
+            Arc::clone(&settings_write_gate),
+        );
         let voice_sessions = Arc::clone(&deps.services.voice_sessions);
         let runtime_start_work = Arc::new(crate::voice_session::RuntimeActivityGate::default());
         deps.services.selection_voice =
@@ -2655,6 +2662,8 @@ impl OpenLessBackend {
                 process,
                 Arc::clone(&deps.services.less_computer),
                 BackendEventPublisher::new(Arc::clone(&events)),
+                Arc::clone(&repositories.preferences),
+                Arc::clone(&settings_write_gate),
             ));
         }
         if let Some(runtime) = deps.local_asr_runtime.take() {
@@ -2930,6 +2939,7 @@ impl OpenLessBackend {
             preferences: repositories.preferences,
             preferences_revision,
             settings_write_gate,
+            local_asr_channel_gate: tokio::sync::Mutex::new(()),
             cloud_sync,
             encrypted_sync,
             encrypted_sync_store,
@@ -3030,7 +3040,7 @@ impl OpenLessBackend {
     /// [`Self::abort_less_computer_capture`].
     pub fn begin_less_computer_capture(&self, session_id: SessionId) -> Result<(), BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
-        if !self.get_preferences().coding_agent_enabled {
+        if !self.get_preferences().less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -3045,6 +3055,11 @@ impl OpenLessBackend {
             ));
         }
         self.deps.services.less_computer.begin_capture(session_id)
+    }
+
+    /// Require this device's explicit opt-in for unfinished features.
+    pub fn ensure_testing_features_enabled(&self) -> Result<(), BackendError> {
+        crate::settings::ensure_testing_features_enabled(&self.get_preferences())
     }
 
     /// Return the current Less Computer capture/run session, if any.
@@ -3091,7 +3106,7 @@ impl OpenLessBackend {
     ) -> Result<LessComputerVoiceSession, BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
         let preferences = self.get_preferences();
-        if !preferences.coding_agent_enabled {
+        if !preferences.less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -3665,7 +3680,7 @@ impl OpenLessBackend {
     ) -> Result<LessComputerRunResult, BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
         let preferences = self.get_preferences();
-        if !preferences.coding_agent_enabled {
+        if !preferences.less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -3717,6 +3732,17 @@ impl OpenLessBackend {
         let Some(session_id) = session_id.or_else(|| self.less_computer_active_session()) else {
             return Ok(());
         };
+        own_voice_effect(
+            &self.deps.task_spawner,
+            self.less_computer_cancellation(session_id),
+        )
+        .await
+    }
+
+    fn less_computer_cancellation(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
         let control = self
             .less_computer_voice_controls
             .lock()
@@ -3725,26 +3751,22 @@ impl OpenLessBackend {
             .cloned();
         let controls = Arc::clone(&self.less_computer_voice_controls);
         let less_computer = Arc::clone(&self.deps.services.less_computer);
-        own_voice_effect(
-            &self.deps.task_spawner,
-            Box::pin(async move {
-                let service_result = less_computer.cancel(Some(session_id)).await;
-                let resource_result = match control {
-                    Some(control) => {
-                        let _guard = VoiceControlGuard {
-                            session_id,
-                            control: Arc::clone(&control),
-                            controls,
-                        };
-                        control.cancel_resources().await
-                    }
-                    None => Ok(()),
-                };
-                let _ = less_computer.abort_capture(session_id);
-                resource_result.and(service_result)
-            }),
-        )
-        .await
+        Box::pin(async move {
+            let service_result = less_computer.cancel(Some(session_id)).await;
+            let resource_result = match control {
+                Some(control) => {
+                    let _guard = VoiceControlGuard {
+                        session_id,
+                        control: Arc::clone(&control),
+                        controls,
+                    };
+                    control.cancel_resources().await
+                }
+                None => Ok(()),
+            };
+            let _ = less_computer.abort_capture(session_id);
+            resource_result.and(service_result)
+        })
     }
 
     pub async fn cancel_active_voice_session(
@@ -4628,6 +4650,16 @@ impl OpenLessBackend {
                 "provider type must not be blank",
             ));
         }
+        if kind == ChannelKind::Asr {
+            return self
+                .apply_channel_mutation(ChannelMutation::SetProviderType {
+                    kind,
+                    id,
+                    provider_type,
+                })
+                .await
+                .map(|_| ());
+        }
         let previous = self
             .list_channels(kind)
             .await?
@@ -4795,18 +4827,36 @@ impl OpenLessBackend {
                 "provider id must not be blank",
             ));
         }
+        let owner_guard = if slot == ProviderSlot::Asr {
+            Some(self.local_asr_channel_gate.lock().await)
+        } else {
+            None
+        };
+        let previous = if slot == ProviderSlot::Asr {
+            self.asr_channel_owner().await?
+        } else {
+            None
+        };
         self.deps
             .credential_store
             .set_active_provider(slot, provider_id)
             .await?;
-        self.refresh_and_publish_credentials().await
+        let retirement = self.release_previous_asr_owner(previous).await;
+        // No runtime cleanup may trail an asynchronous credentials refresh: a
+        // replacement channel/recording can already own the same runtime then.
+        drop(owner_guard);
+        let status = self.refresh_and_publish_credentials().await?;
+        retirement?;
+        Ok(status)
     }
 
     pub async fn activate_local_asr(
         &self,
         request: crate::domains::LocalAsrActivationRequest,
     ) -> Result<crate::domains::LocalAsrActivationResult, BackendError> {
+        let owner_guard = self.local_asr_channel_gate.lock().await;
         let result = self.deps.services.local_asr.activate(request).await?;
+        drop(owner_guard);
         self.refresh_and_publish_credentials().await?;
         Ok(result)
     }
@@ -4815,9 +4865,121 @@ impl OpenLessBackend {
         &self,
         mutation: ChannelMutation,
     ) -> Result<ChannelMutationResult, BackendError> {
+        let kind = match &mutation {
+            ChannelMutation::ActivateLocalAsr { .. }
+            | ChannelMutation::RegisterExperimentalAsr { .. } => ChannelKind::Asr,
+            ChannelMutation::Create { kind, .. }
+            | ChannelMutation::SetProviderType { kind, .. }
+            | ChannelMutation::InvalidateTest { kind, .. }
+            | ChannelMutation::InvalidateTests { kind }
+            | ChannelMutation::DeleteIfBlank { kind, .. }
+            | ChannelMutation::Rename { kind, .. }
+            | ChannelMutation::Delete { kind, .. }
+            | ChannelMutation::SetEnabled { kind, .. }
+            | ChannelMutation::Reorder { kind, .. }
+            | ChannelMutation::RecordTest { kind, .. } => *kind,
+        };
+        let owner_guard = if kind == ChannelKind::Asr {
+            Some(self.local_asr_channel_gate.lock().await)
+        } else {
+            None
+        };
+        let previous = if kind == ChannelKind::Asr {
+            self.asr_channel_owner().await?
+        } else {
+            None
+        };
         let result = self.deps.credential_store.mutate_channel(mutation).await?;
+        let retirement = self.release_previous_asr_owner(previous).await;
+        drop(owner_guard);
+        // The metadata commit still needs publishing when native cleanup fails.
         self.refresh_and_publish_credentials().await?;
+        retirement?;
         Ok(result)
+    }
+
+    async fn asr_channel_owner(&self) -> Result<Option<(String, String)>, BackendError> {
+        let id = match self
+            .deps
+            .credential_store
+            .active_provider(ProviderSlot::Asr)
+            .await
+        {
+            Ok(id) => id,
+            Err(error) if error.code == BackendErrorCode::Unsupported => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if id.is_empty() {
+            return Ok(None);
+        }
+        let channels = match self
+            .deps
+            .credential_store
+            .list_channels(ChannelKind::Asr)
+            .await
+        {
+            Ok(channels) => channels,
+            Err(error) if error.code == BackendErrorCode::Unsupported => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(
+            match channels.into_iter().find(|channel| channel.id == id) {
+                Some(channel) if channel.enabled => Some((id, channel.provider_type)),
+                Some(_) => None,
+                None => Some((id.clone(), id)), // Legacy provider-only selection.
+            },
+        )
+    }
+
+    async fn release_previous_asr_owner(
+        &self,
+        previous: Option<(String, String)>,
+    ) -> Result<(), BackendError> {
+        let Some(previous) = previous else {
+            return Ok(());
+        };
+        if let Some(current) = self.asr_channel_owner().await? {
+            // Editing an unrelated channel is not runtime retirement. A new
+            // channel using the same shared runtime also keeps ownership; its
+            // model can be replaced by the next explicit use, not a stale unload.
+            if current == previous
+                || current.1 == previous.1
+                || Self::local_asr_runtime(&previous.1)
+                    .is_some_and(|runtime| Self::local_asr_runtime(&current.1) == Some(runtime))
+            {
+                return Ok(());
+            }
+        }
+        self.release_local_asr_provider(&previous.1).await
+    }
+
+    fn local_asr_runtime(provider: &str) -> Option<crate::LocalAsrRuntime> {
+        match provider {
+            "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" | "local-whisper"
+            | "apple-whisper" => Some(crate::LocalAsrRuntime::Generic),
+            "foundry-local" | "foundry-whisper" | "foundry-local-whisper" => {
+                Some(crate::LocalAsrRuntime::Foundry)
+            }
+            "sherpa-onnx" | "sherpa-onnx-local" => Some(crate::LocalAsrRuntime::SherpaOnnx),
+            _ => None,
+        }
+    }
+
+    async fn release_local_asr_provider(&self, provider: &str) -> Result<(), BackendError> {
+        if let Some(model) = crate::experimental_asr::ExperimentalAsrModel::from_provider(provider)
+        {
+            if let Some(service) = &self.deps.services.experimental_asr {
+                service.release_runtime(model).await?;
+            }
+            return Ok(());
+        }
+        let Some(runtime) = Self::local_asr_runtime(provider) else {
+            return Ok(());
+        };
+        match self.deps.services.local_asr.release(runtime).await {
+            Err(error) if error.code == BackendErrorCode::Unsupported => Ok(()),
+            result => result,
+        }
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
@@ -5042,6 +5204,21 @@ impl OpenLessBackend {
         {
             self.disarm_edit_observation();
             self.dismiss_pending_corrections();
+        }
+        if previous.testing_features_enabled && !preferences.testing_features_enabled {
+            // Capture the old owners while settings admission is still locked.
+            // A later opt-in must not let cleanup cancel a replacement task.
+            let cancellation = self
+                .less_computer_active_session()
+                .map(|session_id| self.less_computer_cancellation(session_id));
+            self.deps.services.less_computer.dismiss();
+            let cancel_test = self.deps.services.coding_agent.cancel_test();
+            self.deps.task_spawner.spawn(Box::pin(async move {
+                let _ = cancel_test.await;
+                if let Some(cancellation) = cancellation {
+                    let _ = cancellation.await;
+                }
+            }));
         }
         self.publish_preferences_changed();
         Ok(crate::SettingsUpdateOutcome {
@@ -8003,6 +8180,7 @@ mod tests {
     async fn voice_workflows_share_one_busy_lease_and_release_it_on_terminal_paths() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend
             .update_settings(
@@ -8110,6 +8288,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         preferences.coding_agent_provider = "dsh-cli".into();
         preferences.coding_agent_permission_mode = "bypassPermissions".into();
@@ -8162,6 +8341,24 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, BackendErrorCode::PermissionDenied);
+        let mut legacy = backend.get_preferences();
+        legacy.coding_agent_enabled = true;
+        backend.set_preferences(legacy).unwrap();
+        assert_eq!(
+            backend
+                .submit_less_computer("legacy".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            backend
+                .begin_less_computer_capture(SessionId::new())
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
         assert!(runtime.request.lock().unwrap().is_none());
     }
 
@@ -8169,6 +8366,7 @@ mod tests {
     async fn less_computer_capture_facade_is_session_scoped_and_cancel_releases_it() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend.set_preferences(preferences).unwrap();
 
@@ -8189,10 +8387,74 @@ mod tests {
         assert_eq!(backend.less_computer_active_session(), None);
     }
 
+    #[tokio::test]
+    async fn disabling_testing_features_cancels_capture_and_preserves_configuration() {
+        let (backend, _) = backend();
+        backend.start().await.unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        preferences.coding_agent_enabled = true;
+        preferences.coding_agent_model = Some("saved-model".into());
+        backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let owner = SessionId::new();
+        backend.begin_less_computer_capture(owner).unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = false;
+        let outcome = backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let hotkeys = outcome.effects.hotkeys.unwrap();
+        assert!(hotkeys.previous.coding_agent_enabled);
+        assert!(!hotkeys.next.coding_agent_enabled);
+        assert!(outcome.preferences.coding_agent_enabled);
+        assert_eq!(
+            outcome.preferences.coding_agent_model.as_deref(),
+            Some("saved-model")
+        );
+        assert!(backend.less_computer_capture_cancelled(owner));
+        assert!(backend.ensure_testing_features_enabled().is_err());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while backend.less_computer_active_session().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            backend
+                .begin_less_computer_capture(SessionId::new())
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        backend.begin_less_computer_capture(owner).unwrap();
+        backend.cancel_less_computer(Some(owner)).await.unwrap();
+    }
+
     #[test]
     fn less_computer_hotkey_modes_share_hold_toggle_auto_and_combined_rules() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
 
         preferences.hotkey.mode = crate::HotkeyMode::Hold;
@@ -8449,6 +8711,7 @@ mod tests {
                 .unwrap(),
             );
             let mut preferences = backend.get_preferences();
+            preferences.testing_features_enabled = true;
             preferences.coding_agent_enabled = true;
             backend.set_preferences(preferences).unwrap();
             let session_id = SessionId::new();
@@ -8517,6 +8780,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         preferences.stable_transcription_enabled = true;
         backend.set_preferences(preferences).unwrap();
@@ -8677,6 +8941,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend.set_preferences(preferences).unwrap();
         (data_dir, backend, transcription, runtime)
@@ -9292,6 +9557,10 @@ mod tests {
             BackendDependencies::unsupported(),
         )
         .unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        preferences.coding_agent_enabled = true;
+        backend.set_preferences(preferences).unwrap();
         let control = Arc::new(FakeRecordingControl::default());
 
         let stop_session = SessionId::new();
@@ -15573,6 +15842,7 @@ mod tests {
         let backend = runtime_restore_backend();
         backend.ensure_runtime_ready().unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend
             .update_settings(

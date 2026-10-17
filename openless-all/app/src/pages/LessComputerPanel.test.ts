@@ -150,6 +150,7 @@ function context(native, replay) {
     useRef: (initial) => active.ref(initial),
     useEffect: (fn, deps) => active.effect(fn, deps),
     useTranslation: () => ({ t: (key) => key }),
+    detectOS: () => 'win',
     useChatPanelLifecycle: () => ({ enterEpoch: 0, closing: false }),
     useExitMount: (open) => ({ mounted: open, closing: false }),
     applyThemeFromPreference: () => {},

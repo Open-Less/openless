@@ -298,6 +298,42 @@
     {
       "authRequirement": "none",
       "defaultEndpoint": null,
+      "defaultModel": "experimental-textstream-qwen3",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalTextStream",
+      "providerType": "experimental-textstream",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
+      "defaultModel": "experimental-sensevoice-small",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalSenseVoice",
+      "providerType": "experimental-sensevoice",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
+      "defaultModel": "experimental-embedding-gemma-en",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalGemma",
+      "providerType": "experimental-embedding-gemma",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
       "defaultModel": null,
       "defaultRequestFormat": null,
       "kind": "asr",

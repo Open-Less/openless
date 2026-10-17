@@ -41,7 +41,7 @@ export function LanguageSection() {
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+      <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)', marginBottom: 6 }}>
         {t('settings.language.title')}
       </div>
       <SettingRow label={t('settings.language.label')}>

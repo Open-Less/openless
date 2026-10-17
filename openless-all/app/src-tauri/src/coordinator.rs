@@ -1451,7 +1451,8 @@ impl Coordinator {
 
     pub(crate) fn try_update_translation_hotkey_binding(&self) -> Result<(), String> {
         let target = hotkey_runtime_target(&self.inner);
-        if is_builtin_translation_shift(&target.translation)
+        if is_unconfigured_shortcut(&target.translation)
+            || is_builtin_translation_shift(&target.translation)
             || crate::shortcut_binding::legacy_modifier_trigger(&target.translation).is_some()
         {
             take_translation_hotkey_on_main_thread(&self.inner);

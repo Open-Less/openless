@@ -599,6 +599,9 @@ pub struct UserPreferences {
     /// a disabled pack auto-enables and activates it.
     #[serde(default)]
     pub style_pack_hotkeys: Vec<StylePackHotkey>,
+    /// Device-local opt-in for unfinished features. Hidden and unavailable by default.
+    #[serde(default)]
+    pub testing_features_enabled: bool,
     /// Less Computer: whether enabled. Default off; users must enable it in Advanced settings.
     #[serde(default)]
     pub coding_agent_enabled: bool,
@@ -873,6 +876,10 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
+    pub fn less_computer_available(&self) -> bool {
+        self.testing_features_enabled && self.coding_agent_enabled
+    }
+
     pub fn preserve_style_preferences_from(&mut self, current: &Self) {
         self.default_mode = current.default_mode;
         self.enabled_modes = current.enabled_modes.clone();
@@ -1049,6 +1056,8 @@ struct UserPreferencesWire {
     open_app_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
     style_pack_hotkeys: Vec<StylePackHotkey>,
+    #[serde(default)]
+    testing_features_enabled: bool,
     #[serde(default)]
     coding_agent_enabled: bool,
     #[serde(default = "default_coding_agent_provider")]
@@ -1269,6 +1278,7 @@ impl Default for UserPreferencesWire {
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
             style_pack_hotkeys: prefs.style_pack_hotkeys,
+            testing_features_enabled: prefs.testing_features_enabled,
             coding_agent_enabled: prefs.coding_agent_enabled,
             coding_agent_provider: prefs.coding_agent_provider,
             coding_agent_model: prefs.coding_agent_model,
@@ -1471,6 +1481,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_voice_edit_plan_format: wire.selection_voice_edit_plan_format,
             selection_voice_edit_system_prompt: wire.selection_voice_edit_system_prompt,
             qa_save_history: wire.qa_save_history,
+            testing_features_enabled: wire.testing_features_enabled,
             coding_agent_enabled: wire.coding_agent_enabled,
             coding_agent_provider: wire.coding_agent_provider,
             coding_agent_model: wire.coding_agent_model,
@@ -1849,6 +1860,7 @@ impl Default for UserPreferences {
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
             style_pack_hotkeys: Vec::new(),
+            testing_features_enabled: false,
             coding_agent_enabled: false,
             coding_agent_provider: default_coding_agent_provider(),
             coding_agent_model: None,
@@ -1927,6 +1939,19 @@ pub struct StylePackHotkey {
 }
 
 impl ShortcutBinding {
+    /// Explicitly unbound, distinct from an absent legacy preference field.
+    /// Keep the existing wire shape so old preferences and host adapters round-trip.
+    pub fn unassigned() -> Self {
+        Self {
+            primary: String::new(),
+            modifiers: Vec::new(),
+        }
+    }
+
+    pub fn is_unassigned(&self) -> bool {
+        self.primary.is_empty() && self.modifiers.is_empty()
+    }
+
     pub fn default_qa() -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -2504,12 +2529,9 @@ impl PlatformCapabilities {
                 supports_overlay: true,
                 supports_desktop_hotkey: true,
                 supports_tray: true,
-                supports_local_asr: cfg!(any(
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "windows"
-                )),
-                supports_local_qwen3_mlx: cfg!(all(target_os = "macos", target_arch = "aarch64")),
+                // Legacy manager is retired on macOS; experiments use their own entry.
+                supports_local_asr: cfg!(any(target_os = "linux", target_os = "windows")),
+                supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
                 supports_voice_edit: true,
@@ -2869,6 +2891,29 @@ mod translation_effective_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_less_computer_settings_remain_sealed_until_device_opt_in() {
+        let legacy: UserPreferences = serde_json::from_value(serde_json::json!({
+            "codingAgentEnabled": true,
+            "codingAgentProvider": "codex-cli",
+            "codingAgentModel": "saved-model"
+        }))
+        .unwrap();
+        assert!(!UserPreferences::default().testing_features_enabled);
+        assert!(!legacy.testing_features_enabled);
+        assert!(legacy.coding_agent_enabled);
+        assert!(!legacy.less_computer_available());
+        let mut opted_in = legacy.clone();
+        opted_in.testing_features_enabled = true;
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&opted_in).unwrap()).unwrap();
+        assert!(restored.less_computer_available());
+        opted_in.testing_features_enabled = false;
+        assert!(!opted_in.less_computer_available());
+        assert_eq!(opted_in.coding_agent_model, legacy.coding_agent_model);
+        assert_eq!(opted_in.coding_agent_provider, legacy.coding_agent_provider);
+    }
 
     #[test]
     fn macos_newline_modes_round_trip_legacy_auto_and_line_feed() {

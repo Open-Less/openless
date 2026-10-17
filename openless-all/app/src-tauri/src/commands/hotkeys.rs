@@ -16,11 +16,14 @@ pub fn validate_shortcut_binding(binding: ShortcutBinding) -> Result<(), String>
 #[tauri::command]
 pub async fn set_dictation_hotkey(
     coord: CoordinatorState<'_>,
-    binding: ShortcutBinding,
+    binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
     let coord = Arc::clone(coord.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        super::settings::replace_dictation_hotkey(&coord, binding)
+        super::settings::replace_dictation_hotkey(
+            &coord,
+            binding.unwrap_or_else(ShortcutBinding::unassigned),
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -29,10 +32,13 @@ pub async fn set_dictation_hotkey(
 #[tauri::command]
 pub fn set_translation_hotkey(
     coord: CoordinatorState<'_>,
-    binding: ShortcutBinding,
+    binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
-    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
-    crate::shortcut_binding::reject_side_specific_non_dictation(&binding)?;
+    if let Some(binding) = binding.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+    }
+    let binding = binding.unwrap_or_else(ShortcutBinding::unassigned);
     let mut prefs = coord.backend().get_preferences();
     prefs.translation_hotkey = binding;
     reject_hotkey_collisions(&prefs)?;

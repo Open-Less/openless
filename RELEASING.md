@@ -86,10 +86,18 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 3. CI is green on the commit being tagged.
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
 5. Then, and only then, push the release tag.
-6. Beta tag workflows upload Tauri and Android assets to a shared draft.
-   Wait for **both** workflows to succeed, verify the packages and Beta updater
-   manifests, then publish that draft as a prerelease.
+6. Both Beta and Stable tag workflows upload Tauri and Android assets to a shared
+   draft. Wait for **both** workflows to succeed, verify the packages and channel
+   updater manifests, then publish that draft (Beta as a prerelease; Stable as latest).
    Do not rerun an asset workflow after publication without first returning the release to draft.
+7. Publishing Stable with the administrator's CLI/UI credential automatically
+   triggers `sync-homebrew-cask.yml`. It accepts only the published latest Stable
+   tag, preserves application build metadata in DMG filenames, verifies matching
+   ARM/Intel versions, computes their checksums and commits the cask update.
+   Drafts, Beta and older releases never update Homebrew. If repair is needed, run
+   `gh workflow run sync-homebrew-cask.yml -f tag=v<version>-tauri`; no asset rebuild
+   or manual cask edit is needed. Do not publish via an asset workflow's
+   `GITHUB_TOKEN`, which does not emit the downstream release event.
 
 Before independently attaching Linux assets, additionally require all of the following:
 
@@ -98,6 +106,49 @@ Before independently attaching Linux assets, additionally require all of the fol
 3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
 4. The manual build targets the same existing tag whose commit, CI and Linux product acceptance were reviewed. `workflow_dispatch` only uploads Actions artifacts; an administrator separately uploads the verified packages to that Release.
 5. Attach the Linux checksum file as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
+
+## Release notes and contributor attribution
+
+Every release page must use this order:
+
+1. **User-visible features and improvements** — describe what users can do, with
+   platform and experimental-status boundaries where applicable.
+2. **Bug fixes** — summarize the affected behavior and the correction.
+3. **Architecture changes** — explain relevant Core/Host, data, protocol and
+   dependency changes without presenting internal refactors as new user features.
+4. **Build and distribution changes** — cover packaging, CI, signing, updater and
+   distribution work. Distinguish post-tag build-tooling repairs from application
+   changes contained in the tag.
+5. **PRs and participants** — provide a complete, source-linked attribution index.
+6. **Download/upgrade instructions and verification evidence**.
+
+For Stable, compare against the **previous publicly released Stable**, including
+features accumulated across intervening Betas. An unpublished draft or reserved
+version tag is not the comparison baseline. For Beta, name the previous public
+Beta used as the baseline. Always state both comparison tags explicitly.
+
+Under **every feature, fix, architecture and build item**, link the relevant PRs
+and identify their submitters. The linked attribution index must distinguish PR
+submitter, commit authors/co-authors, formal reviewers (including review state),
+discussion participants and merger. Retrieve all pages of commits/reviews/comments
+when needed. Preserve unlinked Git author names as names; do not invent GitHub
+accounts, roles, approvals or human identities for bot/AI signatures. Comments are
+not code review approvals, and an integration PR's participants are not necessarily
+the authors of every feature it contains. Do not publish contributor email addresses.
+
+For work incorporated through a squash, cherry-pick or integration branch, credit
+both the **original contribution PR** and the **actual integration PR/commit**.
+Label a closed-but-integrated source PR accurately; do not call it independently
+merged. Verify inclusion from ancestry, file history and integration records, not
+from PR titles or dates alone. If a PR is unavailable, cite the verified commit and
+record the attribution limitation. Link the full comparison and retain platform
+exclusions (for example, Linux source work does not imply Linux packages shipped).
+
+Keep the release-page Markdown in `docs/releases/<version>-release-notes.md`.
+Before editing an existing public release, save its current body and asset metadata;
+after editing, read it back and verify the body, channel/publication flags and asset
+names/digests/sizes. A notes-only change must not rebuild packages, move tags or
+change the published channel. The same format applies to subsequent releases.
 
 ## Process summary
 

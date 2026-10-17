@@ -222,16 +222,27 @@ impl OpenAICompatibleOmni {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut cancelled = false;
-        loop {
+        'stream: loop {
             if should_cancel() {
                 log::info!("[omni] stream cancelled by caller; breaking SSE loop");
                 cancelled = true;
                 break;
             }
-            let chunk_opt = response
-                .chunk()
-                .await
-                .map_err(crate::polish::llm_error_from_reqwest)?;
+            // A silent/half-open SSE connection must not prevent caller cancellation.
+            // Keep the read future alive while polling; do not restart body reads.
+            let read = response.chunk();
+            tokio::pin!(read);
+            let chunk_opt = loop {
+                tokio::select! {
+                    result = &mut read => break result.map_err(crate::polish::llm_error_from_reqwest)?,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                        if should_cancel() {
+                            cancelled = true;
+                            break 'stream;
+                        }
+                    }
+                }
+            };
             let Some(chunk) = chunk_opt else { break };
             append_utf8_sse_chunk(&mut buffer, &mut utf8_pending, &chunk)?;
             while let Some(idx) = buffer.find("\n\n") {
@@ -245,8 +256,14 @@ impl OpenAICompatibleOmni {
                         continue;
                     };
                     let payload = payload.trim();
-                    if payload.is_empty() || payload == "[DONE]" {
+                    if payload.is_empty() {
                         continue;
+                    }
+                    if payload == "[DONE]" {
+                        // SSE completion is authoritative. Compatible gateways may
+                        // keep HTTP alive after this marker; waiting for EOF can leave
+                        // Processing active until the 90-second request timeout.
+                        break 'stream;
                     }
                     let value: Value = match serde_json::from_str(payload) {
                         Ok(value) => value,
@@ -476,6 +493,132 @@ mod tests {
             temperature: Some(0.3),
             thinking_enabled: false,
         }
+    }
+
+    // Keeps the HTTP body open until the test explicitly releases it. This
+    // reproduces compatible gateways that send [DONE] without closing TCP.
+    async fn open_sse(
+        payload: &str,
+    ) -> (
+        OpenAICompatibleOmni,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let payload = payload.to_string();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0, "request ended before body");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&request[..index]).to_ascii_lowercase();
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    if request.len() >= index + 4 + length {
+                        break;
+                    }
+                }
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
+            let chunk = format!("{:x}\r\n{}\r\n", payload.len(), payload);
+            stream.write_all(chunk.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+            let _ = released.await;
+        });
+        let mut cfg = config();
+        cfg.base_url = format!("http://{address}/v1");
+        // Do not inherit machine-specific proxy settings or the global cache.
+        let provider = OpenAICompatibleOmni {
+            config: cfg,
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        };
+        (provider, release, server)
+    }
+
+    #[tokio::test]
+    async fn stream_done_finishes_without_waiting_for_http_eof() {
+        let (provider, release, server) = open_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"完整结果\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+        ).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.complete_streaming("system", "", Some(&[0u8; 8]), |_| {}, || false),
+        )
+        .await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert_eq!(
+            result.expect("[DONE] must finish before EOF").unwrap(),
+            "完整结果"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_done_fails_promptly_instead_of_waiting_for_eof() {
+        let (provider, release, server) = open_sse("data: [DONE]\n\n").await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.complete_streaming("system", "", None, |_| {}, || false),
+        )
+        .await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert!(matches!(
+            result.expect("empty completion must terminate"),
+            Err(LLMError::InvalidResponse { status: 200, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_a_silent_stream_body_read() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let (provider, release, server) =
+            open_sse("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n").await;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        let (seen, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = async move {
+            received.recv().await.expect("first delta");
+            // Let the next body read become pending before cancellation.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            flag.store(true, Ordering::Release);
+        };
+        let request = provider.complete_streaming(
+            "system",
+            "",
+            None,
+            |_| {
+                let _ = seen.send(());
+            },
+            || cancelled.load(Ordering::Acquire),
+        );
+        let (result, ()) = tokio::join!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), request),
+            cancel
+        );
+        let _ = release.send(());
+        server.await.unwrap();
+        assert_eq!(
+            result
+                .expect("cancellation must wake a stalled read")
+                .unwrap(),
+            "partial"
+        );
     }
 
     #[test]

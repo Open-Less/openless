@@ -3612,12 +3612,27 @@ impl CredentialsVault {
         last_vault_read_error_slot().lock().clone()
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn retire_macos_local_asr() -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::LocalOnly, |root| {
+            let mut metadata = credential_metadata(root);
+            let changed = metadata.retire_macos_local_asr();
+            if changed { apply_credential_metadata(root, metadata)?; }
+            Ok(changed)
+        })
+    }
+
     pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
         let _guard = credentials_lock().lock();
-        Ok(credential_metadata(&load_credentials_for_update()?))
+        let metadata = credential_metadata(&load_credentials_for_update()?);
+        #[cfg(target_os = "macos")]
+        let metadata = metadata.retired_macos_view();
+        Ok(metadata)
     }
 
     pub fn save_metadata(metadata: openless_core::CredentialMetadata) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        let metadata = metadata.retired_macos_view();
         mutate_credentials(
             openless_core::credentials::ChangeOrigin::User,
             move |root| {

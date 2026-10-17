@@ -133,8 +133,7 @@ async function install(): Promise<void> {
     }
   };
   const changed = (event: Event) => {
-    if (!ready || (event as CustomEvent<{ source?: string }>).detail?.source === 'sync-restore')
-      return;
+    if ((event as CustomEvent<{ source?: string }>).detail?.source === 'sync-restore') return;
     const epoch = ++choiceEpoch;
     const values = { locale: getLocalePreference(), fontScale: readFontScale() };
     const detailKey = (event as CustomEvent<{ key?: UiKey }>).detail?.key;
@@ -147,8 +146,14 @@ async function install(): Promise<void> {
           ? ['locale']
           : ['locale', 'fontScale'];
     for (const key of keys) choices.set(key, { epoch, value: values[key] });
-    void enqueue(() => persist(false, epoch)).catch(() => {});
+    if (ready) void enqueue(() => persist(false, epoch)).catch(() => {});
   };
+  // Capture edits while the initial native mirror is still loading.
+  window.addEventListener('openless:ui-preferences-changed', changed);
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'ol-font-scale' || event.key?.includes('locale')) changed(event);
+  });
+  const hydrationEpoch = choiceEpoch;
   const { listen } = await import('@tauri-apps/api/event');
   await listen<Restored>('cloud-sync-e2ee:restored', ({ payload }) => {
     if (
@@ -186,19 +191,16 @@ async function install(): Promise<void> {
       }
     }).catch(() => {});
   });
-  window.addEventListener('openless:ui-preferences-changed', changed);
-  window.addEventListener('storage', (event) => {
-    if (event.key === 'ol-font-scale' || event.key?.includes('locale')) changed(event);
-  });
   flushBridge = () => enqueue(() => persist(true, choiceEpoch));
   try {
     await enqueue(async () => {
       known = await readUi();
-      if (known.preferences) await apply(known.preferences, choiceEpoch);
+      if (known.preferences) await apply(known.preferences, hydrationEpoch);
     });
   } catch {
     // Settings remain available to retry a denied keychain read.
   } finally {
     ready = true;
+    if (choices.size) void enqueue(() => persist(false, choiceEpoch)).catch(() => {});
   }
 }

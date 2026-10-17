@@ -165,7 +165,9 @@ export function PermissionsSection() {
           marginBottom: 6,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.permissions.title')}</div>
+        <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+          {t('settings.permissions.title')}
+        </div>
         {platformCaps?.platform === 'android' && (
           <Btn
             variant="ghost"

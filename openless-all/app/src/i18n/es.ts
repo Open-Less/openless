@@ -1,6 +1,11 @@
 import type { zhCN } from './zh-CN';
 
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const es: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: 'Sesión de edición por voz',
     description:
@@ -1259,6 +1264,13 @@ export const es: typeof zhCN = {
     cancelledTitle: 'Grabación cancelada',
   },
   settings: {
+    testingFeatures: {
+      title: 'Funciones en fase de pruebas',
+      enable: 'Activar funciones en fase de pruebas',
+      description:
+        'Mostrar Less Computer y la consola de Claude para configurarlos y usarlos en plataformas compatibles. Al desactivar esta opción, se detienen las tareas y se ocultan las entradas, pero se conservan los ajustes. Solo se aplica a este dispositivo.',
+      unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
+    },
     selectionWorkspace: {
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
@@ -1511,7 +1523,8 @@ export const es: typeof zhCN = {
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       audioEnhancementLabel: 'Mejora ligera del micrófono',
-      audioEnhancementDesc: 'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
+      audioEnhancementDesc:
+        'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',
@@ -1748,6 +1761,9 @@ export const es: typeof zhCN = {
         asrSherpaOnnxLocal: 'sherpa-onnx local (experimental)',
         asrFoundryLocalWhisper: 'Whisper local (Foundry Local)',
         asrLocalWhisper: 'Whisper local (por lotes)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'Qwen3-ASR local',
         asrLocalQwen3Mlx: 'Qwen3-ASR local (MLX / Metal)',
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
@@ -2416,7 +2432,12 @@ export const es: typeof zhCN = {
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
+    backToTestingFeatures: 'Volver a funciones en fase de pruebas',
     advancedPages: {
+      customSyncServer:
+        'Solo para servicios propios; la sincronización oficial no requiere configuración.',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'Activar opcionalmente las funciones que siguen en pruebas.',
       vocabularyLearning:
         'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
       lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
@@ -2434,7 +2455,8 @@ export const es: typeof zhCN = {
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced: 'Configura Less Computer y la depuración según tus necesidades.',
+      advanced:
+        'Configurar funciones de prueba, aprendizaje de vocabulario y herramientas de depuración.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
@@ -2585,7 +2607,10 @@ export const es: typeof zhCN = {
     foundryError: 'Estado de Foundry',
     foundrySetDefault: 'Usar como predeterminado / Activar ASR local de Windows',
     foundryEnabling: 'Activando…',
-    foundryPrepare: 'Preparar / Descargar / Cargar',
+    foundryPrepare: 'Descargar / verificar modelo',
+    runtimeDownloadRestart:
+      'La descarga utilizó componentes nativos. Reinicia OpenLess antes de activar el modelo; no se activará automáticamente. ¿Reiniciar ahora?',
+    restartNow: 'Reiniciar ahora',
     foundryPreparing: 'Preparando…',
     foundryReleasing: 'Liberando…',
     foundryRetryPrepare: 'Continuar / Reintentar preparación',

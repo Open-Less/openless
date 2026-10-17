@@ -1271,6 +1271,8 @@ mod linux_app {
                 {
                     return;
                 }
+                // End the native window on both X11 and Wayland. Core owns the
+                // conversation; the next show creates a fresh protocol state.
                 self.close_qa_popup();
                 return;
             }
@@ -1309,7 +1311,20 @@ mod linux_app {
         }
 
         fn show_less_computer_popup(&mut self) {
+            if self
+                .backend()
+                .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+            {
+                return;
+            }
             self.ensure_popup(PopupKind::LessComputer);
+            if self
+                .backend()
+                .is_none_or(|backend| backend.ensure_testing_features_enabled().is_err())
+            {
+                self.less_computer_popup = None;
+                return;
+            }
             let message = self.less_computer_snapshot(self.lang);
             self.send_popup(PopupKind::LessComputer, message);
         }
@@ -1922,7 +1937,9 @@ mod linux_app {
                     == Some(session_id.as_str()) =>
                 {
                     if let Some(backend) = self.backend() {
-                        self.spawn(async move {
+                        // 代次与上下文一起带上：返回时若面板已换窗口，结果作废。
+                        let context = self.expected_popup_session(PopupKind::Qa);
+                        self.spawn_qa_action(context, async move {
                             backend
                                 .services()
                                 .qa
@@ -3241,6 +3258,12 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::LessComputerEvent(event) => {
+                    if self
+                        .backend()
+                        .is_some_and(|backend| !backend.get_preferences().testing_features_enabled)
+                    {
+                        return;
+                    }
                     // Less Computer events may complete after a newer turn has
                     // already started. Session ownership, not arrival time,
                     // decides whether a delta/terminal may mutate this view.
@@ -3381,7 +3404,17 @@ mod linux_app {
                         }
                         self.preferences = Some(self.settings_save.rebase(&latest));
                     }
-                    self.sync_capsule_transcript();
+                    if self
+                        .backend()
+                        .is_some_and(|backend| !backend.get_preferences().testing_features_enabled)
+                    {
+                        // Dropping the supervisor closes a feature that is no longer opted in.
+                        self.less_computer_popup = None;
+                        self.less_computer_working = false;
+                        self.pending_approval = None;
+                        self.less_computer_session = None;
+                        self.less_computer_entries.clear();
+                    }
                     self.load_remote_status();
                     self.load_library();
                 }
@@ -3418,36 +3451,8 @@ mod linux_app {
                     {
                         self.qa_state = Some(state);
                     }
-                    if let Some(state) = self.qa_state.clone() {
-                        let session_id =
-                            state.session_id.clone().unwrap_or_else(|| "qa".to_string());
-                        self.send_popup(
-                            PopupKind::Qa,
-                            HostToPopup::QaSnapshot {
-                                version: POPUP_PROTOCOL_VERSION,
-                                session_id,
-                                sequence: event_sequence.saturating_mul(2),
-                                phase: format!("{:?}", state.kind),
-                                messages: state
-                                    .messages
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(|message| PopupChatMessage {
-                                        role: message.role,
-                                        content: message.content,
-                                        selection_text: message.selection_text,
-                                    })
-                                    .collect(),
-                                selection_preview: state.selection_preview,
-                                streaming_answer: state.chunk.unwrap_or_default(),
-                                error: state.error,
-                                edit_instruction_mode: self.qa_edit.instruction_mode,
-                                edit_apply_available: self.qa_edit.apply_available,
-                                edit_revert_available: self.qa_edit.revert_available,
-                                pinned: self.qa_pinned,
-                                viewer_login: self.marketplace_login(),
-                            },
-                        );
+                    if self.qa_visible {
+                        self.show_qa_popup();
                     }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
@@ -4035,6 +4040,9 @@ mod linux_app {
                         }
                         HostAction::ShowQa => {
                             log::info!("[hotkey] QA panel show requested by the host action");
+                            if self.polish_result_visible {
+                                self.close_qa_popup();
+                            }
                             self.qa_visible = true;
                             self.show_qa_popup();
                         }
@@ -5156,6 +5164,7 @@ mod linux_app {
                 s.llm_thinking_enabled = prefs.llm_thinking_enabled;
                 s.multimodal = prefs.multimodal_pipeline_enabled;
                 s.less_computer = prefs.coding_agent_enabled;
+                s.testing_features = prefs.testing_features_enabled;
                 s.coding_agent_provider = match prefs.coding_agent_provider.as_str() {
                     "opencode-cli" => 1,
                     "codex-cli" => 2,
@@ -9571,6 +9580,144 @@ Internal flags (set by OpenLess itself, not for regular use):
     mod tests {
         use super::*;
 
+        struct FailingQaRuntime;
+
+        impl openless_core::QaRuntimeAdapter for FailingQaRuntime {
+            fn prepare_text(
+                &self,
+                _: openless_core::SessionId,
+                text: String,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaInput, BackendError>,
+            > {
+                Box::pin(async move {
+                    Ok(openless_core::QaInput {
+                        text,
+                        selection_text: None,
+                        selection_source_app: None,
+                    })
+                })
+            }
+            fn start_recording(
+                &self,
+                _: openless_core::SessionId,
+                _: Arc<dyn openless_core::QaProgressSink>,
+            ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+                panic!("text submission must not start recording")
+            }
+            fn finish_recording(
+                &self,
+                _: openless_core::SessionId,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaInput, BackendError>,
+            > {
+                panic!("text submission must not finish recording")
+            }
+            fn answer(
+                &self,
+                _: openless_core::QaTurnRequest,
+                _: Arc<dyn openless_core::QaProgressSink>,
+            ) -> futures_util::future::BoxFuture<
+                'static,
+                Result<openless_core::QaTurnResult, BackendError>,
+            > {
+                Box::pin(async {
+                    Err(BackendError::new(
+                        openless_core::BackendErrorCode::InvalidArgument,
+                        "fixture provider unavailable",
+                    ))
+                })
+            }
+            fn cancel(
+                &self,
+                _: openless_core::SessionId,
+            ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        #[test]
+        fn an_idle_popup_submission_reaches_core_and_displays_failure() {
+            let data_dir = tempfile::tempdir().unwrap();
+            let tokio = Arc::new(tokio::runtime::Runtime::new().unwrap());
+            let host_actions = Arc::new(openless_linux_egui::LinuxHostActions::default());
+            let mut dependencies = openless_core::BackendDependencies::unsupported();
+            dependencies.host_actions = host_actions.clone();
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            dependencies.qa_runtime = Some(Arc::new(FailingQaRuntime));
+            dependencies.services.remote_input = Arc::new(
+                openless_core::RemoteInputService::new(
+                    Arc::new(openless_core::testing::RecordingRemoteInputRuntime::default()),
+                    8443,
+                    "en",
+                )
+                .unwrap(),
+            );
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: data_dir.path().to_path_buf(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let runtime = openless_linux_egui::LinuxBackendRuntime {
+                backend,
+                host_actions,
+                settings_runtime: Arc::new(openless_core::settings::NoopSettingsRuntime),
+            };
+            let backend = runtime.backend.clone();
+            let native = tokio
+                .block_on(LinuxNativeRuntime::start(runtime, None, None))
+                .unwrap();
+            let mut app = OpenLessEguiApp::new(tokio.clone(), Ok(native), None, true);
+            app.qa_visible = true;
+            app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
+            let submission = PopupToHost::SubmitQa {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "qa".into(),
+                sequence: 1,
+                text: "probe hello".into(),
+            };
+            app.apply_popup_event(
+                PopupKind::Qa,
+                PopupSupervisorEvent::Message(submission.clone()),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(UiResult::QaAction {
+                    generation,
+                    context,
+                    result,
+                }) = app.rx.try_recv()
+                {
+                    assert!(result.is_err(), "the fixture rejects the provider request");
+                    app.apply_qa_action_result(generation, context, result);
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "idle submission was silently discarded"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let snapshot = tokio.block_on(backend.services().qa.snapshot()).unwrap();
+            assert!(
+                snapshot.session_id.is_some(),
+                "Core must have claimed a QA turn"
+            );
+            assert_eq!(snapshot.phase, openless_core::QaPhase::Failed);
+            assert!(app.qa_state.as_ref().unwrap().error.is_some());
+            app.apply_popup_event(PopupKind::Qa, PopupSupervisorEvent::Message(submission));
+            assert_eq!(app.status, tr_l10n(app.lang, "popup.ignore_stale"));
+            tokio.block_on(backend.shutdown()).unwrap();
+        }
+
         #[test]
         fn capsule_uses_raw_accumulator_not_polished_output_and_respects_preferences() {
             let mut app = fixture_app(false);
@@ -9860,6 +10007,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 settings_section: frontend::view_model::SettingsSection::Shortcuts,
                 ..Default::default()
             };
+            vm.settings.testing_features = true;
             let _ = render(&mut vm, Vec::new());
             let painted = render(&mut vm, Vec::new());
             for key in [
@@ -10202,7 +10350,12 @@ Internal flags (set by OpenLess itself, not for regular use):
         #[test]
         fn shortcut_rows_show_the_bindings_core_holds() {
             let mut app = fixture_app(true);
+            app.lang = Lang::En;
             app.preferences = Some(UserPreferences {
+                dictation_hotkey: openless_core::shared_types::ShortcutBinding {
+                    primary: "RightOption".into(),
+                    modifiers: Vec::new(),
+                },
                 switch_style_hotkey: Some(openless_core::shared_types::ShortcutBinding {
                     primary: "1".into(),
                     modifiers: vec!["ctrl".into(), "shift".into()],
@@ -10219,6 +10372,7 @@ Internal flags (set by OpenLess itself, not for regular use):
             });
             app.sync_view_model();
             let vm = &app.frontend_vm;
+            assert_eq!(vm.dictation_hotkey, "Right Alt");
             for (label, value) in [
                 ("switch_style", &vm.switch_style_hotkey),
                 ("open_app", &vm.open_app_hotkey),

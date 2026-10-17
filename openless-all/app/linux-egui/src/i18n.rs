@@ -3268,6 +3268,46 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.testing_features.title",
+        text: row(
+            "正在测试中的功能",
+            "正在測試中的功能",
+            "Features under testing",
+            "テスト中の機能",
+            "테스트 중인 기능",
+        ),
+    },
+    Msg {
+        key: "settings.testing_features.enable",
+        text: row(
+            "启用正在测试中的功能",
+            "啟用正在測試中的功能",
+            "Enable features under testing",
+            "テスト中の機能を有効にする",
+            "테스트 중인 기능 활성화",
+        ),
+    },
+    Msg {
+        key: "settings.testing_features.description",
+        text: row(
+            "开启后显示 Less Computer 和 Claude 控制台，可在支持的平台配置和使用。关闭会停止运行并隐藏入口，保留已有配置。仅在当前设备生效。",
+            "開啟後顯示 Less Computer 和 Claude 控制台，可在支援的平台設定和使用。關閉會停止執行並隱藏入口，保留既有設定。僅在目前裝置生效。",
+            "Show Less Computer and the Claude console for setup and use on supported platforms. Turning this off stops active tasks and hides their entries while keeping your settings. Applies only to this device.",
+            "対応するプラットフォームで Less Computer と Claude コンソールを表示し、設定・使用できます。オフにすると実行中のタスクを停止して項目を非表示にしますが、設定は保持されます。このデバイスのみに適用されます。",
+            "지원되는 플랫폼에서 Less Computer와 Claude 콘솔을 표시하고 설정 및 사용할 수 있습니다. 끄면 실행 중인 작업을 중지하고 항목을 숨기지만 설정은 유지됩니다. 이 기기에만 적용됩니다.",
+        ),
+    },
+    Msg {
+        key: "modal.advanced_pages.testing_features",
+        text: row(
+            "按需开启尚在测试中的功能。",
+            "依需要開啟尚在測試中的功能。",
+            "Opt in to features that are still being tested.",
+            "テスト中の機能を必要に応じて有効にします。",
+            "필요할 때 테스트 중인 기능을 활성화합니다.",
+        ),
+    },
+    Msg {
         key: "settings.coding_agent.title",
         text: row(
             "Less Computer",
@@ -4418,11 +4458,11 @@ pub const CATALOG: &[Msg] = &[
         Msg {
         key: "modal.descriptions.advanced",
         text: row(
-            "按需配置 Less Computer 与调试功能。",
-            "按需設定 Less Computer 與除錯功能。",
-            "Configure Less Computer and debugging as needed.",
-            "必要に応じて Less Computer とデバッグを設定します。",
-            "필요에 따라 Less Computer와 디버깅을 설정합니다.",
+            "按需配置测试功能与调试工具。",
+            "依需要設定測試功能與除錯工具。",
+            "Configure testing features and debugging tools as needed.",
+            "テスト機能とデバッグツールを設定します。",
+            "테스트 기능과 디버깅 도구를 설정합니다.",
         ),
     },
     Msg {

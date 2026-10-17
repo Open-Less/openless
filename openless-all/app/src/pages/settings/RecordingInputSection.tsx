@@ -14,7 +14,7 @@ import {
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
-import { getPlatformCapabilities } from '../../lib/platform';
+import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
   CapsuleStyle,
   HotkeyMode,
@@ -55,7 +55,9 @@ export function RecordingInputSection() {
   const { t } = useTranslation();
   const os = detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
-  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
+    getCachedPlatformCapabilities,
+  );
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
@@ -142,6 +144,30 @@ export function RecordingInputSection() {
     [savePrefs, refresh, t],
   );
 
+  const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
+  const modeTrackRef = useRef<HTMLDivElement | null>(null);
+  const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
+  const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
+  const activeMode = prefs?.hotkey.mode;
+  // Hooks must also run while preferences are loading. Read the cached platform
+  // capabilities on return so the recording controls don't disappear for a frame.
+  useLayoutEffect(() => {
+    const track = modeTrackRef.current;
+    if (!track) return;
+    const measure = () => {
+      const active = activeMode ? modeButtonsRef.current.get(activeMode) : undefined;
+      if (!active) return;
+      const next = { left: active.offsetLeft, width: active.offsetWidth };
+      setModeThumb((current) =>
+        current?.left === next.left && current.width === next.width ? current : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [activeMode, showDesktopHotkey]);
+
   if (!prefs || !capability) {
     return (
       <Card>
@@ -151,7 +177,6 @@ export function RecordingInputSection() {
   }
 
   const isAndroid = platformCaps?.platform === 'android';
-  const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
   const effectivePasteShortcut =
@@ -193,39 +218,6 @@ export function RecordingInputSection() {
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
     savePrefs({ ...prefs, autoUpdateCheck });
 
-  // Sliding thumb of the horizontal segmented control for the recording mode
-  // (hold-to-talk / auto, etc.): follows the selected item, and the left/width transition
-  // is the switch animation. The button's offsetParent is the track (position:relative),
-  // and offsetLeft shares the containing block origin of the absolutely positioned thumb
-  // (the track's padding edge), so assign directly; useLayoutEffect positions before
-  // paint, so no first-frame flash.
-  // The dependency list must include showDesktopHotkey: prefs and platformCaps load
-  // asynchronously, so on first entry there can be a timing where activeMode is set but
-  // the buttons aren't mounted yet (prefs before caps) and the effect returns early; only
-  // after the buttons mount does this effect run again — without this dependency the thumb
-  // would never be positioned (user report: the selected recording mode wasn't shown on
-  // first visit to settings).
-  const modeTrackRef = useRef<HTMLDivElement | null>(null);
-  const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
-  const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
-  const activeMode = prefs?.hotkey.mode;
-  useLayoutEffect(() => {
-    const track = modeTrackRef.current;
-    if (!track) return;
-    const measure = () => {
-      const active = activeMode ? modeButtonsRef.current.get(activeMode) : undefined;
-      if (!active) return;
-      setModeThumb({ left: active.offsetLeft, width: active.offsetWidth });
-    };
-    measure();
-    // Language switches (button text reflow) and window resizes both change button sizes;
-    // the ResizeObserver re-measures as a safety net so the thumb never stays at a stale
-    // position (pr_agent #912 feedback).
-    const observer = new ResizeObserver(measure);
-    observer.observe(track);
-    return () => observer.disconnect();
-  }, [activeMode, showDesktopHotkey]);
-
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
     ['hold', t('settings.recording.modeHold')],
@@ -258,7 +250,12 @@ export function RecordingInputSection() {
             }}
           >
             <div
-              style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-blue)', marginBottom: 4 }}
+              style={{
+                fontSize: 12.5,
+                fontWeight: 'var(--ol-font-weight-semibold)',
+                color: 'var(--ol-blue)',
+                marginBottom: 4,
+              }}
             >
               {t('settings.recording.migrationNoticeTitle')}
             </div>
@@ -275,11 +272,11 @@ export function RecordingInputSection() {
             <ShortcutRecorder
               value={prefs.dictationHotkey}
               sideSpecificModifiers
-              allowMacDictationKey={os === 'mac'}
               allowMouseButtons={os === 'win'}
-              // 录音快捷键是核心热键，Rust 端不接受 null，不可停用——置灰并提示。
-              disableDisabled
-              disableHint={t('settings.recording.comboDisableHint')}
+              onDisable={async () => {
+                await setDictationHotkey(null);
+                await refresh();
+              }}
               onSave={async (binding) => {
                 await setDictationHotkey(binding);
                 // setDictationHotkey has already persisted and broadcast the preference
@@ -312,13 +309,14 @@ export function RecordingInputSection() {
                     position: 'absolute',
                     top: 2,
                     bottom: 2,
-                    left: modeThumb.left,
-                    width: modeThumb.width,
+                    left: 0,
+                    width: 100,
+                    transformOrigin: 'left center',
+                    transform: `translate3d(${modeThumb.left}px, 0, 0) scaleX(${modeThumb.width / 100})`,
                     borderRadius: 6,
                     background: 'var(--ol-segmented-active-bg)',
                     boxShadow: 'var(--ol-segmented-active-shadow)',
-                    transition:
-                      'left 0.18s var(--ol-motion-soft), width 0.18s var(--ol-motion-soft)',
+                    transition: 'transform 0.18s var(--ol-motion-soft)',
                     pointerEvents: 'none',
                   }}
                 />
@@ -333,7 +331,7 @@ export function RecordingInputSection() {
                   style={{
                     padding: '5px 14px',
                     fontSize: 12,
-                    fontWeight: 500,
+                    fontWeight: 'var(--ol-font-weight-medium)',
                     border: 0,
                     borderRadius: 6,
                     fontFamily: 'inherit',
@@ -449,10 +447,7 @@ export function RecordingInputSection() {
             label={t('settings.recording.audioEnhancementLabel')}
             desc={t('settings.recording.audioEnhancementDesc')}
           >
-            <Toggle
-              on={prefs.audioEnhancementEnabled}
-              onToggle={onAudioEnhancementChange}
-            />
+            <Toggle on={prefs.audioEnhancementEnabled} onToggle={onAudioEnhancementChange} />
           </SettingRow>
         )}
         {!isAndroid && (
@@ -547,7 +542,7 @@ export function RecordingInputSection() {
               style={{
                 padding: '5px 12px',
                 fontSize: 12,
-                fontWeight: 500,
+                fontWeight: 'var(--ol-font-weight-medium)',
                 fontFamily: 'inherit',
                 border: '0.5px solid var(--ol-line-strong)',
                 borderRadius: 8,

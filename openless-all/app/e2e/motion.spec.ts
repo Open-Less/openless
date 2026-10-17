@@ -12,70 +12,116 @@ test.afterEach(async ({ page }) => {
   expect(errors.get(page)).toEqual([]);
 });
 
-test('settings entrance paints its starting pose and progresses over time', async ({ page }) => {
-  await page.evaluate(() => {
-    const probe = window as Window & {
-      settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
-      settingsEntranceComplete: boolean;
+test('settings entrance exposes its starting pose, interpolates and releases its layer', async ({
+  page,
+}) => {
+  type Frame = { opacity: number; y: number; scale: number };
+  type ProbeWindow = Window & {
+    settingsEntranceProbe: {
+      entries: {
+        element: HTMLElement;
+        animation: Animation;
+        initial: Frame;
+        completed: boolean;
+        cancelled: boolean;
+      }[];
+      restore: () => void;
     };
-    probe.settingsEntranceFrames = [];
-    probe.settingsEntranceComplete = false;
-    const observer = new MutationObserver(() => {
-      const panel = document.querySelector<HTMLElement>('.ol-settings-surface');
-      if (!panel) return;
-      observer.disconnect();
-      const deadline = performance.now() + 15_000;
-      const sample = () => {
-        const style = getComputedStyle(panel);
+  };
+  await page.evaluate(() => {
+    const original = Element.prototype.animate;
+    const probe: ProbeWindow['settingsEntranceProbe'] = {
+      entries: [],
+      restore: () => {
+        Element.prototype.animate = original;
+      },
+    };
+    (window as ProbeWindow).settingsEntranceProbe = probe;
+    // Capture creation, not a later DOM scan that may miss a short-lived effect.
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = original.call(this, keyframes, options);
+      if (this instanceof HTMLElement && this.matches('.ol-settings-workspace')) {
+        const style = getComputedStyle(this);
         const transform = new DOMMatrixReadOnly(style.transform);
-        probe.settingsEntranceFrames.push({
-          opacity: Number(style.opacity),
-          y: transform.m42,
-          scale: transform.m11,
-        });
-        if (
-          Number(style.opacity) === 1 &&
-          !panel.getAnimations().some((animation) => animation.id === 'ol-surface-enter')
-        ) {
-          probe.settingsEntranceComplete = true;
-          return;
-        }
-        // Sample through the delayed start and completion without requiring a fixed frame rate.
-        if (performance.now() < deadline) window.setTimeout(sample, 16);
-      };
-      requestAnimationFrame(sample);
-    });
-    observer.observe(document.body, { subtree: true, childList: true });
+        const entry = {
+          element: this,
+          animation,
+          initial: { opacity: Number(style.opacity), y: transform.m42, scale: transform.m11 },
+          completed: false,
+          cancelled: false,
+        };
+        probe.entries.push(entry);
+        void animation.finished.then(
+          () => {
+            entry.completed = true;
+          },
+          () => {
+            entry.cancelled = true;
+          },
+        );
+      }
+      return animation;
+    };
   });
-  await page.getByRole('button', { name: '设置', exact: true }).press('Enter');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  // Let the application's own clock and finished promise complete untouched.
   await expect
     .poll(
       () =>
-        page.evaluate(
-          () => (window as Window & { settingsEntranceComplete: boolean }).settingsEntranceComplete,
-        ),
+        page.evaluate(() => {
+          const entry = (window as ProbeWindow).settingsEntranceProbe.entries.at(-1);
+          return entry
+            ? {
+                completed: entry.completed,
+                cancelled: entry.cancelled,
+                playState: entry.animation.playState,
+                currentTime: entry.animation.currentTime,
+              }
+            : { completed: false, missing: true };
+        }),
       { timeout: 15_000 },
     )
-    .toBe(true);
-  const frames = await page.evaluate(
-    () =>
-      (
-        window as Window & {
-          settingsEntranceFrames: { opacity: number; y: number; scale: number }[];
-        }
-      ).settingsEntranceFrames,
-  );
-  expect(frames[0].opacity).toBeLessThan(0.1);
-  expect(frames[0].y).toBeGreaterThan(16);
-  expect(frames[0].scale).toBeLessThan(0.97);
-  expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
-  expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
+    .toMatchObject({ completed: true });
   await expect(dialog).toHaveCSS('opacity', '1');
   await expect(dialog).toHaveCSS('transform', 'none');
   await expect
     .poll(() => dialog.evaluate((element) => (element as HTMLElement).style.willChange))
     .toBe('');
+  const { initial, frames } = await page.evaluate(async () => {
+    const probe = (window as ProbeWindow).settingsEntranceProbe;
+    probe.restore();
+    const entry = probe.entries.at(-1)!;
+    const effect = entry.animation.effect as KeyframeEffect;
+    // Scrub a separate copy only after the real entrance has finished. Rewinding
+    // the app's live animation changes its finished-promise lifecycle in WebKit.
+    const copy = new Animation(
+      new KeyframeEffect(entry.element, effect.getKeyframes(), effect.getTiming()),
+      document.timeline,
+    );
+    copy.pause();
+    try {
+      await copy.ready;
+      const duration = Number(effect.getTiming().duration);
+      const frames = [0, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95].map((fraction) => {
+        copy.currentTime = duration * fraction;
+        const style = getComputedStyle(entry.element);
+        const transform = new DOMMatrixReadOnly(style.transform);
+        return { opacity: Number(style.opacity), y: transform.m42, scale: transform.m11 };
+      });
+      return { initial: entry.initial, frames };
+    } finally {
+      copy.cancel();
+    }
+  });
+  expect(initial.opacity).toBeLessThan(0.1);
+  // A full-window settings destination fades; scaling its text caused raster flicker.
+  expect(initial.y).toBe(0);
+  expect(initial.scale).toBe(1);
+  expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
+  expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
+  await expect(dialog).toHaveCSS('opacity', '1');
+  await expect(dialog).toHaveCSS('transform', 'none');
 });
 
 test('rapid return to the current page cannot leave it transparent or inert', async ({ page }) => {
@@ -100,7 +146,7 @@ test('closing during entry preserves the painted opacity and releases the dialog
 }) => {
   await page.evaluate(() => {
     const observer = new MutationObserver(() => {
-      const panel = document.querySelector<HTMLElement>('.ol-settings-surface');
+      const panel = document.querySelector<HTMLElement>('.ol-settings-workspace');
       const animation = panel?.getAnimations().find((entry) => entry.id === 'ol-surface-enter');
       if (panel && animation && !panel.dataset.testEntryPending) {
         panel.dataset.testEntryPending = 'true';
@@ -130,11 +176,12 @@ test('closing during entry preserves the painted opacity and releases the dialog
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await expect(dialog).toHaveAttribute('data-test-entry-opacity', /.+/);
-  const before = Number(await dialog.getAttribute('data-test-entry-opacity'));
+  const workspace = page.locator('.ol-settings-workspace');
+  await expect(workspace).toHaveAttribute('data-test-entry-opacity', /.+/);
+  const before = Number(await workspace.getAttribute('data-test-entry-opacity'));
   expect(before).toBeGreaterThan(0);
   expect(before).toBeLessThan(1);
-  await dialog.getByRole('button', { name: '关闭', exact: true }).press('Enter');
+  await dialog.getByRole('button', { name: '返回应用', exact: true }).click();
   await expect(page.locator('body')).toHaveAttribute('data-test-exit-opacity', /.+/);
   const from = Number(await page.locator('body').getAttribute('data-test-exit-opacity'));
   expect(Math.abs(from - before)).toBeLessThan(0.001);
@@ -148,9 +195,9 @@ test('reduced motion keeps model gates and removes the closing delay', async ({ 
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
   await expect(dialog.getByRole('button', { name: /^多模态模型/ })).toBeDisabled();
-  await dialog.getByRole('button', { name: '本地模型', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '本地模型', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
-  for (const label of ['语言模型', '语音识别', '本地模型']) {
+  for (const label of ['语言模型', '语音识别']) {
     await expect(dialog.getByRole('button', { name: new RegExp(`^${label}。`) })).toBeDisabled();
   }
   await expect(dialog.getByRole('button', { name: '多模态模型', exact: true })).toHaveAttribute(
@@ -165,8 +212,9 @@ test('reduced motion keeps model gates and removes the closing delay', async ({ 
           .filter((animation) => animation.id.startsWith('ol-surface')).length,
     ),
   ).toBe(0);
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-  expect(await dialog.count()).toBe(0);
+  await dialog.getByRole('button', { name: '返回应用', exact: true }).click();
+  // React commits the effect-driven unmount asynchronously, even without an exit timer.
+  await expect(dialog).toHaveCount(0, { timeout: 100 });
 });
 
 test('mobile drawers retain their exit and can be opened again', async ({ page }) => {
@@ -189,7 +237,7 @@ test('mobile drawers retain their exit and can be opened again', async ({ page }
       attributeFilter: ['style'],
     });
   });
-  await drawer.getByRole('button', { name: '关闭', exact: true }).press('Enter');
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(page.locator('body')).toHaveAttribute('data-test-drawer-exit', 'true');
   await expect(drawer).toHaveCount(0);
   await more.click();
@@ -254,7 +302,7 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
       return {
         verticalOverflow: scroll.scrollHeight - scroll.clientHeight,
         horizontalOverflow: navigation.scrollWidth - navigation.clientWidth,
-        entries: navigation.querySelectorAll(':scope > button').length,
+        entries: navigation.querySelectorAll('button').length,
         badgesBelowLabels: [...navigation.querySelectorAll('.ol-service-inactive-tag')].every(
           (badge) =>
             badge.getBoundingClientRect().top >=
@@ -307,9 +355,9 @@ test('selection highlights move and settle correctly after a rapid mode return',
       return animation;
     };
   });
-  await dialog.getByRole('button', { name: '多模态模式', exact: true }).press('Enter');
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   await expect(page.locator('body')).toHaveAttribute('data-selection-moved', 'true');
-  await dialog.getByRole('button', { name: '传统模式', exact: true }).press('Enter');
+  await dialog.getByRole('button', { name: '传统模式', exact: true }).click();
   for (const selector of ['.ol-service-pipeline-indicator', '.ol-service-view-indicator']) {
     const indicator = dialog.locator(selector);
     await expect(indicator).toHaveAttribute('data-test-selection-from', /.+/);

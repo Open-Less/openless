@@ -1,7 +1,12 @@
 import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
+import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
+import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
+
 export const zhTW: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '語音編輯工作階段',
     description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
@@ -1194,6 +1199,13 @@ export const zhTW: typeof zhCN = {
     cancelledTitle: '已取消錄音',
   },
   settings: {
+    testingFeatures: {
+      title: '正在測試中的功能',
+      enable: '啟用正在測試中的功能',
+      description:
+        '開啟後顯示 Less Computer 和 Claude 控制台，可在支援的平台設定和使用。關閉會停止執行並隱藏入口，保留既有設定。僅在目前裝置生效。',
+      unavailable: '目前平台暫無可用的測試功能。',
+    },
     selectionWorkspace: {
       title: '選區助手',
       hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
@@ -1636,6 +1648,9 @@ export const zhTW: typeof zhCN = {
         asrSherpaOnnxLocal: '本地 sherpa-onnx（實驗性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
         asrLocalWhisper: '本地 Whisper（批次解碼）',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: '本地 Qwen3-ASR',
         asrLocalQwen3Mlx: '本地 Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
@@ -2235,7 +2250,11 @@ export const zhTW: typeof zhCN = {
     noResults: '找不到相關分類。試試「麥克風」「模型」或「主題」。',
     autoSaveHint: '修改後自動儲存',
     backToAdvanced: '返回實驗與擴充',
+    backToTestingFeatures: '返回正在測試中的功能',
     advancedPages: {
+      customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
+      localModels: experimentalAsr.description,
+      testingFeatures: '依需要開啟尚在測試中的功能。',
       vocabularyLearning: '從聽寫後的手動改詞中學習，設定觀察時長、確認時間和詞長。',
       lessComputer: '選擇 Agent，設定模型、權限與工作目錄。',
       claudeConsole: '偵測 Claude Code，並查看測試工作的執行輸出。',
@@ -2245,11 +2264,11 @@ export const zhTW: typeof zhCN = {
     descriptions: {
       general: '選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。',
       inputMethod: '設定 Android 懸浮窗與輸入法，快速開始手機端輸入。',
-      shortcuts: '設定各功能的觸發方式，以及選取文字後的操作。',
+      shortcuts: '搜尋、分類與自訂各功能的快捷鍵。',
       services: '選擇語音辨識與文字處理服務，管理管道、本機模型和網路連線。',
       appearance: '調整主題、頁面排版和介面語言，讓閱讀更舒服。',
       privacy: '檢查系統權限與連線狀態，管理歷史、錄音和本機資料。',
-      advanced: '按需設定 Less Computer 與除錯功能。',
+      advanced: '設定測試功能、手改學詞與除錯工具。',
       about: '查看目前版本、更新管道與自動更新設定。',
     },
     searchKeywords: {
@@ -2264,7 +2283,7 @@ export const zhTW: typeof zhCN = {
     },
     sections: {
       appearance: '外觀與語言',
-      shortcuts: '快捷鍵與選取文字',
+      shortcuts: '快捷鍵',
       general: '通用',
       inputMethod: '輸入方式',
       services: '服務',
@@ -2389,7 +2408,10 @@ export const zhTW: typeof zhCN = {
     foundryError: 'Foundry 狀態',
     foundrySetDefault: '設為預設 / 啟用 Windows 本地 ASR',
     foundryEnabling: '正在啟用…',
-    foundryPrepare: '準備 / 下載 / 載入',
+    foundryPrepare: '下載 / 驗證模型',
+    runtimeDownloadRestart:
+      '下載操作使用了本機執行元件。請重新啟動 OpenLess 後再啟用；模型不會自動啟用。現在重新啟動？',
+    restartNow: '立即重新啟動',
     foundryPreparing: '正在準備…',
     foundryReleasing: '正在釋放…',
     foundryRetryPrepare: '繼續準備 / 重試',

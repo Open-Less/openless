@@ -29,6 +29,7 @@ import {
   deleteSherpaOnnxAsrModel,
   deleteLocalAsrModel,
   downloadLocalAsrModel,
+  downloadFoundryLocalAsrModel,
   downloadSherpaOnnxAsrModel,
   fetchLocalAsrHfCard,
   fetchLocalAsrRemoteInfo,
@@ -43,6 +44,7 @@ import {
   getSherpaOnnxAsrStatus,
   listLocalAsrModels,
   preloadLocalAsr,
+  prepareSherpaOnnxAsr,
   releaseFoundryLocalAsr,
   releaseLocalAsrEngine,
   releaseSherpaOnnxAsr,
@@ -160,7 +162,7 @@ function LocalAsrGroupTitle({ children }: { children: ReactNode }) {
     <div
       style={{
         fontSize: 12.5,
-        fontWeight: 600,
+        fontWeight: 'var(--ol-font-weight-semibold)',
         color: 'var(--ol-ink-3)',
         letterSpacing: '0.02em',
         margin: '18px 0 8px',
@@ -376,6 +378,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       const message = err instanceof Error ? err.message : String(err);
       setFoundryStatus({
         providerId: 'foundry-local-whisper',
+        restartRequired: false,
         available: false,
         runtimeReady: false,
         runtimeSource: selectedFoundryRuntimeSource,
@@ -976,6 +979,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const handleEnableFoundry = async (aliasOverride?: FoundryLocalAsrModelAlias) => {
     if (!foundryAvailable) return;
+    if (foundryStatus?.restartRequired) {
+      setError(t('localAsr.runtimeDownloadRestart'));
+      return;
+    }
     const alias = aliasOverride ?? selectedFoundryAlias;
     setFoundryBusy('enable');
     try {
@@ -1004,10 +1011,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     });
     try {
       setError(null);
-      await activateLocalAsr('foundry', alias, 'foundry-local-whisper');
-      foundrySelectionDirty.current = false;
+      await downloadFoundryLocalAsrModel(alias);
       await refreshFoundryStatus();
       await refreshFoundryCatalog();
+      if (window.confirm(t('localAsr.runtimeDownloadRestart'))) {
+        await restartApp();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       await refreshFoundryStatus();
@@ -1016,12 +1025,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       setFoundryBusy(null);
       setFoundryCancelRequested(false);
     }
-  };
-
-  // Sidebar "download" action: enable first (switch provider + write model), then prepare/download/load in order.
-  // Atomic activation already covers prepare/preload; sidebar actions must not chain a second settings write.
-  const handleEnableAndPrepareFoundry = async (alias: FoundryLocalAsrModelAlias) => {
-    await handleEnableFoundry(alias);
   };
 
   const handleCancelFoundryPrepare = async () => {
@@ -1159,8 +1162,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     });
     try {
       setError(null);
-      await activateSherpaProvider(selectedSherpaAlias);
-      sherpaSelectionDirty.current = false;
+      await prepareSherpaOnnxAsr(selectedSherpaAlias);
       await refreshSherpaStatus();
       await refreshSherpaCatalog();
     } catch (e) {
@@ -1272,7 +1274,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         modelAlias,
         effectiveSherpaMirror(settings?.mirror ?? 'huggingface'),
       );
-      await activateSherpaProvider(modelAlias);
+      await refreshSherpaCatalog();
+      await refreshSherpaStatus();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
@@ -1859,7 +1862,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       const alias = entry.id as FoundryLocalAsrModelAlias;
       if (action === 'download') {
         setSelectedFoundryAlias(alias);
-        void handleEnableAndPrepareFoundry(alias);
+        void handlePrepareFoundry(alias);
       } else if (action === 'delete') {
         setSelectedFoundryAlias(alias);
         void handleDeleteFoundry(alias);
@@ -2095,7 +2098,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     <div
                       style={{
                         fontSize: 12,
-                        fontWeight: 600,
+                        fontWeight: 'var(--ol-font-weight-semibold)',
                         color: 'var(--ol-ink-4)',
                         marginBottom: 4,
                       }}
@@ -2157,7 +2160,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                         <div
                           style={{
                             fontSize: 12,
-                            fontWeight: 600,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
                             color: 'var(--ol-ink-4)',
                             marginBottom: 4,
                           }}
@@ -2202,7 +2205,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                         <div
                           style={{
                             fontSize: 12,
-                            fontWeight: 600,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
                             color: 'var(--ol-ink-4)',
                             marginBottom: 4,
                           }}
@@ -2678,6 +2681,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
               )}
             </div>
 
+            {foundryStatus?.restartRequired && (
+              <div role="status" className="ol-model-error">
+                {t('localAsr.runtimeDownloadRestart')}
+                <Btn size="sm" onClick={() => void restartApp()}>
+                  {t('localAsr.restartNow')}
+                </Btn>
+              </div>
+            )}
+
             {(foundryBusy === 'prepare' || foundryProgress) && (
               <FoundryPrepareProgressBlock
                 progress={foundryProgress}
@@ -2696,7 +2708,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
               <Btn
                 variant="blue"
                 size="sm"
-                disabled={foundryBusy !== null || !foundryAvailable}
+                disabled={
+                  foundryBusy !== null ||
+                  !foundryAvailable ||
+                  foundryStatus?.restartRequired ||
+                  !selectedFoundryCatalog?.cached
+                }
                 onClick={() => void handleEnableFoundry()}
               >
                 {foundryBusy === 'enable'

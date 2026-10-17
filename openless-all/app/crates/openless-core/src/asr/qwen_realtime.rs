@@ -304,11 +304,17 @@ impl Qwen3RealtimeASR {
             self.cancel();
             return Err(error);
         }
-        if let Some(error) = self.state.lock().session_start_error.clone() {
+        self.finish_session_start()
+    }
+
+    fn finish_session_start(&self) -> Result<(), Qwen3ASRError> {
+        // Rust 2021 keeps an if-let scrutinee's temporary guard through its
+        // body. Release it before cancel() acquires the same non-reentrant lock.
+        let start_error = self.state.lock().session_start_error.clone();
+        if let Some(error) = start_error {
             self.cancel();
             return Err(Qwen3ASRError::TaskFailed(error));
         }
-
         Ok(())
     }
 
@@ -732,6 +738,25 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), Qwen3ASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_start_failure_cancels_without_reentering_the_state_lock() {
+        let asr = create_test_asr();
+        asr.state.lock().session_start_error = Some("startup rejected".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = asr.finish_session_start();
+            assert!(asr.state.lock().session_finished);
+            tx.send(result).unwrap();
+        });
+        let result = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("provider startup failure must not deadlock cleanup");
+        assert!(
+            matches!(result, Err(Qwen3ASRError::TaskFailed(message)) if message == "startup rejected")
+        );
+        worker.join().unwrap();
+    }
 
     #[test]
     fn transcript_snapshots_keep_prefix_and_recognition_corrections() {

@@ -137,7 +137,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
         color,
         fontFamily: 'var(--ol-font-sans)',
         fontSize: 13,
-        fontWeight: 600,
+        fontWeight: 'var(--ol-font-weight-semibold)',
         lineHeight: 1.25,
         letterSpacing: '0.01em',
         pointerEvents: 'none',
@@ -274,7 +274,7 @@ function CenterText({ os, kind, text, color = 'var(--ol-capsule-center-ink)' }: 
     <span
       style={{
         fontSize: 11,
-        fontWeight: 500,
+        fontWeight: 'var(--ol-font-weight-medium)',
         color,
         width: '100%',
         maxWidth: metrics.textWidth,
@@ -405,7 +405,7 @@ function ClassicPill({
           <span
             style={{
               fontSize: 11,
-              fontWeight: 600,
+              fontWeight: 'var(--ol-font-weight-semibold)',
               letterSpacing: 0.1,
               paddingBlock: 2,
               color: 'var(--ol-ink-2)',
@@ -1143,7 +1143,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   alignItems: 'center',
                   gap: 5,
                   fontSize: 10.5,
-                  fontWeight: 600,
+                  fontWeight: 'var(--ol-font-weight-semibold)',
                   color: 'var(--ol-capsule-center-ink)',
                   background: 'var(--ol-capsule-badge-bg)',
                   border: '1px solid var(--ol-capsule-pill-border)',

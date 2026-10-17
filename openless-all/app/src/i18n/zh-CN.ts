@@ -1,7 +1,12 @@
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
 
+import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
+import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
+
 export const zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '语音编辑会话',
     description: '口述草稿或读取目标文本，再用多轮语音指令修改，确认后写回输入框。',
@@ -1193,6 +1198,13 @@ export const zhCN = {
     cancelledTitle: '已取消录音',
   },
   settings: {
+    testingFeatures: {
+      title: '正在测试中的功能',
+      enable: '启用正在测试中的功能',
+      description:
+        '开启后显示 Less Computer 和 Claude 控制台，可在支持的平台配置和使用。关闭会停止运行并隐藏入口，保留已有配置。仅在当前设备生效。',
+      unavailable: '当前平台暂无可用的测试功能。',
+    },
     selectionWorkspace: {
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
@@ -1635,10 +1647,13 @@ export const zhCN = {
         asrSherpaOnnxLocal: '本地 sherpa-onnx（实验性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
         asrLocalWhisper: '本地 Whisper（批量解码）',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: '本地 Qwen3-ASR',
         asrLocalQwen3Mlx: '本地 Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
-        asrAppleSpeech: 'Apple 语音（macOS）',
+        asrAppleSpeech: '苹果识别（macOS）',
         omniOpenai: 'OpenAI（支持音频）',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里云百炼 Omni',
@@ -2235,7 +2250,11 @@ export const zhCN = {
     noResults: '没有找到相关分类。试试“麦克风”“模型”或“主题”。',
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
+    backToTestingFeatures: '返回正在测试中的功能',
     advancedPages: {
+      customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
+      localModels: experimentalAsr.description,
+      testingFeatures: '按需开启尚在测试中的功能。',
       vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
@@ -2245,11 +2264,11 @@ export const zhCN = {
     descriptions: {
       general: '选择麦克风、设置录音方式与文字输入，也可连接手机输入。',
       inputMethod: '配置 Android 悬浮窗和输入法，快速开始手机端输入。',
-      shortcuts: '设置各功能的触发方式，以及选中文字后的操作。',
+      shortcuts: '搜索、分类与自定义各功能的快捷键。',
       services: '选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
       privacy: '检查系统权限与连接状态，管理历史、录音和本地数据。',
-      advanced: '按需配置 Less Computer 与调试功能。',
+      advanced: '配置测试功能、手改学词与调试工具。',
       about: '查看当前版本、更新渠道与自动更新设置。',
     },
     searchKeywords: {
@@ -2265,7 +2284,7 @@ export const zhCN = {
 
     sections: {
       appearance: '外观与语言',
-      shortcuts: '快捷键与选区',
+      shortcuts: '快捷键',
       general: '录音与输入',
       inputMethod: '输入方式',
       services: 'AI 服务与模型',
@@ -2390,7 +2409,10 @@ export const zhCN = {
     foundryError: 'Foundry 状态',
     foundrySetDefault: '设为默认 / 启用 Windows 本地 ASR',
     foundryEnabling: '正在启用…',
-    foundryPrepare: '准备 / 下载 / 加载',
+    foundryPrepare: '下载 / 校验模型',
+    runtimeDownloadRestart:
+      '下载操作使用了本地运行组件。请重启 OpenLess 后再启用；模型不会自动启用。现在重启？',
+    restartNow: '现在重启',
     foundryPreparing: '正在准备…',
     foundryReleasing: '正在释放…',
     foundryRetryPrepare: '继续准备 / 重试',

@@ -97,6 +97,7 @@ export let mockSettings: UserPreferences = {
   },
   openAppHotkey: { primary: 'O', modifiers: defaultAppShortcutModifiers() },
   stylePackHotkeys: [],
+  testingFeaturesEnabled: false,
   codingAgentEnabled: false,
   codingAgentProvider: 'claude-code-cli',
   codingAgentModel: null,

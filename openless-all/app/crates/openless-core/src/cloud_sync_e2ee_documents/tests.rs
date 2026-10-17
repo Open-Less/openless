@@ -119,6 +119,27 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn testing_features_opt_in_is_never_exported_or_accepted_from_another_device() {
+    let mut data = snapshot();
+    data.preferences = SecretJson::new(json!({"testingFeaturesEnabled": true}));
+    let exported = export_snapshot(data).unwrap();
+    assert!(!serde_json::to_string(exported.documents.documents())
+        .unwrap()
+        .contains("testingFeaturesEnabled"));
+    let mut invalid = sample().documents().clone();
+    invalid.documents.push(LogicalDocument {
+        id: "testingFeaturesEnabled".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!(true),
+    });
+    assert_eq!(
+        validate_sync_documents(invalid, Revision::new(3)).unwrap_err(),
+        DocumentError::ExcludedField
+    );
+}
+
+#[test]
 fn controlled_export_keeps_real_service_keys_but_excludes_local_secrets_and_grants() {
     let mut data = channel_snapshot();
     data.preferences = SecretJson::new(

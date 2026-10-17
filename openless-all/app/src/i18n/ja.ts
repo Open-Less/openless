@@ -4,8 +4,13 @@ import { en } from './en';
 // Japanese (Beta) — AI machine translation based; native-speaker review recommended.
 // Structure mirrors zh-CN.ts. When adding new keys, update ja.ts / ko.ts as well
 // (keys not updated fall back to English via ...en).
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const ja: typeof zhCN = {
   ...en,
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '音声編集セッション',
     description:
@@ -1232,6 +1237,13 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
+    testingFeatures: {
+      title: 'テスト中の機能',
+      enable: 'テスト中の機能を有効にする',
+      description:
+        '対応するプラットフォームで Less Computer と Claude コンソールを表示し、設定・使用できます。オフにすると実行中のタスクを停止して項目を非表示にしますが、設定は保持されます。このデバイスのみに適用されます。',
+      unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
+    },
     selectionWorkspace: {
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
@@ -1478,7 +1490,8 @@ export const ja: typeof zhCN = {
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       audioEnhancementLabel: '軽量マイク拡張',
-      audioEnhancementDesc: 'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+      audioEnhancementDesc:
+        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1708,6 +1721,9 @@ export const ja: typeof zhCN = {
         asrSherpaOnnxLocal: 'ローカル sherpa-onnx（実験的）',
         asrFoundryLocalWhisper: 'ローカル Whisper（Foundry Local）',
         asrLocalWhisper: 'ローカル Whisper（バッチ）',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'ローカル Qwen3-ASR',
         asrLocalQwen3Mlx: 'ローカル Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: 'ローカル Qwen3-ASR（C / CPU）',
@@ -2339,7 +2355,11 @@ export const ja: typeof zhCN = {
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
+    backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
+      customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'テスト中の機能を必要に応じて有効にします。',
       vocabularyLearning:
         '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
@@ -2354,7 +2374,7 @@ export const ja: typeof zhCN = {
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: '必要に応じて Less Computer とデバッグを設定します。',
+      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2503,7 +2523,10 @@ export const ja: typeof zhCN = {
     foundryError: 'Foundry 状態',
     foundrySetDefault: '既定に設定 / Windows ローカル ASR を有効化',
     foundryEnabling: '有効化中…',
-    foundryPrepare: '準備 / ダウンロード / 読み込み',
+    foundryPrepare: 'モデルをダウンロード / 検証',
+    runtimeDownloadRestart:
+      'ダウンロードでネイティブ実行環境を使用しました。有効にする前に OpenLess を再起動してください。モデルは自動で有効になりません。今すぐ再起動しますか？',
+    restartNow: '今すぐ再起動',
     foundryPreparing: '準備中…',
     foundryReleasing: '解放中…',
     foundryRetryPrepare: '準備を続行 / 再試行',

@@ -1182,10 +1182,7 @@ impl Recorder {
             return;
         };
         let (done_tx, done_rx) = channel();
-        if sender
-            .send(AudioProcessingMessage::Flush(done_tx))
-            .is_ok()
-        {
+        if sender.send(AudioProcessingMessage::Flush(done_tx)).is_ok() {
             let _ = done_rx.recv();
         }
     }
@@ -1513,6 +1510,7 @@ fn run_audio_thread(
     *state.processor_sender.lock() = None;
     drop(frame_tx);
     processor.finish();
+    log::info!("[recorder] audio processor stopped (accepted frames drained)");
 
     // Wait for the watchdog thread to exit
     if let Some(handle) = watchdog_handle {
@@ -1848,10 +1846,12 @@ struct RawAudioFrame {
 enum AudioProcessingMessage {
     Frame(RawAudioFrame),
     Flush(Sender<()>),
+    Shutdown,
 }
 
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
+    shutdown: SyncSender<AudioProcessingMessage>,
 }
 
 impl AudioProcessingWorker {
@@ -1887,6 +1887,7 @@ impl AudioProcessingWorker {
                         AudioProcessingMessage::Flush(done) => {
                             let _ = done.send(());
                         }
+                        AudioProcessingMessage::Shutdown => break,
                     }
                 }
             })
@@ -1896,12 +1897,18 @@ impl AudioProcessingWorker {
         Ok((
             Self {
                 join_handle: Some(join_handle),
+                shutdown: sender.clone(),
             },
             sender,
         ))
     }
 
     fn finish(mut self) {
+        // CoreAudio may retain the callback (and its sender) after Stream::drop,
+        // notably for explicitly selected devices in CPAL 0.15. Do not wait for
+        // every producer to be destroyed. Native capture is paused before this
+        // FIFO barrier, so all accepted frames are processed before shutdown.
+        let _ = self.shutdown.send(AudioProcessingMessage::Shutdown);
         if let Some(handle) = self.join_handle.take() {
             if let Err(error) = handle.join() {
                 log::warn!("audio processor thread join failed: {:?}", error);
@@ -2260,6 +2267,47 @@ mod tests {
         let chunks = consumer.chunks.lock().unwrap();
         assert_eq!(chunks.len(), 1);
         assert_eq!(decode_i16_le(&chunks[0]), vec![12287, -12287]);
+    }
+
+    #[test]
+    fn audio_processing_shutdown_drains_frames_with_a_retained_native_sender() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: false,
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..8 {
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25, -0.25],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+        }
+        // Model CPAL's retained callback: it must not prevent stop from returning.
+        let retained_native_sender = sender.clone();
+        drop(sender);
+        let (done_tx, done_rx) = channel();
+        let stopped = thread::spawn(move || {
+            worker.finish();
+            let _ = done_tx.send(());
+        });
+        let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+        // Drop even on failure so an EOF-based implementation cannot hang the suite.
+        drop(retained_native_sender);
+        assert!(
+            result.is_ok(),
+            "stopping must not depend on callback destruction"
+        );
+        stopped.join().unwrap();
+        assert_eq!(consumer.chunks.lock().unwrap().len(), 8);
     }
 
     fn decode_i16_le(bytes: &[u8]) -> Vec<i16> {

@@ -368,6 +368,9 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             }
             // 实验与扩展的下钻页把标题换成子页标题，并在左侧给出返回箭头
             // （Tauri 的 `activeAdvancedPage` 顶栏）。
+            if vm.advanced_open == 0 && !vm.settings.testing_features {
+                vm.advanced_open = 3;
+            }
             let detail = if vm.settings_section == SettingsSection::Advanced {
                 advanced_page_title(vm, lang)
             } else {
@@ -401,7 +404,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                         stroke,
                     );
                     if response.clicked() {
-                        vm.advanced_open = usize::MAX;
+                        vm.advanced_open = if vm.advanced_open == 0 { 3 } else { usize::MAX };
                     }
                     ui.label(
                         egui::RichText::new(title)
@@ -495,6 +498,10 @@ fn advanced_page_title(vm: &FrontendViewModel, lang: Lang) -> Option<(&'static s
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         )),
+        3 => Some((
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
+        )),
         _ => None,
     }
 }
@@ -518,7 +525,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     field: ShortcutField::Dictation,
                     label: tr_l10n(lang, "settings.recording.hotkey_label"),
                     value: vm.dictation_hotkey.clone(),
-                    can_disable: false,
+                    can_disable: true,
                     hint: recording_mode_hint(lang, vm.settings.recording_mode),
                 },
             );
@@ -934,14 +941,14 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
             value: vm.dictation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: dictation_hint,
         },
         ShortcutRow {
             field: ShortcutField::Translation,
             label: tr_l10n(lang, "hotkey.translation"),
             value: vm.translation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: String::new(),
         },
         ShortcutRow {
@@ -991,6 +998,9 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             // 风格直达快捷键：Tauri 把它放在「切换到上一个风格」之后、打开 App 之前。
             style_pack_hotkey_block(ui, vm, actions);
             for row in &rows[5..] {
+                if row.field == ShortcutField::CodingAgentVoice && !vm.settings.testing_features {
+                    continue;
+                }
                 shortcut_row(ui, vm, actions, row);
             }
             // 取消本次录音：Tauri 只展示 Esc，不可编辑（Windows/Linux 胶囊无确认键）。
@@ -1042,7 +1052,7 @@ pub(super) struct ShortcutRow {
     label: &'static str,
     /// 已格式化的键帽文本（`Ctrl+Shift+;`），空串 = 未设置。
     value: String,
-    /// 核心热键（录音）不可停用，Tauri 用 `comboDisableHint` 说明原因。
+    /// 已配置的快捷键均可清空；尚未保存的草稿不提供停用操作。
     can_disable: bool,
     /// 行下方的补充说明（录音行显示当前录音方式后缀）。
     hint: String,
@@ -2629,7 +2639,39 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
+        (
+            3,
+            SettingsIcon::Sparkle,
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
+        ),
     ];
+    // Beta 开关：Tauri 用 `ExperimentalSectionTitle`（标题 + Beta 徽章）单独成页。
+    if vm.advanced_open == 3 {
+        experimental_card(ui, rows[2].2, "Beta", "", |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.testing_features.enable"),
+                tr_l10n(lang, "settings.testing_features.description"),
+                vm.settings.testing_features,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::TestingFeatures,
+                    ))
+                },
+            );
+            if vm.settings.testing_features && drill_row(ui, rows[0].1, rows[0].2, rows[0].3) {
+                vm.advanced_open = 0;
+            }
+        });
+        return;
+    }
+    // 测试功能（Less Computer 等）在 Tauri 里挂在 Beta 页下：开关没开时
+    // 既不在根列表出现，也不能停留在它的详情页。
+    if !vm.settings.testing_features && matches!(vm.advanced_open, 0) {
+        vm.advanced_open = 3;
+        return;
+    }
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| match vm.advanced_open {
             0 => {
@@ -2757,7 +2799,17 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     }
     card(ui, "", "", |ui| {
         for (id, icon, title, description) in &rows {
-            if drill_row(ui, *icon, title, description) {
+            // 测试功能页（Less Computer）只在 Beta 页里列出。
+            if *id == 0 {
+                continue;
+            }
+            // Beta 页在 Tauri 里带徽章，行标题同样标出来。
+            let title = if *id == 3 {
+                format!("{title} · Beta")
+            } else {
+                title.to_string()
+            };
+            if drill_row(ui, *icon, &title, description) {
                 vm.advanced_open = *id;
             }
         }
@@ -4564,6 +4616,51 @@ fn link_row(
 }
 
 // ── Card & row helpers ──────────────────────────────────────────────────────
+
+/// 实验性功能卡片：标题旁带一枚徽章，悬停给说明（Tauri 的
+/// `ExperimentalSectionTitle`）。多模态管线与 Beta 开关都用它。
+fn experimental_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    badge: &str,
+    hint: &str,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(theme::SURFACE)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(18, 18))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(title)
+                        .size(13.0)
+                        .strong()
+                        .color(theme::INK),
+                );
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(layout::text_width(ui, badge, 10.0) + 12.0, 16.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    badge,
+                    egui::FontId::proportional(10.0),
+                    theme::BLUE,
+                );
+                if !hint.is_empty() {
+                    let _ = response.on_hover_text(hint);
+                }
+            });
+            ui.add_space(6.0);
+            contents(ui);
+        });
+    ui.add_space(16.0);
+}
 
 /// A settings card. Tauri hides every `SectionDesc` (the only visible
 /// description is the one under the pane title), so the second argument is a

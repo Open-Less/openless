@@ -4,8 +4,13 @@ import { en } from './en';
 // 한국어 (Beta) — AI 기계 번역 기반. 원어민 검토를 권장합니다.
 // 구조는 zh-CN.ts 를 따릅니다. 새 key 를 추가할 때 ja.ts / ko.ts 도 동시에
 // 갱신해 주세요(갱신되지 않은 key 는 ...en 으로 영어로 fallback 됩니다).
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const ko: typeof zhCN = {
   ...en,
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '음성 편집 세션',
     description:
@@ -1226,6 +1231,13 @@ export const ko: typeof zhCN = {
     cancelledTitle: '녹음이 취소됨',
   },
   settings: {
+    testingFeatures: {
+      title: '테스트 중인 기능',
+      enable: '테스트 중인 기능 활성화',
+      description:
+        '지원되는 플랫폼에서 Less Computer와 Claude 콘솔을 표시하고 설정 및 사용할 수 있습니다. 끄면 실행 중인 작업을 중지하고 항목을 숨기지만 설정은 유지됩니다. 이 기기에만 적용됩니다.',
+      unavailable: '이 플랫폼에서는 아직 사용 가능한 테스트 기능이 없습니다.',
+    },
     selectionWorkspace: {
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
@@ -1466,7 +1478,8 @@ export const ko: typeof zhCN = {
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
       audioEnhancementLabel: '가벼운 마이크 향상',
-      audioEnhancementDesc: '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
+      audioEnhancementDesc:
+        '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -1696,6 +1709,9 @@ export const ko: typeof zhCN = {
         asrSherpaOnnxLocal: '로컬 sherpa-onnx(실험적)',
         asrFoundryLocalWhisper: '로컬 Whisper(Foundry Local)',
         asrLocalWhisper: '로컬 Whisper(배치)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: '로컬 Qwen3-ASR',
         asrLocalQwen3Mlx: '로컬 Qwen3-ASR(MLX / Metal)',
         asrLocalQwen3C: '로컬 Qwen3-ASR(C / CPU)',
@@ -2320,7 +2336,11 @@ export const ko: typeof zhCN = {
     noResults: '일치하는 카테고리가 없습니다. “마이크”, “모델” 또는 “테마”를 검색해 보세요.',
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
+    backToTestingFeatures: '테스트 중인 기능으로 돌아가기',
     advancedPages: {
+      customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',
+      localModels: experimentalAsr.description,
+      testingFeatures: '필요할 때 테스트 중인 기능을 활성화합니다.',
       vocabularyLearning:
         '음성 입력 후 수동 수정으로 학습하고 관찰 시간, 확인 시간, 글자 수를 설정합니다.',
       lessComputer: 'Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.',
@@ -2335,7 +2355,7 @@ export const ko: typeof zhCN = {
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '필요에 따라 Less Computer와 디버깅을 설정합니다.',
+      advanced: '테스트 기능, 어휘 학습 및 디버깅 도구를 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {
@@ -2483,7 +2503,10 @@ export const ko: typeof zhCN = {
     foundryError: 'Foundry 상태',
     foundrySetDefault: '기본값으로 설정 / Windows 로컬 ASR 활성화',
     foundryEnabling: '활성화 중…',
-    foundryPrepare: '준비 / 다운로드 / 로드',
+    foundryPrepare: '모델 다운로드 / 확인',
+    runtimeDownloadRestart:
+      '다운로드 중 네이티브 런타임을 사용했습니다. 모델을 활성화하기 전에 OpenLess를 다시 시작하세요. 모델은 자동으로 활성화되지 않습니다. 지금 다시 시작할까요?',
+    restartNow: '지금 다시 시작',
     foundryPreparing: '준비 중…',
     foundryReleasing: '해제 중…',
     foundryRetryPrepare: '준비 계속 / 다시 시도',

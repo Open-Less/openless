@@ -279,6 +279,10 @@ pub async fn less_computer_window_open(
     if window.label() != "main" {
         return Err("Less Computer can only be opened from the main window".to_string());
     }
+    coord
+        .backend()
+        .ensure_testing_features_enabled()
+        .map_err(|error| error.message)?;
     let host = coord.tauri_host();
     // Windows WebView creation deadlocks inside a synchronous IPC handler.
     tauri::async_runtime::spawn_blocking(move || host.show_less_computer())

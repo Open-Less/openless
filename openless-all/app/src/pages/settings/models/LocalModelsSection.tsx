@@ -51,7 +51,7 @@ export function LocalModelsSection() {
           style={{
             fontSize: 11,
             color: '#A04500',
-            fontWeight: 500,
+            fontWeight: 'var(--ol-font-weight-medium)',
             lineHeight: 1.4,
             textAlign: 'right',
             flexShrink: 0,

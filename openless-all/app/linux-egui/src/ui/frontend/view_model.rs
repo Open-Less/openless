@@ -511,6 +511,7 @@ pub enum SettingsField {
     RecordAudioForDebug,
     ActivityHeatmap,
     SystemProxy,
+    TestingFeatures,
     LessComputer,
     Multimodal,
 }
@@ -1152,6 +1153,7 @@ pub struct SettingsFields {
     pub selection_polish_delivery: usize,
     pub activity_heatmap: bool,
     pub system_proxy: bool,
+    pub testing_features: bool,
     pub less_computer: bool,
     /// Less Computer（Coding Agent）配置，全部直连 `coding_agent_*` 偏好。
     pub coding_agent_provider: usize,
@@ -1202,6 +1204,7 @@ impl Default for SettingsFields {
             selection_polish_delivery: 0,
             activity_heatmap: true,
             system_proxy: false,
+            testing_features: false,
             less_computer: false,
             coding_agent_provider: 0,
             coding_agent_permission: 0,

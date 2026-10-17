@@ -7,7 +7,6 @@ import {
   useContext,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -17,9 +16,13 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { useOverlayMotion } from '../../lib/motion';
+import { useSpringReorder } from '../../lib/useSpringReorder';
+import { PageSkeleton } from '../../components/ui/PageSkeleton';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { detectOS, type OS } from '../../components/WindowChrome';
 import { testLocalAsrChannel } from '../../lib/localAsr';
+import { Tooltip } from '../../components/Tooltip';
+import { isExperimentalAsrProvider, isRetiredMacAsrProvider } from '../../lib/experimentalAsr';
 import {
   createChannel,
   deleteChannel,
@@ -95,6 +98,8 @@ export function presetsFor(
   if (kind === 'llm') return descriptorPresets;
   const available = descriptorPresets;
   const visible = available.filter((p) => {
+    if (isExperimentalAsrProvider(p.id)) return false;
+    if (os === 'mac' && isRetiredMacAsrProvider(p.id)) return false;
     // 本地引擎严格按其实际支持的平台暴露；Android 不展示桌面专有实现。
     if (p.id === 'local-qwen3-mlx') return os === 'mac' && supportsQwen3Mlx;
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
@@ -177,6 +182,19 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
   return t('settings.channels.errGeneric');
 }
 
+/** Layout hit testing must include scrolling between the row and its offset parent,
+ * but exclude the row's transient FLIP transform. */
+export function channelRowViewportTop(element: HTMLElement): number {
+  const parent = element.offsetParent as HTMLElement | null;
+  if (!parent) return element.getBoundingClientRect().top;
+  let top = parent.getBoundingClientRect().top + parent.clientTop + element.offsetTop;
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    top -= ancestor.scrollTop;
+    if (ancestor === parent) break;
+  }
+  return top;
+}
+
 /** A test result older than a day is stale news; the faded look signals it may no longer hold. */
 const STALE_TEST_SECONDS = 24 * 60 * 60;
 
@@ -195,6 +213,7 @@ export function channelTestMode(
   validationProbe: string | undefined,
 ): ChannelTestMode {
   if (kind !== 'asr') return 'provider';
+  if (isExperimentalAsrProvider(providerType)) return 'unavailable';
   if (LOCAL_MODEL_CHANNEL_PROVIDERS.has(providerType)) return 'local-model';
   if (
     providerType === 'apple-speech' &&
@@ -286,6 +305,10 @@ export function ChannelList({
 
   useEffect(() => {
     void refresh();
+    const onExperimentalChange = () => void refresh();
+    window.addEventListener('ol-experimental-asr-channels-changed', onExperimentalChange);
+    return () =>
+      window.removeEventListener('ol-experimental-asr-channels-changed', onExperimentalChange);
   }, [refresh]);
 
   // ── Add: one step ──
@@ -375,167 +398,22 @@ export function ChannelList({
     }
   };
 
-  // ── Drag to reorder ──
-  // Hand-written with pointer events, not HTML5 draggable: Tauri's webview ships with dragDropEnabled
-  // on by default, which swallows dragstart/drop as file drag-and-drop, so `draggable` never fires in the
-  // packaged app (it works in the browser — the easiest bug to miss). The pointer approach also keeps
-  // Windows and Android behavior consistent.
-  const rowsRef = useRef(new Map<string, HTMLDivElement>());
-  const channelsRef = useRef<Channel[]>([]);
-  const dragIdRef = useRef<string | null>(null);
-  const orderAtDragStartRef = useRef<string[]>([]);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    channelsRef.current = channels;
-  }, [channels]);
-
-  // FLIP animation compares layout positions before/after updates, smoothly presenting add/remove and reorder.
-  // The dragging row keeps its own transform so slide animations don't overwrite the dragged state.
-  const prevRowTops = useRef(new Map<string, number>());
-  useLayoutEffect(() => {
-    // Also measure layout position only (offsetTop): rect.top is polluted by a FLIP transform still
-    // flying from the previous frame, making the measured delta wrong and the animation jittery.
-    const nextTops = new Map<string, number>();
-    rowsRef.current.forEach((element, id) => nextTops.set(id, element.offsetTop));
-    rowsRef.current.forEach((element, id) => {
-      const current = nextTops.get(id);
-      if (current == null) return;
-      const previous = prevRowTops.current.get(id);
-      const isDragging = dragIdRef.current === id;
-      const lift = isDragging ? ' scale(1.012)' : '';
-      if (previous == null) {
-        element.animate(
-          [
-            { opacity: 0, transform: `translateY(-8px)${isDragging ? '' : ' scale(0.98)'}` },
-            { opacity: 1, transform: 'none' },
-          ],
-          { duration: 260, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
-        );
-      } else if (Math.abs(previous - current) > 1) {
-        element.animate(
-          [
-            { transform: `translateY(${previous - current}px)${lift}` },
-            { transform: `translateY(0)${lift}` },
-          ],
-          { duration: 300, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
-        );
-      }
-    });
-    prevRowTops.current = nextTops;
-  }, [channels]);
-
-  const dragCleanupRef = useRef<(() => void) | null>(null);
-
-  /** Reorder in real time by the row under the pointer. Reads layout coordinates via offsetTop so FLIP
-   * transforms can't change the hit result and retrigger swaps at the same pointer position. */
-  const moveDragTo = (pointerY: number) => {
-    const dragId = dragIdRef.current;
-    if (!dragId) return;
-    let targetId: string | null = null;
-    for (const [id, element] of rowsRef.current) {
-      if (id === dragId) continue;
-      const parent = element.offsetParent as HTMLElement | null;
-      let top: number;
-      let bottom: number;
-      let y: number;
-      if (parent) {
-        top = element.offsetTop;
-        bottom = top + element.offsetHeight;
-        y = pointerY - parent.getBoundingClientRect().top;
-      } else {
-        const rect = element.getBoundingClientRect();
-        top = rect.top;
-        bottom = rect.bottom;
-        y = pointerY;
-      }
-      if (y >= top && y <= bottom) {
-        targetId = id;
-        break;
-      }
-    }
-    if (!targetId || targetId === dragId) return;
-    setChannels((prev) => {
-      const from = prev.findIndex((c) => c.id === dragId);
-      const to = prev.findIndex((c) => c.id === targetId);
-      if (from < 0 || to < 0 || from === to) return prev;
-      const next = [...prev];
-      next.splice(to, 0, next.splice(from, 1)[0]);
-      return next;
-    });
-  };
-
-  /// The browser fires a trailing click right after a drag ends. The settings dialog's overlay has
-  /// onClick={onClose}, and that trailing click closes the whole settings panel (drag a card once, settings
-  /// are gone). Swallow that one click at capture phase; remove the listener if it doesn't arrive within 200ms.
-  const swallowNextClick = () => {
-    const handler = (event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    window.addEventListener('click', handler, { capture: true, once: true });
-    window.setTimeout(() => {
-      window.removeEventListener('click', handler, { capture: true });
-    }, 200);
-  };
-
-  const endDrag = async () => {
-    dragCleanupRef.current?.();
-    dragCleanupRef.current = null;
-    document.body.style.cursor = '';
-    const dragId = dragIdRef.current;
-    dragIdRef.current = null;
-    setDraggingId(null);
-    if (!dragId) return;
-    swallowNextClick();
-    const ids = channelsRef.current.map((c) => c.id);
-    const before = orderAtDragStartRef.current;
-    if (ids.length === before.length && ids.every((id, index) => id === before[index])) {
-      return; // order unchanged, don't bother the backend
-    }
-    try {
-      await reorderChannels(kind, ids);
-      await refresh();
-      emitSaved('saved', t('common.saved'));
-    } catch (error) {
-      console.error('[channels] reorder failed', error);
-      emitSaved('failed', t('common.operationFailed'));
-      await refresh();
-    }
-  };
-
-  // Deliberately NOT setPointerCapture: it redirects later events to the handle, so the browser's trailing
-  // click lands on the settings dialog overlay and one drag closes settings. Window-level listeners keep
-  // the event target unchanged.
-  const onDragHandleDown = (event: React.PointerEvent<HTMLElement>, id: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    dragIdRef.current = id;
-    orderAtDragStartRef.current = channelsRef.current.map((c) => c.id);
-    setDraggingId(id);
-    // Keep the grabbing cursor page-wide during the drag: still visible when the pointer leaves the handle.
-    document.body.style.cursor = 'grabbing';
-
-    const onMove = (moveEvent: PointerEvent) => moveDragTo(moveEvent.clientY);
-    const onUp = () => void endDrag();
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    dragCleanupRef.current = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-    };
-  };
-
-  // On unmount (e.g. closing the settings panel) don't leak window listeners / the grabbing cursor.
-  useEffect(
-    () => () => {
-      dragCleanupRef.current?.();
-      document.body.style.cursor = '';
-    },
-    [],
-  );
+  const [orderNotice, setOrderNotice] = useState('');
+  const reorder = useSpringReorder(channels, (next) => {
+    setChannels(next);
+    setOrderNotice(t('uiRefinement.reordered'));
+    void reorderChannels(
+      kind,
+      next.map((channel) => channel.id),
+    )
+      .then(refresh)
+      .then(() => emitSaved('saved', t('common.saved')))
+      .catch((error) => {
+        console.error('[channels] reorder failed', error);
+        emitSaved('failed', t('common.operationFailed'));
+        void refresh();
+      });
+  });
 
   const editingChannel = channels.find((c) => c.id === (draftId ?? editingId)) ?? null;
   const isDraft = draftId != null;
@@ -586,7 +464,14 @@ export function ChannelList({
         }}
       >
         <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-          <h2 style={{ margin: 0, color: 'var(--ol-ink)', fontSize: 17, fontWeight: 600 }}>
+          <h2
+            style={{
+              margin: 0,
+              color: 'var(--ol-ink)',
+              fontSize: 17,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+            }}
+          >
             {t(`settings.channels.${kind}Title`)}
           </h2>
           <p
@@ -605,11 +490,10 @@ export function ChannelList({
         </Btn>
       </div>
 
-      {!loaded && (
-        <div role="status" style={emptyStyle}>
-          {t('common.loading')}
-        </div>
-      )}
+      {!loaded && <PageSkeleton />}
+      <span className="ol-sr-only" aria-live="polite">
+        {orderNotice}
+      </span>
       {loaded && channels.length === 0 && (
         <div style={emptyStyle}>
           <Icon
@@ -624,6 +508,8 @@ export function ChannelList({
       {/* Active channels no longer use blue background + left bar (the "current" badge already says it;
           a fully tinted row is too loud); rows are rounded cards, selected state is neutral gray fill + thin outline. */}
       <div
+        ref={reorder.list}
+        className="ol-reorder-list"
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -632,19 +518,33 @@ export function ChannelList({
         }}
       >
         {channels.map((channel) => {
-          const isActive = channel.id === activeId;
+          const retired =
+            kind === 'asr' && os === 'mac' && isRetiredMacAsrProvider(channel.providerType);
+          const isActive = !retired && channel.id === activeId;
           const providerLabel = presetLabel(kind, channel.providerType, t, descriptors);
           const label = channel.name.trim() || providerLabel;
-          const model = models[channel.id] ?? '';
+          const model = isExperimentalAsrProvider(channel.providerType)
+            ? channel.providerType === 'experimental-textstream'
+              ? 'TextStream'
+              : channel.providerType === 'experimental-sensevoice'
+                ? 'SenseVoice Small'
+                : 'Embedding Gemma'
+            : (models[channel.id] ?? '');
           const descriptor = descriptors.find((item) => item.providerType === channel.providerType);
           const localEngine = descriptor?.authRequirement === 'none';
-          const testMode = channelTestMode(kind, channel.providerType, descriptor?.validationProbe);
-          return (
+          const testMode = retired
+            ? 'unavailable'
+            : channelTestMode(kind, channel.providerType, descriptor?.validationProbe);
+          const content = (
             <div
               key={channel.id}
+              data-retired-local-asr={retired || undefined}
+              data-channel-id={channel.id}
+              data-channel-provider={channel.providerType}
+              data-channel-active={isActive}
               ref={(element) => {
-                if (element) rowsRef.current.set(channel.id, element);
-                else rowsRef.current.delete(channel.id);
+                if (element) reorder.rows.current.set(channel.id, element);
+                else reorder.rows.current.delete(channel.id);
               }}
               style={{
                 display: 'flex',
@@ -653,24 +553,13 @@ export function ChannelList({
                 gap: '14px 20px',
                 padding: '14px 12px',
                 borderRadius: 12,
-                // Drag state: slight lift (scale + big shadow + strong outline + raised z-index)
-                // makes "which card is being dragged, where is it" obvious at a glance.
                 border: '0.5px solid',
-                borderColor:
-                  draggingId === channel.id
-                    ? 'var(--ol-line-strong)'
-                    : isActive
-                      ? 'var(--ol-line)'
-                      : 'transparent',
+                borderColor: isActive ? 'var(--ol-line)' : 'transparent',
                 background: isActive ? 'var(--ol-surface-2)' : 'transparent',
                 position: 'relative',
-                zIndex: draggingId === channel.id ? 2 : undefined,
-                transform: draggingId === channel.id ? 'scale(1.012)' : undefined,
-                boxShadow: draggingId === channel.id ? 'var(--ol-shadow-lg)' : undefined,
-                opacity: draggingId === channel.id ? 0.96 : 1,
-                transition: draggingId
-                  ? undefined
-                  : 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), transform 0.18s var(--ol-motion-spring), box-shadow 0.18s var(--ol-motion-soft)',
+                opacity: retired ? 0.5 : 1,
+                transition:
+                  'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
               }}
             >
               <div
@@ -682,30 +571,28 @@ export function ChannelList({
                   flex: preferenceStack ? '1 1 100%' : '1 1 260px',
                 }}
               >
-                <span
-                  onPointerDown={(e) => onDragHandleDown(e, channel.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  title={t('settings.channels.dragHint')}
-                  aria-label={t('settings.channels.dragHint')}
-                  style={{
-                    color: draggingId === channel.id ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
-                    fontSize: 18,
-                    flexShrink: 0,
-                    cursor: draggingId === channel.id ? 'grabbing' : 'grab',
-                    touchAction: 'none',
-                    padding: '0 4px',
-                    userSelect: 'none',
-                    transition: 'color 0.16s var(--ol-motion-quick)',
+                <button
+                  type="button"
+                  className="ol-drag-handle"
+                  disabled={retired}
+                  onPointerDown={(event) => {
+                    if (!retired) reorder.onPointerDown(event, channel.id);
                   }}
+                  onKeyDown={(event) => {
+                    if (!retired) reorder.onKeyDown(event, channel.id);
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                  title={t('uiRefinement.reorderHint')}
+                  aria-label={`${label} · ${t('settings.channels.dragHint')}`}
                 >
                   ⠿
-                </span>
+                </button>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                     <span
                       style={{
                         fontSize: 14,
-                        fontWeight: 600,
+                        fontWeight: 'var(--ol-font-weight-semibold)',
                         color: 'var(--ol-ink)',
                         overflowWrap: 'anywhere',
                       }}
@@ -717,7 +604,7 @@ export function ChannelList({
                         {t('settings.channels.current')}
                       </Pill>
                     )}
-                    {!channel.enabled && (
+                    {(retired || !channel.enabled) && (
                       <Pill tone="outline" size="sm">
                         {t('settings.channels.disabled')}
                       </Pill>
@@ -734,14 +621,17 @@ export function ChannelList({
                   >
                     {channel.name.trim() && <span>{providerLabel} · </span>}
                     <span style={{ fontFamily: model ? 'var(--ol-font-mono)' : undefined }}>
-                      {model ||
-                        t(
-                          localEngine
-                            ? 'settings.channels.localModelManaged'
-                            : 'settings.channels.modelNotSet',
-                        )}
+                      {channel.providerType === 'apple-speech'
+                        ? t('settings.providers.appleSpeechLocalNote')
+                        : model ||
+                          t(
+                            localEngine
+                              ? 'settings.channels.localModelManaged'
+                              : 'settings.channels.modelNotSet',
+                          )}
                     </span>
                   </div>
+                  {retired && <p role="note">{t('experimentalAsr.retiredHint')}</p>}
                   <ChannelTestResult
                     channel={channel}
                     testing={Boolean(testingIds[channel.id])}
@@ -779,7 +669,8 @@ export function ChannelList({
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={channel.enabled}
+                  aria-checked={!retired && channel.enabled}
+                  disabled={retired}
                   aria-label={t('settings.channels.enabledFor', { name: label })}
                   onClick={() => void onToggle(channel)}
                   style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 7 }}
@@ -790,7 +681,8 @@ export function ChannelList({
                       width: 24,
                       height: 14,
                       borderRadius: 999,
-                      background: channel.enabled ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
+                      background:
+                        channel.enabled && !retired ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
                       position: 'relative',
                     }}
                   >
@@ -798,7 +690,7 @@ export function ChannelList({
                       style={{
                         position: 'absolute',
                         top: 2,
-                        left: channel.enabled ? 12 : 2,
+                        left: channel.enabled && !retired ? 12 : 2,
                         width: 10,
                         height: 10,
                         borderRadius: 999,
@@ -819,6 +711,20 @@ export function ChannelList({
                 </button>
               </div>
             </div>
+          );
+          return retired ? (
+            <Tooltip
+              key={channel.id}
+              content={t('experimentalAsr.retiredHint')}
+              placement="bottom"
+              wrap
+              focusable
+              trigger={<span />}
+            >
+              {content}
+            </Tooltip>
+          ) : (
+            content
           );
         })}
       </div>
@@ -1137,7 +1043,7 @@ function ChannelModal({
   };
 
   const descriptor = presets.find((item) => item.id === providerType);
-  const isLocalEngine = descriptor?.authRequirement === 'none';
+  const isLocalEngine = descriptor?.authRequirement === 'none' && providerType !== 'apple-speech';
 
   const content = (
     <ProviderFormContext.Provider value={form}>
@@ -1315,5 +1221,5 @@ const ghostBtn: CSSProperties = {
   color: 'var(--ol-ink-2)',
   cursor: 'pointer',
   fontSize: 12.5,
-  fontWeight: 500,
+  fontWeight: 'var(--ol-font-weight-medium)',
 };

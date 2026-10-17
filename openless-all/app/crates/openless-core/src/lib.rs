@@ -34,6 +34,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
 pub mod host_document;

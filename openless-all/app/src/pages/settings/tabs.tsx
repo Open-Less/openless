@@ -5,11 +5,15 @@ import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
+import { Tooltip } from '../../components/Tooltip';
+import { detectOS } from '../../components/WindowChrome';
+import { ExperimentalAsrSection, type ExperimentalAsrController } from './ExperimentalAsrSection';
 import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { SelectionWorkspaceSection } from './SelectionWorkspaceSection';
 import { LanguageSection } from './LanguageSection';
+import { TypographySection } from './TypographySection';
 import { ThemeSection } from './ThemeSection';
 import { ProvidersSection } from './ChannelList';
 import { OmniChannelSection } from './ProvidersSection';
@@ -17,7 +21,7 @@ import { NetworkSection } from './NetworkSection';
 import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';
 import { DataStorageSection } from './DataStorageSection';
-import { CloudSyncSection } from './CloudSyncSection';
+import { CloudSyncSection, CustomSyncServerSection } from './CloudSyncSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
@@ -26,17 +30,19 @@ import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
 import { AutoUpdateSection } from './AutoUpdateSection';
+import { StartupDiagnostics } from './StartupDiagnostics';
 import { AboutSection } from './AboutSection';
-import { getPlatformCapabilities } from '../../lib/platform';
+import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import { listChannels } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
-import { SettingRow, segmentedTrackStyle } from './shared';
+import { SettingRow, Toggle, ExperimentalSectionTitle, segmentedTrackStyle } from './shared';
 import { Card } from '../_atoms';
-import { useContentMotion, useSelectionMotion } from '../../lib/motion';
+import { usePageTransition, useSelectionMotion } from '../../lib/motion';
 import {
   availableServiceViews,
+  isTestingFeaturePage,
   isServiceViewInactive,
   resolveServiceView,
   type ServiceViewId,
@@ -46,7 +52,7 @@ import {
 
 // Platform capability query shared by all tabs (drives desktop/mobile and hotkey / auto-update gating).
 function usePlatformCaps(): PlatformCapabilities | null {
-  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -63,6 +69,7 @@ export function GeneralTab() {
   return (
     <>
       <RecordingInputSection />
+      <SelectionWorkspaceSection showShortcut={false} />
       {showRemoteInput && <RemoteInputSection />}
     </>
   );
@@ -95,36 +102,35 @@ export function InputMethodTab() {
 export function ShortcutsTab() {
   const platformCaps = usePlatformCaps();
   if (!platformCaps?.supportsDesktopHotkey) return null;
-  return (
-    <>
-      <ShortcutsSection />
-      <SelectionWorkspaceSection />
-    </>
-  );
+  return <ShortcutsSection />;
 }
 
 export function AppearanceTab() {
   return (
     <>
       <ThemeSection />
+      <TypographySection />
       <LanguageSection />
     </>
   );
 }
 
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
-export function ServicesTab() {
+export function ServicesTab({ asrNavigation = 0 }: { asrNavigation?: number } = {}) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
-  const showLocalModel = platformCaps?.supportsLocalAsr === true;
+  const showLocalModel = detectOS() !== 'mac' && platformCaps?.supportsLocalAsr === true;
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
-  const [view, setView] = useState<ServiceViewId>('llm');
-  const views = availableServiceViews(showLocalModel);
-  const selectedView = resolveServiceView(view, views, multimodal);
+  const [view, setView] = useState<ServiceViewId>(asrNavigation ? 'asr' : 'llm');
+  useEffect(() => {
+    if (asrNavigation) setView('asr');
+  }, [asrNavigation]);
+  const views = availableServiceViews(showLocalModel, detectOS());
+  const requestedView = resolveServiceView(view, views, multimodal, detectOS());
   const contentRef = useRef<HTMLDivElement>(null);
-  useContentMotion(contentRef, selectedView);
+  const selectedView = usePageTransition(requestedView, contentRef, false);
   const pipelineRef = useRef<HTMLDivElement>(null);
   const pipelineIndicatorRef = useRef<HTMLSpanElement>(null);
   const navigationRef = useRef<HTMLDivElement>(null);
@@ -133,7 +139,7 @@ export function ServicesTab() {
   useSelectionMotion(
     navigationRef,
     navigationIndicatorRef,
-    `${selectedView}:${views.length}`,
+    `${requestedView}:${views.length}`,
     true,
   );
   const setPipelineMode = (mode: 'traditional' | 'multimodal') => {
@@ -228,7 +234,32 @@ export function ServicesTab() {
         >
           <span ref={navigationIndicatorRef} aria-hidden className="ol-service-view-indicator" />
           {views.map((id) => {
-            const inactive = isServiceViewInactive(id, multimodal);
+            if (id === 'models' && detectOS() === 'mac') {
+              return (
+                <Tooltip
+                  key={id}
+                  content={t('experimentalAsr.retiredHint')}
+                  placement="bottom"
+                  wrap
+                  focusable
+                  trigger={<span />}
+                >
+                  <button
+                    type="button"
+                    disabled
+                    data-retired-local-models
+                    aria-label={t('modal.serviceViews.models')}
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    <span>{t('modal.serviceViews.models')}</span>
+                    <span className="ol-service-inactive-tag">
+                      {t('experimentalAsr.retiredLabel')}
+                    </span>
+                  </button>
+                </Tooltip>
+              );
+            }
+            const inactive = isServiceViewInactive(id, multimodal, detectOS());
             const required = !inactive && (id === 'llm' || id === 'asr');
             const configured =
               id === 'llm' ? requiredConfigured.llm : id === 'asr' ? requiredConfigured.asr : false;
@@ -239,7 +270,7 @@ export function ServicesTab() {
                 key={id}
                 type="button"
                 disabled={inactive}
-                aria-pressed={selectedView === id}
+                aria-pressed={requestedView === id}
                 onClick={() => setView(id)}
                 aria-label={
                   inactive
@@ -287,7 +318,7 @@ export function ServicesTab() {
             {selectedView === 'llm' && <ProvidersSection kind="llm" />}
             {selectedView === 'asr' && <ProvidersSection kind="asr" />}
             {selectedView === 'omni' && <OmniChannelSection />}
-            {selectedView === 'models' && <LocalModelsSection />}
+            {showLocalModel && selectedView === 'models' && <LocalModelsSection />}
             {selectedView === 'connections' && (
               <>
                 <NetworkSection />
@@ -329,7 +360,7 @@ export function PrivacyTab() {
             borderRadius: 999,
             background: 'var(--ol-surface)',
             color: 'var(--ol-blue)',
-            fontWeight: 600,
+            fontWeight: 'var(--ol-font-weight-semibold)',
             flexShrink: 0,
           }}
         >
@@ -351,52 +382,112 @@ export function AdvancedTab({
   pages,
   page,
   onOpenPage,
+  experimentalAsr,
+  onOpenAsr,
 }: {
   pages: AdvancedPage[];
   page: AdvancedPageId | null;
   onOpenPage: (page: AdvancedPageId) => void;
+  experimentalAsr: ExperimentalAsrController;
+  onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const [visited, setVisited] = useState<AdvancedPageId[]>([]);
+  useEffect(() => {
+    if (page) setVisited((current) => (current.includes(page) ? current : [...current, page]));
+  }, [page]);
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const testing = prefs?.testingFeaturesEnabled === true;
+  const [savingTesting, setSavingTesting] = useState(false);
+  const testingReady = testing && !savingTesting;
+  const entries = pages.filter((item) =>
+    page === 'testingFeatures'
+      ? testingReady && isTestingFeaturePage(item.id)
+      : !isTestingFeaturePage(item.id),
+  );
+  const list = (
+    <div className="ol-advanced-settings-list">
+      {entries.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className="ol-advanced-settings-entry"
+          data-ol-advanced-entry={item.id}
+          onClick={() => onOpenPage(item.id)}
+        >
+          <span className="ol-advanced-entry-icon">
+            <Icon name={item.icon} size={19} />
+          </span>
+          <span className="ol-advanced-entry-copy">
+            <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
+            <span className="ol-advanced-entry-description">
+              {t(`modal.advancedPages.${item.id}`)}
+            </span>
+          </span>
+          {item.id === 'testingFeatures' && (
+            <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
+          )}
+          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+        </button>
+      ))}
+    </div>
+  );
   return (
     <>
-      <div hidden={page !== null}>
-        <div className="ol-advanced-settings-list">
-          {pages.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="ol-advanced-settings-entry"
-              data-ol-advanced-entry={item.id}
-              onClick={() => onOpenPage(item.id)}
-            >
-              <span className="ol-advanced-entry-icon">
-                <Icon name={item.icon} size={19} />
-              </span>
-              <span className="ol-advanced-entry-copy">
-                <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-                <span className="ol-advanced-entry-description">
-                  {t(`modal.advancedPages.${item.id}`)}
-                </span>
-              </span>
-              <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-            </button>
-          ))}
-        </div>
-      </div>
-      {pages.map((item) => (
-        <section
-          key={item.id}
-          hidden={page !== item.id}
-          className="ol-advanced-settings-detail"
-          aria-label={t(item.titleKey)}
-          data-ol-advanced-page={item.id}
-        >
-          {item.id === 'lessComputer' && <CodingAgentSection />}
-          {item.id === 'claudeConsole' && <ClaudeConsoleSection />}
-          {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
-          {item.id === 'debug' && <DebugToolsSection />}
-        </section>
-      ))}
+      {page === null && list}
+      {page === 'testingFeatures' && (
+        <Card>
+          <ExperimentalSectionTitle badge="Beta">
+            {t('settings.testingFeatures.title')}
+          </ExperimentalSectionTitle>
+          <SettingRow
+            label={t('settings.testingFeatures.enable')}
+            desc={t('settings.testingFeatures.description')}
+          >
+            <Toggle
+              on={testing}
+              disabled={!prefs || savingTesting}
+              label={t('settings.testingFeatures.enable')}
+              onToggle={async (next) => {
+                setSavingTesting(true);
+                try {
+                  await updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next }));
+                } catch {
+                  emitSaved('failed', t('common.operationFailed'));
+                } finally {
+                  setSavingTesting(false);
+                }
+              }}
+            />
+          </SettingRow>
+          {testingReady && list}
+          {testingReady && entries.length === 0 && (
+            <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
+              {t('settings.testingFeatures.unavailable')}
+            </p>
+          )}
+        </Card>
+      )}
+      {pages
+        .filter((item) => item.id !== 'testingFeatures' && visited.includes(item.id))
+        .map((item) => (
+          <section
+            key={item.id}
+            hidden={page !== item.id}
+            className="ol-advanced-settings-detail"
+            aria-label={t(item.titleKey)}
+            data-ol-advanced-page={item.id}
+          >
+            {item.id === 'localModels' && (
+              <ExperimentalAsrSection controller={experimentalAsr} onOpenAsr={onOpenAsr} />
+            )}
+            {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
+            {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
+            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
+            {item.id === 'debug' && <DebugToolsSection />}
+          </section>
+        ))}
     </>
   );
 }
@@ -409,6 +500,7 @@ export function AboutTab() {
   return (
     <>
       <AboutSection />
+      <StartupDiagnostics />
       {showUpdateControls && <BetaChannelSection />}
       {showUpdateControls && <AutoUpdateSection />}
     </>

@@ -104,6 +104,7 @@ export interface LocalAsrDownloadProgress {
 }
 
 export interface FoundryLocalAsrStatus {
+  restartRequired: boolean;
   providerId: string;
   available: boolean;
   runtimeReady: boolean;
@@ -415,6 +416,7 @@ export function setLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
 export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
   return invokeOrMock('foundry_local_asr_status', undefined, () => ({
     providerId: 'foundry-local-whisper',
+    restartRequired: false,
     available: true,
     runtimeReady: false,
     runtimeSource: 'auto',
@@ -444,6 +446,10 @@ export function setFoundryLocalRuntimeSource(source: string): Promise<void> {
 
 export function setFoundryLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
   return invokeOrMock('foundry_local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
+}
+
+export function downloadFoundryLocalAsrModel(modelAlias: string): Promise<void> {
+  return invokeOrMock('foundry_local_asr_download', { modelAlias }, () => undefined);
 }
 
 export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {

@@ -1634,7 +1634,11 @@ pub(crate) fn chat_completions_url(base_url: &str) -> String {
 }
 
 pub fn http_client_builder(base_url: &str, timeout_secs: u64) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout_secs));
+    let builder = reqwest::Client::builder()
+        // Same handshake budget as net::http(); audio generation can still use
+        // its full request timeout after connecting. Never retry timeout errors.
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(timeout_secs));
     if crate::net::should_bypass_proxy(base_url, crate::net::use_system_proxy()) {
         builder.no_proxy()
     } else {
