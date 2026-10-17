@@ -1501,6 +1501,9 @@ export const ko: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (기본 / 대부분 앱)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: '일반 텍스트 삽입 모드',
+      plainTextInsertionDesc:
+        '켜면 모의 붙여넣기에 Ctrl+V 대신 Shift+Insert를 사용합니다(켜져 있는 동안 위 단축키는 변경할 수 없습니다). 매우 특수한 경우에만 켜세요(예: Punto Switcher 같은 키보드 레이아웃 전환 도구가 Ctrl+V를 가로챌 때). 클립보드 붙여넣기 방식에만 적용됩니다(Windows 전용).',
       comboRecordLabel: '단축키 녹화',
       comboRecordDesc:
         '클릭 후 원하는 단축키 조합(예: ⌘⇧D)을 누르세요. 토글 및 누르기 모드 모두 지원합니다.',

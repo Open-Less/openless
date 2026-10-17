@@ -1566,6 +1566,9 @@ export const fr: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (par défaut / plupart des applications)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / plupart des terminaux)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Mode d’insertion en texte brut',
+      plainTextInsertionDesc:
+        'Lorsqu’il est activé, le collage simulé utilise Maj+Insert au lieu de Ctrl+V (le raccourci ci-dessus est verrouillé pendant ce temps). À n’activer que dans des cas très particuliers, par ex. si un outil de changement de disposition comme Punto Switcher intercepte Ctrl+V. S’applique uniquement à l’insertion par collage via le presse-papiers (Windows uniquement).',
       comboRecordLabel: 'Enregistrer un raccourci',
       comboRecordDesc:
         'Cliquez, puis appuyez sur la combinaison souhaitée (p. ex. ⌘⇧D). Accepte les modes Basculer et Maintenir pour parler.',

@@ -1513,6 +1513,9 @@ export const ja: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（既定 / ほとんどのアプリ）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: 'プレーンテキスト挿入モード',
+      plainTextInsertionDesc:
+        'オンにすると、模擬貼り付けは Ctrl+V の代わりに Shift+Insert を使います（オン中は上のショートカットを変更できません）。極めて特殊な場合にのみオンにしてください（例：Punto Switcher などのキーボード配列切替ツールが Ctrl+V を奪う場合）。クリップボード貼り付け方式にのみ適用されます（Windows のみ）。',
       comboRecordLabel: 'ショートカットを記録',
       comboRecordDesc:
         'クリック後、希望するキーの組み合わせ（例：⌘⇧D）を押してください。トグル / 押し続けの両方に対応。',

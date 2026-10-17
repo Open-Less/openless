@@ -1450,6 +1450,9 @@ export const zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（默认 / 多数应用）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / 多数终端）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: '纯文本插入模式',
+      plainTextInsertionDesc:
+        '开启后，模拟粘贴改用 Shift+Insert 代替 Ctrl+V（开启期间上方快捷键选项不可更改）。仅在极为特殊的情况下才开启，例如 Ctrl+V 被键盘布局切换工具（如 Punto Switcher）吞掉时。仅对「剪贴板粘贴」插入方式生效（仅 Windows）。',
       comboRecordLabel: '录制快捷键',
       comboRecordDesc: '点击后按下想要的快捷键组合（如 ⌘⇧D）。',
       comboRecordBtn: '录制快捷键',

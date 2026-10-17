@@ -1451,6 +1451,9 @@ export const zhTW: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（預設 / 多數應用）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / 多數終端）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: '純文字插入模式',
+      plainTextInsertionDesc:
+        '開啟後，模擬貼上改用 Shift+Insert 取代 Ctrl+V（開啟期間上方快捷鍵選項不可更改）。僅在極為特殊的情況下才開啟，例如 Ctrl+V 被鍵盤配置切換工具（如 Punto Switcher）攔截時。僅對「剪貼簿貼上」插入方式生效（僅 Windows）。',
       comboRecordLabel: '錄製快捷鍵',
       comboRecordDesc: '點選後按下你想要的快捷鍵組合（如 ⌘⇧D），支援 Toggle 與 Hold 模式。',
       comboRecordBtn: '錄製快捷鍵',

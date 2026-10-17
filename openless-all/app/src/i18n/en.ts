@@ -1525,6 +1525,9 @@ export const en: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (default / most apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / most terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Plain-text insertion mode',
+      plainTextInsertionDesc:
+        'When on, the simulated paste uses Shift+Insert instead of Ctrl+V (the shortcut above is locked while on). Only enable this in very special cases, e.g. when a keyboard layout switcher such as Punto Switcher swallows Ctrl+V. Applies to clipboard paste insertion only (Windows).',
       comboRecordLabel: 'Record shortcut',
       comboRecordDesc:
         'Click, then press your desired key combination (e.g. \u2318\u21E7D). Supports Toggle and Push-to-talk modes.',

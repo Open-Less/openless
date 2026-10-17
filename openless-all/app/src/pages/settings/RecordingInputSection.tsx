@@ -13,6 +13,10 @@ import {
   showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
+import {
+  isPlainTextInsertionActive,
+  pasteShortcutForPlainTextToggle,
+} from '../../lib/plainTextInsertion';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
@@ -65,18 +69,6 @@ export function RecordingInputSection() {
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
-
-  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中，
-  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
-  useEffect(() => {
-    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
-    void savePrefs((current) => {
-      if (current.pasteShortcut !== 'shiftInsert') return current;
-      return { ...current, pasteShortcut: 'ctrlV' };
-    }).catch((error) => {
-      console.warn('[settings] migrate Windows paste shortcut failed', error);
-    });
-  }, [os, prefs?.pasteShortcut, savePrefs]);
 
   const loadMicrophoneDevices = useCallback(
     async (signal?: { cancelled: boolean }, options: { showLoading?: boolean } = {}) => {
@@ -179,8 +171,7 @@ export function RecordingInputSection() {
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
-  const effectivePasteShortcut =
-    os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+  const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -198,6 +189,8 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onPasteShortcutChange = (pasteShortcut: PasteShortcut) =>
     savePrefs({ ...prefs, pasteShortcut });
+  const onPlainTextInsertionChange = (on: boolean) =>
+    savePrefs({ ...prefs, pasteShortcut: pasteShortcutForPlainTextToggle(on) });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
@@ -590,18 +583,37 @@ export function RecordingInputSection() {
               desc={t('settings.recording.pasteShortcutDesc')}
             >
               <SelectLite
-                value={effectivePasteShortcut}
+                value={prefs.pasteShortcut}
                 onChange={(next) => onPasteShortcutChange(next as PasteShortcut)}
-                options={[
-                  { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
-                  { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                  // 这个「粘贴与剪贴板」组只在 Windows 出现（mac 走
-                  // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
-                  // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
-                ]}
+                // 纯文本插入模式开启时，Shift+Insert 由开关接管，这里只读展示。
+                disabled={plainTextInsertionOn}
+                options={
+                  plainTextInsertionOn
+                    ? [
+                        {
+                          value: 'shiftInsert',
+                          label: t('settings.recording.pasteShortcutShiftInsert'),
+                        },
+                      ]
+                    : [
+                        { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
+                        {
+                          value: 'ctrlShiftV',
+                          label: t('settings.recording.pasteShortcutCtrlShiftV'),
+                        },
+                      ]
+                }
                 ariaLabel={t('settings.recording.pasteShortcutLabel')}
                 style={{ ...inputStyle, maxWidth: 220 }}
               />
+            </SettingRow>
+          )}
+          {os === 'win' && capability.adapter !== 'macEventTap' && (
+            <SettingRow
+              label={t('settings.recording.plainTextInsertionLabel')}
+              desc={t('settings.recording.plainTextInsertionDesc')}
+            >
+              <Toggle on={plainTextInsertionOn} onToggle={onPlainTextInsertionChange} />
             </SettingRow>
           )}
           {capability.adapter === 'windowsLowLevel' && (

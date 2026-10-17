@@ -1554,6 +1554,9 @@ export const de: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (Standard / die meisten Apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / die meisten Terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Reintext-Einfügemodus',
+      plainTextInsertionDesc:
+        'Wenn aktiviert, verwendet das simulierte Einfügen Umschalt+Einfg statt Strg+V (der obige Kurzbefehl ist dabei gesperrt). Nur in sehr besonderen Fällen aktivieren, z. B. wenn ein Tastaturlayout-Umschalter wie Punto Switcher Strg+V abfängt. Gilt nur für die Einfügemethode über die Zwischenablage (nur Windows).',
       comboRecordLabel: 'Kurzbefehl aufzeichnen',
       comboRecordDesc:
         'Klicke hier und drücke die gewünschte Tastenkombination (z. B. ⌘⇧D). Unterstützt die Modi „Umschalten“ und „Gedrückt halten“.',

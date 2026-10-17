@@ -1546,6 +1546,9 @@ export const es: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (predeterminado / mayoría de aplicaciones)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / mayoría de terminales)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Modo de inserción de texto plano',
+      plainTextInsertionDesc:
+        'Al activarlo, el pegado simulado usa Shift+Insert en lugar de Ctrl+V (el atajo superior queda bloqueado mientras esté activo). Actívalo solo en casos muy especiales, p. ej. cuando un cambiador de disposición de teclado como Punto Switcher intercepta Ctrl+V. Solo se aplica al pegado desde el portapapeles (solo Windows).',
       comboRecordLabel: 'Grabar atajo',
       comboRecordDesc:
         'Pulsa aquí y después la combinación deseada (p. ej., ⌘⇧D). Admite los modos Alternar y Mantener para hablar.',
