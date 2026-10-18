@@ -2819,12 +2819,14 @@ mod linux_app {
                         }
                         CloudSyncDialog::Disable | CloudSyncDialog::Delete { .. } => {
                             self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
-                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                            self.frontend_vm.cloud_sync.notice =
+                                Some("cloudSyncE2ee.noticeDone".to_string());
                         }
                         CloudSyncDialog::Create { .. } | CloudSyncDialog::ChangePassword => {
                             self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
                             self.frontend_vm.cloud_sync.intent = None;
-                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                            self.frontend_vm.cloud_sync.notice =
+                                Some("cloudSyncE2ee.noticeDone".to_string());
                         }
                         CloudSyncDialog::Restore { enable_after, .. } => {
                             if enable_after
@@ -2838,14 +2840,16 @@ mod linux_app {
                                 self.apply_cloud_sync_action(CloudSyncAction::SetEnabled(true));
                             } else {
                                 self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
-                                self.frontend_vm.cloud_sync.notice = Some("restored".to_string());
+                                self.frontend_vm.cloud_sync.notice =
+                                    Some("cloudSyncE2ee.noticeRestored".to_string());
                             }
                             self.load_settings_channels();
                             self.load_service_configured();
                         }
                         CloudSyncDialog::None if self.frontend_vm.cloud_sync.notice.is_none() => {
                             // 「立即同步」「锁定」「登出」这类单步动作：成功后给个提示。
-                            self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                            self.frontend_vm.cloud_sync.notice =
+                                Some("cloudSyncE2ee.noticeDone".to_string());
                         }
                         _ => {}
                     }
@@ -2892,7 +2896,8 @@ mod linux_app {
                             } else {
                                 self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
                                 self.frontend_vm.cloud_sync.intent = None;
-                                self.frontend_vm.cloud_sync.notice = Some("done".to_string());
+                                self.frontend_vm.cloud_sync.notice =
+                                    Some("cloudSyncE2ee.noticeDone".to_string());
                             }
                         }
                     }
@@ -3938,7 +3943,8 @@ mod linux_app {
                                 enable_after: false,
                             },
                         );
-                        self.frontend_vm.cloud_sync.notice = Some("states.conflict".to_string());
+                        self.frontend_vm.cloud_sync.notice =
+                            Some("cloudSyncE2ee.states.conflict".to_string());
                     } else {
                         self.load_cloud_sync();
                     }
@@ -3946,7 +3952,8 @@ mod linux_app {
                 BackendEventKind::CloudSyncRestoreCompleted(_) => {
                     self.frontend_vm.cloud_sync.dialog =
                         openless_linux_egui::cloud_sync_ui::CloudSyncDialog::None;
-                    self.frontend_vm.cloud_sync.notice = Some("restored".to_string());
+                    self.frontend_vm.cloud_sync.notice =
+                        Some("cloudSyncE2ee.noticeRestored".to_string());
                     self.load_cloud_sync();
                     self.load_settings_channels();
                     self.load_service_configured();

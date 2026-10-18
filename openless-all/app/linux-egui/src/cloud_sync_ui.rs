@@ -397,7 +397,7 @@ pub struct CloudSyncUi {
     pub dialog: CloudSyncDialog,
     /// What the running enable/unlock/restore flow was started for.
     pub intent: Option<CloudSyncIntent>,
-    /// i18n key suffix under `cloudSyncE2ee.` for a success notice.
+    /// 完整 catalog 键（例如 `cloudSyncE2ee.noticeDone`），渲染时直接查表。
     pub notice: Option<String>,
     /// Stable error code while the last gesture failed.
     pub error: Option<String>,

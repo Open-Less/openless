@@ -97,6 +97,89 @@ fn crate_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
+/// 源码里出现的每个 catalog 键都必须在目录里真实存在。
+///
+/// 这个测试盯的是「动态拼键」造成的漏翻译：`cloud_sync.rs` 曾经用
+/// `format!("cloudSyncE2ee.errors.{code}")` 拼键，`cloud_sync_ui.rs` 里还有一批
+/// `states.* / step* / syncNow` 常量从未进过目录，结果界面上直接画出了
+/// `cloudSyncE2ee.errors.service_unavailable`、`cloudSyncE2ee.states.disabled`。
+///
+/// 只看**字符串字面量**（不看注释与标识符），并跳过带 `{` 的格式模板：
+/// 模板拼出来的键无法在编译期校验，只能靠 `error_key()` 那种字面量表。
+#[test]
+fn every_literal_catalog_key_exists_in_the_catalog() {
+    fn string_literals(source: &str) -> Vec<String> {
+        let cleaned = strip_comments(source);
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < cleaned.len() {
+            if cleaned[i] != b'"' {
+                i += 1;
+                continue;
+            }
+            let mut inner = Vec::new();
+            let mut j = i + 1;
+            while j < cleaned.len() {
+                match cleaned[j] {
+                    b'\\' if j + 1 < cleaned.len() => {
+                        inner.push(cleaned[j + 1]);
+                        j += 2;
+                    }
+                    b'"' => break,
+                    byte => {
+                        inner.push(byte);
+                        j += 1;
+                    }
+                }
+            }
+            out.push(String::from_utf8_lossy(&inner).into_owned());
+            i = j + 1;
+        }
+        out
+    }
+
+    let root = crate_root().join("src");
+    let catalog = std::fs::read_to_string(root.join("i18n.rs")).unwrap();
+    let mut known: BTreeSet<String> = BTreeSet::new();
+    let mut rest = catalog.as_str();
+    while let Some(index) = rest.find("key: \"") {
+        let after = &rest[index + "key: \"".len()..];
+        let Some(end) = after.find('"') else { break };
+        known.insert(after[..end].to_string());
+        rest = &after[end..];
+    }
+    assert!(!known.is_empty(), "the catalog must declare keys");
+
+    const NAMESPACES: [&str; 2] = ["cloudSyncE2ee.", "settings."];
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+    for file in source_files_under(&root) {
+        if file.strip_prefix(&root).unwrap().starts_with("i18n.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file).unwrap();
+        for literal in string_literals(&source) {
+            let Some(namespace) = NAMESPACES.iter().find(|ns| literal.starts_with(**ns)) else {
+                continue;
+            };
+            let key = literal.as_str();
+            let looks_like_key = key.len() > namespace.len()
+                && !key.ends_with('.')
+                && !key.contains('{')
+                && !key.contains('/')
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+            if looks_like_key && !known.contains(key) {
+                missing.insert(key.to_string());
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these catalog keys are referenced from src/ but missing from src/i18n.rs: {missing:?}"
+    );
+}
+
 #[test]
 fn shell_module_is_fully_localized_with_no_raw_simplified_chinese() {
     let shell = std::fs::read_to_string(crate_root().join("src/ui/shell.rs")).unwrap();

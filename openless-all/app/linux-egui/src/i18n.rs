@@ -7752,6 +7752,351 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
 
+    // 加密同步卡片的步骤标题 / 状态 / 按钮文案。这些键在 `cloud_sync_ui.rs` 里
+    // 是静态字符串常量，之前也整批缺失，界面上直接画出了 `cloudSyncE2ee.states.disabled`。
+    Msg {
+        key: "cloudSyncE2ee.checkPending",
+        text: row(
+            "核对待确认结果",
+            "核對待確認結果",
+            "Check pending result",
+            "未確定の結果を確認",
+            "확인 대기 결과 조회",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.conflictCloud",
+        text: row(
+            "使用云端",
+            "使用雲端",
+            "Use cloud",
+            "クラウドを使用",
+            "클라우드 사용",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.conflictLocal",
+        text: row(
+            "保留本机",
+            "保留本機",
+            "Keep local",
+            "ローカルを使用",
+            "로컬 유지",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.createTitle",
+        text: row(
+            "设置同步密码",
+            "設定同步密碼",
+            "Create a sync password",
+            "同期パスワードを設定",
+            "동기화 비밀번호 설정",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolEncryption",
+        text: row(
+            "配置、服务 API 密钥和历史文本会先在本机加密，发往云端和保存在云端的备份内容均为密文。云同步服务无法据此读取或调用您的服务 API 密钥，也不会使用这些内容执行模型请求。",
+            "設定、服務 API 金鑰及歷史文字會先在本機加密，傳送與儲存在雲端的備份內容均為密文。雲端同步服務無法據此讀取或使用您的 API 金鑰，也不會使用這些內容執行模型請求。",
+            "Settings, service API keys and text history are encrypted locally. Backup content is sent and stored as ciphertext. The sync service cannot read or use your API keys from it, and does not use this content to run model requests.",
+            "設定、API キー、テキスト履歴はこの端末で暗号化されます。バックアップは暗号文として送信・保存されます。同期サービスはその内容から API キーを読み取ったり使用したりせず、モデルへのリクエストにも利用しません。",
+            "설정, API 키, 텍스트 기록은 이 기기에서 암호화됩니다. 백업은 암호문으로 전송되고 저장됩니다. 동기화 서비스는 이를 통해 API 키를 읽거나 사용하지 못하며 모델 요청에도 이용하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolEncryptionTitle",
+        text: row(
+            "先在本机加密，再上传",
+            "先在本機加密，再上傳",
+            "Encrypt on this device before uploading",
+            "端末で暗号化してから送信",
+            "기기에서 암호화한 후 업로드",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolExcluded",
+        text: row(
+            "同步密码、解密密钥、OpenLess 管理的 GitHub/OAuth 登录状态、访问令牌及设备私钥不进入备份。账号认证会单独处理必要凭据；服务器仍可见账号标识、密文大小、版本及同步时间。",
+            "同步密碼、解密金鑰、OpenLess 管理的 GitHub/OAuth 登入狀態、存取權杖及裝置私鑰不進入備份。帳號驗證會另外處理必要憑證；伺服器仍可見帳號識別碼、密文大小、版本及同步時間。",
+            "The backup excludes your sync password, decryption keys, OpenLess-managed GitHub/OAuth sign-in state, access tokens and device private keys. Account authentication handles necessary credentials separately. The server can still see account identifiers, ciphertext size, versions and sync times.",
+            "同期パスワード、復号キー、OpenLess が管理する GitHub/OAuth ログイン状態、アクセストークン、端末の秘密鍵はバックアップに含まれません。アカウント認証には必要な認証情報を別途使用します。サーバーにはアカウント識別子、暗号文のサイズ、版、同期日時が見えます。",
+            "동기화 비밀번호, 복호화 키, OpenLess가 관리하는 GitHub/OAuth 로그인 상태, 액세스 토큰, 기기 개인 키는 백업에 포함되지 않습니다. 계정 인증에는 필요한 자격 증명을 별도로 사용합니다. 서버는 계정 식별자, 암호문 크기, 버전 및 동기화 시간을 볼 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolExcludedTitle",
+        text: row(
+            "登录状态与可见信息",
+            "登入狀態與可見資訊",
+            "Sign-in state and visible metadata",
+            "ログイン状態と確認可能な情報",
+            "로그인 상태와 확인 가능한 정보",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolIntro",
+        text: row(
+            "OpenLess 及个人开发者尊重您的隐私，并致力于保护您的资料。请阅读以下说明，再决定是否继续。",
+            "OpenLess 及個人開發者尊重您的隱私，並致力於保護您的資料。請閱讀以下說明，再決定是否繼續。",
+            "OpenLess and its independent developers respect your privacy and work to protect your data. Read this notice before continuing.",
+            "OpenLess と開発者はプライバシーを尊重し、データの保護に取り組んでいます。続行する前に、以下をご確認ください。",
+            "OpenLess와 독립 개발자는 개인정보를 존중하고 데이터를 보호하기 위해 노력합니다. 계속하기 전에 아래 안내를 읽어 주세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolPassword",
+        text: row(
+            "同步密码和解密密钥仅用于本机加密与解锁，不会发送给云同步服务。若密码遗失且没有仍可解锁的设备，我们无法找回加密内容。",
+            "同步密碼及解密金鑰僅用於本機加密與解鎖，不會傳送給雲端同步服務。若密碼遺失且沒有仍可解鎖的裝置，我們無法找回加密內容。",
+            "Your sync password and decryption key are used locally and are never sent to the sync service. If you lose the password and have no device that can still unlock the backup, we cannot recover its contents.",
+            "同期パスワードと復号キーは端末内で使用され、同期サービスには送信されません。パスワードを紛失し、解除できる端末もない場合、内容を復元することはできません。",
+            "동기화 비밀번호와 복호화 키는 기기에서만 사용되며 동기화 서비스로 전송되지 않습니다. 비밀번호를 잃고 백업을 잠금 해제할 기기도 없다면 내용을 복구할 수 없습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.protocolPasswordTitle",
+        text: row(
+            "请妥善保存同步密码",
+            "請妥善保存同步密碼",
+            "Keep your sync password safe",
+            "同期パスワードを大切に保管してください",
+            "동기화 비밀번호를 안전하게 보관하세요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.conflict",
+        text: row(
+            "请审阅冲突更改",
+            "請檢閱衝突變更",
+            "Review conflicting changes",
+            "競合する変更を確認してください",
+            "충돌하는 변경 검토 필요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.disabled",
+        text: row(
+            "同步已关闭",
+            "同步已關閉",
+            "Sync is off",
+            "同期はオフです",
+            "동기화 꺼짐",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.failed",
+        text: row(
+            "同步需要处理",
+            "同步需要處理",
+            "Sync needs attention",
+            "同期の確認が必要です",
+            "동기화 확인 필요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.outcome_unknown",
+        text: row(
+            "云端结果待确认",
+            "雲端結果待確認",
+            "Waiting to confirm the cloud result",
+            "クラウドの結果は未確定です",
+            "클라우드 결과 확인 대기 중",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.pending",
+        text: row(
+            "本机更改待同步",
+            "本機變更待同步",
+            "Local changes are waiting to sync",
+            "ローカルの変更は同期待ちです",
+            "로컬 변경 동기화 대기 중",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.ready",
+        text: row(
+            "已同步",
+            "已同步",
+            "Up to date",
+            "同期済み",
+            "최신 상태",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.recovery_required",
+        text: row(
+            "需要恢复本机同步状态",
+            "需要復原本機同步狀態",
+            "Local recovery is required",
+            "ローカル状態の復旧が必要です",
+            "로컬 상태 복구 필요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.sign_in_required",
+        text: row(
+            "需要登录 GitHub",
+            "需要登入 GitHub",
+            "GitHub sign-in required",
+            "GitHub ログインが必要です",
+            "GitHub 로그인 필요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.syncing",
+        text: row(
+            "正在同步",
+            "正在同步",
+            "Sync in progress",
+            "同期中",
+            "동기화 중",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.states.unlock_required",
+        text: row(
+            "请输入密码解锁",
+            "請輸入密碼解鎖",
+            "Enter your password to unlock",
+            "パスワードを入力して解除してください",
+            "비밀번호를 입력해 잠금을 해제하세요",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepEnableDetail",
+        text: row(
+            "打开右侧开关。确认协议之后，下一步是设置同步密码。",
+            "打開右側開關。確認協議之後，下一步是設定同步密碼。",
+            "Use the switch. After you confirm the notice, the next step is a sync password.",
+            "スイッチを使います。確認のあと、次は同期パスワードの設定です。",
+            "스위치를 사용하세요. 확인 후 다음 단계는 동기화 비밀번호입니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepEnableTitle",
+        text: row(
+            "第 1 步，共 3 步：开启同步",
+            "第 1 步，共 3 步：開啟同步",
+            "Step 1 of 3: Turn sync on",
+            "手順 1/3：同期をオンにする",
+            "1/3단계: 동기화 켜기",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepFollowDetail",
+        text: row(
+            "按这一行旁边的按钮继续。",
+            "按這一列旁邊的按鈕繼續。",
+            "Use the button on this row to continue.",
+            "この行のボタンで続けてください。",
+            "이 줄의 버튼으로 계속하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepUnlockDetail",
+        text: row(
+            "还差一步。输入同步密码，解锁之后才能同步。",
+            "還差一步。輸入同步密碼，解鎖之後才能同步。",
+            "One step left. Enter the sync password to unlock this device.",
+            "あと 1 ステップです。同期パスワードを入力して、このデバイスのロックを解除します。",
+            "한 단계 남았습니다. 동기화 비밀번호로 이 기기의 잠금을 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepUnlockTitle",
+        text: row(
+            "第 2 步，共 3 步：解锁这台设备",
+            "第 2 步，共 3 步：解鎖這台裝置",
+            "Step 2 of 3: Unlock this device",
+            "手順 2/3：このデバイスのロックを解除",
+            "2/3단계: 이 기기 잠금 해제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.syncNow",
+        text: row(
+            "立即同步",
+            "立即同步",
+            "Sync now",
+            "今すぐ同期",
+            "지금 동기화",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.unlockTitle",
+        text: row(
+            "解锁云端备份",
+            "解鎖雲端備份",
+            "Unlock your cloud backup",
+            "クラウドバックアップを解除",
+            "클라우드 백업 잠금 해제",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepRestoreTitle",
+        text: row(
+            "第 3 步，共 3 步：恢复云端备份",
+            "第 3 步，共 3 步：還原雲端備份",
+            "Step 3 of 3: restore the cloud backup",
+            "ステップ 3/3：クラウドバックアップを復元",
+            "3/3단계: 클라우드 백업 복원",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.stepRestoreDetail",
+        text: row(
+            "选择一份云端备份并先预览；确认后才会替换本机资料。",
+            "選擇一份雲端備份並先預覽；確認後才會取代本機資料。",
+            "Pick a cloud backup and preview it first; local data is only replaced after you confirm.",
+            "クラウドバックアップを選んでプレビューし、確認後にのみローカルを置き換えます。",
+            "클라우드 백업을 선택해 먼저 미리 본 뒤 확인하면 로컬 데이터가 교체됩니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.noticeDone",
+        text: row(
+            "已完成。",
+            "已完成。",
+            "Done.",
+            "完了しました。",
+            "완료되었습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.noticeRestored",
+        text: row(
+            "云端备份已恢复到本机。",
+            "雲端備份已還原到本機。",
+            "The cloud backup was restored to this device.",
+            "クラウドバックアップをこの端末に復元しました。",
+            "클라우드 백업을 이 기기로 복원했습니다.",
+        ),
+    },
+
+    // 提供方设置里以字面量引用的两个键；egui 目录此前缺失，界面上会画成裸键。
+    Msg {
+        key: "settings.providers.fillDefault",
+        text: row(
+            "填入默认值",
+            "填入預設值",
+            "Fill default value",
+            "デフォルト値を入力",
+            "기본값 입력",
+        ),
+    },
+    Msg {
+        key: "settings.providers.llmProtocolHeaderConflict",
+        text: row(
+            "Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。",
+            "Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。",
+            "Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.",
+            "Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。",
+            "Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.",
+        ),
+    },
+
 ];
 
 fn lang_index(lang: Lang) -> usize {
