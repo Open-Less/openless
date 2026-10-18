@@ -135,7 +135,13 @@ impl OmniSettings {
         if state.provider == "custom" {
             state.temperature = read(backend, &state.provider, OMNI_TEMPERATURE_ACCOUNT).await?;
         }
-        // API keys and extra headers are deliberately never hydrated.
+        // 与 Tauri 的 `CredentialField` 一致：把已存的密钥读进表单（输入框按密码
+        // 掩码显示），否则用户每次打开都以为「密钥没保存」，测试完刷新一次就变空。
+        state.api_key = read(backend, &state.provider, OMNI_API_KEY_ACCOUNT).await?;
+        if state.provider == "custom" {
+            state.extra_headers =
+                read(backend, &state.provider, OMNI_EXTRA_HEADERS_ACCOUNT).await?;
+        }
         state.loaded = true;
         Ok(state)
     }

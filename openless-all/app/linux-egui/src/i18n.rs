@@ -8096,6 +8096,14 @@ pub const CATALOG: &[Msg] = &[
             "Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.",
         ),
     },
+    Msg {
+        key: "settings.providers.showSecret",
+        text: row("显示", "顯示", "Show", "表示", "표시"),
+    },
+    Msg {
+        key: "settings.providers.hideSecret",
+        text: row("隐藏", "隱藏", "Hide", "隠す", "숨기기"),
+    },
 
 ];
 

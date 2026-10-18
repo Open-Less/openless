@@ -3271,31 +3271,29 @@ mod linux_app {
                             snapshot.extra_headers.clear();
                         }
                         OmniAction::Models => {
+                            // Omni 没有「渠道」这一层：Core 对
+                            // `kind == Omni && channel_id.is_some()` 直接返回
+                            // `omni provider does not support channel id`，
+                            // 于是「测试 / 拉模型」永远是失败的。传 None 让 Core
+                            // 用当前激活的服务商。
                             snapshot.models = backend
                                 .services()
                                 .provider
-                                .list_models(openless_core::ProviderRequest {
-                                    kind: openless_core::ProviderKind::Omni,
-                                    channel_id: Some(snapshot.provider.clone()),
-                                    thinking_enabled: backend
-                                        .get_preferences()
-                                        .llm_thinking_enabled,
-                                })
+                                .list_models(omni_provider_request(
+                                    backend.get_preferences().llm_thinking_enabled,
+                                ))
                                 .await
                                 .map_err(|e| e.to_string())?
                                 .models;
                         }
                         OmniAction::Validate => {
+                            // 同上：带 channel_id 会被 Core 拒绝，测试必然失败。
                             let check = backend
                                 .services()
                                 .provider
-                                .validate(openless_core::ProviderRequest {
-                                    kind: openless_core::ProviderKind::Omni,
-                                    channel_id: Some(snapshot.provider.clone()),
-                                    thinking_enabled: backend
-                                        .get_preferences()
-                                        .llm_thinking_enabled,
-                                })
+                                .validate(omni_provider_request(
+                                    backend.get_preferences().llm_thinking_enabled,
+                                ))
                                 .await
                                 .map_err(|e| e.to_string())?;
                             if !check.ok {
@@ -7895,6 +7893,20 @@ mod linux_app {
         }
     }
 
+    /// Omni 的「测试 / 拉模型」请求：**不能带 channel_id**。
+    ///
+    /// Core 对 `kind == Omni && channel_id.is_some()` 直接报
+    /// `omni provider does not support channel id`；带上频道 id 会让每一次测试都
+    /// 失败，用户看到的就是「密钥填进去用不了」。Core 会自己按当前激活的服务商
+    /// 解析凭据。
+    fn omni_provider_request(thinking_enabled: bool) -> openless_core::ProviderRequest {
+        openless_core::ProviderRequest {
+            kind: openless_core::ProviderKind::Omni,
+            channel_id: None,
+            thinking_enabled,
+        }
+    }
+
     fn provider_kind(kind: openless_core::ChannelKind) -> openless_core::ProviderKind {
         match kind {
             openless_core::ChannelKind::Asr => openless_core::ProviderKind::Asr,
@@ -8476,6 +8488,14 @@ mod linux_app {
             descriptor.provider_type.as_str(),
             "custom" | "custom_responses" | "custom_messages"
         ) {
+            protocol.extra_headers = read_provider_value(
+                &backend,
+                kind,
+                &channel.id,
+                openless_core::credentials::LLM_EXTRA_HEADERS_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
             protocol.temperature = read_provider_value(
                 &backend,
                 kind,
@@ -8485,6 +8505,51 @@ mod linux_app {
             .await?
             .unwrap_or_default();
         }
+        // 密钥也要读回来：Tauri 的 `CredentialField` 就是把已存的值读进输入框再打码，
+        // 用户能看到「这里有东西」。之前这里写死成空串，编辑已有渠道时密钥框永远空白，
+        // 看起来像没保存。
+        let (primary_account, secondary_account) = match descriptor.auth_requirement {
+            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {
+                (None, None)
+            }
+            openless_core::AuthRequirement::Volcengine => {
+                if auth_mode == "api_key" {
+                    (
+                        Some(openless_core::credentials::VOLCENGINE_API_KEY_ACCOUNT),
+                        None,
+                    )
+                } else {
+                    (
+                        Some(openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT),
+                        Some(openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT),
+                    )
+                }
+            }
+            openless_core::AuthRequirement::Xfyun => (
+                Some(openless_core::credentials::XFYUN_APP_ID_ACCOUNT),
+                Some(openless_core::credentials::XFYUN_API_KEY_ACCOUNT),
+            ),
+            openless_core::AuthRequirement::TencentCloud => (
+                Some(openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT),
+                Some(openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT),
+            ),
+            _ => (Some(api_key_account(kind)), None),
+        };
+        let channel_id = channel.id.clone();
+        let read_optional = |account: Option<&'static str>| {
+            let backend = Arc::clone(&backend);
+            let channel_id = channel_id.clone();
+            async move {
+                match account {
+                    Some(account) => read_provider_value(&backend, kind, &channel_id, account)
+                        .await
+                        .map(Option::unwrap_or_default),
+                    None => Ok(String::new()),
+                }
+            }
+        };
+        let primary_secret = read_optional(primary_account).await?;
+        let secondary_secret = read_optional(secondary_account).await?;
         Ok(ProviderEditor {
             protocol,
             kind,
@@ -8496,8 +8561,8 @@ mod linux_app {
             volcengine_service,
             auth_mode,
             resource_id,
-            primary_secret: String::new(),
-            secondary_secret: String::new(),
+            primary_secret,
+            secondary_secret,
         })
     }
 
@@ -10826,6 +10891,99 @@ Internal flags (set by OpenLess itself, not for regular use):
                 None,
                 window_should_be_open,
             )
+        }
+
+        /// Omni 的测试与拉模型请求不带 channel_id：Core 明确拒绝
+        /// `omni + channel_id`，带上就等于每次测试都失败。
+        #[test]
+        fn omni_requests_never_carry_a_channel_id() {
+            let request = omni_provider_request(false);
+            assert_eq!(request.kind, openless_core::ProviderKind::Omni);
+            assert!(
+                request.channel_id.is_none(),
+                "Core rejects omni requests that carry a channel id"
+            );
+        }
+
+        /// 编辑已有渠道时，凭据要读回表单（输入框按密码掩码显示）。写死空串会让用户
+        /// 以为密钥没保存，测试之后刷新一次就"消失"。
+        #[test]
+        fn the_channel_editor_hydrates_the_stored_secret() {
+            use std::sync::Arc;
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let dir = std::env::temp_dir().join(format!(
+                "openless-editor-hydrate-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            let store = Arc::new(openless_linux_egui::InMemoryCredentialStore::default());
+            let mut deps = openless_core::BackendDependencies::unsupported();
+            deps.credential_store = store.clone();
+            deps.task_spawner = Arc::new(openless_core::TokioTaskSpawner);
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    openless_core::BackendConfig {
+                        data_dir: dir.clone(),
+                        ..Default::default()
+                    },
+                    deps,
+                )
+                .unwrap(),
+            );
+            let channel = openless_core::ChannelSummary {
+                id: "deepseek".into(),
+                name: "DeepSeek".into(),
+                provider_type: "deepseek".into(),
+                enabled: true,
+                order: 0,
+                last_test: None,
+            };
+            let descriptor = openless_core::provider_rules::provider_descriptor(
+                openless_core::ProviderKind::Llm,
+                "deepseek",
+            )
+            .expect("deepseek descriptor");
+            runtime.block_on(async {
+                for (account, value) in [
+                    (
+                        openless_core::credentials::LLM_ENDPOINT_ACCOUNT,
+                        "https://api.deepseek.com/v1",
+                    ),
+                    (
+                        openless_core::credentials::LLM_MODEL_ACCOUNT,
+                        "deepseek-chat",
+                    ),
+                    (
+                        openless_core::credentials::LLM_API_KEY_ACCOUNT,
+                        "sk-stored-key",
+                    ),
+                ] {
+                    let key = provider_credential_key(
+                        openless_core::ChannelKind::Llm,
+                        &channel.id,
+                        account,
+                    )
+                    .unwrap();
+                    backend
+                        .set_credential(key, openless_core::SecretValue::new(value))
+                        .await
+                        .unwrap();
+                }
+            });
+            let editor = runtime
+                .block_on(load_provider_editor(
+                    Arc::clone(&backend),
+                    openless_core::ChannelKind::Llm,
+                    channel,
+                    descriptor,
+                ))
+                .expect("editor loads");
+            assert_eq!(editor.endpoint, "https://api.deepseek.com/v1");
+            assert_eq!(editor.model, "deepseek-chat");
+            assert_eq!(
+                editor.primary_secret, "sk-stored-key",
+                "the stored API key must be hydrated so the masked field is not empty"
+            );
+            let _ = std::fs::remove_dir_all(dir);
         }
 
         /// 快捷键卡片上的每一行都必须从 Core 偏好取真值。宿主以前只填了

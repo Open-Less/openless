@@ -3925,6 +3925,7 @@ fn provider_model_block(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn provider_field(
     ui: &mut egui::Ui,
     channel_id: &str,
@@ -3932,9 +3933,12 @@ fn provider_field(
     value: &str,
     field: SettingsProviderField,
     password: bool,
+    lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
-    provider_field_hint(ui, channel_id, label, value, "", field, password, actions);
+    provider_field_hint(
+        ui, channel_id, label, value, "", field, password, lang, actions,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3946,6 +3950,7 @@ fn provider_field_hint(
     hint: &str,
     field: SettingsProviderField,
     password: bool,
+    lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
     /// Tauri 渠道弹窗里的输入框：整列宽、38px 高。
@@ -3972,15 +3977,44 @@ fn provider_field_hint(
             _ => value.to_string(),
         };
         let width = ui.available_width().min(420.0);
-        let response = layout::text_input_sized(
-            ui,
-            &mut draft,
-            id,
-            hint,
-            width,
-            MODAL_INPUT_HEIGHT,
-            password,
-        );
+        // 密钥默认打码，但可以点一下看明文（Tauri `CredentialField` 的眼睛按钮）。
+        let reveal_id = id.with("reveal");
+        let mut revealed = ui
+            .data(|data| data.get_temp::<bool>(reveal_id))
+            .unwrap_or(false);
+        let response = if password {
+            let mut render = |ui: &mut egui::Ui, password: bool| {
+                layout::text_input_sized(
+                    ui,
+                    &mut draft,
+                    id,
+                    hint,
+                    width - 44.0,
+                    MODAL_INPUT_HEIGHT,
+                    password,
+                )
+            };
+            let response = render(ui, !revealed);
+            ui.horizontal(|ui| {
+                let label = if revealed {
+                    tr_l10n(lang, "settings.providers.hideSecret")
+                } else {
+                    tr_l10n(lang, "settings.providers.showSecret")
+                };
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new(label).size(11.0).color(theme::INK_2),
+                    ))
+                    .clicked()
+                {
+                    revealed = !revealed;
+                    ui.data_mut(|data| data.insert_temp(reveal_id, revealed));
+                }
+            });
+            response
+        } else {
+            layout::text_input_sized(ui, &mut draft, id, hint, width, MODAL_INPUT_HEIGHT, false)
+        };
         if response.changed() {
             editor_mark_dirty(ui);
             actions.push(FrontendAction::SettingsProviderField(field, draft.clone()));
@@ -4533,6 +4567,7 @@ fn provider_editor_body(
             &editor.name,
             SettingsProviderField::Name,
             false,
+            lang,
             actions,
         );
     });
@@ -4596,6 +4631,7 @@ fn provider_editor_body(
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
                     true,
+                    lang,
                     actions,
                 );
             } else {
@@ -4606,6 +4642,7 @@ fn provider_editor_body(
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
                     true,
+                    lang,
                     actions,
                 );
                 provider_field(
@@ -4615,6 +4652,7 @@ fn provider_editor_body(
                     &editor.secondary_secret,
                     SettingsProviderField::SecondarySecret,
                     true,
+                    lang,
                     actions,
                 );
             }
@@ -4625,6 +4663,7 @@ fn provider_editor_body(
                 &editor.resource_id,
                 SettingsProviderField::ResourceId,
                 false,
+                lang,
                 actions,
             );
         }
@@ -4636,6 +4675,7 @@ fn provider_editor_body(
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
+                lang,
                 actions,
             );
             provider_field(
@@ -4645,6 +4685,7 @@ fn provider_editor_body(
                 &editor.secondary_secret,
                 SettingsProviderField::SecondarySecret,
                 true,
+                lang,
                 actions,
             );
         }
@@ -4656,6 +4697,7 @@ fn provider_editor_body(
                 &editor.resource_id,
                 SettingsProviderField::ResourceId,
                 false,
+                lang,
                 actions,
             );
             provider_field(
@@ -4665,6 +4707,7 @@ fn provider_editor_body(
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
+                lang,
                 actions,
             );
             provider_field(
@@ -4674,6 +4717,7 @@ fn provider_editor_body(
                 &editor.secondary_secret,
                 SettingsProviderField::SecondarySecret,
                 true,
+                lang,
                 actions,
             );
         }
@@ -4696,6 +4740,7 @@ fn provider_editor_body(
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
                 true,
+                lang,
                 actions,
             );
             if !editor.endpoint_presets.is_empty() {
@@ -4748,6 +4793,7 @@ fn provider_editor_body(
                 &editor.default_endpoint,
                 SettingsProviderField::Endpoint,
                 false,
+                lang,
                 actions,
             );
             if editor.endpoint.trim().is_empty()
@@ -4826,6 +4872,7 @@ fn provider_editor_body(
                         &editor.protocol.temperature,
                         SettingsProviderField::Temperature,
                         false,
+                        lang,
                         actions,
                     );
                     ui.label(
