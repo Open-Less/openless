@@ -443,6 +443,41 @@ impl OpenLessEguiApp {
         self.save_settings_if_dirty();
     }
 
+    /// 恢复出厂默认绑定：默认值来自 `UserPreferences::default()`，与 Core 的
+    /// 序列化默认保持一致（不在这里另抄一份键位）。
+    pub(super) fn apply_shortcut_reset(&mut self, field: frontend::view_model::ShortcutField) {
+        let defaults = openless_core::shared_types::UserPreferences::default();
+        let Some(preferences) = self.preferences.as_mut() else {
+            return;
+        };
+        use frontend::view_model::ShortcutField;
+        match field {
+            ShortcutField::Dictation => preferences.dictation_hotkey = defaults.dictation_hotkey,
+            ShortcutField::Translation => {
+                preferences.translation_hotkey = defaults.translation_hotkey
+            }
+            ShortcutField::Qa => preferences.qa_hotkey = defaults.qa_hotkey,
+            ShortcutField::QuickNote => preferences.quick_note_hotkey = defaults.quick_note_hotkey,
+            ShortcutField::SwitchStyle => {
+                preferences.switch_style_hotkey = defaults.switch_style_hotkey
+            }
+            ShortcutField::OpenApp => preferences.open_app_hotkey = defaults.open_app_hotkey,
+            ShortcutField::CodingAgentVoice => {
+                preferences.coding_agent_voice_hotkey = defaults.coding_agent_voice_hotkey
+            }
+            ShortcutField::SelectionPolish => {
+                preferences.selection_polish_hotkey = defaults.selection_polish_hotkey
+            }
+            // 风格直达键与草稿行没有出厂默认。
+            ShortcutField::StylePack(_) | ShortcutField::StyleDraft => {
+                return;
+            }
+        }
+        self.frontend_vm.shortcut_recording = None;
+        self.frontend_vm.shortcut_menu = None;
+        self.save_settings_if_dirty();
+    }
+
     pub(super) fn apply_style_hotkey_remove(&mut self, index: usize) {
         let pack_id = self
             .frontend_vm

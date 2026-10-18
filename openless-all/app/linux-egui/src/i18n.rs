@@ -7138,6 +7138,44 @@ pub const CATALOG: &[Msg] = &[
             "Reading width",
         ),
     },
+    Msg {
+        key: "uiRefinement.back",
+        text: row("返回应用", "返回应用", "Back to app", "Back to app", "Back to app"),
+    },
+    Msg {
+        key: "uiRefinement.noResults",
+        text: row(
+            "没有匹配的命令",
+            "没有匹配的命令",
+            "No matching commands",
+            "No matching commands",
+            "No matching commands",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.shortcutHint",
+        text: row(
+            "点击按键即可重新录制。Esc 取消；保存前会检查快捷键冲突。",
+            "点击按键即可重新录制。Esc 取消；保存前会检查快捷键冲突。",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.shortcutsSearch",
+        text: row(
+            "搜索命令或按键",
+            "搜索命令或按键",
+            "Search commands or keys",
+            "Search commands or keys",
+            "Search commands or keys",
+        ),
+    },
+    Msg {
+        key: "uiRefinement.unassigned",
+        text: row("未分配", "未分配", "Unassigned", "Unassigned", "Unassigned"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

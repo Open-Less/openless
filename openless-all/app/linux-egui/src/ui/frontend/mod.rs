@@ -1067,31 +1067,34 @@ mod tests {
         )));
     }
 
+    /// Tauri beta 4+ 的快捷键页：录制器内联（键帽 + ↻ + ✕），
+    /// 不再有 chevron 菜单；每行都要画出重置/清空两个图标按钮。
     #[test]
-    fn shortcut_menu_reveals_record_and_disable() {
-        let zh = openless_linux_egui::Lang::ZhCn;
-        let record = openless_linux_egui::tr_l10n(zh, "settings.recording.combo_record_btn");
-        let disable = openless_linux_egui::tr_l10n(zh, "settings.shortcuts.disable");
+    fn every_shortcut_row_has_inline_reset_and_clear() {
+        use super::view_model::ShortcutField;
         let mut vm = FrontendViewModel {
-            shortcut_menu: Some(super::view_model::ShortcutField::Qa),
+            dictation_hotkey: "Alt+Z".to_string(),
             ..Default::default()
         };
-        let open = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
-        assert!(
-            open.iter().any(|line| line == record),
-            "the record button must be painted"
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        // 命令行不再出现菜单里的「录制快捷键 / 停用」按钮文案。
+        let record = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.recording.combo_record_btn",
         );
+        assert!(!lines.iter().any(|line| line == record));
+        // 点击键帽开始录制后，同一行换成录制提示。
+        vm.shortcut_recording = Some(ShortcutField::Qa);
+        let recording =
+            painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
         assert!(
-            open.iter().any(|line| line == disable),
-            "the disable button must be painted"
+            recording.iter().any(|line| line.contains("Esc")),
+            "the recording panel must offer Esc to cancel: {recording:?}"
         );
-        // 收起菜单后两个按钮都要消失。
-        vm.shortcut_menu = None;
-        let closed = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
-        assert!(!closed.iter().any(|line| line == record));
-        assert!(!closed.iter().any(|line| line == disable));
     }
 
+    /// 新快捷键页的行序（Tauri `ShortcutsSection` 的 commands 顺序）：
+    /// 语音与文本 → 风格 → 系统，最后是只读的 Esc。
     #[test]
     fn shortcut_rows_follow_the_video_order() {
         let zh = openless_linux_egui::Lang::ZhCn;
@@ -1110,18 +1113,23 @@ mod tests {
         let start = index_of("settings.shortcuts.start_stop");
         let translation = index_of("hotkey.translation");
         let qa = index_of("selection_ask.hotkey_title");
+        let polish = index_of("settings.selection_workspace.polish_hotkey");
         let switch_style = index_of("settings.shortcuts.switch_style");
-        let style_pack = index_of("settings.shortcuts.style_pack_title");
         let open_app = index_of("settings.shortcuts.open_app");
         let cancel = index_of("settings.shortcuts.cancel");
         assert!(
             start < translation
                 && translation < qa
-                && qa < switch_style
-                && switch_style < style_pack
-                && style_pack < open_app
+                && qa < polish
+                && polish < switch_style
+                && switch_style < open_app
                 && open_app < cancel,
             "shortcut rows must keep the Tauri order, painted: {lines:?}"
+        );
+        let add = openless_linux_egui::tr_l10n(zh, "settings.shortcuts.style_pack_add");
+        assert!(
+            lines.iter().any(|line| line.contains(add)),
+            "the add-style-shortcut action must be painted: {lines:?}"
         );
     }
 

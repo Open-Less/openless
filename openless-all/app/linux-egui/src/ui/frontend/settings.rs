@@ -8,6 +8,7 @@ use super::view_model::{
     FrontendAction, FrontendViewModel, SettingsActionField, SettingsChannelProvider,
     SettingsComboField, SettingsField, SettingsProviderAuth, SettingsProviderEditor,
     SettingsProviderField, SettingsSection, SettingsTextField, ShortcutField, StylePack,
+    StylePackHotkeyRow,
 };
 
 const RAIL_WIDTH: f32 = 214.0;
@@ -107,7 +108,12 @@ pub fn settings_page(
                                     let column = ui.max_rect();
                                     ui.painter().rect_filled(
                                         column,
-                                        egui::CornerRadius::ZERO,
+                                        egui::CornerRadius {
+                                            nw: 14,
+                                            sw: 14,
+                                            ne: 0,
+                                            se: 0,
+                                        },
                                         theme::RAIL_BG,
                                     );
                                     ui.painter().rect_filled(
@@ -160,6 +166,41 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
     let lang = vm.lang;
     // 底色与右侧分隔线由调用方按整栏高度铺好（见 settings_sheet）。
     ui.vertical(|ui| {
+        // Tauri `ol-settings-return`：关闭设置回到应用，位置在左栏最上方
+        // （搜索框之上），不再是右栏顶栏的 ✕。
+        let back = tr_l10n(lang, "uiRefinement.back");
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+        let response = ui.interact(
+            rect,
+            egui::Id::new("openless-settings-back"),
+            egui::Sense::click(),
+        );
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(7), theme::SURFACE_2);
+        }
+        let chevron = egui::Stroke::new(1.4, theme::INK_2);
+        let c = egui::pos2(rect.left() + 9.0, rect.center().y);
+        ui.painter().line_segment(
+            [egui::pos2(c.x + 3.0, c.y - 5.0), egui::pos2(c.x - 2.5, c.y)],
+            chevron,
+        );
+        ui.painter().line_segment(
+            [egui::pos2(c.x - 2.5, c.y), egui::pos2(c.x + 3.0, c.y + 5.0)],
+            chevron,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 18.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            back,
+            egui::FontId::proportional(12.5),
+            theme::INK_2,
+        );
+        if response.clicked() {
+            actions.push(FrontendAction::CloseSettings);
+        }
+        ui.add_space(6.0);
         // Section search, like the Tauri rail.
         egui::Frame::new()
             .fill(theme::SURFACE)
@@ -369,23 +410,15 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                             .color(theme::INK),
                     );
                 }
-                // Tauri：自动保存提示与关闭按钮属于**右栏自己的顶栏**（跟标题同一行，
-                // 不再横跨左栏）；标题占据剩余宽度，二者靠右。
-                let close = ui
-                    .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close = close_button(ui);
-                        ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new(tr_l10n(lang, "modal.auto_save_hint"))
-                                .size(12.0)
-                                .color(theme::INK_3),
-                        );
-                        close
-                    })
-                    .inner;
-                if close {
-                    actions.push(FrontendAction::CloseSettings);
-                }
+                // Tauri（beta 4+）：关闭设置搬到了左栏顶部的「‹ 返回应用」，
+                // 右栏顶栏只剩自动保存提示。
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(tr_l10n(lang, "modal.auto_save_hint"))
+                            .size(12.0)
+                            .color(theme::INK_3),
+                    );
+                });
             });
             ui.add_space(4.0);
             ui.label(
@@ -882,10 +915,11 @@ fn is_complete_sha256(value: &str) -> bool {
 
 fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let lang = vm.lang;
-    // Tauri `ShortcutsSection` 的行序：开始/停止 → 翻译 → 弹出浮窗 → 切换风格 →
-    // 风格直达快捷键（子块）→ 打开 OpenLess → Less Computer → 取消本次录音。
+    // Tauri `ShortcutsSection`（beta 4+）：顶部搜索 + 计数，左侧「分类 / 分配状态」
+    // 两组筛选，右侧是命令行 —— 每行 = 标签(+说明) + 录制器（键帽 / ↻ 重置 / ✕ 清空）。
+    // 快捷键不再藏在 chevron 菜单里。
     let dictation_hint = recording_mode_hint(lang, vm.settings.recording_mode);
-    let rows: [ShortcutRow; 7] = [
+    let mut rows: Vec<ShortcutRow> = vec![
         ShortcutRow {
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
@@ -915,12 +949,21 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             hint: tr_l10n(lang, "quickNote.shortcutDesc").to_string(),
         },
         ShortcutRow {
+            field: ShortcutField::SelectionPolish,
+            label: tr_l10n(lang, "settings.selection_workspace.polish_hotkey"),
+            value: vm.selection_polish_hotkey.clone(),
+            can_disable: true,
+            hint: tr_l10n(lang, "settings.selection_workspace.polish_hotkey_desc").to_string(),
+        },
+        // 风格组
+        ShortcutRow {
             field: ShortcutField::SwitchStyle,
             label: tr_l10n(lang, "settings.shortcuts.switch_style"),
             value: vm.switch_style_hotkey.clone(),
             can_disable: true,
             hint: String::new(),
         },
+        // 系统组
         ShortcutRow {
             field: ShortcutField::OpenApp,
             label: tr_l10n(lang, "settings.shortcuts.open_app"),
@@ -930,72 +973,460 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         },
         ShortcutRow {
             field: ShortcutField::CodingAgentVoice,
-            label: tr_l10n(lang, "settings.shortcuts.agent_voice"),
+            label: tr_l10n(lang, "settings.coding_agent.title"),
             value: vm.coding_agent_hotkey.clone(),
             can_disable: true,
             hint: tr_l10n(lang, "settings.coding_agent.voice_hotkey_desc").to_string(),
         },
     ];
-    card(
-        ui,
-        tr_l10n(lang, "settings.shortcuts.title"),
-        tr_l10n(lang, "settings.shortcuts.desc_no_acc"),
+    // 「Less Computer」属于 Beta 功能：没开测试功能时不出现（与 Tauri 的门禁一致）。
+    if !vm.settings.testing_features {
+        rows.retain(|row| row.field != ShortcutField::CodingAgentVoice);
+    }
+
+    let category = vm.shortcuts_category;
+    let status = vm.shortcuts_status;
+    let query = vm.shortcuts_query.trim().to_lowercase();
+    // 组别：0 语音与文本 / 1 风格 / 2 系统。
+    let group_of = |field: ShortcutField| match field {
+        ShortcutField::Dictation
+        | ShortcutField::Translation
+        | ShortcutField::Qa
+        | ShortcutField::QuickNote
+        | ShortcutField::SelectionPolish => 0,
+        ShortcutField::SwitchStyle => 1,
+        ShortcutField::OpenApp | ShortcutField::CodingAgentVoice => 2,
+        ShortcutField::StylePack(_) | ShortcutField::StyleDraft => 1,
+    };
+    let matches_row = |label: &str, value: &str| -> bool {
+        let assigned = !value.trim().is_empty();
+        let text = if assigned {
+            format!("{label} {value}").to_lowercase()
+        } else {
+            format!("{label} {}", tr_l10n(lang, "uiRefinement.unassigned")).to_lowercase()
+        };
+        (query.is_empty() || text.contains(&query)) && (status == 0 || (status == 1) == assigned)
+    };
+
+    let command_total = rows.len();
+    let packs = vm.settings.style_pack_hotkeys.clone();
+    let pack_names: Vec<String> = packs.iter().map(|row| row.name.clone()).collect();
+    let visible: Vec<ShortcutRow> = rows
+        .into_iter()
+        .filter(|row| category == 0 || category == group_of(row.field) + 1)
+        .filter(|row| matches_row(row.label, &row.value))
+        .collect();
+    let visible_packs: Vec<(usize, &StylePackHotkeyRow)> = packs
+        .iter()
+        .enumerate()
+        .filter(|(_, _row)| category == 0 || category == 2)
+        .filter(|(_, row)| matches_row(&row.name, &row.hotkey))
+        .collect();
+    // 只读行：取消本次录音永远是 Esc（Windows/Linux 胶囊没有确认键）。
+    let readonly_visible = (category == 0 || category == 4)
+        && status != 2
+        && (query.is_empty()
+            || format!("{} Esc", tr_l10n(lang, "settings.shortcuts.cancel"))
+                .to_lowercase()
+                .contains(&query));
+    // 分母 = 命令行 + 已绑风格行 + 只读的 Esc 行（Tauri 的 `commands.length + packHotkeys.length + 1`）。
+    let total = command_total + packs.len() + 1;
+    let count = visible.len() + visible_packs.len() + usize::from(readonly_visible);
+
+    // ── 工具栏：搜索 + 计数 ─────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - 70.0).max(160.0);
+        let mut text = vm.shortcuts_query.clone();
+        let response = layout::text_input(
+            ui,
+            &mut text,
+            egui::Id::new("openless-shortcuts-search"),
+            tr_l10n(lang, "uiRefinement.shortcutsSearch"),
+            width,
+            false,
+        );
+        if response.changed() {
+            actions.push(FrontendAction::ShortcutsQuery(text));
+        }
+        ui.label(
+            egui::RichText::new(format!("{count} / {total}"))
+                .size(11.0)
+                .color(theme::INK_4),
+        );
+    });
+    ui.add_space(8.0);
+
+    ui.horizontal_top(|ui| {
+        // ── 左：筛选 ────────────────────────────────────────────────────
+        ui.allocate_ui_with_layout(
+            egui::vec2(SHORTCUT_FILTER_WIDTH, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(SHORTCUT_FILTER_WIDTH);
+                filter_group(
+                    ui,
+                    lang,
+                    "uiRefinement.category",
+                    &[
+                        ("uiRefinement.all", 0),
+                        ("uiRefinement.recording", 1),
+                        ("uiRefinement.styles", 2),
+                        ("uiRefinement.system", 3),
+                        // 只读行（Esc）在「系统」下与筛选值 4 对应。
+                    ],
+                    category,
+                    |value| actions.push(FrontendAction::ShortcutsCategory(value)),
+                );
+                ui.add_space(10.0);
+                filter_group(
+                    ui,
+                    lang,
+                    "uiRefinement.status",
+                    &[
+                        ("uiRefinement.all", 0),
+                        ("uiRefinement.assigned", 1),
+                        ("uiRefinement.unassigned", 2),
+                    ],
+                    status,
+                    |value| actions.push(FrontendAction::ShortcutsStatus(value)),
+                );
+            },
+        );
+        ui.add_space(12.0);
+        // ── 右：命令行 ──────────────────────────────────────────────────
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "uiRefinement.shortcutHint"))
+                    .size(11.0)
+                    .color(theme::INK_3),
+            );
+            ui.add_space(4.0);
+            for row in &visible {
+                shortcut_recorder_row(ui, vm, actions, row, true);
+            }
+            for (index, row) in &visible_packs {
+                style_pack_recorder_row(ui, vm, actions, *index, row);
+            }
+            if readonly_visible {
+                readonly_keycap_row(ui, tr_l10n(lang, "settings.shortcuts.cancel"), "", "Esc");
+            }
+            if count == 0 {
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "uiRefinement.noResults"))
+                        .size(11.5)
+                        .color(theme::INK_3),
+                );
+            }
+            // 添加风格快捷键：只在「全部/风格」且没有搜索时出现。
+            if (category == 0 || category == 2) && query.is_empty() {
+                ui.add_space(6.0);
+                style_pack_add_row(ui, vm, actions);
+            }
+        });
+    });
+    let _ = pack_names;
+}
+
+const SHORTCUT_FILTER_WIDTH: f32 = 132.0;
+
+/// 一组筛选按钮（标题 + 竖排选项）。Tauri 用 `aria-pressed` 表达选中态。
+fn filter_group(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    title_key: &'static str,
+    options: &[(&'static str, u8)],
+    active: u8,
+    mut on_select: impl FnMut(u8),
+) {
+    ui.label(
+        egui::RichText::new(tr_l10n(lang, title_key))
+            .size(11.0)
+            .color(theme::INK_3),
+    );
+    for (label_key, value) in options {
+        let selected = active == *value;
+        let label = tr_l10n(lang, label_key);
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+        let response = ui.interact(
+            rect,
+            ui.id().with(("shortcut-filter", label_key)),
+            egui::Sense::click(),
+        );
+        if selected {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(7), theme::SURFACE_2);
+        } else if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(7),
+                theme::SURFACE_2.gamma_multiply(0.6),
+            );
+        }
+        ui.painter().text(
+            egui::pos2(rect.left() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            if selected { theme::INK } else { theme::INK_2 },
+        );
+        if response.clicked() {
+            on_select(*value);
+        }
+    }
+}
+
+/// 一条命令行：左侧标签（+说明），右侧录制器（键帽 / ↻ / ✕）。
+fn shortcut_recorder_row(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    row: &ShortcutRow,
+    with_reset: bool,
+) {
+    let lang = vm.lang;
+    let recording = vm.shortcut_recording == Some(row.field);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 40.0),
+        egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            for row in &rows[..5] {
-                shortcut_row(ui, vm, actions, row);
-            }
-            // 风格直达快捷键：Tauri 把它放在「切换到上一个风格」之后、打开 App 之前。
-            style_pack_hotkey_block(ui, vm, actions);
-            for row in &rows[5..] {
-                if row.field == ShortcutField::CodingAgentVoice && !vm.settings.testing_features {
-                    continue;
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(row.label).size(12.5).color(theme::INK));
+                if !row.hint.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&row.hint)
+                            .size(10.5)
+                            .color(theme::INK_4),
+                    );
                 }
-                shortcut_row(ui, vm, actions, row);
-            }
-            // 取消本次录音：Tauri 只展示 Esc，不可编辑（Windows/Linux 胶囊无确认键）。
-            readonly_keycap_row(ui, tr_l10n(lang, "settings.shortcuts.cancel"), "", "Esc");
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if recording {
+                    recording_panel(ui, vm, actions, row.field);
+                    return;
+                }
+                // 从右往左：✕ 清空 → ↻ 重置 → 键帽
+                if row.can_disable
+                    && icon_action(ui, IconName::Close, ("shortcut-clear", row.field))
+                {
+                    actions.push(FrontendAction::ShortcutDisable(row.field));
+                }
+                if with_reset && icon_action(ui, IconName::Refresh, ("shortcut-reset", row.field)) {
+                    actions.push(FrontendAction::ShortcutReset(row.field));
+                }
+                let assigned = !row.value.trim().is_empty();
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(chips_width(ui, &row.value), 26.0),
+                    egui::Sense::click(),
+                );
+                let response = ui.interact(
+                    rect,
+                    ui.id().with(("shortcut-record", row.field)),
+                    egui::Sense::click(),
+                );
+                if assigned {
+                    keycaps_in_rect(ui, rect, &row.value);
+                } else {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "＋",
+                        egui::FontId::proportional(13.0),
+                        theme::INK_3,
+                    );
+                }
+                if response.clicked() {
+                    actions.push(FrontendAction::ShortcutRecording(Some(row.field)));
+                }
+                let _ = lang;
+            });
         },
     );
-    // 选区工作区：划词润色快捷键（可录制/停用）+ 交付方式。
-    card(
-        ui,
-        tr_l10n(lang, "settings.selection_workspace.title"),
-        tr_l10n(lang, "settings.selection_workspace.hint"),
+    separator_line(ui);
+}
+
+/// 「＋ 添加风格快捷键」与已有的风格行（选择器 + 录制器 + ✕）。
+fn style_pack_recorder_row(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    index: usize,
+    row: &StylePackHotkeyRow,
+) {
+    let recording = vm.shortcut_recording == Some(ShortcutField::StylePack(index));
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 40.0),
+        egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            shortcut_row(
+            style_pack_picker(
                 ui,
-                vm,
+                &vm.style_packs.clone(),
+                &row.pack_id,
+                &row.name,
+                Some(index),
                 actions,
-                &ShortcutRow {
-                    field: ShortcutField::SelectionPolish,
-                    label: tr_l10n(lang, "settings.selection_workspace.polish_hotkey"),
-                    value: vm.selection_polish_hotkey.clone(),
-                    can_disable: true,
-                    hint: tr_l10n(lang, "settings.selection_workspace.polish_hotkey_desc")
-                        .to_string(),
-                },
+                vm.lang,
             );
-            segmented_row(
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if recording {
+                    recording_panel(ui, vm, actions, ShortcutField::StylePack(index));
+                    return;
+                }
+                if icon_action(ui, IconName::Close, ("style-hotkey-remove", index)) {
+                    actions.push(FrontendAction::StyleHotkeyRemove(index));
+                }
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(chips_width(ui, &row.hotkey), 26.0),
+                    egui::Sense::click(),
+                );
+                let response = ui.interact(
+                    rect,
+                    ui.id().with(("style-shortcut-record", index)),
+                    egui::Sense::click(),
+                );
+                if !row.hotkey.trim().is_empty() {
+                    keycaps_in_rect(ui, rect, &row.hotkey);
+                } else {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "＋",
+                        egui::FontId::proportional(13.0),
+                        theme::INK_3,
+                    );
+                }
+                if response.clicked() {
+                    actions.push(FrontendAction::ShortcutRecording(Some(
+                        ShortcutField::StylePack(index),
+                    )));
+                }
+            });
+        },
+    );
+    separator_line(ui);
+}
+
+fn style_pack_add_row(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let lang = vm.lang;
+    if !vm.style_hotkey_draft_open {
+        let label = format!("+ {}", tr_l10n(lang, "settings.shortcuts.style_pack_add"));
+        if ui
+            .add(
+                egui::Label::new(egui::RichText::new(label).size(11.5).color(theme::BLUE))
+                    .sense(egui::Sense::click()),
+            )
+            .clicked()
+        {
+            actions.push(FrontendAction::StyleHotkeyDraft(true));
+        }
+        return;
+    }
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 40.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            style_pack_picker(
                 ui,
-                tr_l10n(lang, "settings.selection_workspace.polish_delivery"),
-                "",
-                &[
-                    tr_l10n(lang, "settings.selection_polish.direct_replace"),
-                    tr_l10n(lang, "settings.selection_polish.preview_confirm"),
-                ],
-                vm.settings.selection_polish_delivery.min(1),
-                |val| {
-                    actions.push(FrontendAction::SettingsCombo(
-                        SettingsComboField::SelectionPolishDelivery,
-                        val,
-                    ));
-                },
+                &vm.style_packs.clone(),
+                vm.style_packs
+                    .get(vm.style_hotkey_draft_pack)
+                    .map(|pack| pack.id.as_str())
+                    .unwrap_or(""),
+                vm.style_packs
+                    .get(vm.style_hotkey_draft_pack)
+                    .map(|pack| pack.name.as_str())
+                    .unwrap_or(""),
+                None,
+                actions,
+                lang,
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icon_action(ui, IconName::Close, ("style-draft-cancel", 0)) {
+                    actions.push(FrontendAction::StyleHotkeyDraft(false));
+                }
+                recording_panel(ui, vm, actions, ShortcutField::StyleDraft);
+            });
         },
     );
 }
 
-/// 一行可编辑快捷键的展示数据。
+/// 键帽总宽度（用于给点击区域留出准确空间）。
+fn chips_width(ui: &egui::Ui, combo: &str) -> f32 {
+    let mut width = 0.0;
+    for part in combo
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        width += layout::text_width(ui, part, 11.0) + 16.0 + 4.0;
+    }
+    if width <= 0.0 {
+        // 未分配：给一个「＋」的点击区。
+        26.0
+    } else {
+        width
+    }
+}
+
+/// 在给定矩形内画键帽（从右往左排，与 Tauri 的 `KbdGroup` 顺序一致）。
+fn keycaps_in_rect(ui: &mut egui::Ui, rect: egui::Rect, combo: &str) {
+    let mut x = rect.right();
+    for part in combo
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let width = layout::text_width(ui, part, 11.0) + 16.0;
+        let key = egui::Rect::from_min_size(
+            egui::pos2(x - width, rect.center().y - 11.0),
+            egui::vec2(width, 22.0),
+        );
+        ui.painter()
+            .rect_filled(key, egui::CornerRadius::same(6), theme::SURFACE_2);
+        ui.painter().rect_stroke(
+            key,
+            egui::CornerRadius::same(6),
+            egui::Stroke::new(0.5, theme::LINE_STRONG),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            key.center(),
+            egui::Align2::CENTER_CENTER,
+            part,
+            egui::FontId::proportional(11.0),
+            theme::INK_2,
+        );
+        x -= width + 4.0;
+    }
+}
+
+/// 26×26 的图标按钮（重置 ↻ / 清空 ✕）。
+fn icon_action(
+    ui: &mut egui::Ui,
+    icon: IconName,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    let response = ui.interact(rect, ui.id().with(salt), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
+    }
+    let color = if response.hovered() {
+        theme::INK_2
+    } else {
+        theme::INK_4
+    };
+    crate::ui::frontend::icons::draw_icon_sized(ui, rect.center(), icon, color, 13.0);
+    response.clicked()
+}
+
+/// 一行可编辑快捷键的展示数据。/// 一行可编辑快捷键的展示数据。
 pub(super) struct ShortcutRow {
     field: ShortcutField,
     label: &'static str,
@@ -1461,180 +1892,6 @@ fn draw_chevron_down(ui: &egui::Ui, center: egui::Pos2, open: bool, color: egui:
         stroke,
     );
 }
-/// 「风格直达快捷键」子块：小标题 + 说明 + 每行（风格选择器 + 键帽 + chevron）+
-/// 「＋ 添加风格快捷键」。整块放在「快捷键设置」卡片内部（Tauri 的位置）。
-fn style_pack_hotkey_block(
-    ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
-    actions: &mut Vec<FrontendAction>,
-) {
-    let lang = vm.lang;
-    ui.add_space(10.0);
-    ui.label(
-        egui::RichText::new(tr_l10n(lang, "settings.shortcuts.style_pack_title"))
-            .size(13.0)
-            .strong()
-            .color(theme::INK),
-    );
-    ui.label(
-        egui::RichText::new(tr_l10n(lang, "settings.shortcuts.style_pack_desc"))
-            .size(11.0)
-            .color(theme::INK_4),
-    );
-    ui.add_space(6.0);
-
-    let rows = vm.settings.style_pack_hotkeys.clone();
-    let packs = vm.style_packs.clone();
-    for (index, row) in rows.iter().enumerate() {
-        let recording = vm.shortcut_recording == Some(ShortcutField::StylePack(index));
-        let menu_open = vm.shortcut_menu == Some(ShortcutField::StylePack(index));
-        ui.horizontal(|ui| {
-            ui.set_min_height(40.0);
-            style_pack_picker(
-                ui,
-                &packs,
-                &row.pack_id,
-                &row.name,
-                Some(index),
-                actions,
-                lang,
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if recording {
-                    recording_panel(ui, vm, actions, ShortcutField::StylePack(index));
-                    return;
-                }
-                // chevron → 录制 / 移除
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-                let response = ui.interact(
-                    rect,
-                    ui.id().with(("style-hotkey-menu", index)),
-                    egui::Sense::click(),
-                );
-                if response.hovered() {
-                    ui.painter()
-                        .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
-                }
-                draw_chevron_down(ui, rect.center(), menu_open, theme::INK_4);
-                if response.clicked() {
-                    actions.push(FrontendAction::ShortcutMenu(if menu_open {
-                        None
-                    } else {
-                        Some(ShortcutField::StylePack(index))
-                    }));
-                }
-                ui.add_space(4.0);
-                keycaps_in(ui, &row.hotkey);
-            });
-        });
-        separator_line(ui);
-        if menu_open && !recording {
-            ui.horizontal(|ui| {
-                ui.set_min_height(34.0);
-                let record = tr_l10n(lang, "settings.recording.combo_record_btn");
-                let width = layout::text_width(ui, record, 12.0) + 24.0;
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-                if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft)
-                    .clicked()
-                {
-                    actions.push(FrontendAction::ShortcutRecording(Some(
-                        ShortcutField::StylePack(index),
-                    )));
-                }
-                ui.add_space(6.0);
-                let remove = tr_l10n(lang, "settings.shortcuts.style_pack_remove");
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
-                if layout::action_button(ui, rect, remove, None, layout::ButtonKind::Ghost)
-                    .clicked()
-                {
-                    actions.push(FrontendAction::StyleHotkeyRemove(index));
-                }
-            });
-        }
-    }
-
-    // 草稿行：先选风格包、再录快捷键（Tauri 的 draft 行）。
-    if vm.style_hotkey_draft_open {
-        let draft_id = packs
-            .get(vm.style_hotkey_draft_pack)
-            .map(|pack| pack.id.clone())
-            .unwrap_or_default();
-        let draft_recording = vm.shortcut_recording == Some(ShortcutField::StyleDraft);
-        ui.horizontal(|ui| {
-            ui.set_min_height(40.0);
-            style_pack_picker(ui, &packs, &draft_id, "", None, actions, lang);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
-                let cancel_response = ui.interact(
-                    rect,
-                    ui.id().with("style-hotkey-draft-cancel"),
-                    egui::Sense::click(),
-                );
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "✕",
-                    egui::FontId::proportional(12.0),
-                    if cancel_response.hovered() {
-                        theme::ERR
-                    } else {
-                        theme::INK_4
-                    },
-                );
-                if cancel_response.clicked() {
-                    actions.push(FrontendAction::StyleHotkeyDraft(false));
-                }
-                ui.add_space(6.0);
-                if draft_recording {
-                    recording_panel(ui, vm, actions, ShortcutField::StyleDraft);
-                } else {
-                    let record = tr_l10n(lang, "settings.recording.combo_record_btn");
-                    let width = layout::text_width(ui, record, 12.0) + 24.0;
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-                    if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft)
-                        .clicked()
-                    {
-                        actions.push(FrontendAction::ShortcutRecording(Some(
-                            ShortcutField::StyleDraft,
-                        )));
-                    }
-                }
-            });
-        });
-        separator_line(ui);
-    } else {
-        // 「＋ 添加风格快捷键」虚线按钮（Tauri 的 stylePackAdd）。
-        let label = format!("+ {}", tr_l10n(lang, "settings.shortcuts.style_pack_add"));
-        let width = layout::text_width(ui, &label, 12.0) + 24.0;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-        ui.painter().rect_stroke(
-            rect,
-            egui::CornerRadius::same(6),
-            egui::Stroke::new(0.5, theme::LINE_STRONG),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            &label,
-            egui::FontId::proportional(12.0),
-            theme::INK_3,
-        );
-        if ui
-            .interact(rect, ui.id().with("style-hotkey-add"), egui::Sense::click())
-            .clicked()
-        {
-            actions.push(FrontendAction::StyleHotkeyDraft(true));
-        }
-    }
-    ui.add_space(4.0);
-}
-
 /// 选择器变更后要发的动作。
 ///
 /// `row` 是已有风格包行的下标；草稿行（`None`）只能改「待新建的包」，绝不能写成
@@ -4914,42 +5171,6 @@ fn help_dot(ui: &mut egui::Ui, hint: &str) -> egui::Response {
         theme::INK_4,
     );
     response.on_hover_text(hint)
-}
-
-/// Tauri `iconButtonStyle` 的关闭按钮（28×28 / r8 / 细边），用在设置顶栏。
-fn close_button(ui: &mut egui::Ui) -> bool {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
-    let fill = if response.hovered() {
-        theme::SURFACE_2.gamma_multiply(1.06)
-    } else {
-        theme::SURFACE_2
-    };
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), fill);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(0.5, theme::LINE),
-        egui::StrokeKind::Inside,
-    );
-    let center = rect.center();
-    let stroke = egui::Stroke::new(1.3, theme::INK_3);
-    let arm = 5.0;
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x - arm, center.y - arm),
-            egui::pos2(center.x + arm, center.y + arm),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x + arm, center.y - arm),
-            egui::pos2(center.x - arm, center.y + arm),
-        ],
-        stroke,
-    );
-    response.clicked()
 }
 
 pub(super) fn toggle_row(
