@@ -7204,6 +7204,22 @@ pub const CATALOG: &[Msg] = &[
         key: "uiRefinement.system",
         text: row("系统", "系统", "System", "System", "System"),
     },
+    Msg {
+        key: "uiRefinement.comfortable",
+        text: row("舒适", "舒适", "Comfortable", "Comfortable", "Comfortable"),
+    },
+    Msg {
+        key: "uiRefinement.narrow",
+        text: row("聚焦", "聚焦", "Focused", "Focused", "Focused"),
+    },
+    Msg {
+        key: "uiRefinement.native",
+        text: row("系统默认", "系统默认", "System", "System", "System"),
+    },
+    Msg {
+        key: "uiRefinement.wide",
+        text: row("宽阔", "宽阔", "Wide", "Wide", "Wide"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

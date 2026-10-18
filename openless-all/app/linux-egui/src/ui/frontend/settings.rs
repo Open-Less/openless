@@ -2009,10 +2009,18 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
     let typography = vm.typography;
     card(ui, tr_l10n(lang, "uiRefinement.typography"), "", |ui| {
         use openless_linux_egui::typography::{ContentWidth, FontScale, TypographyField, UiFont};
-        let fonts: Vec<&str> = UiFont::ALL
-            .iter()
-            .map(|font| tr_l10n(lang, font.label_key()))
-            .collect();
+        // 与 Tauri 的 FontCatalog 一致：只有「系统默认」是本地化文案，
+        // 其余直接显示字体本名（不翻译）。这里必须写成字面量，否则
+        // i18n 同步脚本扫不到 key，界面上会直接显示 `uiRefinement.native`。
+        let fonts: Vec<&str> = vec![
+            tr_l10n(lang, "uiRefinement.native"),
+            "Avenir Next · Aptos",
+            "PingFang · 苹方 / 微软雅黑",
+            "New York · Georgia",
+            "Songti · 宋体",
+            "SF Mono · Cascadia Code",
+            "Menlo · Consolas",
+        ];
         let font_index = UiFont::ALL
             .iter()
             .position(|font| *font == typography.font)
@@ -2050,10 +2058,11 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
                 }
             },
         );
-        let widths: Vec<&str> = ContentWidth::ALL
-            .iter()
-            .map(|width| tr_l10n(lang, width.label_key()))
-            .collect();
+        let widths: Vec<&str> = vec![
+            tr_l10n(lang, "uiRefinement.narrow"),
+            tr_l10n(lang, "uiRefinement.comfortable"),
+            tr_l10n(lang, "uiRefinement.wide"),
+        ];
         let width_index = ContentWidth::ALL
             .iter()
             .position(|width| *width == typography.width)

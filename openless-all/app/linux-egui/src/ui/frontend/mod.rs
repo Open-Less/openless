@@ -1142,6 +1142,72 @@ mod tests {
         );
     }
 
+    /// 设置页任何分区都不能把 i18n key 当文案画出来。
+    ///
+    /// 之前「字体与排版」的三行显示成 `uiRefinement.native` / `.comfortable`：
+    /// 标签是通过 `font.label_key()` 取到的，i18n 同步脚本只扫字面量，
+    /// key 没进 egui 目录，`tr_l10n` 就原样回吐。这里用「点后面带大写字母」
+    /// 的启发式认 key（域名不会长成这样），把这类回归钉住。
+    #[test]
+    fn no_settings_section_paints_a_raw_i18n_key() {
+        fn looks_like_key(text: &str) -> bool {
+            let Some((head, tail)) = text.split_once('.') else {
+                return false;
+            };
+            !head.is_empty()
+                && head.chars().all(|c| c.is_ascii_alphanumeric())
+                && tail.chars().any(|c| c.is_ascii_uppercase())
+                && tail
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+        }
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().trim().to_string()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let sections = [
+            super::view_model::SettingsSection::General,
+            super::view_model::SettingsSection::Shortcuts,
+            super::view_model::SettingsSection::Services,
+            super::view_model::SettingsSection::Appearance,
+            super::view_model::SettingsSection::Privacy,
+            super::view_model::SettingsSection::Advanced,
+            super::view_model::SettingsSection::About,
+        ];
+        for section in sections {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: openless_linux_egui::Lang::ZhCn,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: section,
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut actions);
+                let output = crate::ui::frontend::end_pass(&ctx);
+                let mut lines = Vec::new();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut lines);
+                }
+                let raw: Vec<&String> = lines.iter().filter(|line| looks_like_key(line)).collect();
+                assert!(raw.is_empty(), "{section:?} painted raw i18n keys: {raw:?}");
+            }
+        }
+    }
+
     /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。
     #[test]
     fn clicking_outside_the_recording_panel_stops_recording() {

@@ -67,19 +67,6 @@ impl UiFont {
             Self::Mono | Self::Menlo => "monospace",
         }
     }
-
-    /// i18n key for the dropdown label.
-    pub fn label_key(self) -> &'static str {
-        match self {
-            Self::System => "uiRefinement.native",
-            Self::Humanist => "uiRefinement.fontHumanist",
-            Self::Cjk => "uiRefinement.fontCjk",
-            Self::Serif => "uiRefinement.fontSerif",
-            Self::Song => "uiRefinement.fontSong",
-            Self::Mono => "uiRefinement.fontMono",
-            Self::Menlo => "uiRefinement.fontMenlo",
-        }
-    }
 }
 
 /// 90% / 100% / 110%, matching Tauri's `fontScale` ids.
@@ -156,14 +143,6 @@ impl ContentWidth {
             Self::Narrow => 620.0,
             Self::Comfortable => 800.0,
             Self::Wide => 980.0,
-        }
-    }
-
-    pub fn label_key(self) -> &'static str {
-        match self {
-            Self::Narrow => "uiRefinement.narrow",
-            Self::Comfortable => "uiRefinement.comfortable",
-            Self::Wide => "uiRefinement.wide",
         }
     }
 }
