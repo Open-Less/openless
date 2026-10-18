@@ -164,9 +164,6 @@ jobs:
           # Android does not use the local Qwen3/Whisper C submodules.
           submodules: false
 
-      - name: Disable macOS-only Qwen3 MLX dependency
-        run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
-
       - name: Check updater signing availability (tag release)
         if: needs.plan.outputs.is_tag_release == 'true'
         shell: bash
@@ -548,7 +545,8 @@ jobs:
           name: OpenLess ${{ github.ref_name }}
           # The desktop and Android jobs share one Beta draft. Publish it only
           # after all jobs and package verification have finished.
-          draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
+          # Publication is administrator-controlled after both asset workflows pass.
+          draft: true
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md

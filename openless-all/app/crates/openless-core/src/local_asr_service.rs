@@ -69,11 +69,27 @@ pub trait ModelRuntimeAdapter: Send + Sync {
         self.engine_available(target.runtime)
     }
 
+    /// Pure inspection: must not create a native manager, worker or device.
     fn inspect_native_models(
         &self,
         _targets: Vec<LocalAsrTarget>,
     ) -> BoxFuture<'static, Result<Vec<NativeModelState>, BackendError>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Some vendor SDKs initialize their runtime while downloading. After that
+    /// explicit operation, block further use until a fresh application process.
+    fn restart_required(&self, _runtime: LocalAsrRuntime) -> bool {
+        false
+    }
+
+    fn download_native_model(
+        &self,
+        _target: LocalAsrTarget,
+        _source: FoundryRuntimeSource,
+        _progress: ModelPrepareProgressSink,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported("native model download")
     }
 
     fn native_model_dir(
@@ -193,7 +209,6 @@ pub(crate) struct LocalAsrService {
     credentials: Arc<dyn CredentialStore>,
     activation_generation: Arc<AtomicU64>,
     activation_lock: Arc<tokio::sync::Mutex<()>>,
-    active_lease: Arc<std::sync::Mutex<Option<LocalAsrRuntimeLease>>>,
 }
 
 impl LocalAsrService {
@@ -216,7 +231,6 @@ impl LocalAsrService {
             credentials,
             activation_generation: Arc::new(AtomicU64::new(0)),
             activation_lock: Arc::new(tokio::sync::Mutex::new(())),
-            active_lease: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -276,7 +290,8 @@ impl LocalAsrService {
         let active_model = Self::active_model(&preferences, runtime);
         let target = LocalAsrTarget::parse(runtime, active_model.clone())?;
         let model_dir = model_store.runtime_model_dir(&target)?;
-        adapter
+        let restart_required = adapter.restart_required(runtime);
+        let mut status = adapter
             .runtime_status(
                 LocalAsrSettings {
                     runtime,
@@ -304,7 +319,9 @@ impl LocalAsrService {
                 },
                 model_dir,
             )
-            .await
+            .await?;
+        status.restart_required = restart_required;
+        Ok(status)
     }
 
     async fn publish_runtime_status(
@@ -344,7 +361,18 @@ impl LocalAsrService {
         })
     }
 
+    fn validate_target(&self, target: &LocalAsrTarget) -> Result<(), BackendError> {
+        if crate::experimental_asr::ExperimentalAsrModel::from_model_id(target.model_id()).is_some()
+            || !self.runtime.supports_model(target)
+        {
+            return Err(BackendError::new(BackendErrorCode::Unsupported,
+                "This local model is unavailable here; use Experimental local speech models"));
+        }
+        Ok(())
+    }
+
     fn prepared_model_dir(&self, target: &LocalAsrTarget) -> Result<PathBuf, BackendError> {
+        self.validate_target(target)?;
         if !self.model_store.is_native(target)? && !self.model_store.is_installed(target)? {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidState,
@@ -405,7 +433,7 @@ impl LocalAsrService {
         let provider_matches = match target.runtime {
             LocalAsrRuntime::Generic => {
                 let model = crate::LocalAsrModelId::from_wire_id(target.model_id())
-                    .expect("validated local ASR target");
+                    .ok_or_else(|| BackendError::new(BackendErrorCode::InvalidArgument, "Experimental models have their own activation switch"))?;
                 if model.is_qwen() {
                     matches!(
                         provider_type,
@@ -434,74 +462,37 @@ impl LocalAsrService {
     }
 }
 
-async fn release_activation_lease(
-    adapter: &Arc<dyn ModelRuntimeAdapter>,
-    generation_clock: &Arc<AtomicU64>,
-    operation_generation: u64,
-    lease: LocalAsrRuntimeLease,
-) -> Result<(), BackendError> {
-    if generation_clock.load(Ordering::Acquire) != operation_generation {
-        return Ok(());
-    }
-    adapter.release_lease(lease).await
+fn restart_required_error() -> BackendError {
+    BackendError::new(
+        BackendErrorCode::InvalidState,
+        "Restart OpenLess after downloading native runtime components before using local ASR",
+    )
 }
 
-async fn restore_activation_runtime(
+async fn ensure_model_installed(
     adapter: &Arc<dyn ModelRuntimeAdapter>,
-    model_store: &Arc<crate::model_store::ModelStore>,
-    operation_generation: u64,
-    requested: &LocalAsrTarget,
-    previous: Option<&LocalAsrRuntimeLease>,
-    previous_preferences: &UserPreferences,
-    progress: ModelPrepareProgressSink,
-) -> Vec<BackendError> {
-    // Native Windows runtimes already replace their own model during prepare;
-    // preserve their existing same-target rollback behavior. Generic cache
-    // ownership must be restored even when only the activation owner changed.
-    if requested.runtime != LocalAsrRuntime::Generic
-        && previous.map(|lease| &lease.target) == Some(requested)
-    {
-        return Vec::new();
+    store: &Arc<crate::model_store::ModelStore>,
+    target: &LocalAsrTarget,
+) -> Result<(), BackendError> {
+    if !adapter.supports_model(target) || crate::experimental_asr::ExperimentalAsrModel::from_model_id(target.model_id()).is_some() {
+        return Err(BackendError::new(BackendErrorCode::Unsupported, "Use Experimental local speech models"));
     }
-    let mut errors = Vec::new();
-    if let Err(error) = adapter
-        .release_lease(LocalAsrRuntimeLease {
-            target: requested.clone(),
-            generation: operation_generation,
-        })
-        .await
-    {
-        errors.push(error);
+    let installed = if store.is_native(target)? {
+        adapter
+            .inspect_native_models(vec![target.clone()])
+            .await?
+            .iter()
+            .any(|state| &state.target == target && state.installed)
+    } else {
+        store.is_installed(target)?
+    };
+    if !installed {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidState,
+            "local ASR model is not downloaded",
+        ));
     }
-    if let Some(previous) = previous {
-        match model_store.runtime_model_dir(&previous.target) {
-            Ok(model_dir) => {
-                let source = FoundryRuntimeSource::from_legacy(
-                    &previous_preferences.foundry_local_runtime_source,
-                );
-                match adapter
-                    .prepare(previous.target.clone(), source, model_dir.clone(), progress)
-                    .await
-                {
-                    Ok(_) => {
-                        if let Err(error) = adapter
-                            .preload_lease(
-                                previous.clone(),
-                                model_dir,
-                                previous_preferences.active_asr_provider.clone(),
-                            )
-                            .await
-                        {
-                            errors.push(error);
-                        }
-                    }
-                    Err(error) => errors.push(error),
-                }
-            }
-            Err(error) => errors.push(error),
-        }
-    }
-    errors
+    Ok(())
 }
 
 fn activation_error(primary: BackendError, rollback: Vec<BackendError>) -> BackendError {
@@ -600,7 +591,6 @@ impl LocalAsrApi for LocalAsrService {
         let preferences_revision = Arc::clone(&self.preferences_revision);
         let generation_clock = Arc::clone(&self.activation_generation);
         let activation_lock = Arc::clone(&self.activation_lock);
-        let active_lease = Arc::clone(&self.active_lease);
         Box::pin(async move {
             let _guard = activation_lock.lock().await;
             let previous_preferences = preferences.get();
@@ -629,140 +619,31 @@ impl LocalAsrApi for LocalAsrService {
                 .unwrap_or_else(|| request.provider_id.clone());
             Self::validate_activation_provider(&request.target, &provider_type)?;
             let generation = generation_clock.fetch_add(1, Ordering::AcqRel) + 1;
+            // Activation is a settings transaction, not a runtime operation. In
+            // particular, restoring saved settings must never download or load.
+            ensure_model_installed(&adapter, &model_store, &request.target).await?;
+            if adapter.restart_required(request.target.runtime) {
+                return Err(restart_required_error());
+            }
             let previous_target = Self::target_for_active_preferences(&previous_preferences);
-            let previous_lease = active_lease
-                .lock()
-                .expect("local ASR activation lease lock poisoned")
-                .clone()
-                .filter(|lease| previous_target.as_ref() == Some(&lease.target))
-                .or_else(|| {
-                    previous_target.map(|target| LocalAsrRuntimeLease {
-                        target,
-                        generation: generation.saturating_sub(1),
-                    })
-                });
-            if !model_store.is_native(&request.target)?
-                && !model_store.is_installed(&request.target)?
-            {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "local ASR model is not downloaded",
-                ));
-            }
-            let model_dir = model_store.runtime_model_dir(&request.target)?;
-            if let Some(previous) = previous_lease.as_ref() {
-                adapter.claim_lease(previous.clone());
-            }
-            let progress_events = events.clone();
-            let progress: ModelPrepareProgressSink = Arc::new(move |progress| {
-                progress_events.publish(None, BackendEventKind::LocalAsrPrepareProgress(progress));
-            });
-            let source = FoundryRuntimeSource::from_legacy(
-                &previous_preferences.foundry_local_runtime_source,
-            );
-            let prepared_model = match adapter
-                .prepare(
-                    request.target.clone(),
-                    source,
-                    model_dir.clone(),
-                    Arc::clone(&progress),
-                )
-                .await
-            {
-                Ok(model) => model,
-                Err(error) => {
-                    let rollback = restore_activation_runtime(
-                        &adapter,
-                        &model_store,
-                        generation,
-                        &request.target,
-                        previous_lease.as_ref(),
-                        &previous_preferences,
-                        progress,
-                    )
-                    .await;
-                    return Err(activation_error(error, rollback));
-                }
-            };
-            if let Err(error) = adapter
-                .preload_lease(
-                    LocalAsrRuntimeLease {
-                        target: request.target.clone(),
-                        generation,
-                    },
-                    model_dir.clone(),
-                    provider_type.clone(),
-                )
-                .await
-            {
-                let rollback = restore_activation_runtime(
-                    &adapter,
-                    &model_store,
+            if let Some(previous) = previous_target.filter(|target| {
+                target != &request.target
+                    || previous_preferences.active_asr_provider != provider_type
+            }) {
+                // Evict the old cache without aborting a recording that already
+                // owns its engine. Never reload it if metadata commit later fails.
+                let lease = LocalAsrRuntimeLease {
+                    target: previous,
                     generation,
-                    &request.target,
-                    previous_lease.as_ref(),
-                    &previous_preferences,
-                    progress,
-                )
-                .await;
-                return Err(activation_error(error, rollback));
+                };
+                adapter.claim_lease(lease.clone());
+                adapter.release_lease(lease).await?;
             }
-
-            // Finish every fallible native operation before committing the
-            // selected channel. A user may choose another channel while native
-            // preparation awaits; rolling back an old channel snapshot would
-            // erase that choice. Channel persistence is the final commit point.
-            if let Some(previous_lease) = previous_lease.as_ref() {
-                // Generic is a catalog group, not a single native cache: macOS
-                // Qwen and Whisper have independent engines. Retire the old
-                // model lease even when the replacement has the same runtime.
-                if previous_lease.target.runtime != request.target.runtime
-                    || (request.target.runtime == LocalAsrRuntime::Generic
-                        && previous_lease.target != request.target)
-                {
-                    if let Err(error) = release_activation_lease(
-                        &adapter,
-                        &generation_clock,
-                        generation,
-                        previous_lease.clone(),
-                    )
-                    .await
-                    {
-                        let rollback = restore_activation_runtime(
-                            &adapter,
-                            &model_store,
-                            generation,
-                            &request.target,
-                            Some(previous_lease),
-                            &previous_preferences,
-                            progress,
-                        )
-                        .await;
-                        return Err(activation_error(error, rollback));
-                    }
-                }
-            }
-
-            let committed_previous = match preferences.update(|current| {
+            let committed_previous = preferences.update(|current| {
                 let before = current.clone();
                 Self::apply_activation(current, &request.target, &provider_type);
                 before
-            }) {
-                Ok(before) => before,
-                Err(error) => {
-                    let rollback = restore_activation_runtime(
-                        &adapter,
-                        &model_store,
-                        generation,
-                        &request.target,
-                        previous_lease.as_ref(),
-                        &previous_preferences,
-                        progress,
-                    )
-                    .await;
-                    return Err(activation_error(error, rollback));
-                }
-            };
+            })?;
             let channel_commit = credentials
                 .mutate_channel(ChannelMutation::ActivateLocalAsr {
                     id: channel_id,
@@ -778,34 +659,17 @@ impl LocalAsrApi for LocalAsrService {
                             "credential store returned an invalid local ASR activation result",
                         )
                     });
-                    let mut rollback = restore_activation_preferences(
+                    let rollback = restore_activation_preferences(
                         &preferences,
                         &committed_previous,
                         &request,
                         &provider_type,
                     );
-                    rollback.extend(
-                        restore_activation_runtime(
-                            &adapter,
-                            &model_store,
-                            generation,
-                            &request.target,
-                            previous_lease.as_ref(),
-                            &previous_preferences,
-                            progress,
-                        )
-                        .await,
-                    );
+                    // Never reload the previous model during compensation. It
+                    // stays selected and can load on the next explicit use.
                     return Err(activation_error(error, rollback));
                 }
             };
-
-            *active_lease
-                .lock()
-                .expect("local ASR activation lease lock poisoned") = Some(LocalAsrRuntimeLease {
-                target: request.target.clone(),
-                generation,
-            });
 
             let revision = preferences_revision.fetch_add(1, Ordering::SeqCst) + 1;
             events.publish(
@@ -822,10 +686,11 @@ impl LocalAsrApi for LocalAsrService {
             )
             .await;
             Ok(LocalAsrActivationResult {
-                target: request.target,
+                target: request.target.clone(),
                 provider_id,
                 generation,
-                prepared_model,
+                // Kept for wire compatibility; activation no longer prepares a model.
+                prepared_model: request.target.model_id().to_string(),
             })
         })
     }
@@ -881,7 +746,8 @@ impl LocalAsrApi for LocalAsrService {
         let adapter = Arc::clone(&self.runtime);
         Box::pin(async move {
             let mut models = store.list_models(runtime)?;
-            models.retain(|model| adapter.supports_model(&model.target));
+            models.retain(|model| adapter.supports_model(&model.target)
+                && crate::experimental_asr::ExperimentalAsrModel::from_model_id(model.target.model_id()).is_none());
             let native = adapter
                 .inspect_native_models(
                     models
@@ -1051,6 +917,9 @@ impl LocalAsrApi for LocalAsrService {
         &self,
         target: LocalAsrTarget,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
+        if let Err(error) = self.validate_target(&target) {
+            return Box::pin(async move { Err(error) });
+        }
         let runtime = target.runtime;
         let result = self.publish_preferences(|preferences| match runtime {
             LocalAsrRuntime::Generic => {
@@ -1175,11 +1044,30 @@ impl LocalAsrApi for LocalAsrService {
         target: LocalAsrTarget,
         mirror: Option<LocalAsrMirror>,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
+        if let Err(error) = self.validate_target(&target) {
+            return Box::pin(async move { Err(error) });
+        }
         let mirror = mirror.unwrap_or_else(|| {
             LocalAsrMirror::from_legacy(&self.preferences.get().local_asr_mirror)
         });
         let store = Arc::clone(&self.model_store);
-        Box::pin(async move { store.download_target(target, mirror).await.map(|_| ()) })
+        let adapter = Arc::clone(&self.runtime);
+        let source =
+            FoundryRuntimeSource::from_legacy(&self.preferences.get().foundry_local_runtime_source);
+        let events = self.events.clone();
+        Box::pin(async move {
+            if store.is_native(&target)? {
+                let progress: ModelPrepareProgressSink = Arc::new(move |progress| {
+                    events.publish(None, BackendEventKind::LocalAsrPrepareProgress(progress));
+                });
+                adapter
+                    .download_native_model(target, source, progress)
+                    .await
+            } else {
+                // No adapter calls here: downloading files cannot initialize inference.
+                store.download_target(target, mirror).await.map(|_| ())
+            }
+        })
     }
 
     fn cancel_download(
@@ -1203,12 +1091,15 @@ impl LocalAsrApi for LocalAsrService {
         let progress: ModelPrepareProgressSink = Arc::new(move |progress| {
             progress_events.publish(None, BackendEventKind::LocalAsrPrepareProgress(progress));
         });
-        let operation = adapter.prepare(target, source, model_dir, progress);
         let preferences = Arc::clone(&self.preferences);
         let model_store = Arc::clone(&self.model_store);
         let events = self.events.clone();
         Box::pin(async move {
-            let result = operation.await?;
+            ensure_model_installed(&adapter, &model_store, &target).await?;
+            if adapter.restart_required(runtime) {
+                return Err(restart_required_error());
+            }
+            let result = adapter.prepare(target, source, model_dir, progress).await?;
             Self::publish_runtime_status(preferences, adapter, model_store, events, runtime).await;
             Ok(result)
         })
@@ -1235,18 +1126,41 @@ impl LocalAsrApi for LocalAsrService {
     }
 
     fn preload(&self, runtime: LocalAsrRuntime) -> BoxFuture<'static, Result<(), BackendError>> {
-        let preferences = self.preferences.get();
-        let target = match LocalAsrTarget::parse(runtime, Self::active_model(&preferences, runtime))
-        {
-            Ok(target) => target,
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
-        let model_dir = match self.prepared_model_dir(&target) {
-            Ok(path) => path,
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
-        self.runtime
-            .preload(target, model_dir, preferences.active_asr_provider)
+        let preferences = Arc::clone(&self.preferences);
+        let credentials = Arc::clone(&self.credentials);
+        let adapter = Arc::clone(&self.runtime);
+        let model_store = Arc::clone(&self.model_store);
+        Box::pin(async move {
+            // Explicit preload is allowed only for the enabled, selected channel.
+            // Do not trust legacy preferences: channel IDs can be UUIDs and a
+            // disabled channel may still have a saved model in preferences.
+            let active = credentials
+                .active_provider(crate::ProviderSlot::Asr)
+                .await?;
+            let channel = credentials
+                .list_channels(ChannelKind::Asr)
+                .await?
+                .into_iter()
+                .find(|channel| channel.id == active && channel.enabled)
+                .ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "Enable and select a local ASR channel before loading its model",
+                    )
+                })?;
+            let mut settings = preferences.get();
+            settings.active_asr_provider = channel.provider_type.clone();
+            let target = LocalAsrTarget::parse(runtime, Self::active_model(&settings, runtime))?;
+            Self::validate_activation_provider(&target, &channel.provider_type)?;
+            ensure_model_installed(&adapter, &model_store, &target).await?;
+            if adapter.restart_required(runtime) {
+                return Err(restart_required_error());
+            }
+            let model_dir = model_store.runtime_model_dir(&target)?;
+            adapter
+                .preload(target, model_dir, channel.provider_type)
+                .await
+        })
     }
 
     fn delete_model(&self, target: LocalAsrTarget) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -1349,6 +1263,9 @@ impl LocalAsrApi for LocalAsrService {
                 ));
             }
             let target = LocalAsrTarget::parse(LocalAsrRuntime::Generic, model_id)?;
+            if !runtime.supports_model(&target) {
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "This local ASR engine is retired or unavailable"));
+            }
             if !model_store.is_native(&target)? && !model_store.is_installed(&target)? {
                 return Err(BackendError::new(
                     BackendErrorCode::InvalidState,

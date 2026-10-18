@@ -64,7 +64,7 @@
   gap: 12px;
   padding: 0 4px 12px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   color: var(--ol-ink-3);
 }
 .ol-model-list-heading > :last-child {
@@ -109,7 +109,7 @@
 }
 .ol-model-choice-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -137,7 +137,7 @@
   background: var(--ol-surface-2);
   color: var(--ol-ink-3);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   line-height: 1.5;
 }
 .ol-model-status.is-active {
@@ -178,7 +178,7 @@
 .ol-model-eyebrow {
   font-size: 12px;
   color: var(--ol-ink-3);
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
 }
 .ol-model-facts {
   display: grid;
@@ -194,7 +194,7 @@
 .ol-model-facts dd {
   margin: 0;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   line-height: 1.6;
   color: var(--ol-ink);
   overflow-wrap: anywhere;
@@ -251,7 +251,7 @@
 .ol-model-empty h3 {
   margin: 3px 0 0;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-model-empty p {
   max-width: 380px;
@@ -314,7 +314,7 @@
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   color: var(--ol-ink);
 }
 .ol-model-download-progress .is-error {
@@ -440,7 +440,7 @@
 .ol-model-filters button[aria-pressed='true'] {
   border-color: var(--ol-blue);
   color: var(--ol-blue);
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-model-catalog-detail {
   display: flex;
@@ -467,7 +467,7 @@
 .ol-model-description h4 {
   margin: 0 0 10px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-model-description > p {
   font-size: 13px;

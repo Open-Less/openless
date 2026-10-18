@@ -157,6 +157,16 @@ await test('late Tauri injection still installs the live mirror bridge', async (
   await drain();
   assert.equal(c.snapshot().preferences.locale, 'de');
 });
+await test('early edits survive nonblocking initial mirror hydration', async () => {
+  const c = context();
+  const installing = c.install();
+  await c.userLocale('de');
+  c.userFont('large');
+  await installing;
+  await drain();
+  assert.deepEqual(c.snapshot().preferences, { locale: 'de', fontScale: 'large' });
+  assert.equal(c.snapshot().locale, 'de');
+});
 await test('old mirror queued before restore cannot overwrite its native value', async () => {
   const c = context();
   await c.install();

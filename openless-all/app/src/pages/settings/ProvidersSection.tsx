@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { Hint } from '../../components/Tooltip';
 import {
   listProviderModels,
   openExternal,
@@ -74,7 +75,14 @@ export function ChannelSectionHeading({
 }) {
   return (
     <div className="ol-channel-section-heading" style={{ marginBottom: 6 }}>
-      <h3 style={{ margin: 0, fontSize: 14, color: 'var(--ol-ink)', fontWeight: 600 }}>
+      <h3
+        style={{
+          margin: 0,
+          fontSize: 14,
+          color: 'var(--ol-ink)',
+          fontWeight: 'var(--ol-font-weight-semibold)',
+        }}
+      >
         {icon && <Icon name={icon} size={15} />}
         {title}
       </h3>
@@ -106,7 +114,6 @@ function LlmThinkingToggle({
   const layoutStack = conservative || baseLayoutStack;
   return (
     <div
-      title={t('settings.providers.thinkingModeHint')}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -118,9 +125,11 @@ function LlmThinkingToggle({
       }}
     >
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
-        {t('settings.providers.thinkingModeLabel')}
+        <Hint content={t('settings.providers.thinkingModeHint')}>
+          {t('settings.providers.thinkingModeLabel')}
+        </Hint>
       </span>
-      <Toggle on={enabled} onToggle={onToggle} />
+      <Toggle label={t('settings.providers.thinkingModeLabel')} on={enabled} onToggle={onToggle} />
       <span style={{ fontSize: 11.5, color: enabled ? 'var(--ol-blue)' : 'var(--ol-ink-4)' }}>
         {enabled ? t('settings.providers.thinkingModeOn') : t('settings.providers.thinkingModeOff')}
       </span>
@@ -731,7 +740,16 @@ export function ChannelCredentialFields({
     );
   }
 
-  // Local engines (qwen3 / sherpa / foundry / Apple speech) have no key or address; model
+  // Apple Speech uses the OS recognizer and its authorization, not a model catalog.
+  if (kind === 'asr' && providerType === 'apple-speech') {
+    return (
+      <p className="ol-channel-system-recognition-hint">
+        {t('settings.providers.appleSpeechLocalNote')}
+      </p>
+    );
+  }
+
+  // Downloaded engines (qwen3 / sherpa / foundry) have no key or address; model
   // download and switching stay with <LocalAsr embedded /> under "Advanced -> Local models",
   // so only a one-line note here.
   if (descriptor?.authRequirement === 'none') {
@@ -2095,7 +2113,7 @@ const miniBtnStyle: CSSProperties = {
   cursor: 'pointer',
   flexShrink: 0,
   fontSize: 12.5,
-  fontWeight: 500,
+  fontWeight: 'var(--ol-font-weight-medium)',
   letterSpacing: '0.01em',
   transition:
     'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.16s var(--ol-motion-quick)',

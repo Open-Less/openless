@@ -155,6 +155,7 @@ async fn main() -> Result<(), BackendError> {
     // requiring a coding-agent process.
     let mut less_computer_preferences = backend.get_preferences();
     less_computer_preferences.coding_agent_enabled = true;
+    less_computer_preferences.testing_features_enabled = true;
     linux_host.update_settings_strict(
         less_computer_preferences,
         linux_host.snapshot().preferences_revision,

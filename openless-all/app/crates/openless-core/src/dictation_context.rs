@@ -3,6 +3,7 @@
 //! Hosts and provider adapters receive this snapshot instead of re-reading
 //! mutable preferences while recording, transcribing, polishing or inserting.
 
+use crate::audio::AudioProcessingConfig;
 use crate::shared_types::{
     AndroidInsertStrategy, ChineseScriptPreference, MacosNewlineMode, OutputLanguagePreference,
     PasteShortcut, PipelineMode, UserPreferences, WindowsInsertionMode,
@@ -135,6 +136,9 @@ pub struct DictationPolishContext {
     pub output_language_preference: OutputLanguagePreference,
     pub llm_thinking_enabled: bool,
     pub context_window_minutes: u32,
+    /// Transcripts with at most this many non-whitespace characters skip
+    /// polish (0 = off). See `DictationContext::skips_polish_for_short_text`.
+    pub polish_skip_max_chars: u32,
     pub front_app: Option<String>,
     pub cursor_context: Option<String>,
     /// Newest-first turns captured when the session starts.
@@ -181,6 +185,7 @@ pub struct RecordingPlan {
     pub retention_days: u32,
     pub max_entries: Option<u32>,
     pub silence_after_ms: Option<u64>,
+    pub audio_processing: AudioProcessingConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +202,10 @@ pub struct DictationContext {
     /// preserve the start-time resolution failure instead of using a disabled
     /// channel or silently selecting a newly configured provider.
     pub deferred_llm_error: Option<crate::errors::BackendError>,
+    /// Preserve the selected polish style while plain dictation temporarily
+    /// uses Raw because its LLM channel is not configured. The capture can be
+    /// retargeted to a destination that still requires polish before stopping.
+    pub(crate) unconfigured_llm_raw: Option<(PolishMode, String)>,
     pub omni: ProviderInvocation,
     pub polish: DictationPolishContext,
     pub insertion: DictationInsertionContext,
@@ -292,7 +301,10 @@ impl DictationContext {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
                 capture_generation: None,
                 mute_during_recording: preferences.mute_during_recording,
-                transcribe_after_stop: preferences.stable_transcription_enabled,
+                // TextStream is explicitly a live ASR module; do not let an old
+                // batch-mode preference silently buffer its entire recording.
+                transcribe_after_stop: preferences.stable_transcription_enabled
+                    && asr.provider_type != "experimental-textstream",
                 archive_enabled: true,
                 archive_successful_recording: matches!(
                     options.output_target,
@@ -309,6 +321,9 @@ impl DictationContext {
                 silence_after_ms: (preferences.silence_auto_stop_enabled
                     && preferences.hotkey.mode == crate::shared_types::HotkeyMode::Toggle)
                     .then(|| (preferences.silence_auto_stop_seconds * 1_000.0).round() as u64),
+                audio_processing: AudioProcessingConfig {
+                    enhancement_enabled: preferences.audio_enhancement_enabled,
+                },
             },
             pipeline_mode: crate::shared_types::effective_pipeline_mode(
                 preferences.multimodal_pipeline_enabled,
@@ -318,6 +333,7 @@ impl DictationContext {
             asr,
             llm,
             deferred_llm_error: None,
+            unconfigured_llm_raw: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -333,6 +349,7 @@ impl DictationContext {
                 output_language_preference: preferences.output_language_preference,
                 llm_thinking_enabled: preferences.llm_thinking_enabled,
                 context_window_minutes: preferences.polish_context_window_minutes,
+                polish_skip_max_chars: preferences.polish_skip_max_chars,
                 front_app: options.front_app.clone().and_then(non_blank_owned),
                 cursor_context: options.cursor_context.clone().and_then(non_blank_owned),
                 prior_turns,
@@ -423,11 +440,26 @@ impl DictationContext {
                 next.recording.archive_required = true;
             }
         }
+        next.restore_or_apply_unconfigured_llm_raw();
         next
     }
 
     fn normal_archive_successful_recording(&self) -> bool {
         self.normal_archive_successful_recording
+    }
+
+    fn restore_or_apply_unconfigured_llm_raw(&mut self) {
+        let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() else {
+            return;
+        };
+        if self.is_plain_dictation_output() && !self.polish.translation_active {
+            self.polish.mode = PolishMode::Raw;
+            self.polish.style_system_prompt =
+                crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+        } else {
+            self.polish.mode = mode;
+            self.polish.style_system_prompt = prompt;
+        }
     }
 
     pub fn effective_polish_prompts(&self, raw_text: &str) -> (String, String) {
@@ -477,6 +509,34 @@ impl DictationContext {
                     != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw))
     }
 
+    /// Plain dictation whose polished text is simply inserted or saved. Voice Edit
+    /// needs the LLM's draft, Cloud Note delivers polished output, and Q&A never
+    /// polishes; those keep their existing LLM semantics (issue #1032).
+    pub(crate) fn is_plain_dictation_output(&self) -> bool {
+        matches!(
+            self.output_target,
+            DictationOutputTarget::ForegroundApp
+                | DictationOutputTarget::QuickNote
+                | DictationOutputTarget::Undecided
+        ) && !self.polish.edit_plan_input
+            && !self.polish.selection_input
+    }
+
+    /// Issue #1032: a short transcript (at most `polish_skip_max_chars`
+    /// non-whitespace characters) is inserted as raw ASR text without an LLM
+    /// call. Translation is never skipped because its output language differs
+    /// from the transcript. A threshold of 0 disables the rule.
+    pub fn skips_polish_for_short_text(&self, transcript: &str) -> bool {
+        if self.polish.polish_skip_max_chars == 0
+            || self.polish.translation_active
+            || !self.is_plain_dictation_output()
+        {
+            return false;
+        }
+        let chars = transcript.chars().filter(|c| !c.is_whitespace()).count();
+        chars <= self.polish.polish_skip_max_chars as usize
+    }
+
     pub(crate) fn with_translation_requested(&self, requested: bool) -> Self {
         let mut updated = self.clone();
         updated.polish.translation_active = translation_effective(
@@ -484,6 +544,22 @@ impl DictationContext {
             &updated.polish.translation_target_language,
             &updated.polish.working_languages,
         );
+        updated.restore_or_apply_unconfigured_llm_raw();
+        updated
+    }
+
+    /// Mark this session as using Raw only because its LLM channel is not
+    /// configured. Keep the original style so a later destination change can
+    /// restore the polish path.
+    pub(crate) fn with_unconfigured_llm_raw(&self) -> Self {
+        let mut updated = self.clone();
+        if updated.unconfigured_llm_raw.is_none() {
+            updated.unconfigured_llm_raw = Some((
+                updated.polish.mode,
+                updated.polish.style_system_prompt.clone(),
+            ));
+        }
+        updated.restore_or_apply_unconfigured_llm_raw();
         updated
     }
 
@@ -634,6 +710,24 @@ mod tests {
     }
 
     #[test]
+    fn textstream_stays_live_without_changing_the_users_batch_preference() {
+        let preferences = UserPreferences { stable_transcription_enabled: true, ..UserPreferences::default() };
+        let pack = builtin_style_pack_for_mode(PolishMode::Structured);
+        for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
+            let context = DictationContext::capture(
+                &preferences, &pack,
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider(provider),
+                    ProviderInvocation::for_provider("openai"),
+                    ProviderInvocation::for_provider("omni"),
+                ), Vec::new(), Vec::new(), &DictationStartOptions::default(),
+            );
+            assert_eq!(context.recording.transcribe_after_stop, buffered);
+        }
+        assert!(preferences.stable_transcription_enabled);
+    }
+
+    #[test]
     fn context_is_an_owned_snapshot_of_session_preferences() {
         let mut preferences = UserPreferences {
             microphone_device_name: "USB microphone".to_string(),
@@ -641,6 +735,7 @@ mod tests {
             active_llm_provider: "openai".to_string(),
             local_asr_active_model: "qwen3-asr-1.7b".to_string(),
             stable_transcription_enabled: true,
+            audio_enhancement_enabled: true,
             history_max_entries: Some(100),
             audio_recording_max_entries: Some(7),
             working_languages: vec!["简体中文".to_string(), "English".to_string()],
@@ -674,6 +769,7 @@ mod tests {
         );
         assert_eq!(context.asr.provider_id, "local-qwen3");
         assert!(context.recording.transcribe_after_stop);
+        assert!(context.recording.audio_processing.enhancement_enabled);
         assert_eq!(context.asr.model.as_deref(), Some("qwen3-asr-1.7b"));
         // Audio archives have their own user-visible limit. History retention
         // may be much larger and must not silently override the recording cap.
@@ -757,5 +853,73 @@ mod tests {
         assert!(quick_note.recording.archive_successful_recording);
         assert!(ordinary.insertion.enabled);
         assert_eq!(ordinary.output_target, DictationOutputTarget::ForegroundApp);
+    }
+
+    #[test]
+    fn missing_llm_raw_fallback_restores_polish_for_retargeted_cloud_note() {
+        let context = DictationContext::default();
+        let original_mode = context.polish.mode;
+        let original_prompt = context.polish.style_system_prompt.clone();
+
+        let raw = context.with_unconfigured_llm_raw();
+        assert_eq!(raw.polish.mode, PolishMode::Raw);
+        assert!(!raw.uses_llm_polisher());
+
+        let cloud_note = raw.with_output_target(DictationOutputTarget::CloudNote);
+        assert_eq!(cloud_note.polish.mode, original_mode);
+        assert_eq!(cloud_note.polish.style_system_prompt, original_prompt);
+        assert!(cloud_note.uses_llm_polisher());
+
+        let ordinary = cloud_note.with_output_target(DictationOutputTarget::ForegroundApp);
+        assert_eq!(ordinary.polish.mode, PolishMode::Raw);
+        assert!(!ordinary.uses_llm_polisher());
+    }
+
+    #[test]
+    fn missing_llm_raw_fallback_restores_polish_for_translation() {
+        let mut context = DictationContext::default();
+        context.polish.translation_target_language = "English".to_string();
+        context.polish.working_languages = vec!["中文".to_string(), "English".to_string()];
+        let original_mode = context.polish.mode;
+        let raw = context.with_unconfigured_llm_raw();
+
+        let translated = raw.with_translation_requested(true);
+        assert!(translated.polish.translation_active);
+        assert_eq!(translated.polish.mode, original_mode);
+        assert!(translated.uses_llm_polisher());
+
+        let ordinary = translated.with_translation_requested(false);
+        assert!(!ordinary.polish.translation_active);
+        assert_eq!(ordinary.polish.mode, PolishMode::Raw);
+        assert!(!ordinary.uses_llm_polisher());
+    }
+
+    #[test]
+    fn short_text_polish_skip_respects_threshold_and_translation() {
+        let mut context = DictationContext::default();
+
+        // 0 disables the rule entirely.
+        context.polish.polish_skip_max_chars = 0;
+        assert!(!context.skips_polish_for_short_text("确定"));
+
+        context.polish.polish_skip_max_chars = 4;
+        // Whitespace is not counted: "a b c d" is 4 characters.
+        assert!(context.skips_polish_for_short_text("a b c d"));
+        // Exactly at the limit skips; one over does not.
+        assert!(context.skips_polish_for_short_text("确定重试"));
+        assert!(!context.skips_polish_for_short_text("确定重试好"));
+
+        // Translation output differs from the transcript, so it is never skipped.
+        context.polish.translation_active = true;
+        assert!(!context.skips_polish_for_short_text("确定"));
+
+        // Voice Edit and Cloud Note depend on the LLM output; only plain dictation skips.
+        context.polish.translation_active = false;
+        context.output_target = DictationOutputTarget::VoiceEdit;
+        assert!(!context.skips_polish_for_short_text("确定"));
+        context.output_target = DictationOutputTarget::CloudNote;
+        assert!(!context.skips_polish_for_short_text("确定"));
+        context.output_target = DictationOutputTarget::ForegroundApp;
+        assert!(context.skips_polish_for_short_text("确定"));
     }
 }

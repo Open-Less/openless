@@ -56,11 +56,11 @@ Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台�
 | --- | --- |
 | `package.json` / `package-lock.json` | npm 命令、前端依赖与锁定版本；脚本从应用目录执行 |
 | `Cargo.toml` / `Cargo.lock` | Core 与 Linux workspace；不覆盖 `src-tauri` |
-| `src-tauri/Cargo.toml` / `Cargo.lock` | Tauri Host 的独立依赖图；本地 path 子模块须在解析前就绪 |
+| `src-tauri/Cargo.toml` / `Cargo.lock` | Tauri Host 的独立依赖图；不再依赖旧 Qwen/MLX/Whisper 子模块 |
 | `src-tauri/backend-tests/Cargo.toml` | 独立 Rust 回归 crate，按 CI 选择平台执行 |
 | `vite.config.ts` / `tsconfig.json` | WebView 构建、TypeScript 与 Android 别名 |
 | `src-tauri/tauri.conf.json` / `src-tauri/capabilities/` | 应用元数据、初始窗口、打包与 Tauri 能力权限 |
-| `src-tauri/vendor/` | 原生 ASR 引擎与子模块；升级按 [qwen-asr 清单](qwen-asr-submodule-upgrade-checklist.md) |
+| `src-tauri/src/asr/local/experimental/` | 按需原生模块和独立 TextStream worker；生命周期见 [实验模型](experimental-local-asr.md) |
 | `src/lib/ipc/provider-descriptors.generated.json` | Core 导出的公开 provider 目录；生成命令见 [架构](architecture.md) |
 | `assets/remote-input/` / `assets/vocab-presets.json` | Tauri 与 Linux 共用的手机输入页面及内置词表；测试和格式化均读取这份资源 |
 | `contract/language-catalog.json` | 工作语言的原生保存值、显示代码、ASR 代码与 Apple locale；前端及 Core 直接共用，新增语种不分别修改三份映射 |

@@ -33,6 +33,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
 pub mod host_document;
@@ -218,7 +219,10 @@ pub use api::{
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
-pub use audio::{encode_dictation_wav, NormalizedPcmChunk, PcmNormalizer, DICTATION_SAMPLE_RATE};
+pub use audio::{
+    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
+    PcmNormalizer, DICTATION_SAMPLE_RATE,
+};
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,
 };
@@ -327,9 +331,9 @@ pub use remote_input_service::{
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;
 pub use shared_types::{
-    CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode, HotkeyStatus,
-    PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode, UserPreferences,
-    LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
+    CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode,
+    HotkeyStatus, PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode,
+    UserPreferences, LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
 };
 pub use shortcut_types::{
     binding_from_legacy_trigger, binding_requires_mouse_hook, binding_requires_side_aware_hook,

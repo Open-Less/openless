@@ -16,7 +16,6 @@ import {
   getSherpaOnnxAsrCatalog,
   getSherpaOnnxAsrStatus,
   listLocalAsrModels,
-  preloadLocalAsr,
   setFoundryLocalAsrModel,
   setLocalAsrActiveModel,
   setSherpaOnnxAsrModel,
@@ -26,6 +25,8 @@ import {
 } from '../../../lib/localAsr';
 import { emitSaved } from '../../../lib/savedEvent';
 import { useLocalModelsNav } from './modelsNav';
+import { isExperimentalAsrProvider, isRetiredMacAsrProvider } from '../../../lib/experimentalAsr';
+import { detectOS } from '../../../components/WindowChrome';
 
 /** Local engine providerType → picker data-source family. */
 function familyOfProviderType(providerType: string): 'generic' | 'sherpa' | 'foundry' | 'apple' {
@@ -46,6 +47,8 @@ interface ModelOption {
 export function LocalModelPicker({ providerType }: { providerType: string }) {
   const { t } = useTranslation();
   const openModels = useLocalModelsNav();
+  const experimental = isExperimentalAsrProvider(providerType);
+  const retired = detectOS() === 'mac' && isRetiredMacAsrProvider(providerType);
   const family = familyOfProviderType(providerType);
 
   const [options, setOptions] = useState<ModelOption[] | null>(null);
@@ -55,6 +58,7 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
 
   const load = useCallback(async () => {
     try {
+      if (experimental || retired) return;
       if (family === 'generic') {
         const [settings, models] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
         setOptions(
@@ -100,7 +104,7 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
       console.error('[local-models] failed to load picker state', error);
       setEngineNote(t('settings.providers.readFailed'));
     }
-  }, [family, t]);
+  }, [family, t, experimental, retired]);
 
   useEffect(() => {
     void load();
@@ -116,7 +120,6 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
     try {
       if (family === 'generic') {
         await setLocalAsrActiveModel(value);
-        await preloadLocalAsr().catch(() => undefined);
       } else if (family === 'sherpa') {
         await setSherpaOnnxAsrModel(value);
       } else if (family === 'foundry') {
@@ -145,6 +148,9 @@ export function LocalModelPicker({ providerType }: { providerType: string }) {
       setBusy(false);
     }
   };
+
+  if (retired) return <p>{t('experimentalAsr.retiredHint')}</p>;
+  if (experimental) return <p>{t('experimentalAsr.manageHint')}</p>;
 
   if (family === 'apple') {
     return (

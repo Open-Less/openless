@@ -32,6 +32,8 @@ export function useRafThrottle<T>(value: T): T {
   useEffect(
     () => () => {
       if (frame.current != null) cancelAnimationFrame(frame.current);
+      // StrictMode replays effects after cleanup; do not leave a cancelled frame pending.
+      frame.current = null;
     },
     [],
   );

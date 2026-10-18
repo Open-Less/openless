@@ -518,6 +518,7 @@ impl ActiveLLMProvider {
 
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
+    dictation_session_id: Option<crate::types::SessionId>,
     /// Polish-dedicated client: no input-length-dependent whole-request timeout, only a
     /// connection-leak hard cap. The real criteria live at call sites (streaming two
     /// criteria / non-streaming total budget).
@@ -546,8 +547,13 @@ impl OpenAICompatibleLLMProvider {
             });
         Self {
             config,
+            dictation_session_id: None,
             polish_client,
         }
+    }
+
+    pub(crate) fn set_dictation_session(&mut self, session_id: crate::types::SessionId) {
+        self.dictation_session_id = Some(session_id);
     }
 
     pub async fn polish(
@@ -649,11 +655,12 @@ impl OpenAICompatibleLLMProvider {
         );
         let messages = build_polish_history_messages(&system_prompt, prior_turns, &user_prompt);
         log::info!(
-            "[llm] polish_streaming provider={} model={} prior_turns={} raw_chars={}",
+            "[llm] polish_streaming provider={} model={} prior_turns={} raw_chars={} raw_hash={}",
             self.config.provider_id,
             self.config.model,
             prior_turns.len(),
-            raw_text.chars().count()
+            raw_text.chars().count(),
+            privacy_text_hash(raw_text)
         );
         self.chat_completion_messages_streaming(
             messages,
@@ -852,10 +859,19 @@ impl OpenAICompatibleLLMProvider {
         body: &serde_json::Value,
         budget: Duration,
     ) -> Result<String, LLMError> {
-        match tokio::time::timeout(budget, self.send_chat_request_inner(url, body)).await {
+        let request_id = uuid::Uuid::new_v4();
+        log::info!(
+            "[llm] request_id={} session_id={} stream=false",
+            request_id,
+            self.dictation_session_id
+                .map_or_else(|| "none".to_string(), |id| id.to_string()),
+        );
+        match tokio::time::timeout(budget, self.send_chat_request_inner(url, body, request_id))
+            .await
+        {
             Ok(result) => result,
             Err(_) => {
-                log::error!("[llm] request timed out after {budget:?}");
+                log::error!("[llm] request_id={} timed out after {budget:?}", request_id);
                 Err(LLMError::Timeout)
             }
         }
@@ -865,6 +881,7 @@ impl OpenAICompatibleLLMProvider {
         &self,
         url: &str,
         body: &serde_json::Value,
+        request_id: uuid::Uuid,
     ) -> Result<String, LLMError> {
         self.config
             .protocol
@@ -887,7 +904,12 @@ impl OpenAICompatibleLLMProvider {
 
         let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
         let preview = safe_str_slice(&body_text, preview_end);
-        log::info!("[llm] HTTP {} body={}", status.as_u16(), preview);
+        log::info!(
+            "[llm] request_id={} HTTP {} response_bytes={}",
+            request_id,
+            status.as_u16(),
+            body_text.len()
+        );
 
         if !status.is_success() {
             return Err(LLMError::InvalidResponse {
@@ -896,7 +918,23 @@ impl OpenAICompatibleLLMProvider {
             });
         }
 
-        crate::llm_protocol::extract_text(self.config.protocol.format, &body_text)
+        let extracted =
+            crate::llm_protocol::extract_text_raw(self.config.protocol.format, &body_text)?;
+        let cleaned = clean_polish_output(&extracted);
+        log::info!(
+            "[llm] request_id={} response provider={} model={} protocol={:?} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            request_id,
+            self.config.provider_id,
+            self.config.model,
+            self.config.protocol.format,
+            extracted.chars().count(),
+            privacy_text_hash(&extracted),
+            cleaned.chars().count(),
+            privacy_text_hash(&cleaned),
+            find_adjacent_near_duplicates(&extracted).len(),
+            find_adjacent_near_duplicates(&cleaned).len(),
+        );
+        Ok(cleaned)
     }
 
     /// QA shares protocol decoding with polish, but QA keeps the configured
@@ -957,10 +995,13 @@ impl OpenAICompatibleLLMProvider {
             })
             .map_err(|error| LLMError::ParseError(error.message))?;
         let url = self.config.protocol.format.url(&self.config.base_url)?;
+        let request_id = uuid::Uuid::new_v4();
         let body = self.chat_body(true, messages);
         log::info!(
-            "[llm] POST {} provider={} model={} format={:?} stream=true",
+            "[llm] POST {} request_id={} session_id={} provider={} model={} format={:?} stream=true",
             crate::net::sanitized_url_for_logs(&url),
+            request_id,
+            self.dictation_session_id.map_or_else(|| "none".to_string(), |id| id.to_string()),
             self.config.provider_id,
             self.config.model,
             self.config.protocol.format
@@ -1001,6 +1042,7 @@ impl OpenAICompatibleLLMProvider {
         }
         let mut events = TextEventStream::new(self.config.protocol.format);
         let mut full_text = String::new();
+        let mut delta_count = 0usize;
         let mut cancelled = false;
         while !events.done {
             if should_cancel() {
@@ -1033,10 +1075,12 @@ impl OpenAICompatibleLLMProvider {
                 if let StreamEvent::Text(delta) = event {
                     if full_text.is_empty() {
                         log::info!(
-                            "[llm] first content delta after {:.2}s",
+                            "[llm] request_id={} first content delta after {:.2}s",
+                            request_id,
                             started.elapsed().as_secs_f64()
                         );
                     }
+                    delta_count += 1;
                     full_text.push_str(&delta);
                     on_delta(&delta);
                 }
@@ -1048,10 +1092,18 @@ impl OpenAICompatibleLLMProvider {
         if !cancelled {
             events.finish()?;
         }
+        let cleaned = clean_polish_output(&full_text);
         log::info!(
-            "[llm] stream done; cancelled={} chars={}",
+            "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            request_id,
             cancelled,
-            full_text.chars().count()
+            delta_count,
+            full_text.chars().count(),
+            privacy_text_hash(&full_text),
+            cleaned.chars().count(),
+            privacy_text_hash(&cleaned),
+            find_adjacent_near_duplicates(&full_text).len(),
+            find_adjacent_near_duplicates(&cleaned).len(),
         );
         if full_text.is_empty() {
             return Err(LLMError::InvalidResponse {
@@ -1582,7 +1634,11 @@ pub(crate) fn chat_completions_url(base_url: &str) -> String {
 }
 
 pub fn http_client_builder(base_url: &str, timeout_secs: u64) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout_secs));
+    let builder = reqwest::Client::builder()
+        // Same handshake budget as net::http(); audio generation can still use
+        // its full request timeout after connecting. Never retry timeout errors.
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(timeout_secs));
     if crate::net::should_bypass_proxy(base_url, crate::net::use_system_proxy()) {
         builder.no_proxy()
     } else {
@@ -2110,6 +2166,11 @@ fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&
 }
 
 pub(crate) fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
+    let content = extract_assistant_content_raw(body)?;
+    Ok(clean_polish_output(&content))
+}
+
+pub(crate) fn extract_assistant_content_raw(body: &str) -> Result<String, LLMError> {
     let json: Value = serde_json::from_str(body)
         .map_err(|e| LLMError::ParseError(format!("not valid JSON: {}", e)))?;
     let choices = json
@@ -2124,7 +2185,7 @@ pub(crate) fn extract_assistant_content(body: &str) -> Result<String, LLMError> 
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .ok_or_else(|| LLMError::ParseError("message.content is not a string".into()))?;
-    Ok(clean_polish_output(content))
+    Ok(content.to_string())
 }
 
 pub mod prompts {
@@ -3025,6 +3086,8 @@ mod tests {
     /// guaranteed failure.
     #[tokio::test]
     async fn non_streaming_request_succeeds_within_budget() {
+        crate::testing::logging::start();
+        let session_id = crate::types::SessionId::new();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -3039,13 +3102,26 @@ mod tests {
             );
         });
 
-        let out = streaming_test_provider(addr)
+        let mut provider = streaming_test_provider(addr);
+        provider.set_dictation_session(session_id);
+        let out = provider
             .chat_completion("sys", "user", std::time::Duration::from_secs(30))
             .await
             .expect("预算充足时应当正常返回");
 
         assert_eq!(out, "整理好的文本");
         server.join().unwrap();
+        let logs = crate::testing::logging::matching(&format!("session_id={session_id} "));
+        assert_eq!(logs.len(), 1);
+        let request_id = logs[0]
+            .split_whitespace()
+            .find(|field| field.starts_with("request_id="))
+            .unwrap();
+        let records = crate::testing::logging::matching(request_id);
+        assert!(records
+            .iter()
+            .any(|line| line.contains("extracted_chars=6")));
+        assert!(!records.iter().any(|line| line.contains("整理好的文本")));
     }
 
     /// Core of the fix: as long as the stream keeps producing text, a total duration

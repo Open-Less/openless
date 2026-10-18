@@ -39,7 +39,9 @@ export function QuickNote() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}
+    >
       {isDesktop() && shortcutVisible && (
         <Card>
           <div
@@ -51,7 +53,7 @@ export function QuickNote() {
               marginBottom: 6,
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 600 }}>
+            <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>
               {t('quickNote.shortcutTitle', 'Quick note shortcut')}
             </div>
             <Btn

@@ -1,0 +1,135 @@
+name: Sync Homebrew cask
+
+# The administrator publishes verified drafts with a personal/admin credential.
+# Unlike the asset workflows' GITHUB_TOKEN, that emits release:published normally.
+# workflow_dispatch is an explicit repair path; both paths reject drafts/Beta/old tags.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published latest Stable Tauri tag
+        required: true
+        type: string
+
+concurrency:
+  group: homebrew-cask-sync
+  cancel-in-progress: false
+
+jobs:
+  update-homebrew-cask:
+    name: Update Homebrew cask (stable only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release.prerelease == false && github.event.release.draft == false &&
+       startsWith(github.event.release.tag_name, 'v') && endsWith(github.event.release.tag_name, '-tauri') &&
+       !contains(github.event.release.tag_name, '-Beta.') && !endsWith(github.event.release.tag_name, '-beta-tauri'))
+    steps:
+      - name: Checkout default branch (cask 住在这里)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          # The protected default branch only permits organization-admin bypass.
+          # Use a dedicated repository-scoped admin token; never weaken branch rules.
+          token: ${{ secrets.HOMEBREW_CASK_ADMIN_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check stable release publication
+        id: publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-tauri$ ]] || { echo "::error::Expected a stable Tauri tag"; exit 1; }
+          private=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '(.isDraft or .isPrerelease)')
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [ "$private" != false ] || [ "$latest" != "$TAG" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Only the published latest Stable release may update Homebrew."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve version + DMG sha256 from the release
+        if: steps.publication.outputs.ready == 'true'
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Download the DMGs directly and compute sha256 ourselves; do not depend on the
+          # timing/availability of GitHub's asset digest fields.
+          mkdir -p "$RUNNER_TEMP/dmg"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/dmg" \
+            --pattern '*aarch64.dmg' --pattern '*_x64.dmg'
+
+          # Tags omit +build metadata; filenames and the cask must preserve it.
+          version="$(node openless-all/app/scripts/resolve-release-cask-version.mjs "$TAG" "$RUNNER_TEMP/dmg")"
+          arm_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*aarch64.dmg | cut -d' ' -f1)"
+          intel_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*_x64.dmg | cut -d' ' -f1)"
+
+          {
+            echo "version=$version"
+            echo "arm_sha=$arm_sha"
+            echo "intel_sha=$intel_sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "cask → version=$version arm=$arm_sha intel=$intel_sha"
+
+      - name: Update Casks/openless.rb
+        if: steps.publication.outputs.ready == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          ARM_SHA: ${{ steps.meta.outputs.arm_sha }}
+          INTEL_SHA: ${{ steps.meta.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+          cask="Casks/openless.rb"
+          # Warning: line 2 of the cask, `arch arm: "aarch64", intel: "x64"`, also contains
+          # `intel: "..."`. A bare `s/intel: "..."/` would rewrite the arch instruction with a
+          # hash too -> brew installs 404 for Intel users. So the intel sed anchors the sha256
+          # line with `^[[:space:]]*intel:`, while the arm sed naturally matches only the sha256
+          # line via the `sha256 arm:   ` prefix. Capture group \1 preserves the original indent.
+          sed -i "s/version \"[^\"]*\"/version \"$VERSION\"/" "$cask"
+          sed -i "s/sha256 arm:   \"[^\"]*\"/sha256 arm:   \"$ARM_SHA\"/" "$cask"
+          sed -i "s/^\([[:space:]]*\)intel: \"[^\"]*\"/\1intel: \"$INTEL_SHA\"/" "$cask"
+          # Guard: the arch instruction must remain untouched and both new sha256 values must
+          # actually be written, otherwise fail the job.
+          grep -q 'arch arm: "aarch64", intel: "x64"' "$cask" \
+            || { echo "::error::arch 指令被 sed 误伤"; exit 1; }
+          grep -q "\"$ARM_SHA\"" "$cask" && grep -q "\"$INTEL_SHA\"" "$cask" \
+            || { echo "::error::sha256 未正确写入 cask"; exit 1; }
+          echo "----- updated $cask -----"
+          cat "$cask"
+
+      - name: Commit & push cask bump
+        if: steps.publication.outputs.ready == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CASK_ADMIN_TOKEN_AVAILABLE: ${{ secrets.HOMEBREW_CASK_ADMIN_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/openless.rb
+          if git diff --cached --quiet; then
+            echo "cask 已是 $VERSION，无需提交"
+            exit 0
+          fi
+          if [ "$CASK_ADMIN_TOKEN_AVAILABLE" != true ]; then
+            echo "::error::Protected beta requires HOMEBREW_CASK_ADMIN_TOKEN from an organization administrator. No branch protection was changed; this update has not been pushed."
+            exit 1
+          fi
+          # [skip ci]: cask text changes do not need another cross-platform ci.yml run.
+          git commit -m "[cask] openless $VERSION (auto from release) [skip ci]"
+          git push

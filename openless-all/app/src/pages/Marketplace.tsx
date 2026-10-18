@@ -18,7 +18,7 @@ import { Icon } from '../components/Icon';
 import { SavedToast } from '../components/SavedToast';
 import { ThinkingDots } from '../components/ThinkingDots';
 import { GithubLoginModal } from '../components/GithubLoginModal';
-import { PresenceModal } from '../components/ui/Modal';
+import { ExitPresence, PresenceModal } from '../components/ui/Modal';
 import {
   downloadMarketplacePack,
   fetchMarketplaceDetail,
@@ -800,7 +800,13 @@ export function Marketplace() {
                           gap: 6,
                         }}
                       >
-                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink-1)' }}>
+                        <span
+                          style={{
+                            fontSize: 14,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink-1)',
+                          }}
+                        >
                           {p.name}
                         </span>
                         <span
@@ -859,7 +865,12 @@ export function Marketplace() {
                         color: 'var(--ol-ink-4)',
                       }}
                     >
-                      <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
+                      <span
+                        style={{
+                          fontWeight: 'var(--ol-font-weight-medium)',
+                          color: 'var(--ol-ink-3)',
+                        }}
+                      >
                         @{p.authorLogin}
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -889,7 +900,7 @@ export function Marketplace() {
                             cursor: downloadingPackId === null ? 'pointer' : 'not-allowed',
                             opacity: downloadingPackId !== null && !isDownloading ? 0.5 : 1,
                             fontSize: 10,
-                            fontWeight: 600,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
                             whiteSpace: 'nowrap',
                           }}
                         >
@@ -971,7 +982,12 @@ export function Marketplace() {
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginBottom: 12 }}>
-                    <span style={{ fontWeight: 500, color: 'var(--ol-ink-3)' }}>
+                    <span
+                      style={{
+                        fontWeight: 'var(--ol-font-weight-medium)',
+                        color: 'var(--ol-ink-3)',
+                      }}
+                    >
                       @{detail.authorLogin}
                     </span>
                     {' · '}
@@ -1061,7 +1077,7 @@ export function Marketplace() {
                           padding: '4px 8px',
                           borderRadius: 8,
                           fontSize: 12,
-                          fontWeight: 500,
+                          fontWeight: 'var(--ol-font-weight-medium)',
                           color: 'var(--ol-ink-2)',
                         }}
                       >
@@ -1207,7 +1223,11 @@ export function Marketplace() {
                               justifyContent: 'space-between',
                             }}
                           >
-                            <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
+                            <div
+                              style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}
+                            >
+                              {p.name}
+                            </div>
                             {recommended && (
                               <Pill size="sm" tone="blue">
                                 {t('marketplace.upload.recommendedBadge')}
@@ -1354,7 +1374,7 @@ export function Marketplace() {
                     cursor: 'pointer',
                     fontSize: 18,
                     lineHeight: 1,
-                    fontWeight: 500,
+                    fontWeight: 'var(--ol-font-weight-medium)',
                   }}
                 >
                   ×
@@ -1577,9 +1597,16 @@ export function Marketplace() {
       />
 
       {/* GitHub login dialog */}
-      {showLogin && (
-        <GithubLoginModal onClose={() => setShowLogin(false)} onSuccess={onLoginSuccess} />
-      )}
+      <ExitPresence
+        open={showLogin}
+        render={(closing) => (
+          <GithubLoginModal
+            closing={closing}
+            onClose={() => setShowLogin(false)}
+            onSuccess={onLoginSuccess}
+          />
+        )}
+      />
     </div>
   );
 }

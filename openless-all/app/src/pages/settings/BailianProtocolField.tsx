@@ -8,7 +8,7 @@ import {
   type BailianProtocol,
 } from '../../lib/bailianProtocol';
 import { ProviderFormContext } from './ProviderForm';
-import { inputStyle } from './shared';
+import { SelectLite } from '../../components/ui/SelectLite';
 import { emitSaved } from '../../lib/savedEvent';
 
 const account = 'asr.advanced_config';
@@ -103,18 +103,16 @@ export function BailianProtocolField({
   return (
     <label style={{ display: 'grid', gap: 6, marginTop: 8 }}>
       <span>{t('settings.providers.bailianProtocolLabel')}</span>
-      <select
-        style={inputStyle}
+      <SelectLite
+        ariaLabel={t('settings.providers.bailianProtocolLabel')}
         value={selected}
         disabled={!loaded || saving || form?.leaving}
-        onChange={(event) => save(event.target.value as BailianProtocol)}
-      >
-        {bailianProtocols.map((protocol) => (
-          <option key={protocol} value={protocol}>
-            {t(`settings.providers.bailianProtocolOptions.${protocol}`)}
-          </option>
-        ))}
-      </select>
+        onChange={(protocol) => save(protocol as BailianProtocol)}
+        options={bailianProtocols.map((protocol) => ({
+          value: protocol,
+          label: t(`settings.providers.bailianProtocolOptions.${protocol}`),
+        }))}
+      />
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
         {t('settings.providers.bailianProtocolNote')}
       </span>

@@ -2,13 +2,15 @@
 // pending unmount timer.
 // Callers share the exit duration with the overlay motion primitive.
 
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { OVERLAY_EXIT_MS, useReducedMotion } from './motion';
 
 export function useExitMount(open: boolean, exitMs = OVERLAY_EXIT_MS) {
   const [mounted, setMounted] = useState(open);
   const reduced = useReducedMotion();
-  useEffect(() => {
+  // Commit retention before the first visible frame. A fast Escape can otherwise
+  // close an overlay before the passive effect has remembered that it opened.
+  useLayoutEffect(() => {
     if (open) {
       setMounted(true);
       return;

@@ -29,6 +29,46 @@ use crate::provider_transport::{
 use crate::shared_types::PlatformCapabilities;
 use crate::types::{PermissionSnapshot, PermissionState, PolishDelta, SessionId, TranscriptDelta};
 
+#[cfg(test)]
+pub(crate) mod logging {
+    use std::sync::{Mutex, Once};
+
+    struct TestLogger(Mutex<Vec<String>>);
+    static LOGGER: TestLogger = TestLogger(Mutex::new(Vec::new()));
+
+    impl log::Log for TestLogger {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            self.0.lock().unwrap().push(record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    pub fn start() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            log::set_logger(&LOGGER).unwrap();
+            log::set_max_level(log::LevelFilter::Info);
+        });
+    }
+
+    // Filter by a unique session/request ID so concurrent tests cannot mix records.
+    pub fn matching(needle: &str) -> Vec<String> {
+        LOGGER
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains(needle))
+            .cloned()
+            .collect()
+    }
+}
+
 /// Deterministic model-list transport for Core/provider contract tests.
 ///
 /// Each call consumes one queued outcome and records the request.  Request

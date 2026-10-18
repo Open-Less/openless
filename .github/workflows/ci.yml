@@ -95,15 +95,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Android uses no desktop local-ASR submodules; the macOS MLX dependency stays out of
-          # this job.
+          # Optional local runtimes are not source submodules of the main application.
           submodules: false
 
-        # Android compiles no local-ASR C code: build.rs excludes the Android triple by TARGET
-        # (does not call build_qwen_asr). qwen3-asr-rs is a path dependency, and the Cargo
-        # resolver must read its manifest for all targets — so the ci-disable-macos-qwen3.mjs
-        # step below removes that dependency line, otherwise cargo check hard-fails.
-        # Dropping recursive fetch saves one network fetch and one failure point.
       - name: Setup Android SDK + NDK
         uses: android-actions/setup-android@v3
         with:
@@ -174,9 +168,6 @@ jobs:
 
       - name: Check Android updater pubkey matches tauri.conf.json
         run: npm run check:android-updater-pubkey
-
-      - name: Disable macOS-only Qwen3 MLX dependency
-        run: node scripts/ci-disable-macos-qwen3.mjs
 
       - name: Check Tauri backend (Android target)
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
@@ -264,8 +255,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      # With the shared Core in place, macOS's first build compiles the MLX C++ dependencies and
-      # the full Tauri test binary together; limit concurrency so the arm64 runner is not OOM-killed
+      # The shared Core and full Tauri test binary compile together; limit concurrency
+      # so the arm64 runner is not OOM-killed
       # at peak memory.
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_TEST_DEBUG: 0
@@ -276,12 +267,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Initialize the MLX submodule on macOS only; Windows does not resolve that dependency.
-          submodules: ${{ matrix.os == 'macos-latest' && 'recursive' || 'false' }}
-      - name: Disable macOS-only Qwen3 MLX dependency
-        if: runner.os != 'macOS'
-        run: node scripts/ci-disable-macos-qwen3.mjs
-
+          # No legacy native-ASR submodules remain in this application.
+          submodules: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -318,12 +305,6 @@ jobs:
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
-
-      - name: Cache macOS MLX native build
-        if: runner.os == 'macOS' && runner.arch == 'ARM64'
-        uses: ./.github/actions/cache-macos-mlx
-        with:
-          profile: debug
 
       - name: Prepare Windows Sherpa static libraries
         if: runner.os == 'Windows'
@@ -460,7 +441,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -474,11 +455,6 @@ jobs:
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target
-      - name: Cache macOS MLX native build
-        if: runner.arch == 'ARM64'
-        uses: ./.github/actions/cache-macos-mlx
-        with:
-          profile: debug
       - run: npm ci
       - run: npm run build
       - name: Check Tauri backend with Rust 1.88 MSRV

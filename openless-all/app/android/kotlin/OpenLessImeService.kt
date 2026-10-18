@@ -110,7 +110,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun stopImeSession() {
         if (imeSessionId == null) pendingImeStop = true
-        else if (!sendImeCommand("stop")) { recording = false; processing = false }
+        else if (!sendImeCommand("stop")) {
+            recording = false
+            processing = false
+            releaseDismissedEditReplacement()
+        }
     }
 
     private fun onImeSessionEvent(json: String) {
@@ -145,6 +149,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 imeSessionId = null
                 pendingImeStop = false
                 pendingCloudArm = false
+                // The edit panel was already dismissed when recording stopped.
+                // Leaving the replacement armed makes the next successful
+                // dictation delete the old span by length.
+                releaseDismissedEditReplacement()
                 setState("error", ui("听写失败，请重试", "Dictation failed; please retry"))
             }
         }
@@ -340,10 +348,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var lastDictationEpoch: Long = -1
     private var dictationTextUndone = false
     private var editingDictationResult = false
-    // Set right before deleteBackward() edits the field, consumed by the
-    // very next invalidateDictationResultIfTextChanged() call — see
-    // deleteBackward()'s comment.
-    private var selfInitiatedTextChange = false
     // True from the moment the edit mic starts recording until its result
     // (or a cancel) resolves — independent of editingDictationResult, which
     // only tracks which PANEL is currently shown. Stopping the edit mic
@@ -351,6 +355,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // polish animation plays there, not on the compact edit view), while
     // this flag keeps commitImeText() routing the eventual result to
     // finishEditWithSpokenReplacement() instead of a normal commit.
+    // A failed session, or a later tap on the main mic, must release it —
+    // otherwise that next utterance is still treated as the correction and
+    // deletes original.length characters before the cursor.
     private var awaitingEditReplacement = false
     // The exact span being replaced by the edit flow's "speak the correct
     // word" mic: either whatever the user selected in the real input field,
@@ -3356,13 +3363,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     internal fun deleteBackward() {
         val connection = currentInputConnection ?: return
         val selected = connection.getSelectedText(0)
-        // Consumed by the very next invalidateDictationResultIfTextChanged()
-        // call (from onUpdateSelection(), which this delete triggers) so it
-        // skips clearing lastDictationText — deleting via our own backspace
-        // (plain or select-all-then-backspace, both land here) should stay
-        // undoable, unlike text disappearing for some other reason (e.g. the
-        // host app clearing the field itself after sending).
-        selfInitiatedTextChange = true
         if (!selected.isNullOrEmpty()) {
             connection.commitText("", 1)
         } else {
@@ -3455,35 +3455,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Detects the committed dictation text getting cleared by something
-     * OTHER than our own backspace key or undo button — e.g. the host app
-     * clearing the field itself after sending — so the undo/redo/edit
-     * controls don't keep pointing at text that's no longer actually there.
-     * Deleting via our own backspace (plain or select-all-then-backspace,
-     * see deleteBackward()) is deliberately NOT treated as a reason to hide
-     * these: that deletion is itself undoable (the undo button just
-     * re-commits lastDictationText), so hiding it would strand an
-     * accidental full erase with no way back.
-     *
-     * Only clears once NONE of the dictated span remains — a single
-     * backspace only shrinks it by one character, which should still leave
-     * the controls up, not hide them immediately. Checks every leading
-     * prefix of the dictated text (shortest first would also work, but
-     * longest-first short-circuits sooner in the common case) against
-     * what's actually sitting immediately before the cursor; if any prefix
-     * still matches there, some of the utterance is still present.
+     * Hides undo/redo/edit once none of the dictated span is still immediately
+     * before the cursor — the host cleared the field, or backspace removed the
+     * utterance. A shorter matching prefix keeps the controls (one backspace
+     * must not hide them). The undo action itself still refuses to delete
+     * unless the full utterance is exactly before the cursor.
      */
     private fun invalidateDictationResultIfTextChanged() {
-        if (selfInitiatedTextChange) {
-            selfInitiatedTextChange = false
-            return
-        }
         val text = lastDictationText ?: return
         if (dictationTextUndone) return
         val connection = currentInputConnection ?: return
-        for (len in text.length downTo 1) {
-            if (connection.getTextBeforeCursor(len, 0)?.toString() == text.substring(0, len)) return
-        }
+        val beforeCursor = connection.getTextBeforeCursor(text.length, 0) ?: return
+        if (DictationSpan.hasRemainingPrefix(beforeCursor, text)) return
         lastDictationText = null
         updateDictationResultControls()
     }
@@ -3497,6 +3480,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // Selecting another span must not discard the user's pending undo/redo.
+        if (newSelStart < 0 || newSelStart != newSelEnd) return
         invalidateDictationResultIfTextChanged()
     }
 
@@ -3547,6 +3532,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             rawModeArmed = false
             quickNoteArmed = false
             cloudNoteArmed = false
+            // A tap on the main mic (edit panel already gone) is a new
+            // utterance. Drop a correction that failed or was superseded
+            // before its result arrived, so this session cannot inherit it.
+            releaseDismissedEditReplacement()
             // The actual start of a new recording attempt — reset the
             // silence watch and fire the start haptic here, not in
             // onCapsuleStateChanged's "recording" branch: that branch only
@@ -3985,12 +3974,43 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
     }
 
+    private fun requireCollapsedDictationCursor(
+        connection: android.view.inputmethod.InputConnection,
+        selectionMessage: String,
+    ): Boolean {
+        val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+        val length = extracted?.text?.length ?: -1
+        if (extracted == null || extracted.selectionStart !in 0..length || extracted.selectionEnd !in 0..length) {
+            setState("error", ui("无法确认光标位置，未修改文字", "Cannot verify cursor position; text unchanged"))
+            return false
+        }
+        if (extracted.selectionStart != extracted.selectionEnd) {
+            setState("error", selectionMessage)
+            return false
+        }
+        return true
+    }
+
     /** Toggles between removing this dictation's committed text and restoring it. */
     private fun toggleUndoRedoDictation() {
         val text = lastDictationText ?: return
         if (sessionEpoch != lastDictationEpoch) return
         val connection = currentInputConnection ?: return
+        if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再撤销/重做", "Clear the selection before undo/redo"))) return
         if (!dictationTextUndone) {
+            // deleteSurroundingText is length-based. If the utterance is no
+            // longer exactly before the cursor (backspaced away, or the caret
+            // sits inside it), deleting would erase neighboring text.
+            val beforeCursor = connection.getTextBeforeCursor(text.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未撤销", "Cannot read original text; undo cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, text)) {
+                lastDictationText = null
+                updateDictationResultControls()
+                return
+            }
             // Flip the flag before deleting: onUpdateSelection() may run
             // synchronously inside deleteSurroundingText() and would
             // otherwise see dictationTextUndone still false, mistake this
@@ -4027,6 +4047,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         } else {
             val whole = lastDictationText ?: return
             if (sessionEpoch != lastDictationEpoch || dictationTextUndone) return
+            if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) return
+            val beforeCursor = connection.getTextBeforeCursor(whole.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未替换", "Cannot read original text; replacement cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, whole)) {
+                lastDictationText = null
+                updateDictationResultControls()
+                Toast.makeText(this, ui("原文已变化，无法整段替换", "Original text changed; cannot replace it"), Toast.LENGTH_SHORT).show()
+                return
+            }
             editingOriginalText = whole
             editingReplacesWholeResult = true
         }
@@ -4065,6 +4097,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         awaitingEditReplacement = true
         refreshInputView()
         toggleDictation()
+    }
+
+    /**
+     * Drops a spoken correction that is no longer on screen. The in-flight
+     * result of an open edit panel must keep its replacement; once that panel
+     * is gone, the next commit is an ordinary insert.
+     */
+    private fun releaseDismissedEditReplacement() {
+        val next = PendingEditReplacement(
+            awaiting = awaitingEditReplacement,
+            panelVisible = editingDictationResult,
+            original = editingOriginalText,
+            replacesWhole = editingReplacesWholeResult,
+            addToDictionary = addToDictionaryForEdit,
+        ).releaseIfPanelDismissed()
+        awaitingEditReplacement = next.awaiting
+        editingOriginalText = next.original
+        editingReplacesWholeResult = next.replacesWhole
+        addToDictionaryForEdit = next.addToDictionary
     }
 
     /** Backs out of the edit sub-view without applying any correction. */
@@ -4108,8 +4159,31 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val connection = currentInputConnection
         if (connection != null) {
-            if (replacesWhole) connection.deleteSurroundingText(original.length, 0)
-            connection.commitText(text, 1)
+            if (replacesWhole) {
+                if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) {
+                    refreshInputView()
+                    return
+                }
+                if (!DictationSpan.matchesBeforeCursor(
+                        connection.getTextBeforeCursor(original.length, 0),
+                        original,
+                    ) || !connection.deleteSurroundingText(original.length, 0)
+                ) {
+                    setState("error", ui("原文已变化，未替换", "Original text changed; not replaced"))
+                    refreshInputView()
+                    return
+                }
+            }
+            if (!connection.commitText(text, 1)) {
+                val restored = !replacesWhole || connection.commitText(original, 1)
+                setState("error", if (restored) ui("替换失败", "Replace failed") else ui("替换失败，原文恢复失败", "Replace failed; original text could not be restored"))
+                refreshInputView()
+                return
+            }
+        } else {
+            setState("error", ui("输入连接已失效，未替换", "Input connection lost; not replaced"))
+            refreshInputView()
+            return
         }
         if (shouldAddToDictionary && text != original) {
             runNativeAction("加入词典") {

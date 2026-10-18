@@ -98,6 +98,7 @@ mod tests {
         changed.selection_polish_output_mode =
             openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm;
         changed.polish_context_window_minutes = 17;
+        changed.polish_skip_max_chars = 8;
         changed.audio_recording_max_entries = Some(19);
         changed.coding_agent_enabled = true;
         changed.coding_agent_provider = "codex-cli".into();

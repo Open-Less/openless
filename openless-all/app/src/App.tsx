@@ -19,6 +19,7 @@ import {
 import { cancelAndCloseVoiceEditSession } from './lib/ipc/voice-edit-session';
 import type { PlatformCapabilities } from './lib/types';
 import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
+import { markStartup } from './lib/startupMetrics';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
 // Lazy-load pages per WebView by window purpose to cut resident memory. The capsule
@@ -83,7 +84,10 @@ export function App(props: AppProps) {
   useEffect(() => {
     if (!isTauri) return;
     void getStartupSnapshot()
-      .then(() => setReady(true))
+      .then(() => {
+        markStartup('backend');
+        setReady(true);
+      })
       .catch((reason) => {
         const detail = reason instanceof Error ? reason.message : String(reason);
         console.error('[startup] backend contract handshake failed', reason);
@@ -431,7 +435,7 @@ function ReadyApp({
   }
 
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CoreStartupScreen />}>
       <HotkeySettingsProvider>
         {/* Global download progress overlay: always mounted across main-window pages
             (listens to events itself, decoupled from pages). */}

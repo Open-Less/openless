@@ -1,407 +1,407 @@
 [
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "ark",
+    "labelKey": "ark",
     "defaultEndpoint": "https://ark.cn-beijing.volces.com/api/v3",
-    "defaultModel": "deepseek-v3-2",
-    "defaultRequestFormat": "chat_completions",
     "endpointPresets": [
       {
+        "name": "Agent Plan",
         "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3",
-        "modelsUrl": "https://console.volcengine.com/ark/subscription/agent-plan",
-        "name": "Agent Plan"
+        "modelsUrl": "https://console.volcengine.com/ark/subscription/agent-plan"
       },
       {
+        "name": "Coding Plan",
         "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3",
-        "modelsUrl": "https://console.volcengine.com/ark/subscription/coding-plan",
-        "name": "Coding Plan"
+        "modelsUrl": "https://console.volcengine.com/ark/subscription/coding-plan"
       }
     ],
-    "kind": "llm",
-    "labelKey": "ark",
-    "providerType": "ark",
+    "defaultModel": "deepseek-v3-2",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "deepseek",
+    "labelKey": "deepseek",
     "defaultEndpoint": "https://api.deepseek.com/v1",
     "defaultModel": "deepseek-v4-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "deepseek",
-    "providerType": "deepseek",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "siliconflow",
+    "labelKey": "siliconflow",
     "defaultEndpoint": "https://api.siliconflow.cn/v1",
     "defaultModel": "Qwen/Qwen2.5-7B-Instruct",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "siliconflow",
-    "providerType": "siliconflow",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "atlascloud",
+    "labelKey": "atlascloud",
     "defaultEndpoint": "https://api.atlascloud.ai/v1",
     "defaultModel": "qwen/qwen3.5-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "atlascloud",
-    "providerType": "atlascloud",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "openai",
+    "labelKey": "openai",
     "defaultEndpoint": "https://api.openai.com/v1",
     "defaultModel": "gpt-4o",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "openai",
-    "providerType": "openai",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key",
+    "kind": "llm",
+    "providerType": "gemini",
+    "labelKey": "gemini",
     "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
     "defaultModel": "gemini-2.5-flash",
-    "defaultRequestFormat": null,
-    "kind": "llm",
-    "labelKey": "gemini",
-    "providerType": "gemini",
+    "authRequirement": "api_key",
+    "validationProbe": "llm_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "llm_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "o_auth",
+    "kind": "llm",
+    "providerType": "codex_oauth",
+    "labelKey": "codexOAuth",
     "defaultEndpoint": null,
     "defaultModel": "gpt-5.5",
-    "defaultRequestFormat": null,
-    "kind": "llm",
-    "labelKey": "codexOAuth",
-    "providerType": "codex_oauth",
+    "authRequirement": "o_auth",
+    "validationProbe": "llm_text",
     "staticModels": [
       "gpt-5.5",
       "gpt-5.3-codex",
       "gpt-5.4",
       "gpt-5.5"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "llm_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "mimo",
+    "labelKey": "mimo",
     "defaultEndpoint": "https://api.xiaomimimo.com/v1",
     "defaultModel": "xiaomi/mimo-v2-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "mimo",
-    "providerType": "mimo",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "cometapi",
+    "labelKey": "cometapi",
     "defaultEndpoint": "https://api.cometapi.com/v1",
     "defaultModel": "gpt-4o",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "cometapi",
-    "providerType": "cometapi",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "openrouterFree",
+    "labelKey": "openrouterFree",
     "defaultEndpoint": "https://openrouter.ai/api/v1",
     "defaultModel": "qwen/qwen3-coder:free",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "openrouterFree",
-    "providerType": "openrouterFree",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "requesty",
+    "labelKey": "requesty",
     "defaultEndpoint": "https://router.requesty.ai/v1",
     "defaultModel": "openai/gpt-4o-mini",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "requesty",
-    "providerType": "requesty",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "api-route",
+    "labelKey": "apiRoute",
     "defaultEndpoint": "https://global.api-route.com/v1",
     "defaultModel": "deepseek-v4-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "apiRoute",
-    "providerType": "api-route",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "orcarouter",
+    "labelKey": "orcarouter",
     "defaultEndpoint": "https://api.orcarouter.ai/v1",
     "defaultModel": "orcarouter/fusion-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "orcarouter",
-    "providerType": "orcarouter",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "alibabaCoding",
+    "labelKey": "alibabaCoding",
     "defaultEndpoint": "https://coding-intl.dashscope.aliyuncs.com/v1",
     "defaultModel": "qwen3-coder-plus",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "alibabaCoding",
-    "providerType": "alibabaCoding",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "codingPlanX",
+    "labelKey": "codingPlanX",
     "defaultEndpoint": "https://api.codingplanx.ai/v1",
     "defaultModel": "gpt-5-mini",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "codingPlanX",
-    "providerType": "codingPlanX",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "minimax",
+    "labelKey": "minimax",
     "defaultEndpoint": "https://api.minimaxi.com/v1",
     "defaultModel": "MiniMax-M3",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "minimax",
-    "providerType": "minimax",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "stepfun",
+    "labelKey": "stepfun",
     "defaultEndpoint": "https://api.stepfun.com/v1",
     "defaultModel": "step-1o-turbo-vision",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "stepfun",
-    "providerType": "stepfun",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "opencode",
+    "labelKey": "opencode",
     "defaultEndpoint": "https://opencode.ai/zen/v1",
     "defaultModel": "deepseek-v4-flash",
-    "defaultRequestFormat": "chat_completions",
-    "kind": "llm",
-    "labelKey": "opencode",
-    "providerType": "opencode",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
+    "kind": "llm",
+    "providerType": "tencentTokenHub",
+    "labelKey": "tencentTokenHub",
     "defaultEndpoint": "https://tokenhub.tencentmaas.com/v1",
     "defaultModel": "hy3",
-    "defaultRequestFormat": null,
-    "kind": "llm",
-    "labelKey": "tencentTokenHub",
-    "providerType": "tencentTokenHub",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "llm_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "endpoint_model_optional_api_key",
+    "kind": "llm",
+    "providerType": "lmstudio",
+    "labelKey": "lmstudio",
     "defaultEndpoint": "http://localhost:1234/v1",
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "llm",
-    "labelKey": "lmstudio",
-    "providerType": "lmstudio",
+    "authRequirement": "endpoint_model_optional_api_key",
+    "validationProbe": "llm_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "llm_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
-    "defaultEndpoint": null,
-    "defaultModel": null,
-    "defaultRequestFormat": "chat_completions",
     "kind": "llm",
-    "labelKey": "customChatCompletions",
     "providerType": "custom",
+    "labelKey": "customChatCompletions",
+    "defaultEndpoint": null,
+    "defaultModel": null,
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "chat_completions",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "api_key_unless_custom_endpoint",
-    "defaultEndpoint": null,
-    "defaultModel": null,
-    "defaultRequestFormat": "responses",
     "kind": "llm",
-    "labelKey": "customResponses",
     "providerType": "custom_responses",
-    "staticModels": [],
-    "supportedRequestFormats": [
-      "chat_completions",
-      "responses",
-      "messages"
-    ],
-    "validationProbe": "llm_text"
-  },
-  {
+    "labelKey": "customResponses",
+    "defaultEndpoint": null,
+    "defaultModel": null,
     "authRequirement": "api_key_unless_custom_endpoint",
-    "defaultEndpoint": null,
-    "defaultModel": null,
-    "defaultRequestFormat": "messages",
-    "kind": "llm",
-    "labelKey": "customMessages",
-    "providerType": "custom_messages",
+    "validationProbe": "llm_text",
     "staticModels": [],
+    "defaultRequestFormat": "responses",
     "supportedRequestFormats": [
       "chat_completions",
       "responses",
       "messages"
-    ],
-    "validationProbe": "llm_text"
+    ]
   },
   {
-    "authRequirement": "volcengine",
+    "kind": "llm",
+    "providerType": "custom_messages",
+    "labelKey": "customMessages",
     "defaultEndpoint": null,
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrVolcengine",
-    "providerType": "volcengine",
+    "authRequirement": "api_key_unless_custom_endpoint",
+    "validationProbe": "llm_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence_allows_no_final"
+    "defaultRequestFormat": "messages",
+    "supportedRequestFormats": [
+      "chat_completions",
+      "responses",
+      "messages"
+    ]
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "volcengine",
+    "labelKey": "asrVolcengine",
+    "defaultEndpoint": null,
+    "defaultModel": null,
+    "authRequirement": "volcengine",
+    "validationProbe": "asr_silence_allows_no_final",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
+    "providerType": "elevenlabs",
+    "labelKey": "asrElevenLabs",
     "defaultEndpoint": "https://api.elevenlabs.io/v1",
     "defaultModel": "scribe_v2",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrElevenLabs",
-    "providerType": "elevenlabs",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "scribe_v2"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "bailian",
+    "labelKey": "asrBailian",
     "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference/",
     "defaultModel": "fun-asr-realtime",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrBailian",
-    "providerType": "bailian",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "fun-asr-realtime",
       "fun-asr-flash-8k-realtime",
@@ -418,344 +418,380 @@
       "fun-asr-mtl-2025-08-25",
       "paraformer-v2"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "bailian-qwen3-realtime",
+    "labelKey": "asrBailianQwen3",
     "defaultEndpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
     "defaultModel": "qwen3-asr-flash-realtime",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrBailianQwen3",
-    "providerType": "bailian-qwen3-realtime",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "qwen3-asr-flash-realtime",
       "qwen3-asr-flash-realtime-2026-02-10",
       "qwen3-asr-flash-realtime-2025-10-27"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "bailian-fun-asr-flash",
+    "labelKey": "asrBailianFunAsrFlash",
     "defaultEndpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     "defaultModel": "fun-asr-flash-2026-06-15",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrBailianFunAsrFlash",
-    "providerType": "bailian-fun-asr-flash",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_non_silent",
     "staticModels": [
       "qwen-audio-3.0-asr-flash",
       "fun-asr-flash-2026-06-15"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_non_silent"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "siliconflow",
+    "labelKey": "asrSiliconflow",
     "defaultEndpoint": "https://api.siliconflow.cn/v1",
     "defaultModel": "FunAudioLLM/SenseVoiceSmall",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrSiliconflow",
-    "providerType": "siliconflow",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "stepfun",
+    "labelKey": "asrStepfun",
     "defaultEndpoint": "https://api.stepfun.com/v1",
     "defaultModel": "stepaudio-2.5-asr",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrStepfun",
-    "providerType": "stepfun",
+    "authRequirement": "api_key",
+    "validationProbe": "stepfun_no_speech",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "stepfun_no_speech"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "zhipu",
+    "labelKey": "asrZhipu",
     "defaultEndpoint": "https://open.bigmodel.cn/api/paas/v4",
     "defaultModel": "glm-asr-2512",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrZhipu",
-    "providerType": "zhipu",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "minimax",
+    "labelKey": "asrMinimax",
     "defaultEndpoint": "https://api.minimaxi.com/v1",
     "defaultModel": "asr-1.0",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrMinimax",
-    "providerType": "minimax",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "asr-1.0"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "groq",
+    "labelKey": "asrGroq",
     "defaultEndpoint": "https://api.groq.com/openai/v1",
     "defaultModel": "whisper-large-v3-turbo",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrGroq",
-    "providerType": "groq",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "whisper",
+    "labelKey": "asrWhisper",
     "defaultEndpoint": "https://api.openai.com/v1",
     "defaultModel": "whisper-1",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrWhisper",
-    "providerType": "whisper",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "openrouter",
+    "labelKey": "asrOpenrouter",
     "defaultEndpoint": "https://openrouter.ai/api/v1",
     "defaultModel": "openai/whisper-large-v3-turbo",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrOpenrouter",
-    "providerType": "openrouter",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "orcarouter",
+    "labelKey": "orcarouter",
     "defaultEndpoint": "https://api.orcarouter.ai/v1",
     "defaultModel": "google/gemini-2.5-flash",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "orcarouter",
-    "providerType": "orcarouter",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "zenmux",
+    "labelKey": "asrZenmux",
     "defaultEndpoint": "https://zenmux.ai/api/v1",
     "defaultModel": "qwen/qwen3-asr-flash",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrZenmux",
-    "providerType": "zenmux",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "endpoint_model_optional_api_key",
+    "kind": "asr",
+    "providerType": "openai-compatible",
+    "labelKey": "asrOpenAiCompatible",
     "defaultEndpoint": null,
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrOpenAiCompatible",
-    "providerType": "openai-compatible",
+    "authRequirement": "endpoint_model_optional_api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "xiaomi-mimo-asr",
+    "labelKey": "asrXiaomiMimo",
     "defaultEndpoint": "https://api.xiaomimimo.com/v1",
     "defaultModel": "mimo-v2.5-asr",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrXiaomiMimo",
-    "providerType": "xiaomi-mimo-asr",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "mimo-v2.5-asr"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "xfyun",
+    "kind": "asr",
+    "providerType": "iflytek",
+    "labelKey": "asrIflytek",
     "defaultEndpoint": null,
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrIflytek",
-    "providerType": "iflytek",
+    "authRequirement": "xfyun",
+    "validationProbe": "asr_silence_allows_no_final",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence_allows_no_final"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "tencent_cloud",
+    "kind": "asr",
+    "providerType": "tencent-cloud",
+    "labelKey": "asrTencentCloud",
     "defaultEndpoint": null,
     "defaultModel": "Hy-ASR-3.0-preview",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrTencentCloud",
-    "providerType": "tencent-cloud",
+    "authRequirement": "tencent_cloud",
+    "validationProbe": "asr_silence_allows_no_final",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence_allows_no_final"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "gemini",
+    "labelKey": "asrGemini",
     "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
     "defaultModel": "gemini-3.5-transcribe",
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrGemini",
-    "providerType": "gemini",
+    "authRequirement": "api_key",
+    "validationProbe": "asr_silence",
     "staticModels": [
       "gemini-3.5-transcribe"
     ],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "none",
-    "defaultEndpoint": null,
-    "defaultModel": null,
-    "defaultRequestFormat": null,
     "kind": "asr",
-    "labelKey": "asrFoundryLocalWhisper",
     "providerType": "foundry-local-whisper",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrFoundryLocalWhisper",
     "defaultEndpoint": null,
     "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
     "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
     "kind": "asr",
-    "labelKey": "asrLocalWhisper",
     "providerType": "local-whisper",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrLocalWhisper",
     "defaultEndpoint": null,
     "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
     "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
     "kind": "asr",
-    "labelKey": "asrSherpaOnnxLocal",
     "providerType": "sherpa-onnx-local",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrSherpaOnnxLocal",
     "defaultEndpoint": null,
     "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
     "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
     "kind": "asr",
-    "labelKey": "asrLocalQwen3Mlx",
+    "providerType": "experimental-textstream",
+    "labelKey": "asrExperimentalTextStream",
+    "defaultEndpoint": null,
+    "defaultModel": "experimental-textstream-qwen3",
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
+    "providerType": "experimental-sensevoice",
+    "labelKey": "asrExperimentalSenseVoice",
+    "defaultEndpoint": null,
+    "defaultModel": "experimental-sensevoice-small",
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
+    "providerType": "experimental-embedding-gemma",
+    "labelKey": "asrExperimentalGemma",
+    "defaultEndpoint": null,
+    "defaultModel": "experimental-embedding-gemma-en",
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "asr",
     "providerType": "local-qwen3-mlx",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrLocalQwen3Mlx",
     "defaultEndpoint": null,
     "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
     "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
     "kind": "asr",
-    "labelKey": "asrLocalQwen3C",
     "providerType": "local-qwen3-c",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrLocalQwen3C",
     "defaultEndpoint": null,
     "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
+    "staticModels": [],
     "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
     "kind": "asr",
-    "labelKey": "asrLocalQwen3",
     "providerType": "local-qwen3",
-    "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "unsupported"
-  },
-  {
-    "authRequirement": "none",
+    "labelKey": "asrLocalQwen3",
     "defaultEndpoint": null,
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "asr",
-    "labelKey": "asrAppleSpeech",
-    "providerType": "apple-speech",
+    "authRequirement": "none",
+    "validationProbe": "unsupported",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "asr_native_silence"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "asr",
+    "providerType": "apple-speech",
+    "labelKey": "asrAppleSpeech",
+    "defaultEndpoint": null,
+    "defaultModel": null,
+    "authRequirement": "none",
+    "validationProbe": "asr_native_silence",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "omni",
+    "providerType": "openai",
+    "labelKey": "omniOpenai",
     "defaultEndpoint": "https://api.openai.com/v1",
     "defaultModel": "gpt-4o-audio-preview",
-    "defaultRequestFormat": null,
-    "kind": "omni",
-    "labelKey": "omniOpenai",
-    "providerType": "openai",
+    "authRequirement": "api_key",
+    "validationProbe": "omni_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "omni_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "omni",
+    "providerType": "gemini",
+    "labelKey": "omniGemini",
     "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
     "defaultModel": "gemini-2.5-flash",
-    "defaultRequestFormat": null,
-    "kind": "omni",
-    "labelKey": "omniGemini",
-    "providerType": "gemini",
+    "authRequirement": "api_key",
+    "validationProbe": "omni_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "omni_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "omni",
+    "providerType": "dashscope-omni",
+    "labelKey": "omniDashscope",
     "defaultEndpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "defaultModel": "qwen3-omni-flash",
-    "defaultRequestFormat": null,
-    "kind": "omni",
-    "labelKey": "omniDashscope",
-    "providerType": "dashscope-omni",
+    "authRequirement": "api_key",
+    "validationProbe": "omni_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "omni_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   },
   {
-    "authRequirement": "api_key",
+    "kind": "omni",
+    "providerType": "custom",
+    "labelKey": "custom",
     "defaultEndpoint": null,
     "defaultModel": null,
-    "defaultRequestFormat": null,
-    "kind": "omni",
-    "labelKey": "custom",
-    "providerType": "custom",
+    "authRequirement": "api_key",
+    "validationProbe": "omni_text",
     "staticModels": [],
-    "supportedRequestFormats": [],
-    "validationProbe": "omni_text"
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
   }
 ]

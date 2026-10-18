@@ -70,10 +70,12 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           style={{
             position: 'absolute',
             top: 0,
-            left: MAC_SYSTEM_CONTROLS_RESERVED_WIDTH,
+            left: `calc(${MAC_SYSTEM_CONTROLS_RESERVED_WIDTH}px / var(--ol-interface-scale, 1))`,
             right: 0,
-            height: MAC_TITLEBAR_HEIGHT,
-            zIndex: 50,
+            height: `calc(${MAC_TITLEBAR_HEIGHT}px / var(--ol-interface-scale, 1))`,
+            // Settings is a full-window surface at z-index 50. The native drag strip
+            // must remain above it, outside the inert application background.
+            zIndex: 100,
           }}
         />
       )}

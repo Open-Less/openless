@@ -647,8 +647,13 @@ assert.match(
 );
 assert.match(
   localAsrActivation,
-  /\.prepare\([^]*?\.preload_lease\([^]*?preferences\.update\([^]*?\.mutate_channel\(ChannelMutation::ActivateLocalAsr/,
-  'channel activation must commit only after native preparation and preference persistence succeed',
+  /ensure_model_installed\([^]*?preferences\.update\([^]*?\.mutate_channel\(ChannelMutation::ActivateLocalAsr/,
+  'channel activation must validate downloaded files and persist preferences before channel commit',
+);
+assert.doesNotMatch(
+  localAsrActivation,
+  /\.(?:prepare|preload_lease|preload|download_native_model)\(/,
+  'enabling a channel must not initialize local inference or download anything',
 );
 assert.match(
   coreAdapters,
@@ -657,47 +662,10 @@ assert.match(
 );
 assert.match(
   coreAdapters,
-  /let loaded\s*=\s*if openless_core::LocalAsrModelId::from_wire_id\(\s*&settings\.active_model,?\s*\)[^]*?is_whisper\)[^]*?whisper_cache\.loaded_model_id\(\)[^]*?else[^]*?qwen_cache\.loaded_model_id\(\)/,
-  'macOS engine status must select the active model family rather than prefer any loaded Qwen cache',
+  /LocalAsrRuntime::Generic => \{\s*let loaded: Option<String> = None;[^]*?available: false/,
+  'retired macOS runtime status must be file-only and unavailable',
 );
-for (const cache of await Promise.all([
-  read('src-tauri/src/asr/local/cache.rs'),
-  read('src-tauri/src/asr/local/whisper_provider.rs'),
-])) {
-  const release = cache.match(/pub\(crate\) fn release_lease\([^]*?(?=\r?\n    (?:pub|\/\/))/)?.[0];
-  assert.ok(release, 'each native cache must implement model-scoped activation cleanup');
-  assert.match(
-    release,
-    /inner\.lock\(\)[^]*?cached\.model_id == model_id\s*&&\s*cached\.activation_generation == Some\(generation\)[^]*?slot\.take\(\)/,
-    'model and generation checks must happen under the same lock as cache eviction',
-  );
-  assert.doesNotMatch(
-    release,
-    /\.cancel\(/,
-    'retiring a cache lease must preserve an in-flight transcription Arc',
-  );
-  assert.match(
-    cache,
-    /get_or_load_for_lease\([^\n]*None\)/,
-    'ordinary preload or transcription must revoke the previous activation owner',
-  );
-  assert.match(
-    cache,
-    /if self\.load_generation\.load\(Ordering::Acquire\) != load_generation\s*\{\s*if activation_generation\.is_some\(\)\s*\{\s*anyhow::bail!\([^]*?\);\s*\}\s*return Ok\(engine\);\s*\}\s*(?:\*slot = Some|slot\.replace)/,
-    'a superseded activation must fail, while ordinary ASR keeps its uncached Arc without replacing the current cache',
-  );
-  for (const method of ['finish_use', 'release_current_if_idle', 'release_if_idle']) {
-    const cleanup = cache.match(
-      new RegExp(`pub fn ${method}\\([^]*?(?=\\r?\\n    (?:pub|//))`),
-    )?.[0];
-    assert.ok(cleanup, `${method} must remain an explicit native cache cleanup path`);
-    assert.match(
-      cleanup,
-      /inner\.lock\(\)[^]*?activation_generation\.is_none\(\)[^]*?slot\.take\(\)/,
-      `${method} must preserve a newer activation owner even when it reuses the same Arc`,
-    );
-  }
-}
+assert.doesNotMatch(coreAdapters, /qwen_cache|whisper_cache|LocalQwenEngine|AppleSpeechAsr/);
 assert.equal(
   localAsrActivation.match(/\.mutate_channel\(/g)?.length,
   1,
@@ -718,11 +686,15 @@ assert.match(
   /ChannelMutation::ActivateLocalAsr \{ id, provider_type \} => \{[^]*?allocate_channel_id[^]*?channel\.enabled = true[^]*?channels\.insert\(0, channel\)[^]*?ChannelMutationResult::Activated\(id\)/,
   'Core metadata must create or enable and promote the activated channel in the same mutation',
 );
-assert.doesNotMatch(
-  localAsrPage,
-  /activateSherpaProvider\(selectedSherpaAlias\)[^]*?prepareSherpaOnnxAsr\(/,
-  'local ASR activation must not layer the old prepare sequence after the Core transaction',
-);
+for (const handler of ['handleEnableSherpa', 'handleEnableFoundry']) {
+  const body = localAsrPage.match(new RegExp(`const ${handler} = async[^]*?(?=\\n  const )`))?.[0];
+  assert.ok(body);
+  assert.doesNotMatch(
+    body,
+    /prepareSherpaOnnxAsr|prepareFoundryLocalAsr|preloadLocalAsr/,
+    'enabling must not layer a runtime load after the Core settings transaction',
+  );
+}
 for (const legacyDictationFacade of [
   'start_dictation',
   'start_dictation_with_translation',
@@ -754,10 +726,15 @@ assert.match(
 const voiceEditNativeMethod = androidKotlinBridge.match(
   /@JvmStatic\s+external fun (nativeFinalizeVoiceEditFromOverlay)\(\)/,
 )?.[1];
-assert.ok(voiceEditNativeMethod, 'the overlay Voice Edit JNI method must remain static and argument-free');
+assert.ok(
+  voiceEditNativeMethod,
+  'the overlay Voice Edit JNI method must remain static and argument-free',
+);
 assert.match(
   androidNativeBridge,
-  new RegExp(`extern "system" fn Java_com_openless_app_OpenLessNative_${voiceEditNativeMethod}\\(\\s*_env: jni::JNIEnv,\\s*_class: jni::objects::JClass,\\s*\\)`),
+  new RegExp(
+    `extern "system" fn Java_com_openless_app_OpenLessNative_${voiceEditNativeMethod}\\(\\s*_env: jni::JNIEnv,\\s*_class: jni::objects::JClass,\\s*\\)`,
+  ),
   'the exported JNI symbol and receiver signature must match the Kotlin Voice Edit declaration',
 );
 const androidJni = await read('src-tauri/src/android/jni.rs');

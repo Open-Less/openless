@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
+use crate::audio::AudioProcessingConfig;
 use crate::dictation_context::DictationContext;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::types::{InsertStatus, PolishDelta, SessionId, TranscriptDelta};
@@ -505,6 +506,7 @@ pub struct CaptureStartRequest {
     pub microphone_device_name: Option<String>,
     pub low_latency: bool,
     pub pre_roll_ms: u16,
+    pub audio_processing: AudioProcessingConfig,
 }
 
 /// An optional host-owned capture that starts before a dictation session is

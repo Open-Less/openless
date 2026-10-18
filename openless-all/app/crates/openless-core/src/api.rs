@@ -1,4 +1,5 @@
 mod cloud_note;
+use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -1789,6 +1790,8 @@ type TextInsertionPreparation = futures_util::future::Shared<
 >;
 
 struct ActiveTextInsertion {
+    session_id: SessionId,
+    insert_attempts: AtomicU64,
     platform: Arc<dyn TextInsertionSession>,
     streaming: bool,
     script: crate::shared_types::ChineseScriptPreference,
@@ -1813,6 +1816,7 @@ struct ActiveTextInsertionState {
 
 impl ActiveTextInsertion {
     fn new(
+        session_id: SessionId,
         platform: Arc<dyn TextInsertionSession>,
         context: &DictationContext,
         task_spawner: Arc<dyn TaskSpawner>,
@@ -1823,6 +1827,8 @@ impl ActiveTextInsertion {
                 != crate::shared_types::WindowsInsertionMode::SendInput;
         let platform_streaming = platform.supports_streaming();
         Arc::new(Self {
+            session_id,
+            insert_attempts: AtomicU64::new(0),
             platform,
             streaming: context.uses_llm_polisher()
                 && platform_streaming
@@ -1842,6 +1848,57 @@ impl ActiveTextInsertion {
             cancel_result: std::sync::OnceLock::new(),
             terminal: AtomicU8::new(0),
         })
+    }
+
+    fn begin_insert_attempt(&self, operation: &str, text: &str) -> u64 {
+        let attempt = self.insert_attempts.fetch_add(1, Ordering::Relaxed) + 1;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} chars={} hash={}",
+            self.session_id,
+            attempt,
+            operation,
+            text.chars().count(),
+            crate::output_cleaning::privacy_text_hash(text),
+        );
+        attempt
+    }
+
+    async fn write_text(
+        &self,
+        text: String,
+        operation: &str,
+    ) -> Result<crate::ports::InsertWriteResult, BackendError> {
+        let attempt = self.begin_insert_attempt(operation, &text);
+        let result = self.platform.write(text).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} result={:?}",
+            self.session_id,
+            attempt,
+            operation,
+            result
+                .as_ref()
+                .map(|written| written.written_chars)
+                .map_err(|error| error.code),
+        );
+        result
+    }
+
+    async fn finish_platform(&self, text: String) -> Result<InsertOutcome, BackendError> {
+        let operation = if text.is_empty() {
+            "finalize"
+        } else {
+            "insert_final"
+        };
+        let attempt = self.begin_insert_attempt(operation, &text);
+        let result = self.platform.finish(text).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} result={:?}",
+            self.session_id,
+            attempt,
+            operation,
+            result.as_ref().map_err(|error| error.code),
+        );
+        result
     }
 
     fn push(self: &Arc<Self>, delta: &crate::types::PolishDelta) {
@@ -1896,7 +1953,7 @@ impl ActiveTextInsertion {
             let result = if delta.is_empty() {
                 Ok(crate::ports::InsertWriteResult { written_chars: 0 })
             } else {
-                self.platform.write(delta.clone()).await
+                self.write_text(delta.clone(), "stream").await
             };
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             match result {
@@ -1977,10 +2034,10 @@ impl ActiveTextInsertion {
             .reconcile_final(&final_text);
         use crate::streaming_insert::FinalReconciliation;
         match reconciliation {
-            FinalReconciliation::InsertFinal(text) => self.platform.finish(text).await,
+            FinalReconciliation::InsertFinal(text) => self.finish_platform(text).await,
             FinalReconciliation::WriteTail(tail) => {
                 let expected = tail.chars().count();
-                let written = self.platform.write(tail).await;
+                let written = self.write_text(tail, "tail").await;
                 let complete = matches!(written, Ok(result) if result.written_chars >= expected);
                 if complete {
                     if self.save_streamed_text_to_clipboard {
@@ -1988,7 +2045,7 @@ impl ActiveTextInsertion {
                             log::warn!("failed to preserve streamed text on clipboard: {error}");
                         }
                     }
-                    self.platform.finish(String::new()).await
+                    self.finish_platform(String::new()).await
                 } else {
                     self.finish_with_fallback(final_text).await
                 }
@@ -1999,7 +2056,7 @@ impl ActiveTextInsertion {
                         log::warn!("failed to preserve streamed text on clipboard: {error}");
                     }
                 }
-                self.platform.finish(String::new()).await
+                self.finish_platform(String::new()).await
             }
             FinalReconciliation::CopyFallback(text) => self.finish_with_fallback(text).await,
         }
@@ -2007,7 +2064,12 @@ impl ActiveTextInsertion {
 
     async fn finish_with_fallback(&self, text: String) -> Result<InsertOutcome, BackendError> {
         let copied = self.platform.copy(text).await;
-        let closed = self.platform.finish(String::new()).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} operation=copy_fallback result={:?}",
+            self.session_id,
+            copied.as_ref().map_err(|error| error.code),
+        );
+        let closed = self.finish_platform(String::new()).await;
         copied?;
         closed?;
         Ok(InsertOutcome::CopiedFallback)
@@ -2032,6 +2094,12 @@ impl ActiveTextInsertion {
             self.task_spawner.spawn(Box::pin(async move {
                 insertion.wait_for_stream_drain().await;
                 let result = insertion.platform.cancel().await;
+                log::info!(
+                    "[insert-diagnostics] session_id={} operation=cancel attempts={} result={:?}",
+                    insertion.session_id,
+                    insertion.insert_attempts.load(Ordering::Relaxed),
+                    result.as_ref().map_err(|error| error.code),
+                );
                 let _ = insertion.cancel_result.set(result);
                 insertion.terminal.store(4, Ordering::Release);
                 insertion.drained.notify_waiters();
@@ -2260,6 +2328,8 @@ pub struct OpenLessBackend {
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
     settings_write_gate: Arc<Mutex<()>>,
+    // Serialize channel ownership changes through runtime cleanup, not status reads.
+    local_asr_channel_gate: tokio::sync::Mutex<()>,
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
@@ -2556,6 +2626,10 @@ impl OpenLessBackend {
         let history_revision = Arc::new(AtomicU64::new(0));
         let vocabulary_revision = Arc::new(AtomicU64::new(0));
         let settings_write_gate = Arc::new(Mutex::new(()));
+        deps.services.less_computer.bind_testing_features(
+            Arc::clone(&repositories.preferences),
+            Arc::clone(&settings_write_gate),
+        );
         let voice_sessions = Arc::clone(&deps.services.voice_sessions);
         let runtime_start_work = Arc::new(crate::voice_session::RuntimeActivityGate::default());
         deps.services.selection_voice =
@@ -2584,6 +2658,8 @@ impl OpenLessBackend {
                 process,
                 Arc::clone(&deps.services.less_computer),
                 BackendEventPublisher::new(Arc::clone(&events)),
+                Arc::clone(&repositories.preferences),
+                Arc::clone(&settings_write_gate),
             ));
         }
         if let Some(runtime) = deps.local_asr_runtime.take() {
@@ -2859,6 +2935,7 @@ impl OpenLessBackend {
             preferences: repositories.preferences,
             preferences_revision,
             settings_write_gate,
+            local_asr_channel_gate: tokio::sync::Mutex::new(()),
             cloud_sync,
             encrypted_sync,
             encrypted_sync_store,
@@ -2959,7 +3036,7 @@ impl OpenLessBackend {
     /// [`Self::abort_less_computer_capture`].
     pub fn begin_less_computer_capture(&self, session_id: SessionId) -> Result<(), BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
-        if !self.get_preferences().coding_agent_enabled {
+        if !self.get_preferences().less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -2974,6 +3051,11 @@ impl OpenLessBackend {
             ));
         }
         self.deps.services.less_computer.begin_capture(session_id)
+    }
+
+    /// Require this device's explicit opt-in for unfinished features.
+    pub fn ensure_testing_features_enabled(&self) -> Result<(), BackendError> {
+        crate::settings::ensure_testing_features_enabled(&self.get_preferences())
     }
 
     /// Return the current Less Computer capture/run session, if any.
@@ -3020,7 +3102,7 @@ impl OpenLessBackend {
     ) -> Result<LessComputerVoiceSession, BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
         let preferences = self.get_preferences();
-        if !preferences.coding_agent_enabled {
+        if !preferences.less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -3594,7 +3676,7 @@ impl OpenLessBackend {
     ) -> Result<LessComputerRunResult, BackendError> {
         let _runtime = self.runtime_start_work.acquire()?;
         let preferences = self.get_preferences();
-        if !preferences.coding_agent_enabled {
+        if !preferences.less_computer_available() {
             return Err(BackendError::new(
                 BackendErrorCode::PermissionDenied,
                 "Less Computer is disabled",
@@ -3646,6 +3728,17 @@ impl OpenLessBackend {
         let Some(session_id) = session_id.or_else(|| self.less_computer_active_session()) else {
             return Ok(());
         };
+        own_voice_effect(
+            &self.deps.task_spawner,
+            self.less_computer_cancellation(session_id),
+        )
+        .await
+    }
+
+    fn less_computer_cancellation(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
         let control = self
             .less_computer_voice_controls
             .lock()
@@ -3654,26 +3747,22 @@ impl OpenLessBackend {
             .cloned();
         let controls = Arc::clone(&self.less_computer_voice_controls);
         let less_computer = Arc::clone(&self.deps.services.less_computer);
-        own_voice_effect(
-            &self.deps.task_spawner,
-            Box::pin(async move {
-                let service_result = less_computer.cancel(Some(session_id)).await;
-                let resource_result = match control {
-                    Some(control) => {
-                        let _guard = VoiceControlGuard {
-                            session_id,
-                            control: Arc::clone(&control),
-                            controls,
-                        };
-                        control.cancel_resources().await
-                    }
-                    None => Ok(()),
-                };
-                let _ = less_computer.abort_capture(session_id);
-                resource_result.and(service_result)
-            }),
-        )
-        .await
+        Box::pin(async move {
+            let service_result = less_computer.cancel(Some(session_id)).await;
+            let resource_result = match control {
+                Some(control) => {
+                    let _guard = VoiceControlGuard {
+                        session_id,
+                        control: Arc::clone(&control),
+                        controls,
+                    };
+                    control.cancel_resources().await
+                }
+                None => Ok(()),
+            };
+            let _ = less_computer.abort_capture(session_id);
+            resource_result.and(service_result)
+        })
     }
 
     pub async fn cancel_active_voice_session(
@@ -4108,6 +4197,9 @@ impl OpenLessBackend {
                 .then(|| preferences.microphone_device_name.clone()),
             low_latency: preferences.low_latency_dictation_enabled,
             pre_roll_ms: 500,
+            audio_processing: crate::audio::AudioProcessingConfig {
+                enhancement_enabled: preferences.audio_enhancement_enabled,
+            },
         };
         match self.deps.dictation_engine.arm_audio_capture(request) {
             Ok(capture) => {
@@ -4567,6 +4659,16 @@ impl OpenLessBackend {
                 "provider type must not be blank",
             ));
         }
+        if kind == ChannelKind::Asr {
+            return self
+                .apply_channel_mutation(ChannelMutation::SetProviderType {
+                    kind,
+                    id,
+                    provider_type,
+                })
+                .await
+                .map(|_| ());
+        }
         let previous = self
             .list_channels(kind)
             .await?
@@ -4734,18 +4836,36 @@ impl OpenLessBackend {
                 "provider id must not be blank",
             ));
         }
+        let owner_guard = if slot == ProviderSlot::Asr {
+            Some(self.local_asr_channel_gate.lock().await)
+        } else {
+            None
+        };
+        let previous = if slot == ProviderSlot::Asr {
+            self.asr_channel_owner().await?
+        } else {
+            None
+        };
         self.deps
             .credential_store
             .set_active_provider(slot, provider_id)
             .await?;
-        self.refresh_and_publish_credentials().await
+        let retirement = self.release_previous_asr_owner(previous).await;
+        // No runtime cleanup may trail an asynchronous credentials refresh: a
+        // replacement channel/recording can already own the same runtime then.
+        drop(owner_guard);
+        let status = self.refresh_and_publish_credentials().await?;
+        retirement?;
+        Ok(status)
     }
 
     pub async fn activate_local_asr(
         &self,
         request: crate::domains::LocalAsrActivationRequest,
     ) -> Result<crate::domains::LocalAsrActivationResult, BackendError> {
+        let owner_guard = self.local_asr_channel_gate.lock().await;
         let result = self.deps.services.local_asr.activate(request).await?;
+        drop(owner_guard);
         self.refresh_and_publish_credentials().await?;
         Ok(result)
     }
@@ -4754,9 +4874,121 @@ impl OpenLessBackend {
         &self,
         mutation: ChannelMutation,
     ) -> Result<ChannelMutationResult, BackendError> {
+        let kind = match &mutation {
+            ChannelMutation::ActivateLocalAsr { .. }
+            | ChannelMutation::RegisterExperimentalAsr { .. } => ChannelKind::Asr,
+            ChannelMutation::Create { kind, .. }
+            | ChannelMutation::SetProviderType { kind, .. }
+            | ChannelMutation::InvalidateTest { kind, .. }
+            | ChannelMutation::InvalidateTests { kind }
+            | ChannelMutation::DeleteIfBlank { kind, .. }
+            | ChannelMutation::Rename { kind, .. }
+            | ChannelMutation::Delete { kind, .. }
+            | ChannelMutation::SetEnabled { kind, .. }
+            | ChannelMutation::Reorder { kind, .. }
+            | ChannelMutation::RecordTest { kind, .. } => *kind,
+        };
+        let owner_guard = if kind == ChannelKind::Asr {
+            Some(self.local_asr_channel_gate.lock().await)
+        } else {
+            None
+        };
+        let previous = if kind == ChannelKind::Asr {
+            self.asr_channel_owner().await?
+        } else {
+            None
+        };
         let result = self.deps.credential_store.mutate_channel(mutation).await?;
+        let retirement = self.release_previous_asr_owner(previous).await;
+        drop(owner_guard);
+        // The metadata commit still needs publishing when native cleanup fails.
         self.refresh_and_publish_credentials().await?;
+        retirement?;
         Ok(result)
+    }
+
+    async fn asr_channel_owner(&self) -> Result<Option<(String, String)>, BackendError> {
+        let id = match self
+            .deps
+            .credential_store
+            .active_provider(ProviderSlot::Asr)
+            .await
+        {
+            Ok(id) => id,
+            Err(error) if error.code == BackendErrorCode::Unsupported => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if id.is_empty() {
+            return Ok(None);
+        }
+        let channels = match self
+            .deps
+            .credential_store
+            .list_channels(ChannelKind::Asr)
+            .await
+        {
+            Ok(channels) => channels,
+            Err(error) if error.code == BackendErrorCode::Unsupported => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(
+            match channels.into_iter().find(|channel| channel.id == id) {
+                Some(channel) if channel.enabled => Some((id, channel.provider_type)),
+                Some(_) => None,
+                None => Some((id.clone(), id)), // Legacy provider-only selection.
+            },
+        )
+    }
+
+    async fn release_previous_asr_owner(
+        &self,
+        previous: Option<(String, String)>,
+    ) -> Result<(), BackendError> {
+        let Some(previous) = previous else {
+            return Ok(());
+        };
+        if let Some(current) = self.asr_channel_owner().await? {
+            // Editing an unrelated channel is not runtime retirement. A new
+            // channel using the same shared runtime also keeps ownership; its
+            // model can be replaced by the next explicit use, not a stale unload.
+            if current == previous
+                || current.1 == previous.1
+                || Self::local_asr_runtime(&previous.1)
+                    .is_some_and(|runtime| Self::local_asr_runtime(&current.1) == Some(runtime))
+            {
+                return Ok(());
+            }
+        }
+        self.release_local_asr_provider(&previous.1).await
+    }
+
+    fn local_asr_runtime(provider: &str) -> Option<crate::LocalAsrRuntime> {
+        match provider {
+            "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" | "local-whisper"
+            | "apple-whisper" => Some(crate::LocalAsrRuntime::Generic),
+            "foundry-local" | "foundry-whisper" | "foundry-local-whisper" => {
+                Some(crate::LocalAsrRuntime::Foundry)
+            }
+            "sherpa-onnx" | "sherpa-onnx-local" => Some(crate::LocalAsrRuntime::SherpaOnnx),
+            _ => None,
+        }
+    }
+
+    async fn release_local_asr_provider(&self, provider: &str) -> Result<(), BackendError> {
+        if let Some(model) = crate::experimental_asr::ExperimentalAsrModel::from_provider(provider)
+        {
+            if let Some(service) = &self.deps.services.experimental_asr {
+                service.release_runtime(model).await?;
+            }
+            return Ok(());
+        }
+        let Some(runtime) = Self::local_asr_runtime(provider) else {
+            return Ok(());
+        };
+        match self.deps.services.local_asr.release(runtime).await {
+            Err(error) if error.code == BackendErrorCode::Unsupported => Ok(()),
+            result => result,
+        }
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
@@ -4981,6 +5213,21 @@ impl OpenLessBackend {
         {
             self.disarm_edit_observation();
             self.dismiss_pending_corrections();
+        }
+        if previous.testing_features_enabled && !preferences.testing_features_enabled {
+            // Capture the old owners while settings admission is still locked.
+            // A later opt-in must not let cleanup cancel a replacement task.
+            let cancellation = self
+                .less_computer_active_session()
+                .map(|session_id| self.less_computer_cancellation(session_id));
+            self.deps.services.less_computer.dismiss();
+            let cancel_test = self.deps.services.coding_agent.cancel_test();
+            self.deps.task_spawner.spawn(Box::pin(async move {
+                let _ = cancel_test.await;
+                if let Some(cancellation) = cancellation {
+                    let _ = cancellation.await;
+                }
+            }));
         }
         self.publish_preferences_changed();
         Ok(crate::SettingsUpdateOutcome {
@@ -5945,6 +6192,7 @@ impl OpenLessBackend {
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
                 Ok(ActiveTextInsertion::new(
+                    session_id,
                     platform,
                     &insertion_context,
                     task_spawner,
@@ -6447,6 +6695,12 @@ impl OpenLessBackend {
         }
 
         let insert_outcome = if context.insertion.enabled {
+            log::info!(
+                "[insert-diagnostics] session_id={} phase=finalizing final_chars={} final_hash={}",
+                session_id,
+                engine_result.polished_text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&engine_result.polished_text),
+            );
             match self
                 .finish_text_insertion(session_id, engine_result.polished_text.clone())
                 .await
@@ -6465,7 +6719,8 @@ impl OpenLessBackend {
                         engine_result.asr_ms,
                         engine_result.polish_ms,
                         engine_result.has_audio_recording,
-                        context.uses_llm_polisher(),
+                        context.uses_llm_polisher()
+                            && !context.skips_polish_for_short_text(&engine_result.raw_text),
                         engine_result.asr_call_label.clone(),
                         engine_result.llm_call_label.clone(),
                     );
@@ -6478,6 +6733,13 @@ impl OpenLessBackend {
         } else {
             None
         };
+        if let Some(outcome) = insert_outcome {
+            log::info!(
+                "[insert-diagnostics] session_id={} phase=completed outcome={:?}",
+                session_id,
+                outcome,
+            );
+        }
         let result = DictationResult {
             session_id,
             raw_text: engine_result.raw_text.clone(),
@@ -6700,7 +6962,8 @@ impl OpenLessBackend {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
-        let llm_used = context.uses_llm_polisher();
+        let llm_used = context.uses_llm_polisher()
+            && !context.skips_polish_for_short_text(&engine_result.raw_text);
         let attribution = HistoryProviderAttribution::from_context(
             context,
             llm_used,
@@ -7207,6 +7470,26 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
+        // Issue #1032: when the LLM channel is not configured, mark the
+        // session as eligible for the Raw fallback instead of dispatching a
+        // polish request that cannot succeed. The context keeps its original
+        // style until the destination is known, so a later Cloud Note or
+        // translation choice can still take the polish path. A configured
+        // channel whose call fails still takes the polish fallback path below.
+        if purpose == DictationContextPurpose::Dictation
+            && traditional
+            && deferred_llm_error.is_none()
+            && context.uses_llm_polisher()
+            && !crate::cloud_providers::llm_channel_configured(
+                self.deps.credential_store.as_ref(),
+                &context.llm.provider_id,
+                &context.llm.provider_type,
+                context.llm.model.as_deref(),
+            )
+            .await
+        {
+            context = context.with_unconfigured_llm_raw();
+        }
         if let Some(error) = deferred_llm_error {
             if purpose != DictationContextPurpose::Dictation || context.uses_llm_polisher() {
                 return Err(error);
@@ -7906,6 +8189,7 @@ mod tests {
     async fn voice_workflows_share_one_busy_lease_and_release_it_on_terminal_paths() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend
             .update_settings(
@@ -8013,6 +8297,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         preferences.coding_agent_provider = "dsh-cli".into();
         preferences.coding_agent_permission_mode = "bypassPermissions".into();
@@ -8065,6 +8350,24 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, BackendErrorCode::PermissionDenied);
+        let mut legacy = backend.get_preferences();
+        legacy.coding_agent_enabled = true;
+        backend.set_preferences(legacy).unwrap();
+        assert_eq!(
+            backend
+                .submit_less_computer("legacy".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            backend
+                .begin_less_computer_capture(SessionId::new())
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
         assert!(runtime.request.lock().unwrap().is_none());
     }
 
@@ -8072,6 +8375,7 @@ mod tests {
     async fn less_computer_capture_facade_is_session_scoped_and_cancel_releases_it() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend.set_preferences(preferences).unwrap();
 
@@ -8092,10 +8396,74 @@ mod tests {
         assert_eq!(backend.less_computer_active_session(), None);
     }
 
+    #[tokio::test]
+    async fn disabling_testing_features_cancels_capture_and_preserves_configuration() {
+        let (backend, _) = backend();
+        backend.start().await.unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        preferences.coding_agent_enabled = true;
+        preferences.coding_agent_model = Some("saved-model".into());
+        backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let owner = SessionId::new();
+        backend.begin_less_computer_capture(owner).unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = false;
+        let outcome = backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let hotkeys = outcome.effects.hotkeys.unwrap();
+        assert!(hotkeys.previous.coding_agent_enabled);
+        assert!(!hotkeys.next.coding_agent_enabled);
+        assert!(outcome.preferences.coding_agent_enabled);
+        assert_eq!(
+            outcome.preferences.coding_agent_model.as_deref(),
+            Some("saved-model")
+        );
+        assert!(backend.less_computer_capture_cancelled(owner));
+        assert!(backend.ensure_testing_features_enabled().is_err());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while backend.less_computer_active_session().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            backend
+                .begin_less_computer_capture(SessionId::new())
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        backend
+            .update_settings(
+                preferences,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        backend.begin_less_computer_capture(owner).unwrap();
+        backend.cancel_less_computer(Some(owner)).await.unwrap();
+    }
+
     #[test]
     fn less_computer_hotkey_modes_share_hold_toggle_auto_and_combined_rules() {
         let (backend, _) = backend();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
 
         preferences.hotkey.mode = crate::HotkeyMode::Hold;
@@ -8352,6 +8720,7 @@ mod tests {
                 .unwrap(),
             );
             let mut preferences = backend.get_preferences();
+            preferences.testing_features_enabled = true;
             preferences.coding_agent_enabled = true;
             backend.set_preferences(preferences).unwrap();
             let session_id = SessionId::new();
@@ -8420,6 +8789,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         preferences.stable_transcription_enabled = true;
         backend.set_preferences(preferences).unwrap();
@@ -8580,6 +8950,7 @@ mod tests {
         )
         .unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend.set_preferences(preferences).unwrap();
         (data_dir, backend, transcription, runtime)
@@ -9195,6 +9566,10 @@ mod tests {
             BackendDependencies::unsupported(),
         )
         .unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        preferences.coding_agent_enabled = true;
+        backend.set_preferences(preferences).unwrap();
         let control = Arc::new(FakeRecordingControl::default());
 
         let stop_session = SessionId::new();
@@ -9463,6 +9838,22 @@ mod tests {
             .unwrap();
     }
 
+    /// Dictation fixtures exercise the polish path, so they run with a configured
+    /// default LLM channel (`ark`). Unconfigured channels now run as Raw (issue #1032).
+    fn llm_configured_credentials() -> Arc<crate::credentials::InMemoryCredentialStore> {
+        Arc::new(
+            crate::credentials::InMemoryCredentialStore::default().with_secret(
+                CredentialKey::new(
+                    crate::credentials::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    crate::credentials::LLM_API_KEY_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("fixture-key"),
+            ),
+        )
+    }
+
     fn backend_with_dictation_engine(
         data_dir: std::path::PathBuf,
         dictation_engine: Arc<dyn DictationEngine>,
@@ -9479,7 +9870,7 @@ mod tests {
                 )),
                 dictation_engine,
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -11452,8 +11843,7 @@ mod tests {
         let contexts = engine.contexts();
         assert_eq!(contexts.len(), 2);
         assert!(!contexts[0].polish.translation_active);
-        let mut expected = (*contexts[0]).clone();
-        expected.polish.translation_active = true;
+        let expected = contexts[0].with_translation_requested(true);
         assert_eq!(*contexts[1], expected);
         assert_eq!(
             contexts[1].recording.microphone_device_name.as_deref(),
@@ -12608,6 +12998,20 @@ mod tests {
         )
         .unwrap();
         backend.start().await.unwrap();
+        // Configure the default LLM channel so the polish call is actually dispatched
+        // and fails; an unconfigured channel now runs as Raw (issue #1032).
+        backend
+            .set_credential(
+                CredentialKey::new(
+                    crate::credentials::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    crate::credentials::LLM_API_KEY_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
 
         backend.start_dictation().await.unwrap();
         let result = backend.stop_dictation().await.unwrap();
@@ -12621,6 +13025,247 @@ mod tests {
         assert_eq!(history[0].has_audio_recording, Some(false));
 
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn unconfigured_llm_runs_as_raw_without_polish_failure() {
+        // Issue #1032: with no LLM API key the default Light mode must not dispatch
+        // polish (which would fail and record polishFailed); the dictation runs as Raw.
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-core-unconfigured-llm-history-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let engine = crate::dictation_engine::PipelineDictationEngine::new(
+            Arc::new(
+                crate::testing::FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(25, 0.5)])
+                    .with_archived_recording(true),
+            ),
+            Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                "raw fallback",
+                25,
+            )),
+            Arc::new(crate::testing::FixtureTextPolisher::failing(
+                BackendError::new(BackendErrorCode::Provider, "polish must not be called"),
+            )),
+        );
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.clone(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(crate::testing::FixtureTextInserter::with_outcome(
+                    InsertOutcome::Inserted,
+                )),
+                dictation_engine: Arc::new(engine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+
+        backend.start_dictation().await.unwrap();
+        let result = backend.stop_dictation().await.unwrap();
+
+        assert_eq!(result.polished_text, "raw fallback");
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].error_code, None);
+        assert_eq!(history[0].polish_ms, None);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn short_polish_history_matches_the_executed_path() {
+        #[derive(Clone, Copy)]
+        struct Case {
+            raw: &'static str,
+            threshold: u32,
+            translation: bool,
+            insert_failed: bool,
+            correction: Option<(&'static str, &'static str)>,
+            polish_failed: bool,
+            uses_polisher: bool,
+        }
+        let short = Case {
+            raw: "确定",
+            threshold: 8,
+            translation: false,
+            insert_failed: false,
+            correction: None,
+            polish_failed: false,
+            uses_polisher: false,
+        };
+        let long = "确定重试确定重试好";
+        let cases = [
+            ("short", short),
+            (
+                "insert-failed",
+                Case {
+                    insert_failed: true,
+                    ..short
+                },
+            ),
+            (
+                "long",
+                Case {
+                    raw: long,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "disabled",
+                Case {
+                    threshold: 0,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "translation",
+                Case {
+                    translation: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "expanded",
+                Case {
+                    correction: Some(("确定", long)),
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "shortened",
+                Case {
+                    raw: long,
+                    correction: Some((long, "确定")),
+                    ..short
+                },
+            ),
+            (
+                "polish-failed",
+                Case {
+                    raw: long,
+                    polish_failed: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+        ];
+        for (name, case) in cases {
+            let data_dir = TestDataDir::new(name);
+            let polisher = Arc::new(if case.polish_failed {
+                crate::testing::FixtureTextPolisher::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture polish failure",
+                ))
+            } else {
+                crate::testing::FixtureTextPolisher::successful("polished text")
+            });
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0, 2, 0]],
+                    vec![(25, 0.5)],
+                )),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    case.raw, 25,
+                )),
+                polisher.clone(),
+            );
+            let mut backend =
+                backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+            if case.insert_failed {
+                backend.deps.text_inserter =
+                    Arc::new(crate::testing::FixtureTextInserter::failing(
+                        BackendError::new(BackendErrorCode::Platform, "fixture insert failure"),
+                    ));
+            }
+            backend
+                .set_credential(
+                    CredentialKey::new(
+                        crate::credentials::CredentialNamespace::Llm,
+                        Some("ark".to_string()),
+                        crate::credentials::LLM_MODEL_ACCOUNT,
+                    )
+                    .unwrap(),
+                    SecretValue::new("fixture-model"),
+                )
+                .await
+                .unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.polish_skip_max_chars = case.threshold;
+            preferences.streaming_insert = false;
+            preferences.translation_target_language = "English".to_string();
+            preferences.working_languages = vec!["简体中文".to_string(), "English".to_string()];
+            backend.set_preferences(preferences).unwrap();
+            if let Some((from, to)) = case.correction {
+                backend
+                    .add_correction_rule(from.to_string(), to.to_string())
+                    .unwrap();
+            }
+            backend.start().await.unwrap();
+            backend
+                .activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_LIGHT_ID)
+                .unwrap();
+            backend
+                .start_dictation_with_options(DictationStartOptions {
+                    translation_requested: case.translation,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let result = backend.stop_dictation().await;
+            assert_eq!(result.is_err(), case.insert_failed, "{name}");
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1, "{name}");
+            let entry = &history[0];
+            assert_eq!(
+                polisher.inputs().len(),
+                if case.uses_polisher { 1 } else { 0 },
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_provider.as_deref(),
+                case.uses_polisher.then_some("ark"),
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_model.as_deref(),
+                case.uses_polisher.then_some("fixture-model"),
+                "{name}"
+            );
+            assert_eq!(entry.polish_ms.is_some(), case.uses_polisher, "{name}");
+            assert_eq!(entry.mode, crate::types::PolishMode::Light, "{name}");
+            assert_eq!(entry.translation_active, case.translation, "{name}");
+            let expected_error = if case.insert_failed {
+                Some("insertFailed")
+            } else if case.polish_failed {
+                Some("polishFailed")
+            } else {
+                None
+            };
+            assert_eq!(entry.error_code.as_deref(), expected_error, "{name}");
+            if !case.uses_polisher {
+                assert_eq!(
+                    entry.final_text,
+                    case.correction.map_or(case.raw, |(_, to)| to),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -13055,6 +13700,7 @@ mod tests {
 
     #[tokio::test]
     async fn insertion_failure_persists_generated_text_and_releases_the_session() {
+        crate::testing::logging::start();
         let data_dir = std::env::temp_dir().join(format!(
             "openless-core-insert-failure-history-{}",
             uuid::Uuid::new_v4().simple()
@@ -13097,6 +13743,16 @@ mod tests {
             .expect_err("insertion must fail");
 
         assert_eq!(error.code, BackendErrorCode::Platform);
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        assert!(logs
+            .iter()
+            .any(|line| line.contains("attempt=1 operation=insert_final result=Err(Platform)")));
+        assert!(!logs
+            .iter()
+            .any(|line| line.contains("generated text")
+                || line.contains("fixture insertion failure")));
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, session_id.to_string());
@@ -13193,7 +13849,7 @@ mod tests {
                 text_inserter: Arc::new(inserter.clone()),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -13276,6 +13932,7 @@ mod tests {
         ending: NativeInsertionEnd,
         translation: bool,
     ) {
+        crate::testing::logging::start();
         struct BlockingInsertion {
             actions: Arc<Mutex<Vec<&'static str>>>,
             started: Arc<tokio::sync::Semaphore>,
@@ -13343,7 +14000,7 @@ mod tests {
         let host = Arc::new(FakeHost::default());
         let mut deps = BackendDependencies::unsupported();
         deps.host_actions = host.clone();
-        deps.credential_store = Arc::new(crate::credentials::InMemoryCredentialStore::default());
+        deps.credential_store = llm_configured_credentials();
         deps.text_inserter = Arc::new(BlockingInserter(Arc::new(BlockingInsertion {
             actions: Arc::clone(&actions),
             started: Arc::clone(&started),
@@ -13484,6 +14141,17 @@ mod tests {
             *actions.lock().unwrap(),
             vec!["write started", "write finished", "input source restored"]
         );
+        if streaming {
+            let logs = crate::testing::logging::matching(&format!(
+                "[insert-diagnostics] session_id={session_id} "
+            ));
+            assert!(logs
+                .iter()
+                .any(|line| line.contains("attempt=1 operation=stream result=Ok(")));
+            assert!(logs
+                .iter()
+                .any(|line| line.contains("operation=cancel attempts=1 result=Ok(())")));
+        }
         let next = backend.start_dictation().await.unwrap();
         backend.cancel_dictation(Some(next)).await.unwrap();
     }
@@ -13526,6 +14194,7 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_final_writes_only_the_missing_tail() {
+        crate::testing::logging::start();
         use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
 
         let data_dir = TestDataDir::new("streaming-final-tail");
@@ -13547,7 +14216,7 @@ mod tests {
                 text_inserter: Arc::new(inserter.clone()),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -13584,10 +14253,31 @@ mod tests {
                 },
             ]
         );
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        for operation in [
+            "attempt=1 operation=stream chars=1",
+            "attempt=2 operation=tail chars=1",
+            "attempt=3 operation=finalize chars=0",
+        ] {
+            assert!(
+                logs.iter().any(|line| line.contains(operation)),
+                "missing {operation}: {logs:?}"
+            );
+        }
+        assert_eq!(
+            logs.iter().filter(|line| line.contains(" result=")).count(),
+            3
+        );
+        assert!(!logs
+            .iter()
+            .any(|line| line.contains('你') || line.contains('好')));
     }
 
     #[tokio::test]
     async fn native_streaming_unavailable_keeps_one_final_delivery() {
+        crate::testing::logging::start();
         struct FinalOnlySession(Arc<Mutex<Vec<String>>>);
         impl TextInsertionSession for FinalOnlySession {
             fn supports_streaming(&self) -> bool {
@@ -13626,6 +14316,7 @@ mod tests {
         )
         .unwrap();
         let insertion = ActiveTextInsertion::new(
+            session_id,
             Arc::new(FinalOnlySession(delivered.clone())),
             &context,
             Arc::new(TokioTaskSpawner),
@@ -13641,6 +14332,12 @@ mod tests {
             InsertOutcome::Inserted
         );
         assert_eq!(*delivered.lock().unwrap(), ["final text"]);
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        assert_eq!(logs.len(), 2);
+        assert!(logs[0].contains("attempt=1 operation=insert_final chars=10"));
+        assert!(logs[1].contains("attempt=1 operation=insert_final result=Ok(Inserted)"));
     }
 
     #[tokio::test]
@@ -15348,6 +16045,7 @@ mod tests {
         let backend = runtime_restore_backend();
         backend.ensure_runtime_ready().unwrap();
         let mut preferences = backend.get_preferences();
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
         backend
             .update_settings(

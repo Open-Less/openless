@@ -29,7 +29,7 @@ const kbdStyle: CSSProperties = {
   borderRadius: 5,
   fontSize: 11.5,
   lineHeight: 1,
-  fontWeight: 500,
+  fontWeight: 'var(--ol-font-weight-medium)',
   fontFamily: 'var(--ol-font-sans)',
   color: 'var(--ol-ink-2)',
   background: 'var(--ol-surface-2)',

@@ -564,6 +564,11 @@ mod platform {
 
     #[repr(C)]
     struct OpaqueCgEvent(c_void);
+    // SAFETY: NSEvent's public signature uses an opaque __CGEvent pointer.
+    unsafe impl objc2::encode::RefEncode for OpaqueCgEvent {
+        const ENCODING_REF: objc2::encode::Encoding =
+            objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("__CGEvent", &[]));
+    }
     type CgEventRef = *mut OpaqueCgEvent;
 
     #[repr(C)]
@@ -776,9 +781,7 @@ mod platform {
             // systemDefined. While the Fn trigger is held, treat these as function-layer combos —
             // dictation must not start at the same time.
             SYSTEM_DEFINED => {
-                if let Some((subtype, data1)) = system_defined_event_payload(event) {
-                    note_fn_function_layer_event(ctx, subtype, data1);
-                }
+                handle_system_defined_event(ctx, || system_defined_event_payload(event));
             }
             _ => {}
         }
@@ -980,22 +983,58 @@ mod platform {
         note_companion_key_down(ctx);
     }
 
-    fn system_defined_event_payload(event: CgEventRef) -> Option<(i16, isize)> {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject};
+    fn handle_system_defined_event(
+        ctx: &CallbackContext,
+        payload: impl FnOnce() -> Option<(i16, isize)>,
+    ) {
+        // System controls only affect dictation while a configured Fn press is held.
+        if !ctx.shared.trigger_held.load(Ordering::SeqCst)
+            || ctx.shared.binding.read().trigger != HotkeyTrigger::Fn
+        {
+            return;
+        }
+        if let Some((subtype, data1)) = payload() {
+            note_fn_function_layer_event(ctx, subtype, data1);
+        }
+    }
 
+    fn system_defined_event_payload(event: CgEventRef) -> Option<(i16, isize)> {
         if event.is_null() {
             return None;
         }
-        let cls = AnyClass::get("NSEvent")?;
-        let ns_event: *mut AnyObject =
-            unsafe { msg_send![cls, eventWithCGEvent: event.cast::<c_void>()] };
-        if ns_event.is_null() {
-            return None;
+        if unsafe { libc::pthread_main_np() } != 0 {
+            return system_defined_event_payload_on_main(event);
         }
-        let subtype: i16 = unsafe { msg_send![ns_event, subtype] };
-        let data1: isize = unsafe { msg_send![ns_event, data1] };
-        Some((subtype, data1))
+        // NSEvent conversion can enter HIToolbox's main-thread-only input-source
+        // machinery. Complete classification before the listener handles Fn release.
+        let address = event as usize;
+        let mut payload = None;
+        dispatch2::DispatchQueue::main().exec_sync(|| {
+            payload = system_defined_event_payload_on_main(address as CgEventRef);
+        });
+        payload
+    }
+
+    fn system_defined_event_payload_on_main(event: CgEventRef) -> Option<(i16, isize)> {
+        use objc2::msg_send;
+        use objc2::rc::autoreleasepool;
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        debug_assert_ne!(unsafe { libc::pthread_main_np() }, 0);
+        autoreleasepool(|_| {
+            let cls = AnyClass::get("NSEvent")?;
+            let ns_event: *mut AnyObject = unsafe { msg_send![cls, eventWithCGEvent: event] };
+            if ns_event.is_null() {
+                return None;
+            }
+            let event_type: usize = unsafe { msg_send![ns_event, type] };
+            if event_type != SYSTEM_DEFINED as usize {
+                return None;
+            }
+            let subtype: i16 = unsafe { msg_send![ns_event, subtype] };
+            let data1: isize = unsafe { msg_send![ns_event, data1] };
+            Some((subtype, data1))
+        })
     }
 
     fn is_auxiliary_function_key_event(subtype: i16, data1: isize) -> bool {
@@ -1302,6 +1341,29 @@ mod platform {
         }
 
         #[test]
+        fn mac_idle_input_source_switch_does_not_decode_appkit_events() {
+            for trigger in [HotkeyTrigger::Fn, HotkeyTrigger::RightOption] {
+                let shared = shared(trigger);
+                let (ctx, rx) = callback_context(shared);
+                handle_system_defined_event(&ctx, || {
+                    panic!("idle input-source switching must not convert CGEvent to NSEvent");
+                });
+                assert!(drain(&rx).is_empty());
+            }
+        }
+
+        #[test]
+        fn mac_system_controls_do_not_decode_appkit_during_non_fn_holds() {
+            let shared = shared(HotkeyTrigger::RightOption);
+            shared.trigger_held.store(true, Ordering::SeqCst);
+            let (ctx, rx) = callback_context(shared);
+            handle_system_defined_event(&ctx, || {
+                panic!("non-Fn dictation must not decode unrelated system controls");
+            });
+            assert!(drain(&rx).is_empty());
+        }
+
+        #[test]
         fn mac_fn_function_layer_event_suppresses_tap_without_pending_abort() {
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Toggle;
@@ -1315,11 +1377,9 @@ mod platform {
                 pressed_at,
             );
             // subtype/data1 encoding for brightness-up (NX_KEYTYPE_BRIGHTNESS_UP=2).
-            note_fn_function_layer_event(
-                &ctx,
-                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
-                (2_i64 << 16) as isize,
-            );
+            handle_system_defined_event(&ctx, || {
+                Some((NX_SUBTYPE_AUX_CONTROL_BUTTONS, (2_i64 << 16) as isize))
+            });
             handle_dictation_trigger_flags_changed(
                 &ctx,
                 trigger_to_keycode(HotkeyTrigger::Fn),

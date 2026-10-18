@@ -1,299 +1,124 @@
-/**
- * Unified tooltip supporting hover, keyboard focus, and touch triggers.
- *
- * Tooltip uses portal + fixed positioning, unaffected by parent overflow, transform,
- * or backdrop-filter.
- */
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type PointerEvent,
-  type ReactNode,
-} from 'react';
-import { createPortal } from 'react-dom';
+import { useId, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { Tooltip as BaseTooltip } from '@base-ui/react/tooltip';
 
-/** Delay from first hover to show. */
-const WARM_DELAY_MS = 600;
-/** Warm window after a tooltip closes. */
-const WARM_LINGER_MS = 300;
-
-let warmUntil = 0;
+export function TooltipProvider({ children }: { children: ReactNode }) {
+  return (
+    <BaseTooltip.Provider delay={200} timeout={400}>
+      {children}
+    </BaseTooltip.Provider>
+  );
+}
 
 interface TooltipProps {
   content: ReactNode;
-  /** Which side of the anchor the tooltip appears on; default right. */
   placement?: 'right' | 'top' | 'bottom';
-  /** Full-sentence descriptions may wrap; default nowrap. */
   wrap?: boolean;
-  /** Makes the label itself a focusable tooltip trigger. */
   focusable?: boolean;
   children: ReactNode;
+  id?: string;
+  className?: string;
+  trigger?: ReactElement;
 }
 
-type TooltipPlacement = NonNullable<TooltipProps['placement']>;
-
-interface AnchorRect {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
-
-interface TooltipPosition {
-  anchor: AnchorRect;
-  placement: TooltipPlacement;
-  offsetX: number;
-  offsetY: number;
-}
-
+/** Base UI owns focus, Escape, outside dismissal, collision handling and portal lifetime. */
 export function Tooltip({
   content,
   placement = 'right',
   wrap = false,
   focusable = false,
   children,
+  id,
+  className,
+  trigger,
 }: TooltipProps) {
-  const anchorRef = useRef<HTMLSpanElement>(null);
-  const bubbleRef = useRef<HTMLSpanElement>(null);
-  const timerRef = useRef<number | null>(null);
-  const hoveredRef = useRef(false);
-  const focusedRef = useRef(false);
-  const tooltipId = useId();
-  const [pos, setPos] = useState<TooltipPosition | null>(null);
-
-  const readAnchorRect = (): AnchorRect | null => {
-    const anchor = anchorRef.current;
-    if (!anchor) return null;
-    const rect = anchor.getBoundingClientRect();
-    return {
-      left: rect.left,
-      right: rect.right,
-      top: rect.top,
-      bottom: rect.bottom,
-      width: rect.width,
-      height: rect.height,
-    };
-  };
-
-  const show = () => {
-    const anchor = readAnchorRect();
-    if (!anchor) return;
-    setPos({ anchor, placement, offsetX: 0, offsetY: 0 });
-  };
-
-  const clearTimer = () => {
-    if (timerRef.current == null) return;
-    window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-  };
-
-  const scheduleShow = () => {
-    clearTimer();
-    if (Date.now() < warmUntil) {
-      show();
-      return;
-    }
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      show();
-    }, WARM_DELAY_MS);
-  };
-
-  const hide = () => {
-    clearTimer();
-    setPos((prev) => {
-      if (prev) warmUntil = Date.now() + WARM_LINGER_MS;
-      return null;
-    });
-  };
-
-  const hideIfInactive = () => {
-    if (!hoveredRef.current && !focusedRef.current) hide();
-  };
-
-  const onEnter = () => {
-    hoveredRef.current = true;
-    scheduleShow();
-  };
-
-  const onLeave = () => {
-    hoveredRef.current = false;
-    hideIfInactive();
-  };
-
-  const onFocus = () => {
-    focusedRef.current = true;
-    clearTimer();
-    show();
-  };
-
-  const onBlur = () => {
-    focusedRef.current = false;
-    hideIfInactive();
-  };
-
-  const onPointerDown = (event: PointerEvent<HTMLSpanElement>) => {
-    if (event.pointerType === 'touch') {
-      clearTimer();
-      show();
-      return;
-    }
-    hide();
-  };
-
-  useLayoutEffect(() => {
-    const bubble = bubbleRef.current;
-    if (!bubble || !pos) return;
-
-    const margin = 8;
-    const bubbleRect = bubble.getBoundingClientRect();
-    let nextPlacement = pos.placement;
-
-    if (
-      pos.placement === 'bottom' &&
-      bubbleRect.bottom > window.innerHeight - margin &&
-      pos.anchor.top - 8 - bubbleRect.height >= margin
-    ) {
-      nextPlacement = 'top';
-    } else if (
-      pos.placement === 'top' &&
-      bubbleRect.top < margin &&
-      pos.anchor.bottom + 8 + bubbleRect.height <= window.innerHeight - margin
-    ) {
-      nextPlacement = 'bottom';
-    }
-
-    if (nextPlacement !== pos.placement) {
-      setPos({ ...pos, placement: nextPlacement, offsetX: 0, offsetY: 0 });
-      return;
-    }
-
-    const offsetX =
-      Math.max(margin - bubbleRect.left, 0) -
-      Math.max(bubbleRect.right - (window.innerWidth - margin), 0);
-    const offsetY =
-      Math.max(margin - bubbleRect.top, 0) -
-      Math.max(bubbleRect.bottom - (window.innerHeight - margin), 0);
-
-    if (Math.abs(offsetX) > 0.5 || Math.abs(offsetY) > 0.5) {
-      setPos({
-        ...pos,
-        offsetX: pos.offsetX + offsetX,
-        offsetY: pos.offsetY + offsetY,
-      });
-    }
-  }, [pos]);
-
-  useEffect(
-    () => () => {
-      clearTimer();
-    },
-    [],
-  );
-
+  const generatedId = useId();
+  const triggerId = id ?? generatedId;
+  const [open, setOpen] = useState(false);
+  const explicitOpen = useRef(false);
   return (
-    // display:grid keeps the anchor size equal to its child while avoiding extra
-    // layout differences.
-    <span
-      ref={anchorRef}
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-      onFocus={onFocus}
-      onBlur={onBlur}
-      onPointerDown={onPointerDown}
-      tabIndex={focusable ? 0 : undefined}
-      aria-describedby={focusable && pos != null ? tooltipId : undefined}
-      style={{ display: 'grid' }}
+    <BaseTooltip.Root
+      open={open}
+      triggerId={triggerId}
+      onOpenChange={(next, details) => {
+        // A tap/keyboard focus isn't a hover. Synthetic mouse-leave events must not
+        // immediately dismiss it; outside press, blur and Escape still do.
+        if (!next && details.reason === 'trigger-hover' && explicitOpen.current) {
+          details.cancel();
+          return;
+        }
+        if (!next) explicitOpen.current = false;
+        setOpen(next);
+      }}
     >
-      {children}
-      {pos != null &&
-        createPortal(
-          <span
-            ref={bubbleRef}
-            id={tooltipId}
+      <BaseTooltip.Trigger
+        id={triggerId}
+        tabIndex={focusable ? 0 : undefined}
+        aria-describedby={open ? `${generatedId}-description` : undefined}
+        render={trigger ?? (focusable ? <button type="button" /> : <span />)}
+        className={['ol-tooltip-anchor', className].filter(Boolean).join(' ')}
+        delay={200}
+        closeOnClick={!focusable}
+        // A real button makes explanatory text available to touch and keyboard users, too.
+        onClick={
+          focusable
+            ? () => {
+                explicitOpen.current = true;
+                setOpen(true);
+              }
+            : undefined
+        }
+        onBlur={() => {
+          explicitOpen.current = false;
+        }}
+        onFocus={
+          focusable
+            ? (event) => {
+                // Re-entering by keyboard should work even after Escape dismissed a hover-only hint.
+                if (event.currentTarget.matches(':focus-visible')) {
+                  explicitOpen.current = true;
+                  setOpen(true);
+                }
+              }
+            : undefined
+        }
+      >
+        {children}
+      </BaseTooltip.Trigger>
+      <BaseTooltip.Portal className="ol-popup-portal">
+        <BaseTooltip.Positioner
+          className="ol-tooltip-positioner"
+          positionMethod="fixed"
+          side={placement}
+          sideOffset={8}
+          collisionPadding={8}
+        >
+          <BaseTooltip.Popup
+            id={`${generatedId}-description`}
             role="tooltip"
-            style={{
-              ...bubbleStyle,
-              ...(wrap ? wrapBubbleStyle : null),
-              ...placementStyle(pos),
-            }}
+            className="ol-tooltip-bubble"
+            data-wrap={wrap || undefined}
           >
             {content}
-          </span>,
-          document.body,
-        )}
-    </span>
+          </BaseTooltip.Popup>
+        </BaseTooltip.Positioner>
+      </BaseTooltip.Portal>
+    </BaseTooltip.Root>
   );
 }
 
-function placementStyle(pos: TooltipPosition): CSSProperties {
-  const { anchor, placement, offsetX, offsetY } = pos;
-  if (placement === 'right') {
-    return {
-      left: anchor.right + 10 + offsetX,
-      top: anchor.top + anchor.height / 2 + offsetY,
-      transform: 'translateY(-50%)',
-    };
-  }
-  if (placement === 'top') {
-    return {
-      left: anchor.left + anchor.width / 2 + offsetX,
-      top: anchor.top - 8 + offsetY,
-      transform: 'translate(-50%, -100%)',
-    };
-  }
-  return {
-    left: anchor.left + anchor.width / 2 + offsetX,
-    top: anchor.bottom + 8 + offsetY,
-    transform: 'translateX(-50%)',
-  };
-}
-
-const bubbleStyle: CSSProperties = {
-  position: 'fixed',
-  zIndex: 1000,
-  maxWidth: 'min(260px, calc(100vw - 16px))',
-  padding: '5px 9px',
-  borderRadius: 8,
-  fontSize: 11.5,
-  fontWeight: 500,
-  lineHeight: 1.45,
-  color: 'var(--ol-ink)',
-  background: 'var(--ol-glass-bg-strong)',
-  backdropFilter: 'blur(12px) saturate(150%)',
-  WebkitBackdropFilter: 'blur(12px) saturate(150%)',
-  border: '0.5px solid var(--ol-glass-border)',
-  boxShadow: 'var(--ol-shadow-md)',
-  whiteSpace: 'normal',
-  overflowWrap: 'anywhere',
-  pointerEvents: 'none',
-  animation: 'ol-tooltip-in 0.12s ease-out both',
-};
-
-const wrapBubbleStyle: CSSProperties = {
-  whiteSpace: 'normal',
-  width: 'max-content',
-  maxWidth: 'min(280px, calc(100vw - 16px))',
-  maxHeight: 'calc(100vh - 16px)',
-  overflowY: 'auto',
-};
-
-const TOOLTIP_KEYFRAMES = [
-  '@keyframes ol-tooltip-in {',
-  '  from { opacity: 0; scale: .96; }',
-  '  to   { opacity: 1; scale: 1; }',
-  '}',
-].join('\n');
-
-if (typeof document !== 'undefined' && !document.getElementById('ol-tooltip-style')) {
-  const tag = document.createElement('style');
-  tag.id = 'ol-tooltip-style';
-  tag.textContent = TOOLTIP_KEYFRAMES;
-  document.head.appendChild(tag);
+/** The shared explanatory-label pattern: dotted words, no extra help icon. */
+export function Hint({
+  children,
+  content,
+  id,
+}: {
+  children: ReactNode;
+  content: ReactNode;
+  id?: string;
+}) {
+  return (
+    <Tooltip id={id} content={content} placement="right" wrap focusable className="ol-hint-trigger">
+      {children}
+    </Tooltip>
+  );
 }

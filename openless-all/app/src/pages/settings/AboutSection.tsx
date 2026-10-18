@@ -75,7 +75,7 @@ export function AboutSection() {
             <div
               style={{
                 fontSize: 17,
-                fontWeight: 600,
+                fontWeight: 'var(--ol-font-weight-semibold)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',

@@ -31,6 +31,8 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
+/// Maximum number of native callback blocks waiting for the processing worker.
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
 /// archive messages accepted before stop are fully flushed.
@@ -342,7 +344,10 @@ impl WarmCaptureSink {
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let excess = buffer
+            .len()
+            .saturating_add(incoming.len())
+            .saturating_sub(max_bytes);
         let evictable = excess.min(*pre_roll_bytes);
         for _ in 0..(evictable / 2) {
             let _ = buffer.pop_front();
@@ -389,10 +394,7 @@ impl WarmCaptureSink {
                     "warm provisional capture was not armed".into(),
                 ));
             };
-            let WarmCaptureClaim::Staging {
-                pcm, max_level, ..
-            } = claim
-            else {
+            let WarmCaptureClaim::Staging { pcm, max_level, .. } = claim else {
                 return Err(RecorderError::EngineFailed(
                     "warm provisional capture was already promoted".into(),
                 ));
@@ -468,6 +470,18 @@ impl WarmCaptureSink {
             .any(|claim| matches!(claim, WarmCaptureClaim::Promoted(_)))
     }
 
+    fn is_last_promoted_claim(&self, press_id: u64) -> bool {
+        let _delivery = self.delivery_gate.lock();
+        let state = self.state.lock();
+        let WarmCaptureSinkState::Ring { claims, .. } = &*state;
+        matches!(claims.get(&press_id), Some(WarmCaptureClaim::Promoted(_)))
+            && claims
+                .values()
+                .filter(|claim| matches!(claim, WarmCaptureClaim::Promoted(_)))
+                .count()
+                == 1
+    }
+
     fn invalidate_staging(&self) {
         let _delivery = self.delivery_gate.lock();
         let mut state = self.state.lock();
@@ -501,10 +515,7 @@ impl AudioConsumer for WarmCaptureSink {
         let mut targets = Vec::new();
         {
             let mut state = self.state.lock();
-            let WarmCaptureSinkState::Ring {
-                pcm: ring,
-                claims,
-            } = &mut *state;
+            let WarmCaptureSinkState::Ring { pcm: ring, claims } = &mut *state;
             Self::append_bounded(ring, pcm, self.max_bytes);
             for claim in claims.values_mut() {
                 match claim {
@@ -580,13 +591,15 @@ impl WarmStagedRecorder {
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(WarmActiveCapture, Receiver<RecorderError>, bool), RecorderError> {
         let archive_path = audio_archive_path;
-        let archive_writer = archive_path.as_ref().and_then(|path| match WavArchiveWriter::create(path) {
-            Ok(writer) => Some(Arc::new(writer)),
-            Err(error) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
-                None
-            }
-        });
+        let archive_writer = archive_path
+            .as_ref()
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_active = archive_writer.is_some();
         let result = self.hub.promote(
             self.press_id,
@@ -649,7 +662,9 @@ pub(crate) struct WarmCaptureHub {
     enabled: AtomicBool,
     preview_active: AtomicBool,
     cold_capture_active: AtomicBool,
-    pending_configuration: Mutex<Option<(bool, Option<String>)>>,
+    pending_configuration:
+        Mutex<Option<(bool, Option<String>, openless_core::AudioProcessingConfig)>>,
+    processing_config: Mutex<openless_core::AudioProcessingConfig>,
     stream_generation: AtomicU64,
     lifecycle_gate: Mutex<()>,
     device_name: Mutex<Option<String>>,
@@ -666,10 +681,17 @@ impl WarmCaptureHub {
             preview_active: AtomicBool::new(false),
             cold_capture_active: AtomicBool::new(false),
             pending_configuration: Mutex::new(None),
+            processing_config: Mutex::new(openless_core::AudioProcessingConfig::default()),
             stream_generation: AtomicU64::new(0),
             lifecycle_gate: Mutex::new(()),
             device_name: Mutex::new(None),
         })
+    }
+
+    fn stop_recorder(&self) {
+        if let Some(recorder) = self.recorder.lock().take() {
+            recorder.stop();
+        }
     }
 
     fn notify_runtime_error(&self, error: RecorderError) {
@@ -679,36 +701,44 @@ impl WarmCaptureHub {
         }
     }
 
-    pub(crate) fn configure(&self, enabled: bool, device_name: Option<String>) {
+    pub(crate) fn configure(
+        &self,
+        enabled: bool,
+        device_name: Option<String>,
+        processing: openless_core::AudioProcessingConfig,
+    ) {
         let _lifecycle = self.lifecycle_gate.lock();
-        self.configure_locked(enabled, device_name);
+        self.configure_locked(enabled, device_name, processing);
     }
 
-    fn configure_locked(&self, enabled: bool, device_name: Option<String>) {
+    fn configure_locked(
+        &self,
+        enabled: bool,
+        device_name: Option<String>,
+        processing: openless_core::AudioProcessingConfig,
+    ) {
         let device_changed = *self.device_name.lock() != device_name;
+        let config_changed = *self.processing_config.lock() != processing;
         if self.cold_capture_active.load(Ordering::Acquire) {
-            *self.pending_configuration.lock() = Some((enabled, device_name));
+            *self.pending_configuration.lock() = Some((enabled, device_name, processing));
             return;
         }
-        if (device_changed || !enabled) && self.sink.has_promoted_claims() {
+        if (device_changed || config_changed || !enabled) && self.sink.has_claims() {
             let staging_claims = self.sink.staging_claim_ids();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
-            *self.pending_configuration.lock() = Some((enabled, device_name));
+            self.runtime_fallback_claims.lock().extend(staging_claims);
+            *self.pending_configuration.lock() = Some((enabled, device_name, processing));
             self.sink.invalidate_staging();
             return;
         }
         self.pending_configuration.lock().take();
+        *self.processing_config.lock() = processing;
         if !enabled {
             self.enabled.store(false, Ordering::Release);
             self.stream_generation.fetch_add(1, Ordering::AcqRel);
             let staging_claims = self.sink.staging_claim_ids();
-            let recorder = self.recorder.lock().take();
+            self.stop_recorder();
             let archives = self.sink.clear();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
+            self.runtime_fallback_claims.lock().extend(staging_claims);
             self.notify_runtime_error(RecorderError::EngineFailed(
                 "warm capture configuration changed".into(),
             ));
@@ -716,30 +746,22 @@ impl WarmCaptureHub {
             for archive in archives {
                 archive.finish();
             }
-            if let Some(recorder) = recorder {
-                recorder.stop();
-            }
             return;
         }
 
         self.enabled.store(true, Ordering::Release);
-        if device_changed {
+        if device_changed || config_changed {
             self.stream_generation.fetch_add(1, Ordering::AcqRel);
             let staging_claims = self.sink.staging_claim_ids();
-            let recorder = self.recorder.lock().take();
+            self.stop_recorder();
             let archives = self.sink.clear();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
+            self.runtime_fallback_claims.lock().extend(staging_claims);
             self.notify_runtime_error(RecorderError::EngineFailed(
                 "warm capture configuration changed".into(),
             ));
             *self.device_name.lock() = device_name.clone();
             for archive in archives {
                 archive.finish();
-            }
-            if let Some(recorder) = recorder {
-                recorder.stop();
             }
             if !self.preview_active.load(Ordering::Acquire) {
                 let _ = self.ensure_started_locked(device_name);
@@ -776,8 +798,13 @@ impl WarmCaptureHub {
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) =
-            Recorder::start(device_name, consumer, level_handler, None)?;
+        let (recorder, runtime_errors, _) = Recorder::start_with_processing(
+            device_name,
+            consumer,
+            level_handler,
+            None,
+            *self.processing_config.lock(),
+        )?;
         let generation = self.stream_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *self.recorder.lock() = Some(recorder);
         let hub = warm_capture_hub();
@@ -798,18 +825,13 @@ impl WarmCaptureHub {
             return;
         }
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
-        let recorder = self.recorder.lock().take();
+        self.stop_recorder();
         let staging_claims = self.sink.staging_claim_ids();
-        self.runtime_fallback_claims
-            .lock()
-            .extend(staging_claims);
+        self.runtime_fallback_claims.lock().extend(staging_claims);
         let archives = self.sink.clear();
         self.notify_runtime_error(error);
         for archive in archives {
             archive.finish();
-        }
-        if let Some(recorder) = recorder {
-            recorder.stop();
         }
     }
 
@@ -841,7 +863,9 @@ impl WarmCaptureHub {
             return Err(error);
         }
         self.runtime_fallback_claims.lock().remove(&press_id);
-        self.runtime_errors.lock().insert(press_id, runtime_error_tx);
+        self.runtime_errors
+            .lock()
+            .insert(press_id, runtime_error_tx);
         Ok(runtime_error_rx)
     }
 
@@ -849,6 +873,7 @@ impl WarmCaptureHub {
         self: &Arc<Self>,
         press_id: u64,
         device_name: Option<String>,
+        processing: openless_core::AudioProcessingConfig,
     ) -> Result<WarmStagedRecorder, RecorderError> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err(RecorderError::EngineFailed(
@@ -857,9 +882,11 @@ impl WarmCaptureHub {
         }
         loop {
             let lifecycle = self.lifecycle_gate.lock();
-            if *self.device_name.lock() != device_name {
+            if *self.device_name.lock() != device_name
+                || *self.processing_config.lock() != processing
+            {
                 drop(lifecycle);
-                self.configure(true, device_name.clone());
+                self.configure(true, device_name.clone(), processing);
                 continue;
             }
             self.sink.arm(press_id)?;
@@ -879,6 +906,11 @@ impl WarmCaptureHub {
     fn release_claim(&self, press_id: u64) {
         let _lifecycle = self.lifecycle_gate.lock();
         self.runtime_fallback_claims.lock().remove(&press_id);
+        if self.sink.is_last_promoted_claim(press_id) {
+            if let Some(recorder) = self.recorder.lock().as_ref() {
+                recorder.drain_pending_audio();
+            }
+        }
         let target = self.sink.take_claim(press_id);
         self.runtime_errors.lock().remove(&press_id);
         if let Some(target) = target {
@@ -888,8 +920,8 @@ impl WarmCaptureHub {
         }
         if !self.sink.has_promoted_claims() {
             let pending_configuration = self.pending_configuration.lock().take();
-            if let Some((enabled, device_name)) = pending_configuration {
-                self.configure_locked(enabled, device_name);
+            if let Some((enabled, device_name, processing)) = pending_configuration {
+                self.configure_locked(enabled, device_name, processing);
             }
         }
     }
@@ -910,8 +942,8 @@ impl WarmCaptureHub {
             return;
         }
         let pending_configuration = self.pending_configuration.lock().take();
-        if let Some((enabled, device_name)) = pending_configuration {
-            self.configure_locked(enabled, device_name);
+        if let Some((enabled, device_name, processing)) = pending_configuration {
+            self.configure_locked(enabled, device_name, processing);
         }
     }
 
@@ -923,7 +955,7 @@ impl WarmCaptureHub {
         }
         self.preview_active.store(true, Ordering::Release);
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
-        let recorder = self.recorder.lock().take();
+        self.stop_recorder();
         let archives = self.sink.clear();
         self.runtime_fallback_claims.lock().clear();
         self.notify_runtime_error(RecorderError::EngineFailed(
@@ -932,9 +964,6 @@ impl WarmCaptureHub {
         for archive in archives {
             archive.finish();
         }
-        if let Some(recorder) = recorder {
-            recorder.stop();
-        }
         true
     }
 
@@ -942,8 +971,7 @@ impl WarmCaptureHub {
     pub(crate) fn end_preview(&self) {
         let _lifecycle = self.lifecycle_gate.lock();
         self.preview_active.store(false, Ordering::Release);
-        if !self.enabled.load(Ordering::Acquire)
-            || self.cold_capture_active.load(Ordering::Acquire)
+        if !self.enabled.load(Ordering::Acquire) || self.cold_capture_active.load(Ordering::Acquire)
         {
             return;
         }
@@ -958,18 +986,13 @@ impl WarmCaptureHub {
         self.pending_configuration.lock().take();
         self.enabled.store(false, Ordering::Release);
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
-        let recorder = self.recorder.lock().take();
+        self.stop_recorder();
         let archives = self.sink.clear();
         self.runtime_fallback_claims.lock().clear();
-        self.notify_runtime_error(RecorderError::EngineFailed(
-            "warm capture stopped".into(),
-        ));
+        self.notify_runtime_error(RecorderError::EngineFailed("warm capture stopped".into()));
         *self.device_name.lock() = None;
         for archive in archives {
             archive.finish();
-        }
-        if let Some(recorder) = recorder {
-            recorder.stop();
         }
     }
 
@@ -978,7 +1001,7 @@ impl WarmCaptureHub {
     pub(crate) fn suspend_for_cold_capture(&self) {
         let _lifecycle = self.lifecycle_gate.lock();
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
-        let recorder = self.recorder.lock().take();
+        self.stop_recorder();
         let archives = self.sink.clear();
         self.runtime_fallback_claims.lock().clear();
         self.notify_runtime_error(RecorderError::EngineFailed(
@@ -986,9 +1009,6 @@ impl WarmCaptureHub {
         ));
         for archive in archives {
             archive.finish();
-        }
-        if let Some(recorder) = recorder {
-            recorder.stop();
         }
     }
 
@@ -1026,6 +1046,7 @@ pub struct Recorder {
     stop_flag: Arc<AtomicBool>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     archive_writer: Option<Arc<WavArchiveWriter>>,
+    state: Arc<StreamState>,
 }
 
 /// A native stream whose callback output remains memory-only until promotion.
@@ -1055,6 +1076,22 @@ impl Recorder {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
+        Self::start_with_processing(
+            microphone_device_name,
+            consumer,
+            level_handler,
+            audio_archive_path,
+            openless_core::AudioProcessingConfig::default(),
+        )
+    }
+
+    pub fn start_with_processing(
+        microphone_device_name: Option<String>,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        audio_archive_path: Option<PathBuf>,
+        processing: openless_core::AudioProcessingConfig,
+    ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // Startup signal: the child thread reports the result via startup_tx once the Stream
         // is constructed.
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
@@ -1063,6 +1100,8 @@ impl Recorder {
         let (runtime_error_tx, runtime_error_rx) = channel::<RecorderError>();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
+        let state = Arc::new(StreamState::new());
+        let state_for_thread = Arc::clone(&state);
 
         // Try creating WavArchiveWriter on the synchronous path — success/failure is known
         // immediately and passed to the caller to decide whether history marks
@@ -1086,6 +1125,8 @@ impl Recorder {
                     consumer,
                     level_handler,
                     archive_for_thread,
+                    processing,
+                    state_for_thread,
                     stop_for_thread,
                     startup_tx,
                     runtime_error_tx,
@@ -1128,10 +1169,22 @@ impl Recorder {
                 stop_flag,
                 join_handle: Mutex::new(Some(join_handle)),
                 archive_writer,
+                state,
             },
             runtime_error_rx,
             archive_active,
         ))
+    }
+
+    pub(crate) fn drain_pending_audio(&self) {
+        let sender = self.state.processor_sender.lock().clone();
+        let Some(sender) = sender else {
+            return;
+        };
+        let (done_tx, done_rx) = channel();
+        if sender.send(AudioProcessingMessage::Flush(done_tx)).is_ok() {
+            let _ = done_rx.recv();
+        }
     }
 
     /// Stop capture and wait for the audio thread to exit.
@@ -1142,7 +1195,9 @@ impl Recorder {
             stop_flag,
             join_handle,
             archive_writer,
+            state,
         } = self;
+        *state.processor_sender.lock() = None;
         stop_flag.store(true, Ordering::SeqCst);
         if let Some(handle) = join_handle.lock().take() {
             if let Err(err) = handle.join() {
@@ -1160,17 +1215,30 @@ impl Recorder {
         microphone_device_name: Option<String>,
         max_buffer_bytes: usize,
     ) -> Result<StagedRecorder, RecorderError> {
+        Self::start_staged_with_processing(
+            microphone_device_name,
+            max_buffer_bytes,
+            openless_core::AudioProcessingConfig::default(),
+        )
+    }
+
+    pub(crate) fn start_staged_with_processing(
+        microphone_device_name: Option<String>,
+        max_buffer_bytes: usize,
+        processing: openless_core::AudioProcessingConfig,
+    ) -> Result<StagedRecorder, RecorderError> {
         let sink = CaptureSink::new(max_buffer_bytes);
         let consumer: Arc<dyn AudioConsumer> = Arc::clone(&sink) as Arc<dyn AudioConsumer>;
         let sink_for_level = Arc::clone(&sink);
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) = Self::start(
+        let (recorder, runtime_errors, _) = Self::start_with_processing(
             microphone_device_name,
             consumer,
             level_handler,
             None,
+            processing,
         )?;
         Ok(StagedRecorder {
             recorder: Some(recorder),
@@ -1188,13 +1256,15 @@ impl StagedRecorder {
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(Recorder, Receiver<RecorderError>, bool), RecorderError> {
         let archive_path = audio_archive_path;
-        let archive_writer = archive_path.as_ref().and_then(|path| match WavArchiveWriter::create(path) {
-            Ok(writer) => Some(Arc::new(writer)),
-            Err(error) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
-                None
-            }
-        });
+        let archive_writer = archive_path
+            .as_ref()
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_active = archive_writer.is_some();
         if let Err(error) = self
             .sink
@@ -1216,7 +1286,9 @@ impl StagedRecorder {
         })?;
         recorder.archive_writer = archive_writer;
         let runtime_errors = self.runtime_errors.take().ok_or_else(|| {
-            RecorderError::EngineFailed("provisional recorder runtime channel was unavailable".into())
+            RecorderError::EngineFailed(
+                "provisional recorder runtime channel was unavailable".into(),
+            )
         })?;
         Ok((recorder, runtime_errors, archive_active))
     }
@@ -1274,19 +1346,38 @@ fn run_audio_thread(
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archiver: Option<Arc<WavArchiveWriter>>,
+    processing: openless_core::AudioProcessingConfig,
+    state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (stream, state) = match build_input_stream(
-        microphone_device_name,
+    let (processor, frame_tx) = match AudioProcessingWorker::start(
+        processing,
         consumer,
         level_handler,
         archiver,
+        Arc::clone(&state),
+    ) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let _ = startup_tx.send(Err(error));
+            return;
+        }
+    };
+    *state.processor_sender.lock() = Some(frame_tx.clone());
+    let (stream, state) = match build_input_stream(
+        microphone_device_name,
+        frame_tx.clone(),
+        Arc::clone(&state),
+        Arc::clone(&stop_flag),
         runtime_error_tx.clone(),
     ) {
         Ok(s) => s,
         Err(err) => {
+            *state.processor_sender.lock() = None;
+            drop(frame_tx);
+            processor.finish();
             // Startup failed: notify the main thread and exit.
             let _ = startup_tx.send(Err(err));
             return;
@@ -1400,6 +1491,9 @@ fn run_audio_thread(
         thread::sleep(std::time::Duration::from_millis(50));
     }
 
+    // Stop accepting callback frames before pausing the native stream. This prevents a
+    // callback racing with shutdown from adding work after the worker drain begins.
+    state.accepting_audio.store(false, Ordering::Release);
     // Pause explicitly before drop.
     // On macOS coreaudio, cpal 0.15's plain drop(Stream) does not synchronously call
     // AudioOutputUnitStop, so the AudioUnit render callback keeps firing and process_callback
@@ -1413,6 +1507,10 @@ fn run_audio_thread(
     }
     drop(stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
+    *state.processor_sender.lock() = None;
+    drop(frame_tx);
+    processor.finish();
+    log::info!("[recorder] audio processor stopped (accepted frames drained)");
 
     // Wait for the watchdog thread to exit
     if let Some(handle) = watchdog_handle {
@@ -1423,22 +1521,16 @@ fn run_audio_thread(
 /// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
-    consumer: Arc<dyn AudioConsumer>,
-    level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<WavArchiveWriter>>,
+    frame_tx: SyncSender<AudioProcessingMessage>,
+    state: Arc<StreamState>,
+    stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
     let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
-        start_device_stream(
-            device,
-            &consumer,
-            &level_handler,
-            archiver.clone(),
-            &runtime_error_tx,
-        )
+        start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
     };
     let initial_error = match start(&selected) {
         Ok(stream) => return Ok(stream),
@@ -1480,23 +1572,17 @@ fn try_input_candidates<T, U>(
 
 fn start_device_stream(
     device: &cpal::Device,
-    consumer: &Arc<dyn AudioConsumer>,
-    level_handler: &Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<WavArchiveWriter>>,
+    frame_tx: &SyncSender<AudioProcessingMessage>,
+    state: &Arc<StreamState>,
+    stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let mut default = None;
     let initial_error = match device.default_input_config() {
         Ok(config) => {
             default = Some(config.clone());
-            match start_native_config(
-                device,
-                config,
-                consumer,
-                level_handler,
-                archiver.clone(),
-                runtime_error_tx,
-            ) {
+            match start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
+            {
                 Ok(stream) => return Ok(stream),
                 Err(RecorderError::PermissionDenied) => {
                     return Err(RecorderError::PermissionDenied)
@@ -1516,14 +1602,7 @@ fn start_device_stream(
     };
     let configs = native_input_alternatives(default.as_ref(), ranges);
     try_input_candidates(configs, initial_error, |config| {
-        start_native_config(
-            device,
-            config,
-            consumer,
-            level_handler,
-            archiver.clone(),
-            runtime_error_tx,
-        )
+        start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
     })
 }
 
@@ -1553,22 +1632,20 @@ fn native_input_alternatives(
 fn start_native_config(
     device: &cpal::Device,
     supported: cpal::SupportedStreamConfig,
-    consumer: &Arc<dyn AudioConsumer>,
-    level_handler: &Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<WavArchiveWriter>>,
+    frame_tx: &SyncSender<AudioProcessingMessage>,
+    state: &Arc<StreamState>,
+    stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let config = supported.config();
-    let state = Arc::new(StreamState::new());
     state.accepting_audio.store(false, Ordering::Release);
     let stream = build_stream_for_format(
         device,
         &config,
         supported.sample_format(),
-        Arc::clone(consumer),
-        Arc::clone(level_handler),
-        archiver,
-        Arc::clone(&state),
+        frame_tx.clone(),
+        Arc::clone(state),
+        Arc::clone(stop_flag),
         config.sample_rate.0,
         config.channels as usize,
         runtime_error_tx.clone(),
@@ -1584,7 +1661,7 @@ fn start_native_config(
         config.channels,
         supported.sample_format()
     );
-    Ok((stream, state))
+    Ok((stream, Arc::clone(state)))
 }
 
 fn select_input_device(
@@ -1672,47 +1749,61 @@ fn build_stream_for_format(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    consumer: Arc<dyn AudioConsumer>,
-    level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    archiver: Option<Arc<WavArchiveWriter>>,
+    frame_tx: SyncSender<AudioProcessingMessage>,
     state: Arc<StreamState>,
+    stop_flag: Arc<AtomicBool>,
     input_sr: u32,
     channels: usize,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<cpal::Stream, RecorderError> {
     macro_rules! make_stream {
         ($t:ty, $to_f32:expr) => {{
-            let consumer = Arc::clone(&consumer);
-            let level_handler = Arc::clone(&level_handler);
-            let archiver = archiver.clone();
+            let frame_tx = frame_tx.clone();
             let state = Arc::clone(&state);
-            let runtime_error_tx = runtime_error_tx.clone();
+            let stop_flag = Arc::clone(&stop_flag);
+            let runtime_error_for_callback = runtime_error_tx.clone();
+            let runtime_error_for_error = runtime_error_tx.clone();
             let error_state = Arc::clone(&state);
             let err_cb = move |err| {
                 if !error_state.accepting_audio.load(Ordering::Acquire) {
                     return;
                 }
                 log::error!("[recorder] stream error: {err}");
-                let _ =
-                    runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {err}")));
+                let _ = runtime_error_for_error
+                    .send(RecorderError::EngineFailed(format!("stream: {err}")));
             };
             device
                 .build_input_stream::<$t, _, _>(
                     config,
                     move |data: &[$t], _info| {
+                        if !state.accepting_audio.load(Ordering::Acquire) {
+                            return;
+                        }
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
                         }
-                        process_callback(
-                            &floats,
+                        *state.last_callback_time.lock() = Some(std::time::Instant::now());
+                        match frame_tx.try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                            samples: floats,
                             channels,
-                            input_sr,
-                            consumer.as_ref(),
-                            level_handler.as_ref(),
-                            archiver.as_deref(),
-                            &state,
-                        );
+                            input_sample_rate: input_sr,
+                        })) {
+                            Ok(()) => {}
+                            Err(TrySendError::Disconnected(_)) => {
+                                stop_flag.store(true, Ordering::Release);
+                            }
+                            Err(TrySendError::Full(_)) => {
+                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                                    let _ = runtime_error_for_callback.send(
+                                        RecorderError::EngineFailed(
+                                            "audio processing queue overflow".into(),
+                                        ),
+                                    );
+                                }
+                                stop_flag.store(true, Ordering::Release);
+                            }
+                        }
                     },
                     err_cb,
                     None,
@@ -1746,8 +1837,89 @@ fn build_stream_for_format(
     }
 }
 
+struct RawAudioFrame {
+    samples: Vec<f32>,
+    channels: usize,
+    input_sample_rate: u32,
+}
+
+enum AudioProcessingMessage {
+    Frame(RawAudioFrame),
+    Flush(Sender<()>),
+    Shutdown,
+}
+
+struct AudioProcessingWorker {
+    join_handle: Option<JoinHandle<()>>,
+    shutdown: SyncSender<AudioProcessingMessage>,
+}
+
+impl AudioProcessingWorker {
+    fn start(
+        processing: openless_core::AudioProcessingConfig,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        archiver: Option<Arc<WavArchiveWriter>>,
+        state: Arc<StreamState>,
+    ) -> Result<(Self, SyncSender<AudioProcessingMessage>), RecorderError> {
+        let (sender, receiver) =
+            sync_channel::<AudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let join_handle = thread::Builder::new()
+            .name("openless-audio-processor".into())
+            .spawn(move || {
+                let mut processor = openless_core::AudioProcessor::new(processing);
+                while let Ok(message) = receiver.recv() {
+                    match message {
+                        AudioProcessingMessage::Frame(frame) => {
+                            if let Some(chunk) = processor.process(
+                                &frame.samples,
+                                frame.channels,
+                                frame.input_sample_rate,
+                            ) {
+                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                                if let Some(archiver) = &archiver {
+                                    archiver.append(&chunk.pcm_i16_le);
+                                }
+                                level_handler(chunk.level);
+                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                            }
+                        }
+                        AudioProcessingMessage::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                        AudioProcessingMessage::Shutdown => break,
+                    }
+                }
+            })
+            .map_err(|error| {
+                RecorderError::EngineFailed(format!("spawn audio processor: {error}"))
+            })?;
+        Ok((
+            Self {
+                join_handle: Some(join_handle),
+                shutdown: sender.clone(),
+            },
+            sender,
+        ))
+    }
+
+    fn finish(mut self) {
+        // CoreAudio may retain the callback (and its sender) after Stream::drop,
+        // notably for explicitly selected devices in CPAL 0.15. Do not wait for
+        // every producer to be destroyed. Native capture is paused before this
+        // FIFO barrier, so all accepted frames are processed before shutdown.
+        let _ = self.shutdown.send(AudioProcessingMessage::Shutdown);
+        if let Some(handle) = self.join_handle.take() {
+            if let Err(error) = handle.join() {
+                log::warn!("audio processor thread join failed: {:?}", error);
+            }
+        }
+    }
+}
+
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
     resample_phase: Mutex<f64>,
@@ -1765,6 +1937,7 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
             callback_count: AtomicUsize::new(0),
@@ -2067,6 +2240,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audio_processing_worker_drains_accepted_frames_before_join() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let state = Arc::new(StreamState::new());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+            state,
+        )
+        .unwrap();
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                samples: vec![0.25, -0.25],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        drop(sender);
+        worker.finish();
+
+        let chunks = consumer.chunks.lock().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(decode_i16_le(&chunks[0]), vec![12287, -12287]);
+    }
+
+    #[test]
+    fn audio_processing_shutdown_drains_frames_with_a_retained_native_sender() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: false,
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..8 {
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25, -0.25],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+        }
+        // Model CPAL's retained callback: it must not prevent stop from returning.
+        let retained_native_sender = sender.clone();
+        drop(sender);
+        let (done_tx, done_rx) = channel();
+        let stopped = thread::spawn(move || {
+            worker.finish();
+            let _ = done_tx.send(());
+        });
+        let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+        // Drop even on failure so an EOF-based implementation cannot hang the suite.
+        drop(retained_native_sender);
+        assert!(
+            result.is_ok(),
+            "stopping must not depend on callback destruction"
+        );
+        stopped.join().unwrap();
+        assert_eq!(consumer.chunks.lock().unwrap().len(), 8);
+    }
+
     fn decode_i16_le(bytes: &[u8]) -> Vec<i16> {
         bytes
             .chunks_exact(2)
@@ -2272,7 +2515,10 @@ mod tests {
             panic!("sink was promoted unexpectedly");
         };
         assert_eq!(pcm.len(), 6);
-        assert_eq!(pcm.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            pcm.iter().copied().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
     }
 
     #[test]
@@ -2401,7 +2647,11 @@ mod tests {
     fn cold_capture_applies_deferred_configuration_without_deadlock() {
         let hub = WarmCaptureHub::new();
         hub.begin_cold_capture().unwrap();
-        hub.configure(false, Some("next microphone".into()));
+        hub.configure(
+            false,
+            Some("next microphone".into()),
+            openless_core::AudioProcessingConfig::default(),
+        );
         assert!(hub.pending_configuration.lock().is_some());
         assert!(hub.device_name.lock().is_none());
 
@@ -2414,6 +2664,24 @@ mod tests {
         hub.begin_cold_capture().unwrap();
         hub.end_cold_capture();
         assert!(hub.pending_configuration.lock().is_none());
+    }
+
+    #[test]
+    fn warm_config_change_keeps_staged_claim_on_cold_fallback() {
+        let hub = WarmCaptureHub::new();
+        hub.enabled.store(true, Ordering::Release);
+        hub.sink.arm(42).unwrap();
+
+        hub.configure(
+            false,
+            Some("next microphone".into()),
+            openless_core::AudioProcessingConfig::default(),
+        );
+
+        assert!(hub.runtime_fallback_claims.lock().contains(&42));
+        assert!(hub.pending_configuration.lock().is_some());
+        assert!(!hub.sink.has_claims());
+        hub.release_claim(42);
     }
 
     #[test]
@@ -2432,7 +2700,11 @@ mod tests {
                     )
                     .unwrap();
             }
-            hub.configure(false, Some("next microphone".into()));
+            hub.configure(
+                false,
+                Some("next microphone".into()),
+                openless_core::AudioProcessingConfig::default(),
+            );
             if claim_count == 2 {
                 hub.release_claim(1);
                 assert!(hub.enabled.load(Ordering::Acquire));

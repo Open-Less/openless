@@ -114,7 +114,9 @@ pub use resources::{
 };
 pub use runtime::{LinuxNativeRuntime, LinuxRuntimePumpResult};
 pub use selection::LinuxSelectionRuntime;
-pub use settings::{is_bare_modifier_binding, LinuxSettingsEffects, LinuxSettingsRuntime};
+pub use settings::{
+    is_bare_modifier_binding, shortcut_display_label, LinuxSettingsEffects, LinuxSettingsRuntime,
+};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };

@@ -103,6 +103,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_display_mode",
+        key: "capsuleDisplayMode",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "capsule_transcript_enabled",
         key: "capsuleTranscriptEnabled",
         class: PreferenceClass::Portable,
@@ -161,6 +168,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "low_latency_dictation_enabled",
         key: "lowLatencyDictationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
+        rust_name: "audio_enhancement_enabled",
+        key: "audioEnhancementEnabled",
         class: PreferenceClass::Excluded,
         shape: PreferenceShape::Boolean,
         reason: "local_only_microphone_capture",
@@ -432,6 +446,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "testing_features_enabled",
+        key: "testingFeaturesEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "coding_agent_enabled",
         key: "codingAgentEnabled",
         class: PreferenceClass::Excluded,
@@ -630,6 +651,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "polish_context_window_minutes",
         key: "polishContextWindowMinutes",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned32,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_skip_max_chars",
+        key: "polishSkipMaxChars",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Unsigned32,
         reason: "portable_setting",
@@ -879,6 +907,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
     let choices: &[&str] = match field.key {
         "defaultMode" => &["raw", "light", "structured", "formal"],
         "capsuleStyle" => &["siri", "classic", "typeless"],
+        "capsuleDisplayMode" => &["cursorScreen", "allScreens"],
         "pipelineMode" => &["traditional", "multimodal"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],

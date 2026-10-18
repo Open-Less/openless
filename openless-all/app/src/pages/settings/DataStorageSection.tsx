@@ -33,6 +33,13 @@ export function DataStorageSection() {
     if (Number.isNaN(parsed)) return;
     void savePrefs({ ...prefs, polishContextWindowMinutes: clamp(parsed, 0, 60) });
   };
+  // Issue #1032: 0 = off. Empty string rolls back to off. Upper bound 50 characters keeps the
+  // skip limited to short fragments; longer dictations still get polished.
+  const onPolishSkipMaxCharsChange = (raw: string) => {
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return;
+    void savePrefs({ ...prefs, polishSkipMaxChars: clamp(parsed, 0, 50) });
+  };
   // History cap 200 is the current HISTORY_CAP (persistence.rs:32); the lower bound of 5 keeps a
   // user-entered 0 from wiping everything as soon as one entry is written; empty string means
   // unlimited, falling back to null → the backend applies its 200 default.
@@ -78,6 +85,19 @@ export function DataStorageSection() {
           max={60}
           value={prefs.polishContextWindowMinutes}
           onChange={(e) => onPolishContextWindowChange(e.target.value)}
+          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.polishSkipMaxCharsLabel')}
+        desc={t('settings.recording.polishSkipMaxCharsDesc')}
+      >
+        <input
+          type="number"
+          min={0}
+          max={50}
+          value={prefs.polishSkipMaxChars}
+          onChange={(e) => onPolishSkipMaxCharsChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>

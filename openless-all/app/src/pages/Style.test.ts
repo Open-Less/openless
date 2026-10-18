@@ -27,7 +27,7 @@ const instantiate = new Function(
   'deps',
   `const {loadSequence,packsLoaded,pendingDeletes,listStylePacks,setPacks,setSelectedId,
     setBusy,showSaveStatus,t,window,setUndoDelete,deleteStylePack,packs,editorOpen,
-    selectedId,startEditorClose,getStylePackPresentation}=deps;
+    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted}=deps;
     ${compiled}; return {${names.join(',')}};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -55,6 +55,10 @@ function context() {
     loadSequence: { current: 0 },
     packsLoaded: { current: true },
     pendingDeletes,
+    departing: { current: new Set() },
+    cardRefs: { current: new Map() },
+    cardDeparture: () => Promise.resolve(),
+    mounted: { current: true },
     listStylePacks: () => listing(),
     deleteStylePack: (id) => {
       state.deleted.push(id);
@@ -98,7 +102,7 @@ function context() {
 // Refresh/prefs:changed cannot resurrect or select an optimistically removed row.
 {
   const c = context();
-  c.api.handleDeleteImportedPack(c.pack);
+  await c.api.handleDeleteImportedPack(c.pack);
   await c.api.loadPacks(c.pack.id);
   assert.deepEqual(c.state.rows, [c.other]);
   assert.equal(c.state.selected, c.other.id);
@@ -113,7 +117,7 @@ function context() {
   const c = context();
   const done = deferred();
   c.deletion(() => done.promise);
-  c.api.handleDeleteImportedPack(c.pack);
+  await c.api.handleDeleteImportedPack(c.pack);
   c.api.commitDeletedPack(c.pack.id);
   c.api.commitDeletedPack(c.pack.id);
   c.api.restoreDeletedPack(c.pack.id);
@@ -138,7 +142,7 @@ function context() {
   const c = context();
   const done = deferred();
   c.deletion(() => done.promise);
-  c.api.handleDeleteImportedPack(c.pack);
+  await c.api.handleDeleteImportedPack(c.pack);
   c.api.commitDeletedPack(c.pack.id);
   await c.api.loadPacks();
   done.reject(new Error('fixture failure'));

@@ -62,22 +62,14 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
 }
 
 pub(crate) fn sync_active_asr_provider_to_vault(provider: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if openless_core::credentials::is_retired_macos_asr_provider(provider) {
+        return Err("Legacy macOS local ASR is retired; use Experimental local speech models".into());
+    }
     if CredentialsVault::get_active_asr() == provider {
         return Ok(());
     }
     CredentialsVault::set_active_asr_provider(provider).map_err(|error| error.to_string())
-}
-
-pub(crate) fn active_apple_speech_asr_is_supported(provider: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = provider;
-        false
-    }
 }
 
 pub(crate) fn active_foundry_asr_is_supported(provider: &str) -> bool {
@@ -242,7 +234,26 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<openless_core::ChannelMutationResult, openless_core::BackendError>,
     > {
         let directory = self.directory.clone();
-        Box::pin(async move { directory.mutate_channel(mutation).await })
+        Box::pin(async move {
+            #[cfg(target_os = "macos")]
+            {
+                use openless_core::{ChannelKind, ChannelMutation};
+                let provider = match &mutation {
+                    ChannelMutation::Create { kind: ChannelKind::Asr, provider_type, .. }
+                    | ChannelMutation::SetProviderType { kind: ChannelKind::Asr, provider_type, .. }
+                    | ChannelMutation::ActivateLocalAsr { provider_type, .. } => Some(provider_type.clone()),
+                    ChannelMutation::SetEnabled { kind: ChannelKind::Asr, id, enabled: true } =>
+                        directory.list_channels(ChannelKind::Asr).await?.into_iter()
+                            .find(|c| &c.id == id).map(|c| c.provider_type),
+                    _ => None,
+                };
+                if provider.as_deref().is_some_and(openless_core::credentials::is_retired_macos_asr_provider) {
+                    return Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Unsupported,
+                        "Legacy macOS local ASR is retired; use Experimental local speech models"));
+                }
+            }
+            directory.mutate_channel(mutation).await
+        })
     }
 
     fn active_provider(
@@ -259,7 +270,19 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         provider_id: String,
     ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
         let directory = self.directory.clone();
-        Box::pin(async move { directory.set_active_provider(slot, provider_id).await })
+        Box::pin(async move {
+            #[cfg(target_os = "macos")]
+            if slot == openless_core::ProviderSlot::Asr {
+                let provider = directory.list_channels(openless_core::ChannelKind::Asr).await?
+                    .into_iter().find(|c| c.id == provider_id)
+                    .map(|c| c.provider_type).unwrap_or_else(|| provider_id.clone());
+                if openless_core::credentials::is_retired_macos_asr_provider(&provider) {
+                    return Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Unsupported,
+                        "Legacy macOS local ASR is retired; use Experimental local speech models"));
+                }
+            }
+            directory.set_active_provider(slot, provider_id).await
+        })
     }
 }
 
@@ -575,39 +598,19 @@ fn local_asr_configured(
     provider: &str,
     model_store: Option<&openless_core::ModelStore>,
 ) -> Option<bool> {
-    if crate::asr::local::is_local_whisper(provider) {
-        #[cfg(target_os = "macos")]
-        {
-            let model_id = crate::persistence::PreferencesStore::new()
-                .ok()
-                .map(|store| store.get().local_whisper_active_model)
-                .filter(|id| {
-                    crate::asr::local::ModelId::from_wire_id(id)
-                        .map(|model| model.is_whisper())
-                        .unwrap_or(false)
-                })
-                .unwrap_or_else(|| crate::asr::local::WHISPER_MODEL_ID.to_string());
-            return Some(model_store.is_some_and(|store| {
-                crate::asr::local::whisper_model_ready_for_model(store, &model_id)
-            }));
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Some(false);
-        }
+    if provider == "apple-speech" {
+        return Some(cfg!(target_os = "macos"));
     }
-    if crate::asr::local::is_local_qwen3(provider) {
-        #[cfg(target_os = "macos")]
-        {
-            return Some(crate::asr::local::qwen_backend_for_provider(provider).is_some());
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Some(false);
-        }
-    }
-    if provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID {
-        return Some(active_apple_speech_asr_is_supported(provider));
+    if openless_core::credentials::is_retired_macos_asr_provider(provider) { return Some(false); }
+    if let Some(model) =
+        openless_core::experimental_asr::ExperimentalAsrModel::from_provider(provider)
+    {
+        return Some(
+            crate::asr::local::experimental::ExperimentalNativeRuntime::unavailable(model)
+                .is_none()
+                && model_store
+                    .is_some_and(|store| store.is_installed(&model.target()).unwrap_or(false)),
+        );
     }
     if provider == crate::asr::local::foundry::PROVIDER_ID {
         return Some(active_foundry_asr_is_supported(provider));
@@ -783,13 +786,8 @@ pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> R
 #[cfg(not(mobile))]
 #[tauri::command]
 pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> Result<(), String> {
-    if crate::asr::local::is_local_qwen3(&provider)
-        && crate::asr::local::qwen_backend_for_provider(&provider).is_none()
-    {
-        return Err("所选本地 Qwen3-ASR 后端不支持当前系统".to_string());
-    }
-    if crate::asr::local::is_local_whisper(&provider) && !cfg!(target_os = "macos") {
-        return Err("本地 Whisper 当前仅支持 macOS".to_string());
+    if openless_core::credentials::is_retired_macos_asr_provider(&provider) {
+        return Err("该功能已下架，请去实验性与扩展里面".into());
     }
     if provider == FOUNDRY_LOCAL_PROVIDER_ID && !active_foundry_asr_is_supported(&provider) {
         return Err("Foundry Local Whisper is only available on Windows".to_string());
@@ -798,11 +796,6 @@ pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> R
         && !active_sherpa_asr_is_supported(&provider)
     {
         return Err("sherpa-onnx local ASR is only available on Windows".to_string());
-    }
-    if provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID
-        && !active_apple_speech_asr_is_supported(&provider)
-    {
-        return Err("Apple Speech recognition is only available on macOS".to_string());
     }
     if core
         .active_provider(openless_core::ProviderSlot::Asr)
@@ -837,15 +830,8 @@ pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> R
             .await
             .map_err(|error| error.to_string())?;
     }
-    if crate::asr::local::is_local_qwen3(&provider)
-        || crate::asr::local::is_local_whisper(&provider)
-    {
-        core.services()
-            .local_asr
-            .preload(openless_core::LocalAsrRuntime::Generic)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
+    // Selecting a provider must never start local inference. The first recording
+    // (or an explicit model test/load action) owns runtime initialization.
     Ok(())
 }
 

@@ -276,7 +276,9 @@ function AndroidMicrophoneStep() {
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
       >
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{t('onboarding.micTitle')}</div>
+          <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+            {t('onboarding.micTitle')}
+          </div>
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5, marginTop: 4 }}>
             {t('onboarding.micDesc')}
           </div>
@@ -459,7 +461,7 @@ function DesktopOnboarding({
                     width: '100%',
                     padding: '8px 14px',
                     fontSize: 12.5,
-                    fontWeight: 500,
+                    fontWeight: 'var(--ol-font-weight-medium)',
                     fontFamily: 'inherit',
                     border: '0.5px solid var(--ol-line-strong)',
                     borderRadius: 8,
@@ -503,7 +505,7 @@ function DesktopOnboarding({
             marginTop: 12,
             padding: '9px 14px',
             fontSize: 12.5,
-            fontWeight: 500,
+            fontWeight: 'var(--ol-font-weight-medium)',
             fontFamily: 'inherit',
             border: '0.5px solid var(--ol-line-strong)',
             borderRadius: 8,
@@ -621,7 +623,7 @@ function StatusBadge({ granted, label }: { granted: boolean; label: string }) {
       style={{
         flexShrink: 0,
         fontSize: 11,
-        fontWeight: 600,
+        fontWeight: 'var(--ol-font-weight-semibold)',
         borderRadius: 999,
         padding: '4px 8px',
         color: granted ? 'var(--ol-ok)' : 'var(--ol-ink-4)',
@@ -676,14 +678,14 @@ function PermissionStep({
           alignItems: 'center',
           justifyContent: 'center',
           fontSize: 11,
-          fontWeight: 600,
+          fontWeight: 'var(--ol-font-weight-semibold)',
           flexShrink: 0,
         }}
       >
         {granted ? '✓' : index}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 'var(--ol-font-weight-semibold)' }}>{title}</div>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 3, lineHeight: 1.5 }}>
           {desc}
         </div>
@@ -708,7 +710,7 @@ function PermissionStep({
           flexShrink: 0,
           padding: '7px 14px',
           fontSize: 12.5,
-          fontWeight: 500,
+          fontWeight: 'var(--ol-font-weight-medium)',
           fontFamily: 'inherit',
           border: 0,
           borderRadius: 8,
@@ -731,7 +733,7 @@ const primaryButtonStyle = {
   minHeight: 42,
   padding: '10px 14px',
   fontSize: 13,
-  fontWeight: 600,
+  fontWeight: 'var(--ol-font-weight-semibold)',
   fontFamily: 'inherit',
   border: 0,
   borderRadius: 10,
@@ -745,7 +747,7 @@ const secondaryButtonStyle = {
   minHeight: 42,
   padding: '10px 14px',
   fontSize: 13,
-  fontWeight: 600,
+  fontWeight: 'var(--ol-font-weight-semibold)',
   fontFamily: 'inherit',
   border: '0.5px solid var(--ol-line-strong)',
   borderRadius: 10,
@@ -758,7 +760,7 @@ const plainButtonStyle = {
   width: '100%',
   padding: '10px 14px',
   fontSize: 12.5,
-  fontWeight: 500,
+  fontWeight: 'var(--ol-font-weight-medium)',
   fontFamily: 'inherit',
   border: 0,
   borderRadius: 8,

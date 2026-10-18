@@ -166,7 +166,7 @@ export function Translation() {
                   background: 'var(--ol-blue)',
                   color: '#fff',
                   fontSize: 12,
-                  fontWeight: 600,
+                  fontWeight: 'var(--ol-font-weight-semibold)',
                   cursor: loading ? 'not-allowed' : 'default',
                   opacity: loading ? 0.64 : 1,
                 }}
@@ -251,7 +251,7 @@ export function Translation() {
                 color: 'inherit',
                 padding: '4px 10px',
                 fontSize: 11,
-                fontWeight: 600,
+                fontWeight: 'var(--ol-font-weight-semibold)',
                 cursor: loading ? 'not-allowed' : 'default',
                 opacity: loading ? 0.64 : 1,
               }}
@@ -284,7 +284,13 @@ export function Translation() {
         <div className="ol-translation-grid">
           {/* 1. Working languages */}
           <Card style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 6 }}>
+            <div
+              style={{
+                fontSize: 13.5,
+                fontWeight: 'var(--ol-font-weight-semibold)',
+                marginBottom: 6,
+              }}
+            >
               {t('translation.working.title')}
             </div>
             <p className="ol-translation-description">{t('translation.working.desc')}</p>
@@ -342,12 +348,14 @@ export function Translation() {
                 marginBottom: 12,
               }}
             >
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t('translation.target.title')}</div>
+              <div style={{ fontSize: 13.5, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+                {t('translation.target.title')}
+              </div>
               <span
                 style={{
                   padding: '2px 8px',
                   fontSize: 10.5,
-                  fontWeight: 600,
+                  fontWeight: 'var(--ol-font-weight-semibold)',
                   letterSpacing: '0.04em',
                   borderRadius: 999,
                   background: enabled ? 'var(--ol-blue-soft)' : 'var(--ol-control-muted)',
@@ -378,7 +386,13 @@ export function Translation() {
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 'var(--ol-font-weight-semibold)',
+                    color: 'var(--ol-ink-2)',
+                  }}
+                >
                   {t('translation.style.title')}
                 </div>
                 <div
@@ -401,7 +415,7 @@ export function Translation() {
                   background: 'var(--ol-blue-soft)',
                   color: 'var(--ol-blue)',
                   fontSize: 11.5,
-                  fontWeight: 600,
+                  fontWeight: 'var(--ol-font-weight-semibold)',
                 }}
               >
                 {stylePackLoadFailed
@@ -431,7 +445,13 @@ export function Translation() {
 
         {/* 3. How to use: numbered step strip, one row on wide screens, wraps on narrow ones */}
         <Card>
-          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 12 }}>
+          <div
+            style={{
+              fontSize: 13.5,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+              marginBottom: 12,
+            }}
+          >
             {t('translation.howto.title')}
           </div>
           <div

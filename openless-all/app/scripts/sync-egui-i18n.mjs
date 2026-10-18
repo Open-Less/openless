@@ -39,6 +39,8 @@ const RUST_LOCALE_ORDER = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
 /// Keys where the egui host deliberately keeps its own wording and must not be
 /// overwritten by the Tauri value (different product surface / screenshot parity).
 const KEEP_EGUI = new Set([
+  // Linux retains its multimodal subpage under Advanced.
+  'modal.descriptions.advanced',
   // Screenshot labels the sidebar entry "纠错规则"; Tauri uses "纠正规则".
   'nav.corrections',
   // Screenshot labels the detail action "重新转写"; Tauri uses "重新转录".

@@ -205,7 +205,11 @@ impl LocalAsrTarget {
     ) -> Result<Self, BackendError> {
         let model_id = model_id.into();
         let known = match runtime {
-            LocalAsrRuntime::Generic => LocalAsrModelId::from_wire_id(&model_id).is_some(),
+            LocalAsrRuntime::Generic => {
+                LocalAsrModelId::from_wire_id(&model_id).is_some()
+                    || crate::experimental_asr::ExperimentalAsrModel::from_model_id(&model_id)
+                        .is_some()
+            }
             LocalAsrRuntime::Foundry => FOUNDRY_MODEL_ALIASES.contains(&model_id.as_str()),
             LocalAsrRuntime::SherpaOnnx => SHERPA_MODEL_ALIASES.contains(&model_id.as_str()),
         };

@@ -1,29 +1,19 @@
-//! Local ASR engine entry point.
-//!
-//! 当前本地引擎：
-//! - **macOS**：Qwen3-ASR 可选 MLX/Metal 或 C/CPU；
-//! - **Windows**：Foundry Local Whisper（`foundry_*`），以及 sherpa-onnx-local
-//!   实验 provider（`sherpa*`，offline batch + online streaming）
-
+//! Native local speech runtimes. macOS uses opt-in experimental modules only;
+//! old IDs remain metadata-only and cannot link their former inference libraries.
 #[cfg(any(target_os = "windows", test))]
 mod blocking_decode;
-pub mod cache;
+pub mod experimental;
 pub mod foundry;
 pub mod foundry_native;
 pub mod foundry_provider;
 pub mod foundry_runtime;
-#[cfg(target_os = "macos")]
-mod local_provider;
-pub mod models;
+#[cfg(target_os = "windows")]
+mod native_model_receipt;
 pub mod sherpa;
 pub mod sherpa_provider;
 pub mod sherpa_runtime;
 pub mod test_run;
 
-#[cfg(target_os = "macos")]
-mod whisper_provider;
-
-pub use cache::LocalAsrCache;
 #[allow(unused_imports)]
 pub use foundry_provider::FoundryLocalWhisperAsr;
 #[allow(unused_imports)]
@@ -33,43 +23,7 @@ pub use sherpa_provider::SherpaOnnxAsr;
 #[allow(unused_imports)]
 pub use sherpa_runtime::SherpaOnnxRuntime;
 
-#[cfg(target_os = "macos")]
-mod apple_speech_provider;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-mod mlx_qwen_engine;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-mod mlx_worker;
-#[cfg(target_os = "macos")]
-mod qwen_engine;
-#[cfg(target_os = "macos")]
-mod qwen_ffi;
-
-#[cfg(target_os = "macos")]
-#[allow(unused_imports)]
-pub use apple_speech_provider::{native_name_to_apple_locale, AppleSpeechAsr};
-#[cfg(target_os = "macos")]
-pub use local_provider::LocalQwenAsr;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub use mlx_qwen_engine::MlxQwenAsrEngine;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub(crate) use mlx_worker::run_if_requested as run_mlx_worker_if_requested;
-#[cfg(target_os = "macos")]
-pub(crate) use whisper_provider::WhisperEngine;
-#[cfg(target_os = "macos")]
-pub use whisper_provider::MODEL_ID as WHISPER_MODEL_ID;
-#[cfg(target_os = "macos")]
-pub use whisper_provider::{
-    model_path_for_model as whisper_model_path_for_model,
-    model_ready_for_model as whisper_model_ready_for_model,
-};
-#[cfg(target_os = "macos")]
-pub use whisper_provider::{LocalWhisperAsr, LocalWhisperCache};
-
-pub use models::ModelId;
-
-/// 本地 Qwen3-ASR 在 active_asr 字段里的标识；与 Core ProviderDescriptor 的 type 对齐。
-/// 旧版本的本地 Qwen3-ASR provider id。macOS 映射到 MLX，
-/// 仅用于兼容已经保存的渠道配置；新渠道请使用下方两个明确后端 id。
+/// Retired channel IDs are used only for UI retirement and scoped cleanup.
 pub const PROVIDER_ID: &str = "local-qwen3";
 pub const LOCAL_QWEN3_MLX_PROVIDER_ID: &str = "local-qwen3-mlx";
 pub const LOCAL_QWEN3_C_PROVIDER_ID: &str = "local-qwen3-c";
@@ -87,155 +41,4 @@ pub fn is_local_qwen3(id: &str) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QwenBackend {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    Mlx,
-    C,
-}
-
-impl QwenBackend {
-    pub fn cache_key(self) -> &'static str {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx => "mlx",
-            Self::C => "c",
-        }
-    }
-}
-
-pub fn qwen_backend_for_provider(id: &str) -> Option<QwenBackend> {
-    match id {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        PROVIDER_ID | LOCAL_QWEN3_MLX_PROVIDER_ID => Some(QwenBackend::Mlx),
-        #[cfg(target_os = "macos")]
-        LOCAL_QWEN3_C_PROVIDER_ID => Some(QwenBackend::C),
-        #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
-        PROVIDER_ID => Some(QwenBackend::C),
-        _ => None,
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub enum LocalQwenEngine {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    Mlx(MlxQwenAsrEngine),
-    C(qwen_engine::QwenAsrEngine),
-}
-
-#[cfg(target_os = "macos")]
-impl LocalQwenEngine {
-    pub fn load(backend: QwenBackend, model_dir: &std::path::Path) -> anyhow::Result<Self> {
-        match backend {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            QwenBackend::Mlx => Ok(Self::Mlx(MlxQwenAsrEngine::load(model_dir)?)),
-            QwenBackend::C => Ok(Self::C(qwen_engine::QwenAsrEngine::load(model_dir)?)),
-        }
-    }
-
-    pub fn transcribe_pcm(&self, samples: &[f32]) -> anyhow::Result<String> {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.transcribe_pcm(samples),
-            Self::C(engine) => engine.transcribe_audio(samples),
-        }
-    }
-
-    pub fn next_operation_id(&self) -> u64 {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.next_operation_id(),
-            Self::C(_) => 0,
-        }
-    }
-
-    pub fn cancel_operation(&self, operation_id: u64) {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.cancel_operation(operation_id),
-            Self::C(_) => {
-                let _ = operation_id;
-            }
-        }
-    }
-
-    pub fn cancel(&self) {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.abort(),
-            Self::C(_) => {}
-        }
-    }
-
-    pub fn is_healthy(&self) -> bool {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.is_healthy(),
-            Self::C(_) => true,
-        }
-    }
-
-    /// Dictation transcription keeps each backend's existing semantics: MLX batches the whole
-    /// segment; C appends 0.5s of silence and streams, handing stable tokens to the caller for
-    /// live display.
-    pub fn transcribe_dictation_with_handler<F>(
-        &self,
-        operation_id: u64,
-        cancelled: &std::sync::atomic::AtomicBool,
-        mut samples: Vec<f32>,
-        handler: F,
-    ) -> anyhow::Result<String>
-    where
-        F: FnMut(&str) + Send + 'static,
-    {
-        match self {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => {
-                engine.transcribe_pcm_for_operation(operation_id, &samples, cancelled)
-            }
-            Self::C(engine) => {
-                let _ = (operation_id, cancelled);
-                append_c_stream_tail_padding(&mut samples);
-                engine.transcribe_stream_with_handler(&samples, handler)
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-const C_STREAM_TAIL_PADDING_SAMPLES: usize = 8_000;
-
-#[cfg(target_os = "macos")]
-fn append_c_stream_tail_padding(samples: &mut Vec<f32>) {
-    samples.resize(samples.len() + C_STREAM_TAIL_PADDING_SAMPLES, 0.0);
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod qwen_dictation_tests {
-    use super::*;
-
-    #[test]
-    fn c_stream_padding_adds_half_a_second_without_changing_existing_audio() {
-        let mut samples = vec![0.25, -0.5, 1.0];
-        let original = samples.clone();
-
-        append_c_stream_tail_padding(&mut samples);
-
-        assert_eq!(&samples[..original.len()], original.as_slice());
-        assert_eq!(samples.len(), original.len() + 8_000);
-        assert!(samples[original.len()..]
-            .iter()
-            .all(|sample| *sample == 0.0));
-    }
-}
-
-/// Provider id for the Apple Speech (SFSpeechRecognizer) local ASR; aligned with the Core
-/// ProviderDescriptor type (issue #574). The string is recognizable on all platforms,
-/// but the provider implementation compiles only on macOS; on non-macOS the upper layer treats
-/// it as not-configured / unavailable (see the platform gating in commands / coordinator).
 pub const APPLE_SPEECH_PROVIDER_ID: &str = "apple-speech";
-
-#[allow(dead_code)]
-pub fn is_apple_speech(id: &str) -> bool {
-    id == APPLE_SPEECH_PROVIDER_ID
-}

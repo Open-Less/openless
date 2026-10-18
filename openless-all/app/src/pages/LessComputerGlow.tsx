@@ -16,6 +16,8 @@
 // (RENDER_SCALE); even fullscreen 5K is just one lightweight draw.
 
 import { useEffect, useRef, useState } from 'react';
+import { isTauri } from '../lib/ipc';
+import { useReducedMotion } from '../lib/motion';
 
 const RENDER_SCALE = 0.5;
 /** Matches the old CSS --lcg-radius default: hugs the screen's physical rounded corners. */
@@ -112,7 +114,7 @@ if (typeof document !== 'undefined' && !document.getElementById('less-computer-g
   document.head.appendChild(tag);
 }
 
-function GlowCanvas() {
+function GlowCanvas({ reduced }: { reduced: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -178,12 +180,15 @@ function GlowCanvas() {
       gl.uniform1f(uTime, (now - start) / 1000);
       if (uRadius) gl.uniform1f(uRadius, SCREEN_CORNER_RADIUS * scale);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      raf = requestAnimationFrame(frame);
+      if (!reduced) raf = requestAnimationFrame(frame);
     };
-    raf = requestAnimationFrame(frame);
+    frame(performance.now());
+    const resize = reduced ? new ResizeObserver(() => frame(performance.now())) : null;
+    resize?.observe(canvas);
 
     return () => {
       cancelAnimationFrame(raf);
+      resize?.disconnect();
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
       gl.deleteShader(vs);
@@ -201,23 +206,30 @@ export function LessComputerGlow() {
   // this by actively emitting visibility on show/hide: when invisible, unmount entirely
   // (rAF stops + GL released → zero GPU); when visible, remount — zero visual change on
   // show.
-  const [active, setActive] = useState(true);
+  const [active, setActive] = useState(!document.hidden);
+  const reduced = useReducedMotion();
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void import('@tauri-apps/api/event').then(({ listen }) => {
-      if (cancelled) return;
-      void listen<boolean>('less-computer-glow:active', (e) => {
-        setActive(Boolean(e.payload));
-      }).then((un) => {
-        if (cancelled) un();
-        else unlisten = un;
-      });
-    });
+    if (isTauri)
+      void import('@tauri-apps/api/event')
+        .then(async ({ listen }) => {
+          if (cancelled) return;
+          const un = await listen<boolean>('less-computer-glow:active', (e) =>
+            setActive(Boolean(e.payload)),
+          );
+          if (cancelled) un();
+          else unlisten = un;
+        })
+        .catch((error) => {
+          console.warn('[glow] visibility listener unavailable', error);
+          if (!cancelled) setActive(false);
+        });
     // Secondary fallback: stop when the page is marked hidden too (stop-only, never
     // mistakenly disables a currently shown glow).
     const onVisibility = () => {
       if (document.hidden) setActive(false);
+      else if (!isTauri) setActive(true);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -230,7 +242,7 @@ export function LessComputerGlow() {
   if (!active) return null;
   return (
     <div className="lcg-root" aria-hidden>
-      <GlowCanvas />
+      <GlowCanvas key={reduced ? 'still' : 'motion'} reduced={reduced} />
     </div>
   );
 }

@@ -398,6 +398,9 @@ pub struct UserPreferences {
     /// Recording capsule appearance. Preference events sync it to all windows; recording state carries the current style.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
+    /// Display only under the pointer, or mirror recording on every attached display.
+    #[serde(default)]
+    pub capsule_display_mode: CapsuleDisplayMode,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -405,6 +408,10 @@ pub struct UserPreferences {
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
+    /// Apply conservative noise suppression, lightweight gain, and a soft limiter to native microphone input.
+    /// Disabled by default until an audio-quality baseline supports changing it.
+    #[serde(default)]
+    pub audio_enhancement_enabled: bool,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
@@ -595,6 +602,9 @@ pub struct UserPreferences {
     /// a disabled pack auto-enables and activates it.
     #[serde(default)]
     pub style_pack_hotkeys: Vec<StylePackHotkey>,
+    /// Device-local opt-in for unfinished features. Hidden and unavailable by default.
+    #[serde(default)]
+    pub testing_features_enabled: bool,
     /// Less Computer: whether enabled. Default off; users must enable it in Advanced settings.
     #[serde(default)]
     pub coding_agent_enabled: bool,
@@ -709,6 +719,13 @@ pub struct UserPreferences {
     /// Default 5 minutes.
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
+    /// Skip LLM polish for dictations whose transcript has at most N
+    /// non-whitespace characters (issue #1032). Short fragments are inserted
+    /// as the raw ASR text, avoiding a polish round-trip that costs far more
+    /// than the transcription itself. 0 = off (default). Translation sessions
+    /// always polish regardless of this value.
+    #[serde(default = "default_polish_skip_max_chars")]
+    pub polish_skip_max_chars: u32,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -862,6 +879,10 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
+    pub fn less_computer_available(&self) -> bool {
+        self.testing_features_enabled && self.coding_agent_enabled
+    }
+
     pub fn preserve_style_preferences_from(&mut self, current: &Self) {
         self.default_mode = current.default_mode;
         self.enabled_modes = current.enabled_modes.clone();
@@ -893,6 +914,10 @@ fn default_history_retention_days() -> u32 {
 
 fn default_polish_context_window_minutes() -> u32 {
     5
+}
+
+fn default_polish_skip_max_chars() -> u32 {
+    0
 }
 
 fn default_local_asr_mirror() -> String {
@@ -943,12 +968,16 @@ struct UserPreferencesWire {
     show_capsule: bool,
     #[serde(default)]
     capsule_style: CapsuleStyle,
+    #[serde(default)]
+    capsule_display_mode: CapsuleDisplayMode,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     capsule_transcript_font_size: u8,
     #[serde(default)]
     mute_during_recording: bool,
+    #[serde(default)]
+    audio_enhancement_enabled: bool,
     #[serde(default)]
     stable_transcription_enabled: bool,
     #[serde(default)]
@@ -1033,6 +1062,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     style_pack_hotkeys: Vec<StylePackHotkey>,
     #[serde(default)]
+    testing_features_enabled: bool,
+    #[serde(default)]
     coding_agent_enabled: bool,
     #[serde(default = "default_coding_agent_provider")]
     coding_agent_provider: String,
@@ -1091,6 +1122,8 @@ struct UserPreferencesWire {
     history_retention_days: u32,
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
+    #[serde(default = "default_polish_skip_max_chars")]
+    polish_skip_max_chars: u32,
     #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
@@ -1202,9 +1235,11 @@ impl Default for UserPreferencesWire {
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
+            capsule_display_mode: prefs.capsule_display_mode,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
+            audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
@@ -1249,6 +1284,7 @@ impl Default for UserPreferencesWire {
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
             style_pack_hotkeys: prefs.style_pack_hotkeys,
+            testing_features_enabled: prefs.testing_features_enabled,
             coding_agent_enabled: prefs.coding_agent_enabled,
             coding_agent_provider: prefs.coding_agent_provider,
             coding_agent_model: prefs.coding_agent_model,
@@ -1280,6 +1316,7 @@ impl Default for UserPreferencesWire {
             update_channel_explicit: None,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
+            polish_skip_max_chars: prefs.polish_skip_max_chars,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
@@ -1402,9 +1439,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
+            capsule_display_mode: wire.capsule_display_mode,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
+            audio_enhancement_enabled: wire.audio_enhancement_enabled,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
@@ -1449,6 +1488,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_voice_edit_plan_format: wire.selection_voice_edit_plan_format,
             selection_voice_edit_system_prompt: wire.selection_voice_edit_system_prompt,
             qa_save_history: wire.qa_save_history,
+            testing_features_enabled: wire.testing_features_enabled,
             coding_agent_enabled: wire.coding_agent_enabled,
             coding_agent_provider: wire.coding_agent_provider,
             coding_agent_model: wire.coding_agent_model,
@@ -1493,6 +1533,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             update_channel_explicit,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
+            polish_skip_max_chars: wire.polish_skip_max_chars,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
@@ -1779,9 +1820,11 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
+            capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
+            audio_enhancement_enabled: false,
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
@@ -1825,6 +1868,7 @@ impl Default for UserPreferences {
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
             style_pack_hotkeys: Vec::new(),
+            testing_features_enabled: false,
             coding_agent_enabled: false,
             coding_agent_provider: default_coding_agent_provider(),
             coding_agent_model: None,
@@ -1854,6 +1898,7 @@ impl Default for UserPreferences {
             update_channel_explicit: false,
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
+            polish_skip_max_chars: default_polish_skip_max_chars(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
@@ -1902,6 +1947,19 @@ pub struct StylePackHotkey {
 }
 
 impl ShortcutBinding {
+    /// Explicitly unbound, distinct from an absent legacy preference field.
+    /// Keep the existing wire shape so old preferences and host adapters round-trip.
+    pub fn unassigned() -> Self {
+        Self {
+            primary: String::new(),
+            modifiers: Vec::new(),
+        }
+    }
+
+    pub fn is_unassigned(&self) -> bool {
+        self.primary.is_empty() && self.modifiers.is_empty()
+    }
+
     pub fn default_qa() -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -2479,12 +2537,9 @@ impl PlatformCapabilities {
                 supports_overlay: true,
                 supports_desktop_hotkey: true,
                 supports_tray: true,
-                supports_local_asr: cfg!(any(
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "windows"
-                )),
-                supports_local_qwen3_mlx: cfg!(all(target_os = "macos", target_arch = "aarch64")),
+                // Legacy manager is retired on macOS; experiments use their own entry.
+                supports_local_asr: cfg!(any(target_os = "linux", target_os = "windows")),
+                supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
                 supports_voice_edit: true,
@@ -2572,6 +2627,16 @@ pub enum CapsuleState {
     Done,
     Cancelled,
     Error,
+}
+
+/// Which attached displays show the recording capsule. Old preferences default
+/// to one display, so upgrading never opts users into extra windows/renderers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CapsuleDisplayMode {
+    #[default]
+    CursorScreen,
+    AllScreens,
 }
 
 /// Recording capsule appearance; serialized values feed preference storage and each Host's window events.
@@ -2844,6 +2909,29 @@ mod translation_effective_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_less_computer_settings_remain_sealed_until_device_opt_in() {
+        let legacy: UserPreferences = serde_json::from_value(serde_json::json!({
+            "codingAgentEnabled": true,
+            "codingAgentProvider": "codex-cli",
+            "codingAgentModel": "saved-model"
+        }))
+        .unwrap();
+        assert!(!UserPreferences::default().testing_features_enabled);
+        assert!(!legacy.testing_features_enabled);
+        assert!(legacy.coding_agent_enabled);
+        assert!(!legacy.less_computer_available());
+        let mut opted_in = legacy.clone();
+        opted_in.testing_features_enabled = true;
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&opted_in).unwrap()).unwrap();
+        assert!(restored.less_computer_available());
+        opted_in.testing_features_enabled = false;
+        assert!(!opted_in.less_computer_available());
+        assert_eq!(opted_in.coding_agent_model, legacy.coding_agent_model);
+        assert_eq!(opted_in.coding_agent_provider, legacy.coding_agent_provider);
+    }
 
     #[test]
     fn macos_newline_modes_round_trip_legacy_auto_and_line_feed() {
@@ -3238,6 +3326,21 @@ mod tests {
     }
 
     #[test]
+    fn audio_enhancement_defaults_off_and_round_trips_when_enabled() {
+        let legacy: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.audio_enhancement_enabled);
+
+        let enabled = UserPreferences {
+            audio_enhancement_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains("\"audioEnhancementEnabled\":true"));
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.audio_enhancement_enabled);
+    }
+
+    #[test]
     fn stable_transcription_defaults_off_and_round_trips_when_enabled() {
         let legacy: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(!legacy.stable_transcription_enabled);
@@ -3440,6 +3543,20 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_skip_max_chars_defaults_off_and_round_trips() {
+        // Issue #1032: the short-input polish skip is opt-in, so existing users keep polishing.
+        assert_eq!(UserPreferences::default().polish_skip_max_chars, 0);
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(from_empty.polish_skip_max_chars, 0);
+
+        let configured: UserPreferences =
+            serde_json::from_str(r#"{"polishSkipMaxChars":8}"#).unwrap();
+        assert_eq!(configured.polish_skip_max_chars, 8);
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishSkipMaxChars"], 8);
     }
 
     /// issue #440: old versions wrote the default `streamingInsert:false`
