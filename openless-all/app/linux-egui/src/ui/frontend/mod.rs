@@ -691,9 +691,12 @@ mod tests {
         let label =
             openless_linux_egui::tr_l10n(zh, "settings.recording.history_max_entries_label");
         let id = egui::Id::new(("openless-settings-text", label));
+        // 权限卡现在排在数据卡之前（与 Tauri 同序），留存输入框落到首屏之外。
+        // 这个用例验证的是「输入不丢字」，与首屏布局无关，所以放大视口。
+        let tall = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 1600.0));
         for _ in 0..2 {
             ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport()),
+                screen_rect: Some(tall),
                 ..Default::default()
             });
             let mut actions = Vec::new();
@@ -704,7 +707,7 @@ mod tests {
         for step in ["7", "7"] {
             ctx.memory_mut(|m| m.request_focus(id));
             ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport()),
+                screen_rect: Some(tall),
                 events: vec![egui::Event::Text(step.into())],
                 ..Default::default()
             });
@@ -1319,7 +1322,75 @@ mod tests {
         );
     }
 
-    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。
+    /// 「权限与数据」页的卡片顺序必须与 Tauri 一致：权限 → 数据与存储 → 云端同步。
+    /// 之前把数据卡放在最前面，用户先看到留存输入框，找不到「哪里报错了」。
+    #[test]
+    fn privacy_page_lists_permissions_before_storage_and_sync() {
+        use openless_linux_egui::Lang;
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Privacy,
+            ..Default::default()
+        };
+        let mut text = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1321.0, 4000.0),
+                )),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let output = crate::ui::frontend::end_pass(&ctx);
+            fn collect(shape: &egui::Shape, out: &mut String) {
+                match shape {
+                    egui::Shape::Text(text) => {
+                        out.push_str(text.galley.text());
+                        out.push('\n');
+                    }
+                    egui::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            collect(shape, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            text.clear();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut text);
+            }
+        }
+        // 用具名函数而不是闭包：闭包捕获 `text` 会让借用逃逸出闭包体。
+        fn position(text: &str, key: &'static str) -> Option<usize> {
+            text.find(openless_linux_egui::tr_l10n(
+                openless_linux_egui::Lang::ZhCn,
+                key,
+            ))
+        }
+        let permissions = position(&text, "settings.permissions.title")
+            .unwrap_or_else(|| panic!("permissions card missing:\n{text}"));
+        let storage = position(&text, "settings.data_storage.title")
+            .unwrap_or_else(|| panic!("storage card missing:\n{text}"));
+        let sync = position(&text, "cloudSyncE2ee.title")
+            .unwrap_or_else(|| panic!("cloud sync card missing:\n{text}"));
+        assert!(
+            permissions < storage && storage < sync,
+            "permissions ({permissions}) then storage ({storage}) then sync ({sync})"
+        );
+        // 权限卡必须先给出网络结论，再谈留存；否则「不可用」藏在页面底部。
+        let network = position(&text, "settings.permissions.network_label")
+            .unwrap_or_else(|| panic!("network row missing:\n{text}"));
+        let retention = position(&text, "settings.recording.history_retention_label")
+            .unwrap_or_else(|| panic!("retention row missing:\n{text}"));
+        assert!(network < retention, "network status must precede retention");
+    }
+
+    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。
     #[test]
     fn clicking_outside_the_recording_panel_stops_recording() {
         use super::view_model::{FrontendAction, ShortcutField};

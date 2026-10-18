@@ -2735,12 +2735,12 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
 
 fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-        // Keep editable retention controls reachable before the longer service
-        // explanations. Wrapped paragraphs must never inherit centered text.
-        privacy_data(ui, vm, actions);
-        // Tauri 的隐私页顺序是 权限 → 数据与存储 → 云端同步。
-        super::cloud_sync::cloud_sync_card(ui, vm, actions);
+        // 与 Tauri 的隐私页同序：权限 → 数据与存储 → 云端同步。
+        // 权限卡先给结论（麦克风 / 快捷键 / 网络 / 文字插入 / 保险库），
+        // 再让用户改留存与同步设置。
         privacy_access(ui, vm, actions);
+        privacy_data(ui, vm, actions);
+        super::cloud_sync::cloud_sync_card(ui, vm, actions);
     });
 }
 
@@ -2760,26 +2760,24 @@ fn privacy_access(
     use openless_linux_egui::linux_access::{CheckState, KeyringState};
     let lang = vm.lang;
     let checking = vm.linux_access.checking;
-    if ui
-        .add_enabled(
-            !checking,
-            egui::Button::new(if checking {
-                tr_l10n(lang, "settings.permissions.checking")
-            } else {
-                tr_l10n(lang, "settings.linux_privacy.refresh")
-            }),
-        )
-        .clicked()
-    {
-        actions.push(FrontendAction::SettingsAction(
-            SettingsActionField::RefreshLinuxAccess,
-        ));
-    }
-    ui.add_space(8.0);
-    card(
+    let mut refresh = false;
+    card_header(
         ui,
-        tr_l10n(lang, "settings.linux_privacy.title"),
-        "",
+        tr_l10n(lang, "settings.permissions.title"),
+        "", // 说明放在卡片正文里，标题行只留结论与动作
+        |ui| {
+            // 标题行右侧：重新检查（Tauri 的 Retry 按钮等价物）
+            refresh = ui
+                .add_enabled(
+                    !checking,
+                    egui::Button::new(if checking {
+                        tr_l10n(lang, "settings.permissions.checking")
+                    } else {
+                        tr_l10n(lang, "settings.linux_privacy.refresh")
+                    }),
+                )
+                .clicked();
+        },
         |ui| {
             privacy_note(ui, tr_l10n(lang, "settings.linux_privacy.desc"));
             ui.add_space(6.0);
@@ -2821,31 +2819,6 @@ fn privacy_access(
                     theme::INK_4
                 },
             );
-            let (input_text, input_color) = if checking {
-                (tr_l10n(lang, "settings.permissions.checking"), theme::INK_4)
-            } else {
-                match vm.linux_access.input {
-                    CheckState::Ready => (
-                        tr_l10n(lang, "settings.linux_privacy.input_ready"),
-                        theme::OK,
-                    ),
-                    CheckState::Unavailable => (
-                        tr_l10n(lang, "settings.linux_privacy.input_unavailable"),
-                        theme::WARN,
-                    ),
-                    CheckState::Unknown => (
-                        tr_l10n(lang, "settings.linux_privacy.not_checked"),
-                        theme::INK_4,
-                    ),
-                }
-            };
-            status_row(
-                ui,
-                tr_l10n(lang, "settings.linux_privacy.input_label"),
-                tr_l10n(lang, "settings.linux_privacy.input_desc"),
-                input_text,
-                input_color,
-            );
             let (network_text, network_color) = if checking {
                 (
                     tr_l10n(lang, "settings.permissions.checking").to_string(),
@@ -2873,13 +2846,43 @@ fn privacy_access(
             };
             status_row(
                 ui,
-                tr_l10n(lang, "settings.linux_privacy.network_label"),
+                tr_l10n(lang, "settings.permissions.network_label"),
                 tr_l10n(lang, "settings.linux_privacy.network_probe_desc"),
                 &network_text,
                 network_color,
             );
+            let (input_text, input_color) = if checking {
+                (tr_l10n(lang, "settings.permissions.checking"), theme::INK_4)
+            } else {
+                match vm.linux_access.input {
+                    CheckState::Ready => (
+                        tr_l10n(lang, "settings.linux_privacy.input_ready"),
+                        theme::OK,
+                    ),
+                    CheckState::Unavailable => (
+                        tr_l10n(lang, "settings.linux_privacy.input_unavailable"),
+                        theme::WARN,
+                    ),
+                    CheckState::Unknown => (
+                        tr_l10n(lang, "settings.linux_privacy.not_checked"),
+                        theme::INK_4,
+                    ),
+                }
+            };
+            status_row(
+                ui,
+                tr_l10n(lang, "settings.linux_privacy.input_label"),
+                tr_l10n(lang, "settings.linux_privacy.input_desc"),
+                input_text,
+                input_color,
+            );
         },
     );
+    if refresh {
+        actions.push(FrontendAction::SettingsAction(
+            SettingsActionField::RefreshLinuxAccess,
+        ));
+    }
     card(
         ui,
         tr_l10n(lang, "settings.linux_privacy.keyring_title"),

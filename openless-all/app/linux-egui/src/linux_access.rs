@@ -189,7 +189,16 @@ pub fn probe_session() -> (KeyringState, CheckState) {
 
 #[cfg(target_os = "linux")]
 fn input_interface_ready(xml: &str) -> bool {
-    let Ok(document) = roxmltree::Document::parse(xml) else {
+    // fcitx5 的 introspection XML 带 DOCTYPE（D-Bus 标准格式），roxmltree 默认
+    // 拒绝 DTD，解析失败会让这里永远返回 false——「权限与数据」页就会把正常的
+    // 插件报成「不可用」。必须显式允许 DTD。
+    let Ok(document) = roxmltree::Document::parse_with_options(
+        xml,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    ) else {
         return false;
     };
     document.descendants().any(|node| {
@@ -228,5 +237,24 @@ mod tests {
         assert!(!input_interface_ready("<node><interface name='org.fcitx.Fcitx.OpenLess1'><method name='CommitText'/></interface></node>"));
         assert!(!input_interface_ready("invalid XML"));
         assert!(input_interface_ready("<node><interface name='org.fcitx.Fcitx.OpenLess1'><method name='CommitText'/><method name='GetSelectionText'/></interface></node>"));
+    }
+
+    /// fcitx5 的 introspection 回复自带 DOCTYPE。解析器默认拒绝 DTD，一旦这里
+    /// 静默失败，「权限与数据」页就会把正常工作的插件报成「不可用」。
+    #[test]
+    fn the_standard_dbus_doctype_does_not_break_the_probe() {
+        let xml = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.fcitx.Fcitx.OpenLess1">
+    <method name="CommitText"><arg direction="in" type="s"/><arg direction="out" type="b"/></method>
+    <method name="GetSelectionText"><arg direction="out" type="s"/></method>
+    <signal name="DictationKeyEvent"><arg type="u"/><arg type="u"/><arg type="b"/></signal>
+  </interface>
+</node>"#;
+        assert!(
+            input_interface_ready(xml),
+            "a DOCTYPE-prefixed reply from fcitx5 must still be understood"
+        );
     }
 }
