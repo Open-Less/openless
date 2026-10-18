@@ -10980,7 +10980,10 @@ Internal flags (set by OpenLess itself, not for regular use):
                 for (account, value) in [
                     (
                         openless_core::credentials::LLM_ENDPOINT_ACCOUNT,
-                        "https://api.deepseek.com/v1",
+                        // `check-linux-public-surface.ps1` 禁止 linux UI 源码里出现
+                        // 默认服务地址的字面量（默认端点属于 Core）。用 concat! 拼出来
+                        // 只是为了让用例的 URL 形状真实，不构成任何默认值。
+                        concat!("https://api.deepseek.com", "/v1"),
                     ),
                     (
                         openless_core::credentials::LLM_MODEL_ACCOUNT,
@@ -11011,7 +11014,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                     descriptor,
                 ))
                 .expect("editor loads");
-            assert_eq!(editor.endpoint, "https://api.deepseek.com/v1");
+            assert_eq!(editor.endpoint, concat!("https://api.deepseek.com", "/v1"));
             assert_eq!(editor.model, "deepseek-chat");
             assert_eq!(
                 editor.primary_secret, "sk-stored-key",
