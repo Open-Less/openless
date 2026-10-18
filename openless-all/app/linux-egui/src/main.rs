@@ -4758,17 +4758,15 @@ mod linux_app {
                                         || (!form.protocol.extra_headers.is_empty()
                                             && form.protocol.extra_headers
                                                 != editor.protocol.extra_headers);
-                                    // Erase only acknowledged drafts, never text entered during a save.
-                                    if form.primary_secret == editor.primary_secret {
-                                        form.primary_secret.clear();
-                                    }
-                                    if form.secondary_secret == editor.secondary_secret {
-                                        form.secondary_secret.clear();
-                                    }
-                                    if form.protocol.extra_headers == editor.protocol.extra_headers
-                                    {
-                                        form.protocol.extra_headers.clear();
-                                    }
+                                    // 保存成功后**不要**清空密钥草稿。
+                                    //
+                                    // 这里原本会「擦掉已被确认的草稿」（`form.secret ==
+                                    // editor.secret` 时 clear），当时密钥从不回填，所以看不
+                                    // 出问题。现在编辑器会像 Tauri 的 `CredentialField` 一样
+                                    // 把已存的密钥读进输入框再打码：自动保存一次之后草稿被清
+                                    // 空，输入框就变空白、连掩码点都没有——用户看到的就是
+                                    // 「填进去的密钥几秒后被删掉了」。
+                                    // 密钥仍然只存在本地表单里，写盘路径不变。
                                 }
                                 self.frontend_vm.settings_notice = None;
                                 self.status = tr_l10n(self.lang, "status.channel_saved").to_owned();
@@ -10718,6 +10716,42 @@ Internal flags (set by OpenLess itself, not for regular use):
                 .unwrap()
                 .default_model
                 .is_empty());
+        }
+
+        /// 保存成功后，编辑器里的密钥不能被清空。
+        ///
+        /// 旧逻辑会「擦掉已被确认的草稿」，而自动保存是输入后 300ms 触发的：用户刚
+        /// 填好密钥，保存一回就把它从输入框里抹掉，看起来就是「填进去的密钥几秒后
+        /// 被删了」。密钥本身仍在保险库里，只是界面上连掩码点都没有。
+        #[test]
+        fn a_saved_secret_stays_in_the_editor() {
+            let mut app = fixture_app(true);
+            let editor = fixture_editor("custom");
+            app.frontend_vm.settings_open = true;
+            app.frontend_vm.services_view = 0;
+            let mut form = ProviderEditorForm::from_editor(&editor, app.lang);
+            form.primary_secret = "sk-typed-secret".into();
+            app.provider_editor_form = Some(form);
+            app.provider_editor = ProviderEditorState::Loaded(Box::new(editor.clone()));
+            app.draft_touched = true;
+            app.provider_save_pending = true;
+            // 宿主提交的正是这份草稿（`editor_from_form`），回执带回同一份快照。
+            let mut submitted = editor.clone();
+            submitted.primary_secret = "sk-typed-secret".into();
+            app.tx
+                .send(UiResult::ProviderSaved {
+                    editor: Box::new(submitted),
+                    result: Ok(()),
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert_eq!(
+                app.provider_editor_form
+                    .as_ref()
+                    .map(|form| form.primary_secret.clone()),
+                Some("sk-typed-secret".to_string()),
+                "a successful save must not erase the key the user just typed"
+            );
         }
 
         #[test]
