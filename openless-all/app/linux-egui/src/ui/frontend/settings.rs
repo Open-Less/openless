@@ -148,6 +148,20 @@ pub fn settings_page(
                                 egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
+                                    // 内容区白底（Tauri `ol-settings-surface` 白、左栏
+                                    // `--ol-settings-rail-bg` 灰）。整页统一用 CONTENT_BG
+                                    // 的话，白底上的灰色选中块会变成"灰底灰块"。
+                                    let column = ui.max_rect();
+                                    ui.painter().rect_filled(
+                                        column,
+                                        egui::CornerRadius {
+                                            nw: 0,
+                                            sw: 0,
+                                            ne: RADIUS,
+                                            se: RADIUS,
+                                        },
+                                        theme::SURFACE,
+                                    );
                                     ui.set_min_height(body_height);
                                     // 渠道编辑器 portal 进「AI 服务与模型」这一页的右栏，
                                     // 覆盖范围必须跟着分区走。
@@ -1191,13 +1205,17 @@ fn filter_group(
     ui.add_space(4.0);
     for (label, value) in options {
         let selected = active == *value;
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
-        let response = ui.interact(
-            rect,
-            ui.id().with(("shortcut-filter", label)),
-            egui::Sense::click(),
-        );
+        // id 由「分组标题 + 选项」经 `push_id` 派生：
+        //  * 不能跟着 `ui.id()` 走 —— 切换筛选会改变可见行数、连带改变 auto-id；
+        //  * 也不能只用选项文字 —— 分类与分配状态两组各有一个「全部」，
+        //    只按文字区分会让两个按钮抢同一个 id（日志里 `Second use of widget ID`）。
+        // 交互用 `allocate_exact_size` 自己返回的 response：对同一矩形再 `interact`
+        // 会出现两个控件抢同一次点击，点击就丢了。
+        let (rect, response) = ui
+            .push_id(("openless-shortcut-filter", title, *label), |ui| {
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click())
+            })
+            .inner;
         if selected {
             ui.painter()
                 .rect_filled(rect, egui::CornerRadius::same(7), theme::SURFACE_2);
@@ -1223,6 +1241,15 @@ fn filter_group(
             egui::FontId::proportional(13.0),
             if selected { theme::INK } else { theme::INK_2 },
         );
+        #[cfg(test)]
+        ui.ctx().data_mut(|data| {
+            // 按「分组 + 选项」记录：两组各有一个「全部」，只按文字存会互相覆盖。
+            let mut rects: std::collections::BTreeMap<(String, String), egui::Rect> = data
+                .get_temp(egui::Id::new("shortcut-filter-rects"))
+                .unwrap_or_default();
+            rects.insert((title.to_string(), (*label).to_string()), rect);
+            data.insert_temp(egui::Id::new("shortcut-filter-rects"), rects);
+        });
         if response.clicked() {
             on_select(*value);
         }
@@ -1294,7 +1321,7 @@ fn shortcut_recorder_row(
                     );
                     let response = ui.interact(
                         rect,
-                        ui.id().with(("shortcut-record", row.field)),
+                        egui::Id::new(("openless-shortcut-record", format!("{:?}", row.field))),
                         egui::Sense::click(),
                     );
                     if assigned {
@@ -1374,7 +1401,7 @@ fn style_pack_recorder_row(
                     );
                     let response = ui.interact(
                         rect,
-                        ui.id().with(("style-shortcut-record", index)),
+                        egui::Id::new(("openless-style-shortcut-record", index)),
                         egui::Sense::click(),
                     );
                     if !row.hotkey.trim().is_empty() {
@@ -1511,7 +1538,11 @@ fn bordered_icon_button(
     salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
-    let response = ui.interact(rect, ui.id().with(salt), egui::Sense::click());
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("openless-icon-button", format!("{salt:?}"))),
+        egui::Sense::click(),
+    );
     let fill = if response.hovered() {
         theme::SURFACE_2
     } else {

@@ -249,6 +249,12 @@ pub fn install(ctx: &egui::Context) {
                 fonts
                     .families
                     .insert(egui::FontFamily::Name(MEDIUM_FAMILY.into()), chain);
+                // 界面正文默认也用 Medium 面：Regular 的 Noto Sans CJK 在 11–13px
+                // 时笔画又细又尖（用户反馈"不圆润"），Tauri 那边是 font-weight 500。
+                // egui 没有字重轴，只能换面；标题仍靠字号/颜色区分层级。
+                if let Some(chain) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                    chain.insert(0, MEDIUM_FACE.to_owned());
+                }
                 MEDIUM_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }

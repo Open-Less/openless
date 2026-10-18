@@ -147,9 +147,14 @@ fn rasterize_mask(source: &str) -> Option<egui::ColorImage> {
     );
     // tiny-skia returns premultiplied white; ColorImage expects straight RGBA.
     // SVGs contain only white strokes, so opacity is the entire mask.
+    //
+    // 覆盖率做一次 0.75 次幂：Lucide 是 24px 下 2px 描边，缩到 13px 只剩约 1px，
+    // 边缘半透明像素一多，图标看着又细又尖。抬一下 alpha 让笔画更饱满、边缘更圆。
     let mut pixels = Vec::with_capacity(ICON_PIXELS * ICON_PIXELS * 4);
     for pixel in pixmap.data().as_chunks::<4>().0 {
-        pixels.extend_from_slice(&[255, 255, 255, pixel[3]]);
+        let alpha = pixel[3] as f32 / 255.0;
+        let lifted = (alpha.powf(0.75) * 255.0).round().clamp(0.0, 255.0) as u8;
+        pixels.extend_from_slice(&[255, 255, 255, lifted]);
     }
     Some(egui::ColorImage::from_rgba_unmultiplied(
         [ICON_PIXELS, ICON_PIXELS],

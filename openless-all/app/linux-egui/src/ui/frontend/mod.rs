@@ -1067,6 +1067,97 @@ mod tests {
         )));
     }
 
+    /// 回归：连点筛选必须生效，尤其要从某个分类点回「全部」。
+    /// 之前筛选按钮的 id 跟着 `ui.id()` 走，切换分类会改变 auto-id，
+    /// 点击落到别的控件上，表现就是「点全部没反应」。
+    #[test]
+    fn shortcut_filters_switch_and_return_to_all() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            ..Default::default()
+        };
+        let click = |ctx: &egui::Context, vm: &mut FrontendViewModel, group: &str, label: &str| {
+            let key = (group.to_string(), label.to_string());
+            let rect = ctx
+                .data(|data| {
+                    data.get_temp::<std::collections::BTreeMap<(String, String), egui::Rect>>(
+                        egui::Id::new("shortcut-filter-rects"),
+                    )
+                })
+                .and_then(|rects| rects.get(&key).copied());
+            // 先在上一帧里找到按钮位置，再按下并抬起。
+            let rect = rect.unwrap_or_else(|| panic!("no rect painted for {group}/{label}"));
+            let pos = rect.center();
+            for events in [
+                vec![egui::Event::PointerMoved(pos)],
+                vec![
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+            ] {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    events,
+                    ..Default::default()
+                });
+                render(ctx, vm, &mut Vec::new());
+                let _ = crate::ui::frontend::end_pass(ctx);
+            }
+        };
+        // 注意：必须在**同一个 Context** 里渲染 —— 筛选状态存在 egui 的临时记忆里，
+        // 换一个 Context 就等于换了份状态（`painted_settings_lines` 自带 Context，
+        // 这里不能用它）。
+        let lines = |ctx: &egui::Context, vm: &mut FrontendViewModel| -> Vec<String> {
+            let mut out = Vec::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                render(ctx, vm, &mut Vec::new());
+                out = painted_text(&crate::ui::frontend::end_pass(ctx))
+                    .lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            }
+            out
+        };
+        let all_rows = lines(&ctx, &mut vm);
+        // 用行标签而不是「翻译」二字：左侧导航栏也有「翻译」，会误判。
+        assert!(all_rows.iter().any(|line| line == "翻译修饰键"));
+
+        // 切到「风格」：只剩切风格那条 + 添加动作。
+        click(&ctx, &mut vm, "分类", "风格");
+        let filtered = lines(&ctx, &mut vm);
+        assert!(
+            !filtered.iter().any(|line| line == "翻译修饰键"),
+            "风格分类不该包含翻译行: {filtered:?}"
+        );
+
+        // 关键：点回「全部」，所有行必须回来。
+        click(&ctx, &mut vm, "分类", "全部");
+        let back = lines(&ctx, &mut vm);
+        assert!(
+            back.iter().any(|line| line == "翻译修饰键"),
+            "点『全部』必须恢复完整列表: {back:?}"
+        );
+    }
+
     /// Tauri beta 4+ 的快捷键页：录制器内联（键帽 + ↻ + ✕），
     /// 不再有 chevron 菜单；每行都要画出重置/清空两个图标按钮。
     #[test]
