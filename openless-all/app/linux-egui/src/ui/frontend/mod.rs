@@ -1067,6 +1067,51 @@ mod tests {
         )));
     }
 
+    /// 录制器（键帽 + ↻ + ✕）必须贴内容区右边缘：之前用 `allocate_ui_with_layout`
+    /// 的两列，`top_down` 会按内容收缩，标签列只占文字宽，录制器停在中途。
+    #[test]
+    fn shortcut_recorder_hugs_the_right_edge() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            ..Default::default()
+        };
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1321.0, 856.0));
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let dictation = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.shortcuts.start_stop",
+        );
+        let (row, recorder) = ctx
+            .data(|data| {
+                data.get_temp::<(egui::Rect, egui::Rect)>(egui::Id::new((
+                    "shortcut-row-rects",
+                    dictation,
+                )))
+            })
+            .expect("the dictation row must publish its rects");
+        // 录制器右边缘 == 行的右边缘（也就是内容区右边缘）。
+        assert!(
+            (recorder.right() - row.right()).abs() <= 1.0,
+            "the recorder must hug the right edge: row={row:?} recorder={recorder:?}"
+        );
+        // 录制器有固定上限，不能把标签区吃掉。
+        assert!(
+            (recorder.width() - 260.0).abs() <= 1.0,
+            "the recorder column must cap at 260: {recorder:?}"
+        );
+    }
+
     /// 回归：连点筛选必须生效，尤其要从某个分类点回「全部」。
     /// 之前筛选按钮的 id 跟着 `ui.id()` 走，切换分类会改变 auto-id，
     /// 点击落到别的控件上，表现就是「点全部没反应」。
