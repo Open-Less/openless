@@ -519,6 +519,10 @@ pub enum SettingsField {
     TestingFeatures,
     LessComputer,
     Multimodal,
+    /// 选区助手：语音编辑（口述指令改选区）开关（Tauri `selectionVoiceEnabled`）。
+    SelectionVoiceEnabled,
+    /// 选区助手：自动判断「提问 vs 编辑」（Tauri `selectionVoiceIntentMode`）。
+    SelectionVoiceAutoIntent,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
@@ -539,6 +543,8 @@ pub enum SettingsComboField {
     PipelineMode,
     /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
     CodingAgentProvider,
+    /// 选区助手：编辑方案格式（0 = XML，1 = JSON）。
+    SelectionVoicePlanFormat,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
     CodingAgentPermission,
 }
@@ -558,6 +564,10 @@ pub enum SettingsTextField {
     CodingAgentModel,
     CodingAgentWorkdir,
     CodingAgentExe,
+    /// 选区助手：额外问句线索（每行一个）。
+    SelectionVoiceKeywords,
+    /// 选区助手：编辑方案系统提示词（留空 = 用风格包 / 内置默认）。
+    SelectionVoiceSystemPrompt,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
@@ -566,6 +576,8 @@ pub enum SettingsActionField {
     RefreshLinuxAccess,
     /// 试听录音提示音（Tauri `audioCuePreview` 按钮）。
     PreviewAudioCue,
+    /// 恢复默认的编辑方案系统提示词（Tauri `editSystemPromptReset`）。
+    ResetSelectionVoicePrompt,
     ExportDiagnostics,
     CopyCertFingerprint,
     OpenGitHub,
@@ -1162,6 +1174,16 @@ pub struct SettingsFields {
     pub audio_recording_max_entries: String,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     pub selection_polish_delivery: usize,
+    /// 选区助手：语音编辑开关。
+    pub selection_voice_enabled: bool,
+    /// 选区助手：自动判断意图。
+    pub selection_voice_auto_intent: bool,
+    /// 选区助手：额外问句线索，一行一条。
+    pub selection_voice_keywords: String,
+    /// 选区助手：编辑方案格式（0 = XML，1 = JSON）。
+    pub selection_voice_plan_format: usize,
+    /// 选区助手：编辑方案系统提示词。
+    pub selection_voice_system_prompt: String,
     pub activity_heatmap: bool,
     pub system_proxy: bool,
     pub testing_features: bool,
@@ -1213,6 +1235,11 @@ impl Default for SettingsFields {
             polish_skip_max_chars: String::new(),
             audio_recording_max_entries: String::new(),
             selection_polish_delivery: 0,
+            selection_voice_enabled: false,
+            selection_voice_auto_intent: false,
+            selection_voice_keywords: String::new(),
+            selection_voice_plan_format: 0,
+            selection_voice_system_prompt: String::new(),
             activity_heatmap: true,
             system_proxy: false,
             testing_features: false,

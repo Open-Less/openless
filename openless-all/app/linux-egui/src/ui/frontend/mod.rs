@@ -1192,8 +1192,13 @@ mod tests {
             };
             let mut actions = Vec::new();
             for _ in 0..2 {
+                // 视口放宽到整页高度，否则 ScrollArea 只渲染首屏，检查不到下面
+                // 的分区（这条测试因此可能漏掉真正的原始 key）。
                 ctx.begin_pass(egui::RawInput {
-                    screen_rect: Some(viewport()),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 4000.0),
+                    )),
                     ..Default::default()
                 });
                 render(&ctx, &mut vm, &mut actions);
@@ -1206,6 +1211,112 @@ mod tests {
                 assert!(raw.is_empty(), "{section:?} painted raw i18n keys: {raw:?}");
             }
         }
+    }
+
+    /// 选区助手卡片的行为设置只在「语音编辑」开启后出现（对齐 Tauri：
+    /// 自动判断意图 / 线索词 / 编辑方案格式 / 系统提示词都在 voiceEnabled 里）。
+    #[test]
+    fn selection_assistant_rows_follow_the_voice_edit_toggle() {
+        use openless_linux_egui::{tr_l10n, Lang};
+        let ctx = egui::Context::default();
+        let render_section = |voice: bool, auto_intent: bool| -> String {
+            let mut vm = FrontendViewModel {
+                lang: Lang::ZhCn,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: super::view_model::SettingsSection::General,
+                ..Default::default()
+            };
+            vm.settings.selection_voice_enabled = voice;
+            vm.settings.selection_voice_auto_intent = auto_intent;
+            let mut out = String::new();
+            for _ in 0..2 {
+                // 「录音与输入」很长，选区助手在首屏之外；视口放大到能容纳整页，
+                // 否则 ScrollArea 会把卡片裁掉（不是没画，是裁了）。
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 4000.0),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let output = crate::ui::frontend::end_pass(&ctx);
+                fn collect(shape: &egui::Shape, out: &mut String) {
+                    match shape {
+                        egui::Shape::Text(text) => {
+                            out.push_str(text.galley.text());
+                            out.push('\n');
+                        }
+                        egui::Shape::Vec(shapes) => {
+                            for shape in shapes {
+                                collect(shape, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if voice {
+                    // 只在第二轮（滚动到分区后）收集，避免重复。
+                }
+                let mut text = String::new();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut text);
+                }
+                out = text;
+            }
+            out
+        };
+        let auto_intent = tr_l10n(Lang::ZhCn, "settings.selection_workspace.auto_intent");
+        let plan_format = tr_l10n(Lang::ZhCn, "settings.selection_workspace.edit_plan_format");
+        let keywords = tr_l10n(Lang::ZhCn, "settings.selection_workspace.edit_keywords");
+        let prompt = tr_l10n(
+            Lang::ZhCn,
+            "settings.selection_workspace.edit_system_prompt",
+        );
+        let voice_enable = tr_l10n(Lang::ZhCn, "settings.selection_workspace.voice_enable");
+
+        let off = render_section(false, false);
+        assert!(
+            off.contains(voice_enable),
+            "the voice-edit toggle must always be visible: {off}"
+        );
+        assert!(
+            !off.contains(auto_intent),
+            "auto-intent must stay hidden while voice edit is off: {off}"
+        );
+        assert!(
+            !off.contains(plan_format),
+            "edit plan format must stay hidden while voice edit is off"
+        );
+        assert!(
+            !off.contains(prompt),
+            "the system prompt must stay hidden while voice edit is off"
+        );
+
+        let on = render_section(true, false);
+        assert!(
+            on.contains(auto_intent),
+            "auto-intent must appear once voice edit is on"
+        );
+        assert!(
+            on.contains(keywords),
+            "keyword cues must appear while auto-intent is off"
+        );
+        assert!(
+            on.contains(plan_format),
+            "edit plan format must appear once voice edit is on"
+        );
+        assert!(
+            on.contains(prompt),
+            "the system prompt must appear once voice edit is on"
+        );
+
+        let auto = render_section(true, true);
+        assert!(
+            !auto.contains(keywords),
+            "keyword cues must hide once auto-intent is on"
+        );
     }
 
     /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。

@@ -7250,6 +7250,134 @@ pub const CATALOG: &[Msg] = &[
             "로그인 시 OpenLess 자동 시작.",
         ),
     },
+    Msg {
+        key: "settings.selection_workspace.auto_intent",
+        text: row(
+            "自动判断意图",
+            "自動判斷意圖",
+            "Auto-classify intent",
+            "意図を自動判定",
+            "의도 자동 판별",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.auto_intent_desc",
+        text: row(
+            "开启后默认用服务配置的模型判断问句 vs 编辑；模型不可用或解析失败时回退到问句启发式。",
+            "開啟後預設用服務配置的模型判斷問句 vs 編輯；模型不可用或解析失敗時回退到問句啟發式。",
+            "When on, the configured model classifies question vs edit by default; falls back to question-word heuristics if the model fails.",
+            "オン時は設定モデルが質問/編集を判定。モデル失敗時のみ？/疑問語ヒューリスティックにフォールバック。",
+            "켜면 설정된 모델이 질문/편집을 판별합니다. 모델 실패 시에만 의문사 휴리스틱으로 폴백합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_keywords",
+        text: row(
+            "额外问句线索",
+            "額外問句線索",
+            "Extra question cues",
+            "追加の疑問手がかり",
+            "추가 의문 단서",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_keywords_desc",
+        text: row(
+            "关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。",
+            "關閉自動判斷時生效；每行一個，指令含則視為提問，否則仍按問句啟發式判定。",
+            "Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.",
+            "自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。",
+            "자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_plan_format",
+        text: row(
+            "编辑方案格式",
+            "編輯方案格式",
+            "Edit plan format",
+            "編集プラン形式",
+            "편집 계획 형식",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_plan_format_desc",
+        text: row(
+            "模型优先按所选格式输出 EditPlan；解析失败时再尝试另一种格式。",
+            "模型優先按所選格式輸出 EditPlan；解析失敗時再嘗試另一種格式。",
+            "Prefer this EditPlan format from the model; if parsing fails, try the other format.",
+            "モデルはこの形式の EditPlan を優先出力。解析失敗時はもう一方を試します。",
+            "모델이 선택한 형식으로 EditPlan을 우선 출력합니다. 파싱 실패 시 다른 형식을 시도합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_plan_format_json",
+        text: row("JSON", "JSON", "JSON", "JSON", "JSON"),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_plan_format_xml",
+        text: row("XML", "XML", "XML", "XML", "XML"),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_system_prompt",
+        text: row(
+            "编辑方案系统提示词",
+            "編輯方案系統提示詞",
+            "Edit plan system prompt",
+            "編集プランのシステムプロンプト",
+            "편집 계획 시스템 프롬프트",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_system_prompt_desc",
+        text: row(
+            "覆盖风格包 / 内置默认的 EditPlan system prompt。留空则按「自定义 → 风格包 → 内置默认」回退。",
+            "覆蓋風格包 / 內建預設的 EditPlan system prompt。留空則按「自訂 → 風格包 → 內建預設」回退。",
+            "Overrides the style-pack / built-in EditPlan system prompt. Leave empty to fall back: custom → pack → built-in.",
+            "スタイルパック / 内蔵デフォルトの EditPlan システムプロンプトを上書き。空なら カスタム → パック → 内蔵 の順でフォールバック。",
+            "스타일 팩 / 내장 기본 EditPlan 시스템 프롬프트를 덮어씁니다. 비우면 사용자 지정 → 팩 → 내장 순으로 폴백합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_system_prompt_reset",
+        text: row(
+            "恢复默认",
+            "恢復預設",
+            "Reset to default",
+            "デフォルトに戻す",
+            "기본값으로 재설정",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.voice_delivery_desc",
+        text: row(
+            "语音编辑完成后：直接替换选区，或在华词面板中预览后再确认。",
+            "語音編輯完成後：直接替換選區，或在華詞面板中預覽後再確認。",
+            "After voice edit: replace selection directly, or preview in Ask panel then confirm.",
+            "音声編集後：選択範囲を直接置換するか、Ask パネルで確認してから置換します。",
+            "음성 편집 후: 선택 영역을 바로 교체하거나 Ask 패널에서 확인 후 교체합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.voice_enable_desc",
+        text: row(
+            "与上方同一快捷键；录音方式跟随全局设置（当前：{}）。",
+            "與上方同一快捷鍵；錄音方式跟隨全域設定（目前：{}）。",
+            "Uses the same shortcut above; recording follows global settings (current: {}).",
+            "上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{}）。",
+            "위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {}).",
+        ),
+    },
+    Msg {
+        key: "settings.selection_workspace.edit_system_prompt_placeholder",
+        text: row(
+            "留空 = 使用风格包或内置默认",
+            "留空 = 使用風格包或內建預設",
+            "Empty = use style pack or built-in default",
+            "空 = スタイルパックまたは内蔵デフォルト",
+            "비움 = 스타일 팩 또는 내장 기본값",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

@@ -5634,6 +5634,21 @@ mod linux_app {
                     openless_core::shared_types::SelectionPolishOutputMode::DirectReplace => 0,
                     openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm => 1,
                 };
+                // 选区助手（Tauri SelectionWorkspaceSection）
+                s.selection_voice_enabled = prefs.selection_voice_enabled;
+                s.selection_voice_auto_intent = matches!(
+                    prefs.selection_voice_intent_mode,
+                    openless_core::shared_types::SelectionVoiceIntentMode::Auto
+                );
+                s.selection_voice_plan_format = match prefs.selection_voice_edit_plan_format {
+                    openless_core::edit_plan::EditPlanFormat::Json => 1,
+                    openless_core::edit_plan::EditPlanFormat::Xml => 0,
+                };
+                if hydrate_text {
+                    s.selection_voice_keywords = prefs.selection_voice_edit_keywords.join("\n");
+                    s.selection_voice_system_prompt =
+                        prefs.selection_voice_edit_system_prompt.clone();
+                }
                 // 多模态 / 平台能力：决定 AI 服务页的视图与更新控件。
                 // 远程输入的实时状态：配对码 / 访问网址 / 证书指纹。
                 if let Some((status, pin)) = &self.remote_access {

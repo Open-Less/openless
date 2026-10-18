@@ -816,15 +816,38 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         },
     );
 
-    // 选择与工作区（Tauri `SelectionWorkspaceSection`）。在「录音与输入」标签页里
-    // 它只画「润色送达」一行：语音编辑在 Linux 上不支持（supports_voice_edit=false），
-    // 润色快捷键已经移到快捷键页。送达方式本身是活的——core 的 selection_service
-    // 按它决定直接替换还是先给预览。
+    // 选区助手（Tauri `SelectionWorkspaceSection`，录音与输入标签页里
+    // showShortcut=false：润色快捷键在快捷键页，这里只放行为设置）。
+    //
+    // Linux 上没有独立的 Voice Edit 面板（supports_voice_edit=false），所以不画
+    // Tauri 的「语音编辑 + 打开面板」那一行；但语音编辑本身在 Linux 是活的
+    // （core 的 selection_voice_service 按 selection_voice_enabled 决定口述改选区），
+    // 所以开关、意图判定、编辑方案这些设置项都要给入口。
     card_group(
         ui,
         tr_l10n(lang, "settings.selection_workspace.title"),
         |ui| {
             hint_line(ui, tr_l10n(lang, "settings.selection_workspace.hint"));
+            let recording_label = if vm.dictation_hotkey.trim().is_empty() {
+                recording_mode_hint(lang, vm.settings.recording_mode)
+            } else {
+                vm.dictation_hotkey.clone()
+            };
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.selection_workspace.voice_enable"),
+                &fmt_l10n(
+                    lang,
+                    "settings.selection_workspace.voice_enable_desc",
+                    &[&recording_label],
+                ),
+                vm.settings.selection_voice_enabled,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::SelectionVoiceEnabled,
+                    ));
+                },
+            );
             let delivery = [
                 tr_l10n(lang, "settings.selection_polish.direct_replace"),
                 tr_l10n(lang, "settings.selection_polish.preview_confirm"),
@@ -832,7 +855,11 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             segmented_row(
                 ui,
                 tr_l10n(lang, "settings.selection_workspace.polish_delivery"),
-                "",
+                if vm.settings.selection_voice_enabled {
+                    tr_l10n(lang, "settings.selection_workspace.voice_delivery_desc")
+                } else {
+                    ""
+                },
                 &delivery,
                 vm.settings.selection_polish_delivery.min(1),
                 |val| {
@@ -842,6 +869,87 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            if vm.settings.selection_voice_enabled {
+                toggle_row(
+                    ui,
+                    tr_l10n(lang, "settings.selection_workspace.auto_intent"),
+                    tr_l10n(lang, "settings.selection_workspace.auto_intent_desc"),
+                    vm.settings.selection_voice_auto_intent,
+                    || {
+                        actions.push(FrontendAction::SettingsToggle(
+                            SettingsField::SelectionVoiceAutoIntent,
+                        ));
+                    },
+                );
+                // 关掉自动判断才用得上线索词（Tauri 同样只在此时渲染）。
+                if !vm.settings.selection_voice_auto_intent {
+                    text_area_row(
+                        ui,
+                        tr_l10n(lang, "settings.selection_workspace.edit_keywords"),
+                        tr_l10n(lang, "settings.selection_workspace.edit_keywords_desc"),
+                        &mut vm.settings.selection_voice_keywords,
+                        "",
+                        4,
+                        |text| {
+                            actions.push(FrontendAction::SettingsText(
+                                SettingsTextField::SelectionVoiceKeywords,
+                                text.to_owned(),
+                            ));
+                        },
+                    );
+                }
+                let formats = [
+                    tr_l10n(lang, "settings.selection_workspace.edit_plan_format_xml"),
+                    tr_l10n(lang, "settings.selection_workspace.edit_plan_format_json"),
+                ];
+                segmented_row(
+                    ui,
+                    tr_l10n(lang, "settings.selection_workspace.edit_plan_format"),
+                    tr_l10n(lang, "settings.selection_workspace.edit_plan_format_desc"),
+                    &formats,
+                    vm.settings.selection_voice_plan_format.min(1),
+                    |val| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::SelectionVoicePlanFormat,
+                            val,
+                        ));
+                    },
+                );
+                text_area_row(
+                    ui,
+                    tr_l10n(lang, "settings.selection_workspace.edit_system_prompt"),
+                    tr_l10n(lang, "settings.selection_workspace.edit_system_prompt_desc"),
+                    &mut vm.settings.selection_voice_system_prompt,
+                    tr_l10n(
+                        lang,
+                        "settings.selection_workspace.edit_system_prompt_placeholder",
+                    ),
+                    6,
+                    |text| {
+                        actions.push(FrontendAction::SettingsText(
+                            SettingsTextField::SelectionVoiceSystemPrompt,
+                            text.to_owned(),
+                        ));
+                    },
+                );
+                let reset = tr_l10n(
+                    lang,
+                    "settings.selection_workspace.edit_system_prompt_reset",
+                );
+                ui.horizontal(|ui| {
+                    ui.add_space(0.0);
+                    let width = layout::text_width(ui, reset, 12.0) + 20.0;
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
+                    if layout::action_button(ui, rect, reset, None, layout::ButtonKind::Ghost)
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::SettingsAction(
+                            SettingsActionField::ResetSelectionVoicePrompt,
+                        ));
+                    }
+                });
+            }
         },
     );
 
@@ -5462,6 +5570,35 @@ pub(super) fn text_edit_row(
             hint,
             ui.available_width().min(300.0),
             false,
+        );
+        if response.gained_focus() {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
+        if response.changed() {
+            on_change(value);
+        }
+    });
+}
+
+/// 多行文本行（Tauri 的 textarea 设置项：线索词、系统提示词）。
+fn text_area_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    desc: &str,
+    value: &mut String,
+    hint: &str,
+    rows: usize,
+    on_change: impl FnOnce(&str),
+) {
+    row_desc(ui, label, desc, |ui| {
+        let width = ui.available_width().clamp(220.0, 520.0);
+        let response = ui.add(
+            egui::TextEdit::multiline(value)
+                .id(egui::Id::new(("openless-settings-textarea", label)))
+                .desired_rows(rows)
+                .desired_width(width)
+                .hint_text(egui::RichText::new(hint).size(12.0).color(theme::INK_4))
+                .font(egui::TextStyle::Body),
         );
         if response.gained_focus() {
             response.scroll_to_me(Some(egui::Align::Center));

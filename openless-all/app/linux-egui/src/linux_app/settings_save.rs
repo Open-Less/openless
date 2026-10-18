@@ -184,6 +184,20 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::LessComputer => {
                 preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
             }
+            frontend::view_model::SettingsField::SelectionVoiceEnabled => {
+                preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
+            }
+            frontend::view_model::SettingsField::SelectionVoiceAutoIntent => {
+                // Tauri 的开关只有两态：当前是 Auto 就关掉（退回启发式），否则打开。
+                preferences.selection_voice_intent_mode = if matches!(
+                    preferences.selection_voice_intent_mode,
+                    openless_core::shared_types::SelectionVoiceIntentMode::Auto
+                ) {
+                    openless_core::shared_types::SelectionVoiceIntentMode::Heuristic
+                } else {
+                    openless_core::shared_types::SelectionVoiceIntentMode::Auto
+                };
+            }
             frontend::view_model::SettingsField::TestingFeatures => {
                 preferences.testing_features_enabled = !preferences.testing_features_enabled;
             }
@@ -290,6 +304,13 @@ impl OpenLessEguiApp {
                 preferences.selection_polish_output_mode = match index {
                     1 => openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm,
                     _ => openless_core::shared_types::SelectionPolishOutputMode::DirectReplace,
+                };
+            }
+            frontend::view_model::SettingsComboField::SelectionVoicePlanFormat => {
+                preferences.selection_voice_edit_plan_format = if index == 1 {
+                    openless_core::edit_plan::EditPlanFormat::Json
+                } else {
+                    openless_core::edit_plan::EditPlanFormat::Xml
                 };
             }
             frontend::view_model::SettingsComboField::PipelineMode => {
@@ -605,6 +626,22 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.coding_agent_exe = text;
             }
+            frontend::view_model::SettingsTextField::SelectionVoiceKeywords => {
+                // Tauri：一行一条，空行丢弃。
+                preferences.selection_voice_edit_keywords = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect();
+
+                self.frontend_vm.settings.selection_voice_keywords = text;
+            }
+            frontend::view_model::SettingsTextField::SelectionVoiceSystemPrompt => {
+                preferences.selection_voice_edit_system_prompt = text.clone();
+
+                self.frontend_vm.settings.selection_voice_system_prompt = text;
+            }
             frontend::view_model::SettingsTextField::HistoryMaxEntries => {
                 preferences.history_max_entries = text
                     .trim()
@@ -704,6 +741,13 @@ impl OpenLessEguiApp {
                         );
                     }
                 }
+            }
+            frontend::view_model::SettingsActionField::ResetSelectionVoicePrompt => {
+                // 留空 = 按「自定义 → 风格包 → 内置默认」回退。
+                if let Some(preferences) = self.preferences.as_mut() {
+                    preferences.selection_voice_edit_system_prompt = String::new();
+                }
+                self.frontend_vm.settings.selection_voice_system_prompt = String::new();
             }
             frontend::view_model::SettingsActionField::PreviewAudioCue => {
                 // 与真实录音开始时同一段合成提示音（Tauri `playRecordStartCue`）。
