@@ -7354,15 +7354,6 @@ mod linux_app {
                     frontend::view_model::FrontendAction::ShortcutReset(field) => {
                         self.apply_shortcut_reset(field);
                     }
-                    frontend::view_model::FrontendAction::ShortcutsQuery(query) => {
-                        self.frontend_vm.shortcuts_query = query;
-                    }
-                    frontend::view_model::FrontendAction::ShortcutsCategory(category) => {
-                        self.frontend_vm.shortcuts_category = category;
-                    }
-                    frontend::view_model::FrontendAction::ShortcutsStatus(status) => {
-                        self.frontend_vm.shortcuts_status = status;
-                    }
                     frontend::view_model::FrontendAction::StyleHotkeyDraft(open) => {
                         self.frontend_vm.style_hotkey_draft_open = open;
                         if open {

@@ -242,12 +242,6 @@ pub enum FrontendAction {
     ShortcutDisable(ShortcutField),
     /// 恢复该快捷键的出厂默认绑定（Tauri 录制器里的 ↻）。
     ShortcutReset(ShortcutField),
-    /// 快捷键页的搜索框（Tauri `ShortcutsSection` 的 toolbar）。
-    ShortcutsQuery(String),
-    /// 分类筛选：0 全部 / 1 语音与文本 / 2 风格 / 3 系统。
-    ShortcutsCategory(u8),
-    /// 分配状态筛选：0 全部 / 1 已分配 / 2 未分配。
-    ShortcutsStatus(u8),
     /// 风格直达：开关草稿行 / 选择风格包 / 移除整行。
     StyleHotkeyDraft(bool),
     StyleHotkeyDraftPack(usize),
@@ -893,13 +887,6 @@ pub struct FrontendViewModel {
     pub hotkeys_supported: bool,
     /// 展开编辑菜单的快捷键行（`None` = 都收起）。
     pub shortcut_menu: Option<ShortcutField>,
-    /// 快捷键页的搜索与筛选（纯 UI 状态，不落盘）。
-    #[serde(default)]
-    pub shortcuts_query: String,
-    #[serde(default)]
-    pub shortcuts_category: u8,
-    #[serde(default)]
-    pub shortcuts_status: u8,
     /// 正在录入按键的快捷键行（`None` = 未在录入）。
     pub shortcut_recording: Option<ShortcutField>,
     /// 「＋ 添加风格快捷键」草稿行是否打开。
@@ -1117,9 +1104,6 @@ impl Default for FrontendViewModel {
             multimodal_view: false,
             hotkeys_supported: true,
             shortcut_menu: None,
-            shortcuts_query: String::new(),
-            shortcuts_category: 0,
-            shortcuts_status: 0,
             shortcut_recording: None,
             style_hotkey_draft_open: false,
             style_hotkey_draft_pack: 0,

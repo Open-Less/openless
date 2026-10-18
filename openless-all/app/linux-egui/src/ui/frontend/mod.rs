@@ -1521,9 +1521,8 @@ mod tests {
                 })
                 .expect("the settings page still publishes its surface rect");
             // 整页：surface 就是内容区本身，不再缩成居中卡片。
-            // 整页但内缩 8px：圆角才落在页面底色上。
-            let body = layout::body_rect(&ctx);
-            assert_eq!(card, body.shrink(8.0));
+            // 整页贴满内容区（不再内缩，避免多出白边）。
+            assert_eq!(card, layout::body_rect(&ctx));
             let _ = end_pass(&ctx);
         }
     }
@@ -2600,10 +2599,10 @@ mod tests {
                     data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
                 })
                 .expect("the settings page must publish its surface rect");
-            let expected = body.shrink(8.0);
+            let expected = body;
             assert!(
                 (page.min - expected.min).length() <= 1.5,
-                "the settings sheet must stay inset by its corner radius at {width}x{height}: page={page:?} body={body:?}"
+                "the settings sheet must start at the content origin at {width}x{height}: page={page:?} body={body:?}"
             );
             assert!(
                 (page.size() - expected.size()).length() <= 1.5,
