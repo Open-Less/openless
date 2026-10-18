@@ -762,7 +762,12 @@ mod tests {
             }),
             ..Default::default()
         };
-        let id = egui::Id::new(("openless-settings-provider-field", "Name".to_string()));
+        // 字段缓冲的键含渠道 id（不同渠道的同一字段互不串味）。
+        let id = egui::Id::new((
+            "openless-settings-provider-field",
+            "channel",
+            "Name".to_string(),
+        ));
         let mut painted = String::new();
         for _ in 0..2 {
             ctx.begin_pass(egui::RawInput {
@@ -1319,6 +1324,125 @@ mod tests {
         assert!(
             !auto.contains(keywords),
             "keyword cues must hide once auto-intent is on"
+        );
+    }
+
+    /// 渠道编辑器的输入框草稿按「渠道 + 字段」保存，并在宿主值变化时重新播种。
+    ///
+    /// 早期只按字段类型做 key：编辑器第一次渲染时 `value` 还是空的，这个空缓冲会
+    /// 被每帧写回，之后加载出来的 endpoint / model 再也进不了输入框——表现就是
+    /// 「编辑已有渠道读不到配置」。同一份缓冲还会在渠道之间串味。
+    #[test]
+    fn provider_editor_fields_reseed_when_the_channel_config_arrives() {
+        let ctx = egui::Context::default();
+        let render_services = |vm: &mut FrontendViewModel| -> String {
+            let mut text = String::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 1400.0),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, vm, &mut Vec::new());
+                let output = crate::ui::frontend::end_pass(&ctx);
+                fn collect(shape: &egui::Shape, out: &mut String) {
+                    match shape {
+                        egui::Shape::Text(text) => {
+                            out.push_str(text.galley.text());
+                            out.push('\n');
+                        }
+                        egui::Shape::Vec(shapes) => {
+                            for shape in shapes {
+                                collect(shape, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                text.clear();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut text);
+                }
+            }
+            text
+        };
+        let base = || FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Services,
+            services_view: 0,
+            ..Default::default()
+        };
+        let editor = |channel_id: &str, endpoint: &str, model: &str| {
+            super::view_model::SettingsProviderEditor {
+                channel_id: channel_id.to_string(),
+                is_asr: false,
+                is_draft: false,
+                provider: "DeepSeek".into(),
+                provider_type: "deepseek".into(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
+                name: channel_id.to_string(),
+                endpoint: endpoint.to_string(),
+                model: model.to_string(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: true,
+                protocol: Default::default(),
+                busy: false,
+            }
+        };
+
+        // 1) 先开一个「添加渠道」草稿（字段是空的）——用户先新建再编辑已有的路径。
+        let mut vm = base();
+        let mut draft = editor("new-channel", "", "");
+        draft.is_draft = true;
+        vm.provider_editor = Some(draft);
+        let painted = render_services(&mut vm);
+        assert!(painted.contains("new-channel") || painted.contains("DeepSeek"));
+        // 编辑器还没加载完时面板不渲染，但字段缓冲不应因此被"锁定"为空。
+        vm.provider_editor = None;
+        let _ = render_services(&mut vm);
+
+        // 2) 加载出已有渠道的真实配置：输入框必须显示它们。
+        vm.provider_editor = Some(editor(
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            "deepseek-chat",
+        ));
+        let painted = render_services(&mut vm);
+        assert!(
+            painted.contains("https://api.deepseek.com/v1"),
+            "the saved endpoint must be painted:\n{painted}"
+        );
+        assert!(
+            painted.contains("deepseek-chat"),
+            "the saved model must be painted:\n{painted}"
+        );
+
+        // 3) 换一个渠道：不能继续显示上一个渠道的文字。
+        vm.provider_editor = Some(editor(
+            "ark",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "ep-2024",
+        ));
+        let painted = render_services(&mut vm);
+        assert!(painted.contains("https://ark.cn-beijing.volces.com/api/v3"));
+        assert!(
+            !painted.contains("https://api.deepseek.com/v1"),
+            "the previous channel's endpoint must not leak into the next one"
         );
     }
 

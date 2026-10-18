@@ -3927,17 +3927,20 @@ fn provider_model_block(
 
 fn provider_field(
     ui: &mut egui::Ui,
+    channel_id: &str,
     label: &str,
     value: &str,
     field: SettingsProviderField,
     password: bool,
     actions: &mut Vec<FrontendAction>,
 ) {
-    provider_field_hint(ui, label, value, "", field, password, actions);
+    provider_field_hint(ui, channel_id, label, value, "", field, password, actions);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn provider_field_hint(
     ui: &mut egui::Ui,
+    channel_id: &str,
     label: &str,
     value: &str,
     hint: &str,
@@ -3948,13 +3951,26 @@ fn provider_field_hint(
     /// Tauri 渠道弹窗里的输入框：整列宽、38px 高。
     const MODAL_INPUT_HEIGHT: f32 = 38.0;
     let mut row = |ui: &mut egui::Ui| {
-        let id = egui::Id::new(("openless-settings-provider-field", format!("{field:?}")));
-        // 草稿按字段 id 跨帧保存：光标与编辑状态由同一个缓冲维护，不再每帧从
-        // 宿主回显的旧值重建（那会让光标错位、吞字）。
+        // 草稿按「渠道 + 字段」保存：光标与编辑状态由同一个缓冲维护，不再每帧从
+        // 宿主回显的值重建（那会让光标错位、吞字）。
+        //
+        // 早期只按字段类型做 key，没有渠道维度，于是：
+        //   * 第一次渲染时若编辑器还没加载完（value 为空），这个空缓冲会被一直写回，
+        //     之后加载出来的 endpoint/model 再也进不了输入框——「编辑已有渠道读不到配置」；
+        //   * 编辑完 A 再编辑 B，B 显示的是 A 的文字。
+        // 现在额外记一份「播种时的宿主值」：宿主值变了就重新播种，没变就保留用户输入。
+        let id = egui::Id::new((
+            "openless-settings-provider-field",
+            channel_id,
+            format!("{field:?}"),
+        ));
         let draft_id = id.with("draft");
-        let mut draft = ui
-            .data(|data| data.get_temp::<String>(draft_id))
-            .unwrap_or_else(|| value.to_string());
+        let seed_id = id.with("seed");
+        let seed = ui.data(|data| data.get_temp::<String>(seed_id));
+        let mut draft = match (ui.data(|data| data.get_temp::<String>(draft_id)), seed) {
+            (Some(draft), Some(seed)) if seed == value => draft,
+            _ => value.to_string(),
+        };
         let width = ui.available_width().min(420.0);
         let response = layout::text_input_sized(
             ui,
@@ -3969,7 +3985,10 @@ fn provider_field_hint(
             editor_mark_dirty(ui);
             actions.push(FrontendAction::SettingsProviderField(field, draft.clone()));
         }
-        ui.data_mut(|data| data.insert_temp(draft_id, draft));
+        ui.data_mut(|data| {
+            data.insert_temp(draft_id, draft);
+            data.insert_temp(seed_id, value.to_string());
+        });
     };
     if label.is_empty() {
         row(ui);
@@ -4509,6 +4528,7 @@ fn provider_editor_body(
     modal_form_row(ui, tr_l10n(lang, "settings.channels.name_label"), |ui| {
         provider_field(
             ui,
+            &editor.channel_id,
             "",
             &editor.name,
             SettingsProviderField::Name,
@@ -4571,6 +4591,7 @@ fn provider_editor_body(
             if mode == "api_key" {
                 provider_field(
                     ui,
+                    &editor.channel_id,
                     tr_l10n(lang, "settings.providers.volcengineApiKeyLabel"),
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
@@ -4580,6 +4601,7 @@ fn provider_editor_body(
             } else {
                 provider_field(
                     ui,
+                    &editor.channel_id,
                     tr_l10n(lang, "settings.providers.volcengineAppKeyLabel"),
                     &editor.primary_secret,
                     SettingsProviderField::PrimarySecret,
@@ -4588,6 +4610,7 @@ fn provider_editor_body(
                 );
                 provider_field(
                     ui,
+                    &editor.channel_id,
                     tr_l10n(lang, "settings.providers.volcengineAccessKeyLabel"),
                     &editor.secondary_secret,
                     SettingsProviderField::SecondarySecret,
@@ -4597,6 +4620,7 @@ fn provider_editor_body(
             }
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.volcengineResourceIdLabel"),
                 &editor.resource_id,
                 SettingsProviderField::ResourceId,
@@ -4607,6 +4631,7 @@ fn provider_editor_body(
         SettingsProviderAuth::Xfyun => {
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.xfyunAppIdLabel"),
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
@@ -4615,6 +4640,7 @@ fn provider_editor_body(
             );
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.xfyunApiKeyLabel"),
                 &editor.secondary_secret,
                 SettingsProviderField::SecondarySecret,
@@ -4625,6 +4651,7 @@ fn provider_editor_body(
         SettingsProviderAuth::TencentCloud => {
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.tencentCloudAppIdLabel"),
                 &editor.resource_id,
                 SettingsProviderField::ResourceId,
@@ -4633,6 +4660,7 @@ fn provider_editor_body(
             );
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.tencentCloudSecretIdLabel"),
                 &editor.primary_secret,
                 SettingsProviderField::PrimarySecret,
@@ -4641,6 +4669,7 @@ fn provider_editor_body(
             );
             provider_field(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.tencentCloudSecretKeyLabel"),
                 &editor.secondary_secret,
                 SettingsProviderField::SecondarySecret,
@@ -4658,6 +4687,7 @@ fn provider_editor_body(
         SettingsProviderAuth::ApiKey => {
             provider_field(
                 ui,
+                &editor.channel_id,
                 if editor.api_key_optional {
                     tr_l10n(lang, "settings.providers.apiKeyOptionalLabel")
                 } else {
@@ -4712,6 +4742,7 @@ fn provider_editor_body(
             }
             provider_field_hint(
                 ui,
+                &editor.channel_id,
                 tr_l10n(lang, "settings.providers.baseUrlLabel"),
                 &editor.endpoint,
                 &editor.default_endpoint,
@@ -4790,6 +4821,7 @@ fn provider_editor_body(
                 |ui| {
                     provider_field(
                         ui,
+                        &editor.channel_id,
                         "",
                         &editor.protocol.temperature,
                         SettingsProviderField::Temperature,
