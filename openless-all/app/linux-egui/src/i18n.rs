@@ -7741,6 +7741,16 @@ pub const CATALOG: &[Msg] = &[
             "해당 동기화 작업이 더 이상 유효하지 않습니다. 상태를 새로 고치세요.",
         ),
     },
+    Msg {
+        key: "cloudSyncE2ee.errors.serviceUnavailable",
+        text: row(
+            "加密同步服务暂不可用，请稍后重试。",
+            "加密同步服務暫時無法使用，請稍後重試。",
+            "Encrypted sync is temporarily unavailable — retry later.",
+            "暗号化同期は一時的に利用できません。後で再試行してください。",
+            "암호화 동기화를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요.",
+        ),
+    },
 
 ];
 

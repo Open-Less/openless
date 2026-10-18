@@ -368,7 +368,7 @@ pub fn error_key(raw: &str) -> &'static str {
         "secure_random_unavailable" => "cloudSyncE2ee.errors.secureRandomUnavailable",
         "secure_storage" | "secure_storage_denied" => "cloudSyncE2ee.errors.secureStorage",
         "server" => "cloudSyncE2ee.errors.server",
-        "service_unavailable" => "cloudSyncE2ee.errors.unavailable",
+        "service_unavailable" => "cloudSyncE2ee.errors.serviceUnavailable",
         "stale_preview" => "cloudSyncE2ee.errors.changed",
         "stale_task" => "cloudSyncE2ee.errors.staleTask",
         "too_large" => "cloudSyncE2ee.errors.tooLarge",
@@ -381,7 +381,7 @@ pub fn error_key(raw: &str) -> &'static str {
         "rateLimited" => "cloudSyncE2ee.errors.rateLimited",
         "secureStorage" => "cloudSyncE2ee.errors.secureStorage",
         "stalePreview" => "cloudSyncE2ee.errors.changed",
-        "unavailable" => "cloudSyncE2ee.errors.unavailable",
+        "unavailable" => "cloudSyncE2ee.errors.serviceUnavailable",
         "unlock" => "cloudSyncE2ee.errors.unlock",
         _ => "cloudSyncE2ee.errors.unknown",
     }
