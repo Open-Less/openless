@@ -7220,6 +7220,36 @@ pub const CATALOG: &[Msg] = &[
         key: "uiRefinement.wide",
         text: row("宽阔", "宽阔", "Wide", "Wide", "Wide"),
     },
+    Msg {
+        key: "settings.recording.auto_update_check_desc",
+        text: row(
+            "启动时及每 60 分钟自动检查更新。",
+            "啟動時及每 60 分鐘自動檢查更新。",
+            "Check for updates on launch and every 60 minutes.",
+            "起動時および 60 分ごとに自動チェック。",
+            "시작 시 및 60 분마다 자동 확인.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.start_minimized_desc",
+        text: row(
+            "所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。",
+            "所有啟動路徑都不彈主視窗，僅選單欄 / 託盤執行。",
+            "No main window on any launch path — menu bar / tray only.",
+            "どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。",
+            "모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.startup_at_boot_desc",
+        text: row(
+            "登录系统时自动启动 OpenLess。",
+            "登入系統時自動啟動 OpenLess。",
+            "Start OpenLess automatically when you sign in.",
+            "ログイン時に OpenLess を自動起動。",
+            "로그인 시 OpenLess 자동 시작.",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

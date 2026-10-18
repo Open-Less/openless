@@ -510,6 +510,8 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
     let lang = vm.lang;
 
     // 录音与输入（Tauri RecordingInputSection）
+    // 行的顺序与 Tauri 保持一致：快捷键 → 录音方式 → 静音自动停止 → 麦克风 →
+    // 音频增强 → 胶囊 → 胶囊样式/字幕 → 稳定模式 → 录音期间静音 → 提示音。
     card(
         ui,
         tr_l10n(lang, "settings.recording.title"),
@@ -525,7 +527,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     label: tr_l10n(lang, "settings.recording.hotkey_label"),
                     value: vm.dictation_hotkey.clone(),
                     can_disable: true,
-                    hint: recording_mode_hint(lang, vm.settings.recording_mode),
+                    hint: String::new(),
                 },
                 true,
             );
@@ -537,26 +539,13 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             segmented_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mode_label"),
-                "",
+                tr_l10n(lang, "settings.recording.mode_desc"),
                 &modes,
                 vm.settings.recording_mode.min(2),
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(
                         SettingsComboField::RecordingMode,
                         val,
-                    ));
-                },
-            );
-            // 上游 #1082（稳定模式：先录音后识别）：录音期间不连接 ASR，停止后提交整段
-            // 音频；结果更晚，但录音不受建连延迟与网络抖动影响。
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.recording.stable_transcription_label"),
-                tr_l10n(lang, "settings.recording.stable_transcription_desc"),
-                vm.settings.stable_transcription,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StableTranscription,
                     ));
                 },
             );
@@ -631,6 +620,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             } else if vm.settings.microphone_options.is_empty() {
                 hint_line(ui, tr_l10n(lang, "onboarding.mic_no_device_hint"));
             }
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.audio_enhancement_label"),
+                tr_l10n(lang, "settings.recording.audio_enhancement_desc"),
+                vm.settings.audio_enhancement,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::AudioEnhancement,
+                    ));
+                },
+            );
             // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
             toggle_row(
                 ui,
@@ -660,34 +660,47 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 },
             );
             capsule_style_preview(ui, vm.settings.capsule_style.min(2));
-            if vm.settings.show_capsule {
-                toggle_row(
+            // Tauri 这两行只受平台限制，不跟胶囊开关联动（关掉胶囊也仍可预设字幕
+            // 与字号），这里保持一致。
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.capsuleTranscriptLabel"),
+                tr_l10n(lang, "settings.recording.capsuleTranscriptDesc"),
+                vm.settings.capsule_transcript,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::CapsuleTranscript,
+                    ));
+                },
+            );
+            if vm.settings.capsule_transcript {
+                combo_index_row(
                     ui,
-                    tr_l10n(lang, "settings.recording.capsuleTranscriptLabel"),
-                    tr_l10n(lang, "settings.recording.capsuleTranscriptDesc"),
-                    vm.settings.capsule_transcript,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(
-                            SettingsField::CapsuleTranscript,
+                    tr_l10n(lang, "settings.recording.capsuleTranscriptFontSize"),
+                    "",
+                    (vm.settings.capsule_transcript_font_size.clamp(12, 20) - 12) / 2,
+                    &["12px", "14px", "16px", "18px", "20px"],
+                    |index| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::CapsuleTranscriptFontSize,
+                            index,
                         ));
                     },
                 );
-                if vm.settings.capsule_transcript {
-                    combo_index_row(
-                        ui,
-                        tr_l10n(lang, "settings.recording.capsuleTranscriptFontSize"),
-                        "",
-                        (vm.settings.capsule_transcript_font_size.clamp(12, 20) - 12) / 2,
-                        &["12px", "14px", "16px", "18px", "20px"],
-                        |index| {
-                            actions.push(FrontendAction::SettingsCombo(
-                                SettingsComboField::CapsuleTranscriptFontSize,
-                                index,
-                            ));
-                        },
-                    );
-                }
             }
+            // 上游 #1082（稳定模式：先录音后识别）：录音期间不连接 ASR，停止后提交整段
+            // 音频；结果更晚，但录音不受建连延迟与网络抖动影响。
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.stable_transcription_label"),
+                tr_l10n(lang, "settings.recording.stable_transcription_desc"),
+                vm.settings.stable_transcription,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::StableTranscription,
+                    ));
+                },
+            );
             toggle_row(
                 ui,
                 tr_l10n(lang, "settings.recording.mute_during_recording_label"),
@@ -722,17 +735,6 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                             SettingsActionField::PreviewAudioCue,
                         ));
                     }
-                },
-            );
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.recording.audio_enhancement_label"),
-                tr_l10n(lang, "settings.recording.audio_enhancement_desc"),
-                vm.settings.audio_enhancement,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::AudioEnhancement,
-                    ));
                 },
             );
         },
@@ -782,26 +784,16 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         },
     );
 
-    // 启动（Tauri：可折叠分组）
+    // 启动（Tauri `RecordingInputSection` 的 startup 折叠组，顺序一致：
+    // 开机自启 → 启动时静默运行 → 自动检查更新）
     card_group(
         ui,
         tr_l10n(lang, "settings.recording.startup_group_title"),
         |ui| {
             toggle_row(
                 ui,
-                tr_l10n(lang, "settings.recording.start_minimized_label"),
-                "",
-                vm.settings.start_minimized,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StartMinimized,
-                    ));
-                },
-            );
-            toggle_row(
-                ui,
                 tr_l10n(lang, "settings.recording.startup_at_boot"),
-                "",
+                tr_l10n(lang, "settings.recording.startup_at_boot_desc"),
                 vm.settings.launch_at_login,
                 || {
                     actions.push(FrontendAction::SettingsToggle(SettingsField::LaunchAtLogin));
@@ -809,11 +801,45 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             );
             toggle_row(
                 ui,
-                tr_l10n(lang, "settings.recording.auto_update_check_label"),
-                "",
-                vm.settings.auto_update,
+                tr_l10n(lang, "settings.recording.start_minimized_label"),
+                tr_l10n(lang, "settings.recording.start_minimized_desc"),
+                vm.settings.start_minimized,
                 || {
-                    actions.push(FrontendAction::SettingsToggle(SettingsField::AutoUpdate));
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::StartMinimized,
+                    ));
+                },
+            );
+            // Tauri 也画了「自动检查更新」，但 Linux 版本没有任何更新器
+            // （`supports_auto_update == false`，`auto_update_check` 存下来后没人读），
+            // 画一个点了没反应的开关不算对齐。等真有更新通道再加回来。
+        },
+    );
+
+    // 选择与工作区（Tauri `SelectionWorkspaceSection`）。在「录音与输入」标签页里
+    // 它只画「润色送达」一行：语音编辑在 Linux 上不支持（supports_voice_edit=false），
+    // 润色快捷键已经移到快捷键页。送达方式本身是活的——core 的 selection_service
+    // 按它决定直接替换还是先给预览。
+    card_group(
+        ui,
+        tr_l10n(lang, "settings.selection_workspace.title"),
+        |ui| {
+            hint_line(ui, tr_l10n(lang, "settings.selection_workspace.hint"));
+            let delivery = [
+                tr_l10n(lang, "settings.selection_polish.direct_replace"),
+                tr_l10n(lang, "settings.selection_polish.preview_confirm"),
+            ];
+            segmented_row(
+                ui,
+                tr_l10n(lang, "settings.selection_workspace.polish_delivery"),
+                "",
+                &delivery,
+                vm.settings.selection_polish_delivery.min(1),
+                |val| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::SelectionPolishDelivery,
+                        val,
+                    ));
                 },
             );
         },
@@ -2015,9 +2041,9 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
         let fonts: Vec<&str> = vec![
             tr_l10n(lang, "uiRefinement.native"),
             "Avenir Next · Aptos",
-            "PingFang · 苹方 / 微软雅黑",
+            "PingFang / Microsoft YaHei",
             "New York · Georgia",
-            "Songti · 宋体",
+            "Songti / SimSun",
             "SF Mono · Cascadia Code",
             "Menlo · Consolas",
         ];
