@@ -76,16 +76,18 @@ pub fn settings_page(
     actions: &mut Vec<FrontendAction>,
     body: egui::Rect,
 ) {
-    // 设置现在是**整页**而不是悬浮弹窗：不再铺磨砂遮罩、不再缩成居中卡片、
-    // 也没有落影。内容区整块铺满 body（Tauri 的 `SettingsModal` 在桌面端同样
-    // 是一整页），左栏底色与右栏内容直接贴到内容区边缘。
-    let size = body.size();
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), body));
+    // 设置是一整页（不铺磨砂遮罩、不压暗、没有落影），但仍然**留一圈内缩**：
+    // 贴到内容区边缘时 14px 圆角会被窗口边切掉，看上去"没有圆角"（用户反馈）。
+    // 内缩 8px 就能让圆角落在页面底色上，同时仍然是一整页。
+    const INSET: f32 = 8.0;
+    const RADIUS: u8 = 14;
+    let surface = body.shrink(INSET);
+    let size = surface.size();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), surface));
     egui::Area::new(egui::Id::new("openless-settings-page"))
-        // 仍是 Foreground：页内还有下拉菜单（`Order::Foreground`）需要压在上面，
-        // 页本身不能退到 Background 去。
+        // 仍是 Foreground：页内还有下拉菜单（`Order::Foreground`）需要压在上面。
         .order(egui::Order::Foreground)
-        .fixed_pos(body.min)
+        .fixed_pos(surface.min)
         .constrain(false)
         .show(ctx, |ui| {
             ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -94,6 +96,7 @@ pub fn settings_page(
                 egui::Frame::new()
                     // Tauri `--ol-settings-content-bg`：整页浅灰底，卡片才是白色。
                     .fill(theme::CONTENT_BG)
+                    .corner_radius(egui::CornerRadius::same(RADIUS))
                     .show(ui, |ui| {
                         ui.set_min_size(size);
                         ui.set_max_size(size);
@@ -106,11 +109,12 @@ pub fn settings_page(
                                     ui.set_min_size(egui::vec2(RAIL_WIDTH, body_height));
                                     ui.set_max_size(egui::vec2(RAIL_WIDTH, body_height));
                                     let column = ui.max_rect();
+                                    // 左栏只圆左上/左下：右边缘要和内容区拼在一起。
                                     ui.painter().rect_filled(
                                         column,
                                         egui::CornerRadius {
-                                            nw: 14,
-                                            sw: 14,
+                                            nw: RADIUS,
+                                            sw: RADIUS,
                                             ne: 0,
                                             se: 0,
                                         },
@@ -1065,14 +1069,12 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
                 ui.set_width(SHORTCUT_FILTER_WIDTH);
                 filter_group(
                     ui,
-                    lang,
-                    "uiRefinement.category",
+                    tr_l10n(lang, "uiRefinement.category"),
                     &[
-                        ("uiRefinement.all", 0),
-                        ("uiRefinement.recording", 1),
-                        ("uiRefinement.styles", 2),
-                        ("uiRefinement.system", 3),
-                        // 只读行（Esc）在「系统」下与筛选值 4 对应。
+                        (tr_l10n(lang, "uiRefinement.all"), 0),
+                        (tr_l10n(lang, "uiRefinement.recording"), 1),
+                        (tr_l10n(lang, "uiRefinement.styles"), 2),
+                        (tr_l10n(lang, "uiRefinement.system"), 3),
                     ],
                     category,
                     |value| actions.push(FrontendAction::ShortcutsCategory(value)),
@@ -1080,12 +1082,11 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
                 ui.add_space(10.0);
                 filter_group(
                     ui,
-                    lang,
-                    "uiRefinement.status",
+                    tr_l10n(lang, "uiRefinement.status"),
                     &[
-                        ("uiRefinement.all", 0),
-                        ("uiRefinement.assigned", 1),
-                        ("uiRefinement.unassigned", 2),
+                        (tr_l10n(lang, "uiRefinement.all"), 0),
+                        (tr_l10n(lang, "uiRefinement.assigned"), 1),
+                        (tr_l10n(lang, "uiRefinement.unassigned"), 2),
                     ],
                     status,
                     |value| actions.push(FrontendAction::ShortcutsStatus(value)),
@@ -1133,25 +1134,19 @@ const SHORTCUT_FILTER_WIDTH: f32 = 132.0;
 /// 一组筛选按钮（标题 + 竖排选项）。Tauri 用 `aria-pressed` 表达选中态。
 fn filter_group(
     ui: &mut egui::Ui,
-    lang: Lang,
-    title_key: &'static str,
-    options: &[(&'static str, u8)],
+    title: &str,
+    options: &[(&str, u8)],
     active: u8,
     mut on_select: impl FnMut(u8),
 ) {
-    ui.label(
-        egui::RichText::new(tr_l10n(lang, title_key))
-            .size(11.0)
-            .color(theme::INK_3),
-    );
-    for (label_key, value) in options {
+    ui.label(egui::RichText::new(title).size(11.0).color(theme::INK_3));
+    for (label, value) in options {
         let selected = active == *value;
-        let label = tr_l10n(lang, label_key);
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
         let response = ui.interact(
             rect,
-            ui.id().with(("shortcut-filter", label_key)),
+            ui.id().with(("shortcut-filter", label)),
             egui::Sense::click(),
         );
         if selected {
@@ -1167,7 +1162,7 @@ fn filter_group(
         ui.painter().text(
             egui::pos2(rect.left() + 8.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            label,
+            *label,
             egui::FontId::proportional(12.0),
             if selected { theme::INK } else { theme::INK_2 },
         );
@@ -1373,9 +1368,10 @@ fn chips_width(ui: &egui::Ui, combo: &str) -> f32 {
     }
 }
 
-/// 在给定矩形内画键帽（从右往左排，与 Tauri 的 `KbdGroup` 顺序一致）。
+/// 在给定矩形内画键帽：**左→右**排列，修饰键在前（`Alt` `Z`），
+/// 与 Tauri 的 `KbdGroup keys={formatComboParts(...)}` 顺序一致。
 fn keycaps_in_rect(ui: &mut egui::Ui, rect: egui::Rect, combo: &str) {
-    let mut x = rect.right();
+    let mut x = rect.left();
     for part in combo
         .split('+')
         .map(str::trim)
@@ -1383,7 +1379,7 @@ fn keycaps_in_rect(ui: &mut egui::Ui, rect: egui::Rect, combo: &str) {
     {
         let width = layout::text_width(ui, part, 11.0) + 16.0;
         let key = egui::Rect::from_min_size(
-            egui::pos2(x - width, rect.center().y - 11.0),
+            egui::pos2(x, rect.center().y - 11.0),
             egui::vec2(width, 22.0),
         );
         ui.painter()
@@ -1839,38 +1835,25 @@ fn shortcut_primary(key: egui::Key) -> Option<String> {
 
 /// 只读键帽行（Tauri 的 `readonlyRows`：取消本次录音 = Esc）。
 fn readonly_keycap_row(ui: &mut egui::Ui, label: &str, desc: &str, combo: &str) {
-    row_desc(ui, label, desc, |ui| {
-        keycaps_in(ui, combo);
-    });
-}
-
-/// 把 `Ctrl+Shift+;` 这样的标签画成一枚枚键帽，供 right_to_left 布局使用
-/// （因此倒序绘制）。
-fn keycaps_in(ui: &mut egui::Ui, combo: &str) {
-    let parts: Vec<&str> = combo
-        .split('+')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect();
-    for part in parts.iter().rev() {
-        let width = layout::text_width(ui, part, 11.0) + 16.0;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), theme::SURFACE_2);
-        ui.painter().rect_stroke(
-            rect,
-            egui::CornerRadius::same(6),
-            egui::Stroke::new(0.5, theme::LINE_STRONG),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            *part,
-            egui::FontId::proportional(11.0),
-            theme::INK_2,
-        );
-    }
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 40.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(label).size(12.5).color(theme::INK));
+                if !desc.is_empty() {
+                    ui.label(egui::RichText::new(desc).size(10.5).color(theme::INK_4));
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let width = chips_width(ui, combo);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
+                keycaps_in_rect(ui, rect, combo);
+            });
+        },
+    );
+    separator_line(ui);
 }
 
 /// 行右侧的 chevron（展开/收起快捷键菜单）。

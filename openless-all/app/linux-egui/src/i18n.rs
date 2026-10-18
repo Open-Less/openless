@@ -7176,6 +7176,34 @@ pub const CATALOG: &[Msg] = &[
         key: "uiRefinement.unassigned",
         text: row("未分配", "未分配", "Unassigned", "Unassigned", "Unassigned"),
     },
+    Msg {
+        key: "uiRefinement.all",
+        text: row("全部", "全部", "All", "All", "All"),
+    },
+    Msg {
+        key: "uiRefinement.assigned",
+        text: row("已分配", "已分配", "Assigned", "Assigned", "Assigned"),
+    },
+    Msg {
+        key: "uiRefinement.category",
+        text: row("分类", "分类", "Category", "Category", "Category"),
+    },
+    Msg {
+        key: "uiRefinement.recording",
+        text: row("语音与文本", "语音与文本", "Voice & text", "Voice & text", "Voice & text"),
+    },
+    Msg {
+        key: "uiRefinement.status",
+        text: row("分配状态", "分配状态", "Assignment", "Assignment", "Assignment"),
+    },
+    Msg {
+        key: "uiRefinement.styles",
+        text: row("风格", "风格", "Styles", "Styles", "Styles"),
+    },
+    Msg {
+        key: "uiRefinement.system",
+        text: row("系统", "系统", "System", "System", "System"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
