@@ -233,7 +233,6 @@ pub enum FrontendAction {
     /// Close the provider editor.
     SettingsProviderClose,
     /// 快捷键行的交互：展开/收起编辑菜单（`None` 收起全部）。
-    ShortcutMenu(Option<ShortcutField>),
     /// 进入录制态（`None` = 取消录制）。
     ShortcutRecording(Option<ShortcutField>),
     /// 录入完成：主键 + 修饰键写回该绑定。
@@ -886,7 +885,6 @@ pub struct FrontendViewModel {
     /// host did start the listener) keep the section visible.
     pub hotkeys_supported: bool,
     /// 展开编辑菜单的快捷键行（`None` = 都收起）。
-    pub shortcut_menu: Option<ShortcutField>,
     /// 正在录入按键的快捷键行（`None` = 未在录入）。
     pub shortcut_recording: Option<ShortcutField>,
     /// 「＋ 添加风格快捷键」草稿行是否打开。
@@ -1103,7 +1101,6 @@ impl Default for FrontendViewModel {
             supports_local_asr: false,
             multimodal_view: false,
             hotkeys_supported: true,
-            shortcut_menu: None,
             shortcut_recording: None,
             style_hotkey_draft_open: false,
             style_hotkey_draft_pack: 0,

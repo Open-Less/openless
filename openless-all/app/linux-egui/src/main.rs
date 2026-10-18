@@ -7326,19 +7326,9 @@ mod linux_app {
                             });
                         }
                     }
-                    frontend::view_model::FrontendAction::ShortcutMenu(field) => {
-                        self.frontend_vm.shortcut_menu = field;
-                        if field.is_some() {
-                            // 打开菜单即退出录制（Tauri 点「录制快捷键」时同时收起菜单）。
-                            self.frontend_vm.shortcut_recording = None;
-                        }
-                    }
                     frontend::view_model::FrontendAction::ShortcutRecording(field) => {
                         self.frontend_vm.shortcut_pending_modifier = None;
                         self.frontend_vm.shortcut_recording = field;
-                        if field.is_some() {
-                            self.frontend_vm.shortcut_menu = None;
-                        }
                         self.frontend_vm.settings_notice = None;
                     }
                     frontend::view_model::FrontendAction::ShortcutCaptured(

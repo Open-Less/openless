@@ -133,6 +133,36 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
         }
     });
 
+    // 快捷键录制中：「点别处」＝取消（Tauri 的 Popover 点外部关闭）。
+    // 录制面板在 `recording_panel` 里把自己的矩形记进 memory，这里只负责判定。
+    // 进入录制的那一帧就是按下鼠标的那一帧，所以先"武装"一帧再开始判外点。
+    if vm.shortcut_recording.is_some() {
+        let id = egui::Id::new("openless-shortcut-recording");
+        let state = ctx.data(|data| data.get_temp::<(egui::Rect, bool)>(id));
+        let pressed = ctx.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        match state {
+            None => {}
+            Some((rect, armed)) => {
+                if !armed {
+                    ctx.data_mut(|data| data.insert_temp(id, (rect, true)));
+                } else if pressed.is_some_and(|pos| !rect.contains(pos)) {
+                    actions.push(FrontendAction::ShortcutRecording(None));
+                }
+            }
+        }
+    } else {
+        // 录制结束后清掉陈旧矩形，避免下次录制首帧读到旧位置。
+        ctx.data_mut(|data| {
+            data.remove::<(egui::Rect, bool)>(egui::Id::new("openless-shortcut-recording"))
+        });
+    }
+
     if vm.runtime_warning.is_some() {
         runtime_warning_overlay(ctx, vm, actions);
     }
@@ -1109,6 +1139,60 @@ mod tests {
         assert!(
             (recorder.width() - 260.0).abs() <= 1.0,
             "the recorder column must cap at 260: {recorder:?}"
+        );
+    }
+
+    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。
+    #[test]
+    fn clicking_outside_the_recording_panel_stops_recording() {
+        use super::view_model::{FrontendAction, ShortcutField};
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            shortcut_recording: Some(ShortcutField::Qa),
+            ..Default::default()
+        };
+        // 前两帧只建立面板矩形（这一帧先"武装"，不判外点）。
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            actions.clear();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut actions);
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let cancels = |actions: &Vec<FrontendAction>| {
+            actions
+                .iter()
+                .any(|action| matches!(action, FrontendAction::ShortcutRecording(None)))
+        };
+        assert!(
+            !cancels(&actions),
+            "a plain frame must not cancel recording"
+        );
+        // 第三帧：在左上角（录制面板之外）按下鼠标。
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(40.0, 60.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        });
+        actions.clear();
+        render(&ctx, &mut vm, &mut actions);
+        let _ = crate::ui::frontend::end_pass(&ctx);
+        assert!(
+            cancels(&actions),
+            "clicking outside must stop recording: {} actions",
+            actions.len()
         );
     }
 

@@ -172,6 +172,7 @@ fn quick_note_shortcut_card(
                     .color(theme::INK_4),
             );
             ui.add_space(8.0);
+            // 与设置页同一个录制器（键帽 + ↻ + ✕），不再用 chevron 菜单。
             let row = settings::ShortcutRow::new(
                 ShortcutField::QuickNote,
                 "",
@@ -179,8 +180,7 @@ fn quick_note_shortcut_card(
                 true,
                 String::new(),
             );
-            settings::shortcut_control(ui, vm, actions, &row);
-            settings::shortcut_menu(ui, vm, actions, &row);
+            settings::shortcut_recorder_row(ui, vm, actions, &row, true);
         });
     ui.add_space(GAP);
 }

@@ -515,9 +515,8 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         tr_l10n(lang, "settings.recording.title"),
         tr_l10n(lang, "settings.recording.desc"),
         |ui| {
-            // #2：这一行在 Tauri 里就是 ShortcutRecorder（可展开录制/停用），不是只读
-            // 文本——用户反馈「第一个录音快捷键那里不能展开改快捷键选项」。
-            shortcut_row(
+            // 与快捷键页同一个录制器：键帽 + ↻ 重置 + ✕ 清空，点键帽直接录。
+            shortcut_recorder_row(
                 ui,
                 vm,
                 actions,
@@ -528,6 +527,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     can_disable: true,
                     hint: recording_mode_hint(lang, vm.settings.recording_mode),
                 },
+                true,
             );
             let modes = [
                 tr_l10n(lang, "settings.recording.mode_toggle"),
@@ -1268,7 +1268,12 @@ fn shortcut_row_layout(
     body: impl FnOnce(&mut egui::Ui, egui::Rect),
 ) {
     let width = ui.available_width();
-    let height = SHORTCUT_ROW_HEIGHT;
+    // 没有标签时（速记页的卡片只有键帽）用紧凑行高：64px 会把那张卡片撑出可视区。
+    let height = if row_label.is_empty() {
+        44.0
+    } else {
+        SHORTCUT_ROW_HEIGHT
+    };
     let recorder_width = RECORDER_MAX_WIDTH.min((width * 0.5).max(150.0));
     let (row_rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let recorder_rect = egui::Rect::from_min_size(
@@ -1287,7 +1292,7 @@ fn shortcut_row_layout(
             .max_rect(label_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
-    label_ui.add_space(12.0);
+    label_ui.add_space(if row_label.is_empty() { 0.0 } else { 12.0 });
     label_ui.label(egui::RichText::new(row_label).size(13.5).color(theme::INK));
     if !hint.is_empty() {
         label_ui.add_space(5.0);
@@ -1309,7 +1314,7 @@ fn shortcut_row_layout(
     row_divider(ui);
 }
 
-fn shortcut_recorder_row(
+pub(super) fn shortcut_recorder_row(
     ui: &mut egui::Ui,
     vm: &mut FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
@@ -1622,151 +1627,6 @@ impl ShortcutRow {
     }
 }
 
-/// 快捷键行：标签（+「?」）→ 键帽 → 录制控件行最右的 chevron；点 chevron 展开
-/// 「录制快捷键 / 停用」菜单，进入录制后键帽位置换成「请按下快捷键组合…」面板。
-pub(super) fn shortcut_row(
-    ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
-    actions: &mut Vec<FrontendAction>,
-    row: &ShortcutRow,
-) {
-    row_desc(ui, row.label, "", |ui| {
-        shortcut_control(ui, vm, actions, row)
-    });
-    shortcut_menu(ui, vm, actions, row);
-}
-
-/// 键帽在行首、chevron 在行尾（录制中则换成录制面板）。单独抽出供速记页
-/// 的快捷键卡片复用，那一页没有 200px 标签列。
-pub(super) fn shortcut_control(
-    ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
-    actions: &mut Vec<FrontendAction>,
-    row: &ShortcutRow,
-) {
-    let recording = vm.shortcut_recording == Some(row.field);
-    let menu_open = vm.shortcut_menu == Some(row.field);
-    if recording {
-        recording_panel(ui, vm, actions, row.field);
-        return;
-    }
-    // Tauri `ShortcutRecorder`: 录制控件宽度上限 360px，值靠左，展开符贴**同一行**
-    // 的最右缘。过去先画箭头再画键帽，速记卡片里箭头挤在键帽左侧。
-    let width = ui.available_width().clamp(26.0, 360.0);
-    let (line, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
-    let arrow = egui::Rect::from_min_size(
-        egui::pos2(line.right() - 26.0, line.top()),
-        egui::vec2(26.0, 26.0),
-    );
-    #[cfg(test)]
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(egui::Id::new("shortcut-control-rects"), (line, arrow)));
-    let response = ui.interact(
-        arrow,
-        ui.id().with(("shortcut-menu", row.field)),
-        egui::Sense::click(),
-    );
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(arrow, egui::CornerRadius::same(6), theme::SURFACE_2);
-    }
-    draw_chevron_down(ui, arrow.center(), menu_open, theme::INK_4);
-    if response.clicked() {
-        actions.push(FrontendAction::ShortcutMenu(if menu_open {
-            None
-        } else {
-            Some(row.field)
-        }));
-    }
-    let mut x = line.left();
-    for part in row
-        .value
-        .split('+')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let key_width = layout::text_width(ui, part, 11.0) + 16.0;
-        if x + key_width > arrow.left() - 6.0 {
-            break;
-        }
-        let key = egui::Rect::from_min_size(
-            egui::pos2(x, line.center().y - 11.0),
-            egui::vec2(key_width, 22.0),
-        );
-        ui.painter()
-            .rect_filled(key, egui::CornerRadius::same(6), theme::SURFACE_2);
-        ui.painter().rect_stroke(
-            key,
-            egui::CornerRadius::same(6),
-            egui::Stroke::new(0.5, theme::LINE_STRONG),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().text(
-            key.center(),
-            egui::Align2::CENTER_CENTER,
-            part,
-            egui::FontId::proportional(11.0),
-            theme::INK_2,
-        );
-        x += key_width + 4.0;
-    }
-}
-
-/// 行下方的补充说明 + 展开的「录制快捷键 / 停用」菜单。
-pub(super) fn shortcut_menu(
-    ui: &mut egui::Ui,
-    vm: &mut FrontendViewModel,
-    actions: &mut Vec<FrontendAction>,
-    row: &ShortcutRow,
-) {
-    let lang = vm.lang;
-    let recording = vm.shortcut_recording == Some(row.field);
-    let menu_open = vm.shortcut_menu == Some(row.field);
-    if !row.hint.is_empty() {
-        ui.label(
-            egui::RichText::new(row.hint.as_str())
-                .size(11.0)
-                .color(theme::INK_4),
-        );
-    }
-    if menu_open && !recording {
-        // Tauri 的展开菜单紧贴键帽**下方左侧**，录制按钮是浅蓝底/蓝边/蓝字，
-        // 而不是整行靠右的蓝底白字主按钮。
-        ui.horizontal(|ui| {
-            ui.set_min_height(36.0);
-            let record = tr_l10n(lang, "settings.recording.combo_record_btn");
-            let width = layout::text_width(ui, record, 12.0) + 24.0;
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
-            #[cfg(test)]
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new("shortcut-record-button"), rect));
-            if layout::action_button(ui, rect, record, None, layout::ButtonKind::BlueSoft).clicked()
-            {
-                actions.push(FrontendAction::ShortcutRecording(Some(row.field)));
-            }
-            ui.add_space(6.0);
-            let disable = tr_l10n(lang, "settings.shortcuts.disable");
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(58.0, 28.0), egui::Sense::hover());
-            let kind = if row.can_disable {
-                layout::ButtonKind::Ghost
-            } else {
-                layout::ButtonKind::Disabled
-            };
-            if layout::action_button(ui, rect, disable, None, kind).clicked() && row.can_disable {
-                actions.push(FrontendAction::ShortcutDisable(row.field));
-            }
-        });
-        if row.field == ShortcutField::Dictation {
-            ui.label(
-                egui::RichText::new(tr_l10n(lang, "settings.recording.combo_disable_hint"))
-                    .size(10.5)
-                    .color(theme::INK_4),
-            );
-        }
-        ui.add_space(4.0);
-    }
-}
-
 /// 「请按下快捷键组合…」面板：读本帧输入，Escape 取消、其它键即完成录入。
 fn recording_panel(
     ui: &mut egui::Ui,
@@ -1776,6 +1636,13 @@ fn recording_panel(
 ) {
     let lang = vm.lang;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(240.0, 44.0), egui::Sense::hover());
+    // 录制面板的矩形交给主循环：点别处就取消录制（Tauri 的 Popover 点外部关闭）。
+    // 记下"是否已经武装"——进入录制的那一帧是按下鼠标的那一帧，不能立刻取消。
+    let cancel_id = egui::Id::new("openless-shortcut-recording");
+    let armed = ui
+        .data(|data| data.get_temp::<(egui::Rect, bool)>(cancel_id))
+        .is_some_and(|(_, armed)| armed);
+    ui.data_mut(|data| data.insert_temp(cancel_id, (rect, armed)));
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
     ui.painter().rect_stroke(
@@ -2009,26 +1876,6 @@ fn readonly_keycap_row(ui: &mut egui::Ui, label: &str, desc: &str, combo: &str) 
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
         keycaps_in_rect(ui, rect, combo);
     });
-}
-
-/// 行右侧的 chevron（展开/收起快捷键菜单）。仍供速记页/选区页的快捷键卡片使用。
-fn draw_chevron_down(ui: &egui::Ui, center: egui::Pos2, open: bool, color: egui::Color32) {
-    let stroke = egui::Stroke::new(1.4, color);
-    let dy = if open { -1.6 } else { 1.6 };
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x - 4.0, center.y - dy),
-            egui::pos2(center.x, center.y + dy),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x, center.y + dy),
-            egui::pos2(center.x + 4.0, center.y - dy),
-        ],
-        stroke,
-    );
 }
 
 fn style_pack_pick_action(row: Option<usize>, next: usize) -> FrontendAction {
@@ -6028,13 +5875,12 @@ mod tests {
         assert!(text.galley.rows.iter().all(|row| row.pos.x.abs() < 0.5));
     }
 
+    /// 速记页的快捷键卡片现在复用设置页的内联录制器：键帽在右、↻/✕ 有描边，
+    /// 不再有 chevron 菜单。
     #[test]
-    fn quick_note_shortcut_value_and_menu_align_left_with_arrow_at_row_end() {
+    fn quick_note_shortcut_uses_the_inline_recorder() {
         let ctx = egui::Context::default();
-        let mut vm = FrontendViewModel {
-            shortcut_menu: Some(ShortcutField::QuickNote),
-            ..Default::default()
-        };
+        let mut vm = FrontendViewModel::default();
         let row = ShortcutRow::new(
             ShortcutField::QuickNote,
             "",
@@ -6043,7 +5889,7 @@ mod tests {
             String::new(),
         );
         let mut actions = Vec::new();
-        let _ = crate::ui::frontend::run_pass(
+        let output = crate::ui::frontend::run_pass(
             &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -6054,29 +5900,47 @@ mod tests {
             },
             |ui| {
                 ui.set_width(480.0);
-                shortcut_control(ui, &mut vm, &mut actions, &row);
-                shortcut_menu(ui, &mut vm, &mut actions, &row);
+                shortcut_recorder_row(ui, &mut vm, &mut actions, &row, true);
             },
         );
-        let (line, arrow): (egui::Rect, egui::Rect) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("shortcut-control-rects"))
-                .unwrap()
-        });
-        let record: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("shortcut-record-button"))
-                .unwrap()
-        });
+        // 收集画出来的文字（`painted_text_of` 在 linux_app 的测试模块里，不可见）。
+        let painted = {
+            fn collect(shape: &egui::Shape, out: &mut String) {
+                match shape {
+                    egui::Shape::Text(text) => {
+                        out.push_str(text.galley.text());
+                        out.push('\n');
+                    }
+                    egui::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            collect(shape, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut text = String::new();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut text);
+            }
+            text
+        };
+        // 三个键帽都画出来了，顺序是 Ctrl → Shift → S。
+        // 注意 `S` 也是 `Shift` 的首字母，所以按"行"比较而不是按字符查找。
+        let order: Vec<&str> = painted.lines().map(str::trim).collect();
+        let ctrl = order
+            .iter()
+            .position(|line| *line == "Ctrl")
+            .expect("Ctrl chip");
+        let shift = order
+            .iter()
+            .position(|line| *line == "Shift")
+            .expect("Shift chip");
+        let key = order.iter().rposition(|line| *line == "S").expect("S chip");
         assert!(
-            (line.width() - 360.0).abs() < 1.0,
-            "Tauri recorder max width: {line:?}"
+            ctrl < shift && shift < key,
+            "keycaps must read left to right: {painted}"
         );
-        assert_eq!(arrow.right(), line.right());
-        assert!(arrow.left() > line.left() + 300.0);
-        assert!(
-            (record.left() - line.left()).abs() < 1.0,
-            "record button must be below value, left-aligned: {record:?}, {line:?}"
-        );
-        assert!(record.top() >= line.bottom());
     }
 
     #[test]

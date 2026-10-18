@@ -400,7 +400,6 @@ impl OpenLessEguiApp {
         }
 
         self.frontend_vm.shortcut_recording = None;
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
@@ -439,7 +438,6 @@ impl OpenLessEguiApp {
             }
         }
 
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
@@ -474,7 +472,6 @@ impl OpenLessEguiApp {
             }
         }
         self.frontend_vm.shortcut_recording = None;
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
@@ -494,7 +491,6 @@ impl OpenLessEguiApp {
                 .retain(|entry| entry.pack_id != pack_id);
         }
 
-        self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }
 
