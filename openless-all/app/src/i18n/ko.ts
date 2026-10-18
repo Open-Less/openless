@@ -4,14 +4,20 @@ import { en } from './en';
 // 한국어 (Beta) — AI 기계 번역 기반. 원어민 검토를 권장합니다.
 // 구조는 zh-CN.ts 를 따릅니다. 새 key 를 추가할 때 ja.ts / ko.ts 도 동시에
 // 갱신해 주세요(갱신되지 않은 key 는 ...en 으로 영어로 fallback 됩니다).
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const ko: typeof zhCN = {
   ...en,
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '음성 편집 세션',
     description:
       '초안을 음성으로 입력하거나 대상 텍스트를 불러온 뒤 음성 지시로 편집하고 확인하여 입력란에 반영합니다.',
     targetHint: '대상 입력란에 커서를 놓거나 편집할 텍스트를 선택하세요.',
-    androidTargetHint: '오버레이 스와이프 동작에 음성 편집을 지정하세요. 대상 앱에서 녹음한 뒤 스와이프하면 미리보기가 열리며, 확인하면 원래 입력란에 반영됩니다.',
+    androidTargetHint:
+      '오버레이 스와이프 동작에 음성 편집을 지정하세요. 대상 앱에서 녹음한 뒤 스와이프하면 미리보기가 열리며, 확인하면 원래 입력란에 반영됩니다.',
     startDraft: '초안 음성 입력 시작',
     status: '상태: {{phase}}',
     turns: '지시 횟수: {{count}}',
@@ -44,6 +50,12 @@ export const ko: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '자체 동기화 서버 (고급)',
+    customServerOrigin: '서버 주소 (https://...)',
+    customServerToken: '로그인 Token',
+    customServerSave: '저장',
+    customServerHint:
+      '비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.',
     protocolTitle: '클라우드 동기화 약관 및 개인정보 안내',
     protocolIntro:
       'OpenLess와 독립 개발자는 개인정보를 존중하고 데이터를 보호하기 위해 노력합니다. 계속하기 전에 아래 안내를 읽어 주세요.',
@@ -1219,6 +1231,13 @@ export const ko: typeof zhCN = {
     cancelledTitle: '녹음이 취소됨',
   },
   settings: {
+    testingFeatures: {
+      title: '테스트 중인 기능',
+      enable: '테스트 중인 기능 활성화',
+      description:
+        '지원되는 플랫폼에서 Less Computer와 Claude 콘솔을 표시하고 설정 및 사용할 수 있습니다. 끄면 실행 중인 작업을 중지하고 항목을 숨기지만 설정은 유지됩니다. 이 기기에만 적용됩니다.',
+      unavailable: '이 플랫폼에서는 아직 사용 가능한 테스트 기능이 없습니다.',
+    },
     selectionWorkspace: {
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
@@ -1291,7 +1310,7 @@ export const ko: typeof zhCN = {
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
+        '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',
@@ -1449,12 +1468,22 @@ export const ko: typeof zhCN = {
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
       capsuleTranscriptFontSize: '원문 글자 크기',
+      capsuleDisplayModeLabel: "다중 화면 캡슐",
+      capsuleDisplayModeDesc: "녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.",
+      capsuleDisplayCursorScreen: "마우스 포인터가 있는 화면",
+      capsuleDisplayAllScreens: "모든 화면에 표시",
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
+      lowLatencyDictationLabel: '저지연 캡처',
+      lowLatencyDictationDesc:
+        '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
+      audioEnhancementLabel: '가벼운 마이크 향상',
+      audioEnhancementDesc:
+        '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -1520,6 +1549,9 @@ export const ko: typeof zhCN = {
         '보관 기간을 초과한 기록은 새 항목 작성 시 정리됩니다. 0 = 시간 기반 정리 비활성화.',
       historyMaxEntriesLabel: '기록 개수 상한',
       historyMaxEntriesDesc: '로컬 보관 세션 상한. 빈칸 = 200. 범위 5–200.',
+      polishSkipMaxCharsLabel: '짧은 입력은 다듬기 건너뛰기(최대 글자 수)',
+      polishSkipMaxCharsDesc:
+        '공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.',
       polishContextWindowLabel: '대화 컨텍스트 윈도(분)',
       polishContextWindowDesc:
         '최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.',
@@ -1675,11 +1707,15 @@ export const ko: typeof zhCN = {
         asrOpenAiCompatible: '커스텀 OpenAI 호환',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek 실시간 음성 인식',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan 실시간 ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: '로컬 sherpa-onnx(실험적)',
         asrFoundryLocalWhisper: '로컬 Whisper(Foundry Local)',
         asrLocalWhisper: '로컬 Whisper(배치)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: '로컬 Qwen3-ASR',
         asrLocalQwen3Mlx: '로컬 Qwen3-ASR(MLX / Metal)',
         asrLocalQwen3C: '로컬 Qwen3-ASR(C / CPU)',
@@ -1688,6 +1724,12 @@ export const ko: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        '여기서는 gemini-3.5-transcribe로 그대로 전사한 뒤 설정된 LLM으로 처리합니다. 스마트 전사를 사용하려면 멀티모달 모드에서 이 모델을 선택하세요. 녹음이 끝나면 오디오를 업로드하며 실시간 전사는 지원하지 않습니다. 기본 URL: https://generativelanguage.googleapis.com/v1beta (/v1beta/interactions도 사용 가능).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe는 스마트 전사를 제공합니다. 녹음 후 군더더기 표현을 제거하고 말로 한 정정을 반영하며 문장을 정리합니다. 작업 언어와 사전 용어를 지원합니다. 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
+      validateSuccessAudio:
+        '짧은 무음 샘플로 오디오 연결을 확인했습니다. 짧은 녹음으로 전사 품질도 확인하세요.',
       elevenLabsUploadNotice:
         'ElevenLabs는 녹음 오디오를 설정된 엔드포인트에 업로드해 일괄 전사합니다.',
       zenmuxVocabularyNote:
@@ -2298,7 +2340,11 @@ export const ko: typeof zhCN = {
     noResults: '일치하는 카테고리가 없습니다. “마이크”, “모델” 또는 “테마”를 검색해 보세요.',
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
+    backToTestingFeatures: '테스트 중인 기능으로 돌아가기',
     advancedPages: {
+      customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',
+      localModels: experimentalAsr.description,
+      testingFeatures: '필요할 때 테스트 중인 기능을 활성화합니다.',
       vocabularyLearning:
         '음성 입력 후 수동 수정으로 학습하고 관찰 시간, 확인 시간, 글자 수를 설정합니다.',
       lessComputer: 'Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.',
@@ -2313,7 +2359,7 @@ export const ko: typeof zhCN = {
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '필요에 따라 Less Computer와 디버깅을 설정합니다.',
+      advanced: '테스트 기능, 어휘 학습 및 디버깅 도구를 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {
@@ -2461,7 +2507,10 @@ export const ko: typeof zhCN = {
     foundryError: 'Foundry 상태',
     foundrySetDefault: '기본값으로 설정 / Windows 로컬 ASR 활성화',
     foundryEnabling: '활성화 중…',
-    foundryPrepare: '준비 / 다운로드 / 로드',
+    foundryPrepare: '모델 다운로드 / 확인',
+    runtimeDownloadRestart:
+      '다운로드 중 네이티브 런타임을 사용했습니다. 모델을 활성화하기 전에 OpenLess를 다시 시작하세요. 모델은 자동으로 활성화되지 않습니다. 지금 다시 시작할까요?',
+    restartNow: '지금 다시 시작',
     foundryPreparing: '준비 중…',
     foundryReleasing: '해제 중…',
     foundryRetryPrepare: '준비 계속 / 다시 시도',

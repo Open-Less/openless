@@ -25,7 +25,15 @@ export function Row({ label, desc, children }: RowProps) {
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ol-ink)' }}>{label}</div>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 'var(--ol-font-weight-medium)',
+            color: 'var(--ol-ink)',
+          }}
+        >
+          {label}
+        </div>
         {desc && (
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 4, lineHeight: 1.5 }}>
             {desc}

@@ -471,6 +471,19 @@ mod tests {
         ));
         let recorder = FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(20, 0.5)]);
         let transcription = FixtureTranscriptionEngine::successful("fixture raw", 20);
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        credentials
+            .write(
+                openless_core::CredentialKey::new(
+                    openless_core::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    "ark.api_key",
+                )
+                .unwrap(),
+                openless_core::SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
         let runtime = LinuxBackendBuilder::new(
             BackendConfig {
                 data_dir: data_dir.clone(),
@@ -483,7 +496,7 @@ mod tests {
         .with_text_inserter(Arc::new(FixtureTextInserter::with_outcome(
             InsertOutcome::Inserted,
         )))
-        .with_credential_store(Arc::new(InMemoryCredentialStore::default()))
+        .with_credential_store(credentials)
         .build()
         .unwrap();
 
@@ -609,20 +622,37 @@ mod tests {
         .unwrap()
         .build()
         .unwrap();
+        let request = CodingAgentTestRequest {
+            provider: CodingAgentProvider::ClaudeCodeCli,
+            executable: Some("openless-command-that-does-not-exist".into()),
+            prompt: "test".into(),
+            permission_mode: openless_core::CodingAgentPermissionMode::Plan,
+            workdir: None,
+            model: None,
+            max_budget_usd: Some(0.5),
+            timeout_secs: 5,
+        };
+        let denied = runtime
+            .backend
+            .services()
+            .coding_agent
+            .run_test(request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, BackendErrorCode::PermissionDenied);
+        let mut preferences = runtime.backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        runtime
+            .backend
+            .repositories()
+            .preferences
+            .set(preferences)
+            .unwrap();
         let error = runtime
             .backend
             .services()
             .coding_agent
-            .run_test(CodingAgentTestRequest {
-                provider: CodingAgentProvider::ClaudeCodeCli,
-                executable: Some("openless-command-that-does-not-exist".into()),
-                prompt: "test".into(),
-                permission_mode: openless_core::CodingAgentPermissionMode::Plan,
-                workdir: None,
-                model: None,
-                max_budget_usd: Some(0.5),
-                timeout_secs: 5,
-            })
+            .run_test(request)
             .await
             .expect_err("missing coding agent executable must be explicit");
         assert_eq!(error.code, BackendErrorCode::Unsupported);

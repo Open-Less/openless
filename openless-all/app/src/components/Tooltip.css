@@ -1,0 +1,89 @@
+/* Floating UI uses viewport coordinates. Cancel the app's root zoom in the portal,
+   then restore it on the popup so text follows interface size without double-scaling positions. */
+.ol-popup-portal {
+  zoom: calc(1 / var(--ol-interface-scale, 1));
+}
+.ol-tooltip-anchor {
+  display: grid;
+  min-width: 0;
+}
+.ol-hint-trigger {
+  display: inline;
+  width: fit-content;
+  max-width: 100%;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  text-decoration: underline dotted var(--ol-ink-4);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.ol-hint-trigger:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 4px;
+}
+.ol-tooltip-positioner {
+  z-index: 10000;
+}
+.ol-tooltip-positioner[data-anchor-hidden] {
+  visibility: hidden;
+}
+.ol-tooltip-bubble {
+  width: max-content;
+  zoom: var(--ol-interface-scale, 1);
+  max-width: min(260px, calc(var(--available-width) / var(--ol-interface-scale, 1)));
+  max-height: calc(var(--available-height) / var(--ol-interface-scale, 1));
+  overflow-y: auto;
+  padding: 6px 10px;
+  border: 0.5px solid var(--ol-glass-border);
+  border-radius: 8px;
+  background: var(--ol-glass-bg-strong);
+  color: var(--ol-ink);
+  box-shadow: var(--ol-shadow-md);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  font: var(--ol-font-weight-medium) 12px / 1.6 var(--ol-font-sans);
+  overflow-wrap: anywhere;
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 125ms ease-out,
+    transform 125ms ease-out;
+}
+.ol-tooltip-bubble[data-wrap] {
+  max-width: min(320px, calc(var(--available-width) / var(--ol-interface-scale, 1)));
+  padding: 9px 12px;
+}
+.ol-tooltip-bubble p {
+  margin: 0;
+}
+.ol-tooltip-bubble p + p {
+  margin-top: 8px;
+}
+.ol-tooltip-bubble[data-starting-style],
+.ol-tooltip-bubble[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
+.ol-tooltip-bubble[data-instant],
+html[data-ol-input='keyboard'] .ol-tooltip-bubble {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-tooltip-bubble {
+    transition: none;
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .ol-tooltip-bubble {
+    background: var(--ol-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

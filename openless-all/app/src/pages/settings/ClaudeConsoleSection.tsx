@@ -60,6 +60,9 @@ export function ClaudeConsoleSection() {
     setDetecting(true);
     try {
       setDetection(await codingAgentDetect(exe.trim() || undefined));
+    } catch (error) {
+      setDetection(null);
+      setSummary(`✗ ${String(error)}`);
     } finally {
       setDetecting(false);
     }

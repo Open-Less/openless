@@ -3,13 +3,19 @@
 import type { zhCN } from './zh-CN';
 
 // Type-level guarantee that en mirrors the zh-CN shape.
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const en: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: 'Voice editing session',
     description:
       'Dictate a draft or load the target text, edit it with voice instructions, then confirm to write it back.',
     targetHint: 'Place the cursor in the target input field, or select the text to edit.',
-    androidTargetHint: 'Assign Voice editing to an overlay swipe. Record in the target app, then swipe to preview. Confirmation writes back to the original field.',
+    androidTargetHint:
+      'Assign Voice editing to an overlay swipe. Record in the target app, then swipe to preview. Confirmation writes back to the original field.',
     startDraft: 'Start dictating a draft',
     status: 'Status: {{phase}}',
     turns: 'Turns: {{count}}',
@@ -42,6 +48,12 @@ export const en: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: 'Self-hosted sync server (advanced)',
+    customServerOrigin: 'Server address (https://...)',
+    customServerToken: 'Sign-in token',
+    customServerSave: 'Save',
+    customServerHint:
+      'Leave blank to use the official sync server. The address must start with https:// and be a root URL.',
     protocolTitle: 'Cloud sync agreement and privacy notice',
     protocolIntro:
       'OpenLess and its independent developers respect your privacy and work to protect your data. Read this notice before continuing.',
@@ -1236,6 +1248,13 @@ export const en: typeof zhCN = {
     cancelledTitle: 'Recording cancelled',
   },
   settings: {
+    testingFeatures: {
+      title: 'Features under testing',
+      enable: 'Enable features under testing',
+      description:
+        'Show Less Computer and the Claude console for setup and use on supported platforms. Turning this off stops active tasks and hides their entries while keeping your settings. Applies only to this device.',
+      unavailable: 'No testing features are available on this platform yet.',
+    },
     selectionWorkspace: {
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
@@ -1313,7 +1332,7 @@ export const en: typeof zhCN = {
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
       cursorContextDesc:
-        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
+        'Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',
@@ -1473,12 +1492,22 @@ export const en: typeof zhCN = {
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
       capsuleTranscriptFontSize: 'Transcript font size',
+      capsuleDisplayModeLabel: "Multi-display capsule",
+      capsuleDisplayModeDesc: "Choose where the recording capsule appears. Showing it on all displays uses additional windows and graphics resources.",
+      capsuleDisplayCursorScreen: "Display under the pointer",
+      capsuleDisplayAllScreens: "Show on all displays",
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',
       stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
+      lowLatencyDictationLabel: 'Low-latency capture',
+      lowLatencyDictationDesc:
+        'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
+      audioEnhancementLabel: 'Lightweight microphone enhancement',
+      audioEnhancementDesc:
+        'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',
@@ -1544,6 +1573,9 @@ export const en: typeof zhCN = {
         'Entries older than this are pruned on new writes; 0 = no time-based pruning.',
       historyMaxEntriesLabel: 'Max history entries',
       historyMaxEntriesDesc: 'Max sessions retained locally. Blank = 200. Range 5–200.',
+      polishSkipMaxCharsLabel: 'Skip polish for short dictations (max characters)',
+      polishSkipMaxCharsDesc:
+        'Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.',
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
@@ -1701,10 +1733,14 @@ export const en: typeof zhCN = {
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek Realtime ASR',
         asrTencentCloud: 'Tencent Cloud Hunyuan Realtime ASR',
+        asrGemini: 'Google Gemini Transcribe',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: 'Local sherpa-onnx (Experimental)',
         asrFoundryLocalWhisper: 'Local Whisper (Foundry Local)',
         asrLocalWhisper: 'Local Whisper (batch)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'Local Qwen3-ASR',
         asrLocalQwen3Mlx: 'Local Qwen3-ASR (MLX / Metal)',
         asrLocalQwen3C: 'Local Qwen3-ASR (C / CPU)',
@@ -1713,6 +1749,12 @@ export const en: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe uses verbatim transcription here, followed by your configured LLM. For built-in Smart transcription, select this model in Multimodal mode. Audio is uploaded after recording stops; live transcription is not supported. Base URL: https://generativelanguage.googleapis.com/v1beta (also accepts /v1beta/interactions).',
+      geminiTranscribeOmniNotice:
+        'Use gemini-3.5-transcribe for Smart transcription: removes fillers, applies spoken corrections and formats the transcript after recording stops. Working languages and dictionary terms are supported. This model does not use style prompts or support translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
+      validateSuccessAudio:
+        'Audio connectivity passed using a short silence sample. Confirm transcription quality with a short recording.',
       elevenLabsUploadNotice:
         'ElevenLabs uploads recorded audio to the configured endpoint for batch transcription.',
       zenmuxVocabularyNote:
@@ -2348,7 +2390,11 @@ export const en: typeof zhCN = {
     noResults: 'No matching categories. Try “microphone”, “models” or “theme”.',
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
+    backToTestingFeatures: 'Back to features under testing',
     advancedPages: {
+      customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'Opt in to features that are still being tested.',
       vocabularyLearning:
         'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
       lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
@@ -2359,13 +2405,13 @@ export const en: typeof zhCN = {
     descriptions: {
       general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
       inputMethod: 'Configure the Android overlay and input method for phone typing.',
-      shortcuts: 'Set up shortcuts and choose what happens when you select text.',
+      shortcuts: 'Search, browse and customize keyboard shortcuts.',
       services:
         'Choose speech recognition and text processing services. Manage channels, local models and connections.',
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure Less Computer and debugging as needed.',
+      advanced: 'Configure testing features, vocabulary learning, and debugging tools.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {
@@ -2382,7 +2428,7 @@ export const en: typeof zhCN = {
 
     sections: {
       appearance: 'Appearance & language',
-      shortcuts: 'Shortcuts & selection',
+      shortcuts: 'Shortcuts',
       general: 'Recording & input',
       inputMethod: 'Input method',
       services: 'AI services & models',
@@ -2513,7 +2559,10 @@ export const en: typeof zhCN = {
     foundryError: 'Foundry status',
     foundrySetDefault: 'Set default / Enable Windows local ASR',
     foundryEnabling: 'Enabling…',
-    foundryPrepare: 'Prepare / Download / Load',
+    foundryPrepare: 'Download / verify model',
+    runtimeDownloadRestart:
+      'The download used native runtime components. Restart OpenLess before enabling the model; it will not be enabled automatically. Restart now?',
+    restartNow: 'Restart now',
     foundryPreparing: 'Preparing…',
     foundryReleasing: 'Releasing…',
     foundryRetryPrepare: 'Continue / Retry prepare',

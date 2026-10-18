@@ -337,9 +337,15 @@ fn check_stop_reason(value: &Value) -> Result<bool, LLMError> {
     Ok(false)
 }
 
+#[cfg(test)]
 pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<String, LLMError> {
+    let extracted = extract_text_raw(format, text)?;
+    Ok(crate::polish::clean_polish_output(&extracted))
+}
+
+pub(crate) fn extract_text_raw(format: LlmRequestFormat, text: &str) -> Result<String, LLMError> {
     if format == LlmRequestFormat::ChatCompletions {
-        return crate::polish::extract_assistant_content(text);
+        return crate::polish::extract_assistant_content_raw(text);
     }
     let value: Value =
         serde_json::from_str(text).map_err(|_| response_error("invalid LLM JSON"))?;
@@ -371,7 +377,7 @@ pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<Strin
     if output.is_empty() {
         return Err(response_error("empty LLM response"));
     }
-    Ok(crate::polish::clean_polish_output(&output))
+    Ok(output)
 }
 
 fn append_blocks(output: &mut String, blocks: &Value, kind: &str) {
@@ -810,6 +816,20 @@ mod tests {
         ] {
             assert_eq!(extract_text(format, &body.to_string()).unwrap(), "你好");
         }
+        let chat_body = json!({
+            "choices": [{
+                "message": {"content": "<think>secret</think>\n正文"}
+            }]
+        });
+        assert!(
+            extract_text_raw(LlmRequestFormat::ChatCompletions, &chat_body.to_string())
+                .unwrap()
+                .contains("<think>")
+        );
+        assert_eq!(
+            extract_text(LlmRequestFormat::ChatCompletions, &chat_body.to_string()).unwrap(),
+            "正文"
+        );
         assert!(extract_text(
             LlmRequestFormat::Responses,
             r#"{"status":"incomplete","output":[]}"#
@@ -853,6 +873,25 @@ mod tests {
             assert!(stream.done, "recognize the terminal marker before EOF");
             stream.finish().unwrap();
         }
+    }
+
+    #[test]
+    fn chat_sse_appends_incremental_deltas_without_guessing_repetition() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream
+            .push(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"非常\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"非常重要\"}}]}\n\ndata: [DONE]\n\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().unwrap() {
+            if let StreamEvent::Text(delta) = event {
+                text.push_str(&delta);
+            }
+        }
+        stream.finish().unwrap();
+        assert_eq!(text, "非常非常重要");
     }
 
     #[test]

@@ -29,12 +29,18 @@ import {
   searchSettingsSections,
   visibleSettingsSections,
   visibleAdvancedPages,
+  isTestingFeaturePage,
   type AdvancedPageId,
   type SettingsSectionId,
 } from '../pages/settings/navigation';
 import { ChannelEditorHostContext } from '../pages/settings/ChannelEditorHostContext';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
+import {
+  useExperimentalAsr,
+  ExperimentalAsrGuidance,
+} from '../pages/settings/ExperimentalAsrSection';
 import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
-import { useContentMotion, useOverlayMotion } from '../lib/motion';
+import { usePageTransition, useOverlayMotion } from '../lib/motion';
 
 export type { SettingsSectionId } from '../pages/settings/navigation';
 
@@ -63,16 +69,42 @@ export function SettingsModal({
   const providerForm = useProviderForm();
   const mobile = useMobileLayout();
   const conservative = useConservativeLayout();
-  const [section, setSection] = useState<SettingsSectionId>(initialSettingsSection ?? 'general');
-  const [advancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
+  const [requestedSection, setSection] = useState<SettingsSectionId>(
+    initialSettingsSection ?? 'general',
+  );
+  const [requestedAdvancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
+  const experimentalAsr = useExperimentalAsr(platformCaps?.platform === 'desktop' && os === 'mac');
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const [asrNavigation, setAsrNavigation] = useState(0);
+  const openExperimentalAsrChannels = async () => {
+    const navigated = await providerForm.finish(async () => {
+      await updatePrefs((current) => ({ ...current, pipelineMode: 'traditional' }));
+      channelCloseRef.current?.();
+      setAsrNavigation((value) => value + 1);
+      setQuery('');
+      setAdvancedPage(null);
+      setSection('services');
+    });
+    if (!navigated) throw new Error(t('common.operationFailed'));
+  };
   const savedToast = useSavedToastListener();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  useOverlayMotion(overlayRef, closing, 'backdrop', !mobile, 'settings');
-  useOverlayMotion(surfaceRef, closing, mobile ? 'sheet' : 'card', true, 'settings');
+  // A settings destination, not a dialog floating inside another framed surface.
+  // Fade the entire workspace, including its opaque background. Fading only the
+  // child left a solid sheet that disappeared in a single frame on unmount.
+  useOverlayMotion(overlayRef, closing, 'backdrop', true, 'settings');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const destination = usePageTransition(
+    `${requestedSection}:${requestedAdvancedPage ?? ''}`,
+    scrollRef,
+    mobile,
+  );
+  const [sectionKey, advancedKey] = destination.split(':');
+  const section = sectionKey as SettingsSectionId;
+  const advancedPage = (advancedKey || null) as AdvancedPageId | null;
   const searchRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -97,9 +129,9 @@ export function SettingsModal({
     }),
   );
   const searching = query.trim().length > 0;
-  useContentMotion(scrollRef, `${section}:${searching ? 'search' : (advancedPage ?? 'root')}`);
   const results = searchSettingsSections(sections, query);
-  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os);
+  const testingFeaturesEnabled = prefs?.testingFeaturesEnabled === true;
+  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os, testingFeaturesEnabled);
   const activeAdvancedPage =
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
@@ -181,14 +213,14 @@ export function SettingsModal({
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [section, searching, advancedPage]);
 
   useEffect(() => {
     if (advancedPage && !advancedPages.some((page) => page.id === advancedPage))
-      setAdvancedPage(null);
-  }, [advancedPage, platformCaps, os]);
+      setAdvancedPage(isTestingFeaturePage(advancedPage) ? 'testingFeatures' : null);
+  }, [advancedPage, platformCaps, os, testingFeaturesEnabled]);
 
   const openAdvancedPage = (page: AdvancedPageId) => {
     setAdvancedPage(page);
@@ -197,7 +229,7 @@ export function SettingsModal({
 
   const backToAdvanced = () => {
     const previousPage = advancedPage;
-    setAdvancedPage(null);
+    setAdvancedPage(isTestingFeaturePage(previousPage) ? 'testingFeatures' : null);
     window.requestAnimationFrame(() => {
       surfaceRef.current
         ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
@@ -235,7 +267,7 @@ export function SettingsModal({
         surfaceRef.current?.querySelectorAll<HTMLElement>(
           'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
         ) ?? [],
-      ).filter((element) => element.getClientRects().length > 0);
+      ).filter((element) => element.getClientRects().length > 0 && !element.closest('[inert]'));
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (
@@ -309,16 +341,15 @@ export function SettingsModal({
     <ProviderLeaveContext.Provider value={providerForm.register}>
       <div
         ref={overlayRef}
-        className={mobile ? undefined : 'ol-dialog-overlay'}
-        onClick={mobile || closing ? undefined : closeSettings}
+        className="ol-settings-workspace"
         style={{
           position: mobile ? 'fixed' : 'absolute',
           inset: 0,
-          background: mobile ? 'var(--ol-surface)' : 'var(--ol-dialog-backdrop)',
+          background: 'var(--ol-surface)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: mobile ? 0 : '64px 28px 24px',
+          padding: 0,
           zIndex: mobile ? 70 : 50,
           pointerEvents: closing ? 'none' : undefined,
         }}
@@ -329,20 +360,20 @@ export function SettingsModal({
           // Existing menus and child dialogs portal to document.body. Keep those
           // accessible; FloatingShell makes the covered application inert.
           aria-label={t('shell.footer.settings')}
-          className="ol-settings-surface ol-dialog-card"
+          className="ol-settings-surface"
           data-ol-mobile={mobile ? 'true' : undefined}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={handleKeyDown}
           style={{
             width: '100%',
-            maxWidth: mobile ? undefined : 960,
+            maxWidth: '100%',
             height: '100%',
-            maxHeight: mobile ? undefined : 680,
+            maxHeight: '100%',
             minHeight: 0,
             background: 'var(--ol-settings-content-bg)',
-            borderRadius: mobile ? 0 : 'var(--ol-dialog-radius)',
-            border: mobile ? 'none' : '1px solid var(--ol-dialog-border)',
-            boxShadow: mobile ? 'none' : 'var(--ol-dialog-shadow)',
+            borderRadius: 0,
+            border: 'none',
+            boxShadow: 'none',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
@@ -389,11 +420,11 @@ export function SettingsModal({
           >
             <aside
               style={{
-                width: mobile ? undefined : 214,
+                width: mobile ? undefined : 226,
                 flexShrink: 0,
                 minHeight: 0,
                 overflow: 'auto',
-                padding: mobile ? '8px 12px' : '16px 12px',
+                padding: mobile ? '8px 12px' : os === 'mac' ? '48px 12px 16px' : '20px 12px',
                 background: 'var(--ol-settings-rail-bg)',
                 borderRight: mobile ? undefined : '0.5px solid var(--ol-line-soft)',
                 borderBottom: mobile ? '0.5px solid var(--ol-line-soft)' : undefined,
@@ -402,6 +433,17 @@ export function SettingsModal({
                 gap: 12,
               }}
             >
+              {!mobile && (
+                <button
+                  ref={closeRef}
+                  type="button"
+                  className="ol-settings-return"
+                  onClick={closeSettings}
+                >
+                  <Icon name="chevLeft" size={16} />
+                  {t('uiRefinement.back')}
+                </button>
+              )}
               {!mobile && searchBox}
               <nav
                 ref={railNavRef}
@@ -434,7 +476,7 @@ export function SettingsModal({
                   />
                 )}
                 {sections.map((item) => {
-                  const active = !searching && section === item.id;
+                  const active = !searching && requestedSection === item.id;
                   return (
                     <button
                       key={item.id}
@@ -461,7 +503,7 @@ export function SettingsModal({
                               whiteSpace: 'nowrap',
                               background: active ? 'var(--ol-blue-soft)' : 'transparent',
                               color: active ? 'var(--ol-blue)' : 'var(--ol-ink-2)',
-                              fontWeight: active ? 600 : 400,
+                              fontWeight: active ? 'var(--ol-font-weight-semibold)' : 400,
                             }
                           : {
                               ...navButtonStyle,
@@ -524,7 +566,11 @@ export function SettingsModal({
                         display: 'flex',
                         alignItems: 'center',
                         gap: 12,
-                        padding: '18px 24px 0',
+                        padding: mobile
+                          ? '18px 24px 0'
+                          : os === 'mac'
+                            ? '48px 28px 0'
+                            : '24px 28px 0',
                         flexShrink: 0,
                       }}
                     >
@@ -533,8 +579,16 @@ export function SettingsModal({
                           type="button"
                           className="ol-settings-back"
                           onClick={backToAdvanced}
-                          aria-label={t('modal.backToAdvanced')}
-                          title={t('modal.backToAdvanced')}
+                          aria-label={t(
+                            isTestingFeaturePage(advancedPage)
+                              ? 'modal.backToTestingFeatures'
+                              : 'modal.backToAdvanced',
+                          )}
+                          title={t(
+                            isTestingFeaturePage(advancedPage)
+                              ? 'modal.backToTestingFeatures'
+                              : 'modal.backToAdvanced',
+                          )}
                         >
                           <Icon name="chevLeft" size={19} />
                         </button>
@@ -558,20 +612,9 @@ export function SettingsModal({
                         {contentTitle}
                       </h2>
                       {!mobile && (
-                        <>
-                          <span style={{ color: 'var(--ol-ink-3)', fontSize: 12, flexShrink: 0 }}>
-                            {t('modal.autoSaveHint')}
-                          </span>
-                          <button
-                            ref={closeRef}
-                            type="button"
-                            onClick={closeSettings}
-                            aria-label={t('common.close')}
-                            style={iconButtonStyle}
-                          >
-                            <Icon name="close" size={17} />
-                          </button>
-                        </>
+                        <span style={{ color: 'var(--ol-ink-3)', fontSize: 12, flexShrink: 0 }}>
+                          {t('modal.autoSaveHint')}
+                        </span>
                       )}
                     </div>
                   )}
@@ -593,23 +636,26 @@ export function SettingsModal({
                         {contentTitle}
                       </h2>
                     )}
-                    <p
-                      style={{
-                        margin: mobile && !activeAdvancedPage ? '7px 0 0' : 0,
-                        fontSize: 13,
-                        lineHeight: 1.6,
-                        color: 'var(--ol-ink-3)',
-                      }}
-                      aria-live="polite"
-                    >
-                      {contentDescription}
-                    </p>
+                    {activeAdvancedPage?.id !== 'localModels' && (
+                      <p
+                        style={{
+                          margin: mobile && !activeAdvancedPage ? '7px 0 0' : 0,
+                          fontSize: 13,
+                          lineHeight: 1.6,
+                          color: 'var(--ol-ink-3)',
+                        }}
+                        aria-live="polite"
+                      >
+                        {contentDescription}
+                      </p>
+                    )}
                   </div>
                   <div
                     ref={scrollRef}
-                    className={['ol-thinscroll', conservative ? 'ol-conservative-scope' : ''].join(
-                      ' ',
-                    )}
+                    className={[
+                      'ol-thinscroll ol-settings-scroll',
+                      conservative ? 'ol-conservative-scope' : '',
+                    ].join(' ')}
                     style={{
                       flex: 1,
                       minHeight: 0,
@@ -638,7 +684,13 @@ export function SettingsModal({
                           >
                             <Icon name={item.icon} size={18} />
                             <span style={{ flex: 1, minWidth: 0 }}>
-                              <span style={{ display: 'block', fontWeight: 600, marginBottom: 5 }}>
+                              <span
+                                style={{
+                                  display: 'block',
+                                  fontWeight: 'var(--ol-font-weight-semibold)',
+                                  marginBottom: 5,
+                                }}
+                              >
                                 {item.title}
                               </span>
                               <span
@@ -683,6 +735,8 @@ export function SettingsModal({
                     {/* Category replacement keeps each form's lifecycle separate. */}
                     <div
                       key={section}
+                      className="ol-settings-sections"
+                      data-section={section}
                       style={{
                         display: searching ? 'none' : 'flex',
                         flexDirection: 'column',
@@ -693,13 +747,15 @@ export function SettingsModal({
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}
-                      {section === 'services' && <ServicesTab />}
+                      {section === 'services' && <ServicesTab asrNavigation={asrNavigation} />}
                       {section === 'privacy' && <PrivacyTab />}
                       {section === 'advanced' && (
                         <AdvancedTab
                           pages={advancedPages}
                           page={advancedPage}
                           onOpenPage={openAdvancedPage}
+                          experimentalAsr={experimentalAsr}
+                          onOpenAsr={openExperimentalAsrChannels}
                         />
                       )}
                       {section === 'about' && <AboutTab />}
@@ -712,6 +768,10 @@ export function SettingsModal({
           </div>
         </div>
       </div>
+      <ExperimentalAsrGuidance
+        controller={experimentalAsr}
+        onOpenAsr={openExperimentalAsrChannels}
+      />
     </ProviderLeaveContext.Provider>
   );
 }

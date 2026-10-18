@@ -338,6 +338,9 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             }
             // 实验与扩展的下钻页把标题换成子页标题，并在左侧给出返回箭头
             // （Tauri 的 `activeAdvancedPage` 顶栏）。
+            if vm.advanced_open == 0 && !vm.settings.testing_features {
+                vm.advanced_open = 3;
+            }
             let detail = if vm.settings_section == SettingsSection::Advanced {
                 advanced_page_title(vm, lang)
             } else {
@@ -371,7 +374,7 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
                         stroke,
                     );
                     if response.clicked() {
-                        vm.advanced_open = usize::MAX;
+                        vm.advanced_open = if vm.advanced_open == 0 { 3 } else { usize::MAX };
                     }
                     ui.label(
                         egui::RichText::new(title)
@@ -469,6 +472,10 @@ fn advanced_page_title(vm: &FrontendViewModel, lang: Lang) -> Option<(&'static s
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         )),
+        3 => Some((
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
+        )),
         _ => None,
     }
 }
@@ -492,7 +499,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     field: ShortcutField::Dictation,
                     label: tr_l10n(lang, "settings.recording.hotkey_label"),
                     value: vm.dictation_hotkey.clone(),
-                    can_disable: false,
+                    can_disable: true,
                     hint: recording_mode_hint(lang, vm.settings.recording_mode),
                 },
             );
@@ -663,6 +670,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     }
                 },
             );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.audio_enhancement_label"),
+                tr_l10n(lang, "settings.recording.audio_enhancement_desc"),
+                vm.settings.audio_enhancement,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::AudioEnhancement,
+                    ));
+                },
+            );
         },
     );
 
@@ -759,17 +777,16 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                 actions.push(FrontendAction::SettingsToggle(SettingsField::RemoteInput));
             },
         );
-        let port = vm.settings.remote_port.clone();
         text_edit_row(
             ui,
             tr_l10n(lang, "settings.remote_input.port_label"),
             "",
             &mut vm.settings.remote_port,
             "8765",
-            || {
+            |text| {
                 actions.push(FrontendAction::SettingsText(
                     SettingsTextField::RemotePort,
-                    port,
+                    text.to_owned(),
                 ));
             },
         );
@@ -870,14 +887,14 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
             value: vm.dictation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: dictation_hint,
         },
         ShortcutRow {
             field: ShortcutField::Translation,
             label: tr_l10n(lang, "hotkey.translation"),
             value: vm.translation_hotkey.clone(),
-            can_disable: false,
+            can_disable: true,
             hint: String::new(),
         },
         ShortcutRow {
@@ -927,6 +944,9 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             // 风格直达快捷键：Tauri 把它放在「切换到上一个风格」之后、打开 App 之前。
             style_pack_hotkey_block(ui, vm, actions);
             for row in &rows[5..] {
+                if row.field == ShortcutField::CodingAgentVoice && !vm.settings.testing_features {
+                    continue;
+                }
                 shortcut_row(ui, vm, actions, row);
             }
             // 取消本次录音：Tauri 只展示 Esc，不可编辑（Windows/Linux 胶囊无确认键）。
@@ -978,7 +998,7 @@ pub(super) struct ShortcutRow {
     label: &'static str,
     /// 已格式化的键帽文本（`Ctrl+Shift+;`），空串 = 未设置。
     value: String,
-    /// 核心热键（录音）不可停用，Tauri 用 `comboDisableHint` 说明原因。
+    /// 已配置的快捷键均可清空；尚未保存的草稿不提供停用操作。
     can_disable: bool,
     /// 行下方的补充说明（录音行显示当前录音方式后缀）。
     hint: String,
@@ -2059,45 +2079,55 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         tr_l10n(lang, "settings.data_storage.title"),
         tr_l10n(lang, "settings.data_storage.desc"),
         |ui| {
-            let retention = vm.settings.retention_days.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.history_retention_label"),
                 "",
                 &mut vm.settings.retention_days,
                 "0",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::RetentionDays,
-                        retention,
+                        text.to_owned(),
                     ));
                 },
             );
-            let entries = vm.settings.history_max_entries.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.history_max_entries_label"),
                 "",
                 &mut vm.settings.history_max_entries,
                 "200",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::HistoryMaxEntries,
-                        entries,
+                        text.to_owned(),
                     ));
                 },
             );
-            let window = vm.settings.polish_context_window.clone();
             text_edit_row(
                 ui,
                 tr_l10n(lang, "settings.recording.polish_context_window_label"),
                 tr_l10n(lang, "settings.recording.polish_context_window_desc"),
                 &mut vm.settings.polish_context_window,
                 "0",
-                || {
+                |text| {
                     actions.push(FrontendAction::SettingsText(
                         SettingsTextField::PolishContextWindow,
-                        window,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_label"),
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_desc"),
+                &mut vm.settings.polish_skip_max_chars,
+                "0",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::PolishSkipMaxChars,
+                        text.to_owned(),
                     ));
                 },
             );
@@ -2125,7 +2155,31 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
+        (
+            SettingsIcon::Sparkle,
+            tr_l10n(lang, "settings.testing_features.title"),
+            tr_l10n(lang, "modal.advanced_pages.testing_features"),
+        ),
     ];
+    if vm.advanced_open == 3 {
+        experimental_card(ui, rows[3].1, "Beta", "", |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.testing_features.enable"),
+                tr_l10n(lang, "settings.testing_features.description"),
+                vm.settings.testing_features,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::TestingFeatures,
+                    ))
+                },
+            );
+            if vm.settings.testing_features && drill_row(ui, rows[0].0, rows[0].1, rows[0].2) {
+                vm.advanced_open = 0;
+            }
+        });
+        return;
+    }
     if vm.advanced_open < rows.len() {
         let (icon, title, _) = rows[vm.advanced_open];
         let _ = icon;
@@ -2200,45 +2254,42 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
-                let model = vm.settings.coding_agent_model.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_agent.model"),
                     tr_l10n(lang, "settings.coding_agent.model_hint"),
                     &mut vm.settings.coding_agent_model,
                     tr_l10n(lang, "settings.coding_agent.model_placeholder"),
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentModel,
-                            model,
+                            text.to_owned(),
                         ));
                     },
                 );
-                let workdir = vm.settings.coding_agent_workdir.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_console.workdir"),
                     tr_l10n(lang, "settings.coding_console.workdir_desc"),
                     &mut vm.settings.coding_agent_workdir,
                     tr_l10n(lang, "settings.coding_console.workdir_placeholder"),
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentWorkdir,
-                            workdir,
+                            text.to_owned(),
                         ));
                     },
                 );
-                let exe = vm.settings.coding_agent_exe.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.coding_agent.exe"),
                     "",
                     &mut vm.settings.coding_agent_exe,
                     "claude",
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::CodingAgentExe,
-                            exe,
+                            text.to_owned(),
                         ));
                     },
                 );
@@ -2256,17 +2307,16 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
-                let entries = vm.settings.audio_recording_max_entries.clone();
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
                     &mut vm.settings.audio_recording_max_entries,
                     "50",
-                    || {
+                    |text| {
                         actions.push(FrontendAction::SettingsText(
                             SettingsTextField::AudioRecordingMaxEntries,
-                            entries,
+                            text.to_owned(),
                         ));
                     },
                 );
@@ -2283,8 +2333,14 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         return;
     }
     card(ui, "", "", |ui| {
-        for (index, (icon, title, description)) in rows.iter().enumerate() {
-            if drill_row(ui, *icon, title, description) {
+        for index in [3, 1, 2] {
+            let (icon, title, description) = rows[index];
+            let title = if index == 3 {
+                format!("{title} · Beta")
+            } else {
+                title.to_string()
+            };
+            if drill_row(ui, icon, &title, description) {
                 vm.advanced_open = index;
             }
         }
@@ -3614,7 +3670,7 @@ fn text_edit_row(
     desc: &str,
     value: &mut String,
     hint: &str,
-    on_change: impl FnOnce(),
+    on_change: impl FnOnce(&str),
 ) {
     row_desc(ui, label, desc, |ui| {
         let response = layout::text_input(
@@ -3626,7 +3682,7 @@ fn text_edit_row(
             false,
         );
         if response.changed() {
-            on_change();
+            on_change(value);
         }
     });
 }
@@ -3755,6 +3811,68 @@ pub(crate) fn test_render_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_polish_threshold_row_emits_the_edited_value_only_when_changed() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            ..Default::default()
+        };
+        vm.settings.polish_skip_max_chars = "0".to_string();
+        let mut actions = Vec::new();
+        let label = tr_l10n(vm.lang, "settings.recording.polish_skip_max_chars_label");
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        for (events, expected) in [
+            (Vec::new(), None),
+            (
+                vec![
+                    egui::Event::Key {
+                        key: egui::Key::A,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    egui::Event::Text("8".to_string()),
+                ],
+                Some("8"),
+            ),
+            (Vec::new(), None),
+        ] {
+            actions.clear();
+            let _ = crate::ui::frontend::run_pass(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760.0, 2200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    privacy(ui, &mut vm, &mut actions);
+                },
+            );
+            if let Some(expected) = expected {
+                assert_eq!(vm.settings.polish_skip_max_chars, expected);
+                assert_eq!(actions.len(), 1);
+                assert!(
+                    matches!(&actions[0], FrontendAction::SettingsText(SettingsTextField::PolishSkipMaxChars, text) if text == expected)
+                );
+            } else {
+                assert!(actions.is_empty());
+            }
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new(("openless-settings-text", label)))
+            });
+        }
+    }
 
     #[test]
     fn quick_note_shortcut_value_and_menu_align_left_with_arrow_at_row_end() {

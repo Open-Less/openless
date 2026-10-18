@@ -8,7 +8,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,7 +53,7 @@ try {
   for (const name of [
     'build-mac.sh',
     'macos-build-env.sh',
-    'check-macos-speech-usage-description.sh',
+    'check-macos-audio-usage-description.sh',
   ]) {
     copyFileSync(join(scripts, name), join(root, 'scripts', name));
   }
@@ -64,7 +63,6 @@ try {
     `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>NSMicrophoneUsageDescription</key><string>Microphone</string>
-<key>NSSpeechRecognitionUsageDescription</key><string>Speech</string>
 </dict></plist>`,
   );
 
@@ -74,7 +72,6 @@ try {
   executable(
     'npm',
     `
-if [ "$*" = "run check:macos-metal-toolchain" ]; then exit 0; fi
 [[ "$*" == *"-- --locked --timings"* ]]
 [[ "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" == 16 ]]
 [[ "$CARGO_PROFILE_RELEASE_STRIP" == debuginfo ]]
@@ -82,9 +79,7 @@ app=src-tauri/target/release/bundle/macos/OpenLess.app
 dmg=src-tauri/target/release/bundle/dmg/OpenLess_1.2.3_x64.dmg
 # Old bundles must be gone before compilation starts, while Cargo stays warm.
 [[ ! -e "$app" && ! -e "$dmg" && ! -e "$app.tar.gz" && ! -e "$app.tar.gz.sig" ]]
-[[ -f src-tauri/target/release/build/qwen3-asr-rs-helper/build-script-build ]]
-[[ -f src-tauri/target/release/build/qwen3-asr-rs-new/out/lib/mlx.metallib ]]
-[[ ! -e src-tauri/target/release/build/qwen3-asr-rs-old ]]
+[[ -f src-tauri/target/release/build/native-helper/build-script-build ]]
 if [ "$BUILD_FIXTURE_MODE" = missing ]; then exit 0; fi
 mkdir -p "$app/Contents/MacOS" "$(dirname "$dmg")"
 cp fixture.plist "$app/Contents/Info.plist"
@@ -96,10 +91,7 @@ if [ "$BUILD_FIXTURE_MODE" = failure ]; then exit 23; fi
 `,
   );
 
-  put(join(builds, 'qwen3-asr-rs-helper/build-script-build'), 'cached executable');
-  put(join(builds, 'qwen3-asr-rs-new/out/lib/mlx.metallib'), 'new shader');
-  put(join(builds, 'qwen3-asr-rs-old/out/lib/mlx.metallib'), 'old shader');
-  utimesSync(join(builds, 'qwen3-asr-rs-old/out/lib/mlx.metallib'), 1, 1);
+  put(join(builds, 'native-helper/build-script-build'), 'cached executable');
   put(join(app, 'Contents/MacOS/openless'), 'stale binary');
   put(dmg, 'stale dmg');
   put(`${app}.tar.gz`, 'stale updater');
@@ -110,7 +102,7 @@ if [ "$BUILD_FIXTURE_MODE" = failure ]; then exit 23; fi
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(readFileSync(dmg, 'utf8').trim(), 'dmg');
     assert.equal(
-      readFileSync(join(builds, 'qwen3-asr-rs-helper/build-script-build'), 'utf8'),
+      readFileSync(join(builds, 'native-helper/build-script-build'), 'utf8'),
       'cached executable',
     );
   }

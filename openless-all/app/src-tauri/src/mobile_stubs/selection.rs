@@ -23,7 +23,10 @@ pub struct SelectionCaptureOutcome {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget;
 
-/// Normal dictation creates an insertion session first on every Host. Mobile has no restorable desktop
+pub(crate) fn front_app_for_target(_target: &SelectionInsertionTarget) -> Option<String> {
+    None
+}
+
 /// focus, so it only returns a stateless opaque token; actual text insertion remains up to the Android
 /// accessibility/Shizuku Adapter, and this token must not be treated as a verifiable Selection Polish target.
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {

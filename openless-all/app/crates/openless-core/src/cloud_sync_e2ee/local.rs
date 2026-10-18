@@ -37,6 +37,8 @@ pub(crate) struct ClientSettings {
     pub enabled: bool,
     pub consent_version: Option<String>,
     pub owner_id: Option<String>,
+    #[serde(default)]
+    pub service_origin: Option<String>,
     pub remember_key: bool,
     #[serde(default)]
     pub key_preference_epoch: u64,
@@ -58,10 +60,11 @@ pub(crate) struct UiEnvelope {
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             enabled: false,
             consent_version: None,
             owner_id: None,
+            service_origin: None,
             remember_key: false,
             key_preference_epoch: 0,
             last_success: None,
@@ -88,6 +91,12 @@ impl LocalStorage {
             cipher: Arc::new(OnceCell::new()),
             io: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    pub(crate) fn account_namespace(origin: &str, owner: &str) -> SyncResult<String> {
+        let binding =
+            serde_json::to_vec(&[origin, owner]).map_err(|_| error("local_storage_unavailable"))?;
+        Ok(format!("remote-v2:{:x}", Sha256::digest(binding)))
     }
 
     pub(crate) fn initialized(&self) -> SyncResult<bool> {

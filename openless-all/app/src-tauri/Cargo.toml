@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.0-Beta.4+build.20260930"
+version = "2.0.2-Beta.1+build.20261017"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -15,7 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # Keep on the same train as `tauri = "=2.11.2"`. Floating `version = "2"` resolves
 # to tauri-build 2.7 when CI regenerates the lockfile.
 tauri-build = { version = "=2.6.2", features = [] }
-# Compile vendored Open-Less/qwen-asr C sources for the local ASR engine on macOS.
+# Windows manifest anchor and Apple compiler runtime discovery (not legacy ASR).
 cc = "1.1"
 
 [dependencies]
@@ -25,7 +25,7 @@ zeroize = "1"
 openless-core = { path = "../crates/openless-core" }
 # Pin the whole 2.11.2 train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
 # unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
-# Direct pins keep `cargo generate-lockfile` (ci-disable-macos-qwen3) compatible.
+# Direct pins keep fresh lockfile resolution on the compatible train.
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
 tauri = { version = "=2.11.2", features = ["macos-private-api"] }
@@ -114,8 +114,7 @@ default-features = false
 features = ["windows-native"]
 
 [target.'cfg(unix)'.dependencies]
-# PIN persistence uses O_NOFOLLOW/O_NONBLOCK/O_CLOEXEC; macOS qwen-asr also
-# uses libc::free for strings allocated by the C runtime.
+# PIN persistence and owned optional-worker process groups use Unix primitives.
 libc = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -124,12 +123,12 @@ ndk-context = "0.1"
 tao = "0.35"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["static"] }
 security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"
-tokenizers = "0.21"
-whisper-rs = { version = "0.14", features = ["metal"] }
 core-graphics = "0.24"
+dispatch2 = "0.3"
 # issue #470：托盘麦克风设备变更改用 CoreAudio AudioObjectAddPropertyListener 原生通知
 # （替代 10s 轮询，空闲零唤醒）。符号本就在依赖树（cpal → coreaudio-sys 0.2），提升为
 # 直接依赖零额外编译成本。
@@ -139,12 +138,6 @@ objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
-[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-# 注意：path 依赖的 manifest 会被 Cargo 解析器跨所有 target 读取（与 cfg gating
-# 无关），所以**所有平台**源码构建都必须先 `git submodule update --init --recursive`，
-# 否则 cargo check 会在解析阶段硬失败。CI 里非 macOS 任务依赖
-# scripts/ci-disable-macos-qwen3.mjs 删掉本行来规避。
-qwen3-asr-rs = { path = "vendor/qwen3-asr-rs", default-features = false, features = ["mlx"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }

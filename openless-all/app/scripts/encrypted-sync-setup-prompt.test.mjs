@@ -23,7 +23,8 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
-const jsx = (type, props) => ({ type, props: props ?? {} });
+const jsx = (type, props) =>
+  typeof type === 'function' ? type(props) : { type, props: props ?? {} };
 const all = (tree) =>
   Array.isArray(tree) ? tree.flatMap(all) : tree?.props ? [tree, ...all(tree.props.children)] : [];
 function context({ native = true, blocked = false } = {}) {
@@ -82,7 +83,12 @@ function context({ native = true, blocked = false } = {}) {
       },
     },
     '../pages/settings/CloudSyncSection': { CloudSyncSection: 'sync-section' },
-    './ui/Modal': { Modal: 'modal' },
+    './ui/Modal': {
+      // Eligibility tests do not advance animation clocks; closed presence has
+      // no interactive content. Browser tests verify its retained inert exit.
+      PresenceModal: ({ open, render, ...props }) =>
+        open ? jsx('modal', { ...props, children: render() }) : null,
+    },
     '@tauri-apps/api/event': {
       listen: async (name, fn) => {
         listeners.set(name, fn);

@@ -1,12 +1,18 @@
 import type { zhCN } from './zh-CN';
 
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const es: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: 'Sesión de edición por voz',
     description:
       'Dicte un borrador o cargue el texto de destino, edítelo con instrucciones de voz y confirme para insertarlo.',
     targetHint: 'Coloque el cursor en el campo de destino o seleccione el texto que desea editar.',
-    androidTargetHint: 'Asigna la edición por voz a un gesto de la superposición. Graba en la aplicación de destino y desliza para ver la vista previa. Al confirmar, se actualiza el campo original.',
+    androidTargetHint:
+      'Asigna la edición por voz a un gesto de la superposición. Graba en la aplicación de destino y desliza para ver la vista previa. Al confirmar, se actualiza el campo original.',
     startDraft: 'Dictar un borrador',
     status: 'Estado: {{phase}}',
     turns: 'Instrucciones: {{count}}',
@@ -40,6 +46,12 @@ export const es: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: 'Servidor de sincronización propio (avanzado)',
+    customServerOrigin: 'Dirección del servidor (https://...)',
+    customServerToken: 'Token de acceso',
+    customServerSave: 'Guardar',
+    customServerHint:
+      'Déjelo en blanco para usar el servidor de sincronización oficial. La dirección debe comenzar con https:// y ser una URL raíz.',
     protocolTitle: 'Acuerdo de sincronización y privacidad',
     protocolIntro:
       'OpenLess y sus desarrolladores independientes respetan tu privacidad y protegen tus datos. Lee este aviso antes de continuar.',
@@ -1252,6 +1264,13 @@ export const es: typeof zhCN = {
     cancelledTitle: 'Grabación cancelada',
   },
   settings: {
+    testingFeatures: {
+      title: 'Funciones en fase de pruebas',
+      enable: 'Activar funciones en fase de pruebas',
+      description:
+        'Mostrar Less Computer y la consola de Claude para configurarlos y usarlos en plataformas compatibles. Al desactivar esta opción, se detienen las tareas y se ocultan las entradas, pero se conservan los ajustes. Solo se aplica a este dispositivo.',
+      unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
+    },
     selectionWorkspace: {
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
@@ -1330,7 +1349,7 @@ export const es: typeof zhCN = {
       desc: 'Historial de conversaciones y contexto guardados en este dispositivo.',
       cursorContextLabel: 'Contexto del cursor (experimental)',
       cursorContextDesc:
-        'Envía el texto cercano al cursor al modelo para pulirlo (solo macOS). Es independiente del aprendizaje local. Se excluyen contraseñas y aplicaciones sensibles conocidas.',
+        'Envía un fragmento breve del texto cercano al cursor al modelo como referencia para nombres propios, homófonos y pronombres al pulir (macOS / Windows / Android). El dictado, las notas rápidas y las notas en la nube lo usan, pero el contexto en sí nunca se guarda en notas, historial ni registros; con un modelo en la nube se envía a ese proveedor junto con la solicitud de pulido. Es independiente del aprendizaje local. Se excluyen contraseñas, terminales y aplicaciones sensibles conocidas.',
     },
     codingConsole: {
       title: 'Consola de Claude',
@@ -1494,12 +1513,22 @@ export const es: typeof zhCN = {
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
+      capsuleDisplayModeLabel: "Cápsula en varias pantallas",
+      capsuleDisplayModeDesc: "Elige dónde aparece la cápsula. El modo de todas las pantallas utiliza más ventanas y recursos gráficos.",
+      capsuleDisplayCursorScreen: "Pantalla bajo el puntero",
+      capsuleDisplayAllScreens: "Mostrar en todas las pantallas",
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
       stableTranscriptionLabel: 'Modo estable (grabar y luego transcribir)',
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
+      lowLatencyDictationLabel: 'Captura de baja latencia',
+      lowLatencyDictationDesc:
+        'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
+      audioEnhancementLabel: 'Mejora ligera del micrófono',
+      audioEnhancementDesc:
+        'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',
@@ -1567,6 +1596,9 @@ export const es: typeof zhCN = {
       historyMaxEntriesLabel: 'Máximo de registros',
       historyMaxEntriesDesc:
         'Máximo de sesiones guardadas en el dispositivo. Vacío = 200. Intervalo: 5–200.',
+      polishSkipMaxCharsLabel: 'Omitir mejora en dictados cortos (máx. caracteres)',
+      polishSkipMaxCharsDesc:
+        'Las transcripciones de hasta N caracteres (sin contar espacios) se insertan tal cual, sin llamar al LLM. 0 = desactivado. La traducción siempre se mejora.',
       polishContextWindowLabel: 'Ventana de contexto para mejorar texto (minutos)',
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
@@ -1713,6 +1745,7 @@ export const es: typeof zhCN = {
         stepfun: 'StepFun',
         custom: 'Personalizado',
         asrVolcengine: 'Volcengine bigasr',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'ASR en tiempo real Hunyuan de Tencent Cloud',
         asrBailian: 'Alibaba Bailian ASR en tiempo real',
         asrBailianQwen3: 'Bailian Qwen3 ASR en tiempo real',
@@ -1732,6 +1765,9 @@ export const es: typeof zhCN = {
         asrSherpaOnnxLocal: 'sherpa-onnx local (experimental)',
         asrFoundryLocalWhisper: 'Whisper local (Foundry Local)',
         asrLocalWhisper: 'Whisper local (por lotes)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'Qwen3-ASR local',
         asrLocalQwen3Mlx: 'Qwen3-ASR local (MLX / Metal)',
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
@@ -1740,6 +1776,12 @@ export const es: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe transcribe literalmente aquí; después actúa el LLM configurado. Para la transcripción inteligente, elige este modelo en modo multimodal. El audio se sube al terminar la grabación; no se admite transcripción en directo. URL base: https://generativelanguage.googleapis.com/v1beta (también /v1beta/interactions).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe permite transcripción inteligente: elimina muletillas, aplica correcciones habladas y da formato al texto al terminar la grabación. Admite idiomas de trabajo y términos del diccionario. No aplica instrucciones de estilo ni admite traducción, edición de texto o preguntas; usa el modo tradicional con un LLM para esas tareas.',
+      validateSuccessAudio:
+        'Conexión de audio verificada con una breve muestra de silencio. Confirma la calidad de transcripción con una grabación corta.',
       elevenLabsUploadNotice:
         'ElevenLabs sube el audio grabado a la dirección configurada para transcribirlo por lotes.',
       zenmuxVocabularyNote:
@@ -2394,7 +2436,12 @@ export const es: typeof zhCN = {
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
+    backToTestingFeatures: 'Volver a funciones en fase de pruebas',
     advancedPages: {
+      customSyncServer:
+        'Solo para servicios propios; la sincronización oficial no requiere configuración.',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'Activar opcionalmente las funciones que siguen en pruebas.',
       vocabularyLearning:
         'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
       lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
@@ -2412,7 +2459,8 @@ export const es: typeof zhCN = {
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced: 'Configura Less Computer y la depuración según tus necesidades.',
+      advanced:
+        'Configurar funciones de prueba, aprendizaje de vocabulario y herramientas de depuración.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
@@ -2563,7 +2611,10 @@ export const es: typeof zhCN = {
     foundryError: 'Estado de Foundry',
     foundrySetDefault: 'Usar como predeterminado / Activar ASR local de Windows',
     foundryEnabling: 'Activando…',
-    foundryPrepare: 'Preparar / Descargar / Cargar',
+    foundryPrepare: 'Descargar / verificar modelo',
+    runtimeDownloadRestart:
+      'La descarga utilizó componentes nativos. Reinicia OpenLess antes de activar el modelo; no se activará automáticamente. ¿Reiniciar ahora?',
+    restartNow: 'Reiniciar ahora',
     foundryPreparing: 'Preparando…',
     foundryReleasing: 'Liberando…',
     foundryRetryPrepare: 'Continuar / Reintentar preparación',

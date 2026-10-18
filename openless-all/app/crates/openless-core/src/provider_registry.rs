@@ -13,8 +13,9 @@ use futures_util::future::BoxFuture;
 use crate::dictation_context::DictationContext;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
-    DictationEngine, EngineFailure, EngineProgressSink, EngineResult, RecordingProgressSink,
-    TextPolisher, TextStreamSink, TranscriptionEngine, TranscriptionSession, VoiceCapture,
+    CaptureStartRequest, DictationEngine, EngineFailure, EngineProgressSink, EngineResult,
+    PendingAudioCapture, RecordingProgressSink, TextPolisher, TextStreamSink, TranscriptionEngine,
+    TranscriptionSession, VoiceCapture,
 };
 use crate::shared_types::PipelineMode;
 use crate::types::SessionId;
@@ -270,6 +271,87 @@ impl DictationEngineRouter {
 }
 
 impl DictationEngine for DictationEngineRouter {
+    fn arm_audio_capture(
+        &self,
+        request: CaptureStartRequest,
+    ) -> Result<Box<dyn PendingAudioCapture>, BackendError> {
+        self.traditional.arm_audio_capture(request)
+    }
+
+    fn start_with_audio_capture(
+        &self,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+        progress: Arc<dyn EngineProgressSink>,
+        capture: Box<dyn PendingAudioCapture>,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let engine = match self.resolve(&context) {
+            Ok(engine) => engine,
+            Err(error) => {
+                return Box::pin(async move {
+                    let _ = capture.discard().await;
+                    Err(error)
+                })
+            }
+        };
+        let routed = Arc::new(RoutedDictationSession {
+            engine: Arc::clone(&engine),
+            started: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+        });
+        {
+            let mut active = self
+                .active
+                .write()
+                .expect("active dictation provider lock poisoned");
+            match active.entry(session_id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Arc::clone(&routed));
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Box::pin(async move {
+                        let _ = capture.discard().await;
+                        Err(BackendError::new(
+                            BackendErrorCode::Busy,
+                            "dictation provider is already active for this session",
+                        ))
+                    });
+                }
+            }
+        }
+        let active = Arc::clone(&self.active);
+        let fallback_context = Arc::clone(&context);
+        let fallback_progress = Arc::clone(&progress);
+        Box::pin(async move {
+            let result = engine
+                .start_with_audio_capture(session_id, context, progress, capture)
+                .await;
+            let result = match result {
+                Err(error) if error.code == BackendErrorCode::Unsupported => {
+                    engine
+                        .start(session_id, fallback_context, fallback_progress)
+                        .await
+                }
+                result => result,
+            };
+            if result.is_err() {
+                remove_routed_session(&active, session_id, &routed);
+                return result;
+            }
+            routed.started.store(true, Ordering::Release);
+            if routed.cancelled.load(Ordering::Acquire) {
+                let cancel_result = engine.cancel(session_id).await;
+                remove_routed_session(&active, session_id, &routed);
+                cancel_result?;
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "dictation was cancelled while its provider was starting",
+                ));
+            }
+            Ok(())
+        })
+    }
+
     fn start(
         &self,
         session_id: SessionId,

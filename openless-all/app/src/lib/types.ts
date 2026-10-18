@@ -36,11 +36,7 @@ export type PipelineMode = 'traditional' | 'multimodal';
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
 export type HistorySource =
-  | 'voice'
-  | 'quick_note'
-  | 'selection_polish'
-  | 'selection_voice_edit'
-  | 'voice_edit';
+  'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit' | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -356,12 +352,17 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
+  capsuleDisplayMode: 'cursorScreen' | 'allScreens';
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
   muteDuringRecording: boolean;
   /** Record fully first, then connect to the current ASR and submit the whole audio on stop. Off by default. */
   stableTranscriptionEnabled: boolean;
+  /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
+  lowLatencyDictationEnabled: boolean;
+  /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
+  audioEnhancementEnabled: boolean;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
@@ -445,6 +446,8 @@ export interface UserPreferences {
   openAppHotkey: ShortcutBinding | null;
   /** Style pack direct hotkeys: pressing one activates the corresponding style pack. Default empty list (issue #759). */
   stylePackHotkeys: StylePackHotkey[];
+  /** Local opt-in for features under testing. Defaults to false. */
+  testingFeaturesEnabled: boolean;
   /** Less Computer: whether enabled. Off by default. */
   codingAgentEnabled: boolean;
   /** Agent backend: claude-code-cli (default) / opencode-cli / codex-cli / dsh-cli. */
@@ -494,6 +497,8 @@ export interface UserPreferences {
   historyRetentionDays: number;
   /** Conversation-aware polish context window (minutes). 0 = off. Default 5. See PR-A. */
   polishContextWindowMinutes: number;
+  /** Skip LLM polish when the transcript has at most N non-whitespace chars (issue #1032). 0 = off. */
+  polishSkipMaxChars: number;
   /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
    *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;
@@ -515,8 +520,10 @@ export interface UserPreferences {
    *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
-   *  Default false — when on, every dictation reads the foreground app's body text and sends part of it to the LLM provider.
-   *  macOS only; password fields / Secure Input / password managers / terminals are always hard-blocked. */
+   *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
+   *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
+   *  UIA password controls (Windows) / no-personalized-learning editors (Android) / password
+   *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
   vocabularyLearningSettings: {
@@ -574,6 +581,8 @@ export interface UserPreferences {
   /** Major-version generation marker of the splash PV (e.g. '2'). Empty = never played; advanced exclusively by
    *  the Rust-side take_splash_playback, preserved verbatim by the settings save path; the frontend is read-only. */
   splashSeenVersion?: string;
+  /** Self-hosted encrypted-sync server origin, overriding the built-in default. Empty/undefined = use the default. */
+  syncCustomServerOrigin?: string | null;
 }
 
 export interface MarketplaceListItem {

@@ -33,6 +33,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
 pub mod host_document;
@@ -183,8 +184,8 @@ pub mod contract {
     pub use crate::{
         require_backend_contract_version, ActivityDay, AudioConsumer, AudioRecorder, BackendConfig,
         BackendDependencies, BackendError, BackendErrorCode, BackendEvent, BackendEventKind,
-        BackendSnapshot, CliDispatchOutcome, CliIntent, Clock, CorrectionRule, CredentialKey,
-        CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
+        BackendSnapshot, CapturedTextTarget, CliDispatchOutcome, CliIntent, Clock, CorrectionRule,
+        CredentialKey, CredentialMetadata, CredentialNamespace, CredentialStore, CredentialsStatus,
         DictationContext, DictationEngine, DictationHotkeyDispatchOptions, DictationHotkeyEdge,
         DictationInsertStatus, DictationOutputTarget, DictationPhase, DictationResult,
         DictationSession, DictationStartOptions, DictationStateSnapshot, DictionaryEntry,
@@ -218,7 +219,10 @@ pub use api::{
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
-pub use audio::{encode_dictation_wav, NormalizedPcmChunk, PcmNormalizer, DICTATION_SAMPLE_RATE};
+pub use audio::{
+    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
+    PcmNormalizer, DICTATION_SAMPLE_RATE,
+};
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,
 };
@@ -289,14 +293,15 @@ pub use model_store::{
 };
 pub use ports::PreparedTranscription;
 pub use ports::{
-    ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, DirectoryResourceResolver,
-    EditObservationAdapter, EditObservationSink, EngineFailure, EngineFailureStage, EngineProgress,
-    EngineProgressSink, EngineResult, EngineStage, HostAction, HostActions, HostContextAdapter,
-    HostContextCapture, InsertOutcome, InsertWriteResult, NoopEditObservationAdapter,
-    NoopHostActions, NoopHostContextAdapter, PolishOutput, RecordingArchive, RecordingControlSink,
-    RecordingEvent, RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession,
-    TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine,
-    TranscriptionSession, UnsupportedTextInserter, VoiceCapture,
+    ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
+    DictationEngine, DirectoryResourceResolver, EditObservationAdapter, EditObservationSink,
+    EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
+    EngineStage, HostAction, HostActions, HostContextAdapter, HostContextCapture, InsertOutcome,
+    InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
+    PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
+    RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
+    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    UnsupportedTextInserter, VoiceCapture,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -326,9 +331,9 @@ pub use remote_input_service::{
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;
 pub use shared_types::{
-    CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode, HotkeyStatus,
-    PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode, UserPreferences,
-    LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
+    CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode,
+    HotkeyStatus, PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode,
+    UserPreferences, LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
 };
 pub use shortcut_types::{
     binding_from_legacy_trigger, binding_requires_mouse_hook, binding_requires_side_aware_hook,

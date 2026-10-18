@@ -108,7 +108,8 @@ export function RemoteInputSection() {
   const viewState = getRemoteInputViewState(enabled, status, startError);
   // Only a full fingerprint returned by the local listener qualifies for phone verification.
   const fingerprint = status?.caFingerprintSha256;
-  const canVerifyCertificate = typeof fingerprint === 'string' && /^[a-f0-9]{64}$/i.test(fingerprint);
+  const canVerifyCertificate =
+    typeof fingerprint === 'string' && /^[a-f0-9]{64}$/i.test(fingerprint);
   const formattedFingerprint = canVerifyCertificate
     ? fingerprint.toUpperCase().match(/.{2}/g)!.join(' ')
     : '';
@@ -204,7 +205,13 @@ export function RemoteInputSection() {
                 <>
                   <code
                     aria-label={t('settings.remoteInput.certFingerprintLabel')}
-                    style={{ display: 'block', fontSize: 12, lineHeight: 1.8, overflowWrap: 'anywhere', userSelect: 'text' }}
+                    style={{
+                      display: 'block',
+                      fontSize: 12,
+                      lineHeight: 1.8,
+                      overflowWrap: 'anywhere',
+                      userSelect: 'text',
+                    }}
                   >
                     {formattedFingerprint}
                   </code>
@@ -213,7 +220,10 @@ export function RemoteInputSection() {
                     onClick={async () => {
                       await copyText(formattedFingerprint);
                       setCopied('ca-fingerprint');
-                      window.setTimeout(() => setCopied((c) => c === 'ca-fingerprint' ? null : c), 1500);
+                      window.setTimeout(
+                        () => setCopied((c) => (c === 'ca-fingerprint' ? null : c)),
+                        1500,
+                      );
                     }}
                     style={{ ...smallBtn, marginTop: 6 }}
                   >
@@ -289,7 +299,15 @@ export function RemoteInputSection() {
 
           <SettingRow label={t('settings.remoteInput.pinLabel')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code style={{ fontSize: 15, letterSpacing: 2, fontWeight: 600 }}>{status.pin}</code>
+              <code
+                style={{
+                  fontSize: 15,
+                  letterSpacing: 2,
+                  fontWeight: 'var(--ol-font-weight-semibold)',
+                }}
+              >
+                {status.pin}
+              </code>
               <button
                 onClick={async () => {
                   try {

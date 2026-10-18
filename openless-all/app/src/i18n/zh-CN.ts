@@ -1,12 +1,18 @@
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
 
+import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
+import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
+
 export const zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '语音编辑会话',
     description: '口述草稿或读取目标文本，再用多轮语音指令修改，确认后写回输入框。',
     targetHint: '请先把光标放入目标输入框，或选中需要编辑的文本。',
-    androidTargetHint: '请将一个悬浮窗滑动动作设为「语音编辑」。在目标应用录音后滑动进入预览，确认后写回原输入框。',
+    androidTargetHint:
+      '请将一个悬浮窗滑动动作设为「语音编辑」。在目标应用录音后滑动进入预览，确认后写回原输入框。',
     startDraft: '开始口述草稿',
     status: '状态：{{phase}}',
     turns: '回合：{{count}}',
@@ -38,6 +44,11 @@ export const zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '自建同步服务器（高级）',
+    customServerOrigin: '服务器地址（https://...）',
+    customServerToken: '登录 Token',
+    customServerSave: '保存',
+    customServerHint: '留空则使用官方同步服务器。地址必须是 https:// 开头的根地址。',
     protocolTitle: '云同步协议与隐私提醒',
     protocolIntro:
       'OpenLess 及个人开发者尊重您的隐私，并致力于保护您的资料。请阅读以下说明，再决定是否继续。',
@@ -59,7 +70,7 @@ export const zhCN = {
     setupPromptLater: '暂不开启',
     setupPromptOpen: '了解加密同步',
     title: '加密云同步',
-    description: '在本机加密后，通过 GitHub 账号跨设备同步。',
+    description: '在本机加密后，通过 GitHub 账号或 Token 跨设备同步。',
     enable: '启用加密同步',
     setPassword: '设置同步密码',
     stepEnableTitle: '第 1 步，共 3 步：开启同步',
@@ -1187,6 +1198,13 @@ export const zhCN = {
     cancelledTitle: '已取消录音',
   },
   settings: {
+    testingFeatures: {
+      title: '正在测试中的功能',
+      enable: '启用正在测试中的功能',
+      description:
+        '开启后显示 Less Computer 和 Claude 控制台，可在支持的平台配置和使用。关闭会停止运行并隐藏入口，保留已有配置。仅在当前设备生效。',
+      unavailable: '当前平台暂无可用的测试功能。',
+    },
     selectionWorkspace: {
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
@@ -1256,7 +1274,7 @@ export const zhCN = {
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
+        '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
     },
     codingConsole: {
       title: 'Claude 控制台',
@@ -1403,12 +1421,21 @@ export const zhCN = {
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
       capsuleTranscriptFontSize: '原文字号',
+      capsuleDisplayModeLabel: "多屏胶囊",
+      capsuleDisplayModeDesc: "选择录音胶囊显示在哪些屏幕。所有屏幕模式会增加窗口与图形资源占用。",
+      capsuleDisplayCursorScreen: "鼠标所在屏幕",
+      capsuleDisplayAllScreens: "所有屏幕显示",
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',
       stableTranscriptionLabel: '稳定模式（先录音后识别）',
       stableTranscriptionDesc:
         '开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。',
+      lowLatencyDictationLabel: '低延迟录音',
+      lowLatencyDictationDesc:
+        '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
+      audioEnhancementLabel: '轻量麦克风增强',
+      audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
@@ -1468,6 +1495,9 @@ export const zhCN = {
       historyRetentionDesc: '超过保留天数的历史在写入新条目时被清理；0 = 不按时间清理。',
       historyMaxEntriesLabel: '历史条数上限',
       historyMaxEntriesDesc: '本地保留会话上限，留空 = 200。范围 5–200。',
+      polishSkipMaxCharsLabel: '短句跳过润色（最大字数）',
+      polishSkipMaxCharsDesc:
+        '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
@@ -1616,18 +1646,27 @@ export const zhCN = {
         asrXiaomiMimo: '小米 MiMo ASR',
         asrIflytek: '讯飞实时语音转写',
         asrTencentCloud: '腾讯云混元实时 ASR',
+        asrGemini: 'Google Gemini 专用转写',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: '本地 sherpa-onnx（实验性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
         asrLocalWhisper: '本地 Whisper（批量解码）',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: '本地 Qwen3-ASR',
         asrLocalQwen3Mlx: '本地 Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
-        asrAppleSpeech: 'Apple 语音（macOS）',
+        asrAppleSpeech: '苹果识别（macOS）',
         omniOpenai: 'OpenAI（支持音频）',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里云百炼 Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe 在此使用逐字转写，再交给已配置的 LLM 处理。如需内置智能转写，请在多模态模式中选择此模型。录音结束后上传音频，暂不支持实时转写。接口地址：https://generativelanguage.googleapis.com/v1beta，也兼容 /v1beta/interactions。',
+      geminiTranscribeOmniNotice:
+        '使用 gemini-3.5-transcribe 可启用智能转写：录音结束后去除口头语、处理口述纠正并整理排版。支持工作语言和词典词汇。此模型不使用风格提示词，也不支持翻译、纯文本润色或问答；这些任务请使用传统模式搭配 LLM。',
+      validateSuccessAudio: '已通过短静音音频的连接验证，请再用短录音确认转写效果。',
       elevenLabsUploadNotice: 'ElevenLabs 会将录音上传到所配置的端点进行批量转写。',
       zenmuxVocabularyNote:
         'ZenMux 走 JSON 转写协议，不发送词典热词（prompt/hotwords）；词典仍会进入润色链路，但不会参与语音识别偏置。',
@@ -2215,7 +2254,11 @@ export const zhCN = {
     noResults: '没有找到相关分类。试试“麦克风”“模型”或“主题”。',
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
+    backToTestingFeatures: '返回正在测试中的功能',
     advancedPages: {
+      customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
+      localModels: experimentalAsr.description,
+      testingFeatures: '按需开启尚在测试中的功能。',
       vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
@@ -2225,11 +2268,11 @@ export const zhCN = {
     descriptions: {
       general: '选择麦克风、设置录音方式与文字输入，也可连接手机输入。',
       inputMethod: '配置 Android 悬浮窗和输入法，快速开始手机端输入。',
-      shortcuts: '设置各功能的触发方式，以及选中文字后的操作。',
+      shortcuts: '搜索、分类与自定义各功能的快捷键。',
       services: '选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
       privacy: '检查系统权限与连接状态，管理历史、录音和本地数据。',
-      advanced: '按需配置 Less Computer 与调试功能。',
+      advanced: '配置测试功能、手改学词与调试工具。',
       about: '查看当前版本、更新渠道与自动更新设置。',
     },
     searchKeywords: {
@@ -2245,7 +2288,7 @@ export const zhCN = {
 
     sections: {
       appearance: '外观与语言',
-      shortcuts: '快捷键与选区',
+      shortcuts: '快捷键',
       general: '录音与输入',
       inputMethod: '输入方式',
       services: 'AI 服务与模型',
@@ -2370,7 +2413,10 @@ export const zhCN = {
     foundryError: 'Foundry 状态',
     foundrySetDefault: '设为默认 / 启用 Windows 本地 ASR',
     foundryEnabling: '正在启用…',
-    foundryPrepare: '准备 / 下载 / 加载',
+    foundryPrepare: '下载 / 校验模型',
+    runtimeDownloadRestart:
+      '下载操作使用了本地运行组件。请重启 OpenLess 后再启用；模型不会自动启用。现在重启？',
+    restartNow: '现在重启',
     foundryPreparing: '正在准备…',
     foundryReleasing: '正在释放…',
     foundryRetryPrepare: '继续准备 / 重试',

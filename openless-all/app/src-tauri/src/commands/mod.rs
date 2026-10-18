@@ -55,6 +55,8 @@ mod credentials;
 mod dictation;
 mod dictionary;
 #[cfg(not(mobile))]
+mod experimental_asr;
+#[cfg(not(mobile))]
 mod foundry_asr;
 mod github_oauth;
 mod history;
@@ -87,6 +89,8 @@ pub use credentials::*;
 pub use dictation::*;
 pub use dictionary::*;
 #[cfg(not(mobile))]
+pub use experimental_asr::*;
+#[cfg(not(mobile))]
 pub use foundry_asr::*;
 pub use github_oauth::*;
 pub use history::*;
@@ -118,7 +122,20 @@ pub use voice_edit::*;
 pub(crate) type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub(crate) type CoreState<'a> = State<'a, Arc<openless_core::OpenLessBackend>>;
 #[cfg(not(mobile))]
-pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
+pub struct MicrophoneMonitorState {
+    pub(crate) operation: Mutex<()>,
+    pub(crate) recorder: Mutex<Option<Recorder>>,
+}
+
+#[cfg(not(mobile))]
+impl MicrophoneMonitorState {
+    pub(crate) fn new(recorder: Option<Recorder>) -> Self {
+        Self {
+            operation: Mutex::new(()),
+            recorder: Mutex::new(recorder),
+        }
+    }
+}
 #[cfg(not(mobile))]
 pub type TrayMicrophoneMenuState = Mutex<Vec<TrayMicrophoneMenuItem>>;
 
@@ -332,27 +349,24 @@ mod tests {
             &whisper_keyless_ready
         ));
 
-        #[cfg(target_os = "macos")]
-        {
-            assert!(asr_configured_for_provider(
-                crate::asr::local::PROVIDER_ID,
-                &snapshot()
-            ));
-            assert!(asr_configured_for_provider(
-                crate::asr::local::LOCAL_QWEN3_C_PROVIDER_ID,
-                &snapshot()
-            ));
-        }
-        #[cfg(not(target_os = "macos"))]
-        assert!(!asr_configured_for_provider(
+        // Retired metadata IDs can never count as a configured native runtime.
+        for provider in [
             crate::asr::local::PROVIDER_ID,
-            &snapshot()
-        ));
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        assert!(asr_configured_for_provider(
+            crate::asr::local::LOCAL_QWEN3_C_PROVIDER_ID,
             crate::asr::local::LOCAL_QWEN3_MLX_PROVIDER_ID,
-            &snapshot()
-        ));
+        ] {
+            assert!(!asr_configured_for_provider(provider, &snapshot()));
+        }
+        #[cfg(target_os = "macos")]
+        for provider in ["local-whisper", "apple-whisper"] {
+            assert!(!asr_configured_for_provider(provider, &snapshot()));
+        }
+        // System recognition needs no cloud credential, but only the macOS
+        // host registers its native engine. Retired models remain unavailable.
+        assert_eq!(
+            asr_configured_for_provider("apple-speech", &snapshot()),
+            cfg!(target_os = "macos")
+        );
         #[cfg(target_os = "windows")]
         assert!(asr_configured_for_provider(
             crate::asr::local::foundry::PROVIDER_ID,

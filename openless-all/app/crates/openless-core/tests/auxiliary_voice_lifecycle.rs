@@ -335,6 +335,7 @@ fn backend(
     );
     let mut prefs = backend.get_preferences();
     prefs.coding_agent_enabled = true;
+    prefs.testing_features_enabled = true;
     backend
         .update_settings(prefs, SettingsUpdateOptions::STRICT, &NoopSettingsRuntime)
         .unwrap();

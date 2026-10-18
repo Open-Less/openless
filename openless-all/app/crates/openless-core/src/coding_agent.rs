@@ -1644,6 +1644,8 @@ pub struct CodingAgentService {
     events: BackendEventPublisher,
     active_test: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     request_counter: AtomicU64,
+    preferences: Arc<crate::PreferencesStore>,
+    settings_write_gate: Arc<Mutex<()>>,
 }
 
 impl CodingAgentService {
@@ -1652,6 +1654,8 @@ impl CodingAgentService {
         process: Arc<dyn CodingAgentProcessAdapter>,
         less_computer: Arc<dyn crate::domains::LessComputerApi>,
         events: BackendEventPublisher,
+        preferences: Arc<crate::PreferencesStore>,
+        settings_write_gate: Arc<Mutex<()>>,
     ) -> Self {
         Self {
             runner,
@@ -1660,6 +1664,8 @@ impl CodingAgentService {
             events,
             active_test: Arc::new(Mutex::new(None)),
             request_counter: AtomicU64::new(0),
+            preferences,
+            settings_write_gate,
         }
     }
 
@@ -1757,7 +1763,9 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
         request: CodingAgentDetectRequest,
     ) -> BoxFuture<'static, Result<CodingAgentAvailability, BackendError>> {
         let process = Arc::clone(&self.process);
+        let preferences = Arc::clone(&self.preferences);
         Box::pin(async move {
+            crate::settings::ensure_testing_features_enabled(&preferences.get())?;
             let executable =
                 normalize_coding_agent_executable(request.provider, request.executable)?;
             let probe = execute_capture(
@@ -1809,7 +1817,9 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
         request: CodingAgentModelsRequest,
     ) -> BoxFuture<'static, Result<Vec<String>, BackendError>> {
         let process = Arc::clone(&self.process);
+        let preferences = Arc::clone(&self.preferences);
         Box::pin(async move {
+            crate::settings::ensure_testing_features_enabled(&preferences.get())?;
             if request.provider != CodingAgentProvider::OpenCodeCli {
                 return Err(BackendError::new(
                     BackendErrorCode::Unsupported,
@@ -1864,10 +1874,16 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
         let active_test = Arc::clone(&self.active_test);
         let events = self.events.clone();
         let request_id = self.next_request_id();
+        let preferences = Arc::clone(&self.preferences);
+        let settings_write_gate = Arc::clone(&self.settings_write_gate);
         Box::pin(async move {
             let normalized = normalized?;
             let cancel = Arc::new(AtomicBool::new(false));
             {
+                let _admission = settings_write_gate
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                crate::settings::ensure_testing_features_enabled(&preferences.get())?;
                 let mut active = active_test.lock().expect("coding agent test lock poisoned");
                 if active.is_some() {
                     return Err(BackendError::new(
@@ -1918,17 +1934,15 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
     }
 
     fn cancel_test(&self) -> BoxFuture<'static, Result<(), BackendError>> {
-        let active_test = Arc::clone(&self.active_test);
-        Box::pin(async move {
-            if let Some(cancel) = active_test
-                .lock()
-                .expect("coding agent test lock poisoned")
-                .clone()
-            {
-                cancel.store(true, Ordering::Release);
-            }
-            Ok(())
-        })
+        if let Some(cancel) = self
+            .active_test
+            .lock()
+            .expect("coding agent test lock poisoned")
+            .as_ref()
+        {
+            cancel.store(true, Ordering::Release);
+        }
+        Box::pin(async move { Ok(()) })
     }
 
     fn approve(
@@ -1943,6 +1957,100 @@ impl crate::domains::CodingAgentApi for CodingAgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn console_requires_device_opt_in_and_revocation_cancels_only_the_current_test() {
+        use crate::domains::CodingAgentApi;
+        let process = Arc::new(CancelAwareProcess);
+        let path = std::env::temp_dir().join(format!(
+            "openless-testing-console-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let preferences = Arc::new(crate::PreferencesStore::fallback(path.clone()));
+        let events = BackendEventPublisher::new(Arc::new(crate::events::EventBus::new(32)));
+        let service = CodingAgentService::new(
+            Arc::new(CodingAgentRunner::new(process.clone())),
+            process,
+            Arc::new(crate::less_computer::LessComputerService::new()),
+            events,
+            preferences.clone(),
+            Arc::new(Mutex::new(())),
+        );
+        assert_eq!(
+            service
+                .detect(CodingAgentDetectRequest {
+                    provider: CodingAgentProvider::ClaudeCodeCli,
+                    executable: None,
+                })
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            service
+                .list_models(CodingAgentModelsRequest {
+                    provider: CodingAgentProvider::OpenCodeCli,
+                    executable: None,
+                    refresh: false,
+                })
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::PermissionDenied
+        );
+        let request = CodingAgentTestRequest {
+            provider: CodingAgentProvider::ClaudeCodeCli,
+            executable: None,
+            prompt: "probe".into(),
+            permission_mode: CodingAgentPermissionMode::default(),
+            workdir: None,
+            model: None,
+            max_budget_usd: None,
+            timeout_secs: 5,
+        };
+        let mut queued = service.run_test(request.clone());
+        preferences
+            .update(|prefs| prefs.testing_features_enabled = true)
+            .unwrap();
+        assert!(futures_util::poll!(queued.as_mut()).is_pending());
+        preferences
+            .update(|prefs| prefs.testing_features_enabled = false)
+            .unwrap();
+        let cleanup = service.cancel_test();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), queued)
+                .await
+                .unwrap()
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Cancelled
+        );
+        assert_eq!(
+            service.run_test(request.clone()).await.unwrap_err().code,
+            BackendErrorCode::PermissionDenied
+        );
+
+        preferences
+            .update(|prefs| prefs.testing_features_enabled = true)
+            .unwrap();
+        let mut replacement = service.run_test(request);
+        assert!(futures_util::poll!(replacement.as_mut()).is_pending());
+        cleanup.await.unwrap();
+        assert!(!service
+            .active_test
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Acquire));
+        service.cancel_test().await.unwrap();
+        assert_eq!(
+            replacement.await.unwrap_err().code,
+            BackendErrorCode::Cancelled
+        );
+        std::fs::remove_file(path).unwrap();
+    }
 
     struct ScriptedProcess(Vec<ProcessOutputLine>, Result<ProcessExit, BackendError>);
 

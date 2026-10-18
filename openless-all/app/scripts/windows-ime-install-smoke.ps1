@@ -58,14 +58,18 @@ function Invoke-CheckedProcess {
     [string]$FilePath,
     [string[]]$ArgumentList = @(),
     [Parameter(Mandatory = $true)]
-    [string]$Label
+    [string]$Label,
+    [int[]]$SuccessExitCodes = @(0)
   )
 
   $commandLine = Join-ProcessArguments $ArgumentList
   Write-Host "[run] $Label`: $FilePath $commandLine"
   $process = Start-Process -FilePath $FilePath -ArgumentList $commandLine -Wait -PassThru
-  if ($process.ExitCode -ne 0) {
+  if ($process.ExitCode -notin $SuccessExitCodes) {
     throw "$Label failed with exit code $($process.ExitCode)"
+  }
+  if ($process.ExitCode -eq 3010) {
+    Write-Host "[ok] $Label succeeded; Windows requested a reboot (3010). Continuing payload/registry verification without rebooting."
   }
 }
 
@@ -178,7 +182,7 @@ function Uninstall-OpenLess {
     }
     Invoke-CheckedProcess -FilePath $uninstaller -ArgumentList @("/S") -Label "NSIS uninstall"
   } else {
-    Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/x", $InstallerPath, "/qn", "/norestart") -Label "MSI uninstall"
+    Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/x", $InstallerPath, "/qn", "/norestart") -Label "MSI uninstall" -SuccessExitCodes @(0, 3010)
   }
 }
 
@@ -190,7 +194,7 @@ $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ($InstallerKind -eq "nsis") {
   Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList @("/S", "/AllUsers") -Label "NSIS install"
 } else {
-  Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/i", $InstallerPath, "/qn", "/norestart") -Label "MSI install"
+  Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/i", $InstallerPath, "/qn", "/norestart") -Label "MSI install" -SuccessExitCodes @(0, 3010)
 }
 
 $installRoot = Assert-OpenLessImeInstalled

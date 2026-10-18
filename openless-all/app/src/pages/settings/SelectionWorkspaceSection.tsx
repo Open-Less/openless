@@ -32,7 +32,7 @@ const editPlanFormatOptions: Array<{ value: EditPlanFormat }> = [
   { value: 'json' },
 ];
 
-export function SelectionWorkspaceSection() {
+export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcut?: boolean }) {
   const { t } = useTranslation();
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
@@ -119,7 +119,7 @@ export function SelectionWorkspaceSection() {
           </div>
         </SettingRow>
       )}
-      {showDesktop && (
+      {showDesktop && showShortcut && (
         <SettingRow
           label={t('settings.selectionWorkspace.polishHotkey')}
           desc={t('settings.selectionWorkspace.polishHotkeyDesc')}
@@ -164,7 +164,9 @@ export function SelectionWorkspaceSection() {
                     fontFamily: 'inherit',
                     fontSize: 12,
                     cursor: 'default',
-                    fontWeight: selected ? 600 : 500,
+                    fontWeight: selected
+                      ? 'var(--ol-font-weight-semibold)'
+                      : 'var(--ol-font-weight-medium)',
                   }}
                 >
                   {t(`settings.selectionPolish.${option.value}`)}
@@ -215,7 +217,9 @@ export function SelectionWorkspaceSection() {
                           fontFamily: 'inherit',
                           fontSize: 12,
                           cursor: 'default',
-                          fontWeight: selected ? 600 : 500,
+                          fontWeight: selected
+                            ? 'var(--ol-font-weight-semibold)'
+                            : 'var(--ol-font-weight-medium)',
                         }}
                       >
                         {t(`settings.selectionPolish.${option.value}`)}
@@ -295,7 +299,9 @@ export function SelectionWorkspaceSection() {
                           fontFamily: 'inherit',
                           fontSize: 12,
                           cursor: 'default',
-                          fontWeight: selected ? 600 : 500,
+                          fontWeight: selected
+                            ? 'var(--ol-font-weight-semibold)'
+                            : 'var(--ol-font-weight-medium)',
                         }}
                       >
                         {t(

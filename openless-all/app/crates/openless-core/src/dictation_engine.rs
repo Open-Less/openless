@@ -13,10 +13,11 @@ use futures_util::future::BoxFuture;
 use crate::dictation_context::{DictationContext, DictationOutputTarget};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
-    ActiveRecording, AudioCapture, AudioConsumer, AudioRecorder, CapturedPcm, DictationEngine,
-    EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
-    EngineStage, PreparedTranscription, RecordingArchive, RecordingProgressSink, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptionEngine, TranscriptionSession, VoiceCapture,
+    ActiveRecording, AudioCapture, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedPcm,
+    DictationEngine, EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink,
+    EngineResult, EngineStage, PendingAudioCapture, PreparedTranscription, RecordingArchive,
+    RecordingProgressSink, TextPolisher, TextStreamChunk, TextStreamSink, TranscriptionEngine,
+    TranscriptionSession, VoiceCapture,
 };
 use crate::types::{PolishDelta, SessionId, TranscriptDelta};
 
@@ -38,7 +39,9 @@ pub struct PipelineDictationEngine {
     transcription: Arc<dyn TranscriptionEngine>,
     polisher: Arc<dyn TextPolisher>,
     polish_failure_policy: PolishFailurePolicy,
+    local_startup_spawner: Option<Arc<dyn crate::TaskSpawner>>,
     sessions: Arc<Mutex<HashMap<SessionId, Arc<PipelineSession>>>>,
+    pending_captures: Arc<Mutex<HashMap<u64, Box<dyn PendingAudioCapture>>>>,
 }
 
 struct PipelineSession {
@@ -106,8 +109,18 @@ impl PipelineDictationEngine {
             transcription,
             polisher,
             polish_failure_policy: PolishFailurePolicy::UseRawText,
+            local_startup_spawner: None,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            pending_captures: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Once capture is running, local model loading must not hold the public
+    /// session in Starting: Stop must release the microphone before inference is ready.
+    /// Cloud routes and stable (record-first) mode keep their existing behavior.
+    pub fn with_local_startup_spawner(mut self, spawner: Arc<dyn crate::TaskSpawner>) -> Self {
+        self.local_startup_spawner = Some(spawner);
+        self
     }
 
     pub fn with_polish_failure_policy(mut self, policy: PolishFailurePolicy) -> Self {
@@ -117,6 +130,56 @@ impl PipelineDictationEngine {
 }
 
 impl DictationEngine for PipelineDictationEngine {
+    fn arm_audio_capture(
+        &self,
+        request: CaptureStartRequest,
+    ) -> Result<Box<dyn PendingAudioCapture>, BackendError> {
+        self.recorder.arm_capture(request)
+    }
+
+    fn start_with_audio_capture(
+        &self,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+        progress: Arc<dyn EngineProgressSink>,
+        capture: Box<dyn PendingAudioCapture>,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let generation = context.recording.capture_generation;
+        let external_audio =
+            context.audio_source == crate::dictation_context::DictationAudioSource::External;
+        let pending_captures = Arc::clone(&self.pending_captures);
+        let start = self.start(session_id, context, progress);
+        Box::pin(async move {
+            if external_audio {
+                let _ = capture.discard().await;
+                return start.await;
+            }
+            let Some(generation) = generation else {
+                let _ = capture.discard().await;
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "provisional capture is missing its physical generation",
+                ));
+            };
+            let replaced = pending_captures
+                .lock()
+                .expect("pending capture lock poisoned")
+                .insert(generation, capture);
+            if let Some(replaced) = replaced {
+                let _ = replaced.discard().await;
+                return Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "a provisional capture already owns this physical generation",
+                ));
+            }
+            let result = start.await;
+            if result.is_err() {
+                let _ = discard_pending_capture(&pending_captures, generation).await;
+            }
+            result
+        })
+    }
+
     fn start(
         &self,
         session_id: SessionId,
@@ -126,6 +189,11 @@ impl DictationEngine for PipelineDictationEngine {
         let recorder = Arc::clone(&self.recorder);
         let transcription_engine = Arc::clone(&self.transcription);
         let sessions = Arc::clone(&self.sessions);
+        let pending_captures = Arc::clone(&self.pending_captures);
+        let local_startup_spawner = self.local_startup_spawner.clone().filter(|_| {
+            crate::experimental_asr::ExperimentalAsrModel::from_provider(&context.asr.provider_type)
+                .is_some()
+        });
         Box::pin(async move {
             let session = Arc::new(PipelineSession::new(Arc::clone(&context)));
             {
@@ -207,10 +275,40 @@ impl DictationEngine for PipelineDictationEngine {
             }
 
             let audio_consumer: Arc<dyn AudioConsumer> = buffered.clone();
-            let recording = match recorder
-                .start(session_id, context, audio_consumer, recording_progress)
-                .await
+            let pending = context.recording.capture_generation.and_then(|generation| {
+                pending_captures
+                    .lock()
+                    .expect("pending capture lock poisoned")
+                    .remove(&generation)
+            });
+            let pending = if context.audio_source
+                == crate::dictation_context::DictationAudioSource::External
             {
+                if let Some(capture) = pending {
+                    let _ = capture.discard().await;
+                }
+                None
+            } else {
+                pending
+            };
+            let recording = match pending {
+                Some(capture) => {
+                    capture
+                        .commit(
+                            session_id,
+                            Arc::clone(&context),
+                            Arc::clone(&audio_consumer),
+                            Arc::clone(&recording_progress),
+                        )
+                        .await
+                }
+                None => {
+                    recorder
+                        .start(session_id, context, audio_consumer, recording_progress)
+                        .await
+                }
+            };
+            let recording = match recording {
                 Ok(recording) => recording,
                 Err(error) => {
                     let _ = cancel_transcription_once(&session, Arc::clone(&buffered)).await;
@@ -240,7 +338,20 @@ impl DictationEngine for PipelineDictationEngine {
                     "dictation cancelled while the recorder was starting",
                 ));
             }
-            if !stable {
+            if let Some(spawner) = local_startup_spawner.filter(|_| !stable) {
+                let attaching = buffered.attach();
+                let progress = Arc::clone(&buffered.inner.progress);
+                let session = Arc::clone(&session);
+                spawner.spawn(Box::pin(async move {
+                    if let Err(error) = attaching.await {
+                        if !session.cancelled.load(Ordering::Acquire)
+                            && !session.finishing.load(Ordering::Acquire)
+                        {
+                            let _ = progress.publish(crate::ports::RecordingEvent::Fatal(error));
+                        }
+                    }
+                }));
+            } else if !stable {
                 if let Err(error) = buffered.attach().await {
                     let recording = session
                         .resources
@@ -615,6 +726,16 @@ impl DictationEngine for PipelineDictationEngine {
                 &transcript.text,
                 &context.correction_rules,
             );
+            log::info!(
+                "[asr-diagnostics] session_id={} asr_chars={} asr_hash={} asr_near_duplicates={} corrected_chars={} corrected_hash={} corrected_near_duplicates={}",
+                session_id,
+                original_asr_text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&original_asr_text),
+                crate::output_cleaning::find_adjacent_near_duplicates(&original_asr_text).len(),
+                transcript.text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&transcript.text),
+                crate::output_cleaning::find_adjacent_near_duplicates(&transcript.text).len(),
+            );
             let asr_transcript =
                 (transcript.text != original_asr_text).then_some(original_asr_text);
             if !context.recording.archive_successful_recording {
@@ -639,7 +760,9 @@ impl DictationEngine for PipelineDictationEngine {
                     is_final: true,
                 }),
             )?;
-            let uses_polisher = context.uses_llm_polisher();
+            // Issue #1032: short transcripts skip polish (user-configured threshold).
+            let uses_polisher = context.uses_llm_polisher()
+                && !context.skips_polish_for_short_text(&transcript.text);
             let (polish_output, polish_failed, polish_ms) = if uses_polisher {
                 publish_progress(
                     &session,
@@ -732,6 +855,50 @@ impl DictationEngine for PipelineDictationEngine {
                 )?;
             }
 
+            if uses_polisher {
+                let findings =
+                    crate::output_cleaning::find_adjacent_near_duplicates(&polish_output.text);
+                let finding_summary = findings
+                    .iter()
+                    .map(|finding| {
+                        format!(
+                            "{}x{}:{:.4}/{:.4}",
+                            finding.left_chars,
+                            finding.right_chars,
+                            finding.similarity,
+                            finding.length_adjusted_similarity
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                log::info!(
+                    "[polish-diagnostics] session_id={} input_chars={} input_hash={} final_chars={} final_hash={} near_duplicate_count={} near_duplicates={} polish_failed={} provider={} model={}",
+                    session_id,
+                    transcript.text.chars().count(),
+                    crate::output_cleaning::privacy_text_hash(&transcript.text),
+                    polish_output.text.chars().count(),
+                    crate::output_cleaning::privacy_text_hash(&polish_output.text),
+                    findings.len(),
+                    finding_summary,
+                    polish_failed,
+                    polish_output
+                        .llm_call_label
+                        .as_ref()
+                        .map_or("", |label| label.provider.as_str()),
+                    polish_output
+                        .llm_call_label
+                        .as_ref()
+                        .map_or("", |label| label.model.as_str()),
+                );
+                if !findings.is_empty() {
+                    log::warn!(
+                        "[polish-diagnostics] adjacent near-duplicate output detected for session_id={} count={}",
+                        session_id,
+                        findings.len()
+                    );
+                }
+            }
+
             remove_session(&sessions, session_id, &session);
             Ok(EngineResult {
                 raw_text: transcript.text,
@@ -778,6 +945,7 @@ impl DictationEngine for PipelineDictationEngine {
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let sessions = Arc::clone(&self.sessions);
         let polisher = Arc::clone(&self.polisher);
+        let pending_captures = Arc::clone(&self.pending_captures);
         Box::pin(async move {
             let Some(session) = sessions
                 .lock()
@@ -792,6 +960,7 @@ impl DictationEngine for PipelineDictationEngine {
             }
             let preserve_quick_note_archive = session.context().output_target
                 == crate::dictation_context::DictationOutputTarget::QuickNote;
+            let capture_generation = session.context().recording.capture_generation;
 
             let (recording, transcription, buffered) = {
                 let mut resources = session
@@ -805,6 +974,12 @@ impl DictationEngine for PipelineDictationEngine {
                 )
             };
             let mut first_error = None;
+            if let Some(generation) = capture_generation {
+                retain_first_error(
+                    &mut first_error,
+                    discard_pending_capture(&pending_captures, generation).await,
+                );
+            }
             if let Some(recording) = recording {
                 let archive = recording.archive();
                 retain_first_error(&mut first_error, recording.stop().await);
@@ -893,6 +1068,20 @@ fn find_session(
                 "dictation pipeline session is not active",
             )
         })
+}
+
+async fn discard_pending_capture(
+    pending_captures: &Arc<Mutex<HashMap<u64, Box<dyn PendingAudioCapture>>>>,
+    generation: u64,
+) -> Result<(), BackendError> {
+    let capture = pending_captures
+        .lock()
+        .expect("pending capture lock poisoned")
+        .remove(&generation);
+    match capture {
+        Some(capture) => capture.discard().await,
+        None => Ok(()),
+    }
 }
 
 fn remove_session(
@@ -1272,6 +1461,17 @@ fn attach_buffered_transcription(
 ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
     Box::pin(async move {
         let _notify = NotifyOnDrop { waiter };
+        if matches!(
+            *inner
+                .state
+                .lock()
+                .expect("buffered transcription lock poisoned"),
+            BufferedTranscriptionState::Cancelled
+        ) {
+            return Err(cancelled_error(
+                "transcription cancelled before provider startup",
+            ));
+        }
         let downstream = match inner.prepared.start(Arc::clone(&inner.partials)).await {
             Ok(session) => session,
             Err(error) => {
@@ -2022,6 +2222,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn asr_diagnostics_distinguish_correction_introduced_repetition() {
+        crate::testing::logging::start();
+        let corrected =
+            "Please submit the final report today. Please submit the final report today.";
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text(corrected)),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.correction_rules.push(crate::types::CorrectionRule {
+            id: "diagnostic-fixture".into(),
+            pattern: "raw text".into(),
+            replacement: corrected.into(),
+            enabled: true,
+            created_at: String::new(),
+            source: Default::default(),
+        });
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::new(context), fixture.progress.clone())
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.asr_transcript.as_deref(), Some("raw text"));
+        assert_eq!(result.raw_text, corrected);
+        let logs = crate::testing::logging::matching(&format!(
+            "[asr-diagnostics] session_id={session_id} "
+        ));
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].contains(&format!(
+            "asr_chars=8 asr_hash={} asr_near_duplicates=0",
+            crate::output_cleaning::privacy_text_hash("raw text")
+        )));
+        assert!(logs[0].contains(&format!(
+            "corrected_chars={} corrected_hash={} corrected_near_duplicates=1",
+            corrected.chars().count(),
+            crate::output_cleaning::privacy_text_hash(corrected)
+        )));
+        assert!(!logs[0].contains("raw text"));
+        assert!(!logs[0].contains("Please submit"));
+    }
+
+    #[tokio::test]
     async fn provider_only_capture_uses_host_spawner_and_stable_mode_defers_start() {
         #[derive(Default)]
         struct QueuedSpawner(Mutex<Vec<BoxFuture<'static, ()>>>);
@@ -2644,6 +2894,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_model_loading_never_blocks_stop_or_cancel_of_the_microphone() {
+        use crate::experimental_asr::ExperimentalAsrModel;
+        for model in ExperimentalAsrModel::ALL {
+            for cancel in [false, true] {
+                let stops = Arc::new(AtomicUsize::new(0));
+                let pcm = Arc::new(Mutex::new(Vec::new()));
+                let cancels = Arc::new(AtomicUsize::new(0));
+                let entered = Arc::new(tokio::sync::Notify::new());
+                let release = Arc::new(tokio::sync::Notify::new());
+                let engine = Arc::new(
+                    PipelineDictationEngine::new(
+                        Arc::new(ExposedRecorder {
+                            consumer: Arc::new(Mutex::new(None)),
+                            stops: Arc::clone(&stops),
+                        }),
+                        Arc::new(DelayedTranscriber {
+                            entered: Arc::clone(&entered),
+                            release: Arc::clone(&release),
+                            session: Arc::new(FixtureTranscriptionSession {
+                                pcm: Arc::clone(&pcm),
+                                cancels: Arc::clone(&cancels),
+                                finish_entered: None,
+                                finish_release: None,
+                            }),
+                        }),
+                        noop_polisher(),
+                    )
+                    .with_local_startup_spawner(Arc::new(crate::TokioTaskSpawner)),
+                );
+                let mut context = (*raw_dictation_context()).clone();
+                context.asr.provider_type = model.provider_type().into();
+                let id = SessionId::new();
+                let progress = Arc::new(RecordingProgress::default());
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    engine.start(id, Arc::new(context), progress.clone()),
+                )
+                .await
+                .expect("capture must be ready before model loading")
+                .unwrap();
+                entered.notified().await;
+                if cancel {
+                    engine.cancel(id).await.unwrap();
+                    assert_eq!(stops.load(Ordering::Acquire), 1);
+                    release.notify_one();
+                    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        while cancels.load(Ordering::Acquire) == 0 {
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .unwrap();
+                    assert!(
+                        pcm.lock().unwrap().is_empty(),
+                        "cancelled capture must never be replayed"
+                    );
+                } else {
+                    let finishing = tokio::spawn({
+                        let engine = engine.clone();
+                        async move { engine.finish(id, progress).await }
+                    });
+                    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        while stops.load(Ordering::Acquire) == 0 {
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .expect("stop must release capture while model is still loading");
+                    assert!(
+                        !finishing.is_finished(),
+                        "result still waits for real recognition"
+                    );
+                    release.notify_one();
+                    assert_eq!(finishing.await.unwrap().unwrap().raw_text, "raw text");
+                    assert_eq!(*pcm.lock().unwrap(), vec![1, 0]);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_queued_local_start_never_loads_the_model() {
+        #[derive(Default)]
+        struct Queue(Mutex<Vec<BoxFuture<'static, ()>>>);
+        impl crate::TaskSpawner for Queue {
+            fn spawn(&self, task: BoxFuture<'static, ()>) {
+                self.0.lock().unwrap().push(task);
+            }
+        }
+        let spawner = Arc::new(Queue::default());
+        let starts = Arc::new(AtomicUsize::new(0));
+        let stops = Arc::new(AtomicUsize::new(0));
+        let engine = PipelineDictationEngine::new(
+            Arc::new(ExposedRecorder {
+                consumer: Arc::new(Mutex::new(None)),
+                stops: stops.clone(),
+            }),
+            Arc::new(FixtureTranscriber {
+                starts: starts.clone(),
+                session: Arc::new(FixtureTranscriptionSession {
+                    pcm: Arc::new(Mutex::new(Vec::new())),
+                    cancels: Arc::new(AtomicUsize::new(0)),
+                    finish_entered: None,
+                    finish_release: None,
+                }),
+            }),
+            noop_polisher(),
+        )
+        .with_local_startup_spawner(spawner.clone());
+        let mut context = (*raw_dictation_context()).clone();
+        context.asr.provider_type = crate::experimental_asr::ExperimentalAsrModel::TextStream
+            .provider_type()
+            .into();
+        let id = SessionId::new();
+        engine
+            .start(
+                id,
+                Arc::new(context),
+                Arc::new(RecordingProgress::default()),
+            )
+            .await
+            .unwrap();
+        engine.cancel(id).await.unwrap();
+        let tasks = std::mem::take(&mut *spawner.0.lock().unwrap());
+        assert_eq!(tasks.len(), 1);
+        for task in tasks {
+            task.await;
+        }
+        assert_eq!(starts.load(Ordering::Acquire), 0);
+        assert_eq!(stops.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn background_local_start_failure_is_reported_not_silently_recorded_forever() {
+        let engine = PipelineDictationEngine::new(
+            Arc::new(ExposedRecorder {
+                consumer: Arc::new(Mutex::new(None)),
+                stops: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(FailingTranscriber),
+            noop_polisher(),
+        )
+        .with_local_startup_spawner(Arc::new(crate::TokioTaskSpawner));
+        let mut context = (*raw_dictation_context()).clone();
+        context.asr.provider_type = crate::experimental_asr::ExperimentalAsrModel::SenseVoice
+            .provider_type()
+            .into();
+        let id = SessionId::new();
+        let progress = Arc::new(RecordingProgress::default());
+        engine
+            .start(id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
+        // finish must expose the original provider failure, not a fabricated empty result.
+        let error = engine.finish(id, progress).await.unwrap_err();
+        assert_eq!(error.error.code, BackendErrorCode::Provider);
+    }
+
+    #[tokio::test]
     async fn provider_polish_failure_uses_raw_text_fallback() {
         let fixture = fixture_engine(
             false,
@@ -2671,6 +3080,67 @@ mod tests {
             .unwrap();
         assert_eq!(result.raw_text, "raw text");
         assert_eq!(result.polished_text, "raw text");
+    }
+
+    #[tokio::test]
+    async fn short_transcript_under_threshold_skips_polish() {
+        // Issue #1032: "raw text" has 7 non-whitespace characters, within a limit of 8.
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("polished text")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_skip_max_chars = 8;
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(
+                session_id,
+                Arc::new(context),
+                fixture.progress.clone(),
+            )
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.polished_text, "raw text");
+        assert!(!result.polish_failed);
+    }
+
+    #[tokio::test]
+    async fn transcript_over_threshold_still_polishes() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("polished text")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        // "raw text" has 7 non-whitespace characters, above a limit of 6.
+        context.polish.polish_skip_max_chars = 6;
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(
+                session_id,
+                Arc::new(context),
+                fixture.progress.clone(),
+            )
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.polished_text, "polished text");
     }
 
     #[tokio::test]

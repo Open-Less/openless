@@ -739,6 +739,7 @@ mod imp {
         /// EP registration invalidates the SDK's model catalog cache; once it
         /// succeeds this process never registers again.
         execution_providers_ready: OnceCell<()>,
+        restart_after_download: AtomicBool,
         cancel_prepare: Arc<AtomicBool>,
         temporary_cpu_fallback_sequence: AtomicU64,
         route_epoch: AtomicU64,
@@ -756,6 +757,7 @@ mod imp {
             Self {
                 lifecycle: AsyncMutex::new(()),
                 execution_providers_ready: OnceCell::new(),
+                restart_after_download: AtomicBool::new(false),
                 cancel_prepare: Arc::new(AtomicBool::new(false)),
                 temporary_cpu_fallback_sequence: AtomicU64::new(0),
                 route_epoch: AtomicU64::new(0),
@@ -774,7 +776,7 @@ mod imp {
                 .loaded
                 .as_ref()
                 .map(|loaded| loaded.model_id.clone());
-            let native_ready = foundry_native::runtime_ready();
+            let native_ready = loaded_model_id.is_some();
             FoundryRuntimeStatus {
                 provider_id: PROVIDER_ID.into(),
                 available: true,
@@ -797,6 +799,55 @@ mod imp {
                 .loaded
                 .as_ref()
                 .is_some_and(|loaded| loaded.alias == alias)
+        }
+
+        pub fn restart_required(&self) -> bool {
+            self.restart_after_download.load(Ordering::Acquire)
+        }
+
+        /// This vendor SDK needs native initialization to acquire models. It is
+        /// an explicit download, not activation: unload on every exit, leave
+        /// channel preferences untouched, and require a fresh process afterwards.
+        pub async fn download_with_progress<F>(
+            &self,
+            alias: &str,
+            runtime_source: &str,
+            progress: F,
+        ) -> Result<()>
+        where
+            F: Fn(FoundryPrepareProgressPayload) + Send + Sync + 'static,
+        {
+            self.restart_after_download.store(true, Ordering::Release);
+            self.advance_route_epoch();
+            let _lifecycle = self.lifecycle.lock().await;
+            self.cancel_prepare.store(false, Ordering::SeqCst);
+            let source = foundry_native::normalize_runtime_source(runtime_source);
+            let result = async {
+                let loaded = self
+                    .ensure_loaded_locked(alias, source, Arc::new(progress), true)
+                    .await?;
+                let path = loaded
+                    .model
+                    .path()
+                    .await
+                    .context("get downloaded Foundry model path")?;
+                super::super::native_model_receipt::record(
+                    &crate::persistence::foundry_model_cache_root()?,
+                    alias,
+                    &path,
+                )?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            // Do not leave a resident model even if download/receipt writing failed.
+            let released = self.release_now_locked().await;
+            match (result, released) {
+                (Err(error), Err(release)) => {
+                    Err(error.context(format!("also failed to unload: {release:#}")))
+                }
+                (Err(error), _) | (_, Err(error)) => Err(error),
+                _ => Ok(()),
+            }
         }
 
         pub async fn ensure_loaded(&self, alias: &str, runtime_source: &str) -> Result<String> {
@@ -837,7 +888,7 @@ mod imp {
             });
             let runtime_source = foundry_native::normalize_runtime_source(runtime_source);
             Ok(self
-                .ensure_loaded_locked(alias, runtime_source, progress)
+                .ensure_loaded_locked(alias, runtime_source, progress, false)
                 .await?
                 .model_id)
         }
@@ -907,7 +958,7 @@ mod imp {
             self.cancel_prepare.store(false, Ordering::SeqCst);
             let runtime_source = foundry_native::normalize_runtime_source(runtime_source);
             let loaded = self
-                .ensure_loaded_locked(alias, runtime_source, Arc::new(|_| {}))
+                .ensure_loaded_locked(alias, runtime_source, Arc::new(|_| {}), false)
                 .await?;
             let manager = self.manager()?;
             let primary = PrimaryModel::from_loaded(&loaded);
@@ -1036,7 +1087,10 @@ mod imp {
         pub async fn model_dir_for_alias(&self, alias: &str) -> Result<PathBuf> {
             let _lifecycle = self.lifecycle.lock().await;
             if self.state.lock().manager.is_none() {
-                return crate::persistence::foundry_model_cache_root();
+                let root = crate::persistence::foundry_model_cache_root()?;
+                return Ok(
+                    super::super::native_model_receipt::installed_dir(&root, alias).unwrap_or(root),
+                );
             }
             let manager = self.manager()?;
             let model = manager
@@ -1054,43 +1108,28 @@ mod imp {
             &self,
             aliases: &[String],
         ) -> Result<Vec<super::FoundryNativeModelState>> {
-            let _lifecycle = self.lifecycle.lock().await;
-            if !foundry_native::runtime_ready() {
-                return Ok(aliases
-                    .iter()
-                    .map(|alias| super::FoundryNativeModelState {
-                        alias: alias.clone(),
-                        cached: false,
-                        size_bytes: None,
-                        display_name: None,
-                    })
-                    .collect());
-            }
-            let manager = self.manager()?;
-            let mut states = Vec::with_capacity(aliases.len());
-            for alias in aliases {
-                let model = manager
-                    .catalog()
-                    .get_model(alias)
-                    .await
-                    .with_context(|| format!("get Foundry catalog model {alias}"))?;
-                let info = model.info();
-                let cached = model.is_cached().await.unwrap_or(info.cached);
-                states.push(super::FoundryNativeModelState {
+            // No manager()/catalog() call here. Polling a page after restart
+            // must not initialize the SDK just because its DLLs are on disk.
+            let root = crate::persistence::foundry_model_cache_root()?;
+            Ok(aliases
+                .iter()
+                .map(|alias| super::FoundryNativeModelState {
                     alias: alias.clone(),
-                    cached,
-                    size_bytes: info
-                        .file_size_mb
-                        .map(|size| size.saturating_mul(1024 * 1024)),
-                    display_name: info.display_name.clone(),
-                });
-            }
-            Ok(states)
+                    cached: super::super::native_model_receipt::installed_dir(&root, alias)
+                        .is_some(),
+                    size_bytes: None,
+                    display_name: None,
+                })
+                .collect())
         }
 
         pub async fn delete_model(&self, alias: &str) -> Result<()> {
             self.advance_route_epoch();
             let _lifecycle = self.lifecycle.lock().await;
+            let root = crate::persistence::foundry_model_cache_root()?;
+            if self.state.lock().manager.is_none() {
+                return super::super::native_model_receipt::remove(&root, alias);
+            }
             let manager = self.manager()?;
             let model = manager
                 .catalog()
@@ -1109,6 +1148,7 @@ mod imp {
                 .await
                 .with_context(|| format!("remove Foundry model cache {alias}"))?;
             self.state.lock().primary_by_alias.remove(alias);
+            super::super::native_model_receipt::forget(&root, alias)?;
             Ok(())
         }
 
@@ -1117,7 +1157,21 @@ mod imp {
             alias: &str,
             runtime_source: RuntimeSource,
             progress: FoundryPrepareProgressCallback,
+            allow_download: bool,
         ) -> Result<LoadedModel> {
+            if !allow_download {
+                anyhow::ensure!(
+                    !self.restart_required(),
+                    "Restart OpenLess after downloading Foundry components"
+                );
+                let root = crate::persistence::foundry_model_cache_root()?;
+                anyhow::ensure!(
+                    foundry_native::runtime_ready()
+                        && super::super::native_model_receipt::installed_dir(&root, alias)
+                            .is_some(),
+                    "Foundry model is not downloaded; download it explicitly first"
+                );
+            }
             if let Some(loaded) = self.cached_loaded_model(alias) {
                 progress.as_ref()(FoundryPrepareProgressPayload::finished(
                     alias,
@@ -1204,6 +1258,10 @@ mod imp {
                 .await
                 .context("check Foundry model cache")?
             {
+                anyhow::ensure!(
+                    allow_download,
+                    "Foundry model variant is not downloaded; download it explicitly first"
+                );
                 progress.as_ref()(FoundryPrepareProgressPayload::model(
                     alias,
                     model_label.clone(),

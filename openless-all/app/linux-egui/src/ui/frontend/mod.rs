@@ -618,6 +618,48 @@ mod tests {
     }
 
     #[test]
+    fn settings_modal_tessellates_after_opening_and_resizing() {
+        use super::view_model::SettingsSection;
+        for section in [
+            SettingsSection::General,
+            SettingsSection::Shortcuts,
+            SettingsSection::Services,
+            SettingsSection::Appearance,
+            SettingsSection::Privacy,
+            SettingsSection::Advanced,
+            SettingsSection::About,
+        ] {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: openless_linux_egui::Lang::En,
+                settings_open: true,
+                settings_section: section,
+                ..Default::default()
+            };
+            for size in [egui::vec2(1300.0, 835.0), egui::vec2(960.0, 640.0)] {
+                for _ in 0..3 {
+                    ctx.begin_pass(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    });
+                    render(&ctx, &mut vm, &mut Vec::new());
+                    let output = end_pass(&ctx);
+                    let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+                    assert!(!primitives.is_empty(), "{section:?} must paint a frame");
+                    for primitive in primitives {
+                        if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                            assert!(
+                                mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()),
+                                "{section:?} produced non-finite vertices at {size:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn settings_overlay_opens_from_every_page() {
         // Regression: Overview / Style / History returned early from `render`, so
         // the settings overlay at the end of the function never ran and the
@@ -789,6 +831,7 @@ mod tests {
                 ..Default::default()
             };
             vm.settings.less_computer = enabled;
+            vm.settings.testing_features = true;
             let mut painted = String::new();
             for _ in 0..2 {
                 ctx.begin_pass(egui::RawInput {
@@ -807,7 +850,35 @@ mod tests {
         }
     }
 
-    /// 渲染设置页并把这一帧画出的文字按行返回。
+    #[test]
+    fn testing_features_hide_root_entries_and_revoke_an_open_detail_page() {
+        use super::view_model::SettingsSection;
+        let mut vm = FrontendViewModel::default();
+        let root = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        let title = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.testing_features.title",
+        );
+        assert!(root.iter().any(|line| line.contains(title)));
+        assert!(!root.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 3;
+        let off = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(!off.iter().any(|line| line == "Less Computer"));
+        vm.settings.testing_features = true;
+        let on = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(on.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 0;
+        vm.settings.less_computer = true;
+        vm.settings.testing_features = false;
+        let revoked = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert_eq!(vm.advanced_open, 3);
+        assert!(!revoked.iter().any(|line| line == "Less Computer"));
+        let shortcuts = painted_settings_lines(SettingsSection::Shortcuts, &mut vm);
+        let agent_voice = openless_linux_egui::tr_l10n(vm.lang, "settings.shortcuts.agent_voice");
+        assert!(!shortcuts.iter().any(|line| line == agent_voice));
+    }
+
+    /// Render two frames so layout and text are settled.
     fn painted_settings_lines(
         section: super::view_model::SettingsSection,
         vm: &mut FrontendViewModel,
@@ -907,6 +978,7 @@ mod tests {
             shortcut_recording: Some(ShortcutField::CodingAgentVoice),
             ..Default::default()
         };
+        vm.settings.testing_features = true;
         let held = egui::Modifiers {
             ctrl: true,
             command: true,

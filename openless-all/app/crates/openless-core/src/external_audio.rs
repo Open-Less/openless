@@ -13,7 +13,8 @@ use futures_util::future::BoxFuture;
 use crate::dictation_context::{DictationAudioSource, DictationContext};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
-    ActiveRecording, AudioConsumer, AudioRecorder, RecordingArchive, RecordingProgressSink,
+    ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, PendingAudioCapture,
+    RecordingArchive, RecordingProgressSink,
 };
 use crate::types::SessionId;
 
@@ -212,6 +213,17 @@ impl AudioRecorderRouter {
 }
 
 impl AudioRecorder for AudioRecorderRouter {
+    fn arm_capture(
+        &self,
+        request: CaptureStartRequest,
+    ) -> Result<Box<dyn PendingAudioCapture>, BackendError> {
+        self.microphone.arm_capture(request)
+    }
+
+    fn discard_capture(&self, press_id: u64) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.microphone.discard_capture(press_id)
+    }
+
     fn start(
         &self,
         session_id: SessionId,

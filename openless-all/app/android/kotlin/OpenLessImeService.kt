@@ -46,7 +46,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // (see buildKeyboardView()'s spaceButton); the panel/View tree itself
     // is never rebuilt into a second layout for PINYIN — see
     // docs/pinyin-lite/phase-0-audit.md section 7.
-    internal enum class LatinInputMode { ENGLISH, PINYIN }
+    internal enum class LatinInputMode {
+        ENGLISH,
+        PINYIN;
+
+        fun toggled(): LatinInputMode = if (this == ENGLISH) PINYIN else ENGLISH
+    }
 
     private var lastCancelledImeRequest = 0L
     private var imeRequestId = 0L
@@ -55,7 +60,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var pendingImeStop = false
     private var cloudNoteDestination: Pair<String, String>? = null
 
-    private fun sendImeCommand(action: String): Boolean = try {
+    private fun sendImeCommand(action: String, cursorContext: AndroidCursorContext? = null): Boolean = try {
         val request = org.json.JSONObject().apply {
             put("action", action)
             put("requestId", imeRequestId)
@@ -63,6 +68,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             put("raw", rawModeArmed)
             put("quickNote", quickNoteArmed)
             put("cloud", cloudNoteArmed)
+            // Core builds the prompt envelope; only the session's "start" carries the snapshot.
+            if (action == "start" && cursorContext != null) {
+                cursorContext.packageName?.let { put("frontApp", it) }
+                put("cursorBefore", cursorContext.before)
+                put("cursorAfter", cursorContext.after)
+            }
         }
         val response = org.json.JSONObject(OpenLessNative.nativeImeCommand(request.toString()))
         check(response.optBoolean("ok")) { response.optString("error", "IME command failed") }
@@ -72,6 +83,21 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         false
     }
 
+    /** Snapshot of the text around the caret for this recording; must run when recording starts, never at stop. Logs metadata only. */
+    private fun captureCursorContext(): AndroidCursorContext? {
+        if (!OpenLessAndroidPreferences.cursorContextEnabled(this)) return null
+        val started = android.os.SystemClock.elapsedRealtime()
+        val editor = currentInputEditorInfo
+        val connection = currentInputConnection
+        val captured = if (editor == null || connection == null) null else ImePrivacyPolicy.captureCursorContext(
+            enabled = true, inputType = editor.inputType, imeOptions = editor.imeOptions, packageName = editor.packageName,
+            readBefore = { connection.getTextBeforeCursor(it, 0) }, readAfter = { connection.getTextAfterCursor(it, 0) })
+        android.util.Log.i("OpenLessImeService", "cursor-context android status=${if (captured == null) "none" else "ok"} " +
+            "source=input_connection before_chars=${captured?.before?.length ?: 0} after_chars=${captured?.after?.length ?: 0} " +
+            "package=${editor?.packageName} elapsed_ms=${android.os.SystemClock.elapsedRealtime() - started}")
+        return captured
+    }
+
     private fun cancelImeSession() {
         if (imeRequestId != 0L) { lastCancelledImeRequest = imeRequestId; sendImeCommand("cancel") }
         imeRequestId = 0L
@@ -79,11 +105,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         pendingImeStop = false
         cloudNoteDestination = null
         pendingCloudArm = false
+        cloudNoteSubmitting = false
     }
 
     private fun stopImeSession() {
         if (imeSessionId == null) pendingImeStop = true
-        else if (!sendImeCommand("stop")) { recording = false; processing = false }
+        else if (!sendImeCommand("stop")) {
+            recording = false
+            processing = false
+            releaseDismissedEditReplacement()
+        }
     }
 
     private fun onImeSessionEvent(json: String) {
@@ -118,6 +149,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 imeSessionId = null
                 pendingImeStop = false
                 pendingCloudArm = false
+                // The edit panel was already dismissed when recording stopped.
+                // Leaving the replacement armed makes the next successful
+                // dictation delete the old span by length.
+                releaseDismissedEditReplacement()
                 setState("error", ui("听写失败，请重试", "Dictation failed; please retry"))
             }
         }
@@ -180,17 +215,30 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 cloudNoteDestination = (prefs.getString("key_cloud_note_webhook_url", "") ?: "").trim() to
                     (prefs.getString("key_cloud_note_webhook_token", "") ?: "").trim()
             }
-            voiceButton?.cloudNoteActive = value
+            voiceButton?.cloudNoteActive = value || cloudNoteSubmitting
             status?.setTextColor(recordingAccentColor())
         }
+    // The webhook POST that follows a Cloud notes dictation (see
+    // submitCloudNoteText()). cloudNoteArmed is already back to false by
+    // then — the Core session it mirrors has completed — so this is what
+    // keeps the red accent up until the submit itself finishes. Display
+    // only: unlike `processing`, it never blocks a new mic tap.
+    private var cloudNoteSubmitting = false
 
-    /** Status text color while a recording prompt is showing — orange for an armed Raw stop, green for an armed Quick notes stop, red for an armed Cloud notes submit, normal otherwise. Single source of truth for rawModeArmed/quickNoteArmed/cloudNoteArmed's setters and updateStatus() alike, so the three gestures can never disagree on which one currently owns the color. */
-    private fun recordingAccentColor(): Int = when {
-        state == "speaking" && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-        state == "speaking" && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-        state == "speaking" && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
-        else -> statusNormalColor
+    /** Accent of whichever gesture mode is armed — orange for Raw, green for Quick notes, red for Cloud notes (including its submit step) — or null for an ordinary dictation. Single source of truth for the status line, the hint row and the link indicator, so they can never disagree on which mode currently owns the color. */
+    private fun armedAccentColor(): Int? = when {
+        rawModeArmed -> LINK_COLOR_RECORDING_RAW
+        quickNoteArmed -> LINK_COLOR_QUICK_NOTE
+        cloudNoteArmed || cloudNoteSubmitting -> LINK_COLOR_CLOUD_NOTE
+        else -> null
     }
+
+    /** True from the start of a recording through the "thinking" step that follows it — the span an armed mode keeps its accent for. */
+    private fun dictationInProgress(): Boolean = state == "speaking" || state == "thinking"
+
+    /** Status text color while a recording or thinking prompt is showing — the armed mode's accent, normal otherwise. */
+    private fun recordingAccentColor(): Int =
+        if (dictationInProgress()) armedAccentColor() ?: statusNormalColor else statusNormalColor
     internal var inputMode = InputMode.VOICE
     private var englishLayer = EnglishLayer.LETTERS
     // Persisted across sessions the same way inputMode is (see
@@ -300,10 +348,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var lastDictationEpoch: Long = -1
     private var dictationTextUndone = false
     private var editingDictationResult = false
-    // Set right before deleteBackward() edits the field, consumed by the
-    // very next invalidateDictationResultIfTextChanged() call — see
-    // deleteBackward()'s comment.
-    private var selfInitiatedTextChange = false
     // True from the moment the edit mic starts recording until its result
     // (or a cancel) resolves — independent of editingDictationResult, which
     // only tracks which PANEL is currently shown. Stopping the edit mic
@@ -311,6 +355,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // polish animation plays there, not on the compact edit view), while
     // this flag keeps commitImeText() routing the eventual result to
     // finishEditWithSpokenReplacement() instead of a normal commit.
+    // A failed session, or a later tap on the main mic, must release it —
+    // otherwise that next utterance is still treated as the correction and
+    // deletes original.length characters before the cursor.
     private var awaitingEditReplacement = false
     // The exact span being replaced by the edit flow's "speak the correct
     // word" mic: either whatever the user selected in the real input field,
@@ -517,7 +564,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
         litePinyinController.clear()
-        latinInputMode = if (latinInputMode == LatinInputMode.ENGLISH) LatinInputMode.PINYIN else LatinInputMode.ENGLISH
+        latinInputMode = latinInputMode.toggled()
         saveLatinInputMode(latinInputMode)
         refreshLatinCandidateBar()
         performKeyHaptic()
@@ -1548,16 +1595,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             textSize = 12f
             gravity = android.view.Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            isClickable = false
-            // The actual bug behind every earlier "text is just missing"
-            // attempt at a FrameLayout overlay on a keyboardKey(): that key
-            // has its own non-zero elevation+translationZ (dp(5)+dp(1), see
-            // keyboardKey()'s own body) for its raised-surface look, and on
-            // API 21+ ViewGroup draws children in Z order — not insertion
-            // order — whenever their Z values differ. spaceButton's Z was
-            // silently winning and painting straight over this View despite
-            // being added to the FrameLayout first. A higher Z here forces
-            // this View to actually draw on top.
+            isClickable = true
+            isFocusable = true
+            contentDescription = ui("切换拼音和英文", "Switch between Pinyin and English")
+            setOnClickListener { toggleLatinInputMode() }
+            // Keep the hint above the raised space key so its tap target is
+            // the visible mode label rather than the key underneath it.
             translationZ = dp(10).toFloat()
         }
         val spaceWrapper = FrameLayout(this).apply {
@@ -3320,13 +3363,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     internal fun deleteBackward() {
         val connection = currentInputConnection ?: return
         val selected = connection.getSelectedText(0)
-        // Consumed by the very next invalidateDictationResultIfTextChanged()
-        // call (from onUpdateSelection(), which this delete triggers) so it
-        // skips clearing lastDictationText — deleting via our own backspace
-        // (plain or select-all-then-backspace, both land here) should stay
-        // undoable, unlike text disappearing for some other reason (e.g. the
-        // host app clearing the field itself after sending).
-        selfInitiatedTextChange = true
         if (!selected.isNullOrEmpty()) {
             connection.commitText("", 1)
         } else {
@@ -3419,35 +3455,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Detects the committed dictation text getting cleared by something
-     * OTHER than our own backspace key or undo button — e.g. the host app
-     * clearing the field itself after sending — so the undo/redo/edit
-     * controls don't keep pointing at text that's no longer actually there.
-     * Deleting via our own backspace (plain or select-all-then-backspace,
-     * see deleteBackward()) is deliberately NOT treated as a reason to hide
-     * these: that deletion is itself undoable (the undo button just
-     * re-commits lastDictationText), so hiding it would strand an
-     * accidental full erase with no way back.
-     *
-     * Only clears once NONE of the dictated span remains — a single
-     * backspace only shrinks it by one character, which should still leave
-     * the controls up, not hide them immediately. Checks every leading
-     * prefix of the dictated text (shortest first would also work, but
-     * longest-first short-circuits sooner in the common case) against
-     * what's actually sitting immediately before the cursor; if any prefix
-     * still matches there, some of the utterance is still present.
+     * Hides undo/redo/edit once none of the dictated span is still immediately
+     * before the cursor — the host cleared the field, or backspace removed the
+     * utterance. A shorter matching prefix keeps the controls (one backspace
+     * must not hide them). The undo action itself still refuses to delete
+     * unless the full utterance is exactly before the cursor.
      */
     private fun invalidateDictationResultIfTextChanged() {
-        if (selfInitiatedTextChange) {
-            selfInitiatedTextChange = false
-            return
-        }
         val text = lastDictationText ?: return
         if (dictationTextUndone) return
         val connection = currentInputConnection ?: return
-        for (len in text.length downTo 1) {
-            if (connection.getTextBeforeCursor(len, 0)?.toString() == text.substring(0, len)) return
-        }
+        val beforeCursor = connection.getTextBeforeCursor(text.length, 0) ?: return
+        if (DictationSpan.hasRemainingPrefix(beforeCursor, text)) return
         lastDictationText = null
         updateDictationResultControls()
     }
@@ -3461,6 +3480,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // Selecting another span must not discard the user's pending undo/redo.
+        if (newSelStart < 0 || newSelStart != newSelEnd) return
         invalidateDictationResultIfTextChanged()
     }
 
@@ -3511,6 +3532,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             rawModeArmed = false
             quickNoteArmed = false
             cloudNoteArmed = false
+            // A tap on the main mic (edit panel already gone) is a new
+            // utterance. Drop a correction that failed or was superseded
+            // before its result arrived, so this session cannot inherit it.
+            releaseDismissedEditReplacement()
             // The actual start of a new recording attempt — reset the
             // silence watch and fire the start haptic here, not in
             // onCapsuleStateChanged's "recording" branch: that branch only
@@ -3537,7 +3562,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             cloudNoteArmed = initialCloud
             imeRequestId = nextImeRequest.incrementAndGet()
             pendingImeStop = false
-            if (!sendImeCommand("start")) { recording = false; processing = false }
+            if (!sendImeCommand("start", captureCursorContext())) { recording = false; processing = false }
         }
     }
 
@@ -3547,6 +3572,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rawModeArmed = false
         quickNoteArmed = false
         cloudNoteArmed = false
+        cloudNoteSubmitting = false
         invalidateSession("已取消")
         cancelImeSession()
     }
@@ -3609,14 +3635,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * what the user described as the link being "disconnected".
      */
     private fun updateBackendLinkIndicator() {
+        val armedAccent = armedAccentColor()
         val color = when {
-            // Matches VoiceButton's own waveform color for each armed
-            // gesture exactly (rawWaveformColor's when block) — the
-            // breathing dot and the waveform should never disagree about
-            // which mode a recording is currently armed for.
-            recording && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-            recording && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-            recording && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
+            // Matches VoiceButton's own waveform/dots color for each armed
+            // gesture exactly (armedModeColor()) — the breathing dot and
+            // the mic animation should never disagree about which mode a
+            // dictation is currently armed for, recording or thinking.
+            (recording || processing || cloudNoteSubmitting) && armedAccent != null -> armedAccent
             recording -> LINK_COLOR_RECORDING
             processing -> LINK_COLOR_PROCESSING
             !backendLinkHealthy -> LINK_COLOR_ISSUE
@@ -3785,7 +3810,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         voiceRawHint?.setTextColor(rawModeHintColor())
         voiceRawHint?.visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
         voiceButton?.isRecording = recording
-        voiceButton?.isProcessing = processing
+        // The Cloud notes submit shows the same thinking dots as the step
+        // before it, even though `processing` itself is already false.
+        voiceButton?.isProcessing = processing || cloudNoteSubmitting
+        // Re-pushed here, not only from each field's own setter: a panel
+        // rebuild mid-dictation (see toggleDictation()'s edit-panel exit)
+        // hands us a fresh VoiceButton that never saw those setters fire.
+        voiceButton?.rawModeActive = rawModeArmed
+        voiceButton?.quickNoteActive = quickNoteArmed
+        voiceButton?.cloudNoteActive = cloudNoteArmed || cloudNoteSubmitting
         updateDictationResultControls()
         updateBackendLinkIndicator()
     }
@@ -3794,30 +3827,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * Swipe-up-for-Raw / swipe-left-for-Quick-notes / swipe-right-for-
      * Cloud-notes discoverability hint while idle; once a recording is
      * actually armed into one of those three modes (live through both
-     * recording and the following "thinking"/整理 step for Raw and Cloud
-     * notes — quick note never reaches "thinking", see
-     * quickNoteDictation()), the row repurposes itself to confirm whichever
-     * one is armed instead. Recording-or-thinking with none armed (an
-     * ordinary dictation) never reaches this text at all — see
-     * rawModeHintVisible(), which hides the row entirely for that case.
+     * recording and the following "thinking" step — 整理 for Raw and Cloud
+     * notes, plus Cloud notes' own submit; saving for Quick notes), the
+     * row repurposes itself to confirm whichever one is armed instead.
+     * Recording-or-thinking with none armed (an ordinary dictation) never
+     * reaches this text at all — see rawModeHintVisible(), which hides the
+     * row entirely for that case.
      */
     private fun rawModeHintText(): String {
         return when {
-            (state == "speaking" || state == "thinking") && rawModeArmed -> ui("原样转写", "Raw Mode")
-            (state == "speaking" || state == "thinking") && cloudNoteArmed -> ui("云笔记", "Cloud notes")
-            state == "speaking" && quickNoteArmed -> ui("速记模式", "Quick notes")
+            dictationInProgress() && rawModeArmed -> ui("原样转写", "Raw Mode")
+            dictationInProgress() && quickNoteArmed -> ui("速记模式", "Quick notes")
+            dictationInProgress() && (cloudNoteArmed || cloudNoteSubmitting) -> ui("云笔记", "Cloud notes")
             else -> ui("上划RAW · 左划速记 · 右划云笔记", "Up: Raw · Left: Quick notes · Right: Cloud notes")
         }
     }
 
-    /** Same orange/green/red as the status line's own Raw/Quick-notes/Cloud-notes coloring and every other indicator for each mode (VoiceButton's armed pill/waveform) — muted gray otherwise. */
+    /** Same orange/green/red as the status line's own Raw/Quick-notes/Cloud-notes coloring and every other indicator for each mode (VoiceButton's armed pill/waveform/dots) — muted gray otherwise. */
     private fun rawModeHintColor(): Int {
-        return when {
-            (state == "speaking" || state == "thinking") && rawModeArmed -> LINK_COLOR_RECORDING_RAW
-            (state == "speaking" || state == "thinking") && cloudNoteArmed -> LINK_COLOR_CLOUD_NOTE
-            state == "speaking" && quickNoteArmed -> LINK_COLOR_QUICK_NOTE
-            else -> Color.argb((0.8f * 255).toInt(), 0xB0, 0xB0, 0xB0)
-        }
+        val armedAccent = if (dictationInProgress()) armedAccentColor() else null
+        return armedAccent ?: Color.argb((0.8f * 255).toInt(), 0xB0, 0xB0, 0xB0)
     }
 
     /**
@@ -3829,7 +3858,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * is actually armed (confirms it).
      */
     private fun rawModeHintVisible(): Boolean {
-        return !((state == "speaking" || state == "thinking") && !rawModeArmed && !quickNoteArmed && !cloudNoteArmed)
+        return !(dictationInProgress() && armedAccentColor() == null)
     }
 
     /** The request owns its destination; delayed network callbacks cannot affect a later recording. */
@@ -3847,6 +3876,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setState("error", "请先在设置中填写云笔记的地址/Token")
             return
         }
+        cloudNoteSubmitting = true
         setState("thinking", "正在提交云笔记")
         Thread {
             val mainHandler = android.os.Handler(Looper.getMainLooper())
@@ -3944,12 +3974,43 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
     }
 
+    private fun requireCollapsedDictationCursor(
+        connection: android.view.inputmethod.InputConnection,
+        selectionMessage: String,
+    ): Boolean {
+        val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+        val length = extracted?.text?.length ?: -1
+        if (extracted == null || extracted.selectionStart !in 0..length || extracted.selectionEnd !in 0..length) {
+            setState("error", ui("无法确认光标位置，未修改文字", "Cannot verify cursor position; text unchanged"))
+            return false
+        }
+        if (extracted.selectionStart != extracted.selectionEnd) {
+            setState("error", selectionMessage)
+            return false
+        }
+        return true
+    }
+
     /** Toggles between removing this dictation's committed text and restoring it. */
     private fun toggleUndoRedoDictation() {
         val text = lastDictationText ?: return
         if (sessionEpoch != lastDictationEpoch) return
         val connection = currentInputConnection ?: return
+        if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再撤销/重做", "Clear the selection before undo/redo"))) return
         if (!dictationTextUndone) {
+            // deleteSurroundingText is length-based. If the utterance is no
+            // longer exactly before the cursor (backspaced away, or the caret
+            // sits inside it), deleting would erase neighboring text.
+            val beforeCursor = connection.getTextBeforeCursor(text.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未撤销", "Cannot read original text; undo cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, text)) {
+                lastDictationText = null
+                updateDictationResultControls()
+                return
+            }
             // Flip the flag before deleting: onUpdateSelection() may run
             // synchronously inside deleteSurroundingText() and would
             // otherwise see dictationTextUndone still false, mistake this
@@ -3986,6 +4047,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         } else {
             val whole = lastDictationText ?: return
             if (sessionEpoch != lastDictationEpoch || dictationTextUndone) return
+            if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) return
+            val beforeCursor = connection.getTextBeforeCursor(whole.length, 0)
+            if (beforeCursor == null) {
+                setState("error", ui("无法读取原文，未替换", "Cannot read original text; replacement cancelled"))
+                return
+            }
+            if (!DictationSpan.matchesBeforeCursor(beforeCursor, whole)) {
+                lastDictationText = null
+                updateDictationResultControls()
+                Toast.makeText(this, ui("原文已变化，无法整段替换", "Original text changed; cannot replace it"), Toast.LENGTH_SHORT).show()
+                return
+            }
             editingOriginalText = whole
             editingReplacesWholeResult = true
         }
@@ -4024,6 +4097,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         awaitingEditReplacement = true
         refreshInputView()
         toggleDictation()
+    }
+
+    /**
+     * Drops a spoken correction that is no longer on screen. The in-flight
+     * result of an open edit panel must keep its replacement; once that panel
+     * is gone, the next commit is an ordinary insert.
+     */
+    private fun releaseDismissedEditReplacement() {
+        val next = PendingEditReplacement(
+            awaiting = awaitingEditReplacement,
+            panelVisible = editingDictationResult,
+            original = editingOriginalText,
+            replacesWhole = editingReplacesWholeResult,
+            addToDictionary = addToDictionaryForEdit,
+        ).releaseIfPanelDismissed()
+        awaitingEditReplacement = next.awaiting
+        editingOriginalText = next.original
+        editingReplacesWholeResult = next.replacesWhole
+        addToDictionaryForEdit = next.addToDictionary
     }
 
     /** Backs out of the edit sub-view without applying any correction. */
@@ -4067,8 +4159,31 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val connection = currentInputConnection
         if (connection != null) {
-            if (replacesWhole) connection.deleteSurroundingText(original.length, 0)
-            connection.commitText(text, 1)
+            if (replacesWhole) {
+                if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) {
+                    refreshInputView()
+                    return
+                }
+                if (!DictationSpan.matchesBeforeCursor(
+                        connection.getTextBeforeCursor(original.length, 0),
+                        original,
+                    ) || !connection.deleteSurroundingText(original.length, 0)
+                ) {
+                    setState("error", ui("原文已变化，未替换", "Original text changed; not replaced"))
+                    refreshInputView()
+                    return
+                }
+            }
+            if (!connection.commitText(text, 1)) {
+                val restored = !replacesWhole || connection.commitText(original, 1)
+                setState("error", if (restored) ui("替换失败", "Replace failed") else ui("替换失败，原文恢复失败", "Replace failed; original text could not be restored"))
+                refreshInputView()
+                return
+            }
+        } else {
+            setState("error", ui("输入连接已失效，未替换", "Input connection lost; not replaced"))
+            refreshInputView()
+            return
         }
         if (shouldAddToDictionary && text != original) {
             runNativeAction("加入词典") {
@@ -4087,6 +4202,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun setState(nextState: String, message: String, revertDelayMs: Long = DONE_TO_IDLE_DELAY_MS) {
         state = nextState
+        // The submit only ever shows as "thinking"; any other state means
+        // it finished, failed, or a new dictation took over.
+        if (nextState != "thinking") cloudNoteSubmitting = false
         updateStatus(message)
         // A completed commit/edit (see the various setState("done", "已
         // 上屏") call sites) used to just sit there until the next recording
@@ -5443,6 +5561,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 Color.rgb(100, 100, 100), Color.rgb(70, 70, 70),
             )
         }
+        // Per-dot alpha for the thinking ring when an armed mode tints it
+        // (see armedModeColor()) — the same strong/soft rhythm around the
+        // ring as processingDotColors' own grays, in one hue.
+        private val processingDotAlphas = intArrayOf(255, 205, 160, 240, 185, 220)
         var isRecording: Boolean = false
             set(value) {
                 field = value
@@ -5572,6 +5694,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
         }
 
+        /** Accent of the armed gesture mode, shared by the recording waveform and the thinking dots so the two never disagree — null for an ordinary dictation. */
+        private fun armedModeColor(): Int? = when {
+            rawModeActive -> LINK_COLOR_RECORDING_RAW
+            quickNoteActive -> LINK_COLOR_QUICK_NOTE
+            cloudNoteActive -> LINK_COLOR_CLOUD_NOTE
+            else -> null
+        }
+
         private var phase = 0f
         private val animator = object : Runnable {
             override fun run() {
@@ -5672,12 +5802,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val envelopeCenter = (barCount - 1) / 2f
                 val gap = width * 0.86f / (barCount - 1)
                 val startX = centerX - gap * (barCount - 1) / 2f
-                val rawWaveformColor = when {
-                    rawModeActive -> LINK_COLOR_RECORDING_RAW
-                    quickNoteActive -> LINK_COLOR_QUICK_NOTE
-                    cloudNoteActive -> LINK_COLOR_CLOUD_NOTE
-                    else -> waveformColor
-                }
+                val rawWaveformColor = armedModeColor() ?: waveformColor
                 val currentWaveformColor = lerpColor(rawWaveformColor, cancelArmedWaveformColor, waveformCancelAmount)
                 for (index in 0 until barCount) {
                     val x = startX + index * gap
@@ -5693,11 +5818,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
                 }
             } else if (isProcessing) {
-                // Analysis state uses the same restrained monochrome palette;
+                // Analysis state uses the same restrained monochrome palette
+                // for an ordinary dictation, and the armed mode's own accent
+                // (the color its recording waveform just had) otherwise;
                 // the ring of dots keeps rotating exactly as before, and on
                 // top of that the whole ring's radius now breathes — growing
                 // then shrinking together as one — rather than each dot
                 // sizing itself independently off its own angle.
+                val accent = armedModeColor()
                 val colors = processingDotColors
                 val baseOrbit = minOf(width * 0.28f, height * 0.52f)
                 val baseDotRadius = minOf(width * 0.055f, height * 0.15f)
@@ -5708,7 +5836,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     val angle = phase * 0.65f + index * (Math.PI.toFloat() / 3f)
                     val x = centerX + kotlin.math.cos(angle.toDouble()).toFloat() * orbit
                     val y = centerY + kotlin.math.sin(angle.toDouble()).toFloat() * orbit
-                    paint.color = color
+                    paint.color = if (accent == null) {
+                        color
+                    } else {
+                        Color.argb(processingDotAlphas[index], Color.red(accent), Color.green(accent), Color.blue(accent))
+                    }
                     canvas.drawCircle(x, y, dotRadius, paint)
                 }
             }

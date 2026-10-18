@@ -177,6 +177,9 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::LessComputer => {
                 preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
             }
+            frontend::view_model::SettingsField::TestingFeatures => {
+                preferences.testing_features_enabled = !preferences.testing_features_enabled;
+            }
             frontend::view_model::SettingsField::SilenceAutoStop => {
                 preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
             }
@@ -193,6 +196,9 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsField::MuteWhileRecording => {
                 preferences.mute_during_recording = !preferences.mute_during_recording;
+            }
+            frontend::view_model::SettingsField::AudioEnhancement => {
+                preferences.audio_enhancement_enabled = !preferences.audio_enhancement_enabled;
             }
             frontend::view_model::SettingsField::RecordAudioForDebug => {
                 preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
@@ -372,13 +378,21 @@ impl OpenLessEguiApp {
         self.save_settings_if_dirty();
     }
 
-    /// 停用某个快捷键绑定（核心录音快捷键没有停用，UI 里也不给按钮）。
+    /// 清空快捷键；录音和翻译使用显式空绑定，避免重新加载时恢复默认键。
     pub(super) fn apply_shortcut_disable(&mut self, field: frontend::view_model::ShortcutField) {
         let Some(preferences) = self.preferences.as_mut() else {
             return;
         };
         use frontend::view_model::ShortcutField;
         match field {
+            ShortcutField::Dictation => {
+                preferences.dictation_hotkey =
+                    openless_core::shared_types::ShortcutBinding::unassigned()
+            }
+            ShortcutField::Translation => {
+                preferences.translation_hotkey =
+                    openless_core::shared_types::ShortcutBinding::unassigned()
+            }
             ShortcutField::Qa => preferences.qa_hotkey = None,
             ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
@@ -393,8 +407,8 @@ impl OpenLessEguiApp {
                         .retain(|entry| entry.pack_id != pack_id);
                 }
             }
-            // 录音/翻译必须保留一个绑定；草稿行还没有内容。
-            ShortcutField::Dictation | ShortcutField::Translation | ShortcutField::StyleDraft => {
+            // 草稿行还没有已保存的绑定。
+            ShortcutField::StyleDraft => {
                 return;
             }
         }
@@ -490,6 +504,13 @@ impl OpenLessEguiApp {
                 preferences.polish_context_window_minutes = parsed;
 
                 self.frontend_vm.settings.polish_context_window = parsed.to_string();
+            }
+            frontend::view_model::SettingsTextField::PolishSkipMaxChars => {
+                // Issue #1032: 0 = off. Cap at 50 to keep the skip limited to short fragments.
+                let parsed = text.trim().parse::<u32>().unwrap_or(0).min(50);
+                preferences.polish_skip_max_chars = parsed;
+
+                self.frontend_vm.settings.polish_skip_max_chars = parsed.to_string();
             }
             frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
                 preferences.audio_recording_max_entries = text
@@ -661,6 +682,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clearing_dictation_and_translation_survives_the_settings_patch() {
+        let mut app = OpenLessEguiApp::new(
+            Arc::new(tokio::runtime::Runtime::new().unwrap()),
+            Err("fixture".into()),
+            None,
+            false,
+        );
+        let initial = UserPreferences::default();
+        app.preferences = Some(initial.clone());
+        app.settings_save = SettingsSave::new(&initial);
+        app.apply_shortcut_disable(frontend::view_model::ShortcutField::Dictation);
+        app.apply_shortcut_disable(frontend::view_model::ShortcutField::Translation);
+        let current = app.preferences.as_ref().unwrap();
+        assert!(current.dictation_hotkey.is_unassigned());
+        assert!(current.translation_hotkey.is_unassigned());
+        let (_, edits) = app.settings_save.begin().unwrap();
+        let persisted = openless_linux_egui::patch_preferences(&initial, &edits).unwrap();
+        let loaded: UserPreferences =
+            serde_json::from_value(serde_json::to_value(persisted).unwrap()).unwrap();
+        assert!(loaded.dictation_hotkey.is_unassigned());
+        assert!(loaded.translation_hotkey.is_unassigned());
+    }
+
+    #[test]
+    fn short_polish_threshold_saves_and_hydrates_the_current_text() {
+        let mut app = OpenLessEguiApp::new(
+            Arc::new(tokio::runtime::Runtime::new().unwrap()),
+            Err("fixture".into()),
+            None,
+            false,
+        );
+        let mut persisted = UserPreferences::default();
+        app.preferences = Some(persisted.clone());
+        app.settings_save = SettingsSave::new(&persisted);
+        for (text, expected) in [("8", 8), ("", 0), ("99", 50), ("invalid", 0)] {
+            app.apply_settings_text(
+                frontend::view_model::SettingsTextField::PolishSkipMaxChars,
+                text.to_string(),
+            );
+            assert_eq!(
+                app.preferences.as_ref().unwrap().polish_skip_max_chars,
+                expected
+            );
+            assert_eq!(
+                app.frontend_vm.settings.polish_skip_max_chars,
+                expected.to_string()
+            );
+            let (request, edits) = app.settings_save.begin().unwrap();
+            persisted = openless_linux_egui::patch_preferences(&persisted, &edits).unwrap();
+            persisted = serde_json::from_value(serde_json::to_value(&persisted).unwrap()).unwrap();
+            assert_eq!(persisted.polish_skip_max_chars, expected);
+            assert!(app.settings_save.finish(request, &Ok(())));
+        }
+    }
+
+    #[test]
     fn queue_keeps_later_edits_external_changes_and_failed_drafts() {
         let mut draft = UserPreferences::default();
         let mut queue = SettingsSave::new(&draft);
@@ -704,6 +781,7 @@ mod tests {
         draft.selection_polish_output_mode =
             openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm;
         draft.polish_context_window_minutes = 17;
+        draft.polish_skip_max_chars = 8;
         draft.audio_recording_max_entries = Some(19);
         draft.coding_agent_enabled = !initial.coding_agent_enabled;
         draft.coding_agent_provider = "codex-cli".into();

@@ -153,6 +153,9 @@ pub const OMNI_ENDPOINT_ACCOUNT: &str = "omni.endpoint";
 pub const OMNI_MODEL_ACCOUNT: &str = "omni.model";
 pub const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
 pub const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
+/// Static bearer token for a self-hosted `cloud_sync_e2ee` server, stored
+/// under `CredentialNamespace::Application` (an alternative to GitHub OAuth).
+pub const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = "cloud_sync.custom_token";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -182,6 +185,12 @@ pub enum ProviderSlot {
     Omni,
 }
 
+/// Legacy macOS engines retained only as disabled channel metadata.
+pub fn is_retired_macos_asr_provider(provider: &str) -> bool {
+    matches!(provider, "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c"
+        | "local-whisper" | "apple-whisper")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSummary {
@@ -204,6 +213,9 @@ pub struct ChannelTestSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelMutation {
+    RegisterExperimentalAsr {
+        model: crate::experimental_asr::ExperimentalAsrModel,
+    },
     InvalidateTest {
         kind: ChannelKind,
         id: String,
@@ -211,7 +223,8 @@ pub enum ChannelMutation {
     InvalidateTests {
         kind: ChannelKind,
     },
-    /// Commit a prepared local runtime and its channel in one metadata revision.
+    /// Enable/select a downloaded local model's channel in one metadata revision.
+    /// This mutation never prepares or loads the runtime.
     ActivateLocalAsr {
         id: Option<String>,
         provider_type: String,
@@ -565,6 +578,42 @@ impl CredentialMetadata {
         }
     }
 
+    /// Host-invoked macOS migration. Preserve channel identities/names for a
+    /// grey retired card, but never leave a retired local channel selected.
+    /// This is deliberately not a global rule: Windows hosts keep their catalog.
+    pub fn retire_macos_local_asr(&mut self) -> bool {
+        let active = self.active_provider(ProviderSlot::Asr);
+        let channels = self.channels.entry(ChannelKind::Asr).or_default();
+        let retiring_active = is_retired_macos_asr_provider(&active)
+            || channels.iter().any(|c| c.id == active && is_retired_macos_asr_provider(&c.provider_type));
+        let mut changed = false;
+        for channel in channels.iter_mut().filter(|c| is_retired_macos_asr_provider(&c.provider_type)) {
+            changed |= channel.enabled || channel.last_test.is_some();
+            channel.enabled = false;
+            channel.last_test = None;
+        }
+        normalize_channel_order(channels);
+        if retiring_active {
+            let next = channels.iter().find(|c| c.enabled)
+                .map(|c| c.id.clone()).unwrap_or_default();
+            self.active_providers.insert(ProviderSlot::Asr, next);
+            changed = true;
+        }
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+        }
+        changed
+    }
+
+    /// Read-only host projection after sync/import, keeping the persisted revision
+    /// so the next ordinary metadata transaction can still commit atomically.
+    pub fn retired_macos_view(mut self) -> Self {
+        let revision = self.revision;
+        self.retire_macos_local_asr();
+        self.revision = revision;
+        self
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -654,7 +703,8 @@ impl CredentialMetadata {
         has_credentials: impl Fn(&str) -> bool,
     ) -> Result<ChannelMutationResult, BackendError> {
         let mutation_kind = match &mutation {
-            ChannelMutation::ActivateLocalAsr { .. } => ChannelKind::Asr,
+            ChannelMutation::ActivateLocalAsr { .. }
+            | ChannelMutation::RegisterExperimentalAsr { .. } => ChannelKind::Asr,
             ChannelMutation::Create { kind, .. }
             | ChannelMutation::SetProviderType { kind, .. }
             | ChannelMutation::InvalidateTest { kind, .. }
@@ -675,6 +725,37 @@ impl CredentialMetadata {
                 .get(&mutation_kind)
                 .is_some_and(|channels| channels.iter().any(|channel| channel.id == active));
         let (kind, result) = match mutation {
+            ChannelMutation::RegisterExperimentalAsr { model } => {
+                let channels = self.channels.entry(ChannelKind::Asr).or_default();
+                if let Some(existing) = channels.iter().find(|c| c.id == model.channel_id()) {
+                    if existing.provider_type != model.provider_type() {
+                        return Err(BackendError::new(
+                            BackendErrorCode::InvalidState,
+                            "Experimental channel ID is already in use",
+                        ));
+                    }
+                } else {
+                    let enabled = channels.iter().any(|c| c.enabled && c.id == active);
+                    let order = channels
+                        .iter()
+                        .map(|c| c.order)
+                        .max()
+                        .map(|v| v.saturating_add(1))
+                        .unwrap_or(0);
+                    channels.push(ChannelSummary {
+                        id: model.channel_id().into(),
+                        name: model.name().into(),
+                        provider_type: model.provider_type().into(),
+                        enabled,
+                        order,
+                        last_test: None,
+                    });
+                }
+                (
+                    ChannelKind::Asr,
+                    ChannelMutationResult::Created(model.channel_id().into()),
+                )
+            }
             ChannelMutation::ActivateLocalAsr { id, provider_type } => {
                 if provider_type.trim().is_empty() {
                     return Err(BackendError::new(
@@ -905,6 +986,19 @@ pub struct InMemoryCredentialStore {
     values: RwLock<HashMap<CredentialKey, SecretValue>>,
     status: RwLock<CredentialsStatus>,
     metadata: RwLock<CredentialMetadata>,
+}
+
+#[cfg(test)]
+impl InMemoryCredentialStore {
+    /// Seed one secret synchronously for test fixtures (issue #1032 tests need a
+    /// configured LLM channel without an async write).
+    pub fn with_secret(self, key: CredentialKey, value: SecretValue) -> Self {
+        self.values
+            .write()
+            .expect("credential values lock poisoned")
+            .insert(key, value);
+        self
+    }
 }
 
 impl InMemoryCredentialStore {

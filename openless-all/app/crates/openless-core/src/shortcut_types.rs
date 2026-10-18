@@ -172,6 +172,9 @@ pub fn legacy_modifier_trigger(binding: &ShortcutBinding) -> Option<HotkeyTrigge
 }
 
 pub fn bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
+    if left.is_unassigned() || right.is_unassigned() {
+        return false;
+    }
     let left_legacy = legacy_modifier_trigger(left);
     let right_legacy = legacy_modifier_trigger(right);
     match (left_legacy, right_legacy) {
@@ -639,7 +642,8 @@ pub fn reject_style_pack_hotkey_conflicts(
 /// Dictation is the highest-priority binding and is never changed. Other
 /// bindings are considered in product-priority order: an invalid or colliding
 /// value first falls back to its previous value, then is disabled when no safe
-/// fallback exists. Translation is required, so it falls back to its default.
+/// fallback exists. Invalid translation bindings may fall back to the default;
+/// an explicitly unassigned binding remains unassigned.
 /// Style-pack shortcuts are lowest priority and are reconciled last.
 pub fn reconcile_hotkey_collisions(
     preferences: &mut UserPreferences,

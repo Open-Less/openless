@@ -128,6 +128,9 @@ pub struct LocalAsrModel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrRuntimeStatus {
+    /// An explicit vendor download initialized native code in this process.
+    #[serde(default)]
+    pub restart_required: bool,
     pub runtime: LocalAsrRuntime,
     pub provider_id: String,
     pub available: bool,
@@ -209,6 +212,7 @@ pub struct LocalAsrActivationResult {
     pub target: LocalAsrTarget,
     pub provider_id: String,
     pub generation: u64,
+    /// Legacy wire field: the selected model ID, not a runtime-load receipt.
     pub prepared_model: String,
 }
 
@@ -1495,6 +1499,13 @@ pub struct LessComputerRunResult {
 /// the typed event and return the user's decision; they must not maintain a
 /// second token registry or conversation flag.
 pub trait LessComputerApi: Send + Sync {
+    /// Bind admission to this backend's device-local settings transaction.
+    fn bind_testing_features(
+        &self,
+        _preferences: Arc<crate::PreferencesStore>,
+        _settings_write_gate: Arc<std::sync::Mutex<()>>,
+    ) {
+    }
     #[doc(hidden)]
     fn bind_event_publisher(&self, _publisher: crate::events::BackendEventPublisher) {}
     #[doc(hidden)]
@@ -2092,6 +2103,7 @@ pub struct BackendServices {
     pub auxiliary: Arc<dyn crate::auxiliary::AuxiliaryApi>,
     pub provider: Arc<dyn ProviderApi>,
     pub local_asr: Arc<dyn LocalAsrApi>,
+    pub experimental_asr: Option<Arc<crate::experimental_asr::ExperimentalAsrService>>,
     pub selection: Arc<dyn SelectionApi>,
     pub selection_voice: Arc<dyn SelectionVoiceApi>,
     pub qa: Arc<dyn QaApi>,
@@ -2116,6 +2128,7 @@ impl BackendServices {
             auxiliary: Arc::new(crate::auxiliary::UnsupportedAuxiliaryApi),
             provider: Arc::new(UnsupportedDomainServices),
             local_asr: Arc::new(UnsupportedDomainServices),
+            experimental_asr: None,
             selection: Arc::new(UnsupportedDomainServices),
             selection_voice: Arc::new(UnsupportedDomainServices),
             qa: Arc::new(UnsupportedDomainServices),

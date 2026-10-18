@@ -468,9 +468,12 @@ pub enum SettingsField {
     /// 录音胶囊是否显示（Tauri `showCapsule`；Linux 上同样生效）。
     ShowCapsule,
     MuteWhileRecording,
+    /// 轻量本机麦克风增益与软限幅。
+    AudioEnhancement,
     RecordAudioForDebug,
     ActivityHeatmap,
     SystemProxy,
+    TestingFeatures,
     LessComputer,
     Multimodal,
 }
@@ -501,6 +504,8 @@ pub enum SettingsTextField {
     RetentionDays,
     /// 润色上下文窗口（分钟，0 = 关闭）。
     PolishContextWindow,
+    /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
+    PolishSkipMaxChars,
     /// 调试录音最多保留条数。
     AudioRecordingMaxEntries,
     CodingAgentModel,
@@ -1056,6 +1061,7 @@ pub struct SettingsFields {
     /// 枚举麦克风失败时的原因（Tauri `microphoneLoadError` 行）。
     pub microphone_error: Option<String>,
     pub mute_while_recording: bool,
+    pub audio_enhancement: bool,
     pub audio_cue: bool,
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
     pub show_capsule: bool,
@@ -1066,12 +1072,15 @@ pub struct SettingsFields {
     pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
     /// 润色上下文窗口分钟数（0 = 只用当前这条转写）。
     pub polish_context_window: String,
+    /// 短句跳过润色的最大字数（0 = 关闭，issue #1032）。
+    pub polish_skip_max_chars: String,
     /// 调试录音最多保留条数。
     pub audio_recording_max_entries: String,
     /// 选区润色交付方式：0 = 直接替换，1 = 预览确认。
     pub selection_polish_delivery: usize,
     pub activity_heatmap: bool,
     pub system_proxy: bool,
+    pub testing_features: bool,
     pub less_computer: bool,
     /// Less Computer（Coding Agent）配置，全部直连 `coding_agent_*` 偏好。
     pub coding_agent_provider: usize,
@@ -1106,6 +1115,7 @@ impl Default for SettingsFields {
             microphone_options: Vec::new(),
             microphone_error: None,
             mute_while_recording: false,
+            audio_enhancement: false,
             audio_cue: false,
             show_capsule: true,
             capsule_style: 0,
@@ -1113,10 +1123,12 @@ impl Default for SettingsFields {
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),
+            polish_skip_max_chars: String::new(),
             audio_recording_max_entries: String::new(),
             selection_polish_delivery: 0,
             activity_heatmap: true,
             system_proxy: false,
+            testing_features: false,
             less_computer: false,
             coding_agent_provider: 0,
             coding_agent_permission: 0,

@@ -20,6 +20,8 @@ const MODIFIER_ARBITRATION_GRACE: Duration = Duration::from_millis(150);
 /// Native events may overtake the serialized Pressed bridge while session start
 /// awaits microphone/ASR setup. Keep a bounded set of those early Combined ids.
 const MAX_PENDING_COMBINED: usize = 64;
+/// Hold-mode key-up may overtake its Pressed task after the native bridge yields.
+const MAX_PENDING_RELEASED: usize = 64;
 
 /// macOS emits Fn Auto/Toggle edges only after native release arbitration.
 pub(crate) fn modifier_arbitration_required(
@@ -68,6 +70,8 @@ pub(crate) struct HotkeyInterpreter {
     /// Combined can arrive before Pressed because it uses a separate low-latency
     /// channel. The queue preserves multiple overtaking generations in order.
     pending_combined: VecDeque<u64>,
+    /// Hold-mode release can arrive before the spawned Pressed task runs.
+    pending_released: VecDeque<u64>,
     /// Last accepted edge that consumed the debounce window. A Combined gesture
     /// clears its own entry because it never represented a dictation request.
     last_dispatch: Option<(u64, Instant)>,
@@ -107,6 +111,12 @@ impl HotkeyInterpreter {
         if self.take_combined(press_id) {
             // The companion key overtook Pressed on its independent bridge. It
             // must consume this generation before any microphone work starts.
+            self.held = None;
+            return HotkeyIntent::Noop;
+        }
+        if self.take_released(press_id) {
+            // Hold-mode release overtook the spawned Pressed task. Do not open
+            // a session for a key generation that has already ended.
             self.held = None;
             return HotkeyIntent::Noop;
         }
@@ -180,15 +190,28 @@ impl HotkeyInterpreter {
     ) -> HotkeyIntent {
         // Generation matching is the release-side stale-event guard. An old
         // key-up can never stop a session opened by a newer press.
+        let active_session = matches!(phase, DictationPhase::Starting | DictationPhase::Recording)
+            && self.session_press_id == Some(press_id);
         let Some(press) = self.held.filter(|press| press.id == press_id) else {
+            if matches!(mode, HotkeyMode::Hold) {
+                if active_session {
+                    return HotkeyIntent::Stop;
+                }
+                self.remember_released(press_id);
+            }
             return HotkeyIntent::Noop;
         };
         self.held = None;
         if !press.accepted || self.take_combined(press_id) {
             return HotkeyIntent::Noop;
         }
-        let active = matches!(phase, DictationPhase::Starting | DictationPhase::Recording)
-            && self.session_press_id == Some(press_id);
+        let active = active_session;
+        if matches!(mode, HotkeyMode::Hold) && !active && self.session_press_id == Some(press_id) {
+            // A physical key-up may overtake synchronous native capture arming while Core is
+            // still Idle. Clear the start generation so the pending start cannot open afterward.
+            self.session_press_id = None;
+            return HotkeyIntent::Noop;
+        }
         match mode {
             HotkeyMode::Hold if active => HotkeyIntent::Stop,
             HotkeyMode::Auto
@@ -233,6 +256,12 @@ impl HotkeyInterpreter {
         combined
     }
 
+    pub(crate) fn start_is_current(&self, press_id: u64) -> bool {
+        self.session_press_id == Some(press_id)
+            && !self.pending_combined.contains(&press_id)
+            && !self.pending_released.contains(&press_id)
+    }
+
     pub(crate) fn terminal(&mut self, at: Instant) {
         // Clear generation state on every success/failure/cancel terminal path;
         // the cooldown is deliberately shared across all those outcomes.
@@ -264,6 +293,24 @@ impl HotkeyInterpreter {
         }
     }
 
+    fn remember_released(&mut self, press_id: u64) {
+        if press_id == 0 || self.pending_released.contains(&press_id) {
+            return;
+        }
+        self.pending_released.push_back(press_id);
+        if self.pending_released.len() > MAX_PENDING_RELEASED {
+            self.pending_released.pop_front();
+        }
+    }
+
+    fn take_released(&mut self, press_id: u64) -> bool {
+        self.pending_released
+            .iter()
+            .position(|pending| *pending == press_id)
+            .and_then(|index| self.pending_released.remove(index))
+            .is_some()
+    }
+
     fn take_combined(&mut self, press_id: u64) -> bool {
         self.pending_combined
             .iter()
@@ -277,6 +324,101 @@ impl HotkeyInterpreter {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hold_release_while_idle_cancels_only_unreserved_start() {
+        let start = Instant::now();
+        let mut interpreter = HotkeyInterpreter::default();
+
+        assert_eq!(
+            interpreter.press(1, start, HotkeyMode::Hold, DictationPhase::Idle, false),
+            HotkeyIntent::Start { press_id: 1 }
+        );
+        assert_eq!(
+            interpreter.release(
+                1,
+                start + Duration::from_millis(1),
+                HotkeyMode::Hold,
+                DictationPhase::Idle,
+            ),
+            HotkeyIntent::Noop
+        );
+        assert!(!interpreter.start_is_current(1));
+
+        let mut auto = HotkeyInterpreter::default();
+        assert_eq!(
+            auto.press(1, start, HotkeyMode::Auto, DictationPhase::Idle, false),
+            HotkeyIntent::Start { press_id: 1 }
+        );
+        assert_eq!(
+            auto.release(
+                1,
+                start + Duration::from_millis(1),
+                HotkeyMode::Auto,
+                DictationPhase::Idle,
+            ),
+            HotkeyIntent::Noop
+        );
+        assert!(auto.start_is_current(1));
+    }
+
+    #[test]
+    fn hold_release_before_pressed_is_consumed_by_matching_generation() {
+        let start = Instant::now();
+        let mut interpreter = HotkeyInterpreter::default();
+
+        assert_eq!(
+            interpreter.release(9, start, HotkeyMode::Hold, DictationPhase::Idle),
+            HotkeyIntent::Noop
+        );
+        assert_eq!(
+            interpreter.press(9, start, HotkeyMode::Hold, DictationPhase::Idle, false),
+            HotkeyIntent::Noop
+        );
+    }
+
+    #[test]
+    fn delayed_hold_release_stops_active_generation_after_new_press_edge() {
+        let start = Instant::now();
+        let mut interpreter = HotkeyInterpreter::default();
+        assert_eq!(
+            interpreter.press(1, start, HotkeyMode::Hold, DictationPhase::Idle, false),
+            HotkeyIntent::Start { press_id: 1 }
+        );
+        assert_eq!(
+            interpreter.press(
+                2,
+                start + Duration::from_millis(1),
+                HotkeyMode::Hold,
+                DictationPhase::Starting,
+                false,
+            ),
+            HotkeyIntent::Noop
+        );
+        assert_eq!(
+            interpreter.release(
+                1,
+                start + Duration::from_millis(2),
+                HotkeyMode::Hold,
+                DictationPhase::Starting,
+            ),
+            HotkeyIntent::Stop
+        );
+    }
+
+    #[test]
+    fn combined_during_start_arm_invalidates_current_generation() {
+        let start = Instant::now();
+        let mut interpreter = HotkeyInterpreter::default();
+        assert_eq!(
+            interpreter.press(1, start, HotkeyMode::Hold, DictationPhase::Idle, false),
+            HotkeyIntent::Start { press_id: 1 }
+        );
+        assert_eq!(
+            interpreter.combined(1),
+            HotkeyIntent::Cancel { press_id: 1 }
+        );
+        assert!(!interpreter.start_is_current(1));
+    }
     #[test]
     fn mac_fn_tap_arrives_pre_arbitrated_but_hold_and_other_modifiers_do_not() {
         let fn_tap_needs_grace = !cfg!(target_os = "macos");

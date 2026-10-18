@@ -1,11 +1,11 @@
 cask "openless" do
   arch arm: "aarch64", intel: "x64"
 
-  version "1.3.18"
-  sha256 arm:   "746dde4d4ffa8b4464b2e52b8a73f8e18092215d871e59c6bbf766bfed53fa75",
-         intel: "36b9ba5f7926b5bb3ac7f6af3b1f5a75096b9b0f3aebe12581c91876522f2cf4"
+  version "2.0.1+build.20261016"
+  sha256 arm:   "54de2717b094f71a9fd5aa2e73598f565b930668f92baa5b0b3e5d2236e7eaae",
+         intel: "c28b80e0275ae6aa0d9884bcfc84a89f22df314fc6a3fd43965e33af40743bf3"
 
-  url "https://github.com/Open-Less/openless/releases/download/v#{version}-tauri/OpenLess_#{version}_#{arch}.dmg"
+  url "https://github.com/Open-Less/openless/releases/download/v#{version.to_s.split("+", 2).first}-tauri/OpenLess_#{version}_#{arch}.dmg"
   name "OpenLess"
   desc "Menu-bar voice input layer"
   homepage "https://github.com/Open-Less/openless"
@@ -16,7 +16,7 @@ cask "openless" do
   end
 
   auto_updates true
-  depends_on macos: :monterey
+  depends_on macos: (version.major.to_i >= 2 ? :sonoma : :monterey)
 
   app "OpenLess.app"
 

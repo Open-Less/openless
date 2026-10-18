@@ -4,14 +4,20 @@ import { en } from './en';
 // Japanese (Beta) — AI machine translation based; native-speaker review recommended.
 // Structure mirrors zh-CN.ts. When adding new keys, update ja.ts / ko.ts as well
 // (keys not updated fall back to English via ...en).
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const ja: typeof zhCN = {
   ...en,
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: '音声編集セッション',
     description:
       '下書きを音声入力するか対象のテキストを読み込み、音声指示で編集してから確認して入力欄に反映します。',
     targetHint: '対象の入力欄にカーソルを置くか、編集するテキストを選択してください。',
-    androidTargetHint: 'オーバーレイのスワイプ操作に「音声編集」を設定してください。対象アプリで録音後にスワイプしてプレビューを開き、確認すると元の入力欄へ書き戻します。',
+    androidTargetHint:
+      'オーバーレイのスワイプ操作に「音声編集」を設定してください。対象アプリで録音後にスワイプしてプレビューを開き、確認すると元の入力欄へ書き戻します。',
     startDraft: '下書きの音声入力を開始',
     status: '状態：{{phase}}',
     turns: '指示回数：{{count}}',
@@ -44,6 +50,12 @@ export const ja: typeof zhCN = {
     },
   },
   cloudSyncE2ee: {
+    customServerTitle: '自前の同期サーバー（上級者向け）',
+    customServerOrigin: 'サーバーアドレス（https://...）',
+    customServerToken: 'サインイン Token',
+    customServerSave: '保存',
+    customServerHint:
+      '空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。',
     protocolTitle: 'クラウド同期の同意事項とプライバシー',
     protocolIntro:
       'OpenLess と開発者はプライバシーを尊重し、データの保護に取り組んでいます。続行する前に、以下をご確認ください。',
@@ -1225,6 +1237,13 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
+    testingFeatures: {
+      title: 'テスト中の機能',
+      enable: 'テスト中の機能を有効にする',
+      description:
+        '対応するプラットフォームで Less Computer と Claude コンソールを表示し、設定・使用できます。オフにすると実行中のタスクを停止して項目を非表示にしますが、設定は保持されます。このデバイスのみに適用されます。',
+      unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
+    },
     selectionWorkspace: {
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
@@ -1299,7 +1318,7 @@ export const ja: typeof zhCN = {
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
-        '推敲時にカーソル付近の文章をモデルへ送信します（macOSのみ）。端末内の単語学習とは独立した設定です。パスワード欄と既知の機密アプリは除外します。',
+        '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
     },
     codingConsole: {
       title: 'Claude コンソール',
@@ -1461,12 +1480,22 @@ export const ja: typeof zhCN = {
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
       capsuleTranscriptFontSize: '文字起こしの文字サイズ',
+      capsuleDisplayModeLabel: "複数画面のカプセル",
+      capsuleDisplayModeDesc: "録音カプセルを表示する画面を選択します。すべての画面ではウィンドウと描画リソースの使用量が増えます。",
+      capsuleDisplayCursorScreen: "マウスポインターのある画面",
+      capsuleDisplayAllScreens: "すべての画面に表示",
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
+      lowLatencyDictationLabel: '低遅延キャプチャ',
+      lowLatencyDictationDesc:
+        'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
+      audioEnhancementLabel: '軽量マイク拡張',
+      audioEnhancementDesc:
+        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1532,6 +1561,9 @@ export const ja: typeof zhCN = {
         '保持日数を超えた履歴は新規書き込み時に削除されます。0 = 時間で削除しない。',
       historyMaxEntriesLabel: '履歴件数の上限',
       historyMaxEntriesDesc: 'ローカル保持セッション上限。空欄 = 200。範囲 5–200。',
+      polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
+      polishSkipMaxCharsDesc:
+        '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
@@ -1687,11 +1719,15 @@ export const ja: typeof zhCN = {
         asrOpenAiCompatible: 'カスタム OpenAI 互換',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrIflytek: 'iFlytek リアルタイム音声認識',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan リアルタイム ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: 'ローカル sherpa-onnx（実験的）',
         asrFoundryLocalWhisper: 'ローカル Whisper（Foundry Local）',
         asrLocalWhisper: 'ローカル Whisper（バッチ）',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'ローカル Qwen3-ASR',
         asrLocalQwen3Mlx: 'ローカル Qwen3-ASR（MLX / Metal）',
         asrLocalQwen3C: 'ローカル Qwen3-ASR（C / CPU）',
@@ -1700,6 +1736,12 @@ export const ja: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'ここでは gemini-3.5-transcribe で逐語的に文字起こしし、設定済みの LLM で処理します。スマート文字起こしには、マルチモーダルモードでこのモデルを選択してください。録音終了後にアップロードします。リアルタイムには未対応です。ベース URL：https://generativelanguage.googleapis.com/v1beta（/v1beta/interactions も使用可能）。',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe はスマート文字起こしに対応し、録音終了後にフィラーの除去、言い直しの反映、文章の整形を行います。作業言語と辞書を利用できます。スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
+      validateSuccessAudio:
+        '短い無音データで音声接続を確認しました。短い録音で文字起こしの品質も確認してください。',
       elevenLabsUploadNotice:
         'ElevenLabs は録音音声を設定済みのエンドポイントへアップロードしてバッチ文字起こしします。',
       zenmuxVocabularyNote:
@@ -2317,7 +2359,11 @@ export const ja: typeof zhCN = {
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
+    backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
+      customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'テスト中の機能を必要に応じて有効にします。',
       vocabularyLearning:
         '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
@@ -2332,7 +2378,7 @@ export const ja: typeof zhCN = {
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: '必要に応じて Less Computer とデバッグを設定します。',
+      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2481,7 +2527,10 @@ export const ja: typeof zhCN = {
     foundryError: 'Foundry 状態',
     foundrySetDefault: '既定に設定 / Windows ローカル ASR を有効化',
     foundryEnabling: '有効化中…',
-    foundryPrepare: '準備 / ダウンロード / 読み込み',
+    foundryPrepare: 'モデルをダウンロード / 検証',
+    runtimeDownloadRestart:
+      'ダウンロードでネイティブ実行環境を使用しました。有効にする前に OpenLess を再起動してください。モデルは自動で有効になりません。今すぐ再起動しますか？',
+    restartNow: '今すぐ再起動',
     foundryPreparing: '準備中…',
     foundryReleasing: '解放中…',
     foundryRetryPrepare: '準備を続行 / 再試行',

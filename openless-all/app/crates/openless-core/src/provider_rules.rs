@@ -22,6 +22,7 @@ const DASHSCOPE_MULTIMODAL_PROVIDER_ID: &str = "bailian-fun-asr-flash";
 const ELEVENLABS_PROVIDER_ID: &str = "elevenlabs";
 const XFYUN_PROVIDER_ID: &str = "iflytek";
 const TENCENT_CLOUD_PROVIDER_ID: &str = "tencent-cloud";
+const GEMINI_PROVIDER_ID: &str = "gemini";
 
 const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("volcengine", "asrVolcengine"),
@@ -42,9 +43,13 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("xiaomi-mimo-asr", "asrXiaomiMimo"),
     (XFYUN_PROVIDER_ID, "asrIflytek"),
     (TENCENT_CLOUD_PROVIDER_ID, "asrTencentCloud"),
+    (GEMINI_PROVIDER_ID, "asrGemini"),
     ("foundry-local-whisper", "asrFoundryLocalWhisper"),
     ("local-whisper", "asrLocalWhisper"),
     ("sherpa-onnx-local", "asrSherpaOnnxLocal"),
+    ("experimental-textstream", "asrExperimentalTextStream"),
+    ("experimental-sensevoice", "asrExperimentalSenseVoice"),
+    ("experimental-embedding-gemma", "asrExperimentalGemma"),
     ("local-qwen3-mlx", "asrLocalQwen3Mlx"),
     ("local-qwen3-c", "asrLocalQwen3C"),
     ("local-qwen3", "asrLocalQwen3"),
@@ -109,6 +114,7 @@ const DASHSCOPE_MODELS: &[&str] = &[
     crate::asr::dashscope_multimodal::QWEN_AUDIO_MODEL,
     crate::asr::dashscope_multimodal::DEFAULT_MODEL,
 ];
+const GEMINI_MODELS: &[&str] = &[crate::asr::gemini::DEFAULT_MODEL];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,7 +135,7 @@ pub enum ValidationProbe {
     Unsupported,
     AsrSilence,
     AsrSilenceAllowsNoFinal,
-    /// Local engine probe (Apple Speech): the host injects its native
+    /// System recognition probe (Apple Speech): the host injects its native
     /// transcription engine and validation runs the same silence WAV through it,
     /// exercising authorization and recognizer availability for real.
     AsrNativeSilence,
@@ -222,18 +228,21 @@ fn provider_descriptor_with_label(
     let provider_type = ProviderType::new(provider_type).ok()?;
     let id = provider_type.as_str().to_string();
     let (default_endpoint, default_model, auth_requirement, validation_probe) = match kind {
-        ProviderKind::Asr if is_local_asr_provider(&id) => (
+        // Apple Speech is an OS recognition service, not a downloadable model runtime.
+        ProviderKind::Asr if id == "apple-speech" => (
             None,
             None,
             AuthRequirement::None,
-            // Apple Speech starts instantly and needs no download, so its card
-            // can run a real validation probe; download-based local engines stay
-            // unverifiable here and report readiness from the local model page.
-            if id == "apple-speech" {
-                ValidationProbe::AsrNativeSilence
-            } else {
-                ValidationProbe::Unsupported
-            },
+            ValidationProbe::AsrNativeSilence,
+        ),
+        ProviderKind::Asr if is_local_asr_provider(&id) => (
+            None,
+            crate::experimental_asr::ExperimentalAsrModel::from_provider(&id).map(|m| m.model_id()),
+            AuthRequirement::None,
+            // No local descriptor may silently initialize inference through
+            // the generic credentials probe. Legacy IDs are metadata only;
+            // experimental readiness belongs to the explicit opt-in service.
+            ValidationProbe::Unsupported,
         ),
         ProviderKind::Asr => (
             default_asr_endpoint(&id),
@@ -342,10 +351,12 @@ fn is_local_asr_provider(provider_type: &str) -> bool {
         "foundry-local-whisper"
             | "local-whisper"
             | "sherpa-onnx-local"
+            | "experimental-textstream"
+            | "experimental-sensevoice"
+            | "experimental-embedding-gemma"
             | "local-qwen3-mlx"
             | "local-qwen3-c"
             | "local-qwen3"
-            | "apple-speech"
     )
 }
 
@@ -355,6 +366,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "bailian-qwen3-realtime") => QWEN_REALTIME_MODELS,
         (ProviderKind::Asr, "xiaomi-mimo-asr") => &[crate::asr::mimo::DEFAULT_MODEL],
         (ProviderKind::Asr, "bailian-fun-asr-flash") => DASHSCOPE_MODELS,
+        (ProviderKind::Asr, "gemini") => GEMINI_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
@@ -386,6 +398,7 @@ pub enum ActiveAsrProviderKind {
     Volcengine,
     Xfyun,
     TencentCloud,
+    Gemini,
 }
 
 /// Non-secret facts read by a platform credential adapter. Core evaluates
@@ -567,11 +580,16 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "zenmux" => Some("https://zenmux.ai/api/v1"),
         "xiaomi-mimo-asr" => Some("https://api.xiaomimimo.com/v1"),
+        GEMINI_PROVIDER_ID => Some(crate::asr::gemini::DEFAULT_ENDPOINT),
         _ => None,
     }
 }
 
 pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
+    if let Some(model) = crate::experimental_asr::ExperimentalAsrModel::from_provider(provider_type)
+    {
+        return Some(model.model_id());
+    }
     match provider_type {
         "elevenlabs" => Some(crate::asr::elevenlabs::DEFAULT_MODEL),
         "bailian" => Some(crate::asr::bailian::DEFAULT_MODEL),
@@ -587,6 +605,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL),
         "zenmux" => Some(crate::asr::whisper::ZENMUX_DEFAULT_MODEL),
         "xiaomi-mimo-asr" => Some(crate::asr::mimo::DEFAULT_MODEL),
+        GEMINI_PROVIDER_ID => Some(crate::asr::gemini::DEFAULT_MODEL),
         TENCENT_CLOUD_PROVIDER_ID => Some(crate::asr::tencent_cloud::DEFAULT_MODEL),
         _ => None,
     }
@@ -758,8 +777,21 @@ pub fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ELEVENLABS_PROVIDER_ID => ActiveAsrProviderKind::ElevenLabs,
         XFYUN_PROVIDER_ID => ActiveAsrProviderKind::Xfyun,
         TENCENT_CLOUD_PROVIDER_ID => ActiveAsrProviderKind::TencentCloud,
+        GEMINI_PROVIDER_ID => ActiveAsrProviderKind::Gemini,
         value if is_whisper_compatible_provider(value) => ActiveAsrProviderKind::WhisperCompatible,
         _ => ActiveAsrProviderKind::Volcengine,
+    }
+}
+
+pub fn validate_gemini_asr_model(model: &str) -> Result<(), String> {
+    if model.trim().is_empty() || model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+        Ok(())
+    } else {
+        Err(format!(
+            "不支持的 Gemini ASR 模型：{}。当前仅支持 {}",
+            model.trim(),
+            crate::asr::gemini::DEFAULT_MODEL
+        ))
     }
 }
 
@@ -874,6 +906,10 @@ impl BailianProtocol {
 }
 
 pub fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> Result<String, String> {
+    if active_asr == GEMINI_PROVIDER_ID {
+        validate_gemini_asr_model(model)?;
+        return Ok(GEMINI_PROVIDER_ID.to_string());
+    }
     if !is_bailian_provider(active_asr) {
         if is_dashscope_multimodal_provider(active_asr) {
             validate_dashscope_multimodal_model(model)?;
@@ -1430,6 +1466,36 @@ mod tests {
     }
 
     #[test]
+    fn gemini_transcribe_asr_is_explicitly_routed_and_model_scoped() {
+        assert!(crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&"gemini"));
+        let descriptor = provider_descriptor(ProviderKind::Asr, "gemini").unwrap();
+        assert_eq!(descriptor.label_key, "asrGemini");
+        assert_eq!(
+            descriptor.default_endpoint.as_deref(),
+            Some(crate::asr::gemini::DEFAULT_ENDPOINT)
+        );
+        assert_eq!(
+            descriptor.default_model.as_deref(),
+            Some(crate::asr::gemini::DEFAULT_MODEL)
+        );
+        assert_eq!(
+            descriptor.static_models,
+            vec![crate::asr::gemini::DEFAULT_MODEL.to_string()]
+        );
+        assert_eq!(descriptor.auth_requirement, AuthRequirement::ApiKey);
+        assert_eq!(
+            active_asr_provider_kind("gemini"),
+            ActiveAsrProviderKind::Gemini
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("gemini", ""),
+            Ok("gemini".to_string())
+        );
+        assert!(resolve_effective_asr_provider("gemini", "gemini-3.5-transcribe-live").is_err());
+        assert!(resolve_effective_asr_provider("gemini", "unknown").is_err());
+    }
+
+    #[test]
     fn tencent_cloud_asr_and_tokenhub_supply_defaults_and_credentials() {
         assert!(crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&"tencent-cloud"));
         assert!(
@@ -1526,11 +1592,12 @@ mod tests {
     }
 
     #[test]
-    fn apple_speech_probes_natively_while_download_engines_stay_unsupported() {
+    fn retired_and_experimental_models_never_probe_inference_through_credentials() {
         let apple = provider_descriptor(ProviderKind::Asr, "apple-speech").unwrap();
         assert_eq!(apple.validation_probe, ValidationProbe::AsrNativeSilence);
+        assert!(apple.default_model.is_none());
         assert_eq!(apple.auth_requirement, AuthRequirement::None);
-        for provider in ["local-whisper", "local-qwen3", "sherpa-onnx-local"] {
+        for provider in ["local-whisper", "local-qwen3", "sherpa-onnx-local", "experimental-textstream", "experimental-sensevoice", "experimental-embedding-gemma"] {
             assert_eq!(
                 provider_descriptor(ProviderKind::Asr, provider)
                     .unwrap()

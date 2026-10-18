@@ -12,8 +12,18 @@ declare global {
   }
 }
 
-export const isTauri =
-  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
+// A page/webview reload (observed on Android after a Wry window rebuild)
+// re-evaluates this module. If that happens to run before Tauri's own
+// injection of `__TAURI_INTERNALS__` completes, a plain `const` computed once
+// here would stay permanently `false` for the rest of that page's lifetime,
+// even once the bridge becomes available moments later — silently routing
+// every subsequent backend call through the browser-preview mock forever.
+// `isTauriNow()` re-checks live; `isTauri` is kept as a snapshot for the many
+// call sites that only use it for one-time UI/render decisions.
+export function isTauriNow(): boolean {
+  return globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
+}
+export const isTauri = isTauriNow();
 
 export const BACKEND_CONTRACT_VERSION = '2.0.0';
 
@@ -35,7 +45,7 @@ export function validateStartupSnapshot(snapshot: StartupSnapshot): StartupSnaps
 let backendReadyPromise: Promise<StartupSnapshot> | null = null;
 
 export function requireBackendReady(): Promise<StartupSnapshot> {
-  if (!isTauri) {
+  if (!isTauriNow()) {
     return Promise.resolve({
       contractVersion: BACKEND_CONTRACT_VERSION,
       backend: { running: true },
@@ -63,7 +73,7 @@ export async function invokeOrMock<T>(
   args: Record<string, unknown> | undefined,
   mock: () => T,
 ): Promise<T> {
-  if (!isTauri) {
+  if (!isTauriNow()) {
     return mock();
   }
   if (cmd === 'get_startup_snapshot') {

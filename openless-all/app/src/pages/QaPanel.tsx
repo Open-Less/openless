@@ -69,8 +69,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [editInstructionMode, setEditInstructionMode] = useState(false);
   /**
    * 「润色结果」模式：核心在「预览确认」输出模式下请求预览，内容画在**本面板**
-   * （原独立的 `selection-polish-preview` 窗口已下线）。结果只读，「确认并替换」
-   * 就是把它写回原选区的插入。
+   * （原独立的 `selection-polish-preview` 窗口已下线）。可编辑结果，「确认并替换」
+   * 将编辑后的文字写回原选区。
    */
   const [polishResult, setPolishResult] = useState<{ text: string; sourceText: string } | null>(
     null,
@@ -357,6 +357,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   const expanded =
     embedded ||
+    polishResult !== null ||
     submitted ||
     messages.length > 0 ||
     streamingAnswer.length > 0 ||
@@ -650,7 +651,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     modeBusy ||
     editApplyBusy;
 
-  // ── 「润色结果」模式：整块面板换成只读结果 + 确认并替换 ─────────────
+  // ── 「润色结果」模式：整块面板换成可编辑结果 + 确认并替换 ───────────
   if (polishResult) {
     return (
       <div
@@ -685,16 +686,15 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           )}
           <div className="qa-answer-scroll">
             <div className="qa-polish-result">
-              {/* 结果只读（不做就地编辑）——与 egui 侧润色结果模式一致。 */}
-              <div
-                role="textbox"
-                aria-readonly="true"
+              <textarea
                 aria-label={t('selectionPolishPreview.resultLabel')}
-                tabIndex={0}
                 className="qa-polish-text"
-              >
-                {polishResult.text}
-              </div>
+                value={polishResult.text}
+                readOnly={polishBusy}
+                onChange={(event) =>
+                  setPolishResult({ ...polishResult, text: event.currentTarget.value })
+                }
+              />
               {polishResult.sourceText && (
                 <p className="qa-polish-source">
                   {t('selectionPolishPreview.sourcePrefix')}

@@ -10,6 +10,25 @@ pub fn system_prompt(mode: PolishMode) -> String {
     crate::style_packs::default_style_system_prompt_for_mode(mode)
 }
 
+/// Character cap for untrusted text inside an XML prompt envelope.
+///
+/// The envelope truncates past this limit and appends a marker. Any flow that
+/// writes the model result back over the original selection must refuse inputs
+/// above the cap — the model never saw the tail, so a rewrite would delete it.
+pub const MAX_XML_ENVELOPE_CHARS: usize = 16_000;
+
+/// Whether `raw` is longer than the XML envelope will show a model.
+pub fn exceeds_xml_envelope_cap(raw: &str) -> bool {
+    raw.chars().count() > MAX_XML_ENVELOPE_CHARS
+}
+
+/// Error text for a replacement that would be computed from a truncated view.
+pub fn truncated_selection_replacement_message() -> String {
+    format!(
+        "selection is longer than {MAX_XML_ENVELOPE_CHARS} characters; refusing to replace it from a truncated model view"
+    )
+}
+
 /// issue #609 F-02: unified hardening before untrusted text goes into an XML envelope.
 ///
 /// - **Neutralize both opening and closing tags** (not just `</tag>`): an attacker can
@@ -17,20 +36,16 @@ pub fn system_prompt(mode: PolishMode) -> String {
 ///   and be treated as instructions. Case and surrounding-whitespace variants are
 ///   best-effort (`<  /tag >` and the like). The LLM is not a security boundary; this
 ///   is defense in depth, not a hard guarantee.
-/// - **Length cap**: inputs beyond `MAX_ENVELOPE_CHARS` are truncated with a
+/// - **Length cap**: inputs beyond [`MAX_XML_ENVELOPE_CHARS`] are truncated with a
 ///   `…[truncated]` marker, preventing oversized input from drowning the system
 ///   prompt's constraints in context (attention dilution).
 ///
 /// `tag` takes the tag name without angle brackets (e.g. `raw_transcript` /
 /// `selected_text`).
 pub fn sanitize_for_xml_envelope(raw: &str, tag: &str) -> String {
-    /// Character cap for envelope content. Truncates beyond it — prevents attention
-    /// dilution and saves tokens.
-    const MAX_ENVELOPE_CHARS: usize = 16_000;
-
     // Length cap first (by char, not byte, so multibyte UTF-8 is not split).
-    let capped: std::borrow::Cow<'_, str> = if raw.chars().count() > MAX_ENVELOPE_CHARS {
-        let truncated: String = raw.chars().take(MAX_ENVELOPE_CHARS).collect();
+    let capped: std::borrow::Cow<'_, str> = if exceeds_xml_envelope_cap(raw) {
+        let truncated: String = raw.chars().take(MAX_XML_ENVELOPE_CHARS).collect();
         std::borrow::Cow::Owned(format!("{truncated}…[truncated]"))
     } else {
         std::borrow::Cow::Borrowed(raw)
