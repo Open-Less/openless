@@ -7378,6 +7378,370 @@ pub const CATALOG: &[Msg] = &[
             "비움 = 스타일 팩 또는 내장 기본값",
         ),
     },
+    // 加密云同步的错误文案。键名与 Tauri `cloudSyncE2ee.errors.*` 对齐；Core 里
+    // Linux 侧独有的代码（conflict / denied / expired / locked / server /
+    // unsupported / service_unavailable…）在这里补齐，避免把裸 key 画到界面上。
+    Msg {
+        key: "cloudSyncE2ee.errors.accountChanged",
+        text: row(
+            "GitHub 账号已改变，请刷新后再继续。",
+            "GitHub 帳號已變更，請重新整理後再繼續。",
+            "The GitHub account changed. Refresh before continuing.",
+            "GitHub アカウントが変わりました。更新してから続けてください。",
+            "GitHub 계정이 변경되었습니다. 새로고침한 후 계속하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.busy",
+        text: row(
+            "已有同步任务在运行，请等待或先取消。",
+            "已有同步工作在執行，請等待或先取消。",
+            "Another sync task is running. Wait or cancel it first.",
+            "別の同期処理が実行中です。待つか先にキャンセルしてください。",
+            "다른 동기화 작업이 실행 중입니다. 기다리거나 먼저 취소하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.cancelled",
+        text: row(
+            "任务已取消。",
+            "工作已取消。",
+            "The task was cancelled.",
+            "処理をキャンセルしました。",
+            "작업이 취소되었습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.changed",
+        text: row(
+            "审阅期间资料已改变。请关闭弹窗、刷新状态，并重新获取预览。",
+            "檢閱期間資料已變更。請關閉對話框、重新整理狀態，並重新取得預覽。",
+            "Data changed during review. Close this dialog, refresh, and review a new preview.",
+            "確認中にデータが変わりました。閉じて状態を更新し、再度プレビューを取得してください。",
+            "검토 중 데이터가 변경되었습니다. 창을 닫고 새로고침한 후 미리보기를 다시 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.choicesRequired",
+        text: row(
+            "请为每项冲突选择本机或云端版本。",
+            "請為每項衝突選擇本機或雲端版本。",
+            "Choose local or cloud for every conflict.",
+            "すべての競合でローカルかクラウドを選択してください。",
+            "각 충돌에 대해 로컬 또는 클라우드를 선택하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.invalidData",
+        text: row(
+            "加密备份未通过校验，本机资料未被替换。",
+            "加密備份未通過驗證，本機資料未被取代。",
+            "The encrypted backup could not be verified. Local data was not replaced.",
+            "暗号化バックアップを検証できませんでした。ローカルデータは置き換えていません。",
+            "암호화 백업을 검증하지 못했습니다. 로컬 데이터는 교체되지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.invalidPassword",
+        text: row(
+            "密码无法解锁这份备份，或加密资料校验未通过。",
+            "密碼無法解鎖這份備份，或加密資料驗證未通過。",
+            "The password could not unlock this backup, or the encrypted data could not be verified.",
+            "このパスワードで解除できないか、暗号化データを検証できませんでした。",
+            "비밀번호로 백업을 잠금 해제할 수 없거나 암호화 데이터를 검증하지 못했습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.localData",
+        text: row(
+            "这台设备还没准备好本机资料。点「刷新状态」，然后再试一次。",
+            "這台裝置還沒準備好本機資料。點「重新整理狀態」，然後再試一次。",
+            "This device could not prepare its data. Choose Refresh status, then try again.",
+            "このデバイスのデータを準備できませんでした。「状態を更新」を押して、もう一度試してください。",
+            "이 기기의 데이터를 준비하지 못했습니다. 상태 새로고침을 누른 뒤 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.network",
+        text: row(
+            "暂时无法连接同步服务，请检查网络后重试。",
+            "暫時無法連線同步服務，請檢查網路後重試。",
+            "Could not reach the sync service. Check your connection and try again.",
+            "同期サービスに接続できません。ネットワークを確認して再試行してください。",
+            "동기화 서비스에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.outcomeUnknown",
+        text: row(
+            "云端结果尚未确认。请先核对待确认结果，不要重复创建备份。",
+            "雲端結果尚未確認。請先核對待確認結果，不要重複建立備份。",
+            "The cloud result is not confirmed. Check the pending result before creating another backup.",
+            "クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。",
+            "클라우드 결과가 확인되지 않았습니다. 새 백업을 만들기 전에 대기 중인 결과를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.passwordMismatch",
+        text: row(
+            "两次输入的密码不一致。",
+            "兩次輸入的密碼不一致。",
+            "The two passwords do not match.",
+            "パスワードが一致しません。",
+            "두 비밀번호가 일치하지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.rateLimited",
+        text: row(
+            "请求过于频繁，请稍后重试。",
+            "請求過於頻繁，請稍後重試。",
+            "Too many requests. Wait before retrying.",
+            "リクエストが多すぎます。しばらく待ってから再試行してください。",
+            "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.recovery",
+        text: row(
+            "本机同步状态需要恢复。请保留本机资料，不要覆盖云端备份。",
+            "本機同步狀態需要復原。請保留本機資料，不要覆寫雲端備份。",
+            "Local recovery is needed. Keep this device’s data and do not overwrite the cloud backup.",
+            "ローカル状態の復旧が必要です。この端末のデータを保持し、クラウドを上書きしないでください。",
+            "로컬 상태 복구가 필요합니다. 이 기기의 데이터를 보관하고 클라우드 백업을 덮어쓰지 마세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.reviewRequired",
+        text: row(
+            "请先确认完整同步范围，并审阅云端恢复预览。",
+            "請先確認完整同步範圍，並檢閱雲端還原預覽。",
+            "Review the full sync scope and the cloud restore preview before continuing.",
+            "続ける前に同期対象と復元プレビューを確認してください。",
+            "계속하기 전에 동기화 범위와 복원 미리보기를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.rolledBack",
+        text: row(
+            "恢复失败，本机更改已回滚。请刷新状态后重试。",
+            "還原失敗，本機變更已回復。請重新整理狀態後重試。",
+            "Restore failed and local changes were rolled back. Refresh before trying again.",
+            "復元に失敗し、ローカルの変更を元に戻しました。更新してから再試行してください。",
+            "복원에 실패해 로컬 변경을 되돌렸습니다. 새로고침한 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.secureStorage",
+        text: row(
+            "安全存储拒绝访问。请检查设备授权，或取消记住密钥后解锁。",
+            "安全儲存空間拒絕存取。請檢查裝置授權，或取消記住金鑰後解鎖。",
+            "Secure storage denied access. Check device permissions, or unlock without remembering the key.",
+            "安全なストレージへのアクセスが拒否されました。権限を確認するか、キーを記憶せずに解除してください。",
+            "보안 저장소 접근이 거부되었습니다. 권한을 확인하거나 키를 기억하지 않고 잠금 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.signIn",
+        text: row(
+            "请重新登录 GitHub。",
+            "請重新登入 GitHub。",
+            "Sign in to GitHub again.",
+            "GitHub に再ログインしてください。",
+            "GitHub에 다시 로그인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.tooLarge",
+        text: row(
+            "加密备份超出服务的大小限制。",
+            "加密備份超出服務的大小限制。",
+            "The encrypted backup exceeds the service’s size limit.",
+            "暗号化バックアップがサービスのサイズ上限を超えています。",
+            "암호화 백업이 서비스 크기 제한을 초과합니다.",
+        ),
+    },
+        Msg {
+        key: "cloudSyncE2ee.errors.unavailable",
+        text: row(
+            "加密同步暂不可用，请使用原生客户端并稍后检查服务。",
+            "加密同步暫不可用，請使用原生用戶端並稍後檢查服務。",
+            "Encrypted sync is unavailable here. Use the native app and check the service later.",
+            "暗号化同期は利用できません。ネイティブアプリで後ほどサービスを確認してください。",
+            "암호화 동기화를 사용할 수 없습니다. 네이티브 앱에서 나중에 서비스를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.unknown",
+        text: row(
+            "操作未能完成，请刷新状态后重试。",
+            "操作未能完成，請重新整理狀態後重試。",
+            "The operation could not be completed. Refresh the status and try again.",
+            "操作を完了できませんでした。状態を更新して再試行してください。",
+            "작업을 완료하지 못했습니다. 상태를 새로고침한 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.unlock",
+        text: row(
+            "请先使用同步密码解锁此设备。",
+            "請先使用同步密碼解鎖此裝置。",
+            "Unlock this device with your sync password first.",
+            "同期パスワードでこの端末を解除してください。",
+            "먼저 동기화 비밀번호로 이 기기를 잠금 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.weakPassword",
+        text: row(
+            "请使用满足长度和字符要求、且不常见的强密码。",
+            "請使用符合長度和字元要求、且不常見的強密碼。",
+            "Choose a stronger password meeting the length and character requirements.",
+            "長さと文字種の条件を満たす、推測されにくいパスワードにしてください。",
+            "길이와 문자 조건을 충족하는 더 강력한 비밀번호를 사용하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.conflict",
+        text: row(
+            "本地与云端的数据版本冲突，请刷新状态后再试。",
+            "本機與雲端的資料版本衝突，請重新整理狀態後再試。",
+            "Local and cloud data versions conflict — refresh the status and retry.",
+            "ローカルとクラウドのデータ版が競合しています。状態を更新してから再試行してください。",
+            "로컬과 클라우드 데이터 버전이 충돌합니다. 상태를 새로 고친 뒤 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.denied",
+        text: row(
+            "服务拒绝了这次请求（权限或访问受限）。",
+            "服務拒絕了這次請求（權限或存取受限）。",
+            "The service rejected the request (permission or access restriction).",
+            "サービスが要求を拒否しました（権限またはアクセス制限）。",
+            "서비스가 요청을 거부했습니다(권한 또는 접근 제한).",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.expired",
+        text: row(
+            "这次操作已过期，请重新发起。",
+            "這次操作已過期，請重新發起。",
+            "This operation expired — start it again.",
+            "この操作は期限切れです。もう一度実行してください。",
+            "이 작업이 만료되었습니다. 다시 시작하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.locked",
+        text: row(
+            "同步密钥处于锁定状态，请先解锁。",
+            "同步金鑰處於鎖定狀態，請先解鎖。",
+            "The sync key is locked — unlock it first.",
+            "同期キーがロックされています。先にロック解除してください。",
+            "동기화 키가 잠겨 있습니다. 먼저 잠금을 해제하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.server",
+        text: row(
+            "同步服务返回了错误，请稍后重试。",
+            "同步服務回傳錯誤，請稍後重試。",
+            "The sync service returned an error — retry later.",
+            "同期サービスがエラーを返しました。後で再試行してください。",
+            "동기화 서비스가 오류를 반환했습니다. 나중에 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.unsupported",
+        text: row(
+            "服务端协议不受支持，请更新 OpenLess 或改用自建服务器。",
+            "伺服器端協定不受支援，請更新 OpenLess 或改用自建伺服器。",
+            "The server protocol is unsupported — update OpenLess or use your own server.",
+            "サーバー側プロトコルが未対応です。OpenLess を更新するか自前サーバーを使用してください。",
+            "서버 프로토콜이 지원되지 않습니다. OpenLess를 업데이트하거나 자체 서버를 사용하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.invalidResponse",
+        text: row(
+            "服务返回的内容无法解析，请稍后重试。",
+            "服務回傳的內容無法解析，請稍後重試。",
+            "The service returned an unreadable response — retry later.",
+            "サービスの応答を解析できませんでした。後で再試行してください。",
+            "서비스 응답을 해석할 수 없습니다. 나중에 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.cloudDeleted",
+        text: row(
+            "云端备份已被删除；如需继续请重新启用同步。",
+            "雲端備份已被刪除；如需繼續請重新啟用同步。",
+            "The cloud backup was deleted — re-enable sync to continue.",
+            "クラウドバックアップは削除されました。続けるには同期を再度有効にしてください。",
+            "클라우드 백업이 삭제되었습니다. 계속하려면 동기화를 다시 활성화하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.consentRequired",
+        text: row(
+            "请先确认完整同步范围再继续。",
+            "請先確認完整同步範圍再繼續。",
+            "Confirm the full sync scope before continuing.",
+            "続行する前に同期範囲全体を確認してください。",
+            "계속하기 전에 전체 동기화 범위를 확인하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.cryptoWorkerFailed",
+        text: row(
+            "加密运算失败，请重试；若持续出现请导出日志。",
+            "加密運算失敗，請重試；若持續出現請匯出日誌。",
+            "Encryption failed — retry; export the logs if it keeps happening.",
+            "暗号処理に失敗しました。再試行し、続く場合はログを書き出してください。",
+            "암호화 연산이 실패했습니다. 다시 시도하고 계속되면 로그를 내보내세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.deleteConfirmationRequired",
+        text: row(
+            "删除云端备份需要再次确认。",
+            "刪除雲端備份需要再次確認。",
+            "Deleting the cloud backup needs another confirmation.",
+            "クラウドバックアップの削除には再確認が必要です。",
+            "클라우드 백업 삭제에는 다시 확인이 필요합니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.metadataRequired",
+        text: row(
+            "缺少同步元数据，请刷新状态后重试。",
+            "缺少同步中繼資料，請重新整理狀態後重試。",
+            "Sync metadata is missing — refresh the status and retry.",
+            "同期メタデータがありません。状態を更新して再試行してください。",
+            "동기화 메타데이터가 없습니다. 상태를 새로 고친 뒤 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.secureRandomUnavailable",
+        text: row(
+            "系统安全随机源不可用，无法生成加密密钥。",
+            "系統安全隨機源不可用，無法產生加密金鑰。",
+            "The system secure random source is unavailable; cannot derive keys.",
+            "安全な乱数源が利用できず、鍵を生成できません。",
+            "시스템 보안 난수원을 사용할 수 없어 키를 만들 수 없습니다.",
+        ),
+    },
+    Msg {
+        key: "cloudSyncE2ee.errors.staleTask",
+        text: row(
+            "该同步任务已失效，请刷新状态。",
+            "該同步任務已失效，請重新整理狀態。",
+            "That sync task is no longer valid — refresh the status.",
+            "その同期タスクは無効です。状態を更新してください。",
+            "해당 동기화 작업이 더 이상 유효하지 않습니다. 상태를 새로 고치세요.",
+        ),
+    },
+
 ];
 
 fn lang_index(lang: Lang) -> usize {

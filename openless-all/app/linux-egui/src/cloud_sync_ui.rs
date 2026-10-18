@@ -308,9 +308,15 @@ pub fn error_code(raw: &str) -> &'static str {
             return candidate;
         }
     }
-    // Core reports `snake_case` codes; the catalog uses camelCase for a few.
+    // Core 用 snake_case，catalog 里有几个用 camelCase。
     match trimmed {
         "invalid_password" | "wrong_password" => "invalidPassword",
+        "password_mismatch" => "passwordMismatch",
+        "weak_password" => "weakPassword",
+        "too_large" => "tooLarge",
+        "invalid_data" => "invalidData",
+        "review_required" => "reviewRequired",
+        "choices_required" => "choicesRequired",
         "not_signed_in" => "not_signed_in",
         "recovery_required" => "recovery_required",
         "outcome_unknown" => "outcomeUnknown",
@@ -320,6 +326,64 @@ pub fn error_code(raw: &str) -> &'static str {
         "stale_preview" => "stale_preview",
         "secure_storage" => "secureStorage",
         _ => "unknown",
+    }
+}
+
+/// 错误代码 → catalog 键。
+///
+/// 之前界面用 `format!("cloudSyncE2ee.errors.{code}")` 拼键，而 catalog 里根本
+/// 没有这批条目，用户看到的是裸键（`cloudSyncE2ee.errors.service_unavailable`）。
+/// 这里把**每个代码的完整键**写成字面量：既能被 i18n 校对脚本看到，也不会再拼
+/// 出一个不存在的键。Core 侧特有的代码映射到语义最接近的文案。
+pub fn error_key(raw: &str) -> &'static str {
+    // 直接按原始代码匹配：`error_code()` 会把「不在 allow-list 里」的 Core 代码
+    // 折叠成 `unknown`，而这些代码恰恰最需要自己的文案。
+    match raw.trim() {
+        // ── Core（snake_case）─────────────────────────────────────────────
+        "account_changed" => "cloudSyncE2ee.errors.accountChanged",
+        "busy" => "cloudSyncE2ee.errors.busy",
+        "cancelled" => "cloudSyncE2ee.errors.cancelled",
+        "choices_required" => "cloudSyncE2ee.errors.choicesRequired",
+        "cloud_deleted" => "cloudSyncE2ee.errors.cloudDeleted",
+        "conflict" | "revision_conflict" => "cloudSyncE2ee.errors.conflict",
+        "consent_required" => "cloudSyncE2ee.errors.consentRequired",
+        "crypto_worker_failed" => "cloudSyncE2ee.errors.cryptoWorkerFailed",
+        "delete_confirmation_required" => "cloudSyncE2ee.errors.deleteConfirmationRequired",
+        "denied" => "cloudSyncE2ee.errors.denied",
+        "expired" => "cloudSyncE2ee.errors.expired",
+        "invalid_data" => "cloudSyncE2ee.errors.invalidData",
+        "invalid_password" | "wrong_password" => "cloudSyncE2ee.errors.invalidPassword",
+        "invalid_response" => "cloudSyncE2ee.errors.invalidResponse",
+        "local_storage_unavailable" => "cloudSyncE2ee.errors.localData",
+        "locked" => "cloudSyncE2ee.errors.locked",
+        "metadata_required" => "cloudSyncE2ee.errors.metadataRequired",
+        "network" => "cloudSyncE2ee.errors.network",
+        "not_signed_in" | "sign_in_required" => "cloudSyncE2ee.errors.signIn",
+        "outcome_unknown" => "cloudSyncE2ee.errors.outcomeUnknown",
+        "password_mismatch" => "cloudSyncE2ee.errors.passwordMismatch",
+        "rate_limited" => "cloudSyncE2ee.errors.rateLimited",
+        "recovery_required" => "cloudSyncE2ee.errors.recovery",
+        "restore_review_required" | "review_required" => "cloudSyncE2ee.errors.reviewRequired",
+        "revision_rollback" => "cloudSyncE2ee.errors.rolledBack",
+        "secure_random_unavailable" => "cloudSyncE2ee.errors.secureRandomUnavailable",
+        "secure_storage" | "secure_storage_denied" => "cloudSyncE2ee.errors.secureStorage",
+        "server" => "cloudSyncE2ee.errors.server",
+        "service_unavailable" => "cloudSyncE2ee.errors.unavailable",
+        "stale_preview" => "cloudSyncE2ee.errors.changed",
+        "stale_task" => "cloudSyncE2ee.errors.staleTask",
+        "too_large" => "cloudSyncE2ee.errors.tooLarge",
+        "unlock_required" => "cloudSyncE2ee.errors.unlock",
+        "unsupported" | "unsupported_protocol" => "cloudSyncE2ee.errors.unsupported",
+        "weak_password" => "cloudSyncE2ee.errors.weakPassword",
+        // ── Tauri 的 camelCase 键名 ──────────────────────────────────────
+        "invalidPassword" => "cloudSyncE2ee.errors.invalidPassword",
+        "outcomeUnknown" => "cloudSyncE2ee.errors.outcomeUnknown",
+        "rateLimited" => "cloudSyncE2ee.errors.rateLimited",
+        "secureStorage" => "cloudSyncE2ee.errors.secureStorage",
+        "stalePreview" => "cloudSyncE2ee.errors.changed",
+        "unavailable" => "cloudSyncE2ee.errors.unavailable",
+        "unlock" => "cloudSyncE2ee.errors.unlock",
+        _ => "cloudSyncE2ee.errors.unknown",
     }
 }
 
@@ -792,6 +856,7 @@ mod tests {
         assert_eq!(error_code("invalid_password"), "invalidPassword");
         assert_eq!(error_code("outcome_unknown"), "outcomeUnknown");
         assert_eq!(error_code("  network  "), "network");
+
         // Anything else (including a path Core quoted) collapses to `unknown`.
         assert_eq!(error_code("/home/user/.local/share/OpenLess"), "unknown");
         assert_eq!(
@@ -865,5 +930,66 @@ mod tests {
         assert!(ui.password.is_empty());
         assert!(ui.confirmation.is_empty());
         assert!(ui.current_password.is_empty());
+    }
+
+    /// 界面上不允许出现裸键：每个可能的失败代码都必须映射到 catalog 里存在的
+    /// 文案。之前用 `format!("cloudSyncE2ee.errors.{code}")` 拼键，catalog 里没有
+    /// 这批条目，用户看到的就是 `cloudSyncE2ee.errors.service_unavailable`。
+    #[test]
+    fn every_failure_code_resolves_to_a_real_message() {
+        let codes = [
+            // Core 侧会发出的代码（cloud_sync_e2ee 全部 `error(...)` 字面量）
+            "account_changed",
+            "busy",
+            "cancelled",
+            "choices_required",
+            "cloud_deleted",
+            "conflict",
+            "consent_required",
+            "crypto_worker_failed",
+            "delete_confirmation_required",
+            "denied",
+            "expired",
+            "invalid_data",
+            "invalid_password",
+            "invalid_response",
+            "local_storage_unavailable",
+            "locked",
+            "metadata_required",
+            "network",
+            "not_signed_in",
+            "outcome_unknown",
+            "password_mismatch",
+            "rate_limited",
+            "recovery_required",
+            "restore_review_required",
+            "review_required",
+            "revision_conflict",
+            "revision_rollback",
+            "secure_random_unavailable",
+            "secure_storage",
+            "secure_storage_denied",
+            "server",
+            "service_unavailable",
+            "sign_in_required",
+            "stale_preview",
+            "stale_task",
+            "too_large",
+            "unlock_required",
+            "unsupported_protocol",
+            "weak_password",
+            // 本地生成的代码
+            "unknown",
+            "unsupported",
+        ];
+        for code in codes {
+            let key = error_key(code);
+            let text = crate::tr_l10n(crate::Lang::ZhCn, key);
+            assert_ne!(text, key, "{code} → {key} is missing from the catalog");
+            assert!(
+                !text.starts_with("cloudSyncE2ee."),
+                "{code} rendered a raw key: {text}"
+            );
+        }
     }
 }

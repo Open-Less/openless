@@ -225,20 +225,18 @@ pub fn cloud_sync_card(
             // Dynamic key: `tr_l10n` only takes `&'static str`.
             note(ui, &fmt_l10n(lang, notice, &[]), theme::BLUE);
         }
+        // 键必须是 catalog 里真实存在的字面量：之前用 `format!` 拼键，界面上
+        // 出现的是裸键（`cloudSyncE2ee.errors.service_unavailable`）。
         if let Some(error) = &state.error {
-            let key = format!("cloudSyncE2ee.errors.{error}");
-            note(ui, &fmt_l10n(lang, &key, &[]), theme::ERR);
+            let key = openless_linux_egui::cloud_sync_ui::error_key(error);
+            note(ui, tr_l10n(lang, key), theme::ERR);
         } else if let Some(last) = state
             .status
             .as_ref()
             .and_then(|status| status.last_error.as_ref())
         {
-            let code = openless_linux_egui::cloud_sync_ui::error_code(&last.code);
-            note(
-                ui,
-                &fmt_l10n(lang, &format!("cloudSyncE2ee.errors.{code}"), &[]),
-                theme::ERR,
-            );
+            let key = openless_linux_egui::cloud_sync_ui::error_key(&last.code);
+            note(ui, tr_l10n(lang, key), theme::ERR);
         }
         note(
             ui,
