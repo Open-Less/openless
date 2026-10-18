@@ -116,7 +116,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
 
         // Settings overlay (rendered on top of everything).
         if vm.settings_open {
-            settings::settings_overlay(ctx, vm, actions, body);
+            settings::settings_page(ctx, vm, actions, body);
             // 云同步的模态框必须在设置卡片之后创建：同层 Area 后创建的在上，
             // 否则点「恢复/改密码」弹出的对话框会被设置面板盖住。
             cloud_sync::cloud_sync_overlay(ctx, body, vm, actions);
@@ -1468,17 +1468,14 @@ mod tests {
         }
     }
 
-    /// 设置页遮罩用的是离屏模糊背板，而不是一层暗色：发布的纹理必须真的落到弹窗图层
-    /// 上，否则用户看到的还是旧的黑遮罩。
+    /// 设置现在是整页：不再有磨砂遮罩、没有压暗层，页本身也不能退化成弹窗。
     #[test]
-    fn the_settings_overlay_paints_the_published_blurred_backdrop() {
+    fn the_settings_page_paints_no_backdrop_any_more() {
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
             settings_open: true,
             ..Default::default()
         };
-        // Area 首帧只建立屏幕矩形，而且 `Area::fade_in` 会把刚出现的图层整个淡入：
-        // 淡入没走完时 painter 记下的是 `Shape::Noop`，看不到背板。所以推时间跑几帧。
         for frame in 0..4 {
             crate::ui::backdrop::publish(&ctx, Some(egui::TextureId::User(9)));
             ctx.begin_pass(egui::RawInput {
@@ -1492,45 +1489,31 @@ mod tests {
             render(&ctx, &mut vm, &mut Vec::new());
             let layer = egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("openless-settings-modal"),
+                egui::Id::new("openless-settings-page"),
             );
-            let backdrop_corners = ctx.graphics(|graphics| {
-                graphics.get(layer).and_then(|list| {
-                    list.all_entries().find_map(|entry| match &entry.shape {
-                        // 模糊背板是「带纹理的矩形」，只有这样圆角才跟着内容区走
-                        // （用整块的 `image` 会是直角，底部两角顶出窗口圆角）。
-                        egui::Shape::Rect(rect)
-                            if rect.fill_texture_id() == egui::TextureId::User(9) =>
-                        {
-                            Some(rect.corner_radius)
+            let paints_backdrop = ctx.graphics(|graphics| {
+                graphics.get(layer).is_some_and(|list| {
+                    list.all_entries().any(|entry| match &entry.shape {
+                        // 模糊背板（带纹理的矩形）与 `--ol-overlay-bg` 压暗层都算遮罩。
+                        egui::Shape::Rect(rect) => {
+                            rect.fill_texture_id() == egui::TextureId::User(9)
+                                || rect.fill == theme::OVERLAY
                         }
-                        _ => None,
+                        _ => false,
                     })
                 })
             });
-            if frame == 3 {
-                let corners = backdrop_corners.expect("the modal layer must sample the backdrop");
-                assert_eq!(
-                    corners,
-                    layout::body_corner_radius(&ctx),
-                    "the blurred backdrop must use the content corners"
-                );
-                // macOS 一致：模糊之上还有一层 `--ol-overlay-bg` 压暗。
-                let paints_tint = ctx.graphics(|graphics| {
-                    graphics.get(layer).is_some_and(|list| {
-                        list.all_entries().any(|entry| match &entry.shape {
-                            egui::Shape::Rect(rect) => rect.fill == theme::OVERLAY,
-                            _ => false,
-                        })
-                    })
-                });
-                assert!(paints_tint, "the modal layer must tint above the blur");
-            }
-            // 卡片矩形依然要写进 memory：遮罩换了材质，弹窗几何不能跟着变。
-            assert!(ctx
-                .data(|data| data
-                    .get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
-                .is_some());
+            assert!(
+                !paints_backdrop,
+                "the settings page must not paint a modal backdrop"
+            );
+            let card = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
+                })
+                .expect("the settings page still publishes its surface rect");
+            // 整页：surface 就是内容区本身，不再缩成居中卡片。
+            assert_eq!(card, layout::body_rect(&ctx));
             let _ = end_pass(&ctx);
         }
     }
@@ -2573,12 +2556,10 @@ mod tests {
         );
     }
 
-    /// 用户报告「缩放窗口时并不是始终居中」：模态卡片此前用 `Area::anchor`
-    /// 定位，垂直方向稳定偏下 19.5px，且卡片被内容撑宽 22px（横向偏 11px）。
-    /// 现在位置由 `body.center()` 显式算出，两种偏差都必须消失，并且**改变窗口
-    /// 尺寸后的第一帧**就要居中（不能靠后续帧收敛）。
+    /// 设置页整页铺满内容区：改窗口尺寸后的**第一帧**就得贴住内容区四边，
+    /// 不能再有「居中卡片」留下的边距。
     #[test]
-    fn the_settings_modal_stays_centred_across_window_resizes() {
+    fn the_settings_page_fills_the_content_area_across_resizes() {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
         let mut vm = FrontendViewModel {
@@ -2594,7 +2575,6 @@ mod tests {
             (1100.0, 900.0),
         ] {
             let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
-            // 等一帧让内容成型，下一帧断言（尺寸变化不接受「过渡帧」偏差）。
             for _ in 0..2 {
                 ctx.begin_pass(egui::RawInput {
                     screen_rect: Some(viewport),
@@ -2604,33 +2584,19 @@ mod tests {
                 render(&ctx, &mut vm, &mut actions);
                 let _ = crate::ui::frontend::end_pass(&ctx);
             }
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport),
-                ..Default::default()
-            });
-            let mut actions = Vec::new();
-            render(&ctx, &mut vm, &mut actions);
-            let _ = crate::ui::frontend::end_pass(&ctx);
             let body = layout::body_rect(&ctx);
-            // 卡片矩形现在由叠层自己写入 memory（Area 覆盖整个 body，面积已不等于卡片）。
-            let modal = ctx
+            let page = ctx
                 .data(|data| {
                     data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
                 })
-                .expect("the settings card rect must be published while the overlay is open");
+                .expect("the settings page must publish its surface rect");
             assert!(
-                (modal.center().x - body.center().x).abs() <= 1.5,
-                "modal must be horizontally centred at {width}x{height}: modal={modal:?} body={body:?}"
+                (page.min - body.min).length() <= 1.5,
+                "the settings page must start at the content origin at {width}x{height}: page={page:?} body={body:?}"
             );
             assert!(
-                (modal.center().y - body.center().y).abs() <= 1.5,
-                "modal must be vertically centred at {width}x{height}: modal={modal:?} body={body:?}"
-            );
-            // 卡片不会被内容撑宽（撑宽就会把居中算歪）。
-            let expected_width = (body.width() - 40.0).clamp(320.0, 960.0);
-            assert!(
-                (modal.width() - expected_width).abs() <= 2.0,
-                "the content must fit the requested modal width {expected_width}: {modal:?}"
+                (page.size() - body.size()).length() <= 1.5,
+                "the settings page must fill the content area at {width}x{height}: page={page:?} body={body:?}"
             );
         }
     }

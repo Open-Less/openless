@@ -69,77 +69,35 @@ impl SettingsSection {
 }
 
 /// Paint the in-window settings modal. Actions are pushed into the provided vec.
-pub fn settings_overlay(
+pub fn settings_page(
     ctx: &egui::Context,
     vm: &mut FrontendViewModel,
     actions: &mut Vec<FrontendAction>,
     body: egui::Rect,
 ) {
-    // Mask the content area (not the sidebar/titlebar) and centre the card in
-    // it — the same backdrop the marketplace detail uses.
-    let size = egui::vec2(
-        (body.width() - 40.0).clamp(320.0, 960.0),
-        (body.height() - 40.0).clamp(280.0, 680.0),
-    );
-
-    // 遮罩、点击拦截与卡片必须是**同一个 Area**。egui 在 Area 被按下时会把它抬到同层
-    // 最上面（egui-0.33.3/src/containers/area.rs:549 的 `move_to_top`），所以遮罩只要
-    // 是独立 Area，点一下遮罩就会盖住卡片（用户报「点阴影后阴影上移、设置没法用」）。
-    // 同一个图层里先画遮罩、再画卡片，遮罩压住卡片在结构上就不可能发生。
-    let card_rect = egui::Rect::from_center_size(body.center(), size);
-    // 卡片实际落点写进 memory，供测试查询（Area 现在覆盖整个 body，面积已不等于卡片）。
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), card_rect));
-    egui::Area::new(egui::Id::new("openless-settings-modal"))
-        // 用 Foreground 而不是 Tooltip：egui 的 `ComboBox` 下拉/弹出菜单是
-        // `Order::Foreground`（egui-0.33.3/src/containers/popup.rs:150），而同层里
-        // 后创建的 Area 在上层、跨 Order 则是 Tooltip > Foreground。弹窗若占着
-        // Tooltip，设置里所有「点开才出现」的下拉都会被弹窗整个盖住（用户报
-        // 「需要点开的控件都打不开」）。
+    // 设置现在是**整页**而不是悬浮弹窗：不再铺磨砂遮罩、不再缩成居中卡片、
+    // 也没有落影。内容区整块铺满 body（Tauri 的 `SettingsModal` 在桌面端同样
+    // 是一整页），左栏底色与右栏内容直接贴到内容区边缘。
+    let size = body.size();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), body));
+    egui::Area::new(egui::Id::new("openless-settings-page"))
+        // 仍是 Foreground：页内还有下拉菜单（`Order::Foreground`）需要压在上面，
+        // 页本身不能退到 Background 去。
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
         .constrain(false)
         .show(ctx, |ui| {
-            // 磨砂遮罩：先铺一层离屏模糊后的同一帧页面（macOS 版靠窗口级 vibrancy，
-            // Linux 没有系统合成层，只能自己模糊），再压上和 macOS 同一层的
-            // `--ol-overlay-bg`（`rgba(15,17,22,0.32)`，即 `theme::OVERLAY`）：
-            // 只模糊不压暗的话，设置卡片和背板分不开。
-            // 拿不到背板时（无 wgpu 渲染状态的回退路径）只压暗色，卡片仍然可读。
-            // 两者都用**内容区的圆角**：遮罩是以直角矩形铺上去的，底部两角会顶出窗口
-            // 圆角之外，看起来就像遮罩和窗口对不上。
-            let mask_corners = layout::body_corner_radius(ctx);
-            layout::paint_blurred_overlay(ctx, ui, body, mask_corners);
-            let _ = ui.allocate_rect(body, egui::Sense::click());
-            // 卡片：同图层内后画 → 永远在遮罩之上。位置用**显式矩形**而不是 anchor：
-            // anchor 按上一帧面积（含阴影偏移）定位，卡片会稳定偏下 19.5px，且窗口
-            // 缩放的首帧会跳一下（用户报「缩放窗口时并不是始终居中」）。
-            ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
-                ui.set_clip_rect(body.intersect(ui.clip_rect()));
+            ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_min_size(size);
+                ui.set_max_size(size);
                 egui::Frame::new()
-                    // Tauri `--ol-settings-content-bg`：整块弹窗是浅灰底，卡片才是白色。
+                    // Tauri `--ol-settings-content-bg`：整页浅灰底，卡片才是白色。
                     .fill(theme::CONTENT_BG)
-                    .stroke(egui::Stroke::new(0.5, theme::LINE))
-                    .corner_radius(egui::CornerRadius::same(14))
-                    // 学 macOS 的 `--ol-shadow-xl`（`0 54px 65px -29px rgba(15,17,22,0.39)`）：
-                    // 大而柔的落影。CSS 的 `-29px` 收边不搬进来——epaint 的 `spread` 会加到
-                    // 圆角上，负值会把 14px 圆角压成直角，反而露出方形阴影边。
-                    .shadow(egui::Shadow {
-                        offset: [0, 36],
-                        blur: 56,
-                        spread: 0,
-                        color: egui::Color32::from_black_alpha(96),
-                    })
                     .show(ui, |ui| {
                         ui.set_min_size(size);
                         ui.set_max_size(size);
-                        // Tauri SettingsModal：桌面端没有横跨两栏的标题栏——左侧栏顶端就是
-                        // 搜索框，右侧内容区顶端才是标题 + 自动保存提示 + 关闭按钮。
                         let body_height = size.y.max(120.0);
                         ui.horizontal(|ui| {
-                            // Tauri `.ol-settings-surface aside` 是 flex 子项：底色与右侧
-                            // 0.5px 分隔线都通到弹窗上下边缘，内边距 16/12，选项因此正好
-                            // 铺满 214−24=190 的净宽。以前底色画在「内容高度」的 Frame 上、
-                            // 内容宽度又少了 4px：左栏下方露出内容区底色，选项和分割线也
-                            // 缩进了一圈。
                             ui.allocate_ui_with_layout(
                                 egui::vec2(RAIL_WIDTH, body_height),
                                 egui::Layout::top_down(egui::Align::Min),
@@ -149,12 +107,7 @@ pub fn settings_overlay(
                                     let column = ui.max_rect();
                                     ui.painter().rect_filled(
                                         column,
-                                        egui::CornerRadius {
-                                            nw: 14,
-                                            sw: 14,
-                                            ne: 0,
-                                            se: 0,
-                                        },
+                                        egui::CornerRadius::ZERO,
                                         theme::RAIL_BG,
                                     );
                                     ui.painter().rect_filled(
@@ -180,18 +133,14 @@ pub fn settings_overlay(
                                     );
                                 },
                             );
-                            // 分隔线已经画在左栏底色上（Tauri 的 `borderRight`），不再用
-                            // `ui.separator()`：它自己的宽度会让右栏再窄一截。
                             let gutters = ui.spacing().item_spacing.x;
                             ui.allocate_ui_with_layout(
                                 egui::vec2((size.x - RAIL_WIDTH - gutters).max(0.0), body_height),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
                                     ui.set_min_height(body_height);
-                                    // Tauri 桌面端把渠道编辑器 portal 进「AI 服务与模型」
-                                    // 这一页的右栏并 `inset: 0` 盖住整栏，不是全窗口遮罩。
-                                    // 覆盖范围必须跟着分区走：否则别页也会被编辑器盖住，
-                                    // 用户会觉得「打开设置只有模型编辑器、别的都改不了」。
+                                    // 渠道编辑器 portal 进「AI 服务与模型」这一页的右栏，
+                                    // 覆盖范围必须跟着分区走。
                                     let editor_here = vm.provider_editor.is_some()
                                         && vm.settings_section == SettingsSection::Services;
                                     if editor_here {
