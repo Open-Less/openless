@@ -191,4 +191,9 @@ rpmbuild --define "_topdir $RPM_TOP" --define "_dbpath $RPM_TOP/rpmdb" \
 mv "$RPM_TOP/RPMS/x86_64/openless-$RPM_VERSION-1.x86_64.rpm" \
   "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm"
 
+# The checksums are part of the delivery, not a step for the caller to remember:
+# a stale file here makes `verify-linux-egui-packages.sh` fail on freshly built
+# packages.
+( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort
