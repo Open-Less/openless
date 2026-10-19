@@ -270,15 +270,18 @@ jobs:
             -x :app:rustBuildX86_64Debug
             --no-daemon
 
-  # HarmonyOS: the Rust host is covered by `cargo test -p openless-harmony-host`
-  # in the Linux job, and the ArkTS/web side lives here. A full HAP build needs
-  # the Huawei DevEco / ohpm SDK, which is not available on hosted runners, so
-  # this job gates what is reproducible in CI: the shared IPC surface stays in
-  # sync with the code, the ArkTS contracts pass, and the ArkWeb bundle builds.
+  # HarmonyOS covers three layers, in three places:
+  #   * the Rust host is compiled and tested by the Linux job
+  #     (`cargo test --locked -p openless-harmony-host`);
+  #   * ArkTS cannot be compiled without the Huawei SDK, so this job checks what
+  #     is reproducible on a hosted runner: the committed IPC audit still matches
+  #     the code, the ArkTS contract tests pass, and the ArkWeb bundle builds;
+  #   * when `HARMONY_SDK_URL` is configured, the last step additionally builds a
+  #     real HAP, which is what actually type-checks the ArkTS sources.
   harmony-check:
     needs: [changes]
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
-    name: Harmony (ArkTS bundle + IPC contract)
+    name: Harmony (ArkTS contracts + ArkWeb bundle, HAP when the SDK is set)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -316,6 +319,30 @@ jobs:
         # The frontend half of the HAP: same sources, harmony platform flag,
         # relative base for the rawfile origin.
         run: npm run build -- --base=./ --outDir=dist-harmony
+      - name: Cache the HarmonyOS toolchain
+        # Skipped until a maintainer publishes the SDK tarball as a repository
+        # variable; without it the ArkTS sources are only contract-checked.
+        if: vars.HARMONY_SDK_URL != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/harmony/current
+          key: harmony-toolchain-${{ runner.os }}-${{ vars.HARMONY_SDK_SHA256 }}
+      - name: Build the HAP (compiles ArkTS and the Rust host)
+        if: vars.HARMONY_SDK_URL != ''
+        env:
+          HARMONY_SDK_URL: ${{ vars.HARMONY_SDK_URL }}
+          HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
+          OPENLESS_HARMONY_CHANNEL: none
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-harmony-sdk.sh
+          bash scripts/package-harmony-hap.sh
+          version_name=$(node -p "require('./package.json').version.split('+')[0]")
+          version_code=$(cat linux-egui/package-revision)
+          bash scripts/verify-harmony-hap.sh \
+            target/harmony-packages/OpenLess_harmony_arm64.hap \
+            "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
+            "$version_name" "$version_code" --allow-unsigned
 
   # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
