@@ -5,7 +5,7 @@ license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [lib]
 name = "openless_lib"

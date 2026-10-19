@@ -321,7 +321,7 @@ jobs:
           python-version: "3.x"
 
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
         if: runner.os == 'Windows'
 
       - uses: dtolnay/rust-toolchain@stable
@@ -425,13 +425,13 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
-      - name: Check Tauri backend with Rust 1.88 MSRV
+      - name: Check Tauri backend with Rust 1.89 MSRV
         if: runner.os == 'Windows'
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml
+        run: cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml
 
-      - name: Compile backend tests with Rust 1.88 MSRV
+      - name: Compile backend tests with Rust 1.89 MSRV
         if: runner.os == 'Windows'
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
+        run: cargo +1.89.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
       - name: Verify version sync across all 5 files
         # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
@@ -467,7 +467,7 @@ jobs:
     needs: [changes]
     # 失败即运行：只有判定脚本明确说“够不到”才跳过。
     if: needs.changes.outputs.msrv != 'false'
-    name: macOS Rust 1.88 MSRV
+    name: macOS Rust 1.89 MSRV
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -487,7 +487,7 @@ jobs:
           node-version: "22"
       - name: Cache npm from beta
         uses: ./.github/actions/cache-npm
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
@@ -497,7 +497,7 @@ jobs:
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
-      - name: Check Tauri backend with Rust 1.88 MSRV
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
-      - name: Compile backend tests with Rust 1.88 MSRV
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings
+      - name: Check Tauri backend with Rust 1.89 MSRV
+        run: cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Compile backend tests with Rust 1.89 MSRV
+        run: cargo +1.89.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings
