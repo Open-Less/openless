@@ -15,7 +15,7 @@ openless-src/                     Git 仓库、分支与发布边界
 ├── scripts/                      仓库级辅助脚本（版本号同步等）
 └── openless-all/
     ├── README.md                全平台总览
-    ├── scripts/linux-*          fcitx5 插件与 Linux 桌面集成
+    ├── scripts/                 fcitx5 插件（Linux 听写入口）与 egui 语言包同步
     └── app/                     npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
         ├── crates/openless-core/  共享业务 Rust crate
