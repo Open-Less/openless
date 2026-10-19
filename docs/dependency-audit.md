@@ -2,12 +2,15 @@
 
 审计时间：2026-10-19 · HEAD `feat/linux-egui-followups`
 
-工程里有**四个独立的依赖图**，必须分别看：
+工程里有**四个独立的依赖图**，必须分别看（Rust 侧其实是**三个独立锁文件**：
+根 workspace、`src-tauri`、`src-tauri/backend-tests`——三者都要单独 `cargo update`，
+CI 一律用 `--locked`）：
 
 | 依赖图 | 位置 | 谁在用 |
 |---|---|---|
 | A. 根 workspace | `openless-all/app/Cargo.toml`（成员：`crates/openless-core`、`linux-egui`、`harmony/rust`） | Linux 宿主、Core、鸿蒙 |
 | B. Tauri workspace | `openless-all/app/src-tauri/`（独立 `Cargo.lock`，根 workspace 的 `exclude` 里有它） | Windows / macOS / Android 客户端 |
+| B2. backend-tests workspace | `openless-all/app/src-tauri/backend-tests/`（又一个独立 `Cargo.lock`） | 远程输入 TLS 身份的集成测试 |
 | C. npm | `openless-all/app/package.json` | React 前端 + 打包脚本 |
 | D. Gradle/Kotlin | **不在仓库内**：由 `tauri android init` 生成，`scripts/copy-android-scaffolding.mjs` 只拷 Kotlin 源码并打补丁 | Android |
 
@@ -88,7 +91,7 @@ zip 2→9、x509-parser 0.16→0.18、toml 0.8.2→0.8.23（传递依赖，锁�
 | 包 | 钉住 | 最新 | 约束 |
 |---|---|---|---|
 | tauri-plugin-updater | 2.10.1 | 2.14.0 | 需要 `tauri-utils ^2.10`，即 tauri 2.12 训练线 |
-| sherpa-onnx | 1.13.2 | 1.13.8 | Android 用官方预编译库，`scripts/sherpa-onnx-android.mjs` 里写死了归档的 size + SHA-256，换版本要重新校验产物 |
+| sherpa-onnx | 1.13.8 | 1.13.8 | 已升级；Android 归档的 size + SHA-256 在 `scripts/sherpa-onnx-android.mjs` 里同步（46_093_321 / `2ff63469…4f44`） |
 | foundry-local-sdk | 1.2.1 | 2.1.0 | Windows winml 绑定，主版本跨越大 |
 
 **③ 被上游依赖钉死，本仓改不了** —— 见上面 A / B 两节的表
