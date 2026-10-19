@@ -52,11 +52,30 @@ Release automatically**. Nothing is uploaded by hand. Linux has no in-app update
 manifest or AppImage.
 
 HarmonyOS rides in the same Release through `.github/workflows/release-harmony.yml`.
-It is manual-only as well, requires the same tag, and runs on a self-hosted runner
-that has the Huawei DevEco / HarmonyOS SDK (the SDK and the release signing
-profile are account-gated, so no hosted runner can build a HAP). It builds, signs
-and attaches `OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias,
-then uploads the same HAP to HUAWEI AppGallery Connect.
+It is manual-only as well and requires the same tag. It builds, signs and attaches
+`OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias, then uploads
+the same HAP to HUAWEI AppGallery Connect.
+
+The SDK is the one blocker: `hvigor` only accepts the DevEco / HarmonyOS SDK,
+which is downloadable only behind a Huawei account, and the OpenHarmony SDK that
+*is* public is rejected by `hvigor`'s SDK layout/version checks (verified locally:
+`@kit.IMEKit`, `@kit.AssetStoreKit` and `hap-sign-tool.jar` all exist in the public
+OpenHarmony 6.0 SDK, but `HmosSdkLoader` still reports
+`Cannot find the corresponding SDK version`). The workflow therefore supports two
+setups, and the SDK tarball is never fetched from a public URL by CI:
+
+* **Hosted runner (default)**: set the `HARMONY_SDK_URL` and `HARMONY_SDK_SHA256`
+  repository variables to a verifiably pinned tarball of the SDK tree
+  (`default/openharmony/...` plus `default/hms/...`). `scripts/prepare-harmony-sdk.sh`
+  downloads it, checks the SHA-256, lays it out as DevEco does, and installs
+  `@ohos/hvigor` + `@ohos/hvigor-ohos-plugin` from `https://repo.harmonyos.com/npm/`.
+  The SDK is cached with `actions/cache` keyed on the checksum.
+* **Self-hosted runner**: dispatch with
+  `runner_labels: ["self-hosted","harmony"]` and set the `HARMONY_TOOLCHAIN`
+  variable to the DevEco install root.
+
+The SDK tarball must not be committed to the repository: the HarmonyOS SDK licence
+does not permit redistribution.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
@@ -143,7 +162,9 @@ committed, cached or printed.
 | Secret | `HARMONY_KEYSTORE_PASSWORD` | keystore password |
 | Secret | `HARMONY_KEY_PASSWORD` | key password (falls back to the keystore password) |
 | Variable | `HARMONY_KEY_ALIAS` | key alias inside the keystore |
-| Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on the self-hosted runner |
+| Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
+| Variable | `HARMONY_SDK_URL` | https URL of the pinned SDK tarball (hosted runner) |
+| Variable | `HARMONY_SDK_SHA256` | SHA-256 of that tarball; also the cache key |
 | Secret | `APPGALLERY_CLIENT_ID` | AppGallery Connect API client id |
 | Secret | `APPGALLERY_CLIENT_SECRET` | AppGallery Connect API client secret |
 | Secret | `APPGALLERY_APP_ID` | AppGallery Connect app id of the HarmonyOS app |

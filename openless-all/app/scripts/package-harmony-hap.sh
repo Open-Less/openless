@@ -61,6 +61,18 @@ PY
 # build-harmony-frontend.sh builds the Rust cdylib, the ArkWeb bundle, runs
 # hvigor and (when debug material is present) signs. We sign again below with the
 # release material so the artifact matches what AppGallery accepts.
+# On a hosted runner there is no DevEco install, so `hvigorw` does not exist:
+# scripts/prepare-harmony-sdk.sh installs hvigor next to the SDK instead.
+HVIGOR_BIN=""
+if [ -x "$TOOLCHAIN/hvigor/node_modules/@ohos/hvigor/bin/hvigor.js" ]; then
+  HVIGOR_BIN="$TOOLCHAIN/hvigor/node_modules/@ohos/hvigor/bin/hvigor.js"
+fi
+if [ -z "$HVIGOR_BIN" ] && ! command -v hvigorw > /dev/null 2>&1; then
+  echo "no hvigor available: install the SDK with scripts/prepare-harmony-sdk.sh or use a machine with DevEco Studio" >&2
+  exit 1
+fi
+
+HVIGOR_JS="$HVIGOR_BIN" \
 OPENLESS_CACHE_ROOT="$CACHE_ROOT" \
 OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
 OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
