@@ -8,7 +8,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
-import { parseAndroidAbis, ANDROID_ABI_MATRIX } from './android-abi-matrix.mjs';
+import { parseAndroidAbis, ANDROID_ABI_MATRIX, entryForAbi } from './android-abi-matrix.mjs';
+import { fileURLToPath } from 'node:url';
 
 function resolveTargets() {
   const raw = process.env.OPENLESS_ANDROID_TARGETS ?? '';
@@ -27,6 +28,14 @@ function main() {
     process.exit(1);
   }
   const targets = resolveTargets();
+  const rimeBuilder = fileURLToPath(new URL('./build-mobile-rime.py', import.meta.url));
+  for (const target of targets) {
+    const rime = spawnSync(process.env.PYTHON ?? 'python3', [rimeBuilder, 'android', '--stage', '--abi', entryForAbi(target).gradleAbi], {
+      stdio: 'inherit', env: process.env,
+    });
+    if (rime.error) throw rime.error;
+    if (rime.status !== 0) process.exit(rime.status ?? 1);
+  }
   const args = ['tauri', 'android', 'build', '--apk', '--split-per-abi', '--target', ...targets];
   if (mode === '--debug') {
     args.push('--debug');

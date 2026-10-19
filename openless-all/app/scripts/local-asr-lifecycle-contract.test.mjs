@@ -10,7 +10,13 @@ assert.equal(existsSync(new URL('../src-tauri/src/asr/local/retired.rs', import.
 const native = read('src-tauri/src/core_adapters.rs');
 assert.doesNotMatch(native, /LocalAsrCache|LocalWhisperCache|LocalQwenEngine|AppleSpeechAsr/);
 const worker = read('src-tauri/src/asr/local/experimental/textstream.rs');
-assert.match(worker, /installed\(&directory\)[^]*?verify_package[^]*?models\.check_lease[^]*?Command::new\(install::python/);
+assert.match(worker, /installed\(&directory\)[^]*?verification\.verify\(Model::TextStream[^]*?models\.check_lease[^]*?Command::new\(install::python/);
+const verification = read('src-tauri/src/asr/local/experimental/textstream/package_cache.rs');
+assert.match(verification, /verify_package\(model, directory\)/);
+assert.match(verification, /meta\.ino\(\)/);
+assert.match(verification, /meta\.ctime_nsec\(\)/);
+assert.match(verification, /before != after/);
+assert.match(native, /with_local_startup_spawner/);
 assert.match(worker, /TextStreamChunk\s*\{\s*text: finalized \+ &draft,\s*offset: 0/);
 const core = read('crates/openless-core/src/local_asr_service.rs');
 const activate = core.match(/    fn activate\([^]*?(?=\n    fn )/)[0];

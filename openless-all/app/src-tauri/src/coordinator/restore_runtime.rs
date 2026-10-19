@@ -61,6 +61,10 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     coord
                         .inner
                         .host
+                        .cache_capsule_display_mode(work_target.capsule_display_mode);
+                    coord
+                        .inner
+                        .host
                         .cache_capsule_style(work_target.capsule_style);
                     Ok::<_, BackendError>(())
                 })

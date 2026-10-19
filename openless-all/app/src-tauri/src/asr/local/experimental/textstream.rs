@@ -6,6 +6,8 @@ mod install;
 mod process;
 #[path = "textstream/protocol.rs"]
 mod protocol;
+#[path = "textstream/package_cache.rs"]
+mod package_cache;
 use process::Process;
 
 use base64::Engine;
@@ -47,6 +49,7 @@ impl Drop for StartupGuard {
 pub struct Runtime {
     active: Mutex<Option<Weak<Process>>>,
     generation: AtomicU64,
+    verification: Arc<package_cache::VerificationCache>,
 }
 impl Runtime {
     #[cfg(debug_assertions)]
@@ -103,10 +106,16 @@ impl Runtime {
                 "TextStream runtime is not installed; explicitly retry its experimental switch",
             ));
         }
+        let started = std::time::Instant::now();
         let verify = directory.clone();
+        let verification = Arc::clone(&self.verification);
         let budget = tokio::task::spawn_blocking(move || {
             let _background = super::compute_policy::BackgroundScope::enter();
-            openless_core::experimental_asr::verify_package(Model::TextStream, &verify)?;
+            let cached = verification.verify(Model::TextStream, &verify)?;
+            log::info!(
+                "[experimental-asr] model=textstream stage=verify cached={cached} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
             Ok::<_, BackendError>(super::compute_policy::Budget::capture())
         })
         .await
@@ -210,6 +219,10 @@ impl Runtime {
             .map_err(error)??;
         models.check_lease(Model::TextStream, generation)?;
         self.check_start_generation(expected_runtime)?;
+        log::info!(
+            "[experimental-asr] model=textstream stage=ready elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         guard.0.take();
         Ok(Arc::new(Session {
             process,

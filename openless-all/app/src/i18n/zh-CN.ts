@@ -1421,6 +1421,10 @@ export const zhCN = {
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
       capsuleTranscriptFontSize: '原文字号',
+      capsuleDisplayModeLabel: "多屏胶囊",
+      capsuleDisplayModeDesc: "选择录音胶囊显示在哪些屏幕。所有屏幕模式会增加窗口与图形资源占用。",
+      capsuleDisplayCursorScreen: "鼠标所在屏幕",
+      capsuleDisplayAllScreens: "所有屏幕显示",
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',

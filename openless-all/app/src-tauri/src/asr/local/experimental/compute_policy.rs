@@ -22,7 +22,10 @@ impl Budget {
         } else {
             0.25 // Missing telemetry must never mean unlimited CPU.
         };
-        let cores = (logical_cores.max(1) as f64 * idle * IDLE_SHARE).max(0.05);
+        // Native worker pools (including Core ML/MLX helpers) can exceed the
+        // requested BLAS/ONNX thread count. Bound their aggregate average too.
+        let cores =
+            (logical_cores.max(1) as f64 * idle * IDLE_SHARE).clamp(0.05, MAX_CPU_THREADS as f64);
         Self {
             cores,
             threads: (cores.floor() as i32).clamp(1, MAX_CPU_THREADS),
@@ -33,7 +36,7 @@ impl Budget {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
         let budget = Self::from_idle(cores, idle_fraction().unwrap_or(0.25));
         log::info!(
-            "[experimental-asr] CPU budget={:.2} core(s), native threads={}, idle share=80%",
+            "[experimental-asr] CPU budget={:.2} core(s), native threads={}, idle share=80%, aggregate cap=2 cores",
             budget.cores,
             budget.threads
         );
@@ -200,9 +203,9 @@ impl Drop for BackgroundScope {
 mod tests {
     use super::*;
     #[test]
-    fn uses_eighty_percent_of_idle_capacity_not_eighty_percent_of_machine() {
+    fn uses_eighty_percent_of_idle_capacity_with_two_core_aggregate_ceiling() {
         let budget = Budget::from_idle(10, 0.9);
-        assert!((budget.cores - 7.2).abs() < 1e-9);
+        assert_eq!(budget.cores, 2.0);
         assert_eq!(budget.threads, 2);
         let busy = Budget::from_idle(10, 0.1);
         assert!((busy.cores - 0.8).abs() < 1e-9);

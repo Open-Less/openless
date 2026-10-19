@@ -1422,6 +1422,10 @@ export const zhTW: typeof zhCN = {
       capsuleTranscriptDesc:
         '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
       capsuleTranscriptFontSize: '原文字級',
+      capsuleDisplayModeLabel: "多螢幕膠囊",
+      capsuleDisplayModeDesc: "選擇錄音膠囊顯示在哪些螢幕。所有螢幕模式會增加視窗與圖形資源用量。",
+      capsuleDisplayCursorScreen: "滑鼠所在螢幕",
+      capsuleDisplayAllScreens: "所有螢幕顯示",
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: 'Openless 預設風格',

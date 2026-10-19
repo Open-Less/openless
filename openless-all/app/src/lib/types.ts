@@ -352,6 +352,7 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
+  capsuleDisplayMode: 'cursorScreen' | 'allScreens';
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
@@ -802,7 +803,7 @@ export type PermissionStatus =
   'granted' | 'denied' | 'notDetermined' | 'restricted' | 'notApplicable' | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
-export type PlatformKind = 'desktop' | 'android' | 'mobile';
+export type PlatformKind = 'desktop' | 'android' | 'harmony' | 'mobile';
 
 /** Feature flags for desktop vs Android APK UI gating. Mirrors src-tauri PlatformCapabilities. */
 export interface PlatformCapabilities {

@@ -1545,9 +1545,13 @@ impl Coordinator {
     /// After saving, syncs style, window size, and click region without
     /// waiting for the next recording state event.
     pub fn sync_capsule_style_from_preferences(&self) {
+        let preferences = self.inner.backend.get_preferences();
         self.inner
             .host
-            .cache_capsule_style(self.inner.backend.get_preferences().capsule_style);
+            .cache_capsule_display_mode(preferences.capsule_display_mode);
+        self.inner
+            .host
+            .cache_capsule_style(preferences.capsule_style);
     }
     /// Apply only the Tauri presentation side of the Core-owned vocabulary
     /// suggestion state. Commands mutate the Core collection first, then pass

@@ -1492,6 +1492,10 @@ export const en: typeof zhCN = {
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
       capsuleTranscriptFontSize: 'Transcript font size',
+      capsuleDisplayModeLabel: "Multi-display capsule",
+      capsuleDisplayModeDesc: "Choose where the recording capsule appears. Showing it on all displays uses additional windows and graphics resources.",
+      capsuleDisplayCursorScreen: "Display under the pointer",
+      capsuleDisplayAllScreens: "Show on all displays",
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',

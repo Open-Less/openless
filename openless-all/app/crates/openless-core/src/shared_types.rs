@@ -398,6 +398,9 @@ pub struct UserPreferences {
     /// Recording capsule appearance. Preference events sync it to all windows; recording state carries the current style.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
+    /// Display only under the pointer, or mirror recording on every attached display.
+    #[serde(default)]
+    pub capsule_display_mode: CapsuleDisplayMode,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -965,6 +968,8 @@ struct UserPreferencesWire {
     show_capsule: bool,
     #[serde(default)]
     capsule_style: CapsuleStyle,
+    #[serde(default)]
+    capsule_display_mode: CapsuleDisplayMode,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -1230,6 +1235,7 @@ impl Default for UserPreferencesWire {
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
+            capsule_display_mode: prefs.capsule_display_mode,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
@@ -1433,6 +1439,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
+            capsule_display_mode: wire.capsule_display_mode,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
@@ -1813,6 +1820,7 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
+            capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
@@ -2619,6 +2627,16 @@ pub enum CapsuleState {
     Done,
     Cancelled,
     Error,
+}
+
+/// Which attached displays show the recording capsule. Old preferences default
+/// to one display, so upgrading never opts users into extra windows/renderers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CapsuleDisplayMode {
+    #[default]
+    CursorScreen,
+    AllScreens,
 }
 
 /// Recording capsule appearance; serialized values feed preference storage and each Host's window events.

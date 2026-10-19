@@ -1513,6 +1513,10 @@ export const es: typeof zhCN = {
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
+      capsuleDisplayModeLabel: "Cápsula en varias pantallas",
+      capsuleDisplayModeDesc: "Elige dónde aparece la cápsula. El modo de todas las pantallas utiliza más ventanas y recursos gráficos.",
+      capsuleDisplayCursorScreen: "Pantalla bajo el puntero",
+      capsuleDisplayAllScreens: "Mostrar en todas las pantallas",
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',

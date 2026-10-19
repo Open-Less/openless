@@ -1,3 +1,4 @@
+import { isHarmonyHost } from '../lib/harmonyBridge';
 import {
   createContext,
   useCallback,
@@ -84,6 +85,11 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
   useEffect(() => {
+    if (isHarmonyHost) {
+      const refresh = () => { void reloadPreferences().catch((error) => setError(errorMessage(error))); };
+      window.addEventListener('openless:harmony-backend-change', refresh);
+      return () => window.removeEventListener('openless:harmony-backend-change', refresh);
+    }
     if (!isTauri) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;

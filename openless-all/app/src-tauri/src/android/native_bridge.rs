@@ -1079,6 +1079,69 @@ mod jni_exports {
     }
 
     #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativePublicDictionary(
+        env: *mut JNIEnv,
+        _class: JClass,
+        base: jstring,
+        action: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let result = (|| -> Result<serde_json::Value, String> {
+            let base = env
+                .get_string(&JString::from_raw(base))
+                .map(String::from)
+                .map_err(|_| "invalid dictionary path")?;
+            let action = env
+                .get_string(&JString::from_raw(action))
+                .map(String::from)
+                .map_err(|_| "invalid dictionary action")?;
+            let base = std::path::PathBuf::from(base);
+            if base.file_name().and_then(|s| s.to_str())
+                != Some(openless_core::ime_dictionary::BUNDLED_DIRECTORY)
+            {
+                return Err("unexpected dictionary directory".into());
+            }
+            let status = match action.as_str() {
+                "select" => openless_core::ime_dictionary::select(&base),
+                "reject" => openless_core::ime_dictionary::reject(&base),
+                "update" => tauri::async_runtime::block_on(openless_core::ime_dictionary::update(
+                    &base, false,
+                ))?,
+                _ => return Err("unsupported dictionary action".into()),
+            };
+            serde_json::to_value(status).map_err(|_| "encode dictionary status".into())
+        })();
+        crate::android::jni::android::export_jstring(
+            &mut env,
+            &match result {
+                Ok(value) => value.to_string(),
+                Err(error) => serde_json::json!({"error":error}).to_string(),
+            },
+        )
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeCloudPinyin(
+        env: *mut JNIEnv,
+        _class: JClass,
+        pinyin: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let input = env.get_string(&JString::from_raw(pinyin)).map(String::from);
+        let result = input
+            .map(|query| tauri::async_runtime::block_on(openless_core::ime_cloud::query(&query)))
+            .unwrap_or_default();
+        crate::android::jni::android::export_jstring(
+            &mut env,
+            &serde_json::json!(result).to_string(),
+        )
+    }
+
+    #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeImeCommand(
         env: *mut JNIEnv,
         _class: JClass,

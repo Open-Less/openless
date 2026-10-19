@@ -26,6 +26,8 @@ import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } fro
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
+import { isHarmonyHost } from '../lib/harmonyBridge';
+import { HarmonyDictation } from '../components/HarmonyDictation';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -277,6 +279,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           </Btn>
         }
       />
+
+      {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
 
       {showProvidersSection && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>

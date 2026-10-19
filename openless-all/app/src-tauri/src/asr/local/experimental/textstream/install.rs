@@ -42,11 +42,47 @@ pub fn python(directory: &Path) -> PathBuf {
 pub fn script(directory: &Path) -> PathBuf {
     directory.join(".runtime/worker.py")
 }
-pub fn installed(directory: &Path) -> bool {
+fn current_worker_installed(directory: &Path) -> bool {
     python(directory).is_file()
         && std::fs::read_to_string(directory.join(".runtime/installed"))
             .is_ok_and(|s| s == marker(directory))
         && std::fs::read_to_string(script(directory)).is_ok_and(|s| s == WORKER)
+}
+
+const PREVIOUS_WORKERS: &[(&str, &str)] = &[
+    (
+        "f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243",
+        "6c6e1ce76c0e3e220b35160744c5253b499d364095e294c45d712ed7b0922184",
+    ),
+    (
+        "64e7ec7b3c3557bea2314d8a99564cf7cfb0402ff1cea586fc3c5366ef5e543b",
+        "f08166fc2a375a42f9c86bcc75ded43e1bc8b742c4fba4289db4002a6bc464dc",
+    ),
+];
+
+/// A known managed worker can be upgraded at recording start without reinstalling
+/// Python. Lease/status must recognize it, otherwise start never reaches refresh.
+pub fn installed(directory: &Path) -> bool {
+    if current_worker_installed(directory) {
+        return true;
+    }
+    let root = directory.join(".runtime");
+    if !python(directory).is_file()
+        || !std::fs::read_to_string(root.join("requirements.lock")).is_ok_and(|s| s == REQUIREMENTS)
+    {
+        return false;
+    }
+    let Ok(receipt) = std::fs::read_to_string(root.join("installed")) else {
+        return false;
+    };
+    let Ok(worker) = std::fs::read(script(directory)) else {
+        return false;
+    };
+    let hash = format!("{:x}", Sha256::digest(&worker));
+    PREVIOUS_WORKERS.iter().any(|(environment, expected)| {
+        receipt == format!("{PYTHON}:{UV_SHA256}:{}:{environment}", directory.display())
+            && (hash == *expected || worker == WORKER.as_bytes())
+    })
 }
 
 struct CommandGuard {
@@ -215,7 +251,7 @@ async fn installation_lock(root: &Path) -> Result<std::fs::File, BackendError> {
 /// Upgrade only our worker when the pinned Python/dependency environment is
 /// unchanged. Never redownload weights or clear a working venv for a script fix.
 pub async fn refresh_worker(directory: &Path) -> Result<bool, BackendError> {
-    if installed(directory) {
+    if current_worker_installed(directory) {
         return Ok(true);
     }
     let root = directory.join(".runtime");
@@ -227,30 +263,13 @@ pub async fn refresh_worker(directory: &Path) -> Result<bool, BackendError> {
 }
 
 fn refresh_worker_locked(directory: &Path) -> Result<bool, BackendError> {
-    if installed(directory) {
+    if current_worker_installed(directory) {
         return Ok(true);
     }
-    const PREVIOUS_ENV: &str = "f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243";
-    const PREVIOUS_WORKER: &str =
-        "6c6e1ce76c0e3e220b35160744c5253b499d364095e294c45d712ed7b0922184";
+    if !installed(directory) {
+        return Ok(false);
+    }
     let root = directory.join(".runtime");
-    let previous = format!(
-        "{PYTHON}:{UV_SHA256}:{}:{PREVIOUS_ENV}",
-        directory.display()
-    );
-    if !python(directory).is_file()
-        || !std::fs::read_to_string(root.join("installed")).is_ok_and(|s| s == previous)
-        || !std::fs::read_to_string(root.join("requirements.lock")).is_ok_and(|s| s == REQUIREMENTS)
-    {
-        return Ok(false);
-    }
-    let Ok(worker) = std::fs::read(script(directory)) else {
-        return Ok(false);
-    };
-    // The current script also permits recovery after a crash between renames.
-    if format!("{:x}", Sha256::digest(&worker)) != PREVIOUS_WORKER && worker != WORKER.as_bytes() {
-        return Ok(false);
-    }
     fn replace(path: &Path, bytes: &[u8]) -> Result<(), BackendError> {
         use std::io::Write;
         let temporary = path.with_extension(format!("{}.update", uuid::Uuid::new_v4()));
@@ -300,6 +319,17 @@ mod worker_update_tests {
         let root = directory.join(".runtime");
         std::fs::write(root.join("requirements.lock"), REQUIREMENTS).unwrap();
         std::fs::write(script(directory), WORKER).unwrap();
+        for (environment, _) in PREVIOUS_WORKERS {
+            let receipt = format!("{PYTHON}:{UV_SHA256}:{}:{environment}", directory.display());
+            std::fs::write(root.join("installed"), receipt).unwrap();
+            assert!(
+                installed(directory),
+                "lease must allow a known worker to reach refresh"
+            );
+            assert!(!current_worker_installed(directory));
+            assert!(refresh_worker(directory).await.unwrap());
+            assert!(current_worker_installed(directory));
+        }
         let previous = format!("{PYTHON}:{UV_SHA256}:{}:f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243", directory.display());
         std::fs::write(root.join("installed"), &previous).unwrap();
         assert!(

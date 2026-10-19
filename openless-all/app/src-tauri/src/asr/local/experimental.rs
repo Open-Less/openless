@@ -153,7 +153,9 @@ impl ExperimentalNativeRuntime {
                             check()?;
                             let stream = recognizer.create_stream();
                             stream.accept_waveform(16_000, chunk);
+                            let decode_started = std::time::Instant::now();
                             recognizer.decode(&stream);
+                            log::info!("[experimental-asr] model=sensevoice stage=decode audio_ms={} elapsed_ms={}", chunk.len() / 16, decode_started.elapsed().as_millis());
                             let text = stream
                                 .get_result()
                                 .ok_or_else(|| failure("SenseVoice returned no result"))?
@@ -246,11 +248,17 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
                     return Ok(());
                 }
                 openless_core::experimental_asr::verify_package(model, &directory)?;
+                // A changed thread budget must not construct a second native model
+                // while the previous model/allocator is still resident.
+                *slot = None;
+                let loading = std::time::Instant::now();
                 let engine = match model {
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     Model::SenseVoice => {
                         let mut config = sherpa_onnx::OfflineRecognizerConfig::default();
-                        config.model_config.num_threads = budget.threads;
+                        // One CPU thread avoids a persistent ONNX worker pool and
+                        // keeps the cached model valid as the idle budget fluctuates.
+                        config.model_config.num_threads = 1;
                         config.model_config.provider = Some("cpu".into());
                         config.model_config.tokens =
                             Some(directory.join("tokens.txt").to_string_lossy().into());
@@ -279,9 +287,17 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
                 if generation.load(Ordering::Acquire) != expected {
                     return Err(failure("Experimental model was disabled while loading"));
                 }
+                log::info!(
+                    "[experimental-asr] model={model:?} stage=load elapsed_ms={}",
+                    loading.elapsed().as_millis()
+                );
                 *slot = Some(Loaded {
                     directory,
-                    cpu_threads: budget.threads,
+                    cpu_threads: if model == Model::SenseVoice {
+                        1
+                    } else {
+                        budget.threads
+                    },
                     engine,
                 });
                 Ok(())
@@ -438,6 +454,9 @@ mod tests {
         let started = std::time::Instant::now();
         runtime.prepare(model, directory.clone()).await.unwrap();
         let load = started.elapsed();
+        let warm_started = std::time::Instant::now();
+        runtime.prepare(model, directory.clone()).await.unwrap();
+        let warm_prepare = warm_started.elapsed();
         let wav = std::fs::read(
             std::env::var_os("OPENLESS_ASR_ENGLISH_TEST_WAV")
                 .expect("provide the English 16kHz PCM smoke-test WAV"),
@@ -454,7 +473,7 @@ mod tests {
             .await
             .unwrap();
         println!(
-            "{model:?}: load={load:?} inference={:?} audio={:.3}s text={text}",
+            "{model:?}: load={load:?} warm_prepare={warm_prepare:?} inference={:?} audio={:.3}s text={text}",
             inference.elapsed(),
             samples.len() as f64 / 16000.0
         );

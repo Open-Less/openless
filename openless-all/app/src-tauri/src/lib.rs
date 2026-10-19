@@ -3476,17 +3476,16 @@ pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri:
     );
     let bottom_gap = capsule_bottom_gap(style);
 
-    // Windows: the primary capsule stays on the OS primary monitor. Every other monitor
-    // gets its own mirror (see capsule_mirrors), so the capsule is visible on all screens
-    // instead of only the one that happens to hold the focused window (issue #1057).
+    // Windows: keep one capsule on the display under the cursor, just like macOS.
+    // Do not use the capsule's old window position to select the display.
     #[cfg(target_os = "windows")]
     {
-        if let Some(mon) = capsule_mirrors::primary_monitor_rect(window) {
+        if let Some(mon) = capsule_mirrors::target_monitor_rect(window) {
             let (phys_w, phys_h, x, y) =
                 capsule_mirrors::capsule_placement(bounds.width, bounds.height, bottom_gap, mon);
             window.set_size(PhysicalSize::new(phys_w, phys_h))?;
             log::debug!(
-                "[capsule] win position: primary mon=({},{})..({},{}) scale={:.2} size=({}x{}) -> ({},{})",
+                "[capsule] win position: target mon=({},{})..({},{}) scale={:.2} size=({}x{}) -> ({},{})",
                 mon.left, mon.top, mon.right, mon.bottom, mon.scale, phys_w, phys_h, x, y
             );
             window.set_position(PhysicalPosition::new(x, y))?;

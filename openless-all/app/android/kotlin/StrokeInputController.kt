@@ -30,7 +30,7 @@ import android.widget.TextView
 internal class StrokeInputController(private val service: OpenLessImeService) {
     private val strokeRepository by lazy { StrokeInputRepository(service) }
     // internal, not private: Pinyin mode's own post-commit association
-    // (LitePinyinController) reuses this exact instance rather than loading
+    // (RimePinyinController) reuses this exact instance rather than loading
     // a second copy of the same ~220k-entry phrase index — association data
     // is keyed by confirmed on-screen Chinese text, not by how it was
     // typed, so it's equally valid for either input mode.
@@ -656,7 +656,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         updateClearStrokeButtonVisibility()
     }
 
-    // internal, not private: LitePinyinController's own association context
+    // internal, not private: RimePinyinController's own association context
     // buffer reuses the same cap for consistency (see phraseRepository's own
     // doc comment on why the two share one StrokePhraseRepository instance).
     internal companion object {

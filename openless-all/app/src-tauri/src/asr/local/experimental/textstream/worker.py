@@ -27,6 +27,17 @@ MAX_LINE = 1_000_000
 MAX_AUDIO_BYTES = 32_000 * 600
 
 
+def metal_memory_limits(memory_bytes: int, recommended_bytes: int) -> tuple[int, int]:
+    """Reserve RAM for the host; MLX's memory limit is a guideline, not an OS quota."""
+    if memory_bytes <= 0 or recommended_bytes <= 0:
+        raise ValueError("Metal memory information is unavailable")
+    # MLX defaults to 1.5x the recommended working set and retains freed buffers
+    # up to that same limit. That is inappropriate beside a live recorder/UI.
+    memory_limit = min(4 * 1024**3, memory_bytes // 3, recommended_bytes)
+    cache_limit = min(128 * 1024**2, memory_limit // 16)
+    return memory_limit, cache_limit
+
+
 class CpuBudget:
     """Cooperative CPU-seconds budget; GPU wait is not charged as CPU work."""
 
@@ -60,6 +71,7 @@ def configure_cpu_threads() -> float:
     cores = float(os.environ.get("OPENLESS_CPU_BUDGET_CORES", "1"))
     if not math.isfinite(cores) or not 0 < cores <= (os.cpu_count() or 1):
         raise ValueError("invalid CPU budget")
+    cores = min(cores, 2.0)
     threads = str(max(1, min(2, math.floor(cores))))
     for name in (
         "OMP_NUM_THREADS",
@@ -236,6 +248,13 @@ def run(model_dir: Path, port: int, parent: int):
                     "TextStream requires Metal GPU; CPU fallback is disabled"
                 )
             mx.set_default_device(mx.gpu)
+            device = mx.metal.device_info()
+            memory_limit, cache_limit = metal_memory_limits(
+                int(device["memory_size"]),
+                int(device["max_recommended_working_set_size"]),
+            )
+            mx.set_memory_limit(memory_limit)
+            mx.set_cache_limit(cache_limit)
             import numpy as np
             from mlx_qwen3_asr import Session
             from silero_vad_lite import SileroVAD
@@ -251,6 +270,7 @@ def run(model_dir: Path, port: int, parent: int):
                 finalization_mode="accuracy",
             )
             vad = SileroVAD(16000)
+            mx.clear_cache()
         budget.checkpoint()
         emit({"type": "ready", "protocol": 1})
         snapshots = Snapshots()
@@ -271,6 +291,9 @@ def run(model_dir: Path, port: int, parent: int):
             if heard_speech:
                 with contextlib.redirect_stdout(sys.stderr):
                     state = session.feed_audio(audio, state)
+                    # Release dead allocations as the rolling window grows;
+                    # live model weights/KV state remain owned by the session.
+                    mx.clear_cache()
                 budget.checkpoint()
                 emit(snapshots.update(state.stable_text, state.text))
 
@@ -296,6 +319,7 @@ def run(model_dir: Path, port: int, parent: int):
                 if heard_speech:
                     with contextlib.redirect_stdout(sys.stderr):
                         state = session.finish_streaming(state)
+                        mx.clear_cache()
                     budget.checkpoint()
                     # finish_streaming's completed text, not our last draft.
                     emit(snapshots.update(state.stable_text, state.text, terminal=True))

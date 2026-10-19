@@ -1,3 +1,4 @@
+import { isHarmonyHost, invokeHarmony } from '../lib/harmonyBridge';
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -586,7 +587,9 @@ export function Style() {
     setBusy('importing');
     try {
       let zipPath: string | null = null;
-      if (isTauri) {
+      if (isHarmonyHost) {
+        zipPath = await invokeHarmony<string | null>('pick_style_pack_zip');
+      } else if (isTauri) {
         const { open } = await import('@tauri-apps/plugin-dialog');
         const picked = await open({
           filters: [{ name: 'Style Pack ZIP', extensions: ['zip'] }],

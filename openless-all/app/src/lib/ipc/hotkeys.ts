@@ -41,7 +41,7 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
 
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
   return platformCapabilities().then((caps) => {
-    if (caps.platform === 'android') {
+    if (caps.platform !== 'desktop') {
       return androidWindowsImeStatus;
     }
     return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);

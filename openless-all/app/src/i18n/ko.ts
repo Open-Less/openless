@@ -1468,6 +1468,10 @@ export const ko: typeof zhCN = {
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
       capsuleTranscriptFontSize: '원문 글자 크기',
+      capsuleDisplayModeLabel: "다중 화면 캡슐",
+      capsuleDisplayModeDesc: "녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.",
+      capsuleDisplayCursorScreen: "마우스 포인터가 있는 화면",
+      capsuleDisplayAllScreens: "모든 화면에 표시",
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',

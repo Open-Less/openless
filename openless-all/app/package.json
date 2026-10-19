@@ -1,13 +1,13 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.1+build.20261016",
+  "version": "2.0.2-Beta.1+build.20261017",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
     "test": "node scripts/frontend-test-runner.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs",
+    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs && node scripts/harmony-entry-startup.test.mjs && node scripts/harmony-app-dictation.test.mjs && node scripts/harmony-voice-configuration.test.mjs && node scripts/harmony-panel-layout.test.mjs && node scripts/harmony-editor-compat.test.mjs && node scripts/harmony-clipboard-history.test.mjs && node scripts/harmony-symbol-gesture.test.mjs && node scripts/harmony-rime-startup.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

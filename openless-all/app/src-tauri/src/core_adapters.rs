@@ -258,11 +258,14 @@ pub(crate) fn backend_dependencies(
         Arc::clone(&host_recorder),
         external,
     ));
-    let traditional = Arc::new(openless_core::PipelineDictationEngine::new(
-        Arc::clone(&recorder),
-        transcription,
-        Arc::clone(&polisher),
-    ));
+    let traditional = Arc::new(
+        openless_core::PipelineDictationEngine::new(
+            Arc::clone(&recorder),
+            transcription,
+            Arc::clone(&polisher),
+        )
+        .with_local_startup_spawner(Arc::clone(&task_spawner)),
+    );
     let dictation = Arc::new(openless_core::DictationEngineRouter::new(traditional));
     let production_omni: Arc<dyn DictationEngine> = Arc::new(
         openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), recorder),

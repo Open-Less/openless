@@ -252,6 +252,17 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             },
         )
 
+        content.addView(sectionLabel(ui("拼音云候选", "Cloud Pinyin candidates")))
+        content.addView(Switch(this).apply {
+            text = ui("Google 云候选（发送当前拼音；密码和隐私输入禁用）", "Google cloud candidates (sends Pinyin; disabled in private fields)")
+            isChecked = prefs.getBoolean("cloud_pinyin_enabled", false)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("cloud_pinyin_enabled", checked).apply() }
+        })
+        content.addView(Switch(this).apply {
+            text = ui("每周更新公共词库（学习词仅保存在本机）", "Weekly public dictionaries (learned words stay on this device)")
+            isChecked = prefs.getBoolean("public_dictionary_updates", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("public_dictionary_updates", checked).apply() }
+        })
         content.addView(sectionLabel(ui("英文键盘", "English keyboard")))
         val englishSuggestionsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         englishSuggestionsRow.addView(
@@ -468,16 +479,13 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
             },
         )
-        // 简拼优选：不是每次输入都记一条，是"连续两次直接打拼音上屏"的组合
-        // （比如先打 zg 选中国，紧接着打 rm 选人民）达到 3 次后才计入这里——
-        // 见 LitePinyinLearnedPhrases 的文档注释。这里只显示已经达标、正在
-        // 生效的组合数，未达标的候选不计入（避免这个数字本身产生误导）。
-        val learnedPhrases = LitePinyinLearnedPhrases(this)
+        // Retain old backups without presenting them as active Rime learning.
+        val learnedPhrases = LegacyPinyinBackup(this)
         content.addView(
             TextView(this).apply {
                 text = ui(
-                    "简拼优选：已生效 ${learnedPhrases.promotedCount()} 条",
-                    "Pinyin combo learning: ${learnedPhrases.promotedCount()} promoted",
+                    "旧版拼音备份：${learnedPhrases.entryCount()} 条（不参与候选）",
+                    "Legacy pinyin backup: ${learnedPhrases.entryCount()} entries (not used for candidates)",
                 )
                 textSize = 14f
                 setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))

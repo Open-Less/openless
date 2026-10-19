@@ -39,8 +39,13 @@ export function visibleAdvancedPages(
     if (page.id === 'lessComputer') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'claudeConsole') return platform === 'desktop' && os === 'mac';
     if (page.id === 'vocabularyLearning')
-      return platform === 'android' || (platform === 'desktop' && (os === 'win' || os === 'mac'));
-    if (page.id === 'debug') return platform === 'desktop' || platform === 'android';
+      return (
+        platform === 'android' ||
+        platform === 'harmony' ||
+        (platform === 'desktop' && (os === 'win' || os === 'mac'))
+      );
+    if (page.id === 'debug')
+      return platform === 'desktop' || platform === 'android' || platform === 'harmony';
     return true;
   });
 }

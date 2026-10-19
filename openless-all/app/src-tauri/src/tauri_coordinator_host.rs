@@ -19,7 +19,7 @@ use openless_core::BackendEvent;
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::types::{CapsulePayload, CapsuleState, CapsuleStyle};
+use crate::types::{CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle};
 
 static CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_FIRST_SHOW_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -728,14 +728,15 @@ struct CapsuleWindowState {
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
     style: AtomicU8,
+    mirror_all_displays: AtomicBool,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
     deferred_payload: Mutex<Option<CapsulePayload>>,
     snapshot: Mutex<CapsuleSnapshotState>,
     layout_watch_active: AtomicBool,
     layout_watch_epoch: AtomicU64,
-    /// Windows: fingerprint of the last mirror sync; `None` forces the next sync to apply.
-    #[cfg(target_os = "windows")]
+    /// Native display topology and presentation cache; preference changes invalidate it.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     mirror_fingerprint: Mutex<Option<u64>>,
 }
 
@@ -748,19 +749,31 @@ impl Default for CapsuleWindowState {
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
+            mirror_all_displays: AtomicBool::new(false),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
             deferred_payload: Mutex::new(None),
             snapshot: Mutex::new(CapsuleSnapshotState::default()),
             layout_watch_active: AtomicBool::new(false),
             layout_watch_epoch: AtomicU64::new(0),
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             mirror_fingerprint: Mutex::new(None),
         }
     }
 }
 
 impl CapsuleWindowState {
+    fn cache_display_mode(&self, mode: CapsuleDisplayMode) {
+        let all = mode == CapsuleDisplayMode::AllScreens;
+        let changed = self.mirror_all_displays.swap(all, Ordering::SeqCst) != all;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if changed {
+            *self.mirror_fingerprint.lock() = None;
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let _ = changed;
+    }
+
     fn cache_style(&self, style: CapsuleStyle) {
         self.style.store(
             match style {
@@ -985,35 +998,32 @@ impl TauriCapsuleWindow {
 
     pub(crate) fn invalidate_layout(&self) {
         *self.state.layout.lock() = None;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             *self.state.mirror_fingerprint.lock() = None;
         }
     }
 
-    /// Windows: makes every mirror capsule / transcript rail match the primary window —
-    /// visibility, geometry, cursor passthrough and hit-testing — so the capsule shows on
-    /// all monitors (issue #1057). Queued on the main thread because window creation and
-    /// show/hide must run there. A no-op when nothing relevant changed.
-    #[cfg(target_os = "windows")]
+    /// Apply the user's cursor-only/all-displays choice on the native main thread.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
         let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     pub(crate) fn sync_capsule_mirrors(&self) {}
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn apply_capsule_mirrors(&self) {
         use crate::capsule_mirrors::{
-            capsule_placement, ensure_capsule_mirror, ensure_rail_mirror, mirror_label,
-            mirror_targets, CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
+            capsule_placement, ensure_capsule_mirror, mirror_label, mirror_targets,
+            CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
         };
 
         let Some(primary) = self.window() else {
             return;
         };
-        let Some(primary_rect) = crate::capsule_mirrors::primary_monitor_rect(&primary) else {
+        let Some(primary_rect) = crate::capsule_mirrors::target_monitor_rect(&primary) else {
             return;
         };
         let monitors = crate::capsule_mirrors::all_monitor_rects(&primary);
@@ -1052,30 +1062,54 @@ impl TauriCapsuleWindow {
         }
 
         let app = self.app.clone();
+        let mode = if self.state.mirror_all_displays.load(Ordering::SeqCst) {
+            CapsuleDisplayMode::AllScreens
+        } else {
+            CapsuleDisplayMode::CursorScreen
+        };
         let targets = if visible {
-            mirror_targets(&monitors, primary_rect)
+            mirror_targets(mode, &monitors, primary_rect)
         } else {
             Vec::new()
         };
 
-        // Hide every mirror slot that has no monitor to sit on (or when the capsule is hidden).
+        // Reuse a bounded set of webviews. Recreating WKWebViews on every
+        // recording/mode switch accumulates native resources on macOS.
+        let hidden_payload = self
+            .state
+            .snapshot
+            .lock()
+            .payload
+            .clone()
+            .map(|mut payload| {
+                payload.state = CapsuleState::Idle;
+                payload
+            });
+        let mut complete = true;
         for index in targets.len()..MAX_CAPSULE_MIRRORS {
             for prefix in [CAPSULE_MIRROR_PREFIX, RAIL_MIRROR_PREFIX] {
                 if let Some(window) = app.get_webview_window(&mirror_label(prefix, index)) {
-                    let _ = window.hide();
+                    if let Err(error) = window.hide() {
+                        log::warn!("[capsule] mirror hide failed: {error}");
+                        complete = false;
+                    }
+                    // Stop hidden shader/exit animations; future live frames are
+                    // routed only to visible mirror windows.
+                    if let Some(payload) = &hidden_payload {
+                        let _ = app.emit_to(window.label(), "capsule:state", payload);
+                    }
                 }
             }
         }
 
         let bounds = crate::capsule_window_bounds_for_style_with_transcript_and_translation(
             style,
-            false,
+            cfg!(target_os = "macos") && transcript_visible,
             translation_active,
         );
         let bottom_gap = crate::capsule_bottom_gap(style);
 
-        // Only a fully applied sync may be cached; a failed mirror must be retried by the next sync.
-        let mut complete = true;
+        // Only a fully applied sync may be cached; failed operations are retried.
         for (index, monitor) in targets.iter().enumerate() {
             let capsule_label = mirror_label(CAPSULE_MIRROR_PREFIX, index);
             let mirror = match ensure_capsule_mirror(&app, &capsule_label) {
@@ -1088,23 +1122,38 @@ impl TauriCapsuleWindow {
             };
             let (phys_w, phys_h, x, y) =
                 capsule_placement(bounds.width, bounds.height, bottom_gap, *monitor);
+            #[cfg(target_os = "macos")]
+            let _ = (phys_w, phys_h);
             // Geometry failures must not be fingerprint-cached: a skipped retry would leave
             // the mirror stuck at the wrong size/position after a monitor reconnect.
-            if let Err(error) = mirror.set_size(tauri::PhysicalSize::new(phys_w, phys_h)) {
+            #[cfg(target_os = "windows")]
+            let size_result = mirror.set_size(tauri::PhysicalSize::new(phys_w, phys_h));
+            #[cfg(target_os = "macos")]
+            let size_result = mirror.set_size(tauri::LogicalSize::new(bounds.width, bounds.height));
+            if let Err(error) = size_result {
                 log::warn!("[capsule] mirror {capsule_label} set_size failed: {error}");
                 complete = false;
                 continue;
             }
-            if let Err(error) = mirror.set_position(tauri::PhysicalPosition::new(x, y)) {
+            #[cfg(target_os = "windows")]
+            let position_result = mirror.set_position(tauri::PhysicalPosition::new(x, y));
+            #[cfg(target_os = "macos")]
+            let position_result = mirror.set_position(tauri::LogicalPosition::new(
+                x as f64 / monitor.scale,
+                y as f64 / monitor.scale,
+            ));
+            if let Err(error) = position_result {
                 log::warn!("[capsule] mirror {capsule_label} set_position failed: {error}");
                 complete = false;
                 continue;
             }
+            #[cfg(target_os = "windows")]
             let hit_test = if passthrough {
                 clear_capsule_input_region_for_window(&mirror)
             } else {
                 configure_capsule_hit_test(&mirror, style, transcript_visible, translation_active)
             };
+            #[cfg(target_os = "windows")]
             if let Err(error) = hit_test {
                 log::warn!("[capsule] mirror {capsule_label} hit-test setup failed: {error}");
                 complete = false;
@@ -1119,25 +1168,28 @@ impl TauriCapsuleWindow {
                 complete = false;
             }
 
-            let rail_label = mirror_label(RAIL_MIRROR_PREFIX, index);
-            match ensure_rail_mirror(&app, &rail_label) {
-                Ok(rail) => {
-                    if let Err(error) = position_rail_for_capsule(
-                        &app,
-                        &rail,
-                        tauri::PhysicalPosition::new(x, y),
-                        monitor.scale,
-                        style,
-                        translation_active,
-                        transcript_visible,
-                    ) {
-                        log::warn!("[capsule] mirror {rail_label} positioning failed: {error}");
+            #[cfg(target_os = "windows")]
+            {
+                let rail_label = mirror_label(RAIL_MIRROR_PREFIX, index);
+                match crate::capsule_mirrors::ensure_rail_mirror(&app, &rail_label) {
+                    Ok(rail) => {
+                        if let Err(error) = position_rail_for_capsule(
+                            &app,
+                            &rail,
+                            tauri::PhysicalPosition::new(x, y),
+                            monitor.scale,
+                            style,
+                            translation_active,
+                            transcript_visible,
+                        ) {
+                            log::warn!("[capsule] mirror {rail_label} positioning failed: {error}");
+                            complete = false;
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("[capsule] mirror {rail_label} create failed: {error}");
                         complete = false;
                     }
-                }
-                Err(error) => {
-                    log::warn!("[capsule] mirror {rail_label} create failed: {error}");
-                    complete = false;
                 }
             }
         }
@@ -1286,8 +1338,8 @@ impl TauriCapsuleWindow {
     ) -> Option<CapsuleLayoutState> {
         #[cfg(target_os = "windows")]
         {
-            // The primary capsule lives on the OS primary monitor (see capsule_mirrors).
-            if let Some(mon) = crate::capsule_mirrors::primary_monitor_rect(window) {
+            // Use the same cursor display as placement, including mixed-DPI layouts.
+            if let Some(mon) = crate::capsule_mirrors::target_monitor_rect(window) {
                 let monitors = crate::capsule_mirrors::all_monitor_rects(window);
                 return Some(CapsuleLayoutState {
                     translation_active,
@@ -1649,6 +1701,10 @@ impl TauriCoordinatorHost {
         self.capsule.snapshot.lock().record_backend_event(event);
     }
 
+    pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
+        self.capsule.cache_display_mode(mode);
+    }
+
     pub(crate) fn cache_capsule_style(&self, style: CapsuleStyle) {
         self.capsule.cache_style(style);
         if let Some(capsule) = self.capsule_window() {
@@ -1803,13 +1859,18 @@ impl TauriCoordinatorHost {
         if let Some(app) = self.app() {
             let _ = app.emit_to("capsule", "capsule:state", payload);
             let _ = app.emit_to("capsule-rail", "capsule:state", payload);
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             for prefix in [
                 crate::capsule_mirrors::CAPSULE_MIRROR_PREFIX,
                 crate::capsule_mirrors::RAIL_MIRROR_PREFIX,
             ] {
                 for label in crate::capsule_mirrors::existing_mirror_labels(&app, prefix) {
-                    let _ = app.emit_to(label.as_str(), "capsule:state", payload);
+                    if app
+                        .get_webview_window(&label)
+                        .is_some_and(|window| window.is_visible().unwrap_or(false))
+                    {
+                        let _ = app.emit_to(label.as_str(), "capsule:state", payload);
+                    }
                 }
             }
         }
@@ -1886,6 +1947,29 @@ impl TauriCoordinatorHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_mode_changes_invalidate_mirrors_without_changing_style() {
+        let state = CapsuleWindowState::default();
+        assert!(!state.mirror_all_displays.load(Ordering::SeqCst));
+        for mode in [
+            CapsuleDisplayMode::AllScreens,
+            CapsuleDisplayMode::CursorScreen,
+        ] {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                *state.mirror_fingerprint.lock() = Some(123);
+            }
+            state.cache_display_mode(mode);
+            assert_eq!(
+                state.mirror_all_displays.load(Ordering::SeqCst),
+                mode == CapsuleDisplayMode::AllScreens
+            );
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            assert!(state.mirror_fingerprint.lock().is_none());
+            assert_eq!(state.cached_style(), CapsuleStyle::Siri);
+        }
+    }
 
     #[test]
     fn capsule_style_cache_preserves_every_wire_variant() {

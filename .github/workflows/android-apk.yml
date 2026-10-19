@@ -328,6 +328,7 @@ jobs:
         if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
         env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -337,6 +338,7 @@ jobs:
         if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
         env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
           # Resolve signing credentials at execution time; compiled Gradle scripts
           # are cached and must never contain secret literals.
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

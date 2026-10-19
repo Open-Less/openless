@@ -458,6 +458,23 @@ export function RecordingInputSection() {
             <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
           </SettingRow>
         )}
+        {!isAndroid && (os === 'mac' || os === 'win') && (
+          <SettingRow
+            label={t('settings.recording.capsuleDisplayModeLabel')}
+            desc={t('settings.recording.capsuleDisplayModeDesc')}
+          >
+            <SelectLite
+              value={prefs.capsuleDisplayMode ?? 'cursorScreen'}
+              onChange={(next) => savePrefs({ ...prefs, capsuleDisplayMode: next as 'cursorScreen' | 'allScreens' })}
+              options={[
+                { value: 'cursorScreen', label: t('settings.recording.capsuleDisplayCursorScreen') },
+                { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
+              ]}
+              ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
+              style={{ maxWidth: 240, minWidth: 200 }}
+            />
+          </SettingRow>
+        )}
         {!isAndroid && (
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>

@@ -112,6 +112,23 @@ class WorkerTests(unittest.TestCase):
             ), self.assertRaises(ValueError):
                 worker.configure_cpu_threads()
 
+    def test_metal_memory_leaves_room_for_capture_and_bounds_free_cache(self) -> None:
+        for gib in (4, 8, 16, 64):
+            total = gib * 1024**3
+            memory, cache = worker.metal_memory_limits(total, total * 3 // 4)
+            self.assertLessEqual(memory, min(4 * 1024**3, total // 3))
+            self.assertLessEqual(cache, 128 * 1024**2)
+            self.assertGreater(cache, 0)
+        with self.assertRaises(ValueError):
+            worker.metal_memory_limits(0, 0)
+
+    def test_cpu_capacity_is_capped_even_when_many_cores_are_idle(self) -> None:
+        with patch.object(os, "cpu_count", return_value=16), patch.dict(
+            os.environ, {"OPENLESS_CPU_BUDGET_CORES": "12"}
+        ):
+            self.assertEqual(worker.configure_cpu_threads(), 2.0)
+            self.assertEqual(os.environ["OMP_NUM_THREADS"], "2")
+
     def test_draft_is_revisable_and_final_comes_from_decoder(self):
         snapshots = worker.Snapshots()
         self.assertEqual(snapshots.update("你", "你好吗")["draft"], "好吗")
@@ -131,7 +148,20 @@ class WorkerTests(unittest.TestCase):
         lines = json.dumps(request) + "\n" + ('{"type":"finish"}\n' if finish else "")
         output = io.StringIO()
         mlx_core = SimpleNamespace(
-            metal=SimpleNamespace(is_available=lambda: gpu_available),
+            metal=SimpleNamespace(
+                is_available=lambda: gpu_available,
+                device_info=lambda: {
+                    "memory_size": 16 * 1024**3,
+                    "max_recommended_working_set_size": 12 * 1024**3,
+                },
+            ),
+            set_memory_limit=lambda limit: FakeSession.calls.append(
+                ("memory_limit", limit)
+            ),
+            set_cache_limit=lambda limit: FakeSession.calls.append(
+                ("cache_limit", limit)
+            ),
+            clear_cache=lambda: FakeSession.calls.append(("clear_cache",)),
             gpu="gpu",
             set_default_device=lambda device: FakeSession.calls.append(
                 ("device", device)
@@ -181,6 +211,13 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(events[-1]["finalized"], "你好，世界。")
         self.assertEqual(events[-1]["draft"], "")
         self.assertIn(("device", "gpu"), FakeSession.calls)
+        self.assertIn(("memory_limit", 4 * 1024**3), FakeSession.calls)
+        self.assertIn(("cache_limit", 128 * 1024**2), FakeSession.calls)
+        self.assertEqual(FakeSession.calls.count(("clear_cache",)), 3)
+        self.assertLess(
+            next(i for i, c in enumerate(FakeSession.calls) if c[0] == "cache_limit"),
+            next(i for i, c in enumerate(FakeSession.calls) if c[0] == "load"),
+        )
         init = next(call for call in FakeSession.calls if call[0] == "init")
         self.assertIsNone(init[1]["language"], "do not hard-code English")
 

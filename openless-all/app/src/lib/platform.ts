@@ -2,6 +2,7 @@
 // Prefers Tauri `get_platform_capabilities`; falls back to UA / OS heuristics.
 
 import { detectOS } from '../components/WindowChrome';
+import { invokeHarmony, isHarmonyHost } from './harmonyBridge';
 import type { PlatformCapabilities, PlatformKind } from './types';
 
 export type { PlatformCapabilities, PlatformKind };
@@ -46,6 +47,7 @@ export function isAndroid(): boolean {
 }
 
 export function isMobile(): boolean {
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') return true;
   if (cachedCapabilities) {
     return cachedCapabilities.platform === 'mobile' || cachedCapabilities.platform === 'android';
   }
@@ -58,6 +60,9 @@ export function isDesktop(): boolean {
 }
 
 export function inferPlatformCapabilities(): PlatformCapabilities {
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') {
+    return { ...MOBILE_UNAVAILABLE, platform: 'harmony', supportsInAppDictation: true };
+  }
   if (isAndroid()) {
     return {
       platform: 'android',
@@ -96,6 +101,10 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
 
 export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   if (cachedCapabilities) return cachedCapabilities;
+  if (isHarmonyHost) {
+    cachedCapabilities = await invokeHarmony<PlatformCapabilities>('get_platform_capabilities');
+    return cachedCapabilities;
+  }
 
   const isTauri = globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 

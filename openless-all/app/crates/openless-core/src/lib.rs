@@ -332,9 +332,9 @@ pub use remote_input_service::{
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;
 pub use shared_types::{
-    CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode, HotkeyStatus,
-    PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode, UserPreferences,
-    LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
+    CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode,
+    HotkeyStatus, PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode,
+    UserPreferences, LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
 };
 pub use shortcut_types::{
     binding_from_legacy_trigger, binding_requires_mouse_hook, binding_requires_side_aware_hook,
@@ -381,4 +381,6 @@ pub use voice_edit_session::{
     VoiceEditSession, VoiceEditSnapshot, VoiceEditTarget, VoiceEditTurn,
 };
 
+pub mod ime_cloud;
+pub mod ime_dictionary;
 pub mod preference_patch;

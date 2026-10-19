@@ -103,6 +103,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_display_mode",
+        key: "capsuleDisplayMode",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "capsule_transcript_enabled",
         key: "capsuleTranscriptEnabled",
         class: PreferenceClass::Portable,
@@ -900,6 +907,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
     let choices: &[&str] = match field.key {
         "defaultMode" => &["raw", "light", "structured", "formal"],
         "capsuleStyle" => &["siri", "classic", "typeless"],
+        "capsuleDisplayMode" => &["cursorScreen", "allScreens"],
         "pipelineMode" => &["traditional", "multimodal"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
