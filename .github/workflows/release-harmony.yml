@@ -155,7 +155,9 @@ jobs:
           set -euo pipefail
           output=target/harmony-packages
           ( cd "$output" && sha256sum --check --strict SHA256SUMS )
-          version_name=$(node -p "require('./package.json').version.split('+')[0]")
+          # AppGallery needs a numeric versionName, so the packaging script keeps
+          # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
+          version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
           version_code=$(cat linux-egui/package-revision)
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           # The Release only carries the unsigned package; the store copy must

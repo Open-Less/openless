@@ -366,7 +366,9 @@ jobs:
           set -euo pipefail
           bash scripts/prepare-harmony-sdk.sh
           bash scripts/package-harmony-hap.sh
-          version_name=$(node -p "require('./package.json').version.split('+')[0]")
+          # AppGallery needs a numeric versionName, so the packaging script keeps
+          # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
+          version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
           version_code=$(cat linux-egui/package-revision)
           bash scripts/verify-harmony-hap.sh \
             target/harmony-packages/OpenLess_harmony_arm64.hap \
