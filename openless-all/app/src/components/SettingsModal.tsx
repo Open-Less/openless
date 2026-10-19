@@ -743,7 +743,7 @@ export function SettingsModal({
                         gap: 16,
                       }}
                     >
-                      {section === 'general' && <GeneralTab />}
+                      {section === 'general' && <GeneralTab os={os} />}
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}

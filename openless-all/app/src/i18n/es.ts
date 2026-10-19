@@ -1351,6 +1351,16 @@ export const es: typeof zhCN = {
       cursorContextDesc:
         'Envía un fragmento breve del texto cercano al cursor al modelo como referencia para nombres propios, homófonos y pronombres al pulir (macOS / Windows / Android). El dictado, las notas rápidas y las notas en la nube lo usan, pero el contexto en sí nunca se guarda en notas, historial ni registros; con un modelo en la nube se envía a ese proveedor junto con la solicitud de pulido. Es independiente del aprendizaje local. Se excluyen contraseñas, terminales y aplicaciones sensibles conocidas.',
     },
+    localMigration: {
+      title: 'Migración de configuración local',
+      description:
+        'Exporta toda la configuración local portable a un paquete versionado o restáurala en otro dispositivo Android. El modo de compartir está anonimizado de forma predeterminada; la migración personal solo puede incluir credenciales protegidas con contraseña. El flujo nativo muestra el origen, la versión, las categorías y los cambios antes de fusionar o reemplazar.',
+      safetyNote:
+        'Los permisos del sistema, las sesiones OAuth, las rutas del dispositivo y el estado de ejecución nunca se migran. Se crea una copia local antes de importar.',
+      open: 'Abrir migración local',
+      opening: 'Abriendo…',
+      openFailed: 'No se pudo abrir la migración local. Inténtalo de nuevo desde Ajustes.',
+    },
     codingConsole: {
       title: 'Consola de Claude',
       desc: 'Detecta Claude Code y MCP para controlar el ordenador. Ejecuta Claude sin interfaz, con límites de seguridad, y consulta la salida progresiva y el coste.',
@@ -1513,10 +1523,16 @@ export const es: typeof zhCN = {
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
-      capsuleDisplayModeLabel: "Cápsula en varias pantallas",
-      capsuleDisplayModeDesc: "Elige dónde aparece la cápsula. El modo de todas las pantallas utiliza más ventanas y recursos gráficos.",
-      capsuleDisplayCursorScreen: "Pantalla bajo el puntero",
-      capsuleDisplayAllScreens: "Mostrar en todas las pantallas",
+      capsuleDisplayModeLabel: 'Cápsula en varias pantallas',
+      capsuleDisplayModeDesc:
+        'Elige dónde aparece la cápsula. El modo de todas las pantallas utiliza más ventanas y recursos gráficos.',
+      capsuleDisplayCursorScreen: 'Pantalla bajo el puntero',
+      capsuleDisplayPrimaryScreen: 'Solo pantalla principal',
+      capsuleDisplayForegroundWindowScreen: 'Pantalla de la ventana en primer plano',
+      capsuleDisplayAllScreens: 'Mostrar en todas las pantallas',
+      capsuleDisplayModeRestartTitle: 'Reinicia OpenLess para aplicar el modo de pantalla',
+      capsuleDisplayModeRestartDesc:
+        'Cambiar del modo de todas las pantallas requiere reiniciar para cerrar las cápsulas anteriores. ¿Reiniciar ahora?',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
@@ -1546,6 +1562,9 @@ export const es: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (predeterminado / mayoría de aplicaciones)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / mayoría de terminales)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Modo de inserción de texto plano',
+      plainTextInsertionDesc:
+        'Al activarlo, el pegado simulado usa Shift+Insert en lugar de Ctrl+V (el atajo superior queda bloqueado mientras esté activo). Actívalo solo en casos muy especiales, p. ej. cuando un cambiador de disposición de teclado como Punto Switcher intercepta Ctrl+V. Solo se aplica al pegado desde el portapapeles (solo Windows).',
       comboRecordLabel: 'Grabar atajo',
       comboRecordDesc:
         'Pulsa aquí y después la combinación deseada (p. ej., ⌘⇧D). Admite los modos Alternar y Mantener para hablar.',
@@ -2138,6 +2157,7 @@ export const es: typeof zhCN = {
         background: 'Con la aplicación en segundo plano',
         keyboard: 'Cuando aparece el teclado',
         always: 'Siempre visible',
+        never: 'Nunca mostrar',
       },
       androidOverlayTriggerHint: {
         background:
@@ -2145,6 +2165,7 @@ export const es: typeof zhCN = {
         keyboard:
           'Este modo se ha retirado. Los ajustes existentes vuelven al modo de segundo plano.',
         always: 'Siempre disponible, pero permanece en pantalla.',
+        never: 'Nunca aparece automáticamente; el teclado sigue disponible.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2227,6 +2248,9 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
+      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
+      windowsCompositionInputDesc:
+        'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
       streamingInsertSaveClipboardHint:
         'Después de insertar correctamente, copia el texto final al portapapeles para poder pegarlo otra vez con Cmd+V. Desactivado: no se modifica el portapapeles.',
@@ -2235,6 +2259,9 @@ export const es: typeof zhCN = {
         'Sustituye el ASR en la nube por inferencia en el dispositivo. Para uso sin conexión o con datos sensibles.',
       localAsrWarningShort:
         'La inferencia local es más lenta; un equipo poco potente puede omitir palabras.',
+      localAsrFallbackLabel: 'Usar el modelo local si falla la nube',
+      localAsrFallbackDesc:
+        'Con conexión débil o sin conexión, transcribe la grabación con el modelo local descargado en lugar de esperar los reintentos en la nube. Requiere un modelo local descargado.',
       qwen3Desc: 'Al activarlo, sustituirá al proveedor ASR.',
       sherpaDesc: 'Al activarlo, sustituirá al proveedor ASR.',
       foundryDesc: 'Al activarlo, sustituirá al proveedor ASR.',

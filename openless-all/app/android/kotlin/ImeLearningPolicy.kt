@@ -26,9 +26,11 @@ internal object ImeLearningPolicy {
     fun migrate(context: Context): Boolean = runCatching {
         val marker = context.getSharedPreferences("openless_learning_privacy", Context.MODE_PRIVATE)
         if (marker.getInt("version", 0) >= PRIVACY_VERSION) return true
-        for (name in stores) {
-            if (!context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()) return false
+        OpenLessMigrationState.settings {
+            for (name in stores) {
+                check(context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit())
+            }
+            check(marker.edit().putInt("version", PRIVACY_VERSION).commit())
         }
-        marker.edit().putInt("version", PRIVACY_VERSION).commit()
     }.getOrDefault(false)
 }

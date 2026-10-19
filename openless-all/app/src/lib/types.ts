@@ -352,7 +352,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
-  capsuleDisplayMode: 'cursorScreen' | 'allScreens';
+  capsuleDisplayMode: 'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens';
+  capsuleDisplayModeV2?: UserPreferences['capsuleDisplayMode'];
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
@@ -493,6 +494,8 @@ export interface UserPreferences {
   sherpaOnnxLanguageHint: string;
   /** Seconds the Windows sherpa-onnx model stays loaded in the runtime. */
   sherpaOnnxKeepLoadedSecs: number;
+  /** When a cloud ASR provider fails, transcribe the recording with the selected sherpa-onnx model. */
+  localAsrFallbackEnabled: boolean;
   /** History retention days. 0 = no time-based cleanup (the 200-entry cap still applies). Default 7. */
   historyRetentionDays: number;
   /** Conversation-aware polish context window (minutes). 0 = off. Default 5. See PR-A. */
@@ -519,6 +522,8 @@ export interface UserPreferences {
   /** Whether to write the final polished text back to the clipboard after a successful streaming insert.
    *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
+  /** Windows TSF: show the live transcript as an underlined composition in the target. */
+  windowsCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /

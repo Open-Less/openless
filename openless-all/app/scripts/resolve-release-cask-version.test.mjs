@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { resolveReleaseCaskVersion } from './resolve-release-cask-version.mjs';
 
 const files = (version) => [`OpenLess_${version}_aarch64.dmg`, `OpenLess_${version}_x64.dmg`];
@@ -54,4 +55,29 @@ assert.match(
   workflow,
   /version="\$\(node openless-all\/app\/scripts\/resolve-release-cask-version\.mjs "\$TAG" "\$RUNNER_TEMP\/dmg"\)"/,
 );
+const downloadPatterns = [...workflow.matchAll(/--pattern '([^']+)'/g)].map((match) => match[1]);
+assert.equal(downloadPatterns.length, 2);
+for (const version of ['1.3.18', '2.0.0+build.20261015']) {
+  const selected = spawnSync(
+    'bash',
+    [
+      '-c',
+      'arm=$1; intel=$2; shift 2; for name; do if [[ "$name" == $arm || "$name" == $intel ]]; then printf "%s\\n" "$name"; fi; done',
+      'download-patterns',
+      ...downloadPatterns,
+      ...files(version),
+      'OpenLess_macos_aarch64.dmg',
+      'OpenLess_macos_x86_64.dmg',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(selected.status, 0, selected.stderr);
+  const downloaded = selected.stdout.trim().split(/\r?\n/);
+  assert.deepEqual(downloaded, files(version), 'Homebrew must only download versioned DMGs');
+  assert.equal(resolveReleaseCaskVersion(`v${version.split('+')[0]}-tauri`, downloaded), version);
+  const checksumNames = [...workflow.matchAll(/sha256sum "\$RUNNER_TEMP\/dmg\/([^"]+)"/g)].map(
+    (match) => match[1].replaceAll('${version}', version),
+  );
+  assert.deepEqual(checksumNames, files(version), 'Homebrew must checksum the resolved version');
+}
 console.log('resolve-release-cask-version.test.mjs passed');

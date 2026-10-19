@@ -106,7 +106,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (intent?.action) {
             null, ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
-                showOverlay()
+                if (!showOverlay()) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 if (!tryPromoteRecordingForeground()) {
                     abortRecordingStart(startId)
                     return START_NOT_STICKY
@@ -119,7 +122,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 stopSelf(startId)
             }
             ACTION_REPLACE_OVERLAY -> replaceOverlay()
-            ACTION_TOGGLE_EXPAND -> handleIconClick()
+            ACTION_TOGGLE_EXPAND -> {
+                if (overlayDisplayAllowed()) {
+                    handleIconClick()
+                } else {
+                    hideOverlay()
+                }
+            }
             ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
             ACTION_REFRESH_LAYOUT -> refreshOverlayLayout()
         }
@@ -191,7 +200,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun showOverlay() = withOverlayLock {
+    private fun showOverlay(): Boolean = withOverlayLock {
+        if (!overlayDisplayAllowed()) {
+            clearAllOverlayRoots()
+            Log.i(TAG, "overlay show skipped by preference")
+            return@withOverlayLock false
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         overlayRoots.lastOrNull()?.let { existing ->
@@ -199,7 +213,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             if (params != null) {
                 refreshExistingOverlayLayout(existing, params)
                 Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
-                return@withOverlayLock
+                return@withOverlayLock true
             }
             removeOverlayRoot(existing)
             synchronized(overlayRoots) {
@@ -220,6 +234,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         if (removed > 0) {
             Log.i(TAG, "overlay replace cleared removed=$removed")
         }
+        if (!overlayDisplayAllowed()) {
+            Log.i(TAG, "overlay replace skipped by preference")
+            return@withOverlayLock
+        }
         if (!canDrawOverlays()) {
             Log.i(TAG, "overlay replace skipped no overlay permission")
             return@withOverlayLock
@@ -235,6 +253,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun hideOverlay() = withOverlayLock {
         val removed = clearAllOverlayRoots()
+        if (!overlayDisplayAllowed()) {
+            OpenLessAccessibilityService.sendVocabularyCommand("refresh")
+        }
         if (removed > 0) {
             Log.i(TAG, "overlay hidden removed=$removed")
         }
@@ -321,6 +342,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return OpenLessPermissionBridge.canDrawOverlaysSafely(this)
     }
 
+    private fun overlayDisplayAllowed(): Boolean {
+        return OpenLessAndroidPreferences.overlayDisplayAllowed(this)
+    }
+
     private fun refreshExistingOverlayLayout(
         root: FrameLayout,
         params: WindowManager.LayoutParams,
@@ -338,6 +363,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun refreshOverlayLayout() = withOverlayLock {
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
+        if (!overlayDisplayAllowed()) {
+            clearAllOverlayRoots()
+            Log.i(TAG, "overlay refresh skipped by preference")
+            return@withOverlayLock
+        }
         val root = overlayRoots.lastOrNull() ?: rootView
         if (root == null || !root.isAttachedToWindow) {
             Log.i(TAG, "overlay refresh skipped roots=0")
@@ -752,7 +782,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun startRecordingFromOverlay(translation: Boolean = false) {
-        showOverlay()
+        if (!showOverlay()) {
+            return
+        }
         if (tryPromoteRecordingForeground()) {
             beginDictationFromOverlay(translation)
             return

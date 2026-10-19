@@ -14,10 +14,13 @@ import { LocalAsr } from '../../LocalAsr';
 import { detectOS } from '../../../components/WindowChrome';
 import { getPlatformCapabilities } from '../../../lib/platform';
 import { Card } from '../../_atoms';
-import { ExperimentalSectionTitle } from '../shared';
+import { ExperimentalSectionTitle, SettingRow, Toggle } from '../shared';
+import { useHotkeySettings } from '../../../state/HotkeySettingsContext';
+import { LocalModelPicker } from './LocalModelPicker';
 
 export function LocalModelsSection() {
   const { t } = useTranslation();
+  const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
   const os = detectOS();
   const isWin = os === 'win';
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
@@ -74,9 +77,28 @@ export function LocalModelsSection() {
         /* Model catalog / management dashboard (model selection · download · cleanup · delete · test · mirror source).
            Usage entry: pick a local provider under "AI Providers → ASR speech transcription",
            then switch the model in use via the LocalModelPicker in the channel editor. */
-        <div style={{ marginTop: 16, borderTop: '0.5px solid var(--ol-line)', paddingTop: 16 }}>
-          <LocalAsr embedded />
-        </div>
+        <>
+          {/* Cloud ASR keeps the job; the local model only steps in when a cloud
+              call fails (weak or no network, exhausted quota). */}
+          {prefs && (
+            <SettingRow
+              label={t('settings.advanced.localAsrFallbackLabel')}
+              desc={t('settings.advanced.localAsrFallbackDesc')}
+            >
+              <Toggle
+                on={prefs.localAsrFallbackEnabled}
+                onToggle={(next) => savePrefs({ ...prefs, localAsrFallbackEnabled: next })}
+              />
+            </SettingRow>
+          )}
+          {/* Android has no per-engine cards: the sherpa model used by the
+              fallback and by a turned-off cloud channel is picked here, without
+              having to create a local channel first. */}
+          {os === 'android' && <LocalModelPicker providerType="sherpa-onnx-local" />}
+          <div style={{ marginTop: 16, borderTop: '0.5px solid var(--ol-line)', paddingTop: 16 }}>
+            <LocalAsr embedded />
+          </div>
+        </>
       )}
     </Card>
   );

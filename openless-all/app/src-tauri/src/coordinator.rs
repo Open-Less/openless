@@ -684,6 +684,14 @@ impl Coordinator {
             );
 
             let app = crate::core_adapters::app_handle_slot();
+            // arm64 Android links sherpa-onnx (build.rs `local_asr_sherpa`) and
+            // gets the same runtime pair Windows builds in new_with_local_runtimes().
+            #[cfg(local_asr_sherpa)]
+            let native_asr = crate::core_adapters::TauriNativeAsrDependencies::new(
+                Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
+                Arc::new(crate::asr::local::SherpaOnnxRuntime::new()),
+            );
+            #[cfg(not(local_asr_sherpa))]
             let native_asr = crate::core_adapters::TauriNativeAsrDependencies::new();
             let hotkey_status = Arc::new(Mutex::new(HotkeyStatus::default()));
             let qa_context = Arc::new(TauriQaHostContext::default());
@@ -701,7 +709,10 @@ impl Coordinator {
                 startup_error,
             );
 
-            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+                Arc::clone(&app),
+                Arc::clone(&qa_context),
+            );
             let hotkey_runtime_target = (&backend.get_preferences()).into();
             let inner = Arc::new(Inner {
                 host,
@@ -834,7 +845,10 @@ impl Coordinator {
             startup_error,
         );
 
-        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+            Arc::clone(&app),
+            Arc::clone(&qa_context),
+        );
         let hotkey_runtime_target = (&backend.get_preferences()).into();
         let inner = Arc::new(Inner {
             host,
@@ -1062,8 +1076,11 @@ impl Coordinator {
                     AndroidOverlayTrigger::Background => "background",
                     AndroidOverlayTrigger::Keyboard => "keyboard",
                     AndroidOverlayTrigger::Always => "always",
+                    AndroidOverlayTrigger::Never => "never",
                 }
             }
+            let from = from.normalized();
+            let to = to.normalized();
             if from == to {
                 return;
             }
@@ -1072,20 +1089,15 @@ impl Coordinator {
                 overlay_trigger_log_name(from),
                 overlay_trigger_log_name(to),
             );
-            match (from, to) {
-                (
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
-                    AndroidOverlayTrigger::Always,
-                ) => {
+            match to {
+                AndroidOverlayTrigger::Always => {
                     let _ = crate::android::replace_android_overlay();
                 }
-                (
-                    AndroidOverlayTrigger::Always,
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
-                ) => {
+                AndroidOverlayTrigger::Background
+                | AndroidOverlayTrigger::Keyboard
+                | AndroidOverlayTrigger::Never => {
                     let _ = crate::android::hide_android_overlay();
                 }
-                _ => {}
             }
         }
         let _ = (from, to);
@@ -1099,7 +1111,9 @@ impl Coordinator {
                 AndroidOverlayTrigger::Always => {
                     let _ = crate::android::replace_android_overlay();
                 }
-                AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
+                AndroidOverlayTrigger::Background
+                | AndroidOverlayTrigger::Keyboard
+                | AndroidOverlayTrigger::Never => {
                     let _ = crate::android::hide_android_overlay();
                 }
             }

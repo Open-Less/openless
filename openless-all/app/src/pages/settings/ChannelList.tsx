@@ -83,6 +83,7 @@ export function presetsFor(
   supportsQwen3Mlx = true,
   currentProviderId?: string,
   descriptors: ProviderDescriptor[] = [],
+  supportsLocalAsr = true,
 ): PresetOption[] {
   const descriptorPresets = descriptors.map((descriptor) => ({
     id: descriptor.providerType,
@@ -105,8 +106,10 @@ export function presetsFor(
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
     if (p.id === 'local-qwen3-c') return os === 'mac';
     if (p.id === 'local-qwen3') return false;
-    if (p.id === 'foundry-local-whisper' || p.id === 'sherpa-onnx-local') {
-      return os === 'win';
+    if (p.id === 'foundry-local-whisper') return os === 'win';
+    // sherpa-onnx also runs on arm64 Android; the capability is ABI-aware.
+    if (p.id === 'sherpa-onnx-local') {
+      return os === 'win' || (os === 'android' && supportsLocalAsr);
     }
     // The two old Bailian ids are historical aliases; the unified entry is `bailian`, so new cards must not pick them.
     if (p.id === 'bailian-qwen3-realtime' || p.id === 'bailian-fun-asr-flash') return false;
@@ -205,6 +208,7 @@ const LOCAL_MODEL_CHANNEL_PROVIDERS = new Set([
   'local-qwen3-mlx',
   'local-qwen3-c',
   'local-whisper',
+  'sherpa-onnx-local',
 ]);
 
 export function channelTestMode(
@@ -252,8 +256,9 @@ export function ChannelList({
   // Intel); starting from os === 'mac' would flash the MLX preset once on Intel Macs when the dropdown
   // opens, then remove it asynchronously. On Apple Silicon the MLX option appears one frame late — acceptable.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
+  const [supportsLocalAsr, setSupportsLocalAsr] = useState(false);
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
-  const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors);
+  const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors, supportsLocalAsr);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [models, setModels] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
@@ -267,7 +272,10 @@ export function ChannelList({
   const autoOpenedRef = useRef(false);
 
   useEffect(() => {
-    void getPlatformCapabilities().then((caps) => setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx));
+    void getPlatformCapabilities().then((caps) => {
+      setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx);
+      setSupportsLocalAsr(caps.supportsLocalAsr);
+    });
   }, []);
 
   useEffect(() => {
@@ -734,7 +742,14 @@ export function ChannelList({
           key={dialogChannel.id}
           kind={kind}
           channel={dialogChannel}
-          presets={presetsFor(kind, os, supportsQwen3Mlx, dialogChannel.providerType, descriptors)}
+          presets={presetsFor(
+            kind,
+            os,
+            supportsQwen3Mlx,
+            dialogChannel.providerType,
+            descriptors,
+            supportsLocalAsr,
+          )}
           isDraft={dialogIsDraft}
           mobile={mobile}
           closing={dialogMount.closing}

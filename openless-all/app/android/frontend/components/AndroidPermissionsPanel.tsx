@@ -581,6 +581,9 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 <option value="always">
                   {t('settings.permissions.androidOverlayTrigger.always')}
                 </option>
+                <option value="never">
+                  {t('settings.permissions.androidOverlayTrigger.never')}
+                </option>
               </select>
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(

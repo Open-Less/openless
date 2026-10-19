@@ -17,6 +17,14 @@ inline constexpr GUID GUID_OpenLessProfile = {
     {0x9a, 0x26, 0xd2, 0x21, 0xf6, 0xc3, 0xf0, 0x2e},
 };
 
+// Display attribute for the live transcript composition (solid red underline).
+inline constexpr GUID GUID_OpenLessDisplayAttribute = {
+    0x2c7a1e5b,
+    0x8f41,
+    0x4d9a,
+    {0x9e, 0x63, 0x4a, 0xb1, 0xc0, 0xd2, 0xe8, 0x17},
+};
+
 inline constexpr wchar_t kOpenLessImeName[] = L"OpenLess Voice Input";
 // Registered for every language (like the system speech text service) under the
 // speech category, so TSF keeps it active next to the user's keyboard IME and

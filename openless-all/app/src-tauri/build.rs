@@ -29,6 +29,17 @@ fn main() {
         link_android_cpp_runtime();
     }
 
+    // `local_asr_sherpa`: targets that link sherpa-onnx for local ASR —
+    // Windows, and arm64 Android (see the Cargo.toml dependency comment).
+    // classify_target_os() only names android/macos/linux, so Windows is
+    // read from Cargo's own variable.
+    println!("cargo::rustc-check-cfg=cfg(local_asr_sherpa)");
+    let cargo_target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if cargo_target_os == "windows" || (target_os == "android" && target_arch == "aarch64") {
+        println!("cargo:rustc-cfg=local_asr_sherpa");
+    }
+
     tauri_build::build();
 }
 

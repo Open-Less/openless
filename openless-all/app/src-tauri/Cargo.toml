@@ -122,6 +122,13 @@ jni = "0.21"
 ndk-context = "0.1"
 tao = "0.35"
 
+# Local ASR on arm64 Android: the crate has no Android prebuilt download, so
+# scripts/run-android-tauri-build.mjs points SHERPA_ONNX_LIB_DIR at the
+# verified official libraries (scripts/sherpa-onnx-android.mjs) and ships them
+# in jniLibs. Other Android ABIs stay cloud-only.
+[target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
+sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["shared"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["static"] }
 security-framework = "=3.7.0"

@@ -125,7 +125,7 @@ pub mod android {
         Ok(JClass::from(class_obj))
     }
 
-    fn call_static_void_with_context_class<'local>(
+    pub(crate) fn call_static_void_with_context_class<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
         class_name: &str,
@@ -1189,7 +1189,7 @@ pub mod android {
         )
     }
 
-    fn call_static_string_with_context_class<'local>(
+    pub(crate) fn call_static_string_with_context_class<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
         class_name: &str,

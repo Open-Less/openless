@@ -232,6 +232,7 @@ impl DictationEngine for PipelineDictationEngine {
                 ));
             }
             let stable = context.recording.transcribe_after_stop;
+            let has_local_fallback = context.asr_fallback.is_some();
             let transcript_partials: Arc<dyn TextStreamSink> = if stable {
                 Arc::new(DiscardTextStream)
             } else {
@@ -353,18 +354,25 @@ impl DictationEngine for PipelineDictationEngine {
                 }));
             } else if !stable {
                 if let Err(error) = buffered.attach().await {
-                    let recording = session
-                        .resources
-                        .lock()
-                        .expect("pipeline resource lock poisoned")
-                        .recording
-                        .take();
-                    if let Some(recording) = recording {
-                        let _ = recording.stop().await;
+                    // Keep capturing for the local replay; the buffer retains the cloud error.
+                    if has_local_fallback && !session.cancelled.load(Ordering::Acquire) {
+                        log::warn!(
+                            "[dictation] cloud ASR startup failed; keeping local fallback: {error}"
+                        );
+                    } else {
+                        let recording = session
+                            .resources
+                            .lock()
+                            .expect("pipeline resource lock poisoned")
+                            .recording
+                            .take();
+                        if let Some(recording) = recording {
+                            let _ = recording.stop().await;
+                        }
+                        let _ = cancel_transcription_once(&session, Arc::clone(&buffered)).await;
+                        remove_session(&sessions, session_id, &session);
+                        return Err(error);
                     }
-                    let _ = cancel_transcription_once(&session, Arc::clone(&buffered)).await;
-                    remove_session(&sessions, session_id, &session);
-                    return Err(error);
                 }
             }
             if session.cancelled.load(Ordering::Acquire) {
@@ -529,6 +537,7 @@ impl DictationEngine for PipelineDictationEngine {
     ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
         let sessions = Arc::clone(&self.sessions);
         let polisher = Arc::clone(&self.polisher);
+        let transcription_engine = Arc::clone(&self.transcription);
         let policy = self.polish_failure_policy;
         Box::pin(async move {
             let session = find_session(&sessions, session_id)?;
@@ -618,7 +627,29 @@ impl DictationEngine for PipelineDictationEngine {
             )?;
             let asr_started = std::time::Instant::now();
             let mut asr_call_label = transcription.asr_call_label();
-            let transcription_result = transcription.finish().await;
+            // With a local fallback configured, the local model stands by on
+            // the same recording in case the cloud is slow or fails.
+            let standby = context
+                .asr_fallback
+                .is_some()
+                .then(|| archive.clone().filter(|archive| archive.is_available()))
+                .flatten()
+                .map(|archive| {
+                    LocalStandby::new(
+                        Arc::clone(&transcription_engine),
+                        Arc::clone(&context),
+                        Arc::clone(&session),
+                        session_id,
+                        archive,
+                    )
+                });
+            let race = match standby {
+                Some(standby) => race_cloud_with_local_standby(transcription.finish(), standby).await,
+                None => AsrRace::Cloud {
+                    result: transcription.finish().await,
+                    standby: None,
+                },
+            };
             asr_call_label = transcription.asr_call_label().or(asr_call_label);
             for notification in transcription.take_progress_notifications() {
                 publish_progress(
@@ -628,14 +659,58 @@ impl DictationEngine for PipelineDictationEngine {
                     EngineProgress::Notification(notification),
                 )?;
             }
-            let mut transcript = match transcription_result {
-                Ok(transcript) => {
+            // Set when the cloud ASR failed or was too slow and the local
+            // fallback produced the transcript: the network is most likely down
+            // or weak, so polish is skipped.
+            let mut local_fallback_used = false;
+            // Set when the local standby simply answered first: the cloud may be
+            // healthy, so polish still runs.
+            let mut local_won_race = false;
+            let mut transcript = match race {
+                AsrRace::Local((transcript, label)) => {
+                    log::info!(
+                        "[dictation] local {} answered before cloud ASR {}; using the local transcript",
+                        context.asr_fallback.as_ref().map_or("", |fallback| fallback.provider_type.as_str()),
+                        context.asr.provider_type,
+                    );
+                    let _ = cancel_transcription_once(&session, Arc::clone(&transcription)).await;
+                    asr_call_label = label;
+                    local_won_race = true;
+                    transcript
+                }
+                AsrRace::Cloud {
+                    result: Ok(transcript),
+                    standby,
+                } => {
                     session
                         .transcription_finished
                         .store(true, Ordering::Release);
-                    transcript
+                    if transcript.text.trim().is_empty() {
+                        if let Some(standby) = standby {
+                            if let Some((local, label)) = standby.result().await {
+                                log::warn!(
+                                    "[dictation] cloud ASR returned an empty transcript; using the local fallback"
+                                );
+                                asr_call_label = label;
+                                local_fallback_used = true;
+                                local
+                            } else {
+                                transcript
+                            }
+                        } else {
+                            transcript
+                        }
+                    } else {
+                        if let Some(standby) = standby {
+                            standby.abandon().await;
+                        }
+                        transcript
+                    }
                 }
-                Err(first_error) => {
+                AsrRace::Cloud {
+                    result: Err(first_error),
+                    standby,
+                } => {
                     let cancelled = session.cancelled.load(Ordering::Acquire);
                     let prepared = prepared.ok_or_else(|| {
                         BackendError::new(
@@ -643,6 +718,8 @@ impl DictationEngine for PipelineDictationEngine {
                             "transcription provider preparation is unavailable",
                         )
                     })?;
+                    // The recording is replayed for a cloud retry (retryable
+                    // errors only).
                     let retry_pcm = if !cancelled && first_error.retryable {
                         match archive.as_ref().filter(|archive| archive.is_available()) {
                             Some(archive) => {
@@ -654,22 +731,64 @@ impl DictationEngine for PipelineDictationEngine {
                         None
                     };
                     let _ = cancel_transcription_once(&session, Arc::clone(&transcription)).await;
-                    match retry_pcm {
-                        Some(pcm) => match retry_transcription(
-                            prepared,
-                            Arc::clone(&session),
-                            session_id,
-                            Arc::clone(&progress),
-                            pcm,
-                        )
-                        .await
-                        {
-                            Ok((transcript, label)) => {
-                                asr_call_label = label;
-                                transcript
-                            }
-                            Err((error, label)) => {
-                                asr_call_label = label.or(asr_call_label);
+                    // Local first, on any cloud error — an expired key or
+                    // exhausted quota is as much a reason to go local as a dead
+                    // network, and on a weak or absent network the cloud retry
+                    // would only add its backoff and timeouts before failing.
+                    let local = match standby {
+                        Some(standby) if !cancelled => {
+                            log::warn!(
+                                "[dictation] cloud ASR {} failed ({:?}: {}); using the local fallback",
+                                context.asr.provider_type,
+                                first_error.code,
+                                first_error.message,
+                            );
+                            standby.result().await
+                        }
+                        Some(standby) => {
+                            standby.abandon().await;
+                            None
+                        }
+                        None => None,
+                    };
+                    if let Some((transcript, label)) = local {
+                        asr_call_label = label;
+                        local_fallback_used = true;
+                        transcript
+                    } else {
+                        match retry_pcm {
+                            Some(pcm) => match retry_transcription(
+                                prepared,
+                                Arc::clone(&session),
+                                session_id,
+                                Arc::clone(&progress),
+                                pcm,
+                                CLOUD_RETRY,
+                            )
+                            .await
+                            {
+                                Ok((transcript, label)) => {
+                                    asr_call_label = label;
+                                    transcript
+                                }
+                                Err((error, label)) => {
+                                    asr_call_label = label.or(asr_call_label);
+                                    demote_failed_archive(
+                                        archive.as_ref(),
+                                        context.output_target,
+                                        &mut has_audio_recording,
+                                    )
+                                    .await;
+                                    remove_session(&sessions, session_id, &session);
+                                    let mut failure =
+                                        EngineFailure::new(error, EngineFailureStage::Transcribing);
+                                    failure.asr_ms = Some(asr_started.elapsed().as_millis() as u64);
+                                    failure.has_audio_recording = has_audio_recording;
+                                    failure.asr_call_label = asr_call_label;
+                                    return Err(failure);
+                                }
+                            },
+                            None => {
                                 demote_failed_archive(
                                     archive.as_ref(),
                                     context.output_target,
@@ -677,6 +796,13 @@ impl DictationEngine for PipelineDictationEngine {
                                 )
                                 .await;
                                 remove_session(&sessions, session_id, &session);
+                                let error = if cancelled {
+                                    cancelled_error(
+                                        "dictation was cancelled while transcription was finishing",
+                                    )
+                                } else {
+                                    first_error
+                                };
                                 let mut failure =
                                     EngineFailure::new(error, EngineFailureStage::Transcribing);
                                 failure.asr_ms = Some(asr_started.elapsed().as_millis() as u64);
@@ -684,28 +810,6 @@ impl DictationEngine for PipelineDictationEngine {
                                 failure.asr_call_label = asr_call_label;
                                 return Err(failure);
                             }
-                        },
-                        None => {
-                            demote_failed_archive(
-                                archive.as_ref(),
-                                context.output_target,
-                                &mut has_audio_recording,
-                            )
-                            .await;
-                            remove_session(&sessions, session_id, &session);
-                            let error = if cancelled {
-                                cancelled_error(
-                                    "dictation was cancelled while transcription was finishing",
-                                )
-                            } else {
-                                first_error
-                            };
-                            let mut failure =
-                                EngineFailure::new(error, EngineFailureStage::Transcribing);
-                            failure.asr_ms = Some(asr_started.elapsed().as_millis() as u64);
-                            failure.has_audio_recording = has_audio_recording;
-                            failure.asr_call_label = asr_call_label;
-                            return Err(failure);
                         }
                     }
                 }
@@ -761,8 +865,26 @@ impl DictationEngine for PipelineDictationEngine {
                 }),
             )?;
             // Issue #1032: short transcripts skip polish (user-configured threshold).
+            let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
+            // Optional polish may be skipped after fallback; an explicit translation is still required.
+            let translation_active = context.polish.translation_active;
             let uses_polisher = context.uses_llm_polisher()
-                && !context.skips_polish_for_short_text(&transcript.text);
+                && !skips_polish_for_short_text
+                && (!local_fallback_used || translation_active);
+            log::info!(
+                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?}",
+                session_id,
+                uses_polisher,
+                skips_polish_for_short_text,
+                context.insertion.composition_input,
+                translation_active,
+                context.polish.mode,
+            );
+            // Local recognition makes polish optional: when it fails because
+            // the network never answered, the raw transcript is the result.
+            let local_asr_used = local_fallback_used
+                || local_won_race
+                || crate::dictation_context::is_local_asr_provider(&context.asr.provider_type);
             let (polish_output, polish_failed, polish_ms) = if uses_polisher {
                 publish_progress(
                     &session,
@@ -799,9 +921,11 @@ impl DictationEngine for PipelineDictationEngine {
                 };
                 let result = match output {
                     Ok(text) => (text, false),
+                    // Offline after local recognition: the raw transcript is the
+                    // expected output. A rejected key or quota is still reported.
                     Err(error) if can_fallback_to_raw(policy, &error) => (
                         crate::ports::PolishOutput::text(transcript.text.clone()),
-                        true,
+                        !(local_asr_used && error.retryable && !translation_active),
                     ),
                     Err(error) => {
                         let polish_ms = Some(polish_started.elapsed().as_millis() as u64);
@@ -1098,12 +1222,167 @@ fn remove_session(
     }
 }
 
+/// How a recorded-audio replay is attempted: the cloud retry backs off and
+/// tries twice.
+#[derive(Clone, Copy)]
+struct ReplayPlan {
+    attempts: u64,
+    backoff: bool,
+}
+
+const CLOUD_RETRY: ReplayPlan = ReplayPlan { attempts: 2, backoff: true };
+
+type AsrAttempt = (
+    crate::ports::TranscriptOutput,
+    Option<crate::auxiliary::AsrCallLabel>,
+);
+
+/// The outcome of racing the cloud ASR against the local standby.
+enum AsrRace {
+    /// The cloud answered first (or the local model had nothing usable).
+    /// `standby` is the local transcription still pending, if any, for the
+    /// caller to use after a cloud error or to abandon.
+    Cloud {
+        result: Result<crate::ports::TranscriptOutput, BackendError>,
+        standby: Option<LocalStandby>,
+    },
+    /// The local model finished first with a usable transcript.
+    Local(AsrAttempt),
+}
+
+/// Runs the cloud ASR and the local standby side by side once recording has
+/// stopped; whichever returns a transcript first is used. The cloud wins a tie,
+/// and a failed local run leaves the cloud to finish on its own.
+async fn race_cloud_with_local_standby(
+    mut cloud: BoxFuture<'static, Result<crate::ports::TranscriptOutput, BackendError>>,
+    mut standby: LocalStandby,
+) -> AsrRace {
+    tokio::select! {
+        biased;
+        result = &mut cloud => AsrRace::Cloud {
+            result,
+            standby: Some(standby),
+        },
+        local = &mut standby.run => match local {
+            Some(local) => AsrRace::Local(local),
+            None => AsrRace::Cloud {
+                result: cloud.await,
+                standby: None,
+            },
+        },
+    }
+}
+
+/// The session's local fallback model transcribing the frozen recording,
+/// outside the pipeline's registered resources so that it can run alongside
+/// the cloud call. Yields None when there is no usable result — the caller then
+/// carries on with the cloud's outcome, so a missing or broken local model never
+/// replaces the error the user's provider actually gave.
+struct LocalStandby {
+    run: BoxFuture<'static, Option<AsrAttempt>>,
+    /// The started local session until it finishes, so that an abandoned
+    /// standby can still release its model.
+    started: Arc<Mutex<Option<Arc<dyn TranscriptionSession>>>>,
+}
+
+impl LocalStandby {
+    fn new(
+        engine: Arc<dyn TranscriptionEngine>,
+        context: Arc<DictationContext>,
+        session: Arc<PipelineSession>,
+        session_id: SessionId,
+        archive: Arc<dyn RecordingArchive>,
+    ) -> Self {
+        let started: Arc<Mutex<Option<Arc<dyn TranscriptionSession>>>> = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&started);
+        let run = Box::pin(async move {
+            let transcribe = async {
+                let fallback = context.asr_fallback.clone()?;
+                let pcm = archive.read_pcm().await.ok().filter(|pcm| !pcm.is_empty())?;
+                let mut local = (*context).clone();
+                local.asr = fallback;
+                local.asr_fallback = None;
+                let prepared = match engine.prepare(session_id, Arc::new(local)).await {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        log::warn!("[dictation] local ASR standby unavailable: {}", error.message);
+                        return None;
+                    }
+                };
+                // Partials stay private: the cloud may still win.
+                let transcription = match prepared.start(Arc::new(DiscardedTextStream)).await {
+                    Ok(transcription) => transcription,
+                    Err(error) => {
+                        log::warn!("[dictation] local ASR standby failed to start: {}", error.message);
+                        return None;
+                    }
+                };
+                *slot.lock().expect("local standby lock poisoned") = Some(Arc::clone(&transcription));
+                let label = transcription.asr_call_label();
+                transcription.consume_pcm_chunk(&pcm);
+                let result = transcription.finish().await;
+                slot.lock().expect("local standby lock poisoned").take();
+                match result {
+                    Ok(output) if output.text.trim().is_empty() => {
+                        log::warn!("[dictation] local ASR standby returned an empty transcript");
+                        None
+                    }
+                    Ok(output) => Some((output, label)),
+                    Err(error) => {
+                        log::warn!("[dictation] local ASR standby failed: {}", error.message);
+                        None
+                    }
+                }
+            };
+            tokio::select! {
+                result = transcribe => result,
+                _ = wait_until_cancelled(&session) => {
+                    let started = slot.lock().expect("local standby lock poisoned").take();
+                    if let Some(transcription) = started {
+                        let _ = transcription.cancel().await;
+                    }
+                    None
+                }
+            }
+        });
+        Self { run, started }
+    }
+
+    async fn result(self) -> Option<AsrAttempt> {
+        self.run.await
+    }
+
+    /// Stops a standby whose result is no longer needed and releases its model.
+    async fn abandon(self) {
+        drop(self.run);
+        let started = self.started.lock().expect("local standby lock poisoned").take();
+        if let Some(transcription) = started {
+            let _ = transcription.cancel().await;
+        }
+    }
+}
+
+async fn wait_until_cancelled(session: &PipelineSession) {
+    while !session.cancelled.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+struct DiscardedTextStream;
+
+impl TextStreamSink for DiscardedTextStream {
+    fn publish(&self, _chunk: TextStreamChunk) -> Result<(), BackendError> {
+        Ok(())
+    }
+}
+
 async fn retry_transcription(
     prepared: Arc<dyn PreparedTranscription>,
     session: Arc<PipelineSession>,
     session_id: SessionId,
     progress: Arc<dyn EngineProgressSink>,
     pcm: Vec<u8>,
+    plan: ReplayPlan,
 ) -> Result<
     (
         crate::ports::TranscriptOutput,
@@ -1112,11 +1391,13 @@ async fn retry_transcription(
     (BackendError, Option<crate::auxiliary::AsrCallLabel>),
 > {
     let mut last_label = None;
-    for attempt in 1..=2_u64 {
-        if let Err(error) =
-            cancellable_backoff(&session, std::time::Duration::from_millis(500 * attempt)).await
-        {
-            return Err((error, last_label));
+    for attempt in 1..=plan.attempts {
+        if plan.backoff {
+            if let Err(error) =
+                cancellable_backoff(&session, std::time::Duration::from_millis(500 * attempt)).await
+            {
+                return Err((error, last_label));
+            }
         }
         let partials: Arc<dyn TextStreamSink> = Arc::new(TranscriptProgressForwarder {
             session_id,
@@ -1130,7 +1411,7 @@ async fn retry_transcription(
                     last_label,
                 ));
             }
-            Err(error) if error.retryable && attempt < 2 => continue,
+            Err(error) if error.retryable && attempt < plan.attempts => continue,
             Err(error) => return Err((error, last_label)),
         };
         last_label = transcription.asr_call_label();
@@ -1194,7 +1475,7 @@ async fn retry_transcription(
             }
             Err(error) => {
                 let _ = cancel_transcription_once(&session, transcription).await;
-                if !error.retryable || attempt == 2 {
+                if !error.retryable || attempt == plan.attempts {
                     return Err((error, last_label));
                 }
             }
@@ -1741,6 +2022,12 @@ struct TranscriptProgressForwarder {
 
 impl TextStreamSink for TranscriptProgressForwarder {
     fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
+        log::info!(
+            "[transcript] partial emitted session={} offset={} chars={}",
+            self.session_id,
+            chunk.offset,
+            chunk.text.chars().count(),
+        );
         self.progress.publish(
             self.session_id,
             EngineProgress::TranscriptDelta(TranscriptDelta {
@@ -2219,6 +2506,101 @@ mod tests {
             polish_calls,
             polish_contexts,
         }
+    }
+
+    struct GatedPolisher {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl TextPolisher for GatedPolisher {
+        fn polish(
+            &self,
+            _session_id: SessionId,
+            _context: Arc<DictationContext>,
+            _raw_text: String,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<crate::ports::PolishOutput, BackendError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let entered = Arc::clone(&self.entered);
+            let release = Arc::clone(&self.release);
+            Box::pin(async move {
+                entered.notify_one();
+                release.notified().await;
+                Ok(crate::ports::PolishOutput::text("polished final"))
+            })
+        }
+
+        fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_finish_waits_for_polish_and_returns_distinct_final_text() {
+        let polish_entered = Arc::new(tokio::sync::Notify::new());
+        let polish_release = Arc::new(tokio::sync::Notify::new());
+        let polish_calls = Arc::new(AtomicUsize::new(0));
+        let pcm = Arc::new(Mutex::new(Vec::new()));
+        let recorder_stops = Arc::new(AtomicUsize::new(0));
+        let archive_discards = Arc::new(AtomicUsize::new(0));
+        let transcriber = Arc::new(FixtureTranscriber {
+            session: Arc::new(FixtureTranscriptionSession {
+                pcm,
+                cancels: Arc::new(AtomicUsize::new(0)),
+                finish_entered: None,
+                finish_release: None,
+            }),
+            starts: Arc::new(AtomicUsize::new(0)),
+        });
+        let engine = Arc::new(PipelineDictationEngine::new(
+            Arc::new(FixtureRecorder {
+                stops: recorder_stops,
+                archive: Arc::new(FixtureArchive {
+                    available: AtomicBool::new(true),
+                    discards: archive_discards,
+                    pcm: vec![1, 0, 2, 0],
+                }),
+                fail: false,
+            }),
+            transcriber,
+            Arc::new(GatedPolisher {
+                entered: Arc::clone(&polish_entered),
+                release: Arc::clone(&polish_release),
+                calls: Arc::clone(&polish_calls),
+            }),
+        ));
+        let progress = Arc::new(RecordingProgress::default());
+        let session_id = SessionId::new();
+        let mut context = (*raw_dictation_context()).clone();
+        context.polish.mode = crate::types::PolishMode::Formal;
+        context.polish.style_system_prompt =
+            crate::style_packs::default_style_system_prompt_for_mode(
+                crate::types::PolishMode::Formal,
+            );
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
+
+        let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+        let finishing = Arc::clone(&engine);
+        tokio::spawn(async move {
+            let _ = result_tx.send(finishing.finish(session_id, progress).await);
+        });
+        polish_entered.notified().await;
+        assert_eq!(polish_calls.load(Ordering::Acquire), 1);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut result_rx)
+                .await
+                .is_err()
+        );
+
+        polish_release.notify_one();
+        let result = result_rx.await.expect("finish task must return").unwrap();
+        assert_eq!(result.raw_text, "raw text");
+        assert_eq!(result.polished_text, "polished final");
     }
 
     #[tokio::test]
@@ -3096,11 +3478,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3127,11 +3505,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3375,6 +3749,513 @@ mod tests {
         context.polish.style_system_prompt =
             crate::style_packs::default_style_system_prompt_for_mode(crate::types::PolishMode::Raw);
         Arc::new(context)
+    }
+
+    /// Answers each start from the queue of the provider the session was
+    /// started with, and records that provider — so a test can tell the cloud
+    /// call, its retries and the local fallback apart.
+    struct RoutedTranscriber {
+        outputs: Mutex<std::collections::HashMap<String, VecDeque<Result<TranscriptOutput, BackendError>>>>,
+        started: Arc<Mutex<Vec<String>>>,
+        /// How long each provider's finish takes; providers not listed answer at once.
+        delays: std::collections::HashMap<String, std::time::Duration>,
+    }
+
+    struct DelayedTranscriptionSession {
+        output: Result<TranscriptOutput, BackendError>,
+        delay: std::time::Duration,
+        cancels: Arc<AtomicUsize>,
+    }
+
+    impl AudioConsumer for DelayedTranscriptionSession {
+        fn consume_pcm_chunk(&self, _pcm: &[u8]) {}
+    }
+
+    impl TranscriptionSession for DelayedTranscriptionSession {
+        fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
+            let output = self.output.clone();
+            let delay = self.delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                output
+            })
+        }
+
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl TranscriptionEngine for RoutedTranscriber {
+        fn start(
+            &self,
+            _session_id: SessionId,
+            context: Arc<DictationContext>,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            let provider = context.asr.provider_type.clone();
+            self.started.lock().unwrap().push(provider.clone());
+            let output = self
+                .outputs
+                .lock()
+                .unwrap()
+                .get_mut(&provider)
+                .and_then(VecDeque::pop_front)
+                .unwrap_or_else(|| panic!("no fixture output left for {provider}"));
+            if let Some(delay) = self.delays.get(&provider).copied() {
+                return Box::pin(async move {
+                    Ok(Arc::new(DelayedTranscriptionSession {
+                        output,
+                        delay,
+                        cancels: Arc::new(AtomicUsize::new(0)),
+                    }) as Arc<dyn TranscriptionSession>)
+                });
+            }
+            Box::pin(async move {
+                Ok(Arc::new(RetryTranscriptionSession {
+                    output,
+                    pcm: Arc::new(Mutex::new(Vec::new())),
+                }) as Arc<dyn TranscriptionSession>)
+            })
+        }
+    }
+
+    const CLOUD: &str = "volcengine";
+    const LOCAL: &str = "sherpa-onnx-local";
+
+    /// A raw-mode session on CLOUD whose fallback (when set) is LOCAL.
+    fn fallback_test_engine(
+        cloud: Vec<Result<TranscriptOutput, BackendError>>,
+        local: Vec<Result<TranscriptOutput, BackendError>>,
+    ) -> (PipelineDictationEngine, Arc<RecordingProgress>, Arc<Mutex<Vec<String>>>) {
+        let (engine, progress, started, _) = fallback_polish_test_engine(
+            cloud,
+            local,
+            Ok(crate::ports::PolishOutput::text("unused")),
+        );
+        (engine, progress, started)
+    }
+
+    /// The engine, its progress sink, the providers started in order and the
+    /// polisher's call count.
+    type FallbackTestEngine = (
+        PipelineDictationEngine,
+        Arc<RecordingProgress>,
+        Arc<Mutex<Vec<String>>>,
+        Arc<AtomicUsize>,
+    );
+
+    /// fallback_test_engine() with the polisher's result chosen, also
+    /// returning how many times it was called.
+    fn fallback_polish_test_engine(
+        cloud: Vec<Result<TranscriptOutput, BackendError>>,
+        local: Vec<Result<TranscriptOutput, BackendError>>,
+        polish: Result<crate::ports::PolishOutput, BackendError>,
+    ) -> FallbackTestEngine {
+        racing_test_engine(&[], cloud, local, polish)
+    }
+
+    /// fallback_polish_test_engine() with each listed provider taking the
+    /// given time to finish.
+    fn racing_test_engine(
+        delays: &[(&str, u64)],
+        cloud: Vec<Result<TranscriptOutput, BackendError>>,
+        local: Vec<Result<TranscriptOutput, BackendError>>,
+        polish: Result<crate::ports::PolishOutput, BackendError>,
+    ) -> FallbackTestEngine {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let polish_calls = Arc::new(AtomicUsize::new(0));
+        let engine = PipelineDictationEngine::new(
+            Arc::new(FixtureRecorder {
+                stops: Arc::new(AtomicUsize::new(0)),
+                archive: Arc::new(FixtureArchive {
+                    available: AtomicBool::new(true),
+                    discards: Arc::new(AtomicUsize::new(0)),
+                    pcm: vec![1, 0, 2, 0],
+                }),
+                fail: false,
+            }),
+            Arc::new(RoutedTranscriber {
+                outputs: Mutex::new(std::collections::HashMap::from([
+                    (CLOUD.to_string(), cloud.into()),
+                    (LOCAL.to_string(), local.into()),
+                ])),
+                started: Arc::clone(&started),
+                delays: delays
+                    .iter()
+                    .map(|(provider, ms)| {
+                        (provider.to_string(), std::time::Duration::from_millis(*ms))
+                    })
+                    .collect(),
+            }),
+            Arc::new(FixturePolisher {
+                result: polish,
+                calls: Arc::clone(&polish_calls),
+                cancels: Arc::new(AtomicUsize::new(0)),
+                contexts: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        (engine, Arc::new(RecordingProgress::default()), started, polish_calls)
+    }
+
+    /// A polishing session (not raw mode) on CLOUD with the LOCAL fallback.
+    fn polishing_fallback_context() -> Arc<DictationContext> {
+        let mut context = DictationContext {
+            asr: crate::dictation_context::ProviderInvocation::new(CLOUD, CLOUD),
+            asr_fallback: Some(crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL)),
+            ..DictationContext::default()
+        };
+        assert!(context.uses_llm_polisher(), "fixture must exercise the polisher");
+        context.polish.polish_skip_max_chars = 0;
+        Arc::new(context)
+    }
+
+    #[tokio::test]
+    async fn realtime_cloud_start_failure_preserves_local_fallback_and_original_error() {
+        struct FailingCloudStart(Arc<dyn TranscriptionEngine>);
+        impl TranscriptionEngine for FailingCloudStart {
+            fn start(
+                &self,
+                id: SessionId,
+                context: Arc<DictationContext>,
+                partials: Arc<dyn TextStreamSink>,
+            ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>>
+            {
+                if context.asr.provider_type == CLOUD {
+                    Box::pin(async {
+                        Err(BackendError::new(
+                            BackendErrorCode::Provider,
+                            "cloud connection failed",
+                        ))
+                    })
+                } else {
+                    self.0.start(id, context, partials)
+                }
+            }
+        }
+        for local_succeeds in [true, false] {
+            let local = if local_succeeds {
+                transcript("local transcript")
+            } else {
+                Err(BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "model missing",
+                ))
+            };
+            let (mut engine, progress, _) = fallback_test_engine(vec![], vec![local]);
+            engine.transcription = Arc::new(FailingCloudStart(Arc::clone(&engine.transcription)));
+            let id = SessionId::new();
+            engine
+                .start(id, fallback_context(), progress.clone())
+                .await
+                .unwrap();
+            let result = engine.finish(id, progress).await;
+            if local_succeeds {
+                assert_eq!(result.unwrap().raw_text, "local transcript");
+            } else {
+                assert_eq!(result.unwrap_err().error.message, "cloud connection failed");
+            }
+            assert!(engine.sessions.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn local_recognition_preserves_translation_and_reports_translation_failure() {
+        for fallback in [false, true] {
+            for polish_succeeds in [false, true] {
+                let polish = if polish_succeeds {
+                    Ok(crate::ports::PolishOutput::text("Hello"))
+                } else {
+                    Err(BackendError::new(BackendErrorCode::Provider, "LLM offline")
+                        .retryable(true))
+                };
+                let (engine, progress, _, calls) = fallback_polish_test_engine(
+                    if fallback {
+                        vec![Err(BackendError::new(
+                            BackendErrorCode::Provider,
+                            "ASR quota exhausted",
+                        ))]
+                    } else {
+                        vec![]
+                    },
+                    vec![transcript("你好")],
+                    polish,
+                );
+                let mut context = if fallback {
+                    (*polishing_fallback_context()).clone()
+                } else {
+                    (*local_polishing_context()).clone()
+                };
+                context.polish.translation_active = true;
+                context.polish.translation_target_language = "English".into();
+                let id = SessionId::new();
+                engine
+                    .start(id, Arc::new(context), progress.clone())
+                    .await
+                    .unwrap();
+                let result = engine.finish(id, progress).await.unwrap();
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    result.polished_text,
+                    if polish_succeeds { "Hello" } else { "你好" }
+                );
+                assert_eq!(result.polish_failed, !polish_succeeds);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_fallback_skips_polish_and_reports_no_failure() {
+        let (engine, progress, started, polish_calls) = fallback_polish_test_engine(
+            vec![Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true))],
+            vec![transcript("本地识别")],
+            Err(BackendError::new(BackendErrorCode::Provider, "offline")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "本地识别");
+        assert_eq!(result.polished_text, "本地识别");
+        assert!(!result.polish_failed);
+        // The cloud was unreachable a moment ago: no polish request at all.
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    fn local_polishing_context() -> Arc<DictationContext> {
+        let mut context = (*polishing_fallback_context()).clone();
+        context.asr = crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL);
+        context.asr_fallback = None;
+        Arc::new(context)
+    }
+
+    #[tokio::test]
+    async fn a_rejected_polish_after_local_recognition_is_still_reported() {
+        let (engine, progress, _, polish_calls) = fallback_polish_test_engine(
+            vec![],
+            vec![transcript("本地识别")],
+            Err(BackendError::new(BackendErrorCode::Provider, "invalid api key")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, local_polishing_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.polished_text, "本地识别");
+        assert!(result.polish_failed, "a rejected key must not be hidden as offline");
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_offline_polish_after_local_recognition_is_raw_output_not_a_failure() {
+        let (engine, progress, started, polish_calls) = fallback_polish_test_engine(
+            vec![],
+            vec![transcript("本地识别")],
+            Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true)),
+        );
+        let mut context = (*polishing_fallback_context()).clone();
+        context.asr = crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL);
+        context.asr_fallback = None;
+        let session_id = SessionId::new();
+        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.polished_text, "本地识别");
+        assert!(!result.polish_failed);
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(started.lock().unwrap().as_slice(), &[LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_polish_after_cloud_recognition_is_still_reported() {
+        let (engine, progress, _, polish_calls) = fallback_polish_test_engine(
+            vec![transcript("云端识别")],
+            vec![],
+            Err(BackendError::new(BackendErrorCode::Provider, "offline")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.polished_text, "云端识别");
+        assert!(result.polish_failed);
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn fallback_context() -> Arc<DictationContext> {
+        let mut context = (*raw_dictation_context()).clone();
+        context.asr = crate::dictation_context::ProviderInvocation::new(CLOUD, CLOUD);
+        context.asr_fallback = Some(crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL));
+        Arc::new(context)
+    }
+
+    fn transcript(text: &str) -> Result<TranscriptOutput, BackendError> {
+        Ok(TranscriptOutput { text: text.into(), duration_ms: 25 })
+    }
+
+    #[tokio::test]
+    async fn failed_cloud_asr_goes_straight_to_the_local_fallback() {
+        let (engine, progress, started) = fallback_test_engine(
+            vec![Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true))],
+            vec![transcript("本地识别")],
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "本地识别");
+        // No cloud retry (and no backoff) before the local model runs.
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn a_non_retryable_cloud_error_also_falls_back() {
+        let (engine, progress, started) = fallback_test_engine(
+            vec![Err(BackendError::new(BackendErrorCode::Provider, "quota exhausted"))],
+            vec![transcript("本地识别")],
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "本地识别");
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_local_fallback_keeps_the_cloud_retry_and_the_cloud_error() {
+        let temporary =
+            || Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true));
+        let (engine, progress, started) = fallback_test_engine(
+            vec![temporary(), temporary(), temporary()],
+            vec![Err(BackendError::new(BackendErrorCode::Unsupported, "model not downloaded"))],
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+
+        let failure = engine.finish(session_id, progress).await.unwrap_err();
+
+        // The cloud's own error, not the local model's.
+        assert_eq!(failure.error.code, BackendErrorCode::Provider);
+        assert_eq!(failure.error.message, "offline");
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL, CLOUD, CLOUD]);
+    }
+
+    #[tokio::test]
+    async fn without_a_fallback_the_cloud_retry_is_unchanged() {
+        let temporary =
+            || Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true));
+        let (engine, progress, started) =
+            fallback_test_engine(vec![temporary(), transcript("cloud retry")], vec![]);
+        let mut context = (*fallback_context()).clone();
+        context.asr_fallback = None;
+        let session_id = SessionId::new();
+        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "cloud retry");
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, CLOUD]);
+    }
+
+    #[tokio::test]
+    async fn the_local_standby_wins_when_it_answers_before_a_slow_cloud() {
+        let (engine, progress, started, polish_calls) = racing_test_engine(
+            &[(CLOUD, 2_000), (LOCAL, 20)],
+            vec![transcript("云端识别")],
+            vec![transcript("本地识别")],
+            Ok(crate::ports::PolishOutput::text("润色后")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "本地识别");
+        // Only slower, not unreachable: the transcript is still polished.
+        assert_eq!(result.polished_text, "润色后");
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn the_cloud_wins_when_it_answers_before_the_local_standby() {
+        let (engine, progress, _, _) = racing_test_engine(
+            &[(CLOUD, 20), (LOCAL, 2_000)],
+            vec![transcript("云端识别")],
+            vec![transcript("本地识别")],
+            Ok(crate::ports::PolishOutput::text("unused")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "云端识别");
+    }
+
+    #[tokio::test]
+    async fn a_failed_local_standby_leaves_a_slow_cloud_to_finish() {
+        let (engine, progress, _, _) = racing_test_engine(
+            &[(CLOUD, 200)],
+            vec![transcript("云端识别")],
+            vec![Err(BackendError::new(BackendErrorCode::Unsupported, "model not downloaded"))],
+            Ok(crate::ports::PolishOutput::text("unused")),
+        );
+        let session_id = SessionId::new();
+        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "云端识别");
+    }
+
+    #[tokio::test]
+    async fn an_empty_cloud_result_uses_a_valid_local_standby() {
+        let (engine, progress, started, polish_calls) = racing_test_engine(
+            &[(CLOUD, 20), (LOCAL, 200)],
+            vec![transcript(" \n\t")],
+            vec![transcript("本地识别")],
+            Ok(crate::ports::PolishOutput::text("unused")),
+        );
+        let session_id = SessionId::new();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "本地识别");
+        assert_eq!(polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_local_standby_leaves_a_slow_cloud_to_finish() {
+        let (engine, progress, started, _) = racing_test_engine(
+            &[(CLOUD, 200), (LOCAL, 20)],
+            vec![transcript("云端识别")],
+            vec![transcript(" \n\t")],
+            Ok(crate::ports::PolishOutput::text("unused")),
+        );
+        let session_id = SessionId::new();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
+
+        let result = engine.finish(session_id, progress).await.unwrap();
+
+        assert_eq!(result.raw_text, "云端识别");
+        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
     }
 
     #[tokio::test]

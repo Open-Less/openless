@@ -64,6 +64,10 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun refreshVocabularyCard() {
         val request = ++vocabularyCardRequest
+        if (!OpenLessAndroidPreferences.overlayDisplayAllowed(this)) {
+            hideVocabularyCard()
+            return
+        }
         requestVocabulary("pending") { ok, response ->
             if (request == vocabularyCardRequest) showVocabularyCard(if (ok) response?.getString("json") ?: "[]" else "[]")
         }
@@ -172,6 +176,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun showVocabularyCard(json: String) {
         hideVocabularyCard()
+        if (!OpenLessAndroidPreferences.overlayDisplayAllowed(this)) return
         val entries = try { org.json.JSONArray(json) } catch (_: Exception) { return }
         val now = System.currentTimeMillis()
         val pending = (0 until entries.length()).map { entries.getJSONObject(it) }.filter { it.optLong("expiresAtMs") > now }
@@ -752,7 +757,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private fun sendVocabularyCommand(operation: String, generation: Long = 0L) {
+        internal fun sendVocabularyCommand(operation: String, generation: Long = 0L) {
             val context = OpenLessAppContext.context ?: return
             val intent = Intent(context, OpenLessAccessibilityCommandReceiver::class.java).apply {
                 action = OpenLessAccessibilityCommandReceiver.ACTION_VOCABULARY

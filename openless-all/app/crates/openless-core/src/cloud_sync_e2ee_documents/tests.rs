@@ -79,6 +79,7 @@ pub(super) fn channel_snapshot() -> ExportSnapshot {
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "llm-one".into(),
@@ -116,6 +117,22 @@ fn all_current_preference_fields_have_an_explicit_registration() {
         "new persistent fields require a reviewed sync classification"
     );
     assert_eq!(registered.len(), registry::PREFERENCE_FIELDS.len());
+}
+
+#[test]
+fn public_endpoint_rejects_credential_like_hostnames() {
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://sk-live-abc123.example.test"
+    ));
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://token.example.test/v1"
+    ));
+    assert!(registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://api.example.test/v1"
+    ));
 }
 
 #[test]
@@ -183,6 +200,7 @@ fn local_asr_channels_are_archived_with_their_credentials_not_globally_activated
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "local-one".into(),
@@ -322,6 +340,133 @@ fn unknown_preference_values_roundtrip_and_merge_without_application() {
         .documents
         .iter()
         .any(|doc| doc.id == "futureAppearance" && doc.value["value"] == "preserve-me"));
+}
+
+#[test]
+fn capsule_display_exports_new_modes_with_a_v1_compatible_shadow() {
+    for mode in ["primaryScreen", "foregroundWindowScreen"] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({"capsuleDisplayMode": mode}));
+        let exported = export_snapshot(data).unwrap();
+        let value = |id: &str| {
+            exported
+                .documents
+                .documents()
+                .documents
+                .iter()
+                .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == id)
+                .map(|doc| doc.value.clone())
+        };
+        assert_eq!(value("capsuleDisplayMode"), Some(json!("cursorScreen")));
+        assert_eq!(value("capsuleDisplayModeV2"), Some(json!(mode)));
+    }
+}
+
+#[test]
+fn capsule_display_v2_survives_retention_upgrade_and_explicit_replacement() {
+    let retained = LogicalDocument {
+        id: "capsuleDisplayModeV2".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!("foregroundWindowScreen"),
+    };
+    for explicit in [None, Some("cursorScreen"), Some("allScreens")] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({"capsuleDisplayMode":"cursorScreen"}));
+        if let Some(mode) = explicit {
+            data.preferences.expose_mut()["capsuleDisplayModeV2"] = json!(mode);
+        }
+        data.retained_documents.push(retained.clone());
+        let exported = export_snapshot(data).unwrap();
+        let modes: Vec<_> = exported
+            .documents
+            .documents()
+            .documents
+            .iter()
+            .filter(|doc| doc.id == "capsuleDisplayModeV2")
+            .collect();
+        assert_eq!(modes.len(), 1);
+        assert_eq!(
+            modes[0].value,
+            json!(explicit.unwrap_or("foregroundWindowScreen"))
+        );
+    }
+}
+
+#[test]
+fn capsule_display_legacy_edits_are_not_v2_conflicts() {
+    for mode in [
+        "cursorScreen",
+        "primaryScreen",
+        "foregroundWindowScreen",
+        "allScreens",
+    ] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({
+            "themeMode":"system", "capsuleDisplayMode":"cursorScreen", "capsuleDisplayModeV2":mode
+        }));
+        let base = export_snapshot(data).unwrap().documents;
+        let local = change(
+            &base,
+            DocumentKind::Preferences,
+            "capsuleDisplayMode",
+            json!(if mode == "allScreens" {
+                "cursorScreen"
+            } else {
+                "allScreens"
+            }),
+        );
+        let remote = change(&base, DocumentKind::Preferences, "themeMode", json!("dark"));
+        let merged = diff_sync_documents(Some(&base), &local, &remote)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        let mirrored = diff_sync_documents(Some(&base), &remote, &local)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        assert_eq!(merged.documents(), mirrored.documents());
+        assert!(merged
+            .documents()
+            .documents
+            .iter()
+            .any(|doc| doc.id == "capsuleDisplayModeV2" && doc.value == json!(mode)));
+        assert!(merged
+            .documents()
+            .documents
+            .iter()
+            .any(|doc| doc.id == "themeMode" && doc.value == json!("dark")));
+    }
+}
+
+#[test]
+fn capsule_display_v2_rejects_invalid_and_duplicate_documents() {
+    let base = sample();
+    for value in [json!("sometimes"), Value::Null, json!(42)] {
+        let mut set = base.documents().clone();
+        set.documents.push(LogicalDocument {
+            id: "capsuleDisplayModeV2".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value,
+        });
+        assert_eq!(
+            validate_sync_documents(set, Revision::new(4)).unwrap_err(),
+            DocumentError::InvalidDocument
+        );
+    }
+    let mut set = base.documents().clone();
+    let doc = LogicalDocument {
+        id: "capsuleDisplayModeV2".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!("cursorScreen"),
+    };
+    set.documents.extend([doc.clone(), doc]);
+    assert_eq!(
+        validate_sync_documents(set, Revision::new(4)).unwrap_err(),
+        DocumentError::DuplicateId
+    );
 }
 
 #[test]

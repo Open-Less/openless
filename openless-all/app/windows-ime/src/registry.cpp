@@ -184,6 +184,8 @@ HRESULT RegisterKeyboardCategory() {
                                    CLSID_OpenLessTextService);
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
                                    CLSID_OpenLessTextService);
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                                   CLSID_OpenLessTextService);
 
   hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_SPEECH,
                                       CLSID_OpenLessTextService);
@@ -193,6 +195,12 @@ HRESULT RegisterKeyboardCategory() {
   }
   if (SUCCEEDED(hr)) {
     hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+                                        CLSID_OpenLessTextService);
+  }
+  if (SUCCEEDED(hr)) {
+    // Lets hosts resolve the red underline style for the live transcript composition.
+    hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
+                                        GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
                                         CLSID_OpenLessTextService);
   }
   category_mgr->Release();
@@ -240,6 +248,8 @@ HRESULT UnregisterKeyboardCategory() {
   }
 
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_KEYBOARD,
+                                   CLSID_OpenLessTextService);
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
                                    CLSID_OpenLessTextService);
   hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService, GUID_TFCAT_TIP_SPEECH,
                                         CLSID_OpenLessTextService);

@@ -43,6 +43,7 @@ pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
 pub mod llm_protocol;
+pub mod local_migration_bundle;
 mod marketplace;
 pub mod model_store;
 pub mod net;
@@ -215,7 +216,7 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
     DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,

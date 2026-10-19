@@ -142,6 +142,10 @@ assert.match(
 );
 assert.match(imeBuild, /\/p:OutDir=/, 'IME build should pass OutDir to MSBuild');
 assert.match(imeBuild, /\/p:IntDir=/, 'IME build should pass IntDir to MSBuild');
+assert.ok(
+  imeInstallSmoke.includes("OpenLessIme-.+\\.dll"),
+  'install smoke should verify a versioned registered IME DLL path',
+);
 assert.match(imeRegister, /windows-ime-build\.ps1/, 'IME register should build before registering');
 assert.doesNotMatch(
   imeRegister,
@@ -268,13 +272,18 @@ assert.match(
 const insertAtSelectionCalls = imeEditSession.match(/\bInsertTextAtSelection\s*\(/g) ?? [];
 assert.equal(
   insertAtSelectionCalls.length,
-  1,
-  'IME should submit the dictated text to the host exactly once',
+  2,
+  'IME should query the host insertion range once and submit dictated text once',
 );
-assert.doesNotMatch(
+assert.match(
   imeEditSession,
-  /TF_IAS_QUERYONLY/,
-  'IME should not preflight the full text through host text stores before committing it',
+  /InsertTextAtSelection\(edit_cookie, TF_IAS_QUERYONLY, nullptr, 0, range\)/,
+  'IME should use the host-adjusted query-only range for composition start',
+);
+assert.match(
+  imeEditSession,
+  /InsertTextAtSelection\(\s*edit_cookie, 0, text_\.c_str\(\)/,
+  'IME should submit dictated text exactly once without a preflight write',
 );
 
 assert.match(
@@ -366,8 +375,33 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /File \/oname=OpenLessIme\.dll\.new "\$%\$\{ENV_VAR\}%"/,
-  'NSIS should embed OpenLessIme.dll in the installer',
+  /!define OPENLESS_IME_BUILD_TAG[\s\S]*\$\{__DATE__\}[\s\S]*\$\{__TIME__\}/,
+  'NSIS should give each installer build a unique IME DLL tag',
+);
+assert.match(
+  nsisHook,
+  /!searchreplace OPENLESS_IME_BUILD_TAG "\$\{OPENLESS_IME_BUILD_TAG\}" "\/" "-"/,
+  'NSIS must sanitize locale date separators before using the build tag as a filename',
+);
+assert.match(
+  nsisHook,
+  /!define OPENLESS_IME_FILENAME "OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll"/,
+  'NSIS should define the installed IME filename once for staging and registration',
+);
+assert.match(
+  nsisHook,
+  /File \/oname=\$\{OPENLESS_IME_FILENAME\} "\$%\$\{ENV_VAR\}%"/,
+  'NSIS should stage the exact filename used by registration',
+);
+assert.match(
+  nsisHook,
+  /windows-ime\\x64\\\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS should register the exact staged x64 filename',
+);
+assert.doesNotMatch(
+  nsisHook,
+  /\$\{PRODUCT_VERSION\}/,
+  'NSIS must not use the undefined PRODUCT_VERSION define',
 );
 assert.match(
   nsisHook,
@@ -381,10 +415,85 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme\.dll/,
+  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\\$\{OPENLESS_IME_FILENAME\}/,
   'NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows',
 );
+assert.match(
+  nsisHook,
+  /\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS should register each release under the shared versioned IME DLL path',
+);
+assert.match(
+  nsisHook,
+  /!macro OPENLESS_IME_DELETE_LEGACY PLATFORM_DIR[\s\S]*?Delete \/REBOOTOK "\$INSTDIR\\windows-ime\\\$\{PLATFORM_DIR\}\\OpenLessIme\.dll"[\s\S]*?legacy_\$\{PLATFORM_DIR\}_pending_reboot[\s\S]*?SetRebootFlag true/,
+  'NSIS should schedule a locked legacy IME DLL for deletion at reboot',
+);
+assert.match(
+  nsisHook,
+  /SetRebootFlag true/,
+  'NSIS should request a reboot when legacy IME deletion is deferred',
+);
+assert.match(
+  wixFragment,
+  /Name="OpenLessIme-\{\{version\}\}\.dll"/,
+  'WiX custom fragments should use Tauri Handlebars version rendering',
+);
+assert.doesNotMatch(
+  wixFragment,
+  /\$\(var\.ProductVersion\)/,
+  'WiX custom fragments must not require an undefined candle preprocessor variable',
+);
+assert.match(
+  nsisHook,
+  /Delete "\$INSTDIR\\windows-ime\\x64\\OpenLessIme\.dll"/,
+  'NSIS uninstall should remove the legacy x64 IME DLL',
+);
+assert.match(
+  nsisHook,
+  /Delete "\$INSTDIR\\windows-ime\\x86\\OpenLessIme\.dll"/,
+  'NSIS uninstall should remove the legacy x86 IME DLL',
+);
 assert.match(nsisHook, /Abort/, 'NSIS install should fail if TSF registration fails');
+assert.match(
+  nsisHook,
+  /FileWrite \$0[\s\S]*probe_id[\s\S]*P4/,
+  'NSIS should emit a bounded diagnostic marker for installer-stage failures',
+);
+assert.match(
+  nsisHook,
+  /!define OPENLESS_IME_DIAGNOSTIC_FILE "\$TEMP\\openless-ime-install-diagnostic\.ndjson"/,
+  'NSIS diagnostic markers should be written under the installer temp directory',
+);
+assert.match(
+  nsisHook,
+  /stage_x64_begin[\s\S]*stage_x64_complete[\s\S]*stage_x86_begin[\s\S]*stage_x86_complete/,
+  'NSIS should mark both IME staging boundaries in order',
+);
+const stageMacro = nsisHook.match(
+  /!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/,
+)?.[0];
+assert.ok(stageMacro, 'NSIS IME staging macro should exist');
+assert.match(
+  stageMacro,
+  /File \/oname=\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS staging should write the canonical versioned IME filename',
+);
+assert.match(
+  stageMacro,
+  /\$\{IfNot\} \$\{FileExists\}/,
+  'NSIS staging should verify that the DLL exists after extraction',
+);
+assert.match(
+  stageMacro,
+  /\$INSTDIR\\windows-ime\\\$\{PLATFORM_DIR\}\\\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS staging should verify the exact installed DLL path',
+);
+assert.match(
+  stageMacro,
+  /OPENLESS_IME_DIAGNOSTIC_EVENT stage_\$\{PLATFORM_DIR\}_missing/,
+  'NSIS staging failure should emit the bounded P4 stage marker',
+);
+assert.match(stageMacro, /\bAbort\b/, 'NSIS must abort when staged DLL verification fails');
 assert.match(
   nsisHook,
   /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/,
@@ -412,6 +521,28 @@ assert.doesNotMatch(
 );
 assert.match(
   nsisHook,
+  /!macro OPENLESS_IME_UNREGISTER_X64[\s\S]*SetRegView 64[\s\S]*ReadRegStr \$R0 HKLM[\s\S]*InprocServer32[\s\S]*\/u "\$R0"/,
+  'NSIS x64 upgrade should unregister the DLL currently registered in the 64-bit CLSID view',
+);
+assert.ok(
+  nsisHook.includes(
+    'ReadRegStr $R0 HKLM "Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32" ""',
+  ),
+  'NSIS x64 unregister should read the OpenLess CLSID registration path',
+);
+assert.match(
+  nsisHook,
+  /!macro OPENLESS_IME_UNREGISTER_X86[\s\S]*SetRegView 32[\s\S]*ReadRegStr \$R1 HKLM[\s\S]*InprocServer32[\s\S]*\/u "\$R1"/,
+  'NSIS x86 upgrade should unregister the DLL currently registered in the 32-bit CLSID view',
+);
+assert.ok(
+  nsisHook.includes(
+    'ReadRegStr $R1 HKLM "Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32" ""',
+  ),
+  'NSIS x86 unregister should read the OpenLess CLSID registration path',
+);
+assert.match(
+  nsisHook,
   /OpenLess x64 TSF IME unregister exit code \$0/,
   'NSIS uninstall should log x64 TSF unregistration failures',
 );
@@ -419,6 +550,11 @@ assert.match(
   nsisHook,
   /OpenLess x86 TSF IME unregister exit code \$0/,
   'NSIS uninstall should log x86 TSF unregistration failures',
+);
+assert.match(
+  nsisHook,
+  /!macro NSIS_HOOK_PREINSTALL[\s\S]*?OPENLESS_IME_DELETE_LEGACY "x64"[\s\S]*?OPENLESS_IME_DELETE_LEGACY "x86"[\s\S]*?stage_x64_begin/,
+  'NSIS upgrade should remove or defer legacy TSF DLL basenames before staging the versioned DLLs',
 );
 
 assert.match(

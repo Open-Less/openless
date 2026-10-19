@@ -1312,6 +1312,16 @@ export const ko: typeof zhCN = {
       cursorContextDesc:
         '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
+    localMigration: {
+      title: '로컬 구성 마이그레이션',
+      description:
+        '이식 가능한 모든 로컬 구성을 버전이 지정된 번들로 내보내거나 다른 Android 기기에 복원합니다. 공유 모드는 기본적으로 비식별화되며, 개인 마이그레이션에 자격 증명을 포함하려면 비밀번호 보호가 필요합니다. 병합 또는 교체 전에 네이티브 화면에서 출처, 버전, 범주와 변경 내용을 확인할 수 있습니다.',
+      safetyNote:
+        '시스템 권한, OAuth 세션, 기기 경로와 실행 상태는 마이그레이션되지 않습니다. 가져오기 전에 로컬 백업을 만듭니다.',
+      open: '로컬 마이그레이션 열기',
+      opening: '여는 중…',
+      openFailed: '로컬 마이그레이션을 열 수 없습니다. 설정에서 다시 시도하세요.',
+    },
     codingConsole: {
       title: 'Claude 콘솔',
       desc: '로컬 Claude Code 와 MCP(computer use) 상태를 감지하고, 가드레일 아래에서 Claude 를 헤드리스로 실행하여 출력과 비용을 스트리밍으로 확인합니다.',
@@ -1468,10 +1478,16 @@ export const ko: typeof zhCN = {
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
       capsuleTranscriptFontSize: '원문 글자 크기',
-      capsuleDisplayModeLabel: "다중 화면 캡슐",
-      capsuleDisplayModeDesc: "녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.",
-      capsuleDisplayCursorScreen: "마우스 포인터가 있는 화면",
-      capsuleDisplayAllScreens: "모든 화면에 표시",
+      capsuleDisplayModeLabel: '다중 화면 캡슐',
+      capsuleDisplayModeDesc:
+        '녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.',
+      capsuleDisplayCursorScreen: '마우스 포인터가 있는 화면',
+      capsuleDisplayPrimaryScreen: '주 디스플레이만',
+      capsuleDisplayForegroundWindowScreen: '전경 창이 있는 화면',
+      capsuleDisplayAllScreens: '모든 화면에 표시',
+      capsuleDisplayModeRestartTitle: '표시 모드를 적용하려면 OpenLess를 다시 시작하세요',
+      capsuleDisplayModeRestartDesc:
+        '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
@@ -1501,6 +1517,9 @@ export const ko: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (기본 / 대부분 앱)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: '일반 텍스트 삽입 모드',
+      plainTextInsertionDesc:
+        '켜면 모의 붙여넣기에 Ctrl+V 대신 Shift+Insert를 사용합니다(켜져 있는 동안 위 단축키는 변경할 수 없습니다). 매우 특수한 경우에만 켜세요(예: Punto Switcher 같은 키보드 레이아웃 전환 도구가 Ctrl+V를 가로챌 때). 클립보드 붙여넣기 방식에만 적용됩니다(Windows 전용).',
       comboRecordLabel: '단축키 녹화',
       comboRecordDesc:
         '클릭 후 원하는 단축키 조합(예: ⌘⇧D)을 누르세요. 토글 및 누르기 모드 모두 지원합니다.',
@@ -2066,11 +2085,13 @@ export const ko: typeof zhCN = {
         background: '백그라운드',
         keyboard: '키보드 표시 시',
         always: '항상',
+        never: '표시 안 함',
       },
       androidOverlayTriggerHint: {
         background: '단순',
         keyboard: '이 모드는 보류되었습니다. 기존 설정은 백그라운드로 되돌립니다.',
         always: '항상 표시',
+        never: '자동으로 표시되지 않으며 키보드는 계속 사용할 수 있습니다.',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '키보드 표시 감지는 보류되었습니다. 이후 오버레이 제스처로 대체합니다.',
@@ -2140,6 +2161,9 @@ export const ko: typeof zhCN = {
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
         'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
+      windowsCompositionInputLabel: '실시간 원문을 입력창에 표시 (Windows)',
+      windowsCompositionInputDesc:
+        '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',
@@ -2147,6 +2171,9 @@ export const ko: typeof zhCN = {
       localAsrDesc:
         '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',
+      localAsrFallbackLabel: '클라우드 인식이 실패하면 로컬 모델 사용',
+      localAsrFallbackDesc:
+        '네트워크가 불안정하거나 오프라인일 때 클라우드 재시도를 기다리지 않고 다운로드한 로컬 모델로 녹음을 인식합니다. 로컬 모델을 먼저 다운로드해야 합니다.',
       qwen3Desc: '활성화하면 ASR 프로바이더가 인수됩니다.',
       sherpaDesc: '활성화하면 ASR 프로바이더가 인수됩니다.',
       foundryDesc: '활성화하면 ASR 프로바이더가 인수됩니다.',

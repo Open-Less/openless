@@ -1,6 +1,6 @@
 //! Native local speech runtimes. macOS uses opt-in experimental modules only;
 //! old IDs remain metadata-only and cannot link their former inference libraries.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(local_asr_sherpa, test))]
 mod blocking_decode;
 pub mod experimental;
 pub mod foundry;

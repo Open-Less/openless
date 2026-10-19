@@ -85,6 +85,9 @@ impl RestoreTransaction {
                 return Err(failure("云端恢复失败，本地数据已回滚。"));
             }
         }
+        for file in &self.files {
+            crate::cloud_sync_e2ee_store::gate::note_successful_write(&file.target);
+        }
         Ok(())
     }
 }

@@ -3118,6 +3118,7 @@ fn sync_channel(
         enabled: meta.enabled,
         order: meta.order.unwrap_or(u32::MAX),
         active: id == active,
+        configuration: BTreeMap::new(),
     }
 }
 

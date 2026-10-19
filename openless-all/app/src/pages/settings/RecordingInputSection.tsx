@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/TypelessCapsule';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -13,6 +13,10 @@ import {
   showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
+import {
+  isPlainTextInsertionActive,
+  pasteShortcutForPlainTextToggle,
+} from '../../lib/plainTextInsertion';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
@@ -28,10 +32,12 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Card, Collapsible } from '../_atoms';
+import { PresenceModal } from '../../components/ui/Modal';
+import { Card, Collapsible, Btn } from '../_atoms';
+import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
-import { detectOS } from '../../components/WindowChrome';
+import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
@@ -51,9 +57,9 @@ async function autostartDisable(): Promise<void> {
   await invoke('plugin:autostart|disable');
 }
 
-export function RecordingInputSection() {
+export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
   const { t } = useTranslation();
-  const os = detectOS();
+  const os = forcedOs ?? detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
     getCachedPlatformCapabilities,
@@ -61,22 +67,14 @@ export function RecordingInputSection() {
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
+  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
+  const displayModeRestartTitleId = useId();
+  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
-
-  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中，
-  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
-  useEffect(() => {
-    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
-    void savePrefs((current) => {
-      if (current.pasteShortcut !== 'shiftInsert') return current;
-      return { ...current, pasteShortcut: 'ctrlV' };
-    }).catch((error) => {
-      console.warn('[settings] migrate Windows paste shortcut failed', error);
-    });
-  }, [os, prefs?.pasteShortcut, savePrefs]);
 
   const loadMicrophoneDevices = useCallback(
     async (signal?: { cancelled: boolean }, options: { showLoading?: boolean } = {}) => {
@@ -179,8 +177,38 @@ export function RecordingInputSection() {
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
-  const effectivePasteShortcut =
-    os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+  const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
+  const effectiveCapsuleDisplayMode =
+    os === 'win' ||
+    prefs.capsuleDisplayMode === 'cursorScreen' ||
+    prefs.capsuleDisplayMode === 'allScreens'
+      ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
+      : 'cursorScreen';
+
+  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
+    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
+    const changeSequence = ++displayModeChangeSequenceRef.current;
+    await savePrefs({ ...prefs, capsuleDisplayMode: next });
+    if (
+      changeSequence === displayModeChangeSequenceRef.current &&
+      os === 'win' &&
+      previous === 'allScreens' &&
+      next !== 'allScreens'
+    ) {
+      setDisplayModeRestartPending(true);
+    }
+  };
+  const onRestartForDisplayMode = async () => {
+    setDisplayModeRestarting(true);
+    try {
+      await restartApp();
+      setDisplayModeRestartPending(false);
+    } catch (error) {
+      console.error('[settings] restart after capsule display mode change failed', error);
+    } finally {
+      setDisplayModeRestarting(false);
+    }
+  };
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -198,6 +226,8 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onPasteShortcutChange = (pasteShortcut: PasteShortcut) =>
     savePrefs({ ...prefs, pasteShortcut });
+  const onPlainTextInsertionChange = (on: boolean) =>
+    savePrefs({ ...prefs, pasteShortcut: pasteShortcutForPlainTextToggle(on) });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
@@ -464,10 +494,27 @@ export function RecordingInputSection() {
             desc={t('settings.recording.capsuleDisplayModeDesc')}
           >
             <SelectLite
-              value={prefs.capsuleDisplayMode ?? 'cursorScreen'}
-              onChange={(next) => savePrefs({ ...prefs, capsuleDisplayMode: next as 'cursorScreen' | 'allScreens' })}
+              value={effectiveCapsuleDisplayMode}
+              onChange={(next) =>
+                void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
+              }
               options={[
-                { value: 'cursorScreen', label: t('settings.recording.capsuleDisplayCursorScreen') },
+                {
+                  value: 'cursorScreen',
+                  label: t('settings.recording.capsuleDisplayCursorScreen'),
+                },
+                ...(os === 'win'
+                  ? [
+                      {
+                        value: 'primaryScreen',
+                        label: t('settings.recording.capsuleDisplayPrimaryScreen'),
+                      },
+                      {
+                        value: 'foregroundWindowScreen',
+                        label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
+                      },
+                    ]
+                  : []),
                 { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
               ]}
               ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
@@ -590,17 +637,40 @@ export function RecordingInputSection() {
               desc={t('settings.recording.pasteShortcutDesc')}
             >
               <SelectLite
-                value={effectivePasteShortcut}
+                value={prefs.pasteShortcut}
                 onChange={(next) => onPasteShortcutChange(next as PasteShortcut)}
-                options={[
-                  { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
-                  { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                  // 这个「粘贴与剪贴板」组只在 Windows 出现（mac 走
-                  // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
-                  // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
-                ]}
+                // 纯文本插入模式开启时，Shift+Insert 由开关接管，这里只读展示。
+                disabled={plainTextInsertionOn}
+                options={
+                  plainTextInsertionOn
+                    ? [
+                        {
+                          value: 'shiftInsert',
+                          label: t('settings.recording.pasteShortcutShiftInsert'),
+                        },
+                      ]
+                    : [
+                        { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
+                        {
+                          value: 'ctrlShiftV',
+                          label: t('settings.recording.pasteShortcutCtrlShiftV'),
+                        },
+                      ]
+                }
                 ariaLabel={t('settings.recording.pasteShortcutLabel')}
                 style={{ ...inputStyle, maxWidth: 220 }}
+              />
+            </SettingRow>
+          )}
+          {os === 'win' && capability.adapter !== 'macEventTap' && (
+            <SettingRow
+              label={t('settings.recording.plainTextInsertionLabel')}
+              desc={t('settings.recording.plainTextInsertionDesc')}
+            >
+              <Toggle
+                on={plainTextInsertionOn}
+                onToggle={onPlainTextInsertionChange}
+                label={t('settings.recording.plainTextInsertionLabel')}
               />
             </SettingRow>
           )}
@@ -722,6 +792,17 @@ export function RecordingInputSection() {
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
+          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
+            <SettingRow
+              label={t('settings.advanced.windowsCompositionInputLabel')}
+              desc={t('settings.advanced.windowsCompositionInputDesc')}
+            >
+              <Toggle
+                on={!!prefs.windowsCompositionInput}
+                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
+              />
+            </SettingRow>
+          )}
         </Collapsible>
       )}
       {/* ─── Startup (collapsed) ──────────────────────────────────────────── */}
@@ -736,6 +817,43 @@ export function RecordingInputSection() {
           </SettingRow>
         </Collapsible>
       )}
+      <PresenceModal
+        open={displayModeRestartPending}
+        onClose={() => {
+          if (!displayModeRestarting) setDisplayModeRestartPending(false);
+        }}
+        zIndex={1000}
+        width="min(420px, calc(100vw - 32px))"
+        style={{ padding: 18 }}
+        labelledBy={displayModeRestartTitleId}
+        render={() => (
+          <>
+            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
+              {t('settings.recording.capsuleDisplayModeRestartTitle')}
+            </h2>
+            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
+              {t('settings.recording.capsuleDisplayModeRestartDesc')}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Btn
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => setDisplayModeRestartPending(false)}
+              >
+                {t('common.cancel')}
+              </Btn>
+              <Btn
+                variant="blue"
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => void onRestartForDisplayMode()}
+              >
+                {t('settings.about.updateDialog.restartNow')}
+              </Btn>
+            </div>
+          </>
+        )}
+      />
     </>
   );
 }

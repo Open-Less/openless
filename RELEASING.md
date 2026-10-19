@@ -55,6 +55,22 @@ from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
+## Direct download aliases
+
+The release workflows also publish stable, version-independent asset names for the official website:
+
+- macOS Apple Silicon: `OpenLess_macos_aarch64.dmg`
+- macOS Intel: `OpenLess_macos_x86_64.dmg`
+- Windows x64: `OpenLess_windows_x86_64-setup.exe`
+- Android: `OpenLess_android_<abi>.apk` (one each for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`)
+- Linux: `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
+
+Stable website links use `https://github.com/Open-Less/openless/releases/latest/download/<asset-name>`.
+Beta links must use the release tag because `latest` excludes pre-releases:
+`https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
+
+The Tauri and Android workflows attach their aliases automatically. Linux remains administrator-attached after product acceptance, so the administrator must attach the two files from the `openless-linux-egui-direct-download` Actions artifact to the accepted Release as well as the versioned packages. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
 ## Version-sync gate

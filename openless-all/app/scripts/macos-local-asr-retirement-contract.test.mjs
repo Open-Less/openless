@@ -19,7 +19,16 @@ assert.match(router, /apple_speech::AppleSpeechTranscriptionEngine/);
 const apple = read('src-tauri/src/asr/apple_speech.rs');
 assert.doesNotMatch(apple, /ModelStore|ExperimentalNativeRuntime|download_model/);
 assert.match(read('src-tauri/Info.plist'), /NSSpeechRecognitionUsageDescription/);
-assert.match(adapters, /cfg\(target_os = "windows"\)\]\s+struct TauriNativeTranscriptionEngine/);
+// The native Sherpa/Foundry engine compiles only where build.rs sets
+// `local_asr_sherpa` (Windows, arm64 Android) — never on macOS.
+assert.match(adapters, /cfg\(local_asr_sherpa\)\]\s+struct TauriNativeTranscriptionEngine/);
+const buildScript = read('src-tauri/build.rs');
+const sherpaCfg = buildScript.slice(
+  buildScript.indexOf('rustc-check-cfg=cfg(local_asr_sherpa)'),
+  buildScript.indexOf('cargo:rustc-cfg=local_asr_sherpa'),
+);
+assert.match(sherpaCfg, /cargo_target_os == "windows" \|\| \(target_os == "android" && target_arch == "aarch64"\)/);
+assert.doesNotMatch(sherpaCfg, /macos/);
 const availability = adapters.slice(
   adapters.indexOf('impl openless_core::ModelRuntimeAdapter'),
   adapters.indexOf('fn inspect_native_models'),

@@ -398,9 +398,12 @@ pub struct UserPreferences {
     /// Recording capsule appearance. Preference events sync it to all windows; recording state carries the current style.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
-    /// Display only under the pointer, or mirror recording on every attached display.
+    /// Select the recording display, or mirror recording on every attached display.
     #[serde(default)]
     pub capsule_display_mode: CapsuleDisplayMode,
+    /// Authoritative mode established by a V2 client; absent on untouched legacy settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capsule_display_mode_v2: Option<CapsuleDisplayMode>,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -696,6 +699,11 @@ pub struct UserPreferences {
     /// (seconds); same semantics as foundry/qwen3.
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub sherpa_onnx_keep_loaded_secs: u32,
+    /// When a cloud ASR provider fails, transcribe the recorded audio with the
+    /// selected sherpa-onnx model instead (weak or no network). Off by default;
+    /// only takes effect where local ASR is supported and a model is installed.
+    #[serde(default)]
+    pub local_asr_fallback_enabled: bool,
     /// Auto-update channel. stable = background auto-update checks the
     /// stable manifest; beta = the beta manifest. Manual check buttons pass
     /// the channel explicitly, decoupled from this pref.
@@ -774,6 +782,11 @@ pub struct UserPreferences {
     /// user habits).
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
+    /// Windows TSF only: show the live ASR transcript in the target document as an
+    /// underlined composition while recording, then replace it with the final text.
+    /// Off by default; with it off, the target only receives the final text.
+    #[serde(default)]
+    pub windows_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -970,6 +983,7 @@ struct UserPreferencesWire {
     capsule_style: CapsuleStyle,
     #[serde(default)]
     capsule_display_mode: CapsuleDisplayMode,
+    capsule_display_mode_v2: Option<CapsuleDisplayMode>,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -1115,6 +1129,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     sherpa_onnx_keep_loaded_secs: u32,
     #[serde(default)]
+    local_asr_fallback_enabled: bool,
+    #[serde(default)]
     update_channel: UpdateChannel,
     #[serde(default)]
     update_channel_explicit: Option<bool>,
@@ -1134,6 +1150,8 @@ struct UserPreferencesWire {
     streaming_insert_default_migrated: bool,
     #[serde(default = "default_true")]
     streaming_insert_save_clipboard: bool,
+    #[serde(default)]
+    windows_composition_input: bool,
     #[serde(default)]
     cursor_context_enabled: bool,
     #[serde(default)]
@@ -1236,6 +1254,7 @@ impl Default for UserPreferencesWire {
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
             capsule_display_mode: prefs.capsule_display_mode,
+            capsule_display_mode_v2: prefs.capsule_display_mode_v2,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
@@ -1311,6 +1330,7 @@ impl Default for UserPreferencesWire {
             sherpa_onnx_model: prefs.sherpa_onnx_model,
             sherpa_onnx_language_hint: prefs.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: prefs.sherpa_onnx_keep_loaded_secs,
+            local_asr_fallback_enabled: prefs.local_asr_fallback_enabled,
             update_channel: prefs.update_channel,
             // None preserves the fact that the old config lacked the marker; deserialization treats only historical Beta as explicit.
             update_channel_explicit: None,
@@ -1322,6 +1342,7 @@ impl Default for UserPreferencesWire {
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
+            windows_composition_input: prefs.windows_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
@@ -1439,7 +1460,12 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
-            capsule_display_mode: wire.capsule_display_mode,
+            capsule_display_mode: wire
+                .capsule_display_mode_v2
+                .unwrap_or(wire.capsule_display_mode),
+            capsule_display_mode_v2: wire
+                .capsule_display_mode_v2
+                .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
@@ -1529,6 +1555,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             sherpa_onnx_model: wire.sherpa_onnx_model,
             sherpa_onnx_language_hint: wire.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: wire.sherpa_onnx_keep_loaded_secs,
+            local_asr_fallback_enabled: wire.local_asr_fallback_enabled,
             update_channel: wire.update_channel,
             update_channel_explicit,
             history_retention_days: wire.history_retention_days,
@@ -1539,6 +1566,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
+            windows_composition_input: wire.windows_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
@@ -1821,6 +1849,7 @@ impl Default for UserPreferences {
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
+            capsule_display_mode_v2: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
@@ -1894,6 +1923,7 @@ impl Default for UserPreferences {
             sherpa_onnx_model: default_sherpa_onnx_model(),
             sherpa_onnx_language_hint: String::new(),
             sherpa_onnx_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
+            local_asr_fallback_enabled: false,
             update_channel: UpdateChannel::default(),
             update_channel_explicit: false,
             history_retention_days: default_history_retention_days(),
@@ -1904,6 +1934,7 @@ impl Default for UserPreferences {
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
+            windows_composition_input: false,
             cursor_context_enabled: false,
             vocabulary_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
@@ -2502,7 +2533,8 @@ impl PlatformCapabilities {
                 supports_overlay: true,
                 supports_desktop_hotkey: false,
                 supports_tray: false,
-                supports_local_asr: false,
+                // The app links sherpa-onnx on arm64 only; other ABIs stay cloud-only.
+                supports_local_asr: cfg!(target_arch = "aarch64"),
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: true,
                 supports_auto_update: true,
@@ -2537,8 +2569,9 @@ impl PlatformCapabilities {
                 supports_overlay: true,
                 supports_desktop_hotkey: true,
                 supports_tray: true,
-                // Legacy manager is retired on macOS; experiments use their own entry.
-                supports_local_asr: cfg!(any(target_os = "linux", target_os = "windows")),
+                // The Tauri native local engine is available on Windows; Linux keeps the
+                // retired generic provider metadata but has no inference runtime.
+                supports_local_asr: cfg!(target_os = "windows"),
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
@@ -2630,13 +2663,29 @@ pub enum CapsuleState {
 }
 
 /// Which attached displays show the recording capsule. Old preferences default
-/// to one display, so upgrading never opts users into extra windows/renderers.
+/// to the cursor display, so upgrading never changes existing placement or opts users
+/// into extra windows/renderers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum CapsuleDisplayMode {
     #[default]
     CursorScreen,
+    PrimaryScreen,
+    ForegroundWindowScreen,
     AllScreens,
+}
+
+impl CapsuleDisplayMode {
+    pub(crate) fn legacy_sync_mode(self) -> Self {
+        match self {
+            Self::AllScreens => Self::AllScreens,
+            _ => Self::CursorScreen,
+        }
+    }
+
+    pub(crate) fn extended_sync_mode(self) -> Option<Self> {
+        (self != self.legacy_sync_mode()).then_some(self)
+    }
 }
 
 /// Recording capsule appearance; serialized values feed preference storage and each Host's window events.

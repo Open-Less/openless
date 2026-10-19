@@ -82,6 +82,56 @@ pub(super) fn canonicalize_native_documents(
         }
         doc.value = canonical;
     }
+    // Older sync snapshots kept public provider settings only in the
+    // credential record. Normalize those records into the channel projection
+    // before restore verification so legacy snapshots remain round-trippable.
+    let public_accounts: Vec<(String, std::collections::BTreeMap<String, String>)> = set
+        .documents
+        .iter()
+        .filter(|doc| doc.kind == DocumentKind::ProviderCredentials)
+        .filter_map(|doc| {
+            let record: ProviderCredentialRecord = typed(&doc.value).ok()?;
+            Some((doc.id.clone(), record.accounts.clone()))
+        })
+        .collect();
+    for channel in set
+        .documents
+        .iter_mut()
+        .filter(|doc| doc.kind == DocumentKind::Channels)
+    {
+        let Some((_, accounts)) = public_accounts.iter().find(|(id, _)| id == &channel.id) else {
+            continue;
+        };
+        let record: ChannelRecord = typed(&channel.value)?;
+        let public: std::collections::BTreeMap<_, _> = accounts
+            .iter()
+            .filter(|(account, value)| {
+                crate::cloud_sync_e2ee_documents::registry::public_credential_account(
+                    record.namespace,
+                    account,
+                ) && crate::cloud_sync_e2ee_documents::registry::public_credential_value_safe(
+                    account, value,
+                )
+            })
+            .map(|(account, value)| (account.clone(), value.clone()))
+            .collect();
+        if public.is_empty() {
+            continue;
+        }
+        let object = channel
+            .value
+            .as_object_mut()
+            .ok_or(DocumentError::InvalidDocument)?;
+        let configuration = object
+            .entry("configuration")
+            .or_insert_with(|| serde_json::json!({}));
+        let configuration = configuration
+            .as_object_mut()
+            .ok_or(DocumentError::InvalidDocument)?;
+        for (account, value) in public {
+            configuration.entry(account).or_insert(Value::String(value));
+        }
+    }
     validate_sync_documents(set, desired.observed_revision())
 }
 
@@ -303,6 +353,9 @@ impl CoreSyncStore {
                 DocumentKind::Dictionary | DocumentKind::Corrections | DocumentKind::History => {}
             }
         }
+        if let Some(mode) = map.get("capsuleDisplayModeV2").cloned() {
+            map.insert("capsuleDisplayMode".into(), mode);
+        }
         if styles.is_empty()
             || !styles.iter().any(|style| {
                 style.pack.expose().get("enabled").and_then(Value::as_bool) == Some(true)
@@ -322,6 +375,16 @@ impl CoreSyncStore {
         .any(|key| current.get(key) != map.get(*key))
         {
             map.insert("codingAgentEnabled".into(), Value::Bool(false));
+        }
+        for channel in &channels {
+            let Some(record) = credentials.iter_mut().find(|record| {
+                record.channel_id == channel.id && record.namespace == channel.namespace
+            }) else {
+                return Err(DocumentError::InvalidReference);
+            };
+            for (account, value) in &channel.configuration {
+                record.accounts.insert(account.clone(), value.clone());
+            }
         }
         validate_credential_set(&channels, &credentials)?;
         for (namespace, key) in [

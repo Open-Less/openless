@@ -643,7 +643,7 @@ impl EncryptedSyncService {
             .map(|origin| canonical_origin(&origin).map_err(protocol_error))
             .transpose()?;
         let token = token.trim();
-        if origin.is_some() != !token.is_empty() {
+        if origin.is_some() == token.is_empty() {
             return Err(error("unsupported_protocol"));
         }
         self.0.auto_suspended.store(true, Ordering::Release);

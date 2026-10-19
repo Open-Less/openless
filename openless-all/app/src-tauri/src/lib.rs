@@ -523,7 +523,8 @@ macro_rules! app_invoke_handler_desktop {
     };
 }
 
-/// Android/iOS: only commands usable without desktop hotkeys, tray, updater, or local ASR.
+/// Android/iOS: only commands usable without desktop hotkeys, tray or updater;
+/// local ASR commands only where sherpa-onnx is linked (arm64 Android).
 #[macro_export]
 macro_rules! app_invoke_handler_mobile {
     () => {
@@ -540,6 +541,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
             $crate::commands::show_android_overlay,
+            $crate::commands::open_android_local_migration,
             $crate::commands::hide_android_overlay,
             $crate::commands::get_android_accessibility_status,
             $crate::commands::request_android_accessibility_permission,
@@ -681,8 +683,103 @@ macro_rules! app_invoke_handler_mobile {
             $crate::restart_app,
             $crate::reset_accessibility_permission_and_restart_app,
             $crate::log_client_error,
+            // Local ASR: arm64 Android links sherpa-onnx (build.rs `local_asr_sherpa`).
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_get_settings,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_storage_settings,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_set_models_base_dir,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_activate,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_set_active_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_set_mirror,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_list_models,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_fetch_remote_info,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_fetch_hf_card,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_download_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_cancel_download,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_delete_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_cleanup_incomplete,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_model_dir,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_reveal_model_dir,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_reveal_models_root,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_test_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_test_channel,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_engine_status,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_release_engine,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_preload,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::local_asr_set_keep_loaded_secs,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_status,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_catalog,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_fetch_remote_info,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_download_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_cancel_download,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_set_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_set_language_hint,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_prepare,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_cancel_prepare,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_release,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_model_dir,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_delete_model,
+            #[cfg(local_asr_sherpa)]
+            $crate::commands::sherpa_onnx_asr_reveal_model_dir,
         ]
     };
+}
+
+#[cfg(not(mobile))]
+fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _cwd: String) {
+    if let Some(intent) = cli::parse_cli_intent(&argv) {
+        log::info!(
+            "[single-instance] another instance launched with intent={intent:?}, dispatching"
+        );
+        dispatch_cli_intent(app, intent);
+        return;
+    }
+    if let Some(coordinator) = app
+        .try_state::<Arc<coordinator::Coordinator>>()
+        .map(|state| Arc::clone(&*state))
+    {
+        if coordinator.startup_error().is_none()
+            && coordinator.backend().get_preferences().start_minimized
+        {
+            log::info!("[single-instance] start_minimized=true → skipping show on relaunch");
+            return;
+        }
+    }
+    log::info!("[single-instance] another instance launched, focusing existing main window");
+    show_main_window(app);
 }
 
 #[cfg(not(mobile))]
@@ -708,44 +805,9 @@ fn run_desktop() {
     // this plugin registers; the plugin is macOS-only.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    // Keep one instance across installed and development copies sharing the same app identifier.
+    let builder = builder.plugin(tauri_plugin_single_instance::init(single_instance_callback));
     builder
-        // Single-instance lock: the second process exits immediately and forwards the
-        // activation signal to the running instance's main window. Otherwise two OpenLess
-        // copies (e.g. /Applications/ + dev build) each grab the global hotkey, so one key
-        // press runs the pipeline in both processes and text gets inserted twice. See issue #50.
-        //
-        // 第二个进程的 argv 还会转发 CLI 意图给主实例 coordinator；
-        // Linux 桌面快捷键由 egui Host 处理。详见 issue #420 / `cli.rs`。
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(intent) = cli::parse_cli_intent(&argv) {
-                log::info!(
-                    "[single-instance] another instance launched with intent={intent:?}, dispatching"
-                );
-                dispatch_cli_intent(app, intent);
-                return;
-            }
-            // Silent-start mode: a second launch (Win11 "reopen apps after sign-in",
-            // autostart double-trigger, or the user clicking the icon again) must not pop
-            // the main window either, otherwise start_minimized=true is defeated entirely
-            // on Win11. Users open the main window via the tray menu / tray left-click.
-            // issue #468.
-            if let Some(coordinator) = app
-                .try_state::<Arc<coordinator::Coordinator>>()
-                .map(|s| Arc::clone(&*s))
-            {
-                if coordinator.startup_error().is_none()
-                    && coordinator.backend().get_preferences().start_minimized {
-                    log::info!(
-                        "[single-instance] start_minimized=true → skipping show on relaunch"
-                    );
-                    return;
-                }
-            }
-            log::info!(
-                "[single-instance] another instance launched, focusing existing main window"
-            );
-            show_main_window(app);
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -3455,6 +3517,38 @@ pub(crate) fn position_capsule_bottom_center_with_style<R: tauri::Runtime>(
     )
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn position_capsule_on_monitor<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+    style: types::CapsuleStyle,
+    monitor: capsule_mirrors::MonitorRect,
+) -> tauri::Result<()> {
+    let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+        style,
+        false,
+        translation_active,
+    );
+    let bottom_gap = capsule_bottom_gap(style);
+    let (phys_w, phys_h, x, y) =
+        capsule_mirrors::capsule_placement(bounds.width, bounds.height, bottom_gap, monitor);
+    window.set_size(PhysicalSize::new(phys_w, phys_h))?;
+    log::debug!(
+        "[capsule] win position: target mon=({},{})..({},{}) scale={:.2} size=({}x{}) -> ({},{})",
+        monitor.left,
+        monitor.top,
+        monitor.right,
+        monitor.bottom,
+        monitor.scale,
+        phys_w,
+        phys_h,
+        x,
+        y
+    );
+    window.set_position(PhysicalPosition::new(x, y))?;
+    Ok(())
+}
+
 pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     translation_active: bool,
@@ -3481,15 +3575,7 @@ pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri:
     #[cfg(target_os = "windows")]
     {
         if let Some(mon) = capsule_mirrors::target_monitor_rect(window) {
-            let (phys_w, phys_h, x, y) =
-                capsule_mirrors::capsule_placement(bounds.width, bounds.height, bottom_gap, mon);
-            window.set_size(PhysicalSize::new(phys_w, phys_h))?;
-            log::debug!(
-                "[capsule] win position: target mon=({},{})..({},{}) scale={:.2} size=({}x{}) -> ({},{})",
-                mon.left, mon.top, mon.right, mon.bottom, mon.scale, phys_w, phys_h, x, y
-            );
-            window.set_position(PhysicalPosition::new(x, y))?;
-            return Ok(());
+            return position_capsule_on_monitor(window, translation_active, style, mon);
         }
     }
 

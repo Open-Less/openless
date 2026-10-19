@@ -110,11 +110,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun stopImeSession() {
         if (imeSessionId == null) pendingImeStop = true
-        else if (!sendImeCommand("stop")) {
-            recording = false
-            processing = false
-            releaseDismissedEditReplacement()
-        }
+        else if (!sendImeCommand("stop")) { recording = false; processing = false }
     }
 
     private fun onImeSessionEvent(json: String) {
@@ -135,11 +131,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             "completed" -> {
                 if (event.optString("sessionId") != imeSessionId) return
                 val destination = cloudNoteDestination
+                val reviewCloudNote = cloudNoteReviewArmed
                 imeSessionId = null
                 recording = false
                 processing = false
                 cloudNoteArmed = false
-                if (event.optBoolean("cloud")) submitCloudNoteText(event.optString("text"), destination, imeRequestId)
+                if (event.optBoolean("cloud")) {
+                    if (reviewCloudNote) openCloudNoteDraft(event.optString("text"), destination)
+                    else submitCloudNoteText(event.optString("text"), destination, imeRequestId)
+                }
                 else if (event.optBoolean("quickNote")) setState("done", ui("笔记已记录", "Note saved"))
                 else commitImeText(event.optString("text"))
             }
@@ -149,10 +149,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 imeSessionId = null
                 pendingImeStop = false
                 pendingCloudArm = false
-                // The edit panel was already dismissed when recording stopped.
-                // Leaving the replacement armed makes the next successful
-                // dictation delete the old span by length.
-                releaseDismissedEditReplacement()
                 setState("error", ui("听写失败，请重试", "Dictation failed; please retry"))
             }
         }
@@ -198,7 +194,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // The Core session owns retention; this field only displays the accepted destination.
     private var cloudNoteArmed = false
         set(value) {
-            if (!value) pendingCloudArm = false
+            if (!value) {
+                pendingCloudArm = false
+                cloudNoteReviewArmed = false
+            }
             if (value && imeRequestId != 0L && imeSessionId == null) {
                 pendingCloudArm = true
                 updateStatus(ui("正在准备云笔记", "Preparing cloud note"))
@@ -218,6 +217,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             voiceButton?.cloudNoteActive = value || cloudNoteSubmitting
             status?.setTextColor(recordingAccentColor())
         }
+    // Set by a swipe up on the mic while a Cloud notes recording is in
+    // progress, which also ends that recording: the recognized text then
+    // opens in the draft bar for editing (see openCloudNoteDraft()) instead
+    // of going straight to the webhook, as it does after a plain tap.
+    // Only ever true alongside cloudNoteArmed, whose setter clears it.
+    private var cloudNoteReviewArmed = false
     // The webhook POST that follows a Cloud notes dictation (see
     // submitCloudNoteText()). cloudNoteArmed is already back to false by
     // then — the Core session it mirrors has completed — so this is what
@@ -328,6 +333,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // voiceButton/status below.
     private var backendLinkIndicator: View? = null
     private var backendLinkPulseAnimator: android.animation.ObjectAnimator? = null
+    // Which recognizer the next dictation uses, as nativeAsrRoute() reports
+    // it ("cloud", "local", "localRaw", "unavailable"). The idle dot shows
+    // local in dark green and pure-local raw output (no usable polish
+    // channel, or no network to reach it) in light white. Refreshed off the
+    // main thread by refreshAsrRoute().
+    private var asrRoute = "cloud"
+    private var networkAvailable = true
+    private val asrRouteRefreshing = java.util.concurrent.atomic.AtomicBoolean(false)
     // Updated only by the heartbeat check (see startBackendHeartbeat()),
     // not by the normal recording/processing/done states — those already
     // take priority in updateBackendLinkIndicator(). False means the most
@@ -347,29 +360,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var lastDictationText: String? = null
     private var lastDictationEpoch: Long = -1
     private var dictationTextUndone = false
-    private var editingDictationResult = false
-    // True from the moment the edit mic starts recording until its result
-    // (or a cancel) resolves — independent of editingDictationResult, which
-    // only tracks which PANEL is currently shown. Stopping the edit mic
-    // switches back to the main voice panel immediately (so the "thinking"/
-    // polish animation plays there, not on the compact edit view), while
-    // this flag keeps commitImeText() routing the eventual result to
-    // finishEditWithSpokenReplacement() instead of a normal commit.
-    // A failed session, or a later tap on the main mic, must release it —
-    // otherwise that next utterance is still treated as the correction and
-    // deletes original.length characters before the cursor.
-    private var awaitingEditReplacement = false
-    // The exact span being replaced by the edit flow's "speak the correct
-    // word" mic: either whatever the user selected in the real input field,
-    // or (if nothing was selected) the whole last dictation result.
-    private var editingOriginalText: String? = null
-    private var editingReplacesWholeResult = false
-    // Whether finishEditWithSpokenReplacement() should write the spoken
-    // replacement to the global Dictionary. Defaults false — the edit
-    // panel's checkbox is an opt-in per-edit, not an opt-out, since most
-    // edits are just rewording rather than an actual new/misrecognized word
-    // worth remembering; ticking it is what makes the write happen at all.
-    private var addToDictionaryForEdit = false
     private var undoRedoButton: TextView? = null
     private var editResultButton: TextView? = null
     // The row holding undoRedoButton/editResultButton, toggled as a whole so
@@ -697,16 +687,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     override fun onCreateInputView(): View {
         refreshLanguage()
         startRuntimeService()
-        // Checked before any inputMode branch: the clipboard swipe-left
-        // correction flow opens this panel while inputMode is still
-        // InputMode.CLIPBOARD (never changed), so if the CLIPBOARD branch
-        // below ran first, it would win and rebuild the clipboard history
-        // list instead — exactly the "swipe left does nothing visible" bug
-        // this ordering fixes. The original edit-result flow only ever
-        // triggered from Voice mode, so this ordering issue never showed up
-        // before the clipboard flow started reusing the same panel.
         val content = when {
-            editingDictationResult -> buildEditPanel()
             inputMode == InputMode.ENGLISH -> wrapWithKeyPreviewOverlay(buildKeyboardView())
             inputMode == InputMode.STROKE -> wrapWithKeyPreviewOverlay(
                 if (strokeController.strokeNumberMode) strokeController.buildStrokeNumberView()
@@ -718,7 +699,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         val view = applyKeyboardRaise(content)
         appliedKeyboardFootprintKey = keyboardFootprintKey()
-        return view
+        return wrapWithDraftBar(view)
     }
 
     /** Voice panel + floating dictation-result overlay (former onCreateInputView body). */
@@ -813,7 +794,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         val active = downY - event.y >= dp(30)
                         if (active != swipeUpActive) {
                             swipeUpActive = active
-                            voiceButton?.armedForRawSwipe = active
+                            // Mid Cloud-notes recording a swipe up asks for the
+                            // draft editor, not Raw — keep the orange preview off.
+                            voiceButton?.armedForRawSwipe = active && !(recording && (cloudNoteArmed || pendingCloudArm))
                             // One tick every time the threshold is
                             // crossed, either direction — entering AND
                             // leaving the armed zone both get felt, not
@@ -838,7 +821,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                             performDoubleKeyHaptic()
                             cancelDictation()
                         } else if (swipeUpActive) {
-                            if (recording && !rawModeArmed) {
+                            if (recording && (cloudNoteArmed || pendingCloudArm)) {
+                                // Ends the recording right here; the result opens
+                                // in the draft bar instead of being sent. The
+                                // click that may follow this release is a no-op:
+                                // toggleDictation() ignores taps while processing.
+                                cloudNoteReviewArmed = true
+                                performDoubleKeyHaptic()
+                                toggleDictation()
+                            } else if (recording && !rawModeArmed) {
                                 rawModeArmed = true
                                 performDoubleKeyHaptic()
                                 updateStatus(currentMessage)
@@ -1103,7 +1094,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
         }
-        editResultButton = keyboardKey("✎", 1f, action = { openEditDictationResult() }).apply {
+        editResultButton = keyboardKey("✎", 1f, action = { openDictationEditDraft(requireSelection = false) }).apply {
             textSize = 20f
             contentDescription = ui("编辑听写结果", "Edit dictation result")
             layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
@@ -1141,10 +1132,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         setInputView(newView)
         val offset = resources.displayMetrics.widthPixels.toFloat() * slideDirection
         // RaisedKeyboardHost wraps [panel, raiseSpacer] — slide the panel's
-        // own children (skip header at 0), not the raise spacer.
-        val container = when (newView) {
-            is RaisedKeyboardHost -> newView.getChildAt(0) as? ViewGroup
-            is ViewGroup -> newView
+        // own children (skip header at 0), not the raise spacer. The draft
+        // bar sits above that host and stays put as well.
+        val keyboard = (newView as? DraftHost)?.keyboard ?: newView
+        val container = when (keyboard) {
+            is RaisedKeyboardHost -> keyboard.getChildAt(0) as? ViewGroup
+            is ViewGroup -> keyboard
             else -> null
         } ?: return
         for (index in 1 until container.childCount) {
@@ -1156,138 +1149,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 .setInterpolator(android.view.animation.DecelerateInterpolator())
                 .start()
         }
-    }
-
-    /**
-     * "Speak to fix a word" panel, styled after the Typeless reference: same
-     * brand+toggle header as every other panel, a divider, the selected-text
-     * preview (with its own cancel button), a second divider, then a wide
-     * mic + status row along the bottom. Like every other input mode this
-     * replaces the whole panel content rather than floating on top of it —
-     * no card background, just the same panel surface split by
-     * hairline dividers.
-     */
-    private fun buildEditPanel(): View {
-        // Same SwipeModeContainer + exact 300dp constraint as every other
-        // panel (voice/stroke/English) — not a plain LinearLayout — so this
-        // is structurally identical to the main voice panel instead of
-        // risking a taller/"fullscreen"-looking measurement.
-        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(16), dp(8), dp(16), dp(10))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-            clipChildren = false
-            clipToPadding = false
-        }
-
-        // Same brand logo + mode toggle as the normal voice panel — not a
-        // custom header with the toggle swapped for a close button — so the
-        // IME's own identity/state stays visibly unchanged while editing,
-        // exactly like the number panel keeps the same header as the letter
-        // panel underneath it.
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
-            topMargin = dp(6)
-        })
-
-        root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            topMargin = dp(6)
-        })
-
-        val chipRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        val chip = TextView(this).apply {
-            // Plain text, no button/pill background — this is a preview of
-            // text already sitting in the real field, not a tappable control.
-            text = editingOriginalText.orEmpty()
-            textSize = 15f
-            setTextColor(strokeEncodeAccentColor)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        chipRow.addView(chip, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        // Cancel-editing control lives here instead of the header, since the
-        // header is now identical to every other panel's.
-        chipRow.addView(flatCircleButton("✕", 34, ui("取消编辑", "Cancel editing")) {
-            closeEditDictationResult()
-        }, LinearLayout.LayoutParams(dp(38), dp(38)))
-        root.addView(chipRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(14)
-        })
-
-        // Flexible filler mirrors the empty middle area in the reference,
-        // pushing the divider + mic row down to the bottom of the panel.
-        root.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        // Placed low in the panel, just above the bottom divider — not
-        // right under the text chip — and sized 1.5x (checkbox glyph and
-        // label both) so it reads as a deliberate decision, not a small
-        // afterthought easy to miss/mis-tap.
-        val correctionToggleRow = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            isClickable = true
-            setOnClickListener {
-                addToDictionaryForEdit = !addToDictionaryForEdit
-                refreshInputView()
-            }
-        }
-        correctionToggleRow.addView(
-            TextView(this).apply {
-                text = if (addToDictionaryForEdit) "☑" else "☐"
-                textSize = 24f
-                setTextColor(if (addToDictionaryForEdit) strokeEncodeAccentColor else tone(Color.rgb(140, 140, 140), Color.rgb(150, 150, 154)))
-            },
-            LinearLayout.LayoutParams(dp(33), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(9) },
-        )
-        correctionToggleRow.addView(
-            TextView(this).apply {
-                text = ui("加入到字典中", "Add to dictionary")
-                textSize = 18f
-                setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        root.addView(
-            correctionToggleRow,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) },
-        )
-
-        root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            bottomMargin = dp(10)
-        })
-
-        val bottomRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        voiceButton = VoiceButton(this, isDarkTheme).apply {
-            isClickable = true
-            setOnClickListener { toggleDictation() }
-            contentDescription = ui("说出正确的词", "Speak the correct word")
-        }
-        // Noticeably wider than a plain circular icon so the recording
-        // waveform animation has real room to play.
-        bottomRow.addView(voiceButton!!, LinearLayout.LayoutParams(dp(170), dp(46)))
-
-        val textStack = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val title = TextView(this).apply {
-            text = ui("说出正确的词", "Speak to edit")
-            textSize = 15f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(tone(Color.WHITE, Color.rgb(30, 30, 34)))
-        }
-        statusNormalColor = tone(Color.rgb(160, 160, 160), Color.rgb(120, 120, 125))
-        status = TextView(this).apply {
-            text = displayStatus(currentMessage)
-            textSize = 12f
-            setTextColor(statusNormalColor)
-            setPadding(0, dp(2), 0, 0)
-        }
-        textStack.addView(title, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        textStack.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        bottomRow.addView(textStack, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginStart = dp(12)
-        })
-        root.addView(bottomRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        return root
     }
 
     private fun buildDivider(): View = View(this).apply { setBackgroundColor(tone(Color.rgb(68, 68, 68), Color.rgb(215, 215, 218))) }
@@ -1391,12 +1252,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun selectInputMode(selected: InputMode, slideDirection: Int? = null) {
         if (recording || processing) cancelDictation()
-        // Leaving Voice mode mid-edit would otherwise leave editingDictationResult
-        // stuck true, so switching back to Voice later would wrongly reopen the
-        // edit sub-view instead of the normal panel.
-        editingDictationResult = false
-        awaitingEditReplacement = false
-        editingOriginalText = null
         inputMode = selected
         saveInputMode(selected)
         englishLayer = EnglishLayer.LETTERS
@@ -1499,7 +1354,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val row2 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
                 row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
                 listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
-                    .zip(listOf("@", "#", "$", "%", "&", "-", "+", "(", ")"))
+                    .zip(listOf("~", "@", "#", "!", "%", "&", "*", "(", ")"))
                     .forEach { (key, symbol) -> row2.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
                 row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
                 root.addView(row2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -1507,7 +1362,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val row3 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
                 row3.addView(keyboardKey("⇧", 1.5f, action = { cycleEnglishShift() }))
                 listOf("z", "x", "c", "v", "b", "n", "m")
-                    .zip(listOf(":", ";", "'", ".", ",", "!", "?"))
+                    .zip(listOf("'", "/", "-", "_", ":", ";", "?"))
                     .forEach { (key, symbol) -> row3.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
                 row3.addView(
                     keyboardKey("⌫", 1.5f, action = { englishDeleteBackward() }, repeatOnLongPress = true, repeatAction = { englishDeleteBackward() }).apply {
@@ -1541,9 +1396,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // only these two English bottom-row labels are meant to match the
         // letters' new weight for now. Size/color/position left exactly as
         // keyboardKey() already set them.
-        val modeButton = keyboardKey(if (englishLayer == EnglishLayer.LETTERS) "123" else "ABC", 1.3f, action = {
-            handleEnglishBottomModeToggle()
-        }).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+        // Swipe up on "123" for a comma and on Space for a full stop — the
+        // two marks the letter grid's own swipe-up symbols leave out. Neither
+        // key shows a hint for it; the preview bubble names the mark mid-swipe.
+        val onLetters = englishLayer == EnglishLayer.LETTERS
+        val modeButton = keyboardKey(
+            if (onLetters) "123" else "ABC",
+            1.3f,
+            action = { handleEnglishBottomModeToggle() },
+            swipeUpAction = if (onLetters) ({ commitEnglishChar(",") }) else null,
+            swipePreview = if (onLetters) "," else null,
+        ).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
         // "Space" stays keyboardKey()'s own plain centered label (own
         // View, own vertical centering, untouched by the hint) — per
         // real-device feedback, side-by-side (hint right-aligned next to
@@ -1559,18 +1422,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             finalizeEnglishComposingWord()
             rimePinyinController.clear()
             currentInputConnection?.commitText(" ", 1)
-        }, longPressAction = { toggleLatinInputMode() }).apply {
+        }, swipeUpAction = { commitEnglishChar(".") }, swipePreview = ".", longPressAction = { toggleLatinInputMode() }).apply {
             // Same size as Return (17sp — keyboardKey()'s own special case
             // for that label), per real-device feedback.
             textSize = 17f
         }
         // Own View, overlaid on top of spaceButton (not inside its own
-        // text) — left-aligned, vertically centered, non-interactive so
-        // touches still reach the key beneath it. Shows BOTH labels
-        // stacked (拼音 always on top, 英文 always on the bottom — fixed
-        // position, per user request) rather than just naming the target
-        // mode — whichever is currently active is cherry red, the other
-        // gray, so long-press's effect is legible at a glance either way.
+        // text) — left-aligned and vertically centered. The hint keeps its
+        // own tap/long-press target, while upward swipes are delegated to
+        // spaceButton so the key's existing preview and commit handling is
+        // shared. Shows BOTH labels (拼音 always on top, 英文 always on the
+        // bottom — fixed position, per user request) rather than just naming
+        // the target mode — whichever is currently active is cherry red, the
+        // other gray, so long-press's effect is legible at a glance either
+        // way.
         val spaceHint = TextView(this).apply {
             val pinyinLabel = ui("拼音", "PINYIN")
             val englishLabel = ui("英文", "ENGLISH")
@@ -1598,6 +1463,71 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             // Keep the hint above the raised space key so its tap target is
             // the visible mode label rather than the key underneath it.
             translationZ = dp(10).toFloat()
+        }
+        var forwardingSpaceSwipe = false
+        var spaceHintLongPressed = false
+        var spaceHintDown: MotionEvent? = null
+        fun dispatchSpaceTouch(event: MotionEvent) {
+            val forwarded = MotionEvent.obtain(event)
+            val hintLocation = IntArray(2)
+            val spaceLocation = IntArray(2)
+            spaceHint.getLocationOnScreen(hintLocation)
+            spaceButton.getLocationOnScreen(spaceLocation)
+            forwarded.offsetLocation(
+                (hintLocation[0] - spaceLocation[0]).toFloat(),
+                (hintLocation[1] - spaceLocation[1]).toFloat(),
+            )
+            spaceButton.dispatchTouchEvent(forwarded)
+            forwarded.recycle()
+        }
+        spaceHint.setOnLongClickListener {
+            spaceHintLongPressed = true
+            toggleLatinInputMode()
+            true
+        }
+        spaceHint.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    spaceHintDown?.recycle()
+                    spaceHintDown = MotionEvent.obtain(event)
+                    forwardingSpaceSwipe = false
+                    spaceHintLongPressed = false
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!forwardingSpaceSwipe && !spaceHintLongPressed && spaceHintDown != null &&
+                        spaceHintDown!!.y - event.y >= dp(10)
+                    ) {
+                        forwardingSpaceSwipe = true
+                        view.cancelLongPress()
+                        view.isPressed = false
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        spaceHintDown?.let { dispatchSpaceTouch(it) }
+                        dispatchSpaceTouch(event)
+                        true
+                    } else if (forwardingSpaceSwipe) {
+                        dispatchSpaceTouch(event)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (forwardingSpaceSwipe) {
+                        dispatchSpaceTouch(event)
+                        view.isPressed = false
+                        forwardingSpaceSwipe = false
+                        spaceHintDown?.recycle()
+                        spaceHintDown = null
+                        true
+                    } else {
+                        spaceHintDown?.recycle()
+                        spaceHintDown = null
+                        false
+                    }
+                }
+                else -> forwardingSpaceSwipe
+            }
         }
         val spaceWrapper = FrameLayout(this).apply {
             addView(spaceButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -2018,11 +1948,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val pasteKey = quickActionLabel(ui("粘贴", "Paste"), {
             currentInputConnection?.performContextMenuAction(android.R.id.paste)
         }, 20f)
-        // Two lines ("History" / "Dict") since this button now opens both
-        // the clipboard history browser (tap) and the voice-correction flow
-        // for whatever's selected in the real input field (long-press) —
-        // labeled "Dict" since the long-press flow writes to the global
-        // Dictionary now, not a correction rule.
+        // Two lines ("History" / "Edit") since this button opens both the
+        // clipboard history browser (tap) and the draft bar for whatever's
+        // selected in the real input field (long-press).
         // quickActionLabel()->keyboardKey()'s own '\n' handling shrinks only
         // the label's first character (built for single-char rows like
         // "1\n!"), which would leave just one letter undersized here, so the
@@ -2031,11 +1959,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Same cherry red as the stroke panel's own right-side action rail
         // (Color.rgb(153, 26, 40)) — per product request, so these two keys
         // read as the equivalent "action" keys on this panel.
-        val clipboardKey = quickActionLabel(ui("历史\n字典", "History\nDict"), {
+        val clipboardKey = quickActionLabel(ui("历史\n编辑", "History\nEdit"), {
             clipboardHistoryMode = true
             refreshInputView()
         }, 17f, midDivider = true).apply {
-            text = ui("历史\n字典", "History\nDict")
+            text = ui("历史\n编辑", "History\nEdit")
             background = roundedButton(Color.rgb(153, 26, 40), dp(5))
             // quickActionLabel()'s own softWhite text color reads fine on a
             // normal/rose key but not on this now-red one (dark gray in
@@ -2043,7 +1971,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             // same reasoning as backspaceKey's iconColor override below.
             setTextColor(Color.WHITE)
             setOnLongClickListener {
-                openSelectedTextCorrectionViaVoice()
+                openDictationEditDraft(requireSelection = true)
                 true
             }
         }
@@ -2619,6 +2547,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        // An out-of-bounds swipe may not dispatch a click to clear this flag.
+                        suppressNextClick = false
                         downX = event.x
                         downY = event.y
                         horizontalDragArmed = false
@@ -2787,7 +2717,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * instead (a "sloppy key", same idea as most predictive keyboards).
      *
      * @param swipeSymbol Any key that has one — top-row digits (q..p ->
-     *   1..0), row2's @#$%&-+() and row3's :;'.,!? — swiping up commits
+     *   1..0), row2's ~@#!%&*() and row3's '/-_:;? — swiping up commits
      *   this symbol instead of the letter, same interaction as the stroke
      *   panel's own swipe-up keys (see keyboardKey()'s swipeUpAction/
      *   swipePreview). Shown as a small standalone hint pinned to the very
@@ -3367,6 +3297,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         cancelImeSession()
+        closeDraft()
         super.onStartInput(attribute, restarting)
         restoreInputMode()
         restoreScriptPreference()
@@ -3401,8 +3332,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // silently mangling unrelated text.
         lastDictationText = null
         dictationTextUndone = false
-        editingDictationResult = false
-        awaitingEditReplacement = false
         if (isSensitiveField(attribute)) {
             updateStatus("敏感字段，已禁用听写")
         } else {
@@ -3416,6 +3345,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // show. Keyboard settings write height/raise prefs while that cached
         // view is still the old footprint — rebuild when they diverge so the
         // next focus actually shows what the settings preview promised.
+        // A channel may have been turned off in settings since the last show.
+        if (isBackendReady()) refreshAsrRoute()
         val key = keyboardFootprintKey()
         if (appliedKeyboardFootprintKey != key) {
             appliedKeyboardFootprintKey = key
@@ -3426,7 +3357,31 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun keyboardFootprintKey(): String =
         "${keyboardPanelHeightDp()}:${raiseHeightDp(this)}:$inputMode:$latinInputMode:${personalizedLearningAllowed()}"
 
+    override fun onFinishInputView(finishingInput: Boolean) {
+        if (draftEdit != null && (recording || processing)) cancelDictation()
+        closeDraft()
+        super.onFinishInputView(finishingInput)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_BACK && draftEdit != null && isInputViewShown) {
+            event.startTracking()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_BACK && draftEdit != null && event.isTracking && !event.isCanceled) {
+            discardDraft()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onFinishInput() {
+        if (draftEdit != null && (recording || processing)) cancelDictation()
+        closeDraft()
         cancelImeSession()
         englishCandidateQueryEpoch++
         englishComposingWord.clear()
@@ -3440,8 +3395,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         processing = false
         lastDictationText = null
         dictationTextUndone = false
-        editingDictationResult = false
-        awaitingEditReplacement = false
         invalidateSession("输入目标已失效")
         super.onFinishInput()
     }
@@ -3494,15 +3447,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (recording) {
             recording = false
             processing = true
-            if (editingDictationResult) {
-                // Leave the edit panel the instant recording stops — the
-                // "thinking"/polish animation plays on the main voice panel
-                // from here on, not the compact edit view. The eventual
-                // result still finishes the pending replacement via
-                // awaitingEditReplacement (see commitImeText()).
-                editingDictationResult = false
-                refreshInputView()
-            }
             setState("thinking", "正在思考")
             stopImeSession()
         } else {
@@ -3519,15 +3463,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 scheduleBackendReadyRecheck()
                 return
             }
+            if (draftSubmitting) {
+                // A new recording can write into the open draft while the
+                // previous Cloud Notes request is still in flight. Its
+                // completion must not disable or close this newer draft.
+                draftSubmitting = false
+                showDraftMessage(ui("新的听写已开始", "New dictation started"), isError = false)
+            }
             recording = true
             processing = false
             rawModeArmed = false
             quickNoteArmed = false
             cloudNoteArmed = false
-            // A tap on the main mic (edit panel already gone) is a new
-            // utterance. Drop a correction that failed or was superseded
-            // before its result arrived, so this session cannot inherit it.
-            releaseDismissedEditReplacement()
             // The actual start of a new recording attempt — reset the
             // silence watch and fire the start haptic here, not in
             // onCapsuleStateChanged's "recording" branch: that branch only
@@ -3539,15 +3486,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             maxObservedLevelThisSession = 0f
             voiceLinkWarning?.visibility = View.GONE
             performKeyHaptic()
-            // A genuinely new utterance (not the correction/edit sub-flow,
-            // which already hides these via editingDictationResult) makes
-            // the previous result's undo/redo/edit controls stale the
-            // moment recording starts, not just once the new result
-            // replaces them — leaving them up mid-recording risked an undo
-            // tap acting on the wrong utterance.
-            if (!editingDictationResult) {
-                lastDictationText = null
-            }
+            // A new utterance makes the previous result's undo/redo/edit
+            // controls stale the moment recording starts, not just once the
+            // new result replaces them — leaving them up mid-recording risked
+            // an undo tap acting on the wrong utterance.
+            lastDictationText = null
             setState("speaking", "再次点击结束 · 下划取消")
             imeRequestId = 0L
             imeSessionId = null
@@ -3613,6 +3556,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (!ready) {
             OpenLessProcessRestartStats(this, "heartbeat").recordStart()
             ensureBackendReady()
+        } else {
+            refreshAsrRoute()
         }
     }
 
@@ -3637,12 +3582,50 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             recording -> LINK_COLOR_RECORDING
             processing -> LINK_COLOR_PROCESSING
             !backendLinkHealthy -> LINK_COLOR_ISSUE
+            asrRoute == "localRaw" || (asrRoute == "local" && !networkAvailable) -> LINK_COLOR_READY_LOCAL_RAW
+            asrRoute == "local" -> LINK_COLOR_READY_LOCAL
+            asrRoute == "unavailable" -> LINK_COLOR_ISSUE
             else -> LINK_COLOR_READY
         }
-        (backendLinkIndicator?.background as? GradientDrawable)?.setColor(color)
+        (backendLinkIndicator?.background as? GradientDrawable)?.apply {
+            setColor(color)
+            // The light-white dot would vanish on the light keyboard without an edge.
+            if (color == LINK_COLOR_READY_LOCAL_RAW) setStroke(dp(1), Color.rgb(148, 163, 184)) else setStroke(0, Color.TRANSPARENT)
+        }
+        val ready = color == LINK_COLOR_READY || color == LINK_COLOR_READY_LOCAL || color == LINK_COLOR_READY_LOCAL_RAW
         backendLinkPulseAnimator?.duration =
-            if (color == LINK_COLOR_READY) BACKEND_LINK_READY_PULSE_DURATION_MS else BACKEND_LINK_PULSE_DURATION_MS
+            if (ready) BACKEND_LINK_READY_PULSE_DURATION_MS else BACKEND_LINK_PULSE_DURATION_MS
     }
+
+    /**
+     * Asks the backend whether the next dictation runs locally and repaints
+     * the dot. The call reads the credential store, so it runs on its own
+     * thread; overlapping requests (heartbeat plus a keyboard show) collapse
+     * into one.
+     */
+    private fun refreshAsrRoute() {
+        if (!asrRouteRefreshing.compareAndSet(false, true)) return
+        Thread {
+            val route = runCatching { OpenLessNative.nativeAsrRoute() }.getOrNull() ?: "unavailable"
+            val online = hasValidatedNetwork()
+            backendHeartbeatHandler.post {
+                asrRouteRefreshing.set(false)
+                if (route != asrRoute || online != networkAvailable) {
+                    asrRoute = route
+                    networkAvailable = online
+                    updateBackendLinkIndicator()
+                }
+            }
+        }.apply { name = "openless-asr-route" }.start()
+    }
+
+    /** Whether the active network reaches the internet — polish needs it; local recognition doesn't. */
+    private fun hasValidatedNetwork(): Boolean = runCatching {
+        val connectivity = getSystemService(android.net.ConnectivityManager::class.java) ?: return@runCatching true
+        val capabilities = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return@runCatching false
+        capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }.getOrDefault(true)
 
     // Guards scheduleBackendReadyRecheck() so a second mic tap while a
     // recheck loop is already running doesn't stack a duplicate one.
@@ -3806,7 +3789,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // before it, even though `processing` itself is already false.
         voiceButton?.isProcessing = processing || cloudNoteSubmitting
         // Re-pushed here, not only from each field's own setter: a panel
-        // rebuild mid-dictation (see toggleDictation()'s edit-panel exit)
+        // rebuild mid-dictation (a draft opening or closing, a mode switch)
         // hands us a fresh VoiceButton that never saw those setters fire.
         voiceButton?.rawModeActive = rawModeArmed
         voiceButton?.quickNoteActive = quickNoteArmed
@@ -3830,6 +3813,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         return when {
             dictationInProgress() && rawModeArmed -> ui("原样转写", "Raw Mode")
             dictationInProgress() && quickNoteArmed -> ui("速记模式", "Quick notes")
+            dictationInProgress() && cloudNoteArmed && cloudNoteReviewArmed -> ui("云笔记 · 发送前编辑", "Cloud notes · edit before sending")
+            state == "speaking" && cloudNoteArmed -> ui("云笔记 · 上划编辑后发送", "Cloud notes · swipe up to edit first")
             dictationInProgress() && (cloudNoteArmed || cloudNoteSubmitting) -> ui("云笔记", "Cloud notes")
             else -> ui("上划RAW · 左划速记 · 右划云笔记", "Up: Raw · Left: Quick notes · Right: Cloud notes")
         }
@@ -3854,11 +3839,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /** The request owns its destination; delayed network callbacks cannot affect a later recording. */
-    private fun submitCloudNoteText(text: String, destination: Pair<String, String>?, requestId: Long) {
+    private fun submitCloudNoteText(
+        text: String,
+        destination: Pair<String, String>?,
+        requestId: Long,
+        onFinished: ((success: Boolean, message: String) -> Unit)? = null,
+    ) {
         if (text.isBlank()) {
             recording = false
             processing = false
             setState("error", "没有识别到文字")
+            onFinished?.invoke(false, "没有识别到文字")
             return
         }
         val (url, token) = destination ?: ("" to "")
@@ -3866,6 +3857,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         processing = false
         if (url.isEmpty() || token.isEmpty()) {
             setState("error", "请先在设置中填写云笔记的地址/Token")
+            onFinished?.invoke(false, "请先在设置中填写云笔记的地址/Token")
             return
         }
         cloudNoteSubmitting = true
@@ -3889,27 +3881,418 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val code = connection.responseCode
                 mainHandler.post {
-                    if (requestId != imeRequestId) return@post
-                    if (code in 200..299) {
-                        setState("done", "已提交云笔记", QUICK_NOTE_CONFIRMATION_DELAY_MS)
-                    } else {
-                        setState("error", "云笔记提交失败（$code）")
+                    val success = code in 200..299
+                    val message = if (success) "已提交云笔记" else "云笔记提交失败（$code）"
+                    if (requestId == imeRequestId) {
+                        if (success) setState("done", message, QUICK_NOTE_CONFIRMATION_DELAY_MS) else setState("error", message)
                     }
+                    onFinished?.invoke(success, message)
                 }
             } catch (error: Throwable) {
                 android.util.Log.w("OpenLessImeService", "cloud note webhook submit failed: ${error.javaClass.simpleName}")
                 mainHandler.post {
                     if (requestId == imeRequestId) setState("error", "云笔记提交失败，请检查网络")
+                    onFinished?.invoke(false, "云笔记提交失败，请检查网络")
                 }
             } finally { connection?.disconnect() }
         }.start()
     }
 
-    private fun commitImeText(text: String) {
-        if (awaitingEditReplacement) {
-            finishEditWithSpokenReplacement(text)
+    /** What Confirm does with the text in the draft bar. */
+    private enum class DraftPurpose {
+        /** Post it to the Cloud notes webhook. */
+        CLOUD_NOTE,
+        /** Write it back into the host field, over the text it was opened with. */
+        DICTATION_EDIT,
+    }
+
+    /**
+     * Draft box of the draft bar; non-null exactly while the bar is up. The
+     * same instance is re-parented into every rebuilt input view (a mode
+     * switch rebuilds the whole panel), so the text, caret, selection and
+     * scroll position survive without being copied around.
+     */
+    private var draftEdit: android.widget.EditText? = null
+    private var draftConnection: android.view.inputmethod.InputConnection? = null
+    private var draftPurpose = DraftPurpose.CLOUD_NOTE
+    private var draftCloudDestination: Pair<String, String>? = null
+    // DICTATION_EDIT: the host-field text being replaced, whether it is the
+    // whole last dictation result or the host field's selection, and where it
+    // started in the host field when the draft opened (null if the host
+    // doesn't report absolute offsets).
+    private var draftOriginalText: String? = null
+    private var draftReplacesWholeResult = false
+    private var draftOriginalHostStart: Int? = null
+    private var draftRestoreDictationText: String? = null
+    private var draftRestoreDictationUndone = false
+    private var draftSubmitting = false
+    private var draftMessage: String? = null
+    private var draftMessageIsError = false
+    // Bumped whenever a draft opens or closes; a submit result only applies to the draft that sent it.
+    private var draftToken = 0L
+    private var draftStatusView: TextView? = null
+    private var draftCancelButton: TextView? = null
+    private var draftConfirmButton: TextView? = null
+
+    /**
+     * Every key, candidate, backspace and dictation commit in this service
+     * writes through currentInputConnection. While a draft is up that is the
+     * draft box, never the host app's field — and never a fallback to the
+     * host connection, even if the draft's own one is unavailable.
+     */
+    override fun getCurrentInputConnection(): android.view.inputmethod.InputConnection? {
+        val edit = draftEdit ?: return super.getCurrentInputConnection()
+        draftConnection?.let { return it }
+        val base = edit.onCreateInputConnection(EditorInfo()) ?: return null
+        return DraftConnection(base, edit).also { draftConnection = it }
+    }
+
+    /** The host app's field, also while a draft has taken over currentInputConnection. */
+    private fun hostInputConnection(): android.view.inputmethod.InputConnection? = super.getCurrentInputConnection()
+
+    /** Composition and dictation-result state belongs to one text target; drop it when the target flips between the host field and the draft. */
+    private fun resetEditingStateForTargetChange() {
+        englishComposingWord.clear()
+        englishCandidateQueryEpoch++
+        rimePinyinController.clear()
+        rimePinyinController.resetAssociationContext()
+        strokeController.resetForModeSwitch()
+        clipboardSelectionMode = false
+        clipboardSelectionAnchor = -1
+        clipboardSelectionActive = -1
+        lastDictationText = null
+        dictationTextUndone = false
+    }
+
+    /** Puts the draft bar up with [text] in the box, caret at the end. */
+    private fun openDraft(purpose: DraftPurpose, text: String) {
+        resetEditingStateForTargetChange()
+        draftToken++
+        draftPurpose = purpose
+        draftSubmitting = false
+        draftMessage = null
+        draftMessageIsError = false
+        draftConnection = null
+        draftEdit = android.widget.EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            setSingleLine(false)
+            minLines = 2
+            maxLines = 4
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            textSize = 16f
+            isVerticalScrollBarEnabled = true
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            // This window never takes input focus; the keys below are the only keyboard.
+            showSoftInputOnFocus = false
+            // No floating selection/insertion toolbar from the IME window.
+            // A tap still places the caret, and the clipboard panel still
+            // selects, copies and pastes through the draft connection.
+            isLongClickable = false
+            setOnLongClickListener { true }
+            val noActionMode = object : android.view.ActionMode.Callback {
+                override fun onCreateActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?) = false
+                override fun onPrepareActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?) = false
+                override fun onActionItemClicked(mode: android.view.ActionMode?, item: android.view.MenuItem?) = false
+                override fun onDestroyActionMode(mode: android.view.ActionMode?) = Unit
+            }
+            customSelectionActionModeCallback = noActionMode
+            customInsertionActionModeCallback = noActionMode
+            setText(text)
+            setSelection(this.text.length)
+        }
+        refreshInputView()
+    }
+
+    /** A Cloud notes dictation ended by a swipe up lands here instead of being sent: the text goes into the draft box and waits for Confirm. */
+    private fun openCloudNoteDraft(text: String, destination: Pair<String, String>?) {
+        recording = false
+        processing = false
+        if (text.isBlank()) {
+            setState("error", "没有识别到文字")
             return
         }
+        val existing = draftEdit
+        if (existing != null) {
+            // Dictated while a draft is still open: the text joins that draft at the caret.
+            val editable = existing.text
+            val start = existing.selectionStart.coerceAtLeast(0)
+            val end = existing.selectionEnd.coerceAtLeast(0)
+            editable.replace(minOf(start, end), maxOf(start, end), text)
+            if (draftPurpose == DraftPurpose.CLOUD_NOTE) draftCloudDestination = destination
+            showDraftMessage(null, isError = false)
+        } else {
+            openDraft(DraftPurpose.CLOUD_NOTE, text)
+            draftCloudDestination = destination
+        }
+        if (draftPurpose == DraftPurpose.CLOUD_NOTE) {
+            setState("done", ui("请确认云笔记草稿", "Review the cloud note draft"))
+        } else {
+            setState("done", "已上屏")
+        }
+    }
+
+    /** Confirm button: hands the edited draft to whatever it was opened for, once. */
+    private fun confirmDraft() {
+        val edit = draftEdit ?: return
+        if (draftSubmitting) return
+        if (recording || processing) {
+            showDraftMessage(ui("请先结束当前听写", "Finish the current dictation first"), isError = true)
+            return
+        }
+        currentInputConnection?.finishComposingText()
+        val text = edit.text.toString()
+        if (text.isBlank()) {
+            showDraftMessage(ui("内容为空，无法确认", "Nothing to confirm"), isError = true)
+            return
+        }
+        when (draftPurpose) {
+            DraftPurpose.CLOUD_NOTE -> submitCloudNoteDraft(text)
+            DraftPurpose.DICTATION_EDIT -> applyDictationEditDraft(text)
+        }
+    }
+
+    /** The bar stays up until the request finishes, so a failed submit keeps the text. */
+    private fun submitCloudNoteDraft(text: String) {
+        draftSubmitting = true
+        showDraftMessage(displayStatus("正在提交云笔记"), isError = false)
+        val token = draftToken
+        val submissionRequestId = imeRequestId
+        submitCloudNoteText(text, draftCloudDestination, submissionRequestId) { success, message ->
+            if (token != draftToken || submissionRequestId != imeRequestId) return@submitCloudNoteText
+            draftSubmitting = false
+            if (success) {
+                val unchanged = draftEdit?.text?.toString() == text
+                if (recording || processing || !unchanged) {
+                    showDraftMessage(displayStatus(message), isError = false)
+                } else {
+                    closeDraft()
+                    // The status line only exists on the voice panel.
+                    if (inputMode != InputMode.VOICE) Toast.makeText(this, displayStatus(message), Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                showDraftMessage(
+                    if (englishUi && message.startsWith("云笔记提交失败")) "Cloud notes submit failed" else displayStatus(message),
+                    isError = true,
+                )
+            }
+        }
+    }
+
+    /** Absolute offset of the host field's caret (selection start), or null if the host doesn't report one. */
+    private fun hostCaretOffset(host: android.view.inputmethod.InputConnection): Int? {
+        val extracted = host.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0) ?: return null
+        if (extracted.selectionStart < 0 || extracted.selectionEnd < 0) return null
+        return extracted.startOffset + minOf(extracted.selectionStart, extracted.selectionEnd)
+    }
+
+    /**
+     * Swaps [original] for [text] in the host field, wherever the host's
+     * caret is by now; see [ImeDraftReplacement] for how the original is
+     * found. False — with the host field untouched — if it is no longer there.
+     */
+    private fun replaceInHost(
+        host: android.view.inputmethod.InputConnection,
+        original: String,
+        text: String,
+        hintStart: Int?,
+    ): Boolean {
+        val selected = host.getSelectedText(0)?.toString().orEmpty()
+        val reach = HOST_SEARCH_REACH + original.length
+        val before = host.getTextBeforeCursor(reach, 0)?.toString() ?: return false
+        val after = host.getTextAfterCursor(reach, 0)?.toString().orEmpty()
+        val plan = ImeDraftReplacement.plan(original, before, selected, after, hostCaretOffset(host), hintStart)
+            ?: return false
+        host.beginBatchEdit()
+        // commitText() replaces the selection it is given.
+        val replaced = when (plan) {
+            ImeDraftReplacement.ReplaceSelection -> host.commitText(text, 1)
+            is ImeDraftReplacement.SelectRange -> host.setSelection(plan.start, plan.end) && host.commitText(text, 1)
+            is ImeDraftReplacement.DeleteAroundCaret ->
+                host.deleteSurroundingText(plan.before, plan.after) && host.commitText(text, 1)
+        }
+        host.endBatchEdit()
+        return replaced
+    }
+
+    /** Replaces the original text in the host field with the edited draft; if the original is gone from the host field, nothing is touched. */
+    private fun applyDictationEditDraft(text: String) {
+        val original = draftOriginalText
+        val host = hostInputConnection()
+        if (original == null || host == null) {
+            showDraftMessage(displayStatus("输入连接已失效"), isError = true)
+            return
+        }
+        val replacesWhole = draftReplacesWholeResult
+        if (!replaceInHost(host, original, text, draftOriginalHostStart)) {
+            showDraftMessage(ui("找不到原文，无法替换", "The original text is gone"), isError = true)
+            return
+        }
+        closeDraft()
+        // A sub-span correction leaves the surrounding text's exact new
+        // length untracked, so the coarse "undo the whole utterance" no
+        // longer has a clean span to act on; a whole-result replacement is
+        // still one contiguous span, so undo/redo keeps working against it.
+        lastDictationText = if (replacesWhole) text else null
+        lastDictationEpoch = sessionEpoch
+        dictationTextUndone = false
+        setState("done", "已上屏")
+        updateDictationResultControls()
+    }
+
+    /** Cancel button / Back: drops the draft; nothing is sent and the host field stays as it was. */
+    private fun discardDraft() {
+        if (draftEdit == null || draftSubmitting) return
+        val purpose = draftPurpose
+        val restoreText = draftRestoreDictationText
+        val restoreUndone = draftRestoreDictationUndone
+        if (recording || processing) cancelDictation()
+        closeDraft()
+        if (purpose == DraftPurpose.CLOUD_NOTE) {
+            setState("done", ui("已丢弃云笔记草稿", "Cloud note draft discarded"))
+            return
+        }
+        lastDictationText = restoreText
+        // Cancelling draft dictation advances the epoch, not the host text target.
+        lastDictationEpoch = sessionEpoch
+        dictationTextUndone = restoreUndone
+        setState("idle", "点击开始说话")
+        updateDictationResultControls()
+    }
+
+    /** Takes the bar down and hands the keys back to the host field. Never submits or writes anything. */
+    private fun closeDraft() {
+        if (draftEdit == null) return
+        draftToken++
+        draftEdit = null
+        draftConnection = null
+        draftPurpose = DraftPurpose.CLOUD_NOTE
+        draftCloudDestination = null
+        draftOriginalText = null
+        draftReplacesWholeResult = false
+        draftOriginalHostStart = null
+        draftRestoreDictationText = null
+        draftRestoreDictationUndone = false
+        draftSubmitting = false
+        draftMessage = null
+        draftMessageIsError = false
+        draftStatusView = null
+        draftCancelButton = null
+        draftConfirmButton = null
+        resetEditingStateForTargetChange()
+        refreshInputView()
+    }
+
+    private fun showDraftMessage(message: String?, isError: Boolean) {
+        draftMessage = message
+        draftMessageIsError = isError
+        updateDraftControls()
+    }
+
+    private fun updateDraftControls() {
+        draftStatusView?.apply {
+            text = draftMessage ?: when (draftPurpose) {
+                DraftPurpose.CLOUD_NOTE -> ui("云笔记草稿", "Cloud note draft")
+                DraftPurpose.DICTATION_EDIT -> ui("编辑后替换原文", "Edit, then replace")
+            }
+            setTextColor(
+                if (draftMessage != null && draftMessageIsError) LINK_COLOR_CLOUD_NOTE
+                else tone(Color.rgb(190, 190, 190), Color.rgb(110, 110, 115)),
+            )
+        }
+        val enabled = !draftSubmitting
+        listOf(draftCancelButton, draftConfirmButton).forEach { button ->
+            button?.isEnabled = enabled
+            button?.alpha = if (enabled) 1f else 0.45f
+        }
+    }
+
+    /**
+     * Stacks the draft bar (draft box, then Cancel / status / Confirm) on top
+     * of the regular input view while a draft is open. The keyboard panel
+     * below keeps its own height, header and mode toggle, so every input
+     * mode stays fully usable for editing the draft; the IME just grows
+     * taller by the height of the bar.
+     */
+    private fun wrapWithDraftBar(keyboard: View): View {
+        val edit = draftEdit ?: return keyboard
+        (edit.parent as? ViewGroup)?.removeView(edit)
+        val panelColor = tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246))
+        edit.setTextColor(tone(Color.WHITE, Color.rgb(28, 28, 30)))
+        edit.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(10).toFloat()
+            setColor(tone(Color.rgb(34, 34, 34), Color.WHITE))
+            setStroke(dp(1), tone(Color.rgb(68, 68, 68), Color.rgb(215, 215, 218)))
+        }
+        edit.setPadding(dp(12), dp(8), dp(12), dp(8))
+
+        fun barButton(label: String, fill: Int, textColor: Int, action: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 15f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(textColor)
+            setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(18).toFloat()
+                setColor(fill)
+            }
+            isClickable = true
+            setOnClickListener {
+                performKeyHaptic()
+                action()
+            }
+        }
+        val cancel = barButton(
+            ui("取消", "Cancel"),
+            tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)),
+            tone(Color.WHITE, Color.rgb(40, 40, 44)),
+        ) { discardDraft() }
+        val confirmFill = if (draftPurpose == DraftPurpose.CLOUD_NOTE) LINK_COLOR_CLOUD_NOTE else strokeEncodeAccentColor
+        val confirm = barButton(ui("确认", "Confirm"), confirmFill, Color.WHITE) { confirmDraft() }
+        val statusView = TextView(this).apply {
+            textSize = 13f
+            gravity = android.view.Gravity.CENTER
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        draftCancelButton = cancel
+        draftConfirmButton = confirm
+        draftStatusView = statusView
+        updateDraftControls()
+
+        val buttons = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        buttons.addView(cancel, LinearLayout.LayoutParams(dp(84), dp(36)))
+        buttons.addView(statusView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(8)
+            marginEnd = dp(8)
+        })
+        buttons.addView(confirm, LinearLayout.LayoutParams(dp(84), dp(36)))
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(8))
+            setBackgroundColor(panelColor)
+            // Swallow stray touches in the bar's padding so they can't reach the app underneath.
+            isClickable = true
+        }
+        bar.addView(edit, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        bar.addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        })
+
+        val host = DraftHost(this, keyboard).apply { orientation = LinearLayout.VERTICAL }
+        host.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        host.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+        host.addView(keyboard)
+        // View focus (not window focus) is what makes the caret draw and follow the text.
+        edit.post { edit.requestFocus() }
+        return host
+    }
+
+    private fun commitImeText(text: String) {
         if (text.isBlank()) {
             recording = false
             processing = false
@@ -3953,11 +4336,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // these controls disappear right after appearing. They should stay
         // up as long as there's a previous result sitting in the buffer to
         // undo/redo/edit, regardless of what the mic is doing right now.
-        val visible = inputMode == InputMode.VOICE && lastDictationText != null && !editingDictationResult
+        val visible = inputMode == InputMode.VOICE && lastDictationText != null
         // This row is a FrameLayout overlay above the footer (see
         // buildDictationResultOverlay()), not part of the panel's own
         // LinearLayout flow, so GONE here never shifts the mic or footer.
         dictationResultRow?.visibility = if (visible) View.VISIBLE else View.GONE
+        // A dictation made into an open draft can still be undone there, but
+        // not edited in a second draft on top of the first.
+        editResultButton?.visibility = if (draftEdit == null) View.VISIBLE else View.INVISIBLE
         undoRedoButton?.text = if (dictationTextUndone) "↻" else "✕"
         undoRedoButton?.contentDescription = if (dictationTextUndone) {
             ui("重做本次听写结果", "Redo this dictation")
@@ -4024,172 +4410,41 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Switches the voice panel into the "edit dictation result" sub-view.
-     * Corrects whatever text the user selected in the real input field
-     * (native OS selection, e.g. long-press to select a wrong word); if
-     * nothing is selected, falls back to replacing the whole last dictation
-     * result so the button still does something useful.
+     * ✎ on the voice panel, and the long-press on the clipboard panel's
+     * History key: puts the text to fix into the draft bar, where every
+     * input mode can edit it; Confirm writes it back over the original.
+     * The text is whatever is selected in the host field, or — unless
+     * [requireSelection] — the whole last dictation result.
      */
-    private fun openEditDictationResult() {
+    private fun openDictationEditDraft(requireSelection: Boolean) {
+        if (draftEdit != null || recording || processing) return
         val connection = currentInputConnection ?: return
         val selected = connection.getSelectedText(0)?.toString()?.takeIf { it.isNotEmpty() }
-        if (selected != null) {
-            editingOriginalText = selected
-            editingReplacesWholeResult = false
-        } else {
-            val whole = lastDictationText ?: return
-            if (sessionEpoch != lastDictationEpoch || dictationTextUndone) return
-            if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) return
-            val beforeCursor = connection.getTextBeforeCursor(whole.length, 0)
-            if (beforeCursor == null) {
-                setState("error", ui("无法读取原文，未替换", "Cannot read original text; replacement cancelled"))
+        val resultIntact = sessionEpoch == lastDictationEpoch && !dictationTextUndone
+        val original = when {
+            selected != null -> selected
+            requireSelection -> {
+                Toast.makeText(this, ui("请先选中字词", "Please select word"), Toast.LENGTH_SHORT).show()
                 return
             }
-            if (!DictationSpan.matchesBeforeCursor(beforeCursor, whole)) {
-                lastDictationText = null
-                updateDictationResultControls()
-                Toast.makeText(this, ui("原文已变化，无法整段替换", "Original text changed; cannot replace it"), Toast.LENGTH_SHORT).show()
-                return
-            }
-            editingOriginalText = whole
-            editingReplacesWholeResult = true
+            else -> lastDictationText?.takeIf { resultIntact } ?: return
         }
-        // Starts unchecked every time — adding to the Dictionary is an
-        // opt-in the user ticks deliberately, not a guess based on how much
-        // of the result was selected. The user can still flip the checkbox
-        // themselves before finishing.
-        addToDictionaryForEdit = false
-        editingDictationResult = true
-        awaitingEditReplacement = true
-        refreshInputView()
-        // Recording starts immediately when the edit panel opens — the user
-        // only has to tap the mic once, to finish, matching "Tap again to
-        // finish" rather than requiring a tap to start too.
-        toggleDictation()
-    }
-
-    /**
-     * Long-press "History"/"历史" in the clipboard panel: same mechanism as
-     * openEditDictationResult()'s selected-text branch (replaces the
-     * selection in the real input field with the spoken correction) — but
-     * with no whole-last-result fallback. Without an actual selection
-     * there's nothing this gesture can reasonably act on, so it surfaces a
-     * hint instead of guessing.
-     */
-    private fun openSelectedTextCorrectionViaVoice() {
-        val selected = currentInputConnection?.getSelectedText(0)?.toString()?.takeIf { it.isNotEmpty() }
-        if (selected == null) {
-            Toast.makeText(this, ui("请先选中字词", "Please select word"), Toast.LENGTH_SHORT).show()
-            return
+        // Cancel puts the undo/redo/edit controls back exactly as they were.
+        val restoreText = lastDictationText?.takeIf { sessionEpoch == lastDictationEpoch }
+        val restoreUndone = restoreText != null && dictationTextUndone
+        val caret = hostCaretOffset(connection)
+        val originalStart = when {
+            caret == null -> null
+            selected != null -> caret
+            connection.getTextBeforeCursor(original.length, 0)?.toString() == original -> caret - original.length
+            else -> null
         }
-        editingOriginalText = selected
-        editingReplacesWholeResult = false
-        addToDictionaryForEdit = false
-        editingDictationResult = true
-        awaitingEditReplacement = true
-        refreshInputView()
-        toggleDictation()
-    }
-
-    /**
-     * Drops a spoken correction that is no longer on screen. The in-flight
-     * result of an open edit panel must keep its replacement; once that panel
-     * is gone, the next commit is an ordinary insert.
-     */
-    private fun releaseDismissedEditReplacement() {
-        val next = PendingEditReplacement(
-            awaiting = awaitingEditReplacement,
-            panelVisible = editingDictationResult,
-            original = editingOriginalText,
-            replacesWhole = editingReplacesWholeResult,
-            addToDictionary = addToDictionaryForEdit,
-        ).releaseIfPanelDismissed()
-        awaitingEditReplacement = next.awaiting
-        editingOriginalText = next.original
-        editingReplacesWholeResult = next.replacesWhole
-        addToDictionaryForEdit = next.addToDictionary
-    }
-
-    /** Backs out of the edit sub-view without applying any correction. */
-    private fun closeEditDictationResult() {
-        if (recording) {
-            cancelImeSession()
-        }
-        recording = false
-        processing = false
-        editingDictationResult = false
-        awaitingEditReplacement = false
-        editingOriginalText = null
-        setState("done", "已上屏")
-        refreshInputView()
-    }
-
-    /**
-     * Applies the freshly spoken replacement for editingOriginalText: swaps
-     * it into the input field (relying on InputConnection.commitText's
-     * standard "replace the active selection" behavior when there is a real
-     * OS selection, or an explicit delete+insert when we fell back to the
-     * whole last result).
-     *
-     * Remembering the corrected word/phrase in the global Dictionary
-     * uses nativeAddLearnedVocabulary and the shared learned-source marker.
-     * addToDictionaryForEdit starts unchecked and records the user's explicit choice.
-     */
-    private fun finishEditWithSpokenReplacement(text: String) {
-        recording = false
-        processing = false
-        val original = editingOriginalText
-        val replacesWhole = editingReplacesWholeResult
-        val shouldAddToDictionary = addToDictionaryForEdit
-        editingDictationResult = false
-        awaitingEditReplacement = false
-        editingOriginalText = null
-        if (text.isBlank() || original == null) {
-            setState("done", "已上屏")
-            refreshInputView()
-            return
-        }
-        val connection = currentInputConnection
-        if (connection != null) {
-            if (replacesWhole) {
-                if (!requireCollapsedDictationCursor(connection, ui("请先取消选区，再整段替换", "Clear the selection before replacing the dictation"))) {
-                    refreshInputView()
-                    return
-                }
-                if (!DictationSpan.matchesBeforeCursor(
-                        connection.getTextBeforeCursor(original.length, 0),
-                        original,
-                    ) || !connection.deleteSurroundingText(original.length, 0)
-                ) {
-                    setState("error", ui("原文已变化，未替换", "Original text changed; not replaced"))
-                    refreshInputView()
-                    return
-                }
-            }
-            if (!connection.commitText(text, 1)) {
-                val restored = !replacesWhole || connection.commitText(original, 1)
-                setState("error", if (restored) ui("替换失败", "Replace failed") else ui("替换失败，原文恢复失败", "Replace failed; original text could not be restored"))
-                refreshInputView()
-                return
-            }
-        } else {
-            setState("error", ui("输入连接已失效，未替换", "Input connection lost; not replaced"))
-            refreshInputView()
-            return
-        }
-        if (shouldAddToDictionary && text != original) {
-            runNativeAction("加入词典") {
-                check(OpenLessNative.nativeAddLearnedVocabulary(text)) { "词典保存失败，请在历史中重试" }
-            }
-        }
-        // A sub-span correction leaves the surrounding text's exact new
-        // length untracked, so the coarse "undo the whole utterance" no
-        // longer has a clean span to act on; a whole-result replacement is
-        // still one contiguous span, so undo/redo keeps working against it.
-        lastDictationText = if (replacesWhole) text else null
-        dictationTextUndone = false
-        setState("done", "已上屏")
-        refreshInputView()
+        openDraft(DraftPurpose.DICTATION_EDIT, original)
+        draftOriginalText = original
+        draftReplacesWholeResult = selected == null
+        draftOriginalHostStart = originalStart
+        draftRestoreDictationText = restoreText
+        draftRestoreDictationUndone = restoreUndone
     }
 
     private fun setState(nextState: String, message: String, revertDelayMs: Long = DONE_TO_IDLE_DELAY_MS) {
@@ -4497,6 +4752,54 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
             super.onMeasure(widthMeasureSpec, exactHeightSpec)
         }
+    }
+
+    /** Input view while a draft is open: the draft bar stacked above the regular [keyboard] view. */
+    private class DraftHost(
+        context: android.content.Context,
+        val keyboard: View,
+    ) : LinearLayout(context)
+
+    /**
+     * The draft box's own InputConnection, with key events turned into text
+     * edits. The IME window never has window focus, and the framework drops
+     * key events dispatched to an unfocused window — so Return, Backspace and
+     * the cursor keys sent through sendKeyEvent() would silently do nothing.
+     */
+    private class DraftConnection(
+        target: android.view.inputmethod.InputConnection,
+        private val edit: android.widget.EditText,
+    ) : android.view.inputmethod.InputConnectionWrapper(target, true) {
+        override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
+            if (event.action != android.view.KeyEvent.ACTION_DOWN) return true
+            val text = edit.text
+            val start = minOf(edit.selectionStart, edit.selectionEnd).coerceAtLeast(0)
+            val end = maxOf(edit.selectionStart, edit.selectionEnd).coerceAtLeast(0)
+            val layout = edit.layout
+            when (event.keyCode) {
+                android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> commitText("\n", 1)
+                android.view.KeyEvent.KEYCODE_DEL ->
+                    if (start != end) commitText("", 1) else deleteSurroundingTextInCodePoints(1, 0)
+                android.view.KeyEvent.KEYCODE_FORWARD_DEL ->
+                    if (start != end) commitText("", 1) else deleteSurroundingTextInCodePoints(0, 1)
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT ->
+                    if (layout != null) android.text.Selection.moveLeft(text, layout) else edit.setSelection((start - 1).coerceAtLeast(0))
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT ->
+                    if (layout != null) android.text.Selection.moveRight(text, layout) else edit.setSelection((end + 1).coerceAtMost(text.length))
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> if (layout != null) android.text.Selection.moveUp(text, layout)
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> if (layout != null) android.text.Selection.moveDown(text, layout)
+                android.view.KeyEvent.KEYCODE_MOVE_HOME -> if (layout != null) android.text.Selection.moveToLeftEdge(text, layout)
+                android.view.KeyEvent.KEYCODE_MOVE_END -> if (layout != null) android.text.Selection.moveToRightEdge(text, layout)
+                else -> {
+                    val codePoint = event.unicodeChar
+                    if (codePoint != 0 && !Character.isISOControl(codePoint)) commitText(String(Character.toChars(codePoint)), 1)
+                }
+            }
+            return true
+        }
+
+        // A multi-line draft has no editor action; the action key is a line break.
+        override fun performEditorAction(actionCode: Int): Boolean = commitText("\n", 1)
     }
 
     /**
@@ -5915,6 +6218,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // (recording/processing), plus a light-green "ready" and an amber
         // "link issue" that overlay doesn't have.
         private val LINK_COLOR_READY = Color.rgb(134, 239, 172)
+        // Ready, and the next dictation runs on the local model (asrRoute).
+        private val LINK_COLOR_READY_LOCAL = Color.rgb(21, 128, 61)
+        // Ready, local model and raw output: no usable polish channel or no network.
+        private val LINK_COLOR_READY_LOCAL_RAW = Color.rgb(241, 245, 249)
         private val LINK_COLOR_RECORDING = Color.rgb(244, 63, 94)
         // Recording with rawModeArmed set (mic swipe-up: skip LLM polish on
         // stop) — distinct orange so glancing at the dot tells the two
@@ -5931,6 +6238,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // LINK_COLOR_RECORDING_RAW's orange and LINK_COLOR_QUICK_NOTE's
         // green.
         private val LINK_COLOR_CLOUD_NOTE = Color.rgb(239, 68, 68)
+        // How far on either side of the host caret an edited text's original is looked for.
+        private const val HOST_SEARCH_REACH = 4000
         private val LINK_COLOR_PROCESSING = Color.rgb(56, 189, 248)
         private val LINK_COLOR_ISSUE = Color.rgb(250, 204, 21)
         // Ready is the state the indicator sits in almost all the time, so

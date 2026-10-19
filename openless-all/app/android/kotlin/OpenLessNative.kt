@@ -95,6 +95,11 @@ object OpenLessNative {
     @JvmStatic external fun nativeHasRegisteredActivityContext(): Boolean
 
     @JvmStatic external fun nativeBackendSnapshot(): String
+
+    /** "local", "cloud" or "unavailable" — which recognizer the next dictation uses. Blocks on a credential read: call off the main thread. */
+    @JvmStatic external fun nativeAsrRoute(): String?
+    /** "<local>,<cloud>,<latest>" dictation counts from history; latest is "local", "cloud" or empty. Reads history: call off the main thread. */
+    @JvmStatic external fun nativeAsrUsage(): String?
     @JvmStatic external fun nativeImeCommand(json: String): String
     @JvmStatic external fun nativeCloudPinyin(pinyin: String): String
     @JvmStatic external fun nativePublicDictionary(base: String, action: String): String
@@ -132,4 +137,27 @@ object OpenLessNative {
     /** Explicit, user-selected plaintext transfer; result envelopes carry failures. */
     @JvmStatic external fun nativeExportProviderSettings(includeCredentials: Boolean): String
     @JvmStatic external fun nativeImportProviderSettings(json: String, selection: Boolean, credentials: Boolean): String
+
+    /** Versioned, bounded local migration bundle facade. Payloads are base64 only at the JNI boundary. */
+    @JvmStatic external fun nativeExportLocalMigrationBundle(
+        mode: String,
+        includeCredentials: Boolean,
+        password: String,
+    ): String
+
+    @JvmStatic external fun nativeInspectLocalMigrationBundle(bundleBase64: String): String
+    @JvmStatic external fun nativePreviewLocalMigrationBundle(
+        bundleBase64: String,
+        password: String,
+        mode: String,
+    ): String
+
+    @JvmStatic external fun nativeImportLocalMigrationBundle(
+        bundleBase64: String,
+        password: String,
+        mode: String,
+        choicesJson: String,
+        expectedGeneration: String,
+        expectedAndroidRevision: String,
+    ): String
 }

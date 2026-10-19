@@ -2501,9 +2501,11 @@ pub(crate) mod less_computer_test_support {
         prefs.coding_agent_enabled = true;
         prefs.hotkey.mode = mode;
         crate::set_backend_preferences_for_test(&backend, prefs);
+        let qa_context = Arc::new(crate::qa_adapter::TauriQaHostContext::default());
         let inner = Arc::new(Inner {
             host: crate::tauri_coordinator_host::TauriCoordinatorHost::new(
                 crate::core_adapters::app_handle_slot(),
+                qa_context,
             ),
             hotkey_runtime_target: Mutex::new((&backend.get_preferences()).into()),
             backend,

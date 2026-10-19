@@ -13,7 +13,8 @@ use crate::cloud_sync_e2ee_protocol::types::{
 
 use super::registry::{
     credential_accounts, excluded_extension_key, is_device_channel, preference_field,
-    validate_preference_value, PreferenceClass,
+    public_credential_account, public_credential_value_safe, validate_preference_value,
+    PreferenceClass,
 };
 use super::types::*;
 
@@ -54,6 +55,10 @@ pub fn validate_sync_documents(
             return Err(DocumentError::DuplicateId);
         }
     }
+    normalize_capsule_display_mode(&mut set)?;
+    if set.documents.len().saturating_add(set.tombstones.len()) > MAX_DOCUMENTS {
+        return Err(DocumentError::PayloadTooLarge);
+    }
     normalize_collection_order(&mut set)?;
     let mut limit = SizeLimit { bytes: 0 };
     serde_json::to_writer(&mut limit, &set).map_err(|_| DocumentError::PayloadTooLarge)?;
@@ -66,6 +71,52 @@ pub fn validate_sync_documents(
         set,
         revision: observed_revision,
     })
+}
+
+fn normalize_capsule_display_mode(set: &mut DocumentSet) -> DocumentResult<()> {
+    use crate::CapsuleDisplayMode;
+
+    let mode = |id: &str| -> DocumentResult<Option<CapsuleDisplayMode>> {
+        set.documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == id)
+            .map(|doc| {
+                serde_json::from_value(doc.value.clone())
+                    .map_err(|_| DocumentError::InvalidDocument)
+            })
+            .transpose()
+    };
+    let legacy = mode("capsuleDisplayMode")?;
+    let incoming_v2 = mode("capsuleDisplayModeV2")?;
+    let Some(v2) = incoming_v2.or_else(|| legacy.and_then(CapsuleDisplayMode::extended_sync_mode))
+    else {
+        return Ok(());
+    };
+    if incoming_v2.is_none() {
+        if set
+            .tombstones
+            .iter()
+            .any(|mark| mark.kind == DocumentKind::Preferences && mark.id == "capsuleDisplayModeV2")
+        {
+            return Err(DocumentError::InvalidDocument);
+        }
+        set.documents.push(LogicalDocument {
+            id: "capsuleDisplayModeV2".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: DOCUMENT_SCHEMA_VERSION,
+            value: serde_json::to_value(v2).map_err(|_| DocumentError::InvalidDocument)?,
+        });
+    }
+    if let Some(doc) = set
+        .documents
+        .iter_mut()
+        .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == "capsuleDisplayMode")
+    {
+        // The old key is only a compatibility shadow, not an independent merge conflict.
+        doc.value = serde_json::to_value(v2.legacy_sync_mode())
+            .map_err(|_| DocumentError::InvalidDocument)?;
+    }
+    Ok(())
 }
 
 struct SizeLimit {
@@ -335,6 +386,13 @@ fn validate_channel(channel: &ChannelRecord) -> DocumentResult<()> {
     }
     if channel.namespace == SyncNamespace::Omni && channel.id != channel.provider_type {
         return Err(DocumentError::InvalidReference);
+    }
+    if channel.configuration.iter().any(|(account, value)| {
+        !public_credential_account(channel.namespace, account)
+            || !public_credential_value_safe(account, value)
+            || value.len() > 4096
+    }) {
+        return Err(DocumentError::ExcludedField);
     }
     Ok(())
 }

@@ -1320,6 +1320,16 @@ export const ja: typeof zhCN = {
       cursorContextDesc:
         '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
     },
+    localMigration: {
+      title: 'ローカル設定の移行',
+      description:
+        '移行可能なローカル設定をバージョン付きバンドルに書き出すか、別の Android 端末に復元します。共有モードはデフォルトで匿名化され、個人移行で認証情報を含める場合はパスワード保護が必要です。ネイティブ画面で統合または置換の前に、出所、バージョン、カテゴリ、変更内容を確認できます。',
+      safetyNote:
+        'システム権限、OAuth セッション、端末パス、実行時状態は移行されません。インポート前にローカルバックアップを作成します。',
+      open: 'ローカル移行を開く',
+      opening: '開いています…',
+      openFailed: 'ローカル移行を開けませんでした。設定からもう一度お試しください。',
+    },
     codingConsole: {
       title: 'Claude コンソール',
       desc: 'ローカルの Claude Code と MCP（computer use）の状態を検出し、ガードレール付きで Claude をヘッドレス実行して、出力とコストをストリーミング表示します。',
@@ -1480,10 +1490,16 @@ export const ja: typeof zhCN = {
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
       capsuleTranscriptFontSize: '文字起こしの文字サイズ',
-      capsuleDisplayModeLabel: "複数画面のカプセル",
-      capsuleDisplayModeDesc: "録音カプセルを表示する画面を選択します。すべての画面ではウィンドウと描画リソースの使用量が増えます。",
-      capsuleDisplayCursorScreen: "マウスポインターのある画面",
-      capsuleDisplayAllScreens: "すべての画面に表示",
+      capsuleDisplayModeLabel: '複数画面のカプセル',
+      capsuleDisplayModeDesc:
+        '録音カプセルを表示する画面を選択します。すべての画面ではウィンドウと描画リソースの使用量が増えます。',
+      capsuleDisplayCursorScreen: 'マウスポインターのある画面',
+      capsuleDisplayPrimaryScreen: 'メインディスプレイのみ',
+      capsuleDisplayForegroundWindowScreen: '前面ウィンドウのある画面',
+      capsuleDisplayAllScreens: 'すべての画面に表示',
+      capsuleDisplayModeRestartTitle: '表示モードを適用するには OpenLess を再起動してください',
+      capsuleDisplayModeRestartDesc:
+        'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',
@@ -1513,6 +1529,9 @@ export const ja: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（既定 / ほとんどのアプリ）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: 'プレーンテキスト挿入モード',
+      plainTextInsertionDesc:
+        'オンにすると、模擬貼り付けは Ctrl+V の代わりに Shift+Insert を使います（オン中は上のショートカットを変更できません）。極めて特殊な場合にのみオンにしてください（例：Punto Switcher などのキーボード配列切替ツールが Ctrl+V を奪う場合）。クリップボード貼り付け方式にのみ適用されます（Windows のみ）。',
       comboRecordLabel: 'ショートカットを記録',
       comboRecordDesc:
         'クリック後、希望するキーの組み合わせ（例：⌘⇧D）を押してください。トグル / 押し続けの両方に対応。',
@@ -2081,11 +2100,13 @@ export const ja: typeof zhCN = {
         background: 'バックグラウンド',
         keyboard: 'キーボード表示時',
         always: '常時',
+        never: '表示しない',
       },
       androidOverlayTriggerHint: {
         background: 'シンプル',
         keyboard: 'このモードは保留中です。既存設定はバックグラウンドに戻します。',
         always: '常に表示',
+        never: '自動表示しません。キーボードは引き続き使用できます。',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2157,12 +2178,18 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      windowsCompositionInputDesc:
+        '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
       localAsrTitle: 'ローカル ASR モデル',
       localAsrDesc: '転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。',
       localAsrWarningShort: 'ローカル推論は遅く、スペック不足では欠字の可能性があります。',
+      localAsrFallbackLabel: 'クラウド認識に失敗したらローカルモデルを使う',
+      localAsrFallbackDesc:
+        '通信が不安定、またはオフラインのとき、クラウドの再試行を待たずにダウンロード済みのローカルモデルで録音を認識します。ローカルモデルのダウンロードが必要です。',
       qwen3Desc: '有効化すると ASR プロバイダーが引き継がれます。',
       sherpaDesc: '有効化すると ASR プロバイダーが引き継がれます。',
       foundryDesc: '有効化すると ASR プロバイダーが引き継がれます。',

@@ -1,5 +1,6 @@
-//! Native capsule display policy: follow the pointer by default, mirror only
-//! when the user explicitly chooses all attached displays.
+//! Native capsule display policy: follow the pointer by default, select the primary or
+//! foreground-window display when requested, and mirror only when the user explicitly chooses
+//! all attached displays.
 //!
 //! The primary `capsule` / `capsule-rail` windows stay the source of truth: they own the
 //! card modes, the layout cache and the event routing. Legacy mirror labels are kept
@@ -11,9 +12,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::types::CapsuleDisplayMode;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::{AppHandle, Manager, Monitor, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use crate::types::CapsuleDisplayMode;
 
 pub(crate) const CAPSULE_MIRROR_PREFIX: &str = "capsule-mirror-";
 pub(crate) const RAIL_MIRROR_PREFIX: &str = "capsule-rail-mirror-";
@@ -34,6 +35,26 @@ pub(crate) struct MonitorRect {
     pub(crate) work_bottom: i32,
     /// Effective DPI scale (1.0 = 96 dpi).
     pub(crate) scale: f64,
+    /// Stable Tauri monitor name hash, when the runtime exposes one.
+    /// A zero value means that only the outer bounds can identify the monitor.
+    pub(crate) identity: u64,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn monitor_identity(name: Option<&String>) -> u64 {
+    let Some(name) = name else {
+        return 0;
+    };
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    if hash == 0 {
+        1
+    } else {
+        hash
+    }
 }
 
 impl MonitorRect {
@@ -56,13 +77,19 @@ impl MonitorRect {
             work_right: work_left + work.size.width as i32,
             work_bottom: work_top + work.size.height as i32,
             scale: monitor.scale_factor().max(0.1),
+            identity: monitor_identity(monitor.name()),
         }
     }
 
     /// Work area (taskbar excluded), falling back to the full monitor when the OS reports none.
     fn work_rect(&self) -> (i32, i32, i32, i32) {
         if self.work_right > self.work_left && self.work_bottom > self.work_top {
-            (self.work_left, self.work_top, self.work_right, self.work_bottom)
+            (
+                self.work_left,
+                self.work_top,
+                self.work_right,
+                self.work_bottom,
+            )
         } else {
             (self.left, self.top, self.right, self.bottom)
         }
@@ -75,20 +102,105 @@ impl MonitorRect {
 pub(crate) fn target_monitor_rect<R: tauri::Runtime>(
     window: &WebviewWindow<R>,
 ) -> Option<MonitorRect> {
-    use windows::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+    target_monitor_rect_for_mode(window, CapsuleDisplayMode::CursorScreen, None)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn target_monitor_rect_for_mode<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+    mode: CapsuleDisplayMode,
+    frozen: Option<MonitorRect>,
+) -> Option<MonitorRect> {
     let monitors = all_monitor_rects(window);
-    let mut point = POINT::default();
-    // SAFETY: GetCursorPos writes only to this initialized POINT.
-    if unsafe { GetCursorPos(&mut point) }.is_ok() {
-        if let Some(monitor) = monitor_at_point(&monitors, point.x, point.y) {
-            return Some(monitor);
+    let primary = primary_monitor_rect(window);
+    match mode {
+        CapsuleDisplayMode::PrimaryScreen => primary.or_else(|| monitors.first().copied()),
+        CapsuleDisplayMode::ForegroundWindowScreen => {
+            resolve_frozen_monitor(frozen, &monitors, primary)
+        }
+        CapsuleDisplayMode::CursorScreen | CapsuleDisplayMode::AllScreens => {
+            let mut point = windows::Win32::Foundation::POINT::default();
+            // SAFETY: GetCursorPos writes only to this initialized POINT.
+            if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }.is_ok()
+            {
+                if let Some(monitor) = monitor_at_point(&monitors, point.x, point.y) {
+                    return Some(monitor);
+                }
+            }
+            primary.or_else(|| monitors.first().copied())
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn primary_monitor_rect<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Option<MonitorRect> {
     window
         .primary_monitor()
         .ok()
         .flatten()
         .map(|monitor| MonitorRect::from_tauri(&monitor))
+}
+
+/// Resolve a monitor captured at session start against the current topology.
+/// Returning the current rect preserves updated work-area/DPI data while the stable monitor name
+/// (when available) or outer bounds identify the same display. A disconnected target falls back to
+/// the current primary display.
+pub(crate) fn resolve_frozen_monitor(
+    frozen: Option<MonitorRect>,
+    monitors: &[MonitorRect],
+    primary: Option<MonitorRect>,
+) -> Option<MonitorRect> {
+    if let Some(frozen) = frozen {
+        if let Some(current) = monitors.iter().copied().find(|monitor| {
+            if frozen.identity != 0 && monitor.identity != 0 {
+                return monitor.identity == frozen.identity;
+            }
+            (monitor.left, monitor.top, monitor.right, monitor.bottom)
+                == (frozen.left, frozen.top, frozen.right, frozen.bottom)
+        }) {
+            return Some(current);
+        }
+    }
+    primary.or_else(|| monitors.first().copied())
+}
+
+/// Map a captured external foreground HWND to the monitor containing that window.
+#[cfg(target_os = "windows")]
+pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+    raw_hwnd: usize,
+) -> Option<MonitorRect> {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+
+    let hwnd = HWND(raw_hwnd as *mut c_void);
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is initialized with the required structure size and is written by Win32.
+    if !unsafe { GetMonitorInfoW(monitor, &mut info).as_bool() } {
+        return None;
+    }
+    let rect = info.rcMonitor;
+    all_monitor_rects(window).into_iter().find(|candidate| {
+        (
+            candidate.left,
+            candidate.top,
+            candidate.right,
+            candidate.bottom,
+        ) == (rect.left, rect.top, rect.right, rect.bottom)
+    })
 }
 
 pub(crate) fn monitor_at_point(monitors: &[MonitorRect], x: i32, y: i32) -> Option<MonitorRect> {
@@ -114,6 +226,7 @@ pub(crate) fn target_monitor_rect<R: tauri::Runtime>(
             work_right: m.work_x + m.work_width as i32,
             work_bottom: m.work_y + m.work_height as i32,
             scale: m.scale,
+            identity: 0,
         });
     }
     window
@@ -317,7 +430,14 @@ pub(crate) fn ensure_rail_mirror<R: tauri::Runtime>(
 mod tests {
     use super::*;
 
-    fn monitor(left: i32, top: i32, width: i32, height: i32, taskbar: i32, scale: f64) -> MonitorRect {
+    fn monitor(
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+        taskbar: i32,
+        scale: f64,
+    ) -> MonitorRect {
         MonitorRect {
             left,
             top,
@@ -328,7 +448,54 @@ mod tests {
             work_right: left + width,
             work_bottom: top + height - taskbar,
             scale,
+            identity: 0,
         }
+    }
+
+    fn monitor_with_identity(
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+        taskbar: i32,
+        scale: f64,
+        identity: u64,
+    ) -> MonitorRect {
+        let mut monitor = monitor(left, top, width, height, taskbar, scale);
+        monitor.identity = identity;
+        monitor
+    }
+
+    #[test]
+    fn frozen_monitor_keeps_current_work_area_and_falls_back_when_disconnected() {
+        let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
+        let captured = monitor(-1920, 0, 1920, 1080, 40, 1.0);
+        let refreshed = monitor(-1920, 0, 1920, 1080, 80, 1.25);
+
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[refreshed, primary], Some(primary)),
+            Some(refreshed)
+        );
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[primary], Some(primary)),
+            Some(primary)
+        );
+        assert_eq!(
+            resolve_frozen_monitor(None, &[primary], Some(primary)),
+            Some(primary)
+        );
+    }
+
+    #[test]
+    fn frozen_monitor_identity_survives_resolution_and_layout_changes() {
+        let primary = monitor_with_identity(0, 0, 1920, 1080, 40, 1.0, 11);
+        let captured = monitor_with_identity(-1920, 0, 1920, 1080, 40, 1.0, 22);
+        let refreshed = monitor_with_identity(-2560, -120, 2560, 1440, 80, 1.5, 22);
+
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[primary, refreshed], Some(primary)),
+            Some(refreshed)
+        );
     }
 
     #[test]

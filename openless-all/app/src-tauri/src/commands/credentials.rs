@@ -5,7 +5,8 @@ const LLM_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::LLM_TEMPERATUR
 const OMNI_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::OMNI_EXTRA_HEADERS_ACCOUNT;
 const OMNI_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::OMNI_TEMPERATURE_ACCOUNT;
 const MARKETPLACE_GITHUB_TOKEN_ACCOUNT: &str = "github.oauth_token";
-const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str = openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
+const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str =
+    openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
 
 /// Tauri host adapter for the framework-independent core credential port.
 ///
@@ -85,15 +86,7 @@ pub(crate) fn active_foundry_asr_is_supported(provider: &str) -> bool {
 }
 
 pub(crate) fn active_sherpa_asr_is_supported(provider: &str) -> bool {
-    #[cfg(all(not(mobile), target_os = "windows"))]
-    {
-        provider == crate::asr::local::sherpa::PROVIDER_ID
-    }
-    #[cfg(not(all(not(mobile), target_os = "windows")))]
-    {
-        let _ = provider;
-        false
-    }
+    cfg!(local_asr_sherpa) && provider == crate::asr::local::sherpa::PROVIDER_ID
 }
 
 impl openless_core::CredentialStore for SystemCredentialStore {
@@ -326,7 +319,11 @@ fn credentials_status(
     let asr_configured = openless_core::provider_rules::asr_configured(
         &active_asr_provider,
         &configuration,
-        local_asr_configured(&active_asr_provider, model_store),
+        local_asr_configured(
+            &active_asr_provider,
+            model_store,
+            Some(&preferences.sherpa_onnx_model),
+        ),
     );
     let llm_configured =
         openless_core::provider_rules::llm_configured(&active_llm_provider, &configuration);
@@ -590,13 +587,14 @@ fn asr_configured_for_provider_with_model_store(
     openless_core::provider_rules::asr_configured(
         provider,
         &credential_configuration(snap, "", false),
-        local_asr_configured(provider, model_store),
+        local_asr_configured(provider, model_store, None),
     )
 }
 
 fn local_asr_configured(
     provider: &str,
     model_store: Option<&openless_core::ModelStore>,
+    sherpa_model: Option<&str>,
 ) -> Option<bool> {
     if provider == "apple-speech" {
         return Some(cfg!(target_os = "macos"));
@@ -616,7 +614,14 @@ fn local_asr_configured(
         return Some(active_foundry_asr_is_supported(provider));
     }
     if provider == crate::asr::local::sherpa::PROVIDER_ID {
-        return Some(active_sherpa_asr_is_supported(provider));
+        let model_installed = sherpa_model.is_none_or(|model| {
+            openless_core::LocalAsrTarget::parse(openless_core::LocalAsrRuntime::SherpaOnnx, model)
+                .ok()
+                .is_some_and(|target| {
+                    model_store.is_some_and(|store| store.is_installed(&target).unwrap_or(false))
+                })
+        });
+        return Some(active_sherpa_asr_is_supported(provider) && model_installed);
     }
     None
 }
@@ -1034,6 +1039,45 @@ mod tests {
         ] {
             assert_eq!(account_provider_kind(account), CredentialProviderKind::Omni);
         }
+    }
+
+    #[test]
+    fn sherpa_configuration_requires_the_selected_model_receipt() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-credentials-sherpa-config-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = openless_core::ModelStore::new(
+            openless_core::ModelStoreConfig::new(data_dir.join("models")).unwrap(),
+        )
+        .unwrap();
+        let provider = crate::asr::local::sherpa::PROVIDER_ID;
+        let model = "sense-voice-small-zh";
+
+        assert_eq!(
+            local_asr_configured(provider, Some(&store), Some(model)),
+            Some(false)
+        );
+        let target = openless_core::LocalAsrTarget::parse(
+            openless_core::LocalAsrRuntime::SherpaOnnx,
+            model,
+        )
+        .unwrap();
+        let model_dir = store.model_dir(&target).unwrap();
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(
+            model_dir.join(openless_core::MODEL_READY_SENTINEL),
+            b"ready",
+        )
+        .unwrap();
+        std::fs::write(model_dir.join("model.int8.onnx"), b"model").unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), b"tokens").unwrap();
+
+        assert_eq!(
+            local_asr_configured(provider, Some(&store), Some(model)),
+            Some(active_sherpa_asr_is_supported(provider))
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]

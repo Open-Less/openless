@@ -7,6 +7,8 @@ pub mod edit_observation;
 pub mod insert;
 pub mod insert_tiers;
 pub mod jni;
+#[cfg(target_os = "android")]
+pub(crate) mod local_migration;
 pub mod native_bridge;
 pub mod overlay;
 pub mod shizuku;

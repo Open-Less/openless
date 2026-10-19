@@ -355,7 +355,10 @@
   display: flex;
   flex-direction: column;
   width: min(1000px, 100%);
-  height: min(720px, calc(100dvh - 48px));
+  /* The font-size setting zooms the whole document (lib/fontScale.ts), and
+     viewport units grow with it: undo that, or a large font pushes the
+     header under the status bar and the footer off screen. */
+  height: min(720px, calc(100dvh / var(--ol-interface-scale, 1) - 48px));
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--ol-dialog-border);
@@ -386,6 +389,25 @@
   color: var(--ol-ink-3);
   font-size: 13px;
   line-height: 1.6;
+}
+.ol-model-dialog-mirror {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 12px;
+  color: var(--ol-ink-3);
+  font-size: 13px;
+}
+.ol-model-dialog-mirror select {
+  min-width: 180px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--ol-line);
+  border-radius: 8px;
+  background: var(--ol-surface);
+  color: var(--ol-ink);
+  font: inherit;
 }
 .ol-model-close {
   display: grid;

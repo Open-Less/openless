@@ -365,8 +365,10 @@ impl LocalAsrService {
         if crate::experimental_asr::ExperimentalAsrModel::from_model_id(target.model_id()).is_some()
             || !self.runtime.supports_model(target)
         {
-            return Err(BackendError::new(BackendErrorCode::Unsupported,
-                "This local model is unavailable here; use Experimental local speech models"));
+            return Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "This local model is unavailable here; use Experimental local speech models",
+            ));
         }
         Ok(())
     }
@@ -432,8 +434,13 @@ impl LocalAsrService {
     ) -> Result<(), BackendError> {
         let provider_matches = match target.runtime {
             LocalAsrRuntime::Generic => {
-                let model = crate::LocalAsrModelId::from_wire_id(target.model_id())
-                    .ok_or_else(|| BackendError::new(BackendErrorCode::InvalidArgument, "Experimental models have their own activation switch"))?;
+                let model =
+                    crate::LocalAsrModelId::from_wire_id(target.model_id()).ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidArgument,
+                            "Experimental models have their own activation switch",
+                        )
+                    })?;
                 if model.is_qwen() {
                     matches!(
                         provider_type,
@@ -474,8 +481,13 @@ async fn ensure_model_installed(
     store: &Arc<crate::model_store::ModelStore>,
     target: &LocalAsrTarget,
 ) -> Result<(), BackendError> {
-    if !adapter.supports_model(target) || crate::experimental_asr::ExperimentalAsrModel::from_model_id(target.model_id()).is_some() {
-        return Err(BackendError::new(BackendErrorCode::Unsupported, "Use Experimental local speech models"));
+    if !adapter.supports_model(target)
+        || crate::experimental_asr::ExperimentalAsrModel::from_model_id(target.model_id()).is_some()
+    {
+        return Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "Use Experimental local speech models",
+        ));
     }
     let installed = if store.is_native(target)? {
         adapter
@@ -563,6 +575,10 @@ fn restore_activation_preferences(
 }
 
 impl LocalAsrApi for LocalAsrService {
+    fn engine_available(&self, runtime: LocalAsrRuntime) -> bool {
+        self.runtime.engine_available(runtime)
+    }
+
     fn activate(
         &self,
         request: LocalAsrActivationRequest,
@@ -746,8 +762,13 @@ impl LocalAsrApi for LocalAsrService {
         let adapter = Arc::clone(&self.runtime);
         Box::pin(async move {
             let mut models = store.list_models(runtime)?;
-            models.retain(|model| adapter.supports_model(&model.target)
-                && crate::experimental_asr::ExperimentalAsrModel::from_model_id(model.target.model_id()).is_none());
+            models.retain(|model| {
+                adapter.supports_model(&model.target)
+                    && crate::experimental_asr::ExperimentalAsrModel::from_model_id(
+                        model.target.model_id(),
+                    )
+                    .is_none()
+            });
             let native = adapter
                 .inspect_native_models(
                     models
@@ -1239,15 +1260,25 @@ impl LocalAsrApi for LocalAsrService {
                     )
                 })?;
             let provider_type = channel.provider_type;
-            let model_id = {
+            let (target_runtime, model_id) = {
                 let preferences = preferences.get();
                 match provider_type.as_str() {
-                    "local-whisper" | "apple-whisper" => {
-                        preferences.local_whisper_active_model.clone()
-                    }
-                    "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" => {
-                        preferences.local_asr_active_model.clone()
-                    }
+                    "local-whisper" | "apple-whisper" => (
+                        LocalAsrRuntime::Generic,
+                        preferences.local_whisper_active_model.clone(),
+                    ),
+                    "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" => (
+                        LocalAsrRuntime::Generic,
+                        preferences.local_asr_active_model.clone(),
+                    ),
+                    "foundry-local" | "foundry-whisper" | "foundry-local-whisper" => (
+                        LocalAsrRuntime::Foundry,
+                        preferences.foundry_local_asr_model.clone(),
+                    ),
+                    "sherpa-onnx" | "sherpa-onnx-local" => (
+                        LocalAsrRuntime::SherpaOnnx,
+                        preferences.sherpa_onnx_model.clone(),
+                    ),
                     _ => {
                         return Err(BackendError::new(
                             BackendErrorCode::Unsupported,
@@ -1262,9 +1293,12 @@ impl LocalAsrApi for LocalAsrService {
                     "local ASR model is not configured",
                 ));
             }
-            let target = LocalAsrTarget::parse(LocalAsrRuntime::Generic, model_id)?;
+            let target = LocalAsrTarget::parse(target_runtime, model_id)?;
             if !runtime.supports_model(&target) {
-                return Err(BackendError::new(BackendErrorCode::Unsupported, "This local ASR engine is retired or unavailable"));
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "This local ASR engine is retired or unavailable",
+                ));
             }
             if !model_store.is_native(&target)? && !model_store.is_installed(&target)? {
                 return Err(BackendError::new(

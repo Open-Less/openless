@@ -29,26 +29,30 @@ internal class StrokeUserFrequency(context: Context) {
 
     fun record(context: String, candidate: String) {
         if (candidate.isBlank()) return
-        val entryKey = key(context, candidate)
-        val isNewEntry = !preferences.contains(entryKey)
-        val old = preferences.getString(entryKey, null)?.split(',')
-        val count = (old?.getOrNull(0)?.toIntOrNull() ?: 0) + 1
-        val now = System.currentTimeMillis()
-        preferences.edit().putString(entryKey, "$count,$now").apply()
-        // Re-recording an existing entry (by far the common case — the same
-        // handful of characters/phrases typed over and over) never touches
-        // preferences.all at all now. Only a genuinely new key can push the
-        // count past MAX_ENTRIES, so that's the only case worth checking.
-        if (isNewEntry) {
-            val size = resolvedSize() + 1
-            approxSize = size
-            if (size > MAX_ENTRIES) trimIfNeeded()
+        OpenLessMigrationState.learn {
+            val entryKey = key(context, candidate)
+            val isNewEntry = !preferences.contains(entryKey)
+            val old = preferences.getString(entryKey, null)?.split(',')
+            val count = (old?.getOrNull(0)?.toIntOrNull() ?: 0) + 1
+            val now = System.currentTimeMillis()
+            preferences.edit().putString(entryKey, "$count,$now").apply()
+            // Re-recording an existing entry (by far the common case — the same
+            // handful of characters/phrases typed over and over) never touches
+            // preferences.all at all now. Only a genuinely new key can push the
+            // count past MAX_ENTRIES, so that's the only case worth checking.
+            if (isNewEntry) {
+                val size = resolvedSize() + 1
+                approxSize = size
+                if (size > MAX_ENTRIES) trimIfNeeded()
+            }
         }
     }
 
     fun clear() {
-        preferences.edit().clear().apply()
-        approxSize = 0
+        check(OpenLessMigrationState.settings {
+            preferences.edit().clear().apply()
+            approxSize = 0
+        }) { "migration_android_busy" }
     }
 
     /** Current entry count, for showing usage against [MAX_ENTRIES] in settings. */
@@ -64,8 +68,10 @@ internal class StrokeUserFrequency(context: Context) {
 
     /** Replaces the entire store with [entries] — an import wholesale-restores a backup rather than merging with whatever's already on this device. */
     fun importAll(entries: Map<String, String>) {
-        check(preferences.edit().clear().apply { entries.forEach { (key, value) -> putString(key, value) } }.commit()) { "Stroke learning save failed" }
-        approxSize = entries.size
+        check(OpenLessMigrationState.settings {
+            check(preferences.edit().clear().apply { entries.forEach { (key, value) -> putString(key, value) } }.commit()) { "Stroke learning save failed" }
+            approxSize = entries.size
+        }) { "migration_android_busy" }
     }
 
     private fun key(context: String, candidate: String) = "$context$SEPARATOR$candidate"

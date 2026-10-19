@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import urllib.request
 
@@ -38,7 +39,19 @@ def fetch(name, url):
     unpack = CACHE / 'sources' / (name + '-unpack')
     unpack.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as tar:
-        tar.extractall(unpack, filter='data')
+        if sys.version_info >= (3, 12):
+            tar.extractall(unpack, filter='data')
+        else:
+            # Python 3.11 and older do not support TarFile's data filter. Reject
+            # traversal and link entries before extracting with the legacy API.
+            root = os.path.realpath(unpack)
+            for member in tar.getmembers():
+                target = os.path.realpath(os.path.join(root, member.name))
+                if os.path.commonpath((root, target)) != root:
+                    raise RuntimeError('Unsafe archive path: ' + member.name)
+                if member.issym() or member.islnk():
+                    raise RuntimeError('Unsafe archive link: ' + member.name)
+            tar.extractall(unpack)
     roots = list(unpack.iterdir())
     if len(roots) != 1:
         raise RuntimeError('Unexpected archive structure: ' + name)

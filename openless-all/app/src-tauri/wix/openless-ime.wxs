@@ -5,7 +5,7 @@
       <Directory Id="OpenLessImeDirectory" Name="windows-ime">
         <Directory Id="OpenLessImeX64Directory" Name="x64">
           <Component Id="OpenLessImeDllX64Component" Guid="{B787DE6F-DF71-4D68-9DE8-04D3665A26F3}" Win64="yes">
-            <File Id="OpenLessImeDllX64" Name="OpenLessIme.dll" Source="src-tauri\target\windows-ime-msvc\x64\Release\OpenLessIme.dll" KeyPath="yes" />
+            <File Id="OpenLessImeDllX64" Name="OpenLessIme-{{version}}.dll" Source="src-tauri\target\windows-ime-msvc\x64\Release\OpenLessIme.dll" KeyPath="yes" />
           </Component>
         </Directory>
         <Directory Id="OpenLessImeX86Directory" Name="x86">
@@ -15,7 +15,7 @@
                WiX accepts it under the x64 INSTALLDIR; this does not change
                the architecture of the DLL payload. -->
           <Component Id="OpenLessImeDllX86Component" Guid="{A2E61B9A-4034-4ABF-A42F-964A9B1F08BB}" Win64="yes">
-            <File Id="OpenLessImeDllX86" Name="OpenLessIme.dll" Source="src-tauri\target\windows-ime-msvc\x86\Release\OpenLessIme.dll" KeyPath="yes" />
+            <File Id="OpenLessImeDllX86" Name="OpenLessIme-{{version}}.dll" Source="src-tauri\target\windows-ime-msvc\x86\Release\OpenLessIme.dll" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
@@ -50,13 +50,13 @@
       Return="ignore" />
 
     <InstallExecuteSequence>
-      <!-- Issue #321: unregister the old DLL before InstallFiles whenever a
-           previous version is installed, so Windows Installer can overwrite
-           OpenLessIme.dll instead of failing on a sharing violation. The
-           previous condition (REMOVE="ALL") only fired during dedicated
-           uninstall and skipped the auto-update / minor-upgrade path. -->
-      <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed AND NOT REMOVE]]></Custom>
-      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed AND NOT REMOVE]]></Custom>
+      <!-- Keep each release's DLL at a distinct path. TSF client processes can keep
+           an older DLL mapped for their whole lifetime, so an in-place upgrade can
+           otherwise leave the registry pointing at the old protocol. -->
+      <!-- Unregister on both upgrades and complete uninstall. REMOVE=ALL must not skip /u,
+           otherwise the DLL disappears while COM/TSF registration still points at it. -->
+      <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed]]></Custom>
+      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed]]></Custom>
       <Custom Action="RegisterOpenLessImeX64" After="InstallFiles"><![CDATA[NOT REMOVE]]></Custom>
       <Custom Action="RegisterOpenLessImeX86" After="RegisterOpenLessImeX64"><![CDATA[NOT REMOVE]]></Custom>
     </InstallExecuteSequence>

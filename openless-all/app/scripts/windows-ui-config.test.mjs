@@ -48,6 +48,11 @@ const tauriEventsRs = await readFile(
   new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
   'utf-8',
 );
+assertMatch(
+  coordinatorRs,
+  /fn prepare_display_target[\s\S]*?\.then\(\|\| self\.qa_context\.external_focus_target\(\)\)[\s\S]*?\.or_else\(crate::coordinator::capture_focus_target\)/,
+  'foreground display targeting must retain QA provenance and accept OpenLess foreground windows',
+);
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
   'utf-8',
@@ -507,7 +512,7 @@ assertMatch(
 );
 assertMatch(
   coordinatorRs,
-  /if let Err\(error\) = unsafe \{[\s\S]*?SetWindowPos\([\s\S]*?return false/,
+  /fn set_capsule_window_topmost_no_activate[\s\S]*?let position_result = if show[\s\S]*?SetWindowPos\([\s\S]*?if let Err\(error\) = position_result[\s\S]*?return false/,
   'no-activate display should return false when SetWindowPos fails',
 );
 assertMatch(

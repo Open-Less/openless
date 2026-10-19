@@ -3,7 +3,7 @@ use anyhow::Result;
 
 /// Walk the RIFF chunk chain strictly to find "data" — both jfk.wav and test_speech.wav carry
 /// LIST/INFO metadata after the fmt chunk, so a hardcoded +44 offset reads garbage.
-pub(super) fn decode_wav_16k_mono(bytes: &[u8]) -> Result<Vec<f32>> {
+pub(crate) fn decode_wav_16k_mono(bytes: &[u8]) -> Result<Vec<f32>> {
     if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         anyhow::bail!("不是有效的 RIFF/WAVE 文件");
     }

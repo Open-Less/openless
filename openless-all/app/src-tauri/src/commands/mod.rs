@@ -61,7 +61,9 @@ mod foundry_asr;
 mod github_oauth;
 mod history;
 mod hotkeys;
-#[cfg(not(mobile))]
+// Local ASR commands also exist on arm64 Android, which links sherpa-onnx
+// (build.rs `local_asr_sherpa`).
+#[cfg(any(not(mobile), local_asr_sherpa))]
 mod local_asr;
 mod marketplace;
 mod misc;
@@ -77,7 +79,7 @@ mod selection_polish_preview;
 #[cfg(all(not(mobile), target_os = "windows"))]
 mod selection_voice;
 mod settings;
-#[cfg(not(mobile))]
+#[cfg(any(not(mobile), local_asr_sherpa))]
 mod sherpa_asr;
 mod style_packs;
 mod voice_edit;
@@ -95,7 +97,7 @@ pub use foundry_asr::*;
 pub use github_oauth::*;
 pub use history::*;
 pub use hotkeys::*;
-#[cfg(not(mobile))]
+#[cfg(any(not(mobile), local_asr_sherpa))]
 pub use local_asr::*;
 pub use marketplace::*;
 pub use misc::*;
@@ -111,9 +113,9 @@ pub use selection_polish_preview::*;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub use selection_voice::*;
 pub use settings::*;
-#[cfg(not(mobile))]
-// Sherpa commands are registered on Windows only; other desktop targets keep
-// an empty re-export.
+#[cfg(any(not(mobile), local_asr_sherpa))]
+// Sherpa commands are registered on Windows and arm64 Android; other desktop
+// targets keep an empty re-export.
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
 pub use style_packs::*;
@@ -245,6 +247,13 @@ pub(crate) fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), St
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Model folders live in app-private storage on Android, which no file
+/// manager can open; the local ASR "reveal" commands report that instead.
+#[cfg(all(target_os = "android", local_asr_sherpa))]
+pub(crate) fn open_path_in_file_manager(_path: &std::path::Path) -> Result<(), String> {
+    Err("Opening the model folder is not supported on Android".to_string())
 }
 
 #[cfg(test)]

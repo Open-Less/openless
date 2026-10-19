@@ -40,4 +40,19 @@ assert.ok(
   'PR CI must cancel superseded pull-request runs without cancelling branch pushes',
 );
 
+assert.ok(
+  workflows.ci.includes("branches: ['**']"),
+  'CI must run on every branch push so branch changes receive the quality gate',
+);
+for (const [name, source] of [
+  ['Android release', workflows.android],
+  ['Tauri release', workflows.tauriRelease],
+]) {
+  assert.match(
+    source,
+    /branches:\n\s+- '\*\*'/,
+    `${name} workflow must build branch artifacts for provenance-bound testing`,
+  );
+}
+
 console.log('workflow-concurrency-contract.test.mjs passed');

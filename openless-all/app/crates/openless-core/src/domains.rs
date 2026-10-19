@@ -302,6 +302,10 @@ pub trait LocalAsrApi: Send + Sync {
         &self,
         target: LocalAsrTarget,
     ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>>;
+    /// Whether the host has a native engine for this runtime.
+    fn engine_available(&self, _runtime: LocalAsrRuntime) -> bool {
+        false
+    }
     /// Run the native smoke test for a specific ASR channel without changing
     /// the globally active channel.
     fn test_channel(

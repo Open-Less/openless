@@ -60,11 +60,13 @@ const KOTLIN_FILES = [
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessMigrationBundlePolicy.kt',
+  'OpenLessMigrationState.kt',
   'OpenLessImeService.kt',
-  'PendingEditReplacement.kt',
   'ImeLearningPolicy.kt',
   'DictationSpan.kt',
   'ImePrivacyPolicy.kt',
+  'ImeDraftReplacement.kt',
   'StrokeInputController.kt',
   'StrokeInput.kt',
   'OpenLessRime.kt',
@@ -79,17 +81,19 @@ const KOTLIN_FILES = [
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'OpenLessLocalMigrationActivity.kt',
   'OpenLessProcessRestartStats.kt',
   'OpenLessBuildInfo.kt',
 ];
 
 const KOTLIN_TEST_FILES = [
   'ImeLearningPolicyTest.kt',
-  'PendingEditReplacementTest.kt',
   'DictationSpanTest.kt',
   'ImePrivacyPolicyTest.kt',
+  'ImeDraftReplacementTest.kt',
   'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
+  'OpenLessMigrationBundleContractTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
@@ -102,6 +106,7 @@ const KOTLIN_TEST_FILES = [
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
+  'OpenLessMigrationBundleInstrumentedTest.kt',
   'RimeEngineIntegrationTest.kt',
 ];
 

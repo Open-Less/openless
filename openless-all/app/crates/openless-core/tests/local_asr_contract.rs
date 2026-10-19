@@ -1,6 +1,6 @@
 use futures_util::future::BoxFuture;
 use openless_core::{
-    normalize_foundry_language_hint, normalize_sherpa_language_hint, BackendConfig,
+    normalize_foundry_language_hint, normalize_sherpa_language_hint, AsrRoute, BackendConfig,
     BackendDependencies, BackendError, BackendErrorCode, BackendEventKind, ChannelKind,
     ChannelMutation, ChannelMutationResult, ChannelSummary, CredentialKey, CredentialStore,
     CredentialsStatus, FoundryRuntimeSource, InMemoryCredentialStore, LocalAsrActivationRequest,
@@ -161,7 +161,9 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         if let Some(update) = self.during_validation.lock().unwrap().take() {
             update();
         }
-        let installed = !self.missing_native.load(std::sync::atomic::Ordering::SeqCst);
+        let installed = !self
+            .missing_native
+            .load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             Ok(targets
                 .into_iter()
@@ -176,7 +178,8 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     }
 
     fn restart_required(&self, _: LocalAsrRuntime) -> bool {
-        self.restart_needed.load(std::sync::atomic::Ordering::SeqCst)
+        self.restart_needed
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn download_native_model(
@@ -185,8 +188,12 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         _: FoundryRuntimeSource,
         _: openless_core::ModelPrepareProgressSink,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
-        self.operations.lock().unwrap().push(format!("download:{}", target.model_id()));
-        self.restart_needed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.operations
+            .lock()
+            .unwrap()
+            .push(format!("download:{}", target.model_id()));
+        self.restart_needed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.release(target.runtime)
     }
 
@@ -582,6 +589,199 @@ async fn channel_test_requires_a_non_blank_transcript() {
 }
 
 #[tokio::test]
+async fn foundry_channel_test_uses_the_foundry_runtime() {
+    let (data_dir, runtime, backend) = local_asr_backend();
+    let target = LocalAsrTarget::parse(LocalAsrRuntime::Foundry, "whisper-small").unwrap();
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target.clone())
+        .await
+        .unwrap();
+    let channel_id = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "foundry-local-whisper".into(),
+            "Foundry Local".into(),
+        )
+        .await
+        .unwrap();
+
+    *runtime.test_transcript.lock().unwrap() = "Hello from Foundry".into();
+    let result = backend
+        .services()
+        .local_asr
+        .test_channel(channel_id)
+        .await
+        .unwrap();
+
+    assert_eq!(result.target, target);
+    assert_eq!(result.backend, "foundry-local-whisper");
+    assert_eq!(result.transcribed_text, "Hello from Foundry");
+    assert_eq!(
+        runtime.tested_providers.lock().unwrap().as_slice(),
+        ["foundry-local-whisper"]
+    );
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn sherpa_channel_test_uses_the_sherpa_runtime() {
+    let (data_dir, runtime, backend) = local_asr_backend();
+    let target =
+        LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "sense-voice-small-zh").unwrap();
+    let model_store =
+        ModelStore::new(ModelStoreConfig::new(data_dir.join("models")).unwrap()).unwrap();
+    let model_dir = model_store.model_dir(&target).unwrap();
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(
+        model_dir.join(openless_core::MODEL_READY_SENTINEL),
+        b"ready",
+    )
+    .unwrap();
+    std::fs::write(model_dir.join("model.int8.onnx"), b"model").unwrap();
+    std::fs::write(model_dir.join("tokens.txt"), b"tokens").unwrap();
+
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target.clone())
+        .await
+        .unwrap();
+    let channel_id = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "sherpa-onnx-local".into(),
+            "Local Sherpa".into(),
+        )
+        .await
+        .unwrap();
+
+    *runtime.test_transcript.lock().unwrap() = "Hello from Sherpa".into();
+    let result = backend
+        .services()
+        .local_asr
+        .test_channel(channel_id)
+        .await
+        .unwrap();
+
+    assert_eq!(result.target, target);
+    assert_eq!(result.backend, "sherpa-onnx-local");
+    assert_eq!(result.transcribed_text, "Hello from Sherpa");
+    assert_eq!(
+        runtime.tested_providers.lock().unwrap().as_slice(),
+        ["sherpa-onnx-local"]
+    );
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn cloud_route_switches_to_local_when_unconfigured_or_disabled() {
+    let (data_dir, _, backend) = local_asr_backend();
+    let target =
+        LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "sense-voice-small-zh").unwrap();
+    install_fixture(&data_dir, &target);
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target)
+        .await
+        .unwrap();
+    let channel = backend
+        .create_channel(ChannelKind::Asr, "whisper".into(), "Cloud ASR".into())
+        .await
+        .unwrap();
+    backend
+        .set_active_provider(ProviderSlot::Asr, channel.clone())
+        .await
+        .unwrap();
+    assert_eq!(backend.asr_route().await, AsrRoute::LocalRaw);
+    backend
+        .set_channel_enabled(ChannelKind::Asr, channel, false)
+        .await
+        .unwrap();
+    assert_eq!(backend.asr_route().await, AsrRoute::LocalRaw);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn disabled_local_channel_does_not_switch_to_a_different_local_model() {
+    let (data_dir, _runtime, backend) = local_asr_backend_with_credentials(
+        Arc::new(InMemoryCredentialStore::default()),
+        Some("sherpa-onnx-local"),
+    );
+    let target =
+        LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "sense-voice-small-zh").unwrap();
+    install_fixture(&data_dir, &target);
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target)
+        .await
+        .unwrap();
+    let local = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "sherpa-onnx-local".into(),
+            "Local Sherpa".into(),
+        )
+        .await
+        .unwrap();
+    backend
+        .set_active_provider(ProviderSlot::Asr, local.clone())
+        .await
+        .unwrap();
+    backend
+        .set_channel_enabled(ChannelKind::Asr, local, false)
+        .await
+        .unwrap();
+
+    assert_eq!(backend.asr_route().await, AsrRoute::Unavailable);
+    backend.start().await.unwrap();
+    assert_eq!(
+        backend.start_dictation().await.unwrap_err().code,
+        BackendErrorCode::InvalidState
+    );
+    backend.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn foundry_route_is_unavailable_when_restart_is_required() {
+    let (data_dir, runtime, backend) = local_asr_backend_with_credentials(
+        Arc::new(InMemoryCredentialStore::default()),
+        Some("foundry-local-whisper"),
+    );
+    backend
+        .services()
+        .local_asr
+        .set_active_model(
+            LocalAsrTarget::parse(LocalAsrRuntime::Foundry, "whisper-small").unwrap(),
+        )
+        .await
+        .unwrap();
+    let foundry = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "foundry-local-whisper".into(),
+            "Foundry Local".into(),
+        )
+        .await
+        .unwrap();
+    backend
+        .set_active_provider(ProviderSlot::Asr, foundry)
+        .await
+        .unwrap();
+    runtime
+        .restart_needed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(backend.asr_route().await, AsrRoute::Unavailable);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn local_asr_activation_owns_channel_creation_and_enabling() {
     for (runtime_kind, model_id, provider_id) in [
         (LocalAsrRuntime::Generic, "qwen3-asr-0.6b", "local-qwen3-c"),
@@ -650,8 +850,12 @@ async fn local_asr_activation_owns_channel_creation_and_enabling() {
 
             // Even an unavailable/broken native loader must not be called just
             // because a downloaded model is enabled.
-            runtime.fail_prepare.store(true, std::sync::atomic::Ordering::SeqCst);
-            runtime.fail_preload.store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_prepare
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_preload
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             runtime.operations.lock().unwrap().clear();
             let result = backend.activate_local_asr(request).await.unwrap();
             assert!(runtime.operations.lock().unwrap().is_empty());
@@ -1174,7 +1378,10 @@ async fn failed_old_runtime_release_preserves_selection_without_loading_any_repl
         backend.get_preferences().active_asr_provider,
         "local-qwen3-mlx"
     );
-    assert_eq!(*runtime.operations.lock().unwrap(), ["release-lease:qwen3-asr-0.6b:2"]);
+    assert_eq!(
+        *runtime.operations.lock().unwrap(),
+        ["release-lease:qwen3-asr-0.6b:2"]
+    );
     std::fs::remove_dir_all(data_dir).unwrap();
 }
 
@@ -1343,7 +1550,10 @@ async fn committed_channel_changes_are_published_even_when_runtime_release_fails
         .await
         .unwrap_err();
     assert_eq!(error.code, BackendErrorCode::Platform);
-    assert_eq!(backend.active_provider(ProviderSlot::Asr).await.unwrap(), cloud);
+    assert_eq!(
+        backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+        cloud
+    );
     assert!(matches!(
         events.try_recv().unwrap().kind,
         BackendEventKind::CredentialsChanged(_)

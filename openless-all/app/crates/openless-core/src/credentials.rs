@@ -187,8 +187,10 @@ pub enum ProviderSlot {
 
 /// Legacy macOS engines retained only as disabled channel metadata.
 pub fn is_retired_macos_asr_provider(provider: &str) -> bool {
-    matches!(provider, "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c"
-        | "local-whisper" | "apple-whisper")
+    matches!(
+        provider,
+        "local-qwen3" | "local-qwen3-mlx" | "local-qwen3-c" | "local-whisper" | "apple-whisper"
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -585,17 +587,25 @@ impl CredentialMetadata {
         let active = self.active_provider(ProviderSlot::Asr);
         let channels = self.channels.entry(ChannelKind::Asr).or_default();
         let retiring_active = is_retired_macos_asr_provider(&active)
-            || channels.iter().any(|c| c.id == active && is_retired_macos_asr_provider(&c.provider_type));
+            || channels
+                .iter()
+                .any(|c| c.id == active && is_retired_macos_asr_provider(&c.provider_type));
         let mut changed = false;
-        for channel in channels.iter_mut().filter(|c| is_retired_macos_asr_provider(&c.provider_type)) {
+        for channel in channels
+            .iter_mut()
+            .filter(|c| is_retired_macos_asr_provider(&c.provider_type))
+        {
             changed |= channel.enabled || channel.last_test.is_some();
             channel.enabled = false;
             channel.last_test = None;
         }
         normalize_channel_order(channels);
         if retiring_active {
-            let next = channels.iter().find(|c| c.enabled)
-                .map(|c| c.id.clone()).unwrap_or_default();
+            let next = channels
+                .iter()
+                .find(|c| c.enabled)
+                .map(|c| c.id.clone())
+                .unwrap_or_default();
             self.active_providers.insert(ProviderSlot::Asr, next);
             changed = true;
         }

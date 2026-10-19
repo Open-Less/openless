@@ -19,6 +19,8 @@ name: Release Tauri (cross-platform)
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*-tauri'
   workflow_dispatch:
@@ -88,6 +90,15 @@ jobs:
           # Repair packaging against the immutable, already-tested tag, never the tooling branch.
           ref: ${{ inputs.release_tag || github.ref }}
           submodules: false
+
+      - name: Export source build provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source SHA is not a full immutable commit"; exit 1; }
+          echo "OPENLESS_BUILD_ID=$source_sha" >> "$GITHUB_ENV"
+          echo "source_sha=$source_sha" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
         with:
@@ -456,7 +467,8 @@ jobs:
             New-ItemProperty -LiteralPath $policy -Name $policyName -PropertyType DWord -Value 1 -Force | Out-Null
             $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction Stop | Select-Object -First 1
             if (-not $nsis) { throw "NSIS installer not found." }
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript -InstallerPath $nsis.FullName -InstallerKind nsis
+            $nsisLog = Join-Path $env:RUNNER_TEMP 'openless-nsis-install.log'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript -InstallerPath $nsis.FullName -InstallerKind nsis -InstallerLogPath $nsisLog
             if ($LASTEXITCODE -ne 0) {
               throw "NSIS installer smoke failed with exit $LASTEXITCODE"
             }
@@ -498,7 +510,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           OPENLESS_UPDATE_TARGET: ${{ matrix.updater-target }}
           OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
-          OPENLESS_UPDATE_REPO: Open-Less/openless
+          OPENLESS_UPDATE_REPO: ${{ github.repository }}
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
           # On the beta channel output latest-{tgt}-{arch}-beta.json; stable keeps the old filename.
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
@@ -509,6 +521,25 @@ jobs:
           # script does not read this field, so it is safe.
           OPENLESS_RELEASE_TAG: ${{ env.OPENLESS_RELEASE_TAG }}
         run: node scripts/write-updater-manifest.mjs
+
+      - name: Write Windows artifact provenance
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $manifestDir = Join-Path (Resolve-Path 'src-tauri\target\release\bundle') 'provenance'
+          New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+          $version = (Get-Content 'src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
+          [ordered]@{
+            schema = 'openless.artifact-provenance.v1'
+            source_sha = $env:OPENLESS_BUILD_ID
+            workflow_sha = $env:GITHUB_WORKFLOW_SHA
+            run_id = $env:GITHUB_RUN_ID
+            ref = $env:GITHUB_REF
+            app_version = $version
+            platform = 'windows'
+            protocol_revision = '0x4F4C0009'
+          } | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM (Join-Path $manifestDir 'openless-provenance.json')
 
       # ── Collect artifacts ──
       - name: List artifacts (debug)
@@ -534,6 +565,16 @@ jobs:
               xattr -lr "$path" || true
             fi
           done
+
+      - name: Stage direct download alias
+        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        working-directory: openless-all/app
+        env:
+          OPENLESS_DOWNLOAD_TARGET: ${{ matrix.updater-target }}
+          OPENLESS_DOWNLOAD_ARCH: ${{ matrix.updater-arch }}
+          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ matrix.updater-target == 'darwin' && 'src-tauri/target/release/bundle/dmg' || 'src-tauri/target/release/bundle/nsis' }}
+          OPENLESS_DOWNLOAD_OUTPUT_DIR: src-tauri/target/release/downloads
+        run: node scripts/stage-release-download-aliases.mjs
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
@@ -565,6 +606,7 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/bundle/provenance/openless-provenance.json
           if-no-files-found: error
 
       - name: Upload Windows updater artifacts
@@ -648,3 +690,4 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
+            openless-all/app/src-tauri/target/release/downloads/*

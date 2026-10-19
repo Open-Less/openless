@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [main, beta]
+    branches: ['**']
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
@@ -190,6 +190,12 @@ jobs:
 
       - name: Check Android updater pubkey matches tauri.conf.json
         run: npm run check:android-updater-pubkey
+
+      # arm64 Android links sherpa-onnx's shared libraries (local ASR). Its
+      # build script finds them through SHERPA_ONNX_LIB_DIR and has no Android
+      # prebuilt download of its own.
+      - name: Prepare sherpa-onnx Android libraries
+        run: echo "SHERPA_ONNX_LIB_DIR=$(node scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
 
       - name: Check Tauri backend (Android target)
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android

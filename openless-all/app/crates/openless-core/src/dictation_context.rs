@@ -157,6 +157,8 @@ pub struct DictationInsertionContext {
     pub observe_edits: bool,
     pub streaming: bool,
     pub save_streamed_text_to_clipboard: bool,
+    /// Show the live transcript as an underlined composition in the target (Windows TSF).
+    pub composition_input: bool,
     pub restore_clipboard_after_paste: bool,
     pub paste_shortcut: PasteShortcut,
     pub windows_insertion_mode: WindowsInsertionMode,
@@ -197,6 +199,9 @@ pub struct DictationContext {
     pub pipeline_mode: PipelineMode,
     pub correction_rules: Vec<crate::types::CorrectionRule>,
     pub asr: ProviderInvocation,
+    /// Local model a failed cloud ASR call is retried with, frozen at session
+    /// start (see local_asr_fallback()); None when the fallback doesn't apply.
+    pub asr_fallback: Option<ProviderInvocation>,
     pub llm: ProviderInvocation,
     /// Raw may start without an LLM. If translation is requested at stop,
     /// preserve the start-time resolution failure instead of using a disabled
@@ -293,6 +298,11 @@ impl DictationContext {
         }
         let prior_turns =
             eligible_polish_context_turns(recent_history, &style_pack.id, translation_active);
+        let asr_fallback = local_asr_fallback(
+            preferences,
+            &asr,
+            crate::shared_types::PlatformCapabilities::current().supports_local_asr,
+        );
         Self {
             audio_source: options.audio_source,
             output_target: options.output_target,
@@ -331,6 +341,7 @@ impl DictationContext {
             ),
             correction_rules: Vec::new(),
             asr,
+            asr_fallback,
             llm,
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
@@ -373,6 +384,11 @@ impl DictationContext {
                         | DictationOutputTarget::VoiceEdit
                 ) && preferences.streaming_insert,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
+                // Composition display is a TSF text-service feature; other insertion
+                // modes have no underlined preedit channel.
+                composition_input: cfg!(target_os = "windows")
+                    && preferences.windows_composition_input
+                    && preferences.windows_insertion_mode == WindowsInsertionMode::Tsf,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
                 paste_shortcut: preferences.paste_shortcut,
                 windows_insertion_mode: preferences.windows_insertion_mode,
@@ -652,6 +668,51 @@ pub fn eligible_polish_context_turns(
         .collect()
 }
 
+/// Providers that recognize on this device: no network is involved, so a
+/// session on one of them treats polish as optional (see dictation_engine).
+pub(crate) fn is_local_asr_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "apple-speech"
+            | "local-qwen3"
+            | "local-qwen3-mlx"
+            | "local-qwen3-c"
+            | "local-whisper"
+            | "apple-whisper"
+            | "foundry-local"
+            | "foundry-whisper"
+            | "foundry-local-whisper"
+            | "sherpa-onnx"
+            | "sherpa-onnx-local"
+    ) || crate::experimental_asr::ExperimentalAsrModel::from_provider(provider).is_some()
+}
+
+/// The sherpa-onnx model a failed cloud ASR call falls back to: only when the
+/// user enabled it, this platform has local ASR, the session uses one of the
+/// shared cloud providers (a local provider has nothing to fall back to) and a
+/// model is selected. Built from the same preferences a manual switch to the
+/// local model would use; whether the model is actually installed is left to
+/// the native engine, which refuses to start without it.
+pub(crate) fn local_asr_fallback(
+    preferences: &UserPreferences,
+    asr: &ProviderInvocation,
+    local_asr_supported: bool,
+) -> Option<ProviderInvocation> {
+    if !preferences.local_asr_fallback_enabled
+        || !local_asr_supported
+        || !crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&asr.provider_type.as_str())
+    {
+        return None;
+    }
+    let provider = crate::local_asr_catalog::LocalAsrRuntime::SherpaOnnx.provider_id();
+    let mut invocation = ProviderInvocation::new(provider, provider);
+    invocation.model = Some(non_blank(&preferences.sherpa_onnx_model)?);
+    invocation.language = non_blank(&preferences.sherpa_onnx_language_hint);
+    invocation.keep_loaded_secs = Some(preferences.sherpa_onnx_keep_loaded_secs);
+    invocation.prompt = asr.prompt.clone();
+    Some(invocation)
+}
+
 fn selected_asr_details(
     preferences: &UserPreferences,
     provider: &str,
@@ -700,6 +761,53 @@ mod tests {
     use super::*;
     use crate::style_packs::builtin_style_pack_for_mode;
 
+    fn fallback_preferences() -> UserPreferences {
+        UserPreferences {
+            local_asr_fallback_enabled: true,
+            sherpa_onnx_model: "sense-voice-small-zh".into(),
+            sherpa_onnx_language_hint: "zh".into(),
+            sherpa_onnx_keep_loaded_secs: 300,
+            ..UserPreferences::default()
+        }
+    }
+
+    fn cloud_asr() -> ProviderInvocation {
+        let cloud = crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES[0];
+        let mut asr = ProviderInvocation::new("my-cloud-channel", cloud);
+        asr.prompt = Some("OpenLess.".into());
+        asr
+    }
+
+    #[test]
+    fn local_fallback_uses_the_selected_sherpa_model_and_its_settings() {
+        let fallback = local_asr_fallback(&fallback_preferences(), &cloud_asr(), true).unwrap();
+        assert_eq!(fallback.provider_type, "sherpa-onnx-local");
+        assert_eq!(fallback.provider_id, "sherpa-onnx-local");
+        assert_eq!(fallback.model.as_deref(), Some("sense-voice-small-zh"));
+        assert_eq!(fallback.language.as_deref(), Some("zh"));
+        assert_eq!(fallback.keep_loaded_secs, Some(300));
+        // Hotwords carry over from the session's ASR prompt.
+        assert_eq!(fallback.prompt.as_deref(), Some("OpenLess."));
+    }
+
+    #[test]
+    fn local_fallback_needs_the_switch_local_asr_a_cloud_provider_and_a_model() {
+        let preferences = fallback_preferences();
+        let mut off = preferences.clone();
+        off.local_asr_fallback_enabled = false;
+        assert_eq!(local_asr_fallback(&off, &cloud_asr(), true), None);
+        // Platforms without local ASR.
+        assert_eq!(local_asr_fallback(&preferences, &cloud_asr(), false), None);
+        // A local (or unknown) provider has nothing to fall back to.
+        let local = ProviderInvocation::for_provider("sherpa-onnx-local");
+        assert_eq!(local_asr_fallback(&preferences, &local, true), None);
+        let unknown = ProviderInvocation::for_provider("experimental-textstream");
+        assert_eq!(local_asr_fallback(&preferences, &unknown, true), None);
+        let mut no_model = preferences.clone();
+        no_model.sherpa_onnx_model = "  ".into();
+        assert_eq!(local_asr_fallback(&no_model, &cloud_asr(), true), None);
+    }
+
     #[test]
     fn selection_polish_uses_the_selected_text_envelope() {
         let mut context = DictationContext::default();
@@ -711,16 +819,23 @@ mod tests {
 
     #[test]
     fn textstream_stays_live_without_changing_the_users_batch_preference() {
-        let preferences = UserPreferences { stable_transcription_enabled: true, ..UserPreferences::default() };
+        let preferences = UserPreferences {
+            stable_transcription_enabled: true,
+            ..UserPreferences::default()
+        };
         let pack = builtin_style_pack_for_mode(PolishMode::Structured);
         for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
             let context = DictationContext::capture(
-                &preferences, &pack,
+                &preferences,
+                &pack,
                 DictationProviderInvocations::new(
                     ProviderInvocation::for_provider(provider),
                     ProviderInvocation::for_provider("openai"),
                     ProviderInvocation::for_provider("omni"),
-                ), Vec::new(), Vec::new(), &DictationStartOptions::default(),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
             );
             assert_eq!(context.recording.transcribe_after_stop, buffered);
         }
@@ -892,6 +1007,19 @@ mod tests {
         assert!(!ordinary.polish.translation_active);
         assert_eq!(ordinary.polish.mode, PolishMode::Raw);
         assert!(!ordinary.uses_llm_polisher());
+    }
+
+    #[test]
+    fn native_and_experimental_asr_providers_are_local() {
+        for provider in [
+            "apple-speech",
+            "experimental-sensevoice",
+            "experimental-embedding-gemma",
+            "experimental-textstream",
+        ] {
+            assert!(is_local_asr_provider(provider), "{provider}");
+        }
+        assert!(!is_local_asr_provider("volcengine"));
     }
 
     #[test]

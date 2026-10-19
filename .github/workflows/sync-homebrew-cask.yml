@@ -72,12 +72,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dmg"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/dmg" \
-            --pattern '*aarch64.dmg' --pattern '*_x64.dmg'
+            --pattern 'OpenLess_[0-9]*_aarch64.dmg' --pattern 'OpenLess_[0-9]*_x64.dmg'
 
           # Tags omit +build metadata; filenames and the cask must preserve it.
           version="$(node openless-all/app/scripts/resolve-release-cask-version.mjs "$TAG" "$RUNNER_TEMP/dmg")"
-          arm_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*aarch64.dmg | cut -d' ' -f1)"
-          intel_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*_x64.dmg | cut -d' ' -f1)"
+          arm_sha="$(sha256sum "$RUNNER_TEMP/dmg/OpenLess_${version}_aarch64.dmg" | cut -d' ' -f1)"
+          intel_sha="$(sha256sum "$RUNNER_TEMP/dmg/OpenLess_${version}_x64.dmg" | cut -d' ' -f1)"
 
           {
             echo "version=$version"
