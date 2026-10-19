@@ -13,7 +13,17 @@ test "${#rpms[@]}" -eq 1
 test "${#appimages[@]}" -eq 0
 test -s "$OUTPUT/SHA256SUMS"
 test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 2
-test "$(find "$OUTPUT" -maxdepth 1 \( -type f -o -type l \) | wc -l)" -eq 3
+# `SHA256SUMS` plus the two packages. `SHA256SUMS-linux` is an optional copy the
+# release workflow adds for the GitHub Release, where the desktop and Android
+# assets already own the name `SHA256SUMS`.
+expected_files=3
+[ -f "$OUTPUT/SHA256SUMS-linux" ] && expected_files=4
+actual_files=$(find "$OUTPUT" -maxdepth 1 \( -type f -o -type l \) | wc -l)
+if [ "$actual_files" -ne "$expected_files" ]; then
+  echo "expected $expected_files files in $OUTPUT, found $actual_files:" >&2
+  find "$OUTPUT" -maxdepth 1 -type f -printf '  %f\n' >&2
+  exit 1
+fi
 (
   cd "$OUTPUT"
   sha256sum --check --strict SHA256SUMS
