@@ -75,7 +75,29 @@ setups, and the SDK tarball is never fetched from a public URL by CI:
   variable to the DevEco install root.
 
 The SDK tarball must not be committed to the repository: the HarmonyOS SDK licence
-does not permit redistribution.
+does not permit redistribution. `scripts/pack-harmony-toolchain.sh` produces it from
+a local install of the HarmonyOS command-line tools (≈1.6 GiB with `zstd -10`,
+under the 2 GiB Release asset limit) and prints the checksum to paste into
+`HARMONY_SDK_SHA256`.
+
+### Which channel gets which package
+
+| Channel | Artifact | Signing | Where it goes |
+| --- | --- | --- | --- |
+| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` (+ `OpenLess_harmony.hap`) | **unsigned** | Release assets, `SHA256SUMS` |
+| AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
+| 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
+
+Dispatch the workflow with `channel: release` (default) or `channel: test`; the
+input selects both the signing prefix (`release.cer/p7b/p12` vs
+`test.cer/p7b/p12`) and the AppGallery upload label. The workflow artifact
+bundle carries both packages, the Release step uploads only the unsigned pair,
+and the AppGallery step uploads only the signed one.
+
+A local machine without store certificates can still produce a package:
+`OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and
+`scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`
+checks its contents without a device.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
@@ -165,6 +187,11 @@ committed, cached or printed.
 | Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable | `HARMONY_SDK_URL` | https URL of the pinned SDK tarball (hosted runner) |
 | Variable | `HARMONY_SDK_SHA256` | SHA-256 of that tarball; also the cache key |
+
+The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
+`HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there
+and switch channels by dispatching with `channel: test`, so one secret set at a
+time matches the channel being built.
 | Secret | `APPGALLERY_CLIENT_ID` | AppGallery Connect API client id |
 | Secret | `APPGALLERY_CLIENT_SECRET` | AppGallery Connect API client secret |
 | Secret | `APPGALLERY_APP_ID` | AppGallery Connect app id of the HarmonyOS app |

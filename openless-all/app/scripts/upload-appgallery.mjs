@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Upload a HarmonyOS HAP to HUAWEI AppGallery Connect (Publishing API v2/v3).
 //
-//   node scripts/upload-appgallery.mjs --file path/to/hap [--dry-run] [--skip-if-unconfigured]
+//   node scripts/upload-appgallery.mjs --file path/to/hap [--channel release|test]
+//        [--release-type N] [--release-phase N] [--dry-run] [--skip-if-unconfigured]
 //
 // Environment (GitHub Secrets in CI, never the repository):
 //   APPGALLERY_CLIENT_ID      AGC API client id
@@ -29,7 +30,11 @@ const value = (flag, fallback = '') => {
 const file = value('--file');
 const dryRun = args.includes('--dry-run');
 const skipIfUnconfigured = args.includes('--skip-if-unconfigured');
-const releaseType = Number(value('--release-type', '1'));
+// The GitHub Release ships the unsigned package, so only this store upload ever
+// sees a signed HAP. `--channel test` is a label for the log plus the default
+// release type used by the AppGallery test channel.
+const channel = value('--channel', 'release');
+const releaseType = Number(value('--release-type', channel === 'test' ? '1' : '1'));
 const releasePhase = Number(value('--release-phase', '0'));
 
 const clientId = process.env.APPGALLERY_CLIENT_ID ?? '';
@@ -55,7 +60,7 @@ if (missing.length) {
 const size = statSync(file).size;
 const fileName = basename(file);
 const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
-console.log(`[appgallery] ${fileName} ${size} bytes sha256=${digest}`);
+console.log(`[appgallery] ${fileName} ${size} bytes sha256=${digest} channel=${channel}`);
 
 if (dryRun) {
   console.log(`[appgallery] dry run: would upload to app ${appId} (releaseType=${releaseType}, releasePhase=${releasePhase})`);
@@ -120,4 +125,6 @@ if (apply.body?.ret?.code !== 0) {
   process.exit(1);
 }
 
-console.log(`[appgallery] uploaded ${fileName} to app ${appId}; submit it for review in AppGallery Connect to publish.`);
+console.log(
+  `[appgallery] uploaded ${fileName} to app ${appId} (${channel}); submit it for review in AppGallery Connect to publish.`,
+);

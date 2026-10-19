@@ -18,6 +18,17 @@ set -euo pipefail
 
 APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLCHAIN="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
+# Channels, matching how the artifacts are distributed:
+#   release  production build for HUAWEI AppGallery (signed with release.*)
+#   test     beta build for the AppGallery test channel (signed with test.*)
+#   none     no store signing; the debug material is used when it is present
+# The GitHub Release only ever carries the *unsigned* HAP.
+CHANNEL="${OPENLESS_HARMONY_CHANNEL:-release}"
+case "$CHANNEL" in
+  release | test) SIGN_PREFIX="$CHANNEL" ;;
+  none) SIGN_PREFIX="" ;;
+  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test or none' >&2; exit 1 ;;
+esac
 SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}"
 CACHE_ROOT="${OPENLESS_CACHE_ROOT:-$APP_ROOT/target/harmony-cache}"
 OUTPUT="${OPENLESS_HARMONY_OUTPUT:-$APP_ROOT/target/harmony-packages}"
@@ -26,10 +37,10 @@ OUTPUT="${OPENLESS_HARMONY_OUTPUT:-$APP_ROOT/target/harmony-packages}"
   echo "missing HarmonyOS SDK at $TOOLCHAIN (set OPENLESS_HARMONY_TOOLCHAIN)" >&2
   exit 1
 }
-[ -d "$SIGNING_DIR" ] || {
+if [ -n "$SIGN_PREFIX" ] && [ ! -d "$SIGNING_DIR" ]; then
   echo "missing signing directory $SIGNING_DIR (set OPENLESS_HARMONY_SIGNING_DIR)" >&2
   exit 1
-}
+fi
 
 APP_JSON="$APP_ROOT/harmony/AppScope/app.json5"
 VERSION="${OPENLESS_HARMONY_VERSION:-$(node -p "require('$APP_ROOT/package.json').version" | sed 's/[-+].*//')}"
@@ -64,8 +75,8 @@ PY
 # On a hosted runner there is no DevEco install, so `hvigorw` does not exist:
 # scripts/prepare-harmony-sdk.sh installs hvigor next to the SDK instead.
 HVIGOR_BIN=""
-if [ -x "$TOOLCHAIN/hvigor/node_modules/@ohos/hvigor/bin/hvigor.js" ]; then
-  HVIGOR_BIN="$TOOLCHAIN/hvigor/node_modules/@ohos/hvigor/bin/hvigor.js"
+if [ -f "$TOOLCHAIN/standalone-hvigor/node_modules/@ohos/hvigor/bin/hvigor.js" ]; then
+  HVIGOR_BIN="$TOOLCHAIN/standalone-hvigor/node_modules/@ohos/hvigor/bin/hvigor.js"
 fi
 if [ -z "$HVIGOR_BIN" ] && ! command -v hvigorw > /dev/null 2>&1; then
   echo "no hvigor available: install the SDK with scripts/prepare-harmony-sdk.sh or use a machine with DevEco Studio" >&2
@@ -80,18 +91,30 @@ OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 OUT_DIR="$BUILD_PROJECT/entry/build/default/outputs/default"
-python3 "$APP_ROOT/scripts/sign-harmony-hap.py" "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --release
+UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2>/dev/null | head -1)
+[ -n "$UNSIGNED" ] || { echo "hvigor produced no unsigned HAP in $OUT_DIR" >&2; exit 1; }
 
-SIGNED="$OUT_DIR/entry-default-signed.hap"
-[ -f "$SIGNED" ] || {
-  echo "expected a signed HAP at $SIGNED" >&2
-  exit 1
-}
+SIGNED=""
+if [ -n "$SIGN_PREFIX" ]; then
+  python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
+    "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --prefix "$SIGN_PREFIX"
+  SIGNED="$OUT_DIR/entry-default-signed.hap"
+  [ -f "$SIGNED" ] || { echo "expected a signed HAP at $SIGNED" >&2; exit 1; }
+else
+  echo "no store signing: packaging the unsigned HAP only"
+fi
 
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
-cp "$SIGNED" "$OUTPUT/OpenLess_harmony_arm64.hap"
-cp "$SIGNED" "$OUTPUT/OpenLess_harmony.hap"
+# The repository and the GitHub Release distribute the unsigned package, so a
+# download never carries someone else's signing identity.
+cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony_arm64.hap"
+cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony.hap"
+if [ -n "$SIGNED" ]; then
+  # Store-only artifact: the workflow uploads it to AppGallery and keeps it out
+  # of the Release.
+  cp "$SIGNED" "$OUTPUT/OpenLess_harmony_arm64-signed.hap"
+fi
 ( cd "$OUTPUT" && sha256sum ./*.hap > SHA256SUMS )
 echo "HAP packages ready in $OUTPUT"
 ls -l "$OUTPUT"

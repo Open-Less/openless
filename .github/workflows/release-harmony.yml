@@ -22,6 +22,14 @@ on:
         description: Existing release tag to rebuild and attach (v<version>-tauri)
         required: true
         type: string
+      channel:
+        description: 'release = AppGallery production signing, test = AppGallery test channel'
+        required: false
+        type: choice
+        default: release
+        options:
+          - release
+          - test
       publish:
         description: Attach the HAP to that GitHub Release
         required: false
@@ -117,16 +125,20 @@ jobs:
             exit 1
           fi
 
-      - name: Write the release signing material
+      - name: Write the signing material for this channel
+        # One secret set per channel: a `test` dispatch installs the test profile
+        # under `test.*`, a `release` dispatch installs the production profile
+        # under `release.*`. The packaging script picks the prefix by channel.
         run: |
           set -euo pipefail
           dir="$OPENLESS_HARMONY_SIGNING_DIR"
+          prefix="${{ inputs.channel }}"
           rm -rf "$dir"
           mkdir -p "$dir"
           umask 077
-          for pair in "HARMONY_CERT_BASE64:release.cer" \
-                      "HARMONY_PROFILE_BASE64:release.p7b" \
-                      "HARMONY_KEYSTORE_BASE64:release.p12"; do
+          for pair in "HARMONY_CERT_BASE64:$prefix.cer" \
+                      "HARMONY_PROFILE_BASE64:$prefix.p7b" \
+                      "HARMONY_KEYSTORE_BASE64:$prefix.p12"; do
             name="${pair%%:*}"
             file="${pair##*:}"
             value="${!name:-}"
@@ -140,6 +152,8 @@ jobs:
 
       - name: Build, sign and stage the HAP
         working-directory: openless-all/app
+        env:
+          OPENLESS_HARMONY_CHANNEL: ${{ inputs.channel }}
         run: bash scripts/package-harmony-hap.sh
 
       - name: Verify the packaged HAP
@@ -147,15 +161,25 @@ jobs:
         run: |
           set -euo pipefail
           output=target/harmony-packages
-          test -n "$(ls "$output"/*.hap)"
           ( cd "$output" && sha256sum --check --strict SHA256SUMS )
-          echo "HAP: $(ls -l "$output/OpenLess_harmony_arm64.hap")"
+          version_name=$(node -p "require('./package.json').version.split('+')[0]")
+          version_code=$(cat linux-egui/package-revision)
+          toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
+          # The Release only carries the unsigned package; the store copy must
+          # additionally prove its signature.
+          bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
+            "$toolchain" "$version_name" "$version_code" --allow-unsigned
+          bash scripts/verify-harmony-hap.sh \
+            "$output/OpenLess_harmony_arm64-signed.hap" "$toolchain"
 
       - name: Upload the HAP as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: openless-harmony-hap
-          path: openless-all/app/target/harmony-packages/*
+          # `-signed` stays in the workflow artifacts for the store upload; the
+          # repository never publishes it.
+          path: |
+            openless-all/app/target/harmony-packages/*
           if-no-files-found: error
 
       - name: Attach the HAP to the GitHub Release
@@ -189,6 +213,9 @@ jobs:
         # A fork without AGC credentials still gets the GitHub Release; the step
         # reports that it skipped instead of failing the whole release.
         run: >-
-          node scripts/upload-appgallery.mjs
-          --file target/harmony-packages/OpenLess_harmony_arm64.hap
-          --skip-if-unconfigured
+          # Only the signed package is uploaded; the unsigned one is what the
+          # GitHub Release distributes.
+          node scripts/upload-appgallery.mjs \
+            --channel "${{ inputs.channel }}" \
+            --file target/harmony-packages/OpenLess_harmony_arm64-signed.hap \
+            --skip-if-unconfigured

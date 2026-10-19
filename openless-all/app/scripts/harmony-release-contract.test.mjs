@@ -38,6 +38,22 @@ assert.match(readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8
 // No DevEco install: the standalone hvigor CLI must be usable.
 assert.match(packaging, /@ohos\/hvigor\/bin\/hvigor\.js/);
 
+// Distribution policy: the repository only ever carries the unsigned package,
+// AppGallery gets the signed one, and the test channel signs with its own
+// material.
+assert.match(workflow, /channel:[\s\S]{0,400}default: release/);
+assert.match(workflow, /HARMONY_KEYSTORE_BASE64[\s\S]{0,400}prefix\.p12/);
+assert.match(workflow, /OPENLESS_HARMONY_CHANNEL: \$\{\{ inputs\.channel \}\}/);
+assert.match(workflow, /--channel "\$\{\{ inputs\.channel \}\}"/);
+const attachStart = workflow.indexOf('gh release upload');
+const releaseAttach = workflow.slice(attachStart, workflow.indexOf('attached HarmonyOS assets', attachStart));
+assert.ok(!releaseAttach.includes('-signed.hap'), 'the Release must not carry the signed HAP');
+assert.match(releaseAttach, /OpenLess_harmony_arm64\.hap/);
+assert.match(packaging, /OpenLess_harmony_arm64-signed\.hap/);
+assert.match(packaging, /OPENLESS_HARMONY_CHANNEL/);
+assert.match(readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8'), /--prefix/);
+assert.match(readFileSync(join(appRoot, 'scripts/verify-harmony-hap.sh'), 'utf8'), /--allow-unsigned/);
+
 // Credentials arrive as Secrets/Variables, never as literals.
 for (const secret of [
   'HARMONY_KEYSTORE_BASE64',
@@ -57,7 +73,7 @@ assert.doesNotMatch(workflow, /password\s*:\s*['"][^'"]+['"]/i, 'no literal pass
 // Packaging and signing are separate, testable scripts.
 assert.ok(existsSync(join(appRoot, 'scripts/package-harmony-hap.sh')));
 assert.match(packaging, /sign-harmony-hap\.py/);
-assert.match(packaging, /--release/);
+assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
 assert.match(packaging, /sha256sum \.\/\*\.hap > SHA256SUMS/);
 assert.match(packaging, /OpenLess_harmony_arm64\.hap/);
 assert.match(packaging, /OpenLess_harmony\.hap/);

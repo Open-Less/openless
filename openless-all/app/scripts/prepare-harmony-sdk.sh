@@ -4,73 +4,139 @@
 #
 #   scripts/prepare-harmony-sdk.sh
 #
-# The DevEco / HarmonyOS SDK that hvigor accepts is not downloadable without a
-# Huawei account, so it cannot be fetched from a public URL the way the
-# OpenHarmony SDK can. What other projects do (and what this script implements)
-# is: keep one verified tarball of the SDK somewhere the runner may read it,
-# pin its SHA-256, and lay it out exactly as DevEco does:
+# Why this exists: `hvigor` refuses the public OpenHarmony SDK. The two trees are
+# not interchangeable - verified against `@ohos/hos-sdkmanager-common` (the loader
+# hvigor 6 uses for `runtimeOS: HarmonyOS`):
 #
-#   $DEVECO_SDK_HOME/default/openharmony/{ets,js,native,previewer,toolchains}
-#   $DEVECO_SDK_HOME/default/hms/{ets,js,native,toolchains}
+#   * component metadata is `sdk-pkg.json` with the payload under a `data` key
+#     (the OpenHarmony SDK ships `oh-uni-package.json` with the payload inline);
+#   * component directories are named `<path>-<os version build>`, e.g.
+#     `ets-HarmonyOS-NEXT2` (`HOS_CONFIG.sdkSufNameMapper`), and each component
+#     carries `hosSdkVersion`/`stage` that map to an API level through
+#     `HOS_CONFIG.osVersionMapper`;
+#   * `HosLocalComponentLoader` accepts a component only when its location matches
+#     `<sdkRoot>/<generated name>` (or sits in a directory called `default`).
+#
+# So the SDK has to be produced by DevEco / the HarmonyOS SDK Manager, which is
+# account-gated. What other HarmonyOS projects do - and what this script
+# implements - is to keep one verified tarball of that tree where CI may read it,
+# pin its SHA-256, and restore it from cache on every run.
 #
 # Environment:
 #   HARMONY_SDK_URL     https URL of the SDK tarball (required)
 #   HARMONY_SDK_SHA256  expected SHA-256 of that tarball (required)
 #   OPENLESS_HARMONY_TOOLCHAIN  install root (default: $HOME/.local/share/harmony/current)
 #   HARMONY_HVIGOR_VERSION      @ohos/hvigor version to install (default: 6.26.8)
-#   HARMONY_NODE_VERSION        node used by hvigor (default: current node)
-#
-# The SDK is cached by the caller (actions/cache) keyed on HARMONY_SDK_SHA256, so
-# the download happens once per SDK revision.
+#   HARMONY_NPM_REGISTRY        Huawei npm registry (default: https://repo.harmonyos.com/npm/)
 set -euo pipefail
 
 url=${HARMONY_SDK_URL:-}
 sha=${HARMONY_SDK_SHA256:-}
 root=${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}
 hvigor_version=${HARMONY_HVIGOR_VERSION:-6.26.8}
+registry=${HARMONY_NPM_REGISTRY:-https://repo.harmonyos.com/npm/}
+sdk_root=$root/sdk
 
-[ -n "$url" ] || { echo "HARMONY_SDK_URL is required" >&2; exit 1; }
-[ -n "$sha" ] || { echo "HARMONY_SDK_SHA256 is required" >&2; exit 1; }
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
 
-if [ -d "$root/sdk/default/openharmony/ets" ]; then
-  echo "SDK already present at $root"
+# Fail with the loader's own rule instead of letting hvigor report
+# "Cannot find the corresponding SDK version under the specified SDK path".
+validate_sdk_tree() {
+  local dir=$1
+  [ -d "$dir" ] || die "SDK root $dir does not exist"
+  local packages
+  packages=$(find "$dir" -maxdepth 3 -name sdk-pkg.json | head -50)
+  if [ -z "$packages" ]; then
+    die "no sdk-pkg.json under $dir: this looks like an OpenHarmony SDK (oh-uni-package.json), which hvigor rejects for runtimeOS HarmonyOS"
+  fi
+  if ! xargs -r grep -l '"apiVersion"' <<< "$packages" > /dev/null; then
+    die "sdk-pkg.json under $dir carries no apiVersion; the tarball is not a usable HarmonyOS SDK"
+  fi
+  # Two shapes exist: one sdk-pkg.json in `default/` describing the whole SDK
+  # (what the official command-line tools ship), or one per component directory.
+  if [ ! -d "$dir/default/openharmony/ets" ] \
+    && [ -z "$(find "$dir" -maxdepth 3 -type d -name 'ets*' | head -1)" ]; then
+    die "SDK has no ArkTS component under $dir"
+  fi
+  if [ ! -d "$dir/default/openharmony/toolchains" ] \
+    && [ -z "$(find "$dir" -maxdepth 3 -type d -name 'toolchains*' | head -1)" ]; then
+    die "SDK has no toolchains component under $dir"
+  fi
+  local api
+  api=$(xargs -r grep -h '"apiVersion"' <<< "$packages" | head -1 | sed 's/[^0-9]//g')
+  echo "SDK ready at $dir (API ${api:-unknown})"
+}
+
+if [ -d "$sdk_root" ] && [ -n "$(find "$sdk_root" -maxdepth 3 -name sdk-pkg.json | head -1)" ]; then
+  echo "SDK already present at $sdk_root"
 else
+  [ -n "$url" ] || die "HARMONY_SDK_URL is required to install the SDK"
+  [ -n "$sha" ] || die "HARMONY_SDK_SHA256 is required to install the SDK"
+
   archive=$(mktemp)
   echo "downloading $url"
   curl --fail --location --retry 3 --output "$archive" "$url"
   actual=$(sha256sum "$archive" | awk '{print $1}')
   if [ "$actual" != "$sha" ]; then
-    echo "SDK archive checksum mismatch: got $actual, expected $sha" >&2
-    exit 1
+    rm -f "$archive"
+    die "SDK archive checksum mismatch: got $actual, expected $sha"
   fi
+
   staging=$(mktemp -d)
   tar -xf "$archive" -C "$staging"
-  # Accept either a flat `default/...` tree or a top-level directory that
-  # contains it, so the tarball does not need a fixed shape.
-  if [ ! -d "$staging/default/openharmony" ]; then
-    inner=$(find "$staging" -maxdepth 3 -type d -name openharmony | head -1)
-    [ -n "$inner" ] || { echo "SDK archive does not contain default/openharmony" >&2; exit 1; }
-    staging=$(dirname "$(dirname "$inner")")
+  rm -f "$archive"
+
+  # Accept three tarball shapes: a bare SDK tree, a whole command-line-tools
+  # install (`sdk/` + `bin/` + `hvigor/` + `tool/`), or either wrapped in one
+  # top-level directory.
+  source_root=$staging
+  if [ ! -d "$staging/sdk" ] && [ -z "$(find "$staging" -maxdepth 3 -name sdk-pkg.json | head -1)" ]; then
+    inner=$(find "$staging" -maxdepth 3 -type d -name sdk | head -1)
+    [ -n "$inner" ] || die "SDK archive contains neither sdk/ nor sdk-pkg.json"
+    source_root=$(dirname "$inner")
   fi
-  mkdir -p "$root/sdk"
-  rm -rf "$root/sdk/default"
-  cp -a "$staging/default" "$root/sdk/default"
-  rm -rf "$archive" "$staging"
-  echo "SDK installed at $root/sdk/default"
+
+  mkdir -p "$root"
+  if [ -d "$source_root/sdk" ]; then
+    # Whole toolchain: keep hvigorw and the bundled node, they are what
+    # `package-harmony-hap.sh` drives.
+    for part in sdk bin hvigor ohpm tool lib; do
+      [ -d "$source_root/$part" ] || continue
+      rm -rf "${root:?}/$part"
+      cp -a "$source_root/$part" "$root/$part"
+    done
+    echo "HarmonyOS command-line tools installed at $root"
+  else
+    rm -rf "$sdk_root"
+    cp -a "$source_root" "$sdk_root"
+    echo "SDK installed at $sdk_root"
+  fi
+  rm -rf "$staging"
 fi
 
-[ -d "$root/sdk/default/openharmony/toolchains" ] || {
-  echo "SDK is missing default/openharmony/toolchains" >&2
-  exit 1
-}
+validate_sdk_tree "$sdk_root"
 
-# hvigor and its HarmonyOS plugin live on the Huawei npm registry, not npmjs.
-if [ ! -d "$root/hvigor/node_modules/@ohos/hvigor" ]; then
-  mkdir -p "$root/hvigor"
-  ( cd "$root/hvigor" \
-    && npm init -y > /dev/null \
-    && npm install --no-audit --no-fund \
-         --registry=https://repo.harmonyos.com/npm/ \
-         "@ohos/hvigor@${hvigor_version}" "@ohos/hvigor-ohos-plugin@${hvigor_version}" )
+# hvigor comes from two places: the HarmonyOS command-line tools ship it
+# (`$root/bin/hvigorw`), and a bare SDK tarball needs it from the Huawei npm
+# registry. Never install into the toolchain's own `hvigor/` directory: a second
+# `@ohos/hvigor` copy there shadows the bundled one, so `hvigorfile.ts` loads a
+# different `hvigor` singleton and every build dies with
+# "The root node is not yet available for build".
+standalone=$root/standalone-hvigor
+if [ -x "$root/bin/hvigorw" ]; then
+  echo "hvigor ships with the toolchain at $root/bin/hvigorw"
+elif [ -f "$standalone/node_modules/@ohos/hvigor/bin/hvigor.js" ]; then
+  echo "hvigor already installed at $standalone"
+else
+  mkdir -p "$standalone"
+  (
+    cd "$standalone"
+    npm init -y > /dev/null
+    npm install --no-audit --no-fund --registry="$registry" \
+      "@ohos/hvigor@${hvigor_version}" "@ohos/hvigor-ohos-plugin@${hvigor_version}"
+  )
+  echo "hvigor installed at $standalone"
 fi
-echo "hvigor ready at $root/hvigor"
