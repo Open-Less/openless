@@ -31,9 +31,11 @@ on:
         type: string
         default: ''
 
-permissions:
-  # `gh release upload` writes assets; nothing else in this workflow writes.
-  contents: write
+# No `permissions:` here on purpose: a reusable workflow inherits its caller's
+# grant, and the release caller needs `contents: write` for `gh release upload`
+# while CI keeps `contents: read`. Asking for more than the caller grants is
+# rejected before the run starts (`startup_failure`, zero jobs); asking for less
+# silently breaks the upload.
 
 concurrency:
   group: linux-egui-build-${{ github.workflow }}-${{ github.ref }}
