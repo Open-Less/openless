@@ -340,18 +340,15 @@ jobs:
         # relative base for the rawfile origin.
         run: npm run build -- --base=./ --outDir=dist-harmony
       - name: Cache the HarmonyOS toolchain
-        # Skipped until a maintainer publishes the SDK tarball as a repository
-        # variable; without it the ArkTS sources are only contract-checked.
-        if: vars.HARMONY_SDK_URL != ''
+        # The official command-line tools, downloaded from the public mirror that
+        # `prepare-harmony-sdk.sh` pins by checksum. No Huawei account is involved,
+        # so this runs on every pull request.
         uses: actions/cache@v4
         with:
           path: ~/.local/share/harmony/current
-          key: harmony-toolchain-${{ runner.os }}-${{ vars.HARMONY_SDK_SHA256 }}
+          key: harmony-tools-6.0.1.251-${{ runner.os }}
       - name: Build the HAP (compiles ArkTS and the Rust host)
-        if: vars.HARMONY_SDK_URL != ''
         env:
-          HARMONY_SDK_URL: ${{ vars.HARMONY_SDK_URL }}
-          HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
           OPENLESS_HARMONY_CHANNEL: none
         run: |
           set -euo pipefail

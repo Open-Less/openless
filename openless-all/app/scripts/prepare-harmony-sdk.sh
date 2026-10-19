@@ -22,16 +22,25 @@
 # implements - is to keep one verified tarball of that tree where CI may read it,
 # pin its SHA-256, and restore it from cache on every run.
 #
+# A public mirror of the official command-line tools is the default source, which
+# is exactly what other HarmonyOS projects do (sherpa-onnx's `harmony-os` workflow
+# downloads the same archive and caches it by name). Override the URL/checksum when
+# a newer tools release is needed; the checksum is what makes the download
+# trustworthy either way.
+#
 # Environment:
-#   HARMONY_SDK_URL     https URL of the SDK tarball (required)
-#   HARMONY_SDK_SHA256  expected SHA-256 of that tarball (required)
+#   HARMONY_SDK_URL     https URL of the tools archive (default below)
+#   HARMONY_SDK_SHA256  expected SHA-256 (default below)
 #   OPENLESS_HARMONY_TOOLCHAIN  install root (default: $HOME/.local/share/harmony/current)
 #   HARMONY_HVIGOR_VERSION      @ohos/hvigor version to install (default: 6.26.8)
 #   HARMONY_NPM_REGISTRY        Huawei npm registry (default: https://repo.harmonyos.com/npm/)
 set -euo pipefail
 
-url=${HARMONY_SDK_URL:-}
-sha=${HARMONY_SDK_SHA256:-}
+# commandline-tools-linux-x64-6.0.1.251.zip, 2,108,510,902 bytes.
+DEFAULT_URL=https://huggingface.co/csukuangfj/harmonyos-commandline-tools/resolve/main/commandline-tools-linux-x64-6.0.1.251.zip
+DEFAULT_SHA256=e971348eabe959b41b1d07fae037b3cc53ab2c0a8306f0895357dd45f98ad421
+url=${HARMONY_SDK_URL:-$DEFAULT_URL}
+sha=${HARMONY_SDK_SHA256:-$DEFAULT_SHA256}
 root=${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}
 hvigor_version=${HARMONY_HVIGOR_VERSION:-6.26.8}
 registry=${HARMONY_NPM_REGISTRY:-https://repo.harmonyos.com/npm/}
@@ -70,8 +79,11 @@ validate_sdk_tree() {
   echo "SDK ready at $dir (API ${api:-unknown})"
 }
 
-if [ -d "$sdk_root" ] && [ -n "$(find "$sdk_root" -maxdepth 3 -name sdk-pkg.json | head -1)" ]; then
-  echo "SDK already present at $sdk_root"
+# A cache restore can be partial (SDK without `bin/hvigorw`, or the other way
+# round), so require both halves before skipping the download.
+if [ -n "$(find "$sdk_root" -maxdepth 3 -name sdk-pkg.json 2> /dev/null | head -1)" ] \
+  && [ -x "$root/bin/hvigorw" ]; then
+  echo "HarmonyOS toolchain already present at $root"
 else
   [ -n "$url" ] || die "HARMONY_SDK_URL is required to install the SDK"
   [ -n "$sha" ] || die "HARMONY_SDK_SHA256 is required to install the SDK"

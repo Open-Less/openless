@@ -56,29 +56,20 @@ It is manual-only as well and requires the same tag. It builds, signs and attach
 `OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias, then uploads
 the same HAP to HUAWEI AppGallery Connect.
 
-The SDK is the one blocker: `hvigor` only accepts the DevEco / HarmonyOS SDK,
-which is downloadable only behind a Huawei account, and the OpenHarmony SDK that
-*is* public is rejected by `hvigor`'s SDK layout/version checks (verified locally:
-`@kit.IMEKit`, `@kit.AssetStoreKit` and `hap-sign-tool.jar` all exist in the public
-OpenHarmony 6.0 SDK, but `HmosSdkLoader` still reports
-`Cannot find the corresponding SDK version`). The workflow therefore supports two
-setups, and the SDK tarball is never fetched from a public URL by CI:
+The build needs the official HarmonyOS command-line tools (SDK + hvigor + ohpm +
+bundled node). Huawei's download page wants an account, but the same archive is
+mirrored publicly - the mirror `k2-fsa/sherpa-onnx`'s own `harmony-os` workflow
+uses - so `scripts/prepare-harmony-sdk.sh` downloads
+`commandline-tools-linux-x64-6.0.1.251.zip` from it, verifies the pinned SHA-256
+and lays it out under `~/.local/share/harmony/current`. **No repository variable
+and no self-hosted runner is required**; the toolchain is cached by
+`actions/cache` under the tools version.
 
-* **Hosted runner (default)**: set the `HARMONY_SDK_URL` and `HARMONY_SDK_SHA256`
-  repository variables to a verifiably pinned tarball of the SDK tree
-  (`default/openharmony/...` plus `default/hms/...`). `scripts/prepare-harmony-sdk.sh`
-  downloads it, checks the SHA-256, lays it out as DevEco does, and installs
-  `@ohos/hvigor` + `@ohos/hvigor-ohos-plugin` from `https://repo.harmonyos.com/npm/`.
-  The SDK is cached with `actions/cache` keyed on the checksum.
-* **Self-hosted runner**: dispatch with
-  `runner_labels: ["self-hosted","harmony"]` and set the `HARMONY_TOOLCHAIN`
-  variable to the DevEco install root.
-
-The SDK tarball must not be committed to the repository: the HarmonyOS SDK licence
-does not permit redistribution. `scripts/pack-harmony-toolchain.sh` produces it from
-a local install of the HarmonyOS command-line tools (≈1.6 GiB with `zstd -10`,
-under the 2 GiB Release asset limit) and prints the checksum to paste into
-`HARMONY_SDK_SHA256`.
+Override `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` to move to a newer tools
+release, or set `HARMONY_TOOLCHAIN` and dispatch with
+`runner_labels: ["self-hosted","harmony"]` on a machine that already has the
+tools installed. Do not commit the archive: the SDK licence does not permit
+redistribution, which is also why it is fetched at job time rather than vendored.
 
 ### Which channel gets which package
 
@@ -185,8 +176,8 @@ committed, cached or printed.
 | Secret | `HARMONY_KEY_PASSWORD` | key password (falls back to the keystore password) |
 | Variable | `HARMONY_KEY_ALIAS` | key alias inside the keystore |
 | Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
-| Variable | `HARMONY_SDK_URL` | https URL of the pinned SDK tarball (hosted runner) |
-| Variable | `HARMONY_SDK_SHA256` | SHA-256 of that tarball; also the cache key |
+| Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
+| Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
 
 The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
 `HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there

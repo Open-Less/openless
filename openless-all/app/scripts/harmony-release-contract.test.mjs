@@ -28,13 +28,14 @@ assert.match(workflow, /ref: \$\{\{ inputs\.tag \}\}/);
 assert.match(workflow, /TAG_VERSION=\$\{TAG_VERSION%-tauri\}/);
 assert.match(workflow, /does not match package\.json version/);
 
-// Default runner is a hosted one, with the SDK restored from a pinned tarball;
-// the workflow explains the requirement instead of failing with a mystery error.
+// Default runner is a hosted one and the toolchain comes from the public mirror
+// that `prepare-harmony-sdk.sh` pins by checksum - no secrets, no self-hosted box.
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
-assert.match(workflow, /HARMONY_SDK_SHA256/);
-assert.match(workflow, /no HarmonyOS SDK: set the HARMONY_SDK_URL/);
-assert.match(readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8'), /checksum mismatch/);
+const prepare = readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8');
+assert.match(prepare, /DEFAULT_URL=https:\/\//);
+assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
+assert.match(prepare, /checksum mismatch/);
 // No DevEco install: the standalone hvigor CLI must be usable.
 assert.match(packaging, /@ohos\/hvigor\/bin\/hvigor\.js/);
 

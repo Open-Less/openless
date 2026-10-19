@@ -3,15 +3,14 @@ name: Release HarmonyOS
 # HarmonyOS ships its HAP in the same GitHub Release as the desktop, Android and
 # Linux assets, and the same package is pushed to HUAWEI AppGallery Connect.
 #
-# The SDK that hvigor accepts (DevEco / HarmonyOS) is account-gated, so it cannot
-# be fetched from a public URL. Two supported setups:
+# The build uses the official HarmonyOS command-line tools. Huawei's own download
+# page needs an account, but the same archive is mirrored publicly (the mirror
+# sherpa-onnx's own CI uses); `scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
+# so the workflow needs no variables and no self-hosted runner. Only the AppGallery
+# signing profile is secret - which it has to be.
 #
-#   * `runner_labels: ["ubuntu-latest"]` (default host) + the `HARMONY_SDK_URL` /
-#     `HARMONY_SDK_SHA256` secrets pointing at a verified SDK tarball. This is what
-#     other HarmonyOS projects do: host the SDK once, pin its checksum, restore it
-#     from cache on every run. Nothing Huawei-account-gated is fetched at runtime.
-#   * `runner_labels: ["self-hosted","harmony"]` when a machine already has the SDK;
-#     set the `HARMONY_TOOLCHAIN` variable to its path.
+# Override `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` when a newer tools release is
+# needed, and `runner_labels` for a machine that already has the tools installed.
 #
 # Dispatch it after the tag exists; it rebuilds that tag, signs it with material
 # from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
@@ -41,7 +40,7 @@ on:
         type: boolean
         default: true
       runner_labels:
-        description: JSON array of runner labels (hosted runner + HARMONY_SDK_URL, or one with DevEco preinstalled)
+        description: JSON array of runner labels (a hosted runner is enough; use a self-hosted one only if it already has the tools)
         required: false
         type: string
         default: '["ubuntu-latest"]'
@@ -89,29 +88,20 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Cache the HarmonyOS SDK
-        if: vars.HARMONY_SDK_URL != ''
+      - name: Cache the HarmonyOS toolchain
         uses: actions/cache@v4
         with:
-          path: ~/.local/share/harmony/current/sdk
-          key: harmony-sdk-${{ runner.os }}-${{ vars.HARMONY_SDK_SHA256 }}
+          path: ~/.local/share/harmony/current
+          key: harmony-tools-6.0.1.251-${{ runner.os }}
 
-      - name: Prepare the HarmonyOS SDK
-        # `HARMONY_SDK_URL` + `HARMONY_SDK_SHA256` are repository variables (a URL
-        # is not a secret; the checksum is what makes the tarball trustworthy).
+      - name: Prepare the HarmonyOS toolchain
         env:
           HARMONY_SDK_URL: ${{ vars.HARMONY_SDK_URL }}
           HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
         run: |
           set -euo pipefail
-          if [ -n "${HARMONY_SDK_URL:-}" ]; then
-            bash openless-all/app/scripts/prepare-harmony-sdk.sh
-          fi
+          bash openless-all/app/scripts/prepare-harmony-sdk.sh
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
-          if [ ! -d "$toolchain/sdk/default/openharmony" ]; then
-            echo "::error::no HarmonyOS SDK: set the HARMONY_SDK_URL and HARMONY_SDK_SHA256 variables, or run on a self-hosted runner with HARMONY_TOOLCHAIN"
-            exit 1
-          fi
           echo "OPENLESS_HARMONY_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
           echo "HVIGOR_USER_HOME=$toolchain/hvigor-home" >> "$GITHUB_ENV"
 

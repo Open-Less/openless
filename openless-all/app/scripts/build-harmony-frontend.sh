@@ -91,7 +91,11 @@ shutil.copy2(target.parent / 'rust-target/aarch64-unknown-linux-ohos/release/lib
 
 PY
 cd "$BUILD_PROJECT"
-ohpm install --all --cache "$CACHE_ROOT/harmony/ohpm"
+# ohpm keeps its cache under $OHPM_HOME (default ~/.ohpm). The CLI's `--cache`
+# flag only exists in newer DevEco builds, so set the home instead of guessing
+# which flag this toolchain has.
+export OHPM_HOME="${OHPM_HOME:-$CACHE_ROOT/harmony/ohpm}"
+ohpm install --all
 # `HVIGOR_JS` lets a runner without DevEco drive the standalone hvigor CLI; the
 # DevEco install keeps using its own `hvigorw` wrapper.
 if [ -n "${HVIGOR_JS:-}" ]; then
