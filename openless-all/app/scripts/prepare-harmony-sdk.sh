@@ -89,17 +89,27 @@ else
   [ -n "$sha" ] || die "HARMONY_SDK_SHA256 is required to install the SDK"
 
   archive=$(mktemp)
+  # Keep the original name so the extractor can tell zip from tar by extension.
+  record=$archive.${url##*.}
   echo "downloading $url"
-  curl --fail --location --retry 3 --output "$archive" "$url"
-  actual=$(sha256sum "$archive" | awk '{print $1}')
+  curl --fail --location --retry 3 --output "$record" "$url"
+  actual=$(sha256sum "$record" | awk '{print $1}')
   if [ "$actual" != "$sha" ]; then
-    rm -f "$archive"
+    rm -f "$record"
     die "SDK archive checksum mismatch: got $actual, expected $sha"
   fi
 
   staging=$(mktemp -d)
-  tar -xf "$archive" -C "$staging"
-  rm -f "$archive"
+  case "$record" in
+    *.zip)
+      command -v unzip > /dev/null 2>&1 || die "unzip is required to extract the tools archive"
+      unzip -q "$record" -d "$staging"
+      ;;
+    *)
+      tar -xf "$archive" -C "$staging"
+      ;;
+  esac
+  rm -f "$record"
 
   # Accept three tarball shapes: a bare SDK tree, a whole command-line-tools
   # install (`sdk/` + `bin/` + `hvigor/` + `tool/`), or either wrapped in one
