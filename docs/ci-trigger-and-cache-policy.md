@@ -91,7 +91,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 | macOS checks | 20m01s | 8m36s | 6m16s |
 | Windows checks | 20m04s | 15m30s | 13m17s |
 | Android | 8m11s | 5m50s | 5m50s |
-| macOS Rust 1.89 MSRV | 16m47s | 3m39s | 3m39s |
+| macOS Rust 1.99 MSRV | 16m47s | 3m39s | 3m39s |
 | Linux egui（测试 + 打包） | 17m21s | 6m35s（旧缓存前缀） | 8m08s（新前缀首次命中） |
 
 同一步骤的冷 / 热对照：`cargo test -p openless-core` 命中 201 s、冷启动 579 s；`cargo build --release -p openless-linux-egui` 命中 124 s、冷启动 463 s。整轮墙钟时间由最慢的 job 决定（本轮 Windows 13m17s），改动前是 20m12s。
