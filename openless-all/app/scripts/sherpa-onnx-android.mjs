@@ -20,12 +20,12 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 // Must match the sherpa-onnx crate version in src-tauri/Cargo.toml.
-export const SHERPA_ONNX_VERSION = '1.13.2';
+export const SHERPA_ONNX_VERSION = '1.13.8';
 export const SHERPA_ONNX_ANDROID_ARCHIVE = {
   name: `sherpa-onnx-v${SHERPA_ONNX_VERSION}-android.tar.bz2`,
   url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/sherpa-onnx-v${SHERPA_ONNX_VERSION}-android.tar.bz2`,
-  sizeBytes: 52_236_308,
-  sha256: 'fc4d17941152941a883b0cfabfc9acac118682324e9f97df6c1ae1360bc7bc8e',
+  sizeBytes: 46_093_321,
+  sha256: '2ff63469a71cb6009aa2e3ed5f4a670f8abdcbe4bb9ffd23776afc792a6b4f44',
 };
 /** The only ABI local ASR is built for; the others stay cloud-only. */
 export const SHERPA_ONNX_ANDROID_ABI = 'arm64-v8a';

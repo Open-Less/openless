@@ -127,10 +127,10 @@ tao = "0.35"
 # verified official libraries (scripts/sherpa-onnx-android.mjs) and ships them
 # in jniLibs. Other Android ABIs stay cloud-only.
 [target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["shared"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["static"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
 security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"
