@@ -120,8 +120,10 @@ fn fontconfig_match(query: &str) -> Option<(PathBuf, u32)> {
 /// Faces are resolved through fontconfig (so HarmonyOS Sans, Noto or whatever
 /// the desktop prefers is used, exactly like the Tauri build) and CJK is loaded
 /// with its proper face index. The egui defaults stay as the last fallback.
-pub fn install(ctx: &egui::Context) {
+pub fn install(ctx: &egui::Context, chosen: openless_linux_egui::typography::UiFont) {
     enable_antialiasing(ctx);
+    // 切换字体后可能没有独立 Medium 面，不能沿用上一轮注册标记。
+    MEDIUM_AVAILABLE.store(false, std::sync::atomic::Ordering::Relaxed);
     // (font key, file, face index, proportional?, monospace?)
     let mut candidates: Vec<(String, PathBuf, u32, bool, bool)> = Vec::new();
     if let Some(path) = std::env::var_os("OPENLESS_IME_FONT").map(PathBuf::from) {
@@ -133,7 +135,6 @@ pub fn install(ctx: &egui::Context) {
     // CJK 回退，所以我们要同样的顺序。缺字形时照样回退到下面的 CJK 面。
     // 外观页选中的字族（Tauri 的 `--ol-font-ui`）：拉丁面按用户选择解析，
     // CJK 面仍走下面的 `:lang=zh-cn` 兜底，缺字形时自动回退。
-    let chosen = openless_linux_egui::typography::load().font;
     if chosen == openless_linux_egui::typography::UiFont::System {
         if let Some((path, index)) = fontconfig_match("sans-serif:lang=en") {
             candidates.push(("openless-ui-latin".to_owned(), path, index, true, false));
@@ -224,8 +225,8 @@ pub fn install(ctx: &egui::Context) {
     // Tauri 的 `SettingRow` 标签是 `font-weight: 500`。egui 不能选可变字体的字重轴，
     // 所以去 fontconfig 要一个真正的 Medium 面（例如 Noto Sans CJK Medium）单独注册
     // 成一个命名族；桌面没有 500 面时退回 Proportional（见 `medium_font`）。
-    let regular_face = fontconfig_match("sans-serif");
-    let medium_face = fontconfig_match("sans-serif:weight=medium");
+    let regular_face = fontconfig_match(chosen.fontconfig_query());
+    let medium_face = fontconfig_match(&format!("{}:weight=medium", chosen.fontconfig_query()));
     if let Some((path, index)) = medium_face {
         if regular_face.as_ref() != Some(&(path.clone(), index)) {
             if let Ok(bytes) = std::fs::read(&path) {

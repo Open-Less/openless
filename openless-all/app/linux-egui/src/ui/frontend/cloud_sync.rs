@@ -542,10 +542,7 @@ fn dialog_contents(
             {
                 note(
                     ui,
-                    &format!(
-                        "{} · {days}",
-                        tr_l10n(lang, "cloudSyncE2ee.backupRetention")
-                    ),
+                    &fmt_l10n(lang, "cloudSyncE2ee.backupRetention", &[&days]),
                     theme::INK_3,
                 );
             }
@@ -684,11 +681,16 @@ fn restore_review(
     if !preview.device_settings_to_review.is_empty() {
         note(
             ui,
-            &format!(
-                "{}: {}",
-                tr_l10n(lang, "cloudSyncE2ee.deviceReview"),
-                preview.device_settings_to_review.join(", ")
+            &fmt_l10n(
+                lang,
+                "cloudSyncE2ee.deviceReview",
+                &[&preview.device_settings_to_review.len()],
             ),
+            theme::INK_3,
+        );
+        note(
+            ui,
+            &preview.device_settings_to_review.join(", "),
             theme::INK_3,
         );
     }
@@ -697,7 +699,18 @@ fn restore_review(
     if !preview.conflicts.is_empty() {
         note(
             ui,
-            tr_l10n(lang, "cloudSyncE2ee.conflictProgress"),
+            &fmt_l10n(
+                lang,
+                "cloudSyncE2ee.conflictProgress",
+                &[
+                    &state
+                        .conflicts
+                        .iter()
+                        .filter(|(_, side)| side.is_some())
+                        .count(),
+                    &preview.conflicts.len(),
+                ],
+            ),
             theme::INK,
         );
         for item in &preview.conflicts {

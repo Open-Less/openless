@@ -1,7 +1,7 @@
 import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
-import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
+import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
 
 export const zhTW: typeof zhCN = {

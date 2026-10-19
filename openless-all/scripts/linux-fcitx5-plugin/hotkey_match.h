@@ -17,8 +17,6 @@
 
 #include <cstdint>
 
-#include <fcitx-utils/key.h>
-
 namespace openless_hotkeys {
 
 constexpr uint32_t kShiftBit = 0x01;
@@ -29,6 +27,11 @@ constexpr uint32_t kShiftBit = 0x01;
 /// Super2/Hyper2/Meta bits are *not* part of a shortcut's identity: they ride
 /// along on every key event and must not decide whether a hotkey fires.
 constexpr uint32_t kModifierMask = 0x01u | 0x04u | 0x08u | 0x40u;
+
+/// Read fcitx::KeyState::Repeat from the original, unnormalized event states.
+inline bool shouldNotifyAction(bool isPress, uint32_t originalStates) {
+    return !isPress || (originalStates & (1u << 31)) == 0;
+}
 
 /// X11 modifier keysyms (Shift_L … Hyper_R) plus CapsLock/ShiftLock.
 inline bool isModifierSym(uint32_t sym) { return sym >= 0xffe1 && sym <= 0xffee; }

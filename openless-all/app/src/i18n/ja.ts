@@ -4,7 +4,7 @@ import { en } from './en';
 // Japanese (Beta) — AI machine translation based; native-speaker review recommended.
 // Structure mirrors zh-CN.ts. When adding new keys, update ja.ts / ko.ts as well
 // (keys not updated fall back to English via ...en).
-import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { uiRefinementJa as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
@@ -162,7 +162,7 @@ export const ja: typeof zhCN = {
       '同期範囲のローカルデータを置き換えます。ローカルの変更を残すにはマージを選んでください。',
     restoreCheck: '復元方法と競合の選択を確認しました。',
     applyRestore: '復元を確認',
-    conflictProgress: '{{total}} 件中 {{selected}} 件を選択済み',
+    conflictProgress: '競合を {{selected}} / {{total}} 件解決済み',
     conflictItem: '競合 {{index}} · {{category}}',
     conflictLocal: 'ローカルを使用',
     conflictCloud: 'クラウドを使用',

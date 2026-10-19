@@ -264,12 +264,18 @@ public:
                         FCITX_LOGC(openless, Debug)
                             << "QA shortcut sym=0x" << std::hex << sym << std::dec
                             << " states=0x" << std::hex << states;
-                        qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
+                        if (openless_hotkeys::shouldNotifyAction(isPress,
+                                static_cast<uint32_t>(keyEvent.origKey().states()))) {
+                            qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
+                        }
                         consume(qaRawSym_);
                         return;
                     }
                     if (quickNoteRawSym_ != 0 && hit(quickNoteRawSym_, quickNoteRawStates_)) {
-                        quickNoteEvent(quickNoteRawSym_, quickNoteRawStates_, isPress);
+                        if (openless_hotkeys::shouldNotifyAction(isPress,
+                                static_cast<uint32_t>(keyEvent.origKey().states()))) {
+                            quickNoteEvent(quickNoteRawSym_, quickNoteRawStates_, isPress);
+                        }
                         consume(quickNoteRawSym_);
                         return;
                     }

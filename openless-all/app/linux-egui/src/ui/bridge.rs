@@ -32,7 +32,7 @@ use super::frontend::view_model::{FrontendAction, FrontendViewModel};
 pub type LatestSnapshot = Arc<Mutex<Option<(u64, Box<FrontendViewModel>)>>>;
 
 /// 协议版本：宿主与 UI 进程对不上就直接拒绝启动 UI（避免半懂不懂地渲染）。
-pub const UI_BRIDGE_VERSION: u32 = 3;
+pub const UI_BRIDGE_VERSION: u32 = 4;
 
 /// 单帧上限。视图模型快照含历史列表，比弹窗协议大得多。
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;

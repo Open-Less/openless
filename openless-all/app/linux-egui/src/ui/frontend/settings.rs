@@ -2710,8 +2710,22 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                                     .color(theme::INK_4),
                             );
                         } else {
+                            let held = ui.input(|input| {
+                                input.focused
+                                    && input.pointer.primary_down()
+                                    && !input.key_pressed(egui::Key::Escape)
+                            });
+                            if !held || vm.settings_notice.is_some() {
+                                ui.data_mut(|data| {
+                                    data.remove_temp::<ChannelDrag>(egui::Id::new(
+                                        "openless-settings-channel-drag",
+                                    ))
+                                });
+                            }
                             for (index, channel) in vm.channels.iter().enumerate() {
-                                channel_row(ui, channel, index, lang, actions);
+                                ui.push_id(&channel.id, |ui| {
+                                    channel_row(ui, channel, index, &vm.channels, lang, actions)
+                                });
                             }
                         }
                     },
@@ -3368,6 +3382,12 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
     });
 }
 
+#[derive(Clone)]
+struct ChannelDrag {
+    channel_id: String,
+    pending: Option<(String, isize)>,
+}
+
 /// 一个渠道卡片（Tauri `ChannelList` 的行）。
 ///
 /// 结构照抄 Tauri：左侧拖拽手柄 → 名称 + 徽章 → `provider · model`（模型用等宽）
@@ -3378,12 +3398,13 @@ fn channel_row(
     ui: &mut egui::Ui,
     channel: &super::view_model::SettingsChannel,
     index: usize,
+    channels: &[super::view_model::SettingsChannel],
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
-    // 拖动中的行号；只存在 egui 的临时数据里，不进视图模型（它不是宿主状态）。
+    // 拖动身份不随排序变化；同一次交换等宿主确认后再提交下一次。
     let drag_id = egui::Id::new("openless-settings-channel-drag");
-    let dragging = ui.data(|data| data.get_temp::<usize>(drag_id));
+    let dragging = ui.data(|data| data.get_temp::<ChannelDrag>(drag_id));
 
     let card = egui::Frame::new()
         // 当前使用中的渠道：中性灰底 + 细描边。Tauri 特意不用蓝底竖条 ——
@@ -3407,7 +3428,9 @@ fn channel_row(
                 // ── 拖拽手柄（Tauri 的 `⠿`）
                 let (handle_rect, handle) =
                     ui.allocate_exact_size(egui::vec2(16.0, 24.0), egui::Sense::drag());
-                let lifted = dragging == Some(index);
+                let lifted = dragging
+                    .as_ref()
+                    .is_some_and(|drag| drag.channel_id == channel.id);
                 icons::draw_icon_sized(
                     ui,
                     handle_rect.center(),
@@ -3425,10 +3448,18 @@ fn channel_row(
                         .on_hover_text(tr_l10n(lang, "settings.channels.drag_hint"));
                 }
                 if handle.drag_started() {
-                    ui.data_mut(|data| data.insert_temp(drag_id, index));
+                    ui.data_mut(|data| {
+                        data.insert_temp(
+                            drag_id,
+                            ChannelDrag {
+                                channel_id: channel.id.clone(),
+                                pending: None,
+                            },
+                        )
+                    });
                 }
                 if handle.drag_stopped() {
-                    ui.data_mut(|data| data.remove_temp::<usize>(drag_id));
+                    ui.data_mut(|data| data.remove_temp::<ChannelDrag>(drag_id));
                 }
 
                 ui.vertical(|ui| {
@@ -3552,15 +3583,43 @@ fn channel_row(
         })
         .response;
 
-    // 拖动中越过邻居的中线就互换 —— Tauri 是实时重排，这里用「越线即交换 ±1」
-    // 得到同样的手感，而且不需要先知道邻居的高度。
-    if dragging == Some(index) {
-        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-            if pointer.y > card.rect.bottom() + 2.0 {
-                actions.push(FrontendAction::SettingsChannelMove { index, delta: 1 });
-            } else if pointer.y < card.rect.top() - 2.0 {
-                actions.push(FrontendAction::SettingsChannelMove { index, delta: -1 });
+    if let Some(mut drag) = dragging.filter(|drag| drag.channel_id == channel.id) {
+        if let Some((neighbor, delta)) = &drag.pending {
+            if index
+                .checked_add_signed(*delta)
+                .and_then(|target| channels.get(target))
+                .is_some_and(|channel| channel.id == *neighbor)
+            {
+                return;
             }
+            drag.pending = None;
+        }
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            let delta = if pointer.y > card.rect.bottom() + 2.0 {
+                1
+            } else if pointer.y < card.rect.top() - 2.0 {
+                -1
+            } else {
+                0
+            };
+            if delta != 0 {
+                if let Some(neighbor) = index
+                    .checked_add_signed(delta)
+                    .and_then(|target| channels.get(target))
+                {
+                    actions.push(FrontendAction::SettingsChannelMove {
+                        channel_id: channel.id.clone(),
+                        neighbor_id: neighbor.id.clone(),
+                        delta,
+                    });
+                    drag.pending = Some((neighbor.id.clone(), delta));
+                }
+            }
+        }
+        if ui.input(|input| {
+            input.focused && input.pointer.primary_down() && !input.key_pressed(egui::Key::Escape)
+        }) {
+            ui.data_mut(|data| data.insert_temp(drag_id, drag));
         }
     }
 }

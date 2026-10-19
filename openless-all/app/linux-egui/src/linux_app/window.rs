@@ -279,7 +279,7 @@ fn encode_view_model(
         trimmed |= trim_page(&mut view_model.marketplace_packs, keep);
         trimmed |= trim_page(&mut view_model.style_packs, keep);
         if !trimmed {
-            break;
+            continue;
         }
         if view_model.history_selected >= view_model.history_entries.len() {
             // 选中的那条这一帧没发出去：回到最新一条，别让详情栏空着。
@@ -342,7 +342,7 @@ pub(super) fn run_ui_client(socket: std::path::PathBuf) -> Result<(), String> {
         "OpenLess",
         options,
         Box::new(move |cc| {
-            theme::install(&cc.egui_ctx);
+            theme::install(&cc.egui_ctx, openless_linux_egui::typography::load().font);
             // 字号缩放（90/100/110%）跟着外观页的偏好走：egui 的 zoom factor
             // 缩放整棵 UI，等价于 Tauri 那边改根节点字号。
             cc.egui_ctx
@@ -412,6 +412,7 @@ pub(super) struct UiClientApp {
     pub(super) view_model: FrontendViewModel,
     /// 已采纳的最大快照序号。
     last_sequence: u64,
+    applied_typography: Option<openless_linux_egui::typography::Typography>,
     /// 宿主上一份快照的 JSON：用来分辨「宿主改了这个字段」和「用户还没提交的
     /// 本地输入」。
     last_adopted: Option<serde_json::Value>,
@@ -438,7 +439,10 @@ impl UiClientApp {
         client: UiBridgeClient,
         render_state: Option<&eframe::egui_wgpu::RenderState>,
     ) -> Self {
-        let mut view_model = FrontendViewModel::default();
+        let mut view_model = FrontendViewModel {
+            typography: openless_linux_egui::typography::load(),
+            ..Default::default()
+        };
         // QA：OPENLESS_FPS_SETTINGS=1 时开机就打开设置面板，直接测最重的渲染路径
         // （磨砂背板 + 离屏 4×MSAA 重绘 + 动画预览）。见 `frame_stats` 模块文档。
         // 真正的置位在每帧采纳快照之后（见 `ui()`）：宿主快照会把这里覆盖掉。
@@ -453,6 +457,7 @@ impl UiClientApp {
             }),
             view_model,
             last_sequence: 0,
+            applied_typography: None,
             last_adopted: None,
             action_sequence: 0,
             ping_sequence: 0,
@@ -497,6 +502,23 @@ impl UiClientApp {
         };
         self.view_model = adopted;
         self.last_adopted = incoming_json;
+    }
+
+    fn apply_typography(&mut self, ctx: &egui::Context) {
+        let typography = self.view_model.typography;
+        if self
+            .applied_typography
+            .is_none_or(|previous| previous.font != typography.font)
+        {
+            theme::install(ctx, typography.font);
+        }
+        if self
+            .applied_typography
+            .is_none_or(|previous| previous.scale != typography.scale)
+        {
+            ctx.set_zoom_factor(typography.scale.factor());
+        }
+        self.applied_typography = Some(typography);
     }
 
     /// 收宿主的帧。快照按序号采纳；`Shutdown` 与断连都表示「宿主走了」，
@@ -701,6 +723,7 @@ impl eframe::App for UiClientApp {
         if self.connection_error.is_none() {
             self.drain_host(&ctx);
         }
+        self.apply_typography(&ctx);
         // QA 开关要在**采纳快照之后**再压一次：宿主每帧/每次保活都会重发 view model，
         // 只在初始化时置位会被随后到达的快照覆盖掉（这个开关以前就是这么失效的）。
         if openless_linux_egui::frame_stats::settings_open_on_start() {
@@ -889,5 +912,103 @@ mod tests {
         // 总数不动：切掉的条目仍能通过「加载更多」拉回来。
         assert_eq!(view_model.history_list_total, 0);
         assert_eq!(view_model.vocab_total, 30);
+    }
+
+    #[test]
+    fn an_exactly_full_first_page_continues_past_the_unchanged_first_step() {
+        let mut view_model = view_model_with(200);
+        for entry in &mut view_model.history_entries {
+            entry.final_text = "x".repeat(100 * 1024);
+        }
+        view_model.history_list_total = 1_000;
+        assert!(serde_json::to_vec(&view_model).unwrap().len() >= 20 * 1024 * 1024);
+
+        let payload =
+            encode_view_model(&mut view_model, SNAPSHOT_SOFT_LIMIT, &FIRST_PAGE_LADDER).unwrap();
+        assert!(payload.len() <= SNAPSHOT_SOFT_LIMIT);
+        assert_eq!(view_model.history_entries.len(), 100);
+        let received: FrontendViewModel = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(received.history_entries.len(), 100);
+        assert_eq!(received.history_list_total, 1_000);
+        assert_eq!(received.history_entries[0].id, "entry-0");
+        assert_eq!(received.history_entries[99].id, "entry-99");
+    }
+
+    #[test]
+    fn a_short_first_page_skips_unchanged_steps_until_it_fits() {
+        let mut view_model = view_model_with(20);
+        for entry in &mut view_model.history_entries {
+            entry.final_text = "x".repeat(1024 * 1024);
+        }
+        view_model.history_list_total = 700;
+
+        let payload =
+            encode_view_model(&mut view_model, SNAPSHOT_SOFT_LIMIT, &FIRST_PAGE_LADDER).unwrap();
+        assert!(payload.len() <= SNAPSHOT_SOFT_LIMIT);
+        assert_eq!(view_model.history_entries.len(), 10);
+        let received: FrontendViewModel = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(received.history_entries.len(), 10);
+        assert_eq!(received.history_list_total, 700);
+    }
+
+    #[test]
+    fn one_huge_entry_reaches_the_empty_page_step_without_losing_totals() {
+        let mut view_model = view_model_with(1);
+        view_model.history_entries[0].final_text = "x".repeat(20 * 1024 * 1024);
+        view_model.history_list_total = 700;
+        view_model.vocab_total = 800;
+        view_model.correction_rule_total = 900;
+        view_model.marketplace_total = 1_000;
+        view_model.style_pack_total = 1_100;
+
+        let payload =
+            encode_view_model(&mut view_model, SNAPSHOT_SOFT_LIMIT, &FIRST_PAGE_LADDER).unwrap();
+        assert!(payload.len() <= SNAPSHOT_SOFT_LIMIT);
+        let received: FrontendViewModel = serde_json::from_slice(&payload).unwrap();
+        assert!(received.history_entries.is_empty());
+        assert_eq!(received.history_list_total, 700);
+        assert_eq!(received.vocab_total, 800);
+        assert_eq!(received.correction_rule_total, 900);
+        assert_eq!(received.marketplace_total, 1_000);
+        assert_eq!(received.style_pack_total, 1_100);
+    }
+
+    #[test]
+    fn adopted_typography_updates_the_real_ui_context_even_with_a_save_error() {
+        use openless_linux_egui::typography::{FontScale, Typography};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ui.sock");
+        let mut host = UiBridgeHost::bind(path.clone()).unwrap();
+        let client = UiBridgeClient::connect(&path).unwrap();
+        host.accept_pending();
+        let mut app = UiClientApp::new(client, None);
+        // 只验证缩放更新，不让系统字体探测影响并行的默认 Context 测试。
+        app.applied_typography = Some(Typography::default());
+        let ctx = egui::Context::default();
+
+        for (sequence, scale) in [(1, FontScale::Large), (2, FontScale::Small)] {
+            let typography = Typography {
+                scale,
+                ..Default::default()
+            };
+            app.adopt_snapshot(
+                sequence,
+                FrontendViewModel {
+                    typography,
+                    settings_save_error: Some("Local save failed".into()),
+                    ..Default::default()
+                },
+            );
+            app.apply_typography(&ctx);
+            ctx.run_ui(egui::RawInput::default(), |_| {})
+                .drop_without_applying_deltas();
+            assert_eq!(ctx.zoom_factor(), scale.factor());
+            assert_eq!(app.applied_typography, Some(typography));
+            assert_eq!(
+                app.view_model.settings_save_error.as_deref(),
+                Some("Local save failed")
+            );
+        }
     }
 }

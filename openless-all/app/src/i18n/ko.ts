@@ -4,7 +4,7 @@ import { en } from './en';
 // 한국어 (Beta) — AI 기계 번역 기반. 원어민 검토를 권장합니다.
 // 구조는 zh-CN.ts 를 따릅니다. 새 key 를 추가할 때 ja.ts / ko.ts 도 동시에
 // 갱신해 주세요(갱신되지 않은 key 는 ...en 으로 영어로 fallback 됩니다).
-import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { uiRefinementKo as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ko: typeof zhCN = {
@@ -159,7 +159,7 @@ export const ko: typeof zhCN = {
       '동기화 범위의 로컬 데이터를 교체합니다. 로컬 변경을 유지하려면 병합을 선택하세요.',
     restoreCheck: '복원 방식과 충돌 선택을 확인했습니다.',
     applyRestore: '복원 확인',
-    conflictProgress: '충돌 {{total}}개 중 {{selected}}개 해결',
+    conflictProgress: '충돌 {{selected}} / {{total}}개 해결',
     conflictItem: '충돌 {{index}} · {{category}}',
     conflictLocal: '로컬 유지',
     conflictCloud: '클라우드 사용',

@@ -9,6 +9,7 @@
 
 using openless_hotkeys::matches;
 using openless_hotkeys::shouldConsume;
+using openless_hotkeys::shouldNotifyAction;
 using openless_hotkeys::symMatches;
 
 static constexpr uint32_t kCtrl = 0x04;
@@ -18,6 +19,7 @@ static constexpr uint32_t kCapsLock = 0x02;
 static constexpr uint32_t kNumLock = 0x10;
 static constexpr uint32_t kMod3 = 0x20;
 static constexpr uint32_t kMod5 = 0x80;
+static constexpr uint32_t kRepeat = 1u << 31;
 
 static void expect(bool actual, const char *what) {
     if (!actual) {
@@ -113,6 +115,40 @@ int main() {
            "lock bits alone never change the modifier set");
     expect(openless_hotkeys::statesMatch(kCtrl | kShift, kCtrl) == false,
            "statesMatch still distinguishes real modifiers");
+
+    // 8. Repeat is inspected before normalizing away raw event state bits.
+    expect(shouldNotifyAction(true, kCtrl | kShift),
+           "an ordinary press is notified");
+    expect(!shouldNotifyAction(true, kRepeat | kCtrl | kShift | kCapsLock),
+           "a repeated press is suppressed even with modifiers and CapsLock");
+    expect(shouldNotifyAction(false, kRepeat | kCtrl | kShift | kCapsLock),
+           "a release is always notified even if its raw states include Repeat");
+
+    struct Event {
+        bool isPress;
+        uint32_t states;
+    };
+    const Event gesture[] = {
+        {true, kCtrl | kShift},
+        {true, kCtrl | kShift | kRepeat},
+        {true, kCtrl | kShift | kRepeat | kCapsLock},
+        {false, kCtrl | kShift},
+    };
+    unsigned presses = 0;
+    unsigned releases = 0;
+    for (const auto &event : gesture) {
+        if (shouldNotifyAction(event.isPress, event.states)) {
+            event.isPress ? ++presses : ++releases;
+        }
+    }
+    expect(presses == 1 && releases == 1,
+           "a held gesture sends exactly one press and one release");
+    expect(shouldNotifyAction(true, kCtrl | kShift),
+           "a new press after release starts the next gesture");
+    expect(shouldNotifyAction(true, kCtrl | kShift) &&
+               !shouldNotifyAction(true, kCtrl | kShift | kRepeat) &&
+               shouldNotifyAction(true, kCtrl | kShift),
+           "a new non-repeat press still fires when the prior release was lost");
 
     std::printf("hotkey_match contract passed\n");
     return 0;

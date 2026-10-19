@@ -644,6 +644,7 @@ mod linux_app {
         vocab_presets: Vec<openless_core::VocabPreset>,
         qa_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
+        capsule_popup_generation: u64,
         popup_action_guard: PopupActionGuard,
         /// 当前胶囊展示的会话 id（用于「会话消失但没收到终态」的兜底收起）。
         capsule_session: Option<String>,
@@ -652,6 +653,7 @@ mod linux_app {
         /// 「要记住这个词吗？」卡片当前内容（Core `pending_corrections`）。非空时
         /// 胶囊窗只画这张卡；见 `refresh_vocab_suggestions`。
         vocab_suggestions: Vec<openless_linux_egui::CapsuleSuggestion>,
+        vocab_card_session: Option<String>,
         /// 卡片上一轮的重算时刻，用来让过期的候选自己消失（Core 只按需清理）。
         vocab_suggestions_checked: std::time::Instant,
         tray: Option<openless_linux_egui::LinuxTray>,
@@ -882,10 +884,12 @@ mod linux_app {
                         vocab_presets: Vec::new(),
                         qa_popup: None,
                         capsule_popup: None,
+                        capsule_popup_generation: 0,
                         popup_action_guard: PopupActionGuard::default(),
                         capsule_session: None,
                         capsule_dismissal_scheduled: None,
                         vocab_suggestions: Vec::new(),
+                        vocab_card_session: None,
                         vocab_suggestions_checked: std::time::Instant::now(),
                         tray,
                         exit_requested: false,
@@ -999,10 +1003,12 @@ mod linux_app {
                     vocab_presets: Vec::new(),
                     qa_popup: None,
                     capsule_popup: None,
+                    capsule_popup_generation: 0,
                     popup_action_guard: PopupActionGuard::default(),
                     capsule_session: None,
                     capsule_dismissal_scheduled: None,
                     vocab_suggestions: Vec::new(),
+                    vocab_card_session: None,
                     vocab_suggestions_checked: std::time::Instant::now(),
                     tray,
                     exit_requested: false,
@@ -1206,6 +1212,14 @@ mod linux_app {
                             self.qa_popup_presentation.generation.saturating_add(1);
                         self.qa_popup_presentation.session_id = None;
                     }
+                    if kind == PopupKind::Capsule {
+                        self.capsule_popup_generation =
+                            self.capsule_popup_generation.saturating_add(1);
+                        self.vocab_card_session = self
+                            .vocab_card_session
+                            .as_ref()
+                            .map(|_| format!("vocab:{}", uuid::Uuid::new_v4()));
+                    }
                     self.popup_action_guard.reset(kind);
                     let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
                     *self.popup_slot(kind) = Some(supervisor);
@@ -1230,12 +1244,25 @@ mod linux_app {
             if let HostToPopup::Capsule { session_id, .. } = &message {
                 self.capsule_session = Some(session_id.clone());
             }
-            let retry = message.clone();
+            let mut retry = message.clone();
             if let Some(supervisor) = self.popup_slot(kind) {
                 if let Err(error) = supervisor.try_send(message) {
                     self.status = fmt_l10n(lang, "popup.channel_rebuild", &[&format!("{error:?}")]);
                     *self.popup_slot(kind) = None;
                     self.ensure_popup(kind);
+                    if let (
+                        HostToPopup::Capsule {
+                            session_id,
+                            suggestions,
+                            ..
+                        },
+                        Some(token),
+                    ) = (&mut retry, &self.vocab_card_session)
+                    {
+                        if !suggestions.is_empty() {
+                            session_id.clone_from(token);
+                        }
+                    }
                     if let Some(supervisor) = self.popup_slot(kind) {
                         if let Err(retry_error) = supervisor.try_send(retry) {
                             self.status = fmt_l10n(
@@ -1363,11 +1390,12 @@ mod linux_app {
                     .qa_state
                     .as_ref()
                     .map(|state| state.session_id.clone().unwrap_or_else(|| "qa".to_string())),
-                PopupKind::Capsule => self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.dictation.session_id)
-                    .map(|session_id| session_id.to_string()),
+                PopupKind::Capsule => self.vocab_card_session.clone().or_else(|| {
+                    self.snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.dictation.session_id)
+                        .map(|session_id| session_id.to_string())
+                }),
                 PopupKind::LessComputer => self
                     .less_computer_session
                     .map(|session_id| session_id.to_string()),
@@ -1574,28 +1602,32 @@ mod linux_app {
 
         /// 丢弃当前候选（新会话开始 / 胶囊开关关掉时）。
         fn dismiss_vocab_suggestions(&mut self) {
-            if self.vocab_suggestions.is_empty() {
+            if self.vocab_suggestions.is_empty() && self.vocab_card_session.is_none() {
                 return;
             }
             if let Some(backend) = self.backend() {
                 backend.dismiss_pending_corrections();
             }
             self.vocab_suggestions.clear();
+            self.hide_vocab_card();
         }
 
-        /// 把卡片画进胶囊窗。会话 id 留空：卡片与听写会话无关，因此**不能**走
-        /// `capsule_session`/兜底收起那条路（那会把卡片当成「会话消失了」收掉）。
+        /// 卡片独立于听写会话；token 同时标记可见状态并隔离过期动作。
         fn show_vocab_card(&mut self) {
             if !self.capsule_enabled() {
                 self.dismiss_vocab_suggestions();
                 return;
             }
             self.ensure_popup(PopupKind::Capsule);
+            let session_id = self
+                .vocab_card_session
+                .get_or_insert_with(|| format!("vocab:{}", uuid::Uuid::new_v4()))
+                .clone();
             self.send_popup(
                 PopupKind::Capsule,
                 HostToPopup::Capsule {
                     version: POPUP_PROTOCOL_VERSION,
-                    session_id: String::new(),
+                    session_id,
                     sequence: self.last_event_sequence.saturating_mul(2),
                     phase: String::new(),
                     text: String::new(),
@@ -1607,19 +1639,19 @@ mod linux_app {
                     suggestions: self.vocab_suggestions.clone(),
                 },
             );
-            // `send_popup` 会把胶囊会话记成空串，兜底收起会误判成「会话消失」。
+            // 卡片不参加听写会话的兜底收起。
             self.capsule_session = None;
         }
 
         fn hide_vocab_card(&mut self) {
-            if self.vocab_suggestions.is_empty() && self.capsule_session.is_none() {
+            let Some(session_id) = self.vocab_card_session.take() else {
                 return;
-            }
+            };
             self.send_popup(
                 PopupKind::Capsule,
                 HostToPopup::Hide {
                     version: POPUP_PROTOCOL_VERSION,
-                    session_id: String::new(),
+                    session_id,
                     sequence: 0,
                 },
             );
@@ -1707,6 +1739,10 @@ mod linux_app {
         }
 
         fn show_capsule_popup(&mut self) {
+            if !self.vocab_suggestions.is_empty() {
+                self.show_vocab_card();
+                return;
+            }
             if !self.capsule_enabled() {
                 return;
             }
@@ -1815,6 +1851,7 @@ mod linux_app {
             }
             *self.popup_slot(PopupKind::Capsule) = None;
             self.capsule_session = None;
+            self.vocab_card_session = None;
             self.capsule_dismissal_scheduled = None;
             // 这条日志缺失 = 收起决定没走到「结束弹窗进程」这一环。
             log::info!("capsule: dismissal applied (popup process was running: {had_process})");
@@ -1823,7 +1860,10 @@ mod linux_app {
         fn poll_popup_supervisors(&mut self) {
             let mut events = Vec::new();
             for kind in [PopupKind::Qa, PopupKind::Capsule] {
-                let generation = self.qa_popup_presentation.generation;
+                let generation = match kind {
+                    PopupKind::Capsule => self.capsule_popup_generation,
+                    _ => self.qa_popup_presentation.generation,
+                };
                 if let Some(supervisor) = self.popup_slot(kind) {
                     while let Ok(event) = supervisor.try_recv() {
                         events.push((kind, generation, event));
@@ -1842,7 +1882,12 @@ mod linux_app {
             event: PopupSupervisorEvent,
         ) {
             // 处理一条排队消息时可能已经把进程换掉了：旧进程剩下的消息全部作废。
-            if kind == PopupKind::Qa && generation != self.qa_popup_presentation.generation {
+            let stale = match kind {
+                PopupKind::Qa => generation != self.qa_popup_presentation.generation,
+                PopupKind::Capsule => generation != self.capsule_popup_generation,
+                PopupKind::LessComputer => false,
+            };
+            if stale {
                 return;
             }
             self.apply_popup_event(kind, event);
@@ -1851,6 +1896,20 @@ mod linux_app {
         fn apply_popup_event(&mut self, kind: PopupKind, event: PopupSupervisorEvent) {
             let lang = self.lang;
             if let PopupSupervisorEvent::Message(message) = &event {
+                if let PopupToHost::VocabSuggestion { session_id, id, .. } = message {
+                    let current = self.vocab_card_session.as_deref() == Some(session_id.as_str())
+                        && self.vocab_suggestions.iter().any(|item| item.id == *id)
+                        && self.backend().is_none_or(|backend| {
+                            backend
+                                .pending_corrections()
+                                .iter()
+                                .any(|item| item.id == *id)
+                        });
+                    if !current {
+                        self.status = tr_l10n(lang, "popup.ignore_stale").to_string();
+                        return;
+                    }
+                }
                 let Some(expected_session) = self.expected_popup_session(kind) else {
                     self.status = tr_l10n(lang, "popup.ignore_no_session").to_string();
                     return;
@@ -2891,8 +2950,8 @@ mod linux_app {
                             self.apply_cloud_sync_action(CloudSyncAction::PreviewRestore);
                         }
                         openless_core::cloud_sync_e2ee::EnableStep::Ready => {
-                            if intent == Some(CloudSyncIntent::Enable) {
-                                self.apply_cloud_sync_action(CloudSyncAction::SetEnabled(true));
+                            if let Some(action) = intent.and_then(CloudSyncIntent::ready_action) {
+                                self.apply_cloud_sync_action(action);
                             } else {
                                 self.frontend_vm.cloud_sync.dialog = CloudSyncDialog::None;
                                 self.frontend_vm.cloud_sync.intent = None;
@@ -3557,6 +3616,7 @@ mod linux_app {
                         self.play_record_cue(false);
                     }
                     if state.phase == DictationPhase::Starting {
+                        self.dismiss_vocab_suggestions();
                         self.transcript_state = TranscriptAccumulator::default();
                         self.transcript.clear();
                         self.transcript_session = state.session_id;
@@ -6569,8 +6629,8 @@ mod linux_app {
                             None => {}
                         }
                     }
-                    frontend::view_model::FrontendAction::HistoryPlay(index) => {
-                        let Some(entry) = self.frontend_vm.history_entries.get(index) else {
+                    frontend::view_model::FrontendAction::HistoryPlay(id) => {
+                        let Some(entry) = self.history.entry(&id) else {
                             return;
                         };
                         let id = entry.id.clone();
@@ -6614,9 +6674,9 @@ mod linux_app {
                     frontend::view_model::FrontendAction::HistoryRepolishClose => {
                         self.frontend_vm.history_repolish_open = false;
                     }
-                    frontend::view_model::FrontendAction::HistoryRepolish(index, pack_index) => {
+                    frontend::view_model::FrontendAction::HistoryRepolish(id, pack_index) => {
                         if let (Some(backend), Some(entry)) =
-                            (self.backend(), self.frontend_vm.history_entries.get(index))
+                            (self.backend(), self.history.entry(&id))
                         {
                             if !entry.raw_transcript.trim().is_empty() {
                                 let request = openless_core::auxiliary::RepolishRequest {
@@ -6642,9 +6702,9 @@ mod linux_app {
                             }
                         }
                     }
-                    frontend::view_model::FrontendAction::HistoryRetranscribe(index) => {
+                    frontend::view_model::FrontendAction::HistoryRetranscribe(id) => {
                         if let Some(backend) = self.backend() {
-                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                            if let Some(entry) = self.history.entry(&id) {
                                 let id = entry.id.clone();
                                 let data_dir = backend.config().data_dir.clone();
                                 let lang = self.lang;
@@ -6695,9 +6755,9 @@ mod linux_app {
                             }
                         }
                     }
-                    frontend::view_model::FrontendAction::HistoryExport(index) => {
+                    frontend::view_model::FrontendAction::HistoryExport(id) => {
                         if let Some(backend) = self.backend() {
-                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                            if let Some(entry) = self.history.entry(&id) {
                                 let id = entry.id.clone();
                                 let data_dir = backend.config().data_dir.clone();
                                 let lang = self.lang;
@@ -7310,8 +7370,6 @@ mod linux_app {
                             self.status =
                                 tr_l10n(self.lang, "uiRefinement.storageError").to_owned();
                         }
-                        crate::ui::theme::install(ctx_arg);
-                        ctx_arg.set_zoom_factor(typography.scale.factor());
                         ctx_arg.request_repaint();
                     }
                     // Tauri `startCreate`：点「添加渠道」先在后台建一张空渠道（名字留空），
@@ -7396,16 +7454,23 @@ mod linux_app {
                         self.draft_touched = false;
                         self.open_provider_editor(index);
                     }
-                    frontend::view_model::FrontendAction::SettingsChannelMove { index, delta } => {
+                    frontend::view_model::FrontendAction::SettingsChannelMove {
+                        channel_id,
+                        neighbor_id,
+                        delta,
+                    } => {
                         let kind = self.settings_channel_kind;
                         let mut ids: Vec<String> = self
                             .settings_channels
                             .iter()
                             .map(|channel| channel.id.clone())
                             .collect();
-                        let target = index as isize + delta;
-                        if target >= 0 && (target as usize) < ids.len() {
-                            ids.swap(index, target as usize);
+                        if frontend::view_model::move_channel(
+                            &mut ids,
+                            &channel_id,
+                            &neighbor_id,
+                            delta,
+                        ) {
                             if let Some(backend) = self.backend() {
                                 let lang = self.lang;
                                 self.spawn_channel_change(kind, async move {
@@ -9223,10 +9288,12 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             first: bool,
         ) -> openless_linux_egui::LayerFrame {
             if first {
-                theme::install(ctx);
+                theme::install(ctx, openless_linux_egui::typography::load().font);
             }
-            let exit = self.pump(None);
-            self.send_ready_if_needed();
+            let exit = self.pump(None) || (self.state.session_id.is_some() && !self.state.visible);
+            if !exit {
+                self.send_ready_if_needed();
+            }
             let animated = matches!(
                 self.state.capsule.phase.to_ascii_lowercase().as_str(),
                 "starting" | "recording" | "transcribing" | "polishing" | "inserting"
@@ -9235,8 +9302,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             let lang = self.lang;
             let mut action = frontend::popups::CapsuleAction::None;
             let output = ctx.run_ui(raw, |ui| {
-                self.track_capsule_warmup(capsule.audio_level.is_none(), &capsule.phase);
-                action = frontend::popups::dictation_capsule(ui, &capsule, lang, self.warmup_ms);
+                if !exit && self.state.visible {
+                    self.track_capsule_warmup(capsule.audio_level.is_none(), &capsule.phase);
+                    action =
+                        frontend::popups::dictation_capsule(ui, &capsule, lang, self.warmup_ms);
+                }
             });
             match action {
                 frontend::popups::CapsuleAction::None => {}
@@ -9574,6 +9644,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                                     sequence: seq,
                                     ..
                                 }
+                                | PopupToHost::VocabSuggestion {
+                                    session_id: id,
+                                    sequence: seq,
+                                    ..
+                                }
                                 | PopupToHost::StopDictation {
                                     session_id: id,
                                     sequence: seq,
@@ -9588,6 +9663,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                                 &message,
                                 PopupToHost::CancelDictation { .. }
                                     | PopupToHost::StopDictation { .. }
+                                    | PopupToHost::VocabSuggestion { .. }
                             );
                             self.send(message);
                             if !keep_open {
@@ -9844,7 +9920,7 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
             "OpenLess Popup",
             options,
             Box::new(move |cc| {
-                theme::install(&cc.egui_ctx);
+                theme::install(&cc.egui_ctx, openless_linux_egui::typography::load().font);
                 if let Some(state) = cc.wgpu_render_state.as_ref() {
                     crate::ui::frontend::siri_wgpu::install_wgpu(state, 4);
                 }
@@ -11143,6 +11219,284 @@ Internal flags (set by OpenLess itself, not for regular use):
                 overlay: None,
                 hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
             }
+        }
+
+        fn vocab_card_message(session_id: &str, sequence: u64) -> HostToPopup {
+            HostToPopup::Capsule {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: session_id.into(),
+                sequence,
+                phase: String::new(),
+                text: String::new(),
+                transcript: String::new(),
+                transcript_font_size: 14,
+                audio_level: None,
+                translation_active: false,
+                style: "siri".into(),
+                suggestions: vec![openless_linux_egui::CapsuleSuggestion {
+                    id: "candidate".into(),
+                    pattern: "old".into(),
+                    replacement: "new".into(),
+                }],
+            }
+        }
+
+        fn vocab_host_app() -> (tempfile::TempDir, OpenLessEguiApp) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut app = fixture_app(false);
+            let host_actions = Arc::new(openless_linux_egui::LinuxHostActions::default());
+            let mut dependencies = openless_core::BackendDependencies::unsupported();
+            dependencies.host_actions = host_actions.clone();
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            dependencies.services.remote_input = Arc::new(
+                openless_core::RemoteInputService::new(
+                    Arc::new(openless_core::testing::RecordingRemoteInputRuntime::default()),
+                    8443,
+                    "en",
+                )
+                .unwrap(),
+            );
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: dir.path().to_path_buf(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let runtime = openless_linux_egui::LinuxBackendRuntime {
+                backend: backend.clone(),
+                host_actions,
+                settings_runtime: Arc::new(openless_core::settings::NoopSettingsRuntime),
+            };
+            app.native = Some(
+                app.tokio
+                    .block_on(LinuxNativeRuntime::start(runtime, None, None))
+                    .unwrap(),
+            );
+            app.snapshot = Some(backend.snapshot());
+            app.preferences = Some(backend.get_preferences());
+            app.capsule_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            (dir, app)
+        }
+
+        #[test]
+        fn layer_capsule_waits_for_content_and_exits_only_for_an_accepted_hide() {
+            let (tx, rx) = mpsc::channel();
+            let mut app = popup_app(PopupKind::Capsule, rx);
+            let ctx = egui::Context::default();
+            let raw = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 240.0),
+                )),
+                ..Default::default()
+            };
+            let waiting = app.layer_frame(&ctx, raw(), false);
+            assert!(!waiting.exit);
+            assert!(waiting.output.shapes.is_empty());
+            tx.send(vocab_card_message("card", 1)).unwrap();
+            let visible = app.layer_frame(&ctx, raw(), false);
+            assert!(!visible.exit);
+            assert!(!visible.output.shapes.is_empty());
+            for (session_id, sequence) in [("card", 1), ("old-card", 2)] {
+                tx.send(HostToPopup::Hide {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.into(),
+                    sequence,
+                })
+                .unwrap();
+                assert!(!app.layer_frame(&ctx, raw(), false).exit);
+            }
+            tx.send(HostToPopup::Hide {
+                version: POPUP_PROTOCOL_VERSION,
+                session_id: "card".into(),
+                sequence: 2,
+            })
+            .unwrap();
+            let hidden = app.layer_frame(&ctx, raw(), false);
+            assert!(hidden.exit);
+            assert!(!app.state.visible);
+            assert!(hidden.output.shapes.is_empty());
+        }
+
+        #[test]
+        fn dictation_starting_clears_the_vocab_card_before_recording() {
+            let (_dir, mut app) = vocab_host_app();
+            let backend = app.backend().unwrap();
+            backend
+                .queue_pending_correction("old".into(), "new".into())
+                .unwrap();
+            app.refresh_vocab_suggestions();
+            assert!(app.vocab_card_session.is_some());
+            let session = openless_core::SessionId::new();
+            app.apply_event(BackendEvent {
+                sequence: 1,
+                session_id: Some(session),
+                kind: BackendEventKind::DictationStateChanged(
+                    openless_core::DictationStateSnapshot {
+                        phase: DictationPhase::Starting,
+                        session_id: Some(session),
+                        ..Default::default()
+                    },
+                ),
+            });
+            assert!(app.vocab_suggestions.is_empty());
+            assert!(app.vocab_card_session.is_none());
+            assert!(backend.pending_corrections().is_empty());
+            assert_eq!(app.capsule_session, Some(session.to_string()));
+        }
+
+        #[test]
+        fn vocab_actions_use_card_identity_and_reject_duplicates_and_old_cards() {
+            let (_dir, mut app) = vocab_host_app();
+            let backend = app.backend().unwrap();
+            let first = backend
+                .queue_pending_correction("first".into(), "First".into())
+                .unwrap()
+                .unwrap();
+            let second = backend
+                .queue_pending_correction("second".into(), "Second".into())
+                .unwrap()
+                .unwrap();
+            app.refresh_vocab_suggestions();
+            let token = app.vocab_card_session.clone().unwrap();
+            assert_eq!(
+                app.expected_popup_session(PopupKind::Capsule),
+                Some(token.clone())
+            );
+            app.snapshot.as_mut().unwrap().dictation.session_id =
+                Some(openless_core::SessionId::new());
+            assert_eq!(
+                app.expected_popup_session(PopupKind::Capsule),
+                Some(token.clone())
+            );
+            let action = |token: &str, id: &str, sequence, accept| {
+                PopupSupervisorEvent::Message(PopupToHost::VocabSuggestion {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: token.into(),
+                    sequence,
+                    id: id.into(),
+                    accept,
+                })
+            };
+            for (card, id, sequence) in [
+                ("old-card", first.id.as_str(), 100),
+                (token.as_str(), "missing", 100),
+                (token.as_str(), first.id.as_str(), 0),
+            ] {
+                app.apply_popup_event(PopupKind::Capsule, action(card, id, sequence, true));
+                assert_eq!(backend.pending_corrections().len(), 2);
+                assert!(backend.list_vocabulary().unwrap().is_empty());
+            }
+            app.apply_popup_event(PopupKind::Qa, action(&token, &first.id, 1, true));
+            assert!(backend.list_vocabulary().unwrap().is_empty());
+            app.apply_popup_event(PopupKind::Capsule, action(&token, &first.id, 1, true));
+            assert_eq!(backend.list_vocabulary().unwrap()[0].phrase, "First");
+            assert_eq!(app.vocab_card_session.as_ref(), Some(&token));
+            app.apply_popup_event(PopupKind::Capsule, action(&token, &second.id, 1, false));
+            assert_eq!(backend.pending_corrections().len(), 1);
+            app.apply_popup_event(PopupKind::Capsule, action(&token, &second.id, 2, false));
+            assert!(backend.pending_corrections().is_empty());
+            assert!(app.vocab_card_session.is_none());
+            let next = backend
+                .queue_pending_correction("third".into(), "Third".into())
+                .unwrap()
+                .unwrap();
+            app.refresh_vocab_suggestions();
+            let next_token = app.vocab_card_session.clone().unwrap();
+            assert_ne!(next_token, token);
+            app.apply_popup_event(PopupKind::Capsule, action(&token, &next.id, 100, true));
+            assert_eq!(backend.pending_corrections().len(), 1);
+            app.apply_popup_event(PopupKind::Capsule, action(&next_token, &next.id, 1, false));
+            assert!(backend.pending_corrections().is_empty());
+            assert!(app.vocab_card_session.is_none());
+        }
+
+        #[test]
+        fn an_empty_core_card_hides_even_after_the_host_candidates_are_cleared() {
+            let (_dir, mut app) = vocab_host_app();
+            let backend = app.backend().unwrap();
+            let candidate = backend
+                .queue_pending_correction("old".into(), "new".into())
+                .unwrap()
+                .unwrap();
+            app.refresh_vocab_suggestions();
+            let token = app.vocab_card_session.clone().unwrap();
+            let sequence = app.popup_sequences[popup_kind_index(PopupKind::Capsule)];
+            backend.dismiss_pending_corrections();
+            app.apply_popup_event(
+                PopupKind::Capsule,
+                PopupSupervisorEvent::Message(PopupToHost::VocabSuggestion {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: token,
+                    sequence: 1,
+                    id: candidate.id,
+                    accept: true,
+                }),
+            );
+            assert!(backend.list_vocabulary().unwrap().is_empty());
+            app.refresh_vocab_suggestions();
+            assert!(app.vocab_suggestions.is_empty());
+            assert!(app.vocab_card_session.is_none());
+            assert_eq!(
+                app.popup_sequences[popup_kind_index(PopupKind::Capsule)],
+                sequence + 1
+            );
+        }
+
+        #[test]
+        fn capsule_rebuild_rotates_card_identity_and_rejects_old_process_events() {
+            let mut app = fixture_app(false);
+            let HostToPopup::Capsule { suggestions, .. } = vocab_card_message("old-card", 1) else {
+                unreachable!()
+            };
+            app.vocab_suggestions = suggestions;
+            app.vocab_card_session = Some("old-card".into());
+            let old_generation = app.capsule_popup_generation;
+            app.ensure_popup(PopupKind::Capsule);
+            let token = app.vocab_card_session.clone().unwrap();
+            assert_ne!(token, "old-card");
+            assert_ne!(app.capsule_popup_generation, old_generation);
+            app.capsule_popup = Some(PopupSupervisor::spawn_command(
+                app.tokio.handle(),
+                tokio::process::Command::new("/bin/cat"),
+            ));
+            app.apply_popup_event_in_generation(
+                PopupKind::Capsule,
+                old_generation,
+                PopupSupervisorEvent::Exited {
+                    code: Some(0),
+                    crashed: false,
+                },
+            );
+            app.apply_popup_event_in_generation(
+                PopupKind::Capsule,
+                old_generation,
+                PopupSupervisorEvent::SpawnFailed("old failure".into()),
+            );
+            assert!(app.capsule_popup.is_some());
+            let sequence = app.popup_sequences[popup_kind_index(PopupKind::Capsule)];
+            app.apply_popup_event(
+                PopupKind::Capsule,
+                PopupSupervisorEvent::Message(PopupToHost::Ready {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: token.clone(),
+                    sequence: 1,
+                    kind: PopupKind::Capsule,
+                }),
+            );
+            assert_eq!(app.vocab_card_session, Some(token));
+            assert_eq!(
+                app.popup_sequences[popup_kind_index(PopupKind::Capsule)],
+                sequence + 1
+            );
         }
 
         #[test]

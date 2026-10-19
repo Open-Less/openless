@@ -24,6 +24,16 @@ pub enum CloudSyncIntent {
     Restore,
 }
 
+impl CloudSyncIntent {
+    pub fn ready_action(self) -> Option<CloudSyncAction> {
+        match self {
+            Self::Enable => Some(CloudSyncAction::SetEnabled(true)),
+            Self::Restore => Some(CloudSyncAction::PreviewRestore),
+            Self::Unlock => None,
+        }
+    }
+}
+
 /// The modal the card is currently showing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CloudSyncDialog {
@@ -761,6 +771,19 @@ mod tests {
             "backupRetentionDays": null
         }))
         .expect("fixture is a valid EncryptedSyncStatus")
+    }
+
+    #[test]
+    fn a_ready_device_keeps_the_requested_enable_restore_or_unlock_intent() {
+        assert_eq!(
+            CloudSyncIntent::Enable.ready_action(),
+            Some(CloudSyncAction::SetEnabled(true))
+        );
+        assert_eq!(
+            CloudSyncIntent::Restore.ready_action(),
+            Some(CloudSyncAction::PreviewRestore)
+        );
+        assert_eq!(CloudSyncIntent::Unlock.ready_action(), None);
     }
 
     #[test]

@@ -13,6 +13,81 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use openless_linux_egui::{fmt_l10n, tr_l10n, Lang, LANGS};
+
+#[test]
+fn cloud_sync_counts_are_formatted_in_every_language() {
+    for lang in LANGS {
+        let review = fmt_l10n(lang, "cloudSyncE2ee.deviceReview", &[&2]);
+        assert!(!review.contains("{}"), "{lang:?}: {review}");
+        assert_eq!(review.matches('2').count(), 1, "{lang:?}: {review}");
+
+        let retention = fmt_l10n(lang, "cloudSyncE2ee.backupRetention", &[&30]);
+        assert!(!retention.contains("{}"), "{lang:?}: {retention}");
+        assert_eq!(retention.matches("30").count(), 1, "{lang:?}: {retention}");
+
+        let progress = fmt_l10n(lang, "cloudSyncE2ee.conflictProgress", &[&1, &3]);
+        let expected = match lang {
+            Lang::ZhCn => "已处理 1 / 3 项冲突",
+            Lang::ZhTw => "已處理 1 / 3 項衝突",
+            Lang::En => "1 of 3 conflicts resolved",
+            Lang::Ja => "競合を 1 / 3 件解決済み",
+            Lang::Ko => "충돌 1 / 3개 해결",
+        };
+        assert_eq!(progress, expected, "{lang:?}");
+        assert!(!progress.contains("{}"), "{lang:?}: {progress}");
+    }
+}
+
+#[test]
+fn ui_refinement_additions_have_japanese_korean_and_traditional_chinese_translations() {
+    const KEYS: [&str; 22] = [
+        "uiRefinement.family",
+        "uiRefinement.fontHint",
+        "uiRefinement.fontSize",
+        "uiRefinement.storageError",
+        "uiRefinement.typography",
+        "uiRefinement.width",
+        "uiRefinement.back",
+        "uiRefinement.noResults",
+        "uiRefinement.shortcutHint",
+        "uiRefinement.shortcutsSearch",
+        "uiRefinement.unassigned",
+        "uiRefinement.all",
+        "uiRefinement.assigned",
+        "uiRefinement.category",
+        "uiRefinement.recording",
+        "uiRefinement.status",
+        "uiRefinement.styles",
+        "uiRefinement.system",
+        "uiRefinement.comfortable",
+        "uiRefinement.narrow",
+        "uiRefinement.native",
+        "uiRefinement.wide",
+    ];
+    for key in KEYS {
+        let english = tr_l10n(Lang::En, key);
+        for lang in [Lang::Ja, Lang::Ko, Lang::ZhTw] {
+            let translated = tr_l10n(lang, key);
+            assert!(!translated.trim().is_empty(), "{lang:?}: {key}");
+            assert_ne!(translated, key, "{lang:?}: missing {key}");
+            if matches!(lang, Lang::Ja | Lang::Ko) {
+                assert_ne!(translated, english, "{lang:?}: English fallback for {key}");
+            }
+        }
+    }
+    assert_eq!(tr_l10n(Lang::ZhTw, "uiRefinement.family"), "字型系列");
+    assert_eq!(tr_l10n(Lang::ZhTw, "uiRefinement.width"), "閱讀寬度");
+    assert_eq!(
+        tr_l10n(Lang::ZhTw, "uiRefinement.fontHint"),
+        "僅使用已安裝的字型，找不到時改用系統字型。不下載、不掃描，也不發出字型網路請求。"
+    );
+    assert_eq!(
+        tr_l10n(Lang::ZhTw, "uiRefinement.shortcutHint"),
+        "點選按鍵即可重新錄製。Esc 取消；儲存前會檢查快速鍵衝突。"
+    );
+}
+
 fn strip_comments(source: &str) -> Vec<u8> {
     let bytes = source.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

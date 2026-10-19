@@ -6,8 +6,7 @@
 //!
 //! 约定：
 //! * 宿主侧的集合顺序与窗口看到的顺序**始终一致**（都是宿主存储的前缀），
-//!   所以两边的下标语义天然相同 —— 窗口发出的 `HistoryPlay(index)` 之类在这里
-//!   不需要改成 id。
+//!   因此分页按前缀拼接；历史操作另用稳定记录 ID，避免快照刷新后错位。
 //! * 快照里的 `*_entries` 只是第一页，`*_total` 才是真实条数；窗口据此显示
 //!   「已载入 X / 共 Y」并发出 [`FrontendAction::LoadMore`]。
 //! * 过滤/搜索仍由窗口在**已载入**的前缀上做（历史搜索除外，见 `linux_app`），
@@ -214,7 +213,7 @@ pub fn load_more_footer(
         egui::FontId::proportional(11.0),
         theme::INK_4,
     );
-    if auto {
+    if auto && loaded < AUTO_LOAD_MAX_ITEMS {
         painter.text(
             egui::pos2(rect.right() - 2.0, rect.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -224,12 +223,10 @@ pub fn load_more_footer(
         );
         // 搜索/筛选下的自动加载：宿主一个 tick 内就回包，下一帧 loaded 变大，
         // 条件自然不再成立；到上限后停在按钮上，交回给用户。
-        if loaded < AUTO_LOAD_MAX_ITEMS {
-            actions.push(FrontendAction::LoadMore {
-                collection,
-                offset: loaded,
-            });
-        }
+        actions.push(FrontendAction::LoadMore {
+            collection,
+            offset: loaded,
+        });
         return;
     }
     let more = tr_l10n(lang, "common.load_more");
@@ -358,5 +355,120 @@ mod tests {
         assert_eq!(Collection::History.total(&view_model), 300);
         assert_eq!(Collection::Vocabulary.loaded(&view_model), 0);
         assert_eq!(Collection::Vocabulary.total(&view_model), 12);
+    }
+
+    fn footer_frame(
+        ctx: &egui::Context,
+        view_model: &FrontendViewModel,
+        events: Vec<egui::Event>,
+        actions: &mut Vec<FrontendAction>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| load_more_footer(ui, Lang::En, Collection::History, view_model, true, actions),
+        )
+    }
+
+    #[test]
+    fn footer_auto_loads_before_the_cap() {
+        let ctx = egui::Context::default();
+        let view_model = FrontendViewModel {
+            history_entries: history_entries(4_999),
+            history_list_total: 6_000,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        footer_frame(&ctx, &view_model, Vec::new(), &mut actions).drop_without_applying_deltas();
+        assert!(!actions.is_empty());
+        assert!(actions.iter().all(|action| matches!(
+            action,
+            FrontendAction::LoadMore {
+                collection: Collection::History,
+                offset: 4_999
+            }
+        )));
+    }
+
+    #[test]
+    fn footer_at_or_above_the_cap_offers_a_working_manual_button() {
+        for loaded in [5_000, 5_200] {
+            let ctx = egui::Context::default();
+            let view_model = FrontendViewModel {
+                history_entries: history_entries(loaded),
+                history_list_total: 6_000,
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            let output = footer_frame(&ctx, &view_model, Vec::new(), &mut actions);
+            assert!(
+                actions.is_empty(),
+                "automatic loading must stop at {loaded}"
+            );
+            let label = tr_l10n(Lang::En, "common.load_more");
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .expect("the manual load button must actually be painted");
+            output.drop_without_applying_deltas();
+
+            footer_frame(
+                &ctx,
+                &view_model,
+                vec![egui::Event::PointerMoved(position)],
+                &mut actions,
+            )
+            .drop_without_applying_deltas();
+            for pressed in [true, false] {
+                footer_frame(
+                    &ctx,
+                    &view_model,
+                    vec![egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    &mut actions,
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(matches!(
+                actions.as_slice(),
+                [FrontendAction::LoadMore {
+                    collection: Collection::History,
+                    offset
+                }] if *offset == loaded
+            ));
+        }
+    }
+
+    #[test]
+    fn footer_draws_nothing_when_every_item_is_loaded() {
+        for loaded in [200, 201] {
+            let ctx = egui::Context::default();
+            let view_model = FrontendViewModel {
+                history_entries: history_entries(loaded),
+                history_list_total: 200,
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            let output = footer_frame(&ctx, &view_model, Vec::new(), &mut actions);
+            assert!(actions.is_empty());
+            assert!(output.shapes.is_empty());
+            output.drop_without_applying_deltas();
+        }
     }
 }

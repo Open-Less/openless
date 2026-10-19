@@ -20,7 +20,10 @@ fn draw(
         queue,
         samples,
         scale,
-        effects,
+        &effects
+            .iter()
+            .map(|(effect, origin)| (*effect, *origin, EFFECT_SIZE))
+            .collect::<Vec<_>>(),
         clipped,
         wgpu::TextureFormat::Rgba8Unorm,
     )
@@ -31,7 +34,7 @@ fn draw_format(
     queue: &wgpu::Queue,
     samples: u32,
     scale: f32,
-    effects: &[(SiriEffect, [f32; 2])],
+    effects: &[(SiriEffect, [f32; 2], [f32; 2])],
     clipped: bool,
     format: wgpu::TextureFormat,
 ) -> Vec<u8> {
@@ -46,10 +49,10 @@ fn draw_format(
     install_renderer(&mut renderer, device, format, samples);
     let primitives: Vec<_> = effects
         .iter()
-        .map(|(effect, origin)| {
+        .map(|(effect, origin, effect_size)| {
             let rect = egui::Rect::from_min_size(
                 egui::pos2(origin[0] / scale, origin[1] / scale),
-                egui::vec2(EFFECT_SIZE[0] / scale, EFFECT_SIZE[1] / scale),
+                egui::vec2(effect_size[0] / scale, effect_size[1] / scale),
             );
             let clip_rect = if clipped {
                 rect.shrink(16.0 / scale)
@@ -64,7 +67,7 @@ fn draw_format(
                         SiriCallback {
                             uniforms: SiriUniforms {
                                 effect: *effect,
-                                size: EFFECT_SIZE,
+                                size: *effect_size,
                             },
                             binding: OnceLock::new(),
                         },
@@ -206,7 +209,7 @@ fn vulkan_effects_are_visible_local_independent_and_transparent() {
             &queue,
             1,
             1.0,
-            &[(SiriEffect::wave(1.35, 0.52), [0.0, 0.0])],
+            &[(SiriEffect::wave(1.35, 0.52), [0.0, 0.0], EFFECT_SIZE)],
             false,
             format,
         );
@@ -228,6 +231,51 @@ fn vulkan_effects_are_visible_local_independent_and_transparent() {
                     &pixels[offset..offset + 4]
                 );
             }
+        }
+    }
+
+    // The 46-point composer must keep its ring on the outer edge at every DPI.
+    for samples in [1, 4] {
+        for scale in [1.0, 1.5, 2.0] {
+            let size = [220.0 * scale, 46.0 * scale];
+            let origin = [32.0, 128.0];
+            let pixels = draw_format(
+                &device,
+                &queue,
+                samples,
+                scale,
+                &[(SiriEffect::ring(0.5, 12.0, 2.0), origin, size)],
+                false,
+                wgpu::TextureFormat::Rgba8Unorm,
+            );
+            let width = size[0] as u32;
+            let height = size[1] as u32;
+            let alpha = |x, y| {
+                let x = x + origin[0] as u32;
+                let y = y + origin[1] as u32;
+                pixels[((y * WIDTH + x) * 4 + 3) as usize]
+            };
+            for (x, y) in [
+                (width / 2, 0),
+                (width / 2, height - 1),
+                (0, height / 2),
+                (width - 1, height / 2),
+            ] {
+                assert!(
+                    alpha(x, y) > 128,
+                    "composer ring missing at outer edge {x},{y}, MSAA={samples}, DPI={scale}"
+                );
+            }
+            assert_eq!(
+                alpha(width / 2, height / 2),
+                0,
+                "composer centre must remain transparent, MSAA={samples}, DPI={scale}"
+            );
+            assert_eq!(
+                alpha(0, 0),
+                0,
+                "rounded composer corner must be transparent"
+            );
         }
     }
     // One distance field must meet both endpoints without a handoff pop.

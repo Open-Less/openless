@@ -458,7 +458,7 @@ fn round_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
 fn ring(frag: vec2<f32>) -> vec4<f32> {
     let p = frag - u.size * 0.5;
     let radius = clamp(u.radius, 0.0, min(u.size.x, u.size.y) * 0.5);
-    let distance = round_box(p, u.size * 0.5 - vec2<f32>(radius), radius);
+    let distance = round_box(p, u.size * 0.5, radius);
     let edge = 1.0 - smoothstep(0.0, max(u.thickness, 1.0), abs(distance));
     let alpha = edge * 0.9;
     return vec4<f32>(u.tint.rgb * alpha, alpha);

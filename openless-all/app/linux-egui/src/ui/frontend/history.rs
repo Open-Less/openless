@@ -640,7 +640,10 @@ fn detail_card(
                                 )
                                 .clicked()
                             {
-                                actions.push(FrontendAction::HistoryRepolish(index, None));
+                                actions.push(FrontendAction::HistoryRepolish(
+                                    vm.history_entries[index].id.clone(),
+                                    None,
+                                ));
                             }
                             for (pack_index, pack) in vm.style_packs.iter().enumerate() {
                                 if pack.enabled
@@ -653,7 +656,7 @@ fn detail_card(
                                         .clicked()
                                 {
                                     actions.push(FrontendAction::HistoryRepolish(
-                                        index,
+                                        vm.history_entries[index].id.clone(),
                                         Some(pack_index),
                                     ));
                                 }
@@ -1028,20 +1031,20 @@ fn history_action_menu(
             icon: IconName::Play,
             label: tr_l10n(lang, "history.play_recording").to_string(),
             danger: false,
-            action: Box::new(FrontendAction::HistoryPlay(index)),
+            action: Box::new(FrontendAction::HistoryPlay(entry.id.clone())),
         });
         items.push(HistoryMenuItem::Action {
             icon: IconName::Download,
             label: tr_l10n(lang, "history.export").to_string(),
             danger: false,
-            action: Box::new(FrontendAction::HistoryExport(index)),
+            action: Box::new(FrontendAction::HistoryExport(entry.id.clone())),
         });
         items.push(HistoryMenuItem::Separator);
         items.push(HistoryMenuItem::Action {
             icon: IconName::Refresh,
             label: tr_l10n(lang, "history.retranscribe").to_string(),
             danger: false,
-            action: Box::new(FrontendAction::HistoryRetranscribe(index)),
+            action: Box::new(FrontendAction::HistoryRetranscribe(entry.id.clone())),
         });
     }
     if !entry.raw_transcript.trim().is_empty() {

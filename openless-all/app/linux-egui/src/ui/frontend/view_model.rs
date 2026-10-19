@@ -21,6 +21,27 @@ pub enum Page {
 
 // ── FrontendAction ──────────────────────────────────────────────────────────
 
+/// Apply an adjacent swap only while its observed identities still match.
+pub fn move_channel(ids: &mut [String], channel_id: &str, neighbor_id: &str, delta: isize) -> bool {
+    if !matches!(delta, -1 | 1) {
+        return false;
+    }
+    let Some(index) = ids.iter().position(|id| id == channel_id) else {
+        return false;
+    };
+    let Some(target) = index
+        .checked_add_signed(delta)
+        .filter(|target| *target < ids.len())
+    else {
+        return false;
+    };
+    if ids[target] != neighbor_id {
+        return false;
+    }
+    ids.swap(index, target);
+    true
+}
+
 /// Every user interaction the frontend can produce. The host
 /// (`OpenLessEguiApp`) drains these actions and dispatches them to existing
 /// Core / backend methods without duplicating the Core state machine.
@@ -88,14 +109,14 @@ pub enum FrontendAction {
     /// Dismiss the pending confirmation dialog.
     HistoryCancelConfirm,
     /// Export a history entry's recording to a file.
-    HistoryExport(usize),
+    HistoryExport(String),
     /// Re-run ASR on a history entry's recording.
-    HistoryRetranscribe(usize),
+    HistoryRetranscribe(String),
     HistoryRepolishOpen(usize),
     HistoryRepolishClose,
-    HistoryRepolish(usize, Option<usize>),
+    HistoryRepolish(String, Option<usize>),
     /// Open a history entry's recording in the system player.
-    HistoryPlay(usize),
+    HistoryPlay(String),
     /// Pause or resume the current in-app recording without dropping its cursor.
     HistoryPauseToggle,
     /// Seek the current recording to a millisecond timestamp.
@@ -200,7 +221,8 @@ pub enum FrontendAction {
     SettingsChannelSelect(usize),
     /// Move a channel up/down; Core's `reorder_channels` owns the order.
     SettingsChannelMove {
-        index: usize,
+        channel_id: String,
+        neighbor_id: String,
         delta: isize,
     },
     /// Switch a channel to another provider type (Core's `set_channel_provider_type`).
@@ -1271,5 +1293,40 @@ mod lang_tag {
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Lang, D::Error> {
         let tag = String::deserialize(deserializer)?;
         Lang::parse(&tag).ok_or_else(|| serde::de::Error::custom(format!("unknown lang tag {tag}")))
+    }
+}
+
+#[cfg(test)]
+mod action_identity_tests {
+    use super::*;
+    #[test]
+    fn a_drag_tracks_the_channel_through_multiple_neighbors() {
+        let mut ids = vec!["A".into(), "B".into(), "C".into()];
+        assert!(move_channel(&mut ids, "A", "B", 1));
+        assert!(!move_channel(&mut ids, "A", "B", 1));
+        assert!(move_channel(&mut ids, "A", "C", 1));
+        for _ in 0..10 {
+            assert!(!move_channel(&mut ids, "A", "C", 1));
+        }
+        assert_eq!(ids, ["B", "C", "A"]);
+        assert!(move_channel(&mut ids, "A", "C", -1));
+        assert_eq!(ids, ["B", "A", "C"]);
+        assert!(!move_channel(&mut ids, "missing", "A", 1));
+        assert!(!move_channel(&mut ids, "B", "A", -1));
+        assert!(!move_channel(&mut ids, "A", "C", 2));
+    }
+    #[test]
+    fn history_actions_keep_the_record_id_on_the_wire() {
+        for action in [
+            FrontendAction::HistoryPlay("entry-220".into()),
+            FrontendAction::HistoryExport("entry-220".into()),
+            FrontendAction::HistoryRetranscribe("entry-220".into()),
+            FrontendAction::HistoryRepolish("entry-220".into(), Some(2)),
+        ] {
+            let encoded = serde_json::to_value(&action).unwrap();
+            let decoded: FrontendAction = serde_json::from_value(encoded.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+            assert!(encoded.to_string().contains("entry-220"));
+        }
     }
 }
