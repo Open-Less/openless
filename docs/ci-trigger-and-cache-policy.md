@@ -19,7 +19,7 @@
 
 | 区域 | 跳过条件（全部改动都命中才算跳过） | 覆盖的 job |
 |---|---|---|
-| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
+| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`app/scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
 | `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.99 MSRV |
 | `linux` | 全部改动都是散文（`docs/**`、`*.md`、`LICENSE`、`NOTICE`） | Linux Core/egui 测试与 deb/rpm 打包链 |
 

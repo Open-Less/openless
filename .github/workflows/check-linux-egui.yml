@@ -120,7 +120,7 @@ jobs:
 
       - name: Build and test fcitx5 plugin
         if: inputs.scope != 'none'
-        working-directory: openless-all/scripts/linux-fcitx5-plugin
+        working-directory: openless-all/app/scripts/linux-fcitx5-plugin
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build --parallel

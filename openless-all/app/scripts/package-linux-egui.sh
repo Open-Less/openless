@@ -16,7 +16,7 @@ fi
 ARCH=${OPENLESS_LINUX_ARCH:-x86_64}
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
-PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
+PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
 # 图标：与 Tauri 侧共用同一套画（`icon.png` 与 `public/AppIcon.png` 的 md5 相同，

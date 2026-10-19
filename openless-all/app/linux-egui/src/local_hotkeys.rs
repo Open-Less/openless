@@ -1,7 +1,7 @@
 //! 我们自己的窗口有焦点时，fcitx5 插件收不到按键 —— 本地兜底匹配的**判定层**。
 //!
 //! 插件把热键匹配挂在 fcitx5 的 `EventType::InputContextKeyEvent` 上
-//! （`scripts/linux-fcitx5-plugin/openless.cpp`），而 fcitx5 只有在聚焦的客户端
+//! （`app/scripts/linux-fcitx5-plugin/openless.cpp`），而 fcitx5 只有在聚焦的客户端
 //! 注册了 text-input 时才会收到那个客户端的按键。我们的 winit/egui 窗口从不注册
 //! （`ime_allowed` 默认 false → 不会调用 `zwp_text_input_v3.enable()`），于是
 //! **主窗口、选区助手、Less Computer 面板有焦点时插件一个信号都不会发**：用户

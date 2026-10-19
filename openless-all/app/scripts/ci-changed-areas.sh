@@ -51,7 +51,7 @@ while IFS= read -r file; do
       case "$file" in
         openless-all/app/linux-egui/Cargo.toml) run ;;
         openless-all/app/linux-egui/*) ;;
-        openless-all/scripts/linux-fcitx5-plugin/*) ;;
+        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
         docs/* | *.md | LICENSE* | NOTICE*) ;;
         *) run ;;
       esac
@@ -77,7 +77,7 @@ while IFS= read -r file; do
       case "$file" in
         docs/* | *.md | LICENSE* | NOTICE*) ;;
         openless-all/app/linux-egui/*) ;;
-        openless-all/scripts/linux-fcitx5-plugin/*) ;;
+        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
         *) run ;;
       esac
       ;;

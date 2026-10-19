@@ -12,7 +12,7 @@ The runnable sources live in `app/`:
 - `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK;
 - `app/harmony`: HarmonyOS host (ArkTS + ArkWeb) with the shared Rust backend;
 - `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
-- `scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
+- `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
 
 The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
 
