@@ -1505,6 +1505,9 @@ export const de: typeof zhCN = {
       modeToggle: 'Umschalten',
       modeHold: 'Gedrückt halten',
       modeAuto: 'Automatisch',
+      enterStopLabel: 'Aufnahme mit Enter beenden',
+      enterStopDesc:
+        'Standardmäßig aus; nur im Umschaltmodus. Enter ohne Zusatztasten (auch im Ziffernblock) beendet die Aufnahme und startet die Transkription. Das Aufnahme-Tastenkürzel beendet weiterhin, Esc bricht ab.',
       silenceAutoStopLabel: 'Bei Stille automatisch beenden',
       silenceAutoStopDesc:
         'Nur im Umschaltmodus. Nach erkannter Sprache wird die Aufnahme automatisch beendet und gesendet, sobald die gewählte Dauer ohne Sprache verstrichen ist. Standardmäßig aus. Erneuter Tastendruck und Esc funktionieren weiterhin.',

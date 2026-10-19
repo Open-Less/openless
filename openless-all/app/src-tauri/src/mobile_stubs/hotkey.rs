@@ -12,6 +12,7 @@ use crate::types::{
 pub enum HotkeyEvent {
     Pressed { at: Instant, press_id: u64 },
     Released { at: Instant, press_id: u64 },
+    StopRequested { session_id: openless_core::SessionId },
     // Combo-key abort and Esc cancel have no global keyboard listener on
     // mobile and are not in this enum (see the hotkey.rs module comment).
     TranslationModifierPressed,
@@ -39,6 +40,11 @@ pub fn next_press_id() -> u64 {
 
 /// Mobile has no global keyboard listener; Esc-exclusive is a no-op.
 pub fn set_esc_exclusive(_active: bool) {}
+
+pub fn set_enter_stop_provider(
+    _provider: std::sync::Arc<dyn Fn() -> Option<openless_core::SessionId> + Send + Sync>,
+) {
+}
 
 pub struct HotkeyMonitor;
 

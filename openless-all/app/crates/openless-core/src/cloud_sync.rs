@@ -562,6 +562,7 @@ fn capture_preferences(
         mute_during_recording: Some(preferences.mute_during_recording),
         stable_transcription_enabled: Some(preferences.stable_transcription_enabled),
         silence_auto_stop_enabled: Some(preferences.silence_auto_stop_enabled),
+        enter_stop_enabled: Some(preferences.enter_stop_enabled),
         silence_auto_stop_seconds: Some(preferences.silence_auto_stop_seconds),
         show_overview_activity_heatmap: Some(preferences.show_overview_activity_heatmap),
         llm_thinking_enabled: Some(preferences.llm_thinking_enabled),
@@ -601,6 +602,7 @@ fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferenc
         mute_during_recording,
         stable_transcription_enabled,
         silence_auto_stop_enabled,
+        enter_stop_enabled,
         silence_auto_stop_seconds,
         show_overview_activity_heatmap,
         llm_thinking_enabled
@@ -782,5 +784,24 @@ mod encrypted_gate_tests {
             repositories.vocabulary.list().unwrap()[0].phrase,
             "standalone restore"
         );
+    }
+}
+
+#[cfg(test)]
+mod enter_stop_sync_tests {
+    use super::*;
+
+    #[test]
+    fn enter_stop_is_projected_and_applied_by_plaintext_sync() {
+        let preferences = UserPreferences {
+            enter_stop_enabled: true,
+            ..UserPreferences::default()
+        };
+        let projected = capture_preferences(&preferences, CloudSyncUiPreferences::default());
+        assert_eq!(projected.enter_stop_enabled, Some(true));
+
+        let mut restored = UserPreferences::default();
+        apply_preferences(&mut restored, &projected);
+        assert!(restored.enter_stop_enabled);
     }
 }

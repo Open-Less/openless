@@ -160,6 +160,11 @@ pub enum HostToPopup {
         session_id: String,
         sequence: u64,
         bindings: Box<openless_core::HotkeyRuntimeTarget>,
+        /// Live ordinary-dictation session eligible for local bare Enter stop.
+        /// `None` deliberately disables local interception (for example VoiceEdit,
+        /// QA, processing phases, shortcut capture, or the opt-in being off).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enter_stop_session: Option<String>,
     },
     Shutdown {
         version: u16,
@@ -295,6 +300,14 @@ pub enum PopupToHost {
         session_id: String,
         sequence: u64,
     },
+    /// Capsule-local bare Enter stop; kept distinct from the confirmation button
+    /// so the host can apply the opt-in Toggle-only policy without changing the
+    /// existing all-mode confirmation semantics.
+    StopDictationFromEnter {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+    },
     /// 划词追问头部图钉：固定后宿主不再自动收起（Tauri `qa.pinTooltip`）。
     SetPinned {
         version: u16,
@@ -363,6 +376,7 @@ impl PopupToHost {
             | Self::DismissCapsule { version, .. }
             | Self::CancelDictation { version, .. }
             | Self::StopDictation { version, .. }
+            | Self::StopDictationFromEnter { version, .. }
             | Self::SetPinned { version, .. }
             | Self::SetEditInstructionMode { version, .. }
             | Self::ApplyEdit { version, .. }
@@ -386,6 +400,7 @@ impl PopupToHost {
             | Self::DismissCapsule { session_id, .. }
             | Self::CancelDictation { session_id, .. }
             | Self::StopDictation { session_id, .. }
+            | Self::StopDictationFromEnter { session_id, .. }
             | Self::SetPinned { session_id, .. }
             | Self::SetEditInstructionMode { session_id, .. }
             | Self::ApplyEdit { session_id, .. }
@@ -409,6 +424,7 @@ impl PopupToHost {
             | Self::DismissCapsule { sequence, .. }
             | Self::CancelDictation { sequence, .. }
             | Self::StopDictation { sequence, .. }
+            | Self::StopDictationFromEnter { sequence, .. }
             | Self::SetPinned { sequence, .. }
             | Self::SetEditInstructionMode { sequence, .. }
             | Self::ApplyEdit { sequence, .. }
@@ -436,7 +452,8 @@ impl PopupToHost {
             | Self::RevertEdit { .. } => PopupKind::Qa,
             Self::DismissCapsule { .. }
             | Self::CancelDictation { .. }
-            | Self::StopDictation { .. } => PopupKind::Capsule,
+            | Self::StopDictation { .. }
+            | Self::StopDictationFromEnter { .. } => PopupKind::Capsule,
             Self::SubmitLessComputer { .. }
             | Self::ApproveLessComputer { .. }
             | Self::CancelLessComputer { .. }
@@ -706,6 +723,8 @@ pub struct PopupState {
     pub less_computer: LessComputerPopupState,
     /// 宿主下发的本地热键配置；没有它就不做本地匹配。
     pub hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
+    /// Host-computed live session eligible for local Enter-stop interception.
+    pub enter_stop_session: Option<String>,
     retired_sessions: HashSet<String>,
 }
 
@@ -722,8 +741,14 @@ impl PopupState {
     pub fn apply(&mut self, message: HostToPopup) -> ApplyOutcome {
         // 热键配置不是“会话内容”：它不推进会话、不参与序号排序（宿主可能在面板
         // 刚重连、还没收到第一条内容帧时先发它），所以在这里提前收下就返回。
-        if let HostToPopup::Hotkeys { bindings, .. } = message {
+        if let HostToPopup::Hotkeys {
+            bindings,
+            enter_stop_session,
+            ..
+        } = message
+        {
             self.hotkeys = Some(*bindings);
+            self.enter_stop_session = enter_stop_session;
             return ApplyOutcome::Applied;
         }
         let session_id = message.session_id().to_owned();
@@ -1264,6 +1289,18 @@ mod tests {
     }
 
     #[test]
+    fn enter_stop_action_has_a_distinct_capsule_route() {
+        let message = PopupToHost::StopDictationFromEnter {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".to_string(),
+            sequence: 7,
+        };
+        assert_eq!(message.kind(), PopupKind::Capsule);
+        assert_eq!(message.session_id(), "session");
+        assert_eq!(message.sequence(), 7);
+    }
+
+    #[test]
     fn capsule_uses_x11_only_in_a_native_x11_session() {
         assert!(force_x11_for(PopupKind::Capsule, Some(":0"), None));
         assert!(!force_x11_for(PopupKind::Capsule, None, None));
@@ -1373,6 +1410,7 @@ mod tests {
             session_id: "qa".to_owned(),
             sequence: 7,
             bindings: Box::new(bindings),
+            enter_stop_session: Some("session".to_owned()),
         };
         let encoded = serde_json::to_string(&message).expect("encode hotkeys");
         let decoded: HostToPopup = serde_json::from_str(&encoded).expect("decode hotkeys");
@@ -1381,6 +1419,7 @@ mod tests {
         let mut state = PopupState::default();
         assert_eq!(state.apply(message), ApplyOutcome::Applied);
         assert!(state.hotkeys.is_some());
+        assert_eq!(state.enter_stop_session.as_deref(), Some("session"));
         // 配置不是会话内容：后面的内容帧序号照常从 1 开始被采纳。
         assert_eq!(state.session_id, None);
         assert_eq!(state.last_sequence, 0);

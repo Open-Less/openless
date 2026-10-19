@@ -51,6 +51,8 @@ pub enum HostToWindow {
     Hotkeys {
         version: u32,
         bindings: Box<openless_core::HotkeyRuntimeTarget>,
+        #[serde(default)]
+        enter_stop_session: Option<String>,
     },
     /// 完整视图模型快照；`sequence` 单调递增。
     Snapshot {
@@ -84,6 +86,10 @@ pub enum WindowToHost {
     Hotkey {
         sequence: u64,
         edge: openless_linux_egui::LocalHotkeyEdge,
+    },
+    EnterStopRequested {
+        sequence: u64,
+        session_id: String,
     },
     /// UI 正常退出前的告别（宿主据此立即作废句柄，不必等 EOF）。
     Bye,
@@ -291,7 +297,8 @@ impl UiBridgeHost {
                                 WindowToHost::Action { sequence, .. } => {
                                     advance_sequence(&mut connection.action_sequence, *sequence)
                                 }
-                                WindowToHost::Hotkey { sequence, .. } => {
+                                WindowToHost::Hotkey { sequence, .. }
+                                | WindowToHost::EnterStopRequested { sequence, .. } => {
                                     advance_sequence(&mut connection.hotkey_sequence, *sequence)
                                 }
                                 WindowToHost::Hello { .. } => {

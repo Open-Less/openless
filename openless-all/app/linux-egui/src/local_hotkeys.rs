@@ -190,6 +190,7 @@ pub fn plugin_event_hotkey(
         LinuxHotkeyEvent::DictationPressed { .. }
         | LinuxHotkeyEvent::DictationReleased { .. }
         | LinuxHotkeyEvent::DictationCombined { .. } => LocalHotkey::Dictation,
+        LinuxHotkeyEvent::DictationEnterStopRequested { .. } => return None,
         LinuxHotkeyEvent::QaPressed => LocalHotkey::Qa,
         LinuxHotkeyEvent::QuickNotePressed => LocalHotkey::QuickNote,
         LinuxHotkeyEvent::SelectionPolishPressed => LocalHotkey::SelectionPolish,
@@ -328,6 +329,7 @@ mod tests {
         HotkeyRuntimeTarget {
             dictation: binding("A", &["alt"]),
             dictation_mode: HotkeyMode::Toggle,
+            enter_stop_enabled: false,
             qa: Some(binding(";", &["ctrl", "shift"])),
             quick_note: None,
             translation: binding("Z", &["alt"]),

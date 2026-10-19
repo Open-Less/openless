@@ -1192,6 +1192,7 @@ impl Coordinator {
             log::info!("[coord] hotkey startup waits for local recovery");
             return;
         }
+        dictation::install_enter_stop_provider(&self.inner);
         // Spawn a daemon thread that retries installing the hotkey hook, so it
         // takes effect as soon as Accessibility is granted without requiring
         // the user to restart OpenLess.
@@ -1601,6 +1602,7 @@ impl Coordinator {
             monitor.update_binding(binding);
             return Ok(());
         }
+        dictation::install_enter_stop_provider(&self.inner);
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);

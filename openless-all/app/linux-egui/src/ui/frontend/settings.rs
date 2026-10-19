@@ -521,6 +521,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.enter_stop_label"),
+                tr_l10n(lang, "settings.recording.enter_stop_desc"),
+                vm.settings.enter_stop_enabled,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::EnterStopEnabled,
+                    ));
+                },
+            );
             // 上游 #1082（稳定模式：先录音后识别）：录音期间不连接 ASR，停止后提交整段
             // 音频；结果更晚，但录音不受建连延迟与网络抖动影响。
             toggle_row(

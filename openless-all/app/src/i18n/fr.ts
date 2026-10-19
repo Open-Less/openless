@@ -1517,6 +1517,9 @@ export const fr: typeof zhCN = {
       modeToggle: 'Basculer',
       modeHold: 'Maintenir pour parler',
       modeAuto: 'Automatique',
+      enterStopLabel: 'Arrêter l’enregistrement avec Entrée',
+      enterStopDesc:
+        'Désactivé par défaut ; mode Basculer uniquement. Entrée sans modificateur (pavé numérique inclus) arrête l’enregistrement et lance la transcription. Le raccourci arrête toujours et Échap annule.',
       silenceAutoStopLabel: 'Arrêter après un silence',
       silenceAutoStopDesc:
         'En mode Basculer uniquement. Après avoir détecté la voix, arrête et envoie l’enregistrement lorsque le silence dure le temps choisi. Désactivé par défaut ; le raccourci et Échap restent disponibles.',

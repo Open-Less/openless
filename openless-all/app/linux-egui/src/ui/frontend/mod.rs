@@ -3288,17 +3288,32 @@ mod tests {
         vm.dictation_hotkey = "Alt+A".to_string();
         vm.settings.microphone_options = vec!["USB microphone".to_string()];
         let mut painted = String::new();
-        for _ in 0..2 {
+        for frame in 0..4 {
+            let events = if frame >= 2 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(900.0, 400.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -300.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
+                events,
                 ..Default::default()
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            painted.push_str(&painted_text(&crate::ui::frontend::end_pass(&ctx)));
         }
         for key in [
             "settings.recording.hotkey_label",
+            "settings.recording.enter_stop_label",
             "settings.recording.microphone_label",
             "settings.recording.capsule_label",
             "settings.recording.capsule_style_label",

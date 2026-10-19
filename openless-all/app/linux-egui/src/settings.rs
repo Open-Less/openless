@@ -87,6 +87,15 @@ impl LinuxSettingsRuntime {
     }
 }
 
+fn hotkeys_require_native_update(
+    change: &openless_core::SettingsValueChange<HotkeyRuntimeTarget>,
+) -> bool {
+    let mut previous = change.previous.clone();
+    previous.enter_stop_enabled = change.next.enter_stop_enabled;
+    // Equal targets explicitly request startup reapplication of native bindings.
+    change.previous == change.next || previous != change.next
+}
+
 impl SettingsRuntime for LinuxSettingsRuntime {
     fn prepare(
         &self,
@@ -125,6 +134,9 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         let Some(change) = &plan.hotkeys else {
             return Ok(());
         };
+        if !hotkeys_require_native_update(change) {
+            return Ok(());
+        }
         if !receipt.applied.contains(&SettingsEffectKind::Hotkeys) {
             receipt.applied.push(SettingsEffectKind::Hotkeys);
         }
@@ -149,6 +161,7 @@ impl SettingsRuntime for LinuxSettingsRuntime {
                 SettingsEffectKind::Hotkeys => plan
                     .hotkeys
                     .as_ref()
+                    .filter(|change| hotkeys_require_native_update(change))
                     .map(|change| self.effects.apply_hotkeys(&change.previous))
                     .unwrap_or(Ok(())),
                 SettingsEffectKind::ActiveAsrProvider => plan
@@ -692,6 +705,71 @@ mod tests {
     }
 
     #[test]
+    fn equal_hotkey_targets_request_native_startup_reapplication() {
+        for enabled in [false, true] {
+            let preferences = openless_core::UserPreferences {
+                enter_stop_enabled: enabled,
+                ..openless_core::UserPreferences::default()
+            };
+            let target = HotkeyRuntimeTarget::from(&preferences);
+            assert!(hotkeys_require_native_update(&openless_core::SettingsValueChange {
+                previous: target.clone(),
+                next: target,
+            }));
+        }
+    }
+
+    #[test]
+    fn enter_stop_only_changes_do_not_require_native_hotkey_registration() {
+        let previous = HotkeyRuntimeTarget::from(&openless_core::UserPreferences::default());
+        let mut enter_only = previous.clone();
+        enter_only.enter_stop_enabled = true;
+        assert!(!hotkeys_require_native_update(&openless_core::SettingsValueChange {
+            previous: previous.clone(),
+            next: enter_only,
+        }));
+
+        let mut real_hotkey_change = previous.clone();
+        real_hotkey_change.dictation.primary = "F9".into();
+        assert!(hotkeys_require_native_update(&openless_core::SettingsValueChange {
+            previous,
+            next: real_hotkey_change,
+        }));
+    }
+
+    #[test]
+    fn enter_stop_only_changes_skip_commit_and_restore_effect_calls() {
+        struct CountingEffects(std::sync::atomic::AtomicUsize);
+
+        impl LinuxSettingsEffects for CountingEffects {
+            fn apply_hotkeys(&self, _target: &HotkeyRuntimeTarget) -> Result<(), BackendError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn set_active_asr_provider(&self, _provider_id: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+        }
+
+        let previous = HotkeyRuntimeTarget::from(&openless_core::UserPreferences::default());
+        let mut next = previous.clone();
+        next.enter_stop_enabled = true;
+        let plan = SettingsEffectPlan {
+            hotkeys: Some(openless_core::SettingsValueChange { previous, next }),
+            ..SettingsEffectPlan::default()
+        };
+        let effects = std::sync::Arc::new(CountingEffects(std::sync::atomic::AtomicUsize::new(0)));
+        let runtime = LinuxSettingsRuntime::with_effects(effects.clone());
+        let mut receipt = SettingsEffectReceipt {
+            applied: vec![SettingsEffectKind::Hotkeys],
+        };
+        runtime.commit(&plan, &mut receipt).unwrap();
+        runtime.restore(&plan, &receipt).unwrap();
+        assert_eq!(effects.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn registration_summary_shows_modifier_triggers() {
         let target = HotkeyRuntimeTarget {
             dictation: ShortcutBinding {
@@ -699,6 +777,7 @@ mod tests {
                 modifiers: vec!["alt".into()],
             },
             dictation_mode: openless_core::shared_types::HotkeyMode::Toggle,
+            enter_stop_enabled: false,
             quick_note: None,
             qa: Some(ShortcutBinding {
                 primary: ":".into(),

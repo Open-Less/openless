@@ -14,6 +14,7 @@
  *    SetHotkey(as: keys)           — 设置听写触发快捷键 (Key::parse 格式)
  *    SetHotkeyRaw(uu: sym, states) — 直接设听写触发 sym+states (不走 parse)
  *    SetCustomDictationTrigger(s: keyString) — 设置自定义组合键 (Key::parse 格式)
+ *    SetDictationEnterStopSession(s: sessionId) — 设置当前 Toggle 听写的回车停止会话
  *    SetQaHotkeyRaw(uu: sym, states)     — 直接设 QA 面板触发 sym+states
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
  *    SetLessComputerHotkeyRaw(uu: sym, states) — 直接设 Less Computer 触发 sym+states
@@ -28,6 +29,7 @@
  *    CancelSelectionTarget(s: ticket) -> b — 释放未使用的目标
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
+ *    DictationEnterStopRequested(s: sessionId) — 裸回车请求停止捕获的会话
  *    LessComputerKeyEvent(uub: sym, states, isPress) — Less Computer 热键按下/抬起
  *    LessComputerKeyCombined(uub: sym, states, isPress) — Less Computer 组合键撤销
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
@@ -50,6 +52,7 @@
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/option.h>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/matchrule.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/i18n.h>
@@ -104,6 +107,13 @@ public:
           openAppRawSym_(0),
           openAppRawStates_(0),
           hasCustomDictationKey_(false),
+          dictationEnterStopSession_(),
+          enterHeld_(false),
+          keypadEnterHeld_(false),
+          enterStopGesture_(false),
+          keypadEnterStopGesture_(false),
+          enterStopArmed_(true),
+          keypadEnterStopArmed_(true),
           dictationTriggerHeld_(false),
           dictationTriggerCombined_(false),
           lessComputerTriggerHeld_(false),
@@ -155,6 +165,46 @@ public:
                     auto states = static_cast<uint32_t>(keyEvent.key().states()) &
                                   openless_hotkeys::kModifierMask;
                     bool isPress = !keyEvent.isRelease();
+
+                    // Toggle-mode stop is enabled by the host only while a dictation
+                    // session is Starting/Recording. Keep each physical Return key's
+                    // gesture state here so repeats cannot stop a later session and an
+                    // accepted press/release pair is swallowed despite modifier changes.
+                    if (isReturn(sym)) {
+                        bool &held = isKeypadReturn(sym) ? keypadEnterHeld_ : enterHeld_;
+                        bool &stopGesture = isKeypadReturn(sym)
+                            ? keypadEnterStopGesture_
+                            : enterStopGesture_;
+                        bool &stopArmed = isKeypadReturn(sym)
+                            ? keypadEnterStopArmed_
+                            : enterStopArmed_;
+                        if (isPress) {
+                            const bool freshPress = !held;
+                            held = true;
+                            if (stopGesture) {
+                                keyEvent.filterAndAccept();
+                                return;
+                            }
+                            if (isBareReturn(sym, states) &&
+                                !dictationEnterStopSession_.empty() && bus() && bus()->isOpen() &&
+                                stopArmed && freshPress) {
+                                stopGesture = true;
+                                stopArmed = false;
+                                dictationEnterStopRequested(dictationEnterStopSession_);
+                                keyEvent.filterAndAccept();
+                                return;
+                            }
+                        } else {
+                            const bool swallow = stopGesture;
+                            held = false;
+                            stopGesture = false;
+                            stopArmed = true;
+                            if (swallow) {
+                                keyEvent.filterAndAccept();
+                                return;
+                            }
+                        }
+                    }
 
                     // 命中判定统一走 hotkey_match.h：字母大小写折叠 + US 布局
                     // base/shifted 视为同一物理键（前端把 Shift 折进 keysym）。
@@ -582,6 +632,42 @@ public:
         rebuildTriggerKeys();
     }
 
+    void setDictationEnterStopSession(const std::string &sessionId) {
+        dictationEnterStopSession_.clear();
+        enterStopOwnerWatch_.reset();
+        if (!sessionId.empty()) {
+            const auto *message = currentMessage();
+            if (!message || !bus() || message->sender().empty()) {
+                throw dbus::MethodCallError(
+                    "org.freedesktop.DBus.Error.Failed", "Enter-stop owner unavailable");
+            }
+            const auto owner = message->sender();
+            enterStopOwnerWatch_ = bus()->addMatch(
+                dbus::MatchRule("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                "org.freedesktop.DBus", "NameOwnerChanged", {owner}),
+                [this, owner](dbus::Message &event) {
+                    std::string name, previousOwner, nextOwner;
+                    event >> name >> previousOwner >> nextOwner;
+                    if (name == owner && nextOwner.empty()) {
+                        dictationEnterStopSession_.clear();
+                    }
+                    return true;
+                });
+            if (!enterStopOwnerWatch_) {
+                throw dbus::MethodCallError(
+                    "org.freedesktop.DBus.Error.Failed", "Enter-stop owner watch unavailable");
+            }
+            dictationEnterStopSession_ = sessionId;
+        }
+        // A gate transition while Return is already held must not turn a
+        // repeat into a fresh stop gesture. The key-up re-arms the next press.
+        enterStopArmed_ = !enterHeld_;
+        keypadEnterStopArmed_ = !keypadEnterHeld_;
+        FCITX_LOGC(openless, Debug)
+            << "SetDictationEnterStopSession: "
+            << (sessionId.empty() ? "disabled" : sessionId);
+    }
+
     void setCustomDictationTrigger(const std::string &keyString) {
         Key key(keyString);
         if (!key.isValid()) {
@@ -757,6 +843,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setHotkey, "SetHotkey", "as", "");
     FCITX_OBJECT_VTABLE_METHOD(setHotkeyRaw, "SetHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setCustomDictationTrigger, "SetCustomDictationTrigger", "s", "");
+    FCITX_OBJECT_VTABLE_METHOD(setDictationEnterStopSession, "SetDictationEnterStopSession", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setQuickNoteHotkeyRaw, "SetQuickNoteHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
@@ -768,6 +855,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(dictationEnterStopRequested, "DictationEnterStopRequested", "s");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyCombined, "LessComputerKeyCombined", "uub");
@@ -956,6 +1044,19 @@ private:
         return "conf/openless.conf";
     }
 
+    static bool isReturn(uint32_t sym) {
+        return sym == 0xff0d || sym == 0xff8d;
+    }
+
+    static bool isKeypadReturn(uint32_t sym) {
+        return sym == 0xff8d;
+    }
+
+    static bool isBareReturn(uint32_t sym, uint32_t states) {
+        constexpr uint32_t kModifierMask = 0x01u | 0x04u | 0x08u | 0x40u;
+        return isReturn(sym) && (states & kModifierMask) == 0;
+    }
+
     static bool isModifierKeySym(uint32_t sym) {
         // X11 modifier keysyms.  CapsLock is included to match the desktop hook's
         // treatment of lock keys: pressing it alongside a trigger must not abort
@@ -1109,6 +1210,14 @@ private:
     std::vector<std::tuple<std::string, uint32_t, uint32_t>> stylePackHotkeys_;
     Key customDictationKey_;
     bool hasCustomDictationKey_;
+    std::string dictationEnterStopSession_;
+    std::unique_ptr<dbus::Slot> enterStopOwnerWatch_;
+    bool enterHeld_;
+    bool keypadEnterHeld_;
+    bool enterStopGesture_;
+    bool keypadEnterStopGesture_;
+    bool enterStopArmed_;
+    bool keypadEnterStopArmed_;
     bool dictationTriggerHeld_;
     bool dictationTriggerCombined_;
     bool lessComputerTriggerHeld_;

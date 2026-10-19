@@ -380,8 +380,8 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
           </SettingRow>
         )}
         {showDesktopHotkey && (
-          // "Auto-stop after silence" is only available in toggle mode. The outer container
-          // always renders: switching the mode from hold/auto to toggle pulls the whole
+          // Toggle-only recording controls share the outer container. Switching
+          // from hold/auto to toggle pulls the whole
           // group out from below, and switching away collapses it — the same grid 0fr→1fr
           // animation as the toggle-controlled seconds row, no more "sudden pop-in". While
           // collapsed the content stays in the DOM (overflow hidden), height animates to 0
@@ -399,6 +399,15 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
             aria-hidden={prefs.hotkey.mode !== 'toggle'}
           >
             <div style={{ overflow: 'hidden', minHeight: 0 }}>
+              <SettingRow
+                label={t('settings.recording.enterStopLabel')}
+                desc={t('settings.recording.enterStopDesc')}
+              >
+                <Toggle
+                  on={prefs.enterStopEnabled ?? false}
+                  onToggle={(next) => savePrefs({ ...prefs, enterStopEnabled: next })}
+                />
+              </SettingRow>
               <SettingRow
                 label={t('settings.recording.silenceAutoStopLabel')}
                 desc={t('settings.recording.silenceAutoStopDesc')}

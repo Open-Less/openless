@@ -59,6 +59,8 @@ impl SettingsUpdateOptions {
 pub struct HotkeyRuntimeTarget {
     pub dictation: ShortcutBinding,
     pub dictation_mode: HotkeyMode,
+    #[serde(default)]
+    pub enter_stop_enabled: bool,
     pub qa: Option<ShortcutBinding>,
     pub quick_note: Option<ShortcutBinding>,
     pub translation: ShortcutBinding,
@@ -79,6 +81,7 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
         Self {
             dictation: preferences.dictation_hotkey.clone(),
             dictation_mode: preferences.hotkey.mode,
+            enter_stop_enabled: preferences.enter_stop_enabled,
             qa: preferences.qa_hotkey.clone(),
             quick_note: preferences.quick_note_hotkey.clone(),
             translation: preferences.translation_hotkey.clone(),
@@ -252,6 +255,21 @@ mod tests {
             windows_show_openless_in_keyboard_list: show,
             ..UserPreferences::default()
         }
+    }
+
+    #[test]
+    fn hotkey_runtime_target_carries_enter_stop_and_defaults_legacy_payloads_off() {
+        let mut preferences = preferences(WindowsInsertionMode::Tsf, true);
+        assert!(!HotkeyRuntimeTarget::from(&preferences).enter_stop_enabled);
+
+        preferences.enter_stop_enabled = true;
+        let target = HotkeyRuntimeTarget::from(&preferences);
+        assert!(target.enter_stop_enabled);
+
+        let mut legacy = serde_json::to_value(&target).unwrap();
+        legacy.as_object_mut().unwrap().remove("enterStopEnabled");
+        let restored: HotkeyRuntimeTarget = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.enter_stop_enabled);
     }
 
     #[test]

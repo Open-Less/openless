@@ -1451,6 +1451,9 @@ export const ko: typeof zhCN = {
       modeToggle: '토글 방식',
       modeHold: '눌러서 말하기',
       modeAuto: '자동',
+      enterStopLabel: 'Enter로 녹음 종료',
+      enterStopDesc:
+        '기본적으로 꺼져 있으며 토글 모드에서만 동작합니다. 보조 키 없이 Enter(숫자 키패드 포함)를 누르면 녹음을 종료하고 전사를 시작합니다. 녹음 단축키로 종료하거나 Esc로 취소하는 동작도 유지됩니다.',
       silenceAutoStopLabel: '침묵 시 자동 중지',
       silenceAutoStopDesc:
         '토글 모드에서만 동작합니다. 음성이 감지된 후 선택한 시간 동안 침묵이 이어지면 녹음을 자동으로 종료하고 제출합니다. 말을 전혀 하지 않으면 10초 후 취소됩니다. 기본적으로 꺼져 있으며, 두 번째 키 누름으로 중지하고 Esc로 취소하는 동작은 그대로 유지됩니다.',

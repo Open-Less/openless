@@ -134,6 +134,7 @@ pub struct LinuxHost {
     backend: std::sync::Arc<OpenLessBackend>,
     settings_runtime: std::sync::Arc<dyn SettingsRuntime>,
     translation_pending: std::sync::atomic::AtomicBool,
+    enter_stop_suppressed: std::sync::atomic::AtomicBool,
     less_computer_voice: std::sync::Arc<std::sync::Mutex<LinuxLessComputerCaptureState>>,
 }
 
@@ -302,6 +303,7 @@ impl LinuxHost {
             backend,
             settings_runtime,
             translation_pending: std::sync::atomic::AtomicBool::new(false),
+            enter_stop_suppressed: std::sync::atomic::AtomicBool::new(false),
             less_computer_voice: std::sync::Arc::new(std::sync::Mutex::new(
                 LinuxLessComputerCaptureState::default(),
             )),
@@ -372,6 +374,76 @@ impl LinuxHost {
         }
     }
 
+    pub fn set_enter_stop_suppressed(&self, suppressed: bool) {
+        self.enter_stop_suppressed
+            .store(suppressed, std::sync::atomic::Ordering::Release);
+        self.sync_dictation_enter_stop();
+    }
+
+    pub fn sync_dictation_enter_stop(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            if !crate::hotkeys::listener_active() {
+                return;
+            }
+            static SESSION: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+            static UNSUPPORTED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if UNSUPPORTED.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            let snapshot = self.backend.snapshot();
+            let preferences = self.backend.get_preferences();
+            let active = preferences.enter_stop_enabled
+                && !self
+                    .enter_stop_suppressed
+                    .load(std::sync::atomic::Ordering::Acquire)
+                && preferences.hotkey.mode
+                    == openless_core::shared_types::HotkeyMode::Toggle
+                && !matches!(
+                    self.backend.dictation_output_target(),
+                    Some(
+                        openless_core::DictationOutputTarget::Qa
+                            | openless_core::DictationOutputTarget::VoiceEdit
+                    )
+                )
+                && matches!(
+                    snapshot.dictation.phase,
+                    DictationPhase::Starting | DictationPhase::Recording
+                );
+            let next = if active {
+                snapshot
+                    .dictation
+                    .session_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let generation = crate::hotkeys::listener_generation();
+            let previous = {
+                let mut current = SESSION.lock().expect("Enter-stop session lock poisoned");
+                if current
+                    .as_ref()
+                    .is_some_and(|(cached_generation, cached)| {
+                        *cached_generation == generation && cached == &next
+                    })
+                {
+                    return;
+                }
+                current.replace((generation, next.clone()))
+            };
+            if let Err(error) = crate::fcitx5::set_dictation_enter_stop_session(&next) {
+                *SESSION.lock().expect("Enter-stop session lock poisoned") = previous;
+                if error.message.contains("Unknown method")
+                    || error.message.contains("UnknownMethod")
+                {
+                    UNSUPPORTED.store(true, std::sync::atomic::Ordering::Release);
+                }
+                log::debug!("[fcitx] could not update Enter stop session: {error}");
+            }
+        }
+    }
     /// Route fcitx5 dictation and QA signals through core use-cases. Selection
     /// and translation signals remain observable because their host capture and
     /// arming adapters are injected independently from the UI.
@@ -396,7 +468,8 @@ impl LinuxHost {
                 let translation_requested = self
                     .translation_pending
                     .swap(false, std::sync::atomic::Ordering::AcqRel);
-                self.backend
+                let result = self
+                    .backend
                     .dispatch_dictation_hotkey_edge_with_options(
                         DictationHotkeyEdge::Pressed { press_id, at },
                         DictationStartOptions {
@@ -406,18 +479,60 @@ impl LinuxHost {
                         },
                     )
                     .await
-                    .map(Some)
+                    .map(Some);
+                self.sync_dictation_enter_stop();
+                result
             }
-            LinuxHotkeyEvent::DictationReleased { press_id, at, .. } => self
-                .backend
-                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id, at })
-                .await
-                .map(Some),
-            LinuxHotkeyEvent::DictationCombined { press_id, at, .. } => self
-                .backend
-                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
-                .await
-                .map(Some),
+            LinuxHotkeyEvent::DictationReleased { press_id, at, .. } => {
+                let result = self
+                    .backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id, at })
+                    .await
+                    .map(Some);
+                self.sync_dictation_enter_stop();
+                result
+            }
+            LinuxHotkeyEvent::DictationEnterStopRequested { session_id } => {
+                let preferences = self.backend.get_preferences();
+                let snapshot = self.backend.snapshot();
+                let active = preferences.enter_stop_enabled
+                    && !self
+                        .enter_stop_suppressed
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    && preferences.hotkey.mode
+                        == openless_core::shared_types::HotkeyMode::Toggle
+                    && !matches!(
+                        self.backend.dictation_output_target(),
+                        Some(
+                            openless_core::DictationOutputTarget::Qa
+                                | openless_core::DictationOutputTarget::VoiceEdit
+                        )
+                    )
+                    && matches!(
+                        snapshot.dictation.phase,
+                        DictationPhase::Starting | DictationPhase::Recording
+                    )
+                    && snapshot.dictation.session_id == Some(session_id);
+                let result = if active {
+                    self.backend
+                        .stop_dictation_session(session_id)
+                        .await
+                        .map(|_| None)
+                } else {
+                    Ok(None)
+                };
+                self.sync_dictation_enter_stop();
+                result
+            }
+            LinuxHotkeyEvent::DictationCombined { press_id, at, .. } => {
+                let result = self
+                    .backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
+                    .await
+                    .map(Some);
+                self.sync_dictation_enter_stop();
+                result
+            }
             LinuxHotkeyEvent::QuickNotePressed => Ok(None), // Host toggles the permanent recording.
             LinuxHotkeyEvent::QaPressed => {
                 // 用户报「选区助手快捷键打不开」时，这一行 + 宿主的 ShowQa/HideQa

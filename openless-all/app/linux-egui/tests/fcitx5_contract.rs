@@ -44,9 +44,29 @@ fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
             .expect("emit fcitx5 contract signal");
         assert!(status.success());
     }
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    let status = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--type=signal",
+            "/openless",
+            "org.fcitx.Fcitx.OpenLess1.DictationEnterStopRequested",
+            "string:00000000-0000-0000-0000-000000000001",
+        ])
+        .status()
+        .expect("emit fcitx5 Enter-stop signal");
+    assert!(status.success());
     let mut events = Vec::new();
-    assert_eq!(listener.drain(|event| events.push(event)), 7);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        listener.drain(|event| events.push(event));
+        assert!(listener.take_error().is_none());
+        if events.len() >= 8 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "fcitx5 signals did not arrive");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(events.len(), 8);
     assert!(matches!(
         events[0],
         openless_linux_egui::LinuxHotkeyEvent::DictationPressed { .. }
@@ -74,6 +94,10 @@ fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
     assert!(matches!(
         events[6],
         openless_linux_egui::LinuxHotkeyEvent::TranslationPressed { .. }
+    ));
+    assert!(matches!(
+        events[7],
+        openless_linux_egui::LinuxHotkeyEvent::DictationEnterStopRequested { .. }
     ));
     drop(listener);
 

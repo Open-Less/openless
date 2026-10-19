@@ -183,6 +183,22 @@ impl OpenLessEguiApp {
                     self.pending_local_hotkeys
                         .push((std::time::Instant::now(), edge));
                 }
+                WindowToHost::EnterStopRequested { session_id, .. } => {
+                    if let (Some(native), Ok(id)) =
+                        (self.native.as_ref(), uuid::Uuid::parse_str(&session_id))
+                    {
+                        let host = native.host_arc();
+                        self.spawn(async move {
+                            host.dispatch_hotkey_event(
+                                LinuxHotkeyEvent::DictationEnterStopRequested {
+                                    session_id: openless_core::SessionId::from_uuid(id),
+                                },
+                            )
+                            .await?;
+                            Ok(String::new())
+                        });
+                    }
+                }
                 WindowToHost::Ping { sequence } => {
                     self.pending_ui_pongs.push(sequence);
                 }
@@ -341,6 +357,8 @@ pub(super) struct UiClientApp {
     exited: bool,
     /// 宿主下发的本地热键配置（窗口有焦点时插件收不到按键）。
     hotkeys: Option<openless_core::HotkeyRuntimeTarget>,
+    enter_stop_session: Option<String>,
+    enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher,
     hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher,
     /// 本地热键边沿的发送序号（与动作序号分开，便于日志区分）。
     hotkey_sequence: u64,
@@ -371,6 +389,8 @@ impl UiClientApp {
             latency_samples: Vec::new(),
             exited: false,
             hotkeys: None,
+            enter_stop_session: None,
+            enter_stop_matcher: crate::ui::local_hotkeys::EnterStopMatcher::default(),
             hotkey_matcher: crate::ui::local_hotkeys::LocalHotkeyMatcher::default(),
             hotkey_sequence: 0,
         }
@@ -410,7 +430,12 @@ impl UiClientApp {
                     self.client.shutdown();
                     break;
                 }
-                Ok(HostToWindow::Hotkeys { bindings, .. }) => {
+                Ok(HostToWindow::Hotkeys {
+                    bindings,
+                    enter_stop_session,
+                    ..
+                }) => {
+                    self.enter_stop_session = enter_stop_session;
                     // 窗口有焦点时 fcitx5 收不到按键，本地匹配全靠这份配置。
                     log::info!("[ui-client] local hotkey bindings received");
                     self.hotkeys = Some(*bindings);
@@ -462,6 +487,19 @@ impl UiClientApp {
     /// 只读 `InputState`（不消费事件），命中才发一帧；正在录制快捷键时跳过，
     /// 否则用户在设置里录「Alt+A」会顺手触发一次听写。
     pub(super) fn poll_local_hotkeys(&mut self, ctx: &egui::Context) {
+        let eligible = self
+            .enter_stop_session
+            .as_deref()
+            .filter(|_| self.view_model.shortcut_recording.is_none());
+        if let Some(session_id) = self.enter_stop_matcher.poll(ctx, eligible) {
+            self.hotkey_sequence += 1;
+            if let Err(error) = self.client.send(WindowToHost::EnterStopRequested {
+                sequence: self.hotkey_sequence,
+                session_id,
+            }) {
+                log::warn!("[ui-client] cannot forward Enter stop: {error}");
+            }
+        }
         let Some(bindings) = self.hotkeys.as_ref() else {
             return;
         };

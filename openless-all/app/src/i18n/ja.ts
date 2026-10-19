@@ -1463,6 +1463,9 @@ export const ja: typeof zhCN = {
       modeToggle: 'トグル式',
       modeHold: '押し続けて話す',
       modeAuto: '自動',
+      enterStopLabel: 'Enter で録音を終了',
+      enterStopDesc:
+        '既定ではオフで、トグルモードのみ有効です。修飾キーなしの Enter（テンキーを含む）で録音を終了して文字起こしを開始します。録音ショートカットでの終了と Esc でのキャンセルも引き続き使えます。',
       silenceAutoStopLabel: '無音で自動停止',
       silenceAutoStopDesc:
         'トグルモードのみ有効。音声を検出した後、無音が選択した時間続いたら録音を自動停止して送信します。一度も話さない場合は10秒後にキャンセル。既定ではオフで、2回目のキー押下による停止と Esc によるキャンセルは引き続き有効です。',

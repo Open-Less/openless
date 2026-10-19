@@ -153,6 +153,8 @@ pub struct SyncPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub silence_auto_stop_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub enter_stop_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silence_auto_stop_seconds: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_overview_activity_heatmap: Option<bool>,

@@ -816,6 +816,47 @@ pub(crate) fn set_raw_hotkey(
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn set_dictation_enter_stop_session(session_id: &str) -> Result<(), BackendError> {
+    use dbus::blocking::BlockingSender;
+
+    // The addon binds its gate to this connection's lifetime, not a one-shot RPC.
+    static CONNECTION: std::sync::OnceLock<
+        std::sync::Mutex<Option<dbus::blocking::SyncConnection>>,
+    > = std::sync::OnceLock::new();
+    let mut slot = CONNECTION
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map_err(|_| platform_error("Enter-stop DBus connection lock poisoned".to_string()))?;
+    if slot.is_none() {
+        *slot = Some(dbus::blocking::SyncConnection::new_session().map_err(dbus_error)?);
+    }
+    let message = dbus::Message::new_method_call(
+        DESTINATION,
+        OBJECT_PATH,
+        INTERFACE,
+        "SetDictationEnterStopSession",
+    )
+    .map_err(|error| platform_error(format!("failed to build Enter-stop call: {error}")))?
+    .append1(session_id);
+    let result = slot
+        .as_ref()
+        .expect("Enter-stop connection initialized")
+        .send_with_reply_and_block(message, TIMEOUT);
+    if result.is_err() {
+        *slot = None;
+    }
+    result.map(|_| ()).map_err(dbus_error)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn set_dictation_enter_stop_session(_: &str) -> Result<(), BackendError> {
+    Err(BackendError::new(
+        BackendErrorCode::Unsupported,
+        "fcitx5 hotkeys are only available on Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn set_custom_dictation_trigger(key: &str) -> Result<(), BackendError> {
     send_message("SetCustomDictationTrigger", |message| message.append1(key))
 }

@@ -55,6 +55,7 @@ export let mockSettings: UserPreferences = {
   lowLatencyDictationEnabled: false,
   audioEnhancementEnabled: false,
   audioCueOnRecord: true,
+  enterStopEnabled: false,
   silenceAutoStopEnabled: false,
   silenceAutoStopSeconds: 3,
   microphoneDeviceName: '',

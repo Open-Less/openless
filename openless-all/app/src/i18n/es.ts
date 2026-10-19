@@ -1497,6 +1497,9 @@ export const es: typeof zhCN = {
       modeToggle: 'Alternar',
       modeHold: 'Mantener para hablar',
       modeAuto: 'Automático',
+      enterStopLabel: 'Detener la grabación con Enter',
+      enterStopDesc:
+        'Desactivado de forma predeterminada; solo en modo Alternar. Enter sin modificadores (incluido el teclado numérico) detiene la grabación e inicia la transcripción. El atajo sigue deteniendo y Esc sigue cancelando.',
       silenceAutoStopLabel: 'Detener tras un silencio',
       silenceAutoStopDesc:
         'Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes seguir pulsando el atajo o Esc.',

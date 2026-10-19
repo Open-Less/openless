@@ -151,6 +151,9 @@ impl OpenLessEguiApp {
                 preferences.stable_transcription_enabled =
                     !preferences.stable_transcription_enabled;
             }
+            frontend::view_model::SettingsField::EnterStopEnabled => {
+                preferences.enter_stop_enabled = !preferences.enter_stop_enabled;
+            }
             frontend::view_model::SettingsField::StartMinimized => {
                 preferences.start_minimized = !preferences.start_minimized;
             }
@@ -327,6 +330,9 @@ impl OpenLessEguiApp {
                 &[&error.to_string()],
             ));
             self.frontend_vm.shortcut_recording = None;
+            if let Some(native) = &self.native {
+                native.host().set_enter_stop_suppressed(false);
+            }
             return;
         }
         // 修饰键触发（按住说话）照常保存：插件只观察不吞修饰键，
@@ -338,6 +344,9 @@ impl OpenLessEguiApp {
             .map(|pack| pack.id.clone());
         let Some(preferences) = self.preferences.as_mut() else {
             self.frontend_vm.shortcut_recording = None;
+            if let Some(native) = &self.native {
+                native.host().set_enter_stop_suppressed(false);
+            }
             self.frontend_vm.shortcut_pending_modifier = None;
             return;
         };
@@ -374,6 +383,9 @@ impl OpenLessEguiApp {
         }
 
         self.frontend_vm.shortcut_recording = None;
+        if let Some(native) = &self.native {
+            native.host().set_enter_stop_suppressed(false);
+        }
         self.frontend_vm.shortcut_menu = None;
         self.save_settings_if_dirty();
     }

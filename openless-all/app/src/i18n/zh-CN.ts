@@ -1406,6 +1406,9 @@ export const zhCN = {
       modeToggle: '切换式',
       modeHold: '按住说话',
       modeAuto: '自动',
+      enterStopLabel: '按 Enter 结束录音',
+      enterStopDesc:
+        '默认关闭，仅切换式录音生效。开启后，按不带修饰键的 Enter（含小键盘回车）结束录音并开始转写；再次按录音快捷键仍可结束，Esc 仍为取消。',
       silenceAutoStopLabel: '静音后自动停止',
       silenceAutoStopDesc:
         '仅切换模式生效。检测到语音后，连续静音达到所选时长即自动结束并提交；一直没说话则 10 秒后取消。默认关闭；第二次按键停止和 Esc 取消仍然有效。',

@@ -2085,6 +2085,26 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.recording.enter_stop_desc",
+        text: row(
+            "默认关闭，仅切换式录音生效。开启后，按不带修饰键的 Enter（含小键盘回车）结束录音并开始转写；再次按录音快捷键仍可结束，Esc 仍为取消。",
+            "預設關閉，僅切換式錄音生效。開啟後，按不帶修飾鍵的 Enter（含小鍵盤 Enter）結束錄音並開始轉寫；再次按錄音快捷鍵仍可結束，Esc 仍為取消。",
+            "Off by default; applies only in Toggle mode. When enabled, bare Enter (including keypad Enter) stops recording and starts transcription; the recording hotkey and Esc keep their existing behavior.",
+            "デフォルトはオフで、トグル式録音のみ有効です。有効にすると、修飾キーなしの Enter（テンキー Enter を含む）で録音を終了して文字起こしを開始します。録音ショートカットと Esc の動作は変わりません。",
+            "기본값은 꺼져 있으며 토글 방식에서만 적용됩니다. 켜면 수정 키 없는 Enter(키패드 Enter 포함)로 녹음을 끝내고 전사를 시작합니다. 녹음 단축키와 Esc 동작은 유지됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.enter_stop_label",
+        text: row(
+            "按 Enter 结束录音",
+            "按 Enter 結束錄音",
+            "Press Enter to stop recording",
+            "Enter で録音を終了",
+            "Enter로 녹음 종료",
+        ),
+    },
+    Msg {
         key: "settings.recording.mode_label",
         text: row("录音方式", "錄音方式", "Trigger mode", "録音方式", "녹음 방식"),
     },

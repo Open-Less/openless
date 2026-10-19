@@ -367,6 +367,8 @@ export interface UserPreferences {
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
+  /** Opt-in Enter-to-stop for desktop Toggle recording; disabled by default. */
+  enterStopEnabled: boolean;
   /** Toggle mode "auto-stop after speech" (issue #860). Off by default; when on, speech followed by
    *  silenceAutoStopSeconds of continuous silence auto-stops and submits; 10 seconds of no speech cancels. */
   silenceAutoStopEnabled: boolean;

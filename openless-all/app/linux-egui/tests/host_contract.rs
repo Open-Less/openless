@@ -366,7 +366,21 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
         events.try_recv().unwrap().kind,
         BackendEventKind::PreferencesChanged(_)
     ));
+    let mut enter_only = backend.get_preferences();
+    enter_only.enter_stop_enabled = true;
+    host.update_settings_strict(enter_only, backend.snapshot().preferences_revision)
+        .expect("Enter preference must not require native hotkey re-registration");
+    assert_eq!(
+        effects.hotkeys.lock().unwrap().len(),
+        1,
+        "changing only Enter-stop must not re-register fcitx hotkeys"
+    );
+    assert!(matches!(
+        events.try_recv().unwrap().kind,
+        BackendEventKind::PreferencesChanged(_)
+    ));
     let revision = backend.snapshot().preferences_revision;
+    let saved = backend.get_preferences();
     let saved_json = serde_json::to_value(&saved).unwrap();
     let mut conflicting = saved.clone();
     conflicting.translation_hotkey = conflicting.dictation_hotkey.clone();

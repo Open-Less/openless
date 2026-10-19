@@ -1476,6 +1476,9 @@ export const en: typeof zhCN = {
       modeToggle: 'Toggle',
       modeHold: 'Push-to-talk',
       modeAuto: 'Auto',
+      enterStopLabel: 'Press Enter to stop recording',
+      enterStopDesc:
+        'Off by default; Toggle mode only. Press unmodified Enter (including numpad Enter) to stop and transcribe. The recording hotkey still stops, and Esc still cancels.',
       silenceAutoStopLabel: 'Auto-stop after silence',
       silenceAutoStopDesc:
         'Toggle only. After speech is detected, recording stops and submits automatically once silence lasts the chosen duration. Off by default; a second hotkey press and Esc still work.',

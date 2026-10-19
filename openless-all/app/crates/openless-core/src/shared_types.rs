@@ -436,6 +436,10 @@ pub struct UserPreferences {
     /// is unaffected.
     #[serde(default)]
     pub silence_auto_stop_enabled: bool,
+    /// Allow Enter to stop and commit a toggle-mode recording. Default off;
+    /// push-to-talk and other recording modes are unaffected.
+    #[serde(default)]
+    pub enter_stop_enabled: bool,
     /// Continuous-silence threshold after speech, in seconds. Options 1 / 1.5 / 2 / 3 / 4 / 5, default 3.
     #[serde(default = "default_silence_auto_stop_seconds")]
     pub silence_auto_stop_seconds: f32,
@@ -1000,6 +1004,8 @@ struct UserPreferencesWire {
     audio_cue_on_record: bool,
     #[serde(default)]
     silence_auto_stop_enabled: bool,
+    #[serde(default)]
+    enter_stop_enabled: bool,
     #[serde(default = "default_silence_auto_stop_seconds")]
     silence_auto_stop_seconds: f32,
     #[serde(default)]
@@ -1263,6 +1269,7 @@ impl Default for UserPreferencesWire {
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
+            enter_stop_enabled: prefs.enter_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
@@ -1474,6 +1481,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
+            enter_stop_enabled: wire.enter_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
@@ -1858,6 +1866,7 @@ impl Default for UserPreferences {
             low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
+            enter_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
@@ -3897,6 +3906,39 @@ mod capsule_transcript_preferences_tests {
                 .unwrap()
                 .capsule_transcript_font_size,
             12
+        );
+    }
+}
+
+#[cfg(test)]
+mod enter_stop_preference_tests {
+    use super::*;
+
+    #[test]
+    fn enter_stop_defaults_off() {
+        assert!(!UserPreferences::default().enter_stop_enabled);
+    }
+
+    #[test]
+    fn legacy_preferences_missing_enter_stop_default_off() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value.as_object_mut().unwrap().remove("enterStopEnabled");
+        let preferences: UserPreferences = serde_json::from_value(value).unwrap();
+        assert!(!preferences.enter_stop_enabled);
+    }
+
+    #[test]
+    fn enabled_enter_stop_roundtrips_with_camel_case_wire_key() {
+        let preferences = UserPreferences {
+            enter_stop_enabled: true,
+            ..UserPreferences::default()
+        };
+        let value = serde_json::to_value(&preferences).unwrap();
+        assert_eq!(value["enterStopEnabled"], true);
+        assert!(
+            serde_json::from_value::<UserPreferences>(value)
+                .unwrap()
+                .enter_stop_enabled
         );
     }
 }

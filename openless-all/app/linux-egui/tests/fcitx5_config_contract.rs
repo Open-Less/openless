@@ -89,3 +89,67 @@ fn the_host_never_rewrites_the_input_method_configuration() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn enter_stop_contract_keeps_the_native_gate_and_gesture_guard() {
+    let root = crate_root();
+    let source = std::fs::read_to_string(
+        root.join("../../scripts/linux-fcitx5-plugin/openless.cpp"),
+    )
+    .expect("fcitx5 plugin source");
+    for required in [
+        "SetDictationEnterStopSession",
+        "DictationEnterStopRequested",
+        "currentMessage()",
+        "NameOwnerChanged",
+        "enterStopOwnerWatch_",
+        "nextOwner.empty()",
+        "bus()->isOpen()",
+        "enterHeld_",
+        "keypadEnterHeld_",
+        "enterStopGesture_",
+        "keypadEnterStopGesture_",
+        "enterStopArmed_",
+        "keypadEnterStopArmed_",
+        "isReturn(sym)",
+        "sym == 0xff0d || sym == 0xff8d",
+        "keyEvent.filterAndAccept();",
+    ] {
+        assert!(
+            source.contains(required),
+            "fcitx5 Enter-stop implementation lost required guard: {required}"
+        );
+    }
+}
+
+#[test]
+fn enter_stop_linux_paths_require_opt_in_and_preserve_the_gesture_boundary() {
+    let root = crate_root();
+    let host = std::fs::read_to_string(root.join("src/lib.rs")).expect("Linux host source");
+    let popup = std::fs::read_to_string(root.join("src/main.rs")).expect("Linux app source");
+    let protocol =
+        std::fs::read_to_string(root.join("src/popup.rs")).expect("popup protocol source");
+    for required in [
+        "preferences.enter_stop_enabled",
+        "HotkeyMode::Toggle",
+        "DictationPhase::Starting",
+        "DictationPhase::Recording",
+        "DictationOutputTarget::VoiceEdit",
+        "DictationOutputTarget::Qa",
+        "StopDictationFromEnter",
+        "enter_stop_suppressed",
+        "enter_stop_session",
+        "ShortcutRecording",
+        "modifiers",
+        "enter_stop_matcher",
+    ] {
+        assert!(
+            host.contains(required) || popup.contains(required) || protocol.contains(required),
+            "Linux Enter-stop path lost required guard: {required}"
+        );
+    }
+    assert!(
+        host.contains("snapshot.dictation.session_id == Some(session_id)"),
+        "fcitx Enter-stop must validate the captured session before stopping"
+    );
+}
