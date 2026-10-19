@@ -535,6 +535,19 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
+      - name: Build the Windows TSF input method
+        # The TSF DLL has its own vcxproj and is not part of the Tauri build, so
+        # nothing else in CI ever compiles it. A compile error here would
+        # otherwise only surface on a Windows machine with Visual Studio.
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-version: '17.x'
+      - name: Compile the TSF IME (x64, Release)
+        if: runner.os == 'Windows'
+        working-directory: openless-all/app/windows-ime
+        run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+
       - name: Verify version sync across all 5 files
         # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
         # across shells. Fail immediately on version drift instead of discovering it at release.
