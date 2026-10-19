@@ -371,7 +371,7 @@ OpenLess 的润色模型只重塑文本。它不回答问题、不执行任务�
 
 ……而不是一份缺失功能的清单。
 
-长期参考改写的 `raw → polished → rule` 三元组格式见 [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl)。该文件说明参考数据格式；当前模块职责见[架构文档](docs/architecture.md)。
+长期参考改写的 `raw → polished → rule` 三元组格式见 [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl)。该文件说明参考数据格式；当前模块职责见[架构文档](docs/architecture.md)。
 
 ## 词典
 

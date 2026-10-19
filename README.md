@@ -364,7 +364,7 @@ What features does this app still need?
 
 …not a list of missing features.
 
-Long-term reference rewrites are represented as `raw → polished → rule` triples in [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl). The sample format describes reference data; current module responsibilities are documented in [Architecture](docs/architecture.md).
+Long-term reference rewrites are represented as `raw → polished → rule` triples in [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl). The sample format describes reference data; current module responsibilities are documented in [Architecture](docs/architecture.md).
 
 ## Dictionary
 

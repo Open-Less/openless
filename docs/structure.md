@@ -6,12 +6,11 @@
 
 ```text
 openless-src/                     Git 仓库、分支与发布边界
-├── docs/                         架构、合同说明、平台交接与已知缺口
+├── docs/                         架构、合同说明、平台交接、已知缺口与参考样例
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
 ├── .github/workflows/            CI、Tauri / Android / Linux / HarmonyOS 发布
 ├── Casks/                        Homebrew 分发定义
-├── Examples/                     示例数据
 ├── assets/                       产品展示材料
 ├── scripts/                      仓库级辅助脚本（版本号同步等）
 └── openless-all/
@@ -27,6 +26,7 @@ openless-src/                     Git 仓库、分支与发布边界
         ├── android/              Kotlin / AIDL / manifest / 前端片段
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
+        ├── .cargo/config.toml    Windows GNU 目标的 linker flag（cdylib 符号导出）
         ├── scripts/              构建、平台检查与合同测试
         └── public/               Vite 静态资源
 ```
