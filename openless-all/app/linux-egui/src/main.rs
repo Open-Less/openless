@@ -11298,11 +11298,14 @@ Internal flags (set by OpenLess itself, not for regular use):
                 )),
                 ..Default::default()
             };
-            let waiting = app.layer_frame(&ctx, raw(), false);
+            // 无 GPU 提交的测试要清掉纹理增量，避免析构掩盖断言结果。
+            let mut waiting = app.layer_frame(&ctx, raw(), false);
+            waiting.output.textures_delta.clear();
             assert!(!waiting.exit);
             assert!(waiting.output.shapes.is_empty());
             tx.send(vocab_card_message("card", 1)).unwrap();
-            let visible = app.layer_frame(&ctx, raw(), false);
+            let mut visible = app.layer_frame(&ctx, raw(), false);
+            visible.output.textures_delta.clear();
             assert!(!visible.exit);
             assert!(!visible.output.shapes.is_empty());
             for (session_id, sequence) in [("card", 1), ("old-card", 2)] {
@@ -11312,7 +11315,9 @@ Internal flags (set by OpenLess itself, not for regular use):
                     sequence,
                 })
                 .unwrap();
-                assert!(!app.layer_frame(&ctx, raw(), false).exit);
+                let mut frame = app.layer_frame(&ctx, raw(), false);
+                frame.output.textures_delta.clear();
+                assert!(!frame.exit);
             }
             tx.send(HostToPopup::Hide {
                 version: POPUP_PROTOCOL_VERSION,
@@ -11320,7 +11325,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 sequence: 2,
             })
             .unwrap();
-            let hidden = app.layer_frame(&ctx, raw(), false);
+            let mut hidden = app.layer_frame(&ctx, raw(), false);
+            hidden.output.textures_delta.clear();
             assert!(hidden.exit);
             assert!(!app.state.visible);
             assert!(hidden.output.shapes.is_empty());
