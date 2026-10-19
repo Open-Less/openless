@@ -339,6 +339,18 @@ jobs:
         # The frontend half of the HAP: same sources, harmony platform flag,
         # relative base for the rawfile origin.
         run: npm run build -- --base=./ --outDir=dist-harmony
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Tier-2 OHOS target; `rustup target list` above lists it for stable.
+          targets: aarch64-unknown-linux-ohos
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          # The HAP embeds a release cdylib; keep its own key so the debug trees
+          # of the other jobs do not evict it.
+          key: harmony-host
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
       - name: Cache the HarmonyOS toolchain
         # The official command-line tools, downloaded from the public mirror that
         # `prepare-harmony-sdk.sh` pins by checksum. No Huawei account is involved,

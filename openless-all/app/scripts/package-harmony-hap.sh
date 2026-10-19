@@ -33,6 +33,14 @@ SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/
 CACHE_ROOT="${OPENLESS_CACHE_ROOT:-$APP_ROOT/target/harmony-cache}"
 OUTPUT="${OPENLESS_HARMONY_OUTPUT:-$APP_ROOT/target/harmony-packages}"
 
+# The command-line tools ship their own `hvigorw` and node; put them on PATH up
+# front so the version stamp, `ohpm` and `hvigorw` are all found without relying
+# on the caller's environment.
+if [ -x "$TOOLCHAIN/bin/hvigorw" ]; then
+  PATH="$TOOLCHAIN/bin:$TOOLCHAIN/tool/node/bin:$PATH"
+  export PATH
+fi
+
 [ -d "$TOOLCHAIN/sdk" ] || {
   echo "missing HarmonyOS SDK at $TOOLCHAIN (set OPENLESS_HARMONY_TOOLCHAIN)" >&2
   exit 1
