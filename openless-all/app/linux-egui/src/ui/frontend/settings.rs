@@ -2717,7 +2717,7 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                             });
                             if !held || vm.settings_notice.is_some() {
                                 ui.data_mut(|data| {
-                                    data.remove_temp::<ChannelDrag>(egui::Id::new(
+                                    data.remove::<ChannelDrag>(egui::Id::new(
                                         "openless-settings-channel-drag",
                                     ))
                                 });
@@ -3459,7 +3459,7 @@ fn channel_row(
                     });
                 }
                 if handle.drag_stopped() {
-                    ui.data_mut(|data| data.remove_temp::<ChannelDrag>(drag_id));
+                    ui.data_mut(|data| data.remove::<ChannelDrag>(drag_id));
                 }
 
                 ui.vertical(|ui| {
