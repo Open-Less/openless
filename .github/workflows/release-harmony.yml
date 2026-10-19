@@ -61,7 +61,9 @@ jobs:
       # Device-independent: the SDK path can be overridden per runner with a
       # repository variable instead of patching this file.
       OPENLESS_HARMONY_TOOLCHAIN: ${{ vars.HARMONY_TOOLCHAIN }}
-      OPENLESS_HARMONY_SIGNING_DIR: ${{ runner.temp }}/harmony-signing
+      # Empty until the signing step resolves `$RUNNER_TEMP`; the `runner`
+      # context is not available in a job-level `env`, only inside a step.
+      OPENLESS_HARMONY_SIGNING_DIR: ""
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       # Signing material: files are base64 secrets, passwords are plain secrets
@@ -131,11 +133,12 @@ jobs:
         # under `release.*`. The packaging script picks the prefix by channel.
         run: |
           set -euo pipefail
-          dir="$OPENLESS_HARMONY_SIGNING_DIR"
+          dir="$RUNNER_TEMP/harmony-signing"
           prefix="${{ inputs.channel }}"
           rm -rf "$dir"
           mkdir -p "$dir"
           umask 077
+          echo "OPENLESS_HARMONY_SIGNING_DIR=$dir" >> "$GITHUB_ENV"
           for pair in "HARMONY_CERT_BASE64:$prefix.cer" \
                       "HARMONY_PROFILE_BASE64:$prefix.p7b" \
                       "HARMONY_KEYSTORE_BASE64:$prefix.p12"; do
