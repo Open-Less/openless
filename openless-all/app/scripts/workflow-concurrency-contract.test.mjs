@@ -44,15 +44,20 @@ assert.ok(
   workflows.ci.includes("branches: ['**']"),
   'CI must run on every branch push so branch changes receive the quality gate',
 );
+// Release workflows are tag-only: a per-branch push rebuilt a 1-2 GB cache entry
+// on every commit and evicted the beta scope, while `ci.yml` already builds the
+// same trees for the quality gate. A weekly scheduled run keeps them warm.
 for (const [name, source] of [
   ['Android release', workflows.android],
   ['Tauri release', workflows.tauriRelease],
 ]) {
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /branches:\n\s+- '\*\*'/,
-    `${name} workflow must build branch artifacts for provenance-bound testing`,
+    /push:[\s\S]{0,200}branches:/,
+    `${name} workflow must not rebuild on every branch push`,
   );
+  assert.match(source, /schedule:/, `${name} workflow needs a warm-up schedule`);
+  assert.match(source, /tags:[\s\S]{0,40}v\*-tauri/, `${name} workflow must still ship tags`);
 }
 
 console.log('workflow-concurrency-contract.test.mjs passed');
