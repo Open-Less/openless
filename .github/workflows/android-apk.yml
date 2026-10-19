@@ -16,10 +16,14 @@ name: Android APK (debug)
 
 on:
   push:
-    branches:
-      - '**'
+    # Same reasoning as release-tauri: an APK per branch push cost 13-18 minutes
+    # and duplicated the Gradle + Rust trees that `android-check` already keeps
+    # warm. Tags, a weekly smoke build and explicit dispatch cover it.
     tags:
       - 'v*-tauri'
+  schedule:
+    # Monday 05:23 UTC: weekly APK smoke build (debug-grade, not published).
+    - cron: '23 5 * * 1'
   workflow_dispatch:
     inputs:
       abis:

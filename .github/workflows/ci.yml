@@ -268,6 +268,53 @@ jobs:
             -x :app:rustBuildX86_64Debug
             --no-daemon
 
+  # HarmonyOS: the Rust host is covered by `cargo test -p openless-harmony-host`
+  # in the Linux job, and the ArkTS/web side lives here. A full HAP build needs
+  # the Huawei DevEco / ohpm SDK, which is not available on hosted runners, so
+  # this job gates what is reproducible in CI: the shared IPC surface stays in
+  # sync with the code, the ArkTS contracts pass, and the ArkWeb bundle builds.
+  harmony-check:
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    name: Harmony (ArkTS bundle + IPC contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - run: npm ci
+      - name: Shared IPC audit matches the code
+        # The report is committed so the ArkTS coverage is reviewable; a stale
+        # report hides commands that the Harmony host does not implement yet.
+        run: |
+          node scripts/audit-harmony-ipc.mjs
+          git diff --exit-code harmony/ipc-audit.json
+      - name: Harmony ArkTS contracts
+        run: |
+          node scripts/harmony-entry-startup.test.mjs
+          node scripts/harmony-app-dictation.test.mjs
+          node scripts/harmony-voice-configuration.test.mjs
+          node scripts/harmony-panel-layout.test.mjs
+          node scripts/harmony-editor-compat.test.mjs
+          node scripts/harmony-clipboard-history.test.mjs
+          node scripts/harmony-symbol-gesture.test.mjs
+          node scripts/harmony-rime-startup.test.mjs
+      - name: Build the ArkWeb bundle
+        env:
+          VITE_OPENLESS_PLATFORM: harmony
+        # The frontend half of the HAP: same sources, harmony platform flag,
+        # relative base for the rawfile origin.
+        run: npm run build -- --base=./ --outDir=dist-harmony
+
   # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
   # plus the Linux host, fcitx5 and package contracts.

@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 190,
+  "total": 191,
   "wired": 100,
-  "missing": 90,
+  "missing": 91,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -58,7 +58,7 @@
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "rust"
+      "implementation": "arkts"
     },
     {
       "name": "cancel_selection_polish_preview",
@@ -824,6 +824,13 @@
       "implementation": "rust"
     },
     {
+      "name": "open_android_local_migration",
+      "calledFrom": [
+        "src/lib/ipc/local-migration.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "open_external_url",
       "calledFrom": [
         "src/lib/ipc/utils.ts"
@@ -1227,7 +1234,7 @@
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "rust"
+      "implementation": "arkts"
     },
     {
       "name": "start_microphone_level_monitor",
@@ -1255,7 +1262,7 @@
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "rust"
+      "implementation": "arkts"
     },
     {
       "name": "stop_microphone_level_monitor",

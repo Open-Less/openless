@@ -38,4 +38,9 @@ jobs:
           REPO: ${{ github.repository }}
           LIMIT_GB: '8'
         working-directory: openless-all/app
-        run: bash scripts/ci-cache-usage.sh --prune --repo "$REPO" --limit-gb "$LIMIT_GB"
+        # `--keep-family 2` also drops superseded generations inside the branch
+        # scope: only the two newest keys of one (branch, key family) pair stay,
+        # because `restore-keys` never needs more than the previous generation.
+        run: >-
+          bash scripts/ci-cache-usage.sh
+          --prune --keep-family 2 --repo "$REPO" --limit-gb "$LIMIT_GB"
