@@ -194,7 +194,8 @@ pub fn install(ctx: &egui::Context, chosen: openless_linux_egui::typography::UiF
         fonts.font_data.insert(
             name.clone(),
             egui::FontData {
-                font: bytes.into(),
+                // egui 0.37：`font` 由 `Cow<[u8]>` 改成 `Arc<dyn AsRef<[u8]>>`。
+                font: std::sync::Arc::new(bytes),
                 index,
                 tweak: Default::default(),
             }
@@ -233,7 +234,7 @@ pub fn install(ctx: &egui::Context, chosen: openless_linux_egui::typography::UiF
                 fonts.font_data.insert(
                     MEDIUM_FACE.to_owned(),
                     egui::FontData {
-                        font: bytes.into(),
+                        font: std::sync::Arc::new(bytes),
                         index,
                         tweak: Default::default(),
                     }

@@ -254,7 +254,7 @@ pub fn cloud_sync_card(
                 let response = layout::text_input(
                     ui,
                     &mut origin,
-                    egui::Id::new("openless-cloud-sync-origin"),
+                    egui::Id::unique("openless-cloud-sync-origin"),
                     "https://sync.example.com",
                     ui.available_width().min(280.0),
                     false,
@@ -273,7 +273,7 @@ pub fn cloud_sync_card(
                 let response = layout::text_input(
                     ui,
                     &mut token,
-                    egui::Id::new("openless-cloud-sync-token"),
+                    egui::Id::unique("openless-cloud-sync-token"),
                     "",
                     ui.available_width().min(280.0),
                     true,
@@ -349,7 +349,7 @@ pub fn cloud_sync_overlay(
     }
     let lang = vm.lang;
     let state = &vm.cloud_sync;
-    egui::Area::new(egui::Id::new("openless-cloud-sync-dialog"))
+    egui::Area::new(egui::Id::unique("openless-cloud-sync-dialog"))
         .order(egui::Order::Foreground)
         .sense(egui::Sense::click())
         .fixed_pos(body.min)
@@ -588,7 +588,7 @@ fn password_form(
     if layout::text_input(
         ui,
         &mut password,
-        egui::Id::new("openless-cloud-sync-password"),
+        egui::Id::unique("openless-cloud-sync-password"),
         tr_l10n(lang, "cloudSyncE2ee.passwordPolicy"),
         ui.available_width().min(320.0),
         true,
@@ -603,7 +603,7 @@ fn password_form(
         && layout::text_input(
             ui,
             &mut confirmation,
-            egui::Id::new("openless-cloud-sync-confirmation"),
+            egui::Id::unique("openless-cloud-sync-confirmation"),
             tr_l10n(lang, "cloudSyncE2ee.confirmPassword"),
             ui.available_width().min(320.0),
             true,
@@ -646,7 +646,7 @@ fn current_password_row(
     if layout::text_input(
         ui,
         &mut current,
-        egui::Id::new("openless-cloud-sync-current-password"),
+        egui::Id::unique("openless-cloud-sync-current-password"),
         tr_l10n(lang, "cloudSyncE2ee.currentPassword"),
         ui.available_width().min(320.0),
         true,

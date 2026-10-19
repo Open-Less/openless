@@ -668,7 +668,7 @@ pub fn selection_ask(
                     child.set_clip_rect(child.clip_rect().intersect(input_rect));
                     let response = child.add(
                         egui::TextEdit::singleline(composer)
-                            .id(egui::Id::new("openless-qa-composer-input"))
+                            .id(egui::Id::unique("openless-qa-composer-input"))
                             .frame(egui::Frame::NONE)
                             .text_color(theme::INK)
                             .font(egui::FontId::proportional(13.5))
@@ -683,7 +683,7 @@ pub fn selection_ask(
                     }
                     let mic = ui.interact(
                         mic_rect,
-                        ui.id().with("openless-qa-mic"),
+                        ui.scope_id().with("openless-qa-mic"),
                         egui::Sense::click(),
                     );
                     if recording {
@@ -719,7 +719,7 @@ pub fn selection_ask(
                     let can_send = !composer.trim().is_empty() && !thinking;
                     let send = ui.interact(
                         send_rect,
-                        ui.id().with("openless-qa-send"),
+                        ui.scope_id().with("openless-qa-send"),
                         egui::Sense::click(),
                     );
                     ui.painter().circle_filled(
@@ -1233,7 +1233,7 @@ pub fn dictation_capsule(
             // One capsule timeline and one animation clock survive every phase.
             // Only a new recording session resets them.
             let now = ui.input(|input| input.time);
-            let motion_id = egui::Id::new("openless-capsule-motion");
+            let motion_id = egui::Id::unique("openless-capsule-motion");
             let mut motion = ui.ctx().data_mut(|data| {
                 data.get_temp::<capsule_motion::CapsuleMotion>(motion_id)
                     .unwrap_or_default()
@@ -1295,7 +1295,7 @@ pub fn dictation_capsule(
                     );
                     let stop = ui.interact(
                         stop_rect,
-                        ui.id().with("openless-typeless-stop"),
+                        ui.scope_id().with("openless-typeless-stop"),
                         egui::Sense::click(),
                     );
                     round_button(
@@ -1320,7 +1320,7 @@ pub fn dictation_capsule(
                 );
                 let cancel = ui.interact(
                     cancel_rect,
-                    ui.id().with("openless-capsule-cancel"),
+                    ui.scope_id().with("openless-capsule-cancel"),
                     egui::Sense::click(),
                 );
                 let cancel_fill = if typeless {
@@ -1353,7 +1353,7 @@ pub fn dictation_capsule(
                 );
                 let confirm = ui.interact(
                     confirm_rect,
-                    ui.id().with("openless-capsule-confirm"),
+                    ui.scope_id().with("openless-capsule-confirm"),
                     egui::Sense::click(),
                 );
                 let (confirm_fill, confirm_ink) = if typeless {
@@ -1683,7 +1683,7 @@ fn capsule_suggestion_card(
         );
         let reject = ui.interact(
             reject_rect,
-            ui.id().with(("openless-vocab-reject", index)),
+            ui.scope_id().with(("openless-vocab-reject", index)),
             egui::Sense::click(),
         );
         let icon = (reject_rect.width() * 0.46).clamp(9.0, 13.0);
@@ -1701,7 +1701,7 @@ fn capsule_suggestion_card(
         }
         let accept = ui.interact(
             accept_rect,
-            ui.id().with(("openless-vocab-accept", index)),
+            ui.scope_id().with(("openless-vocab-accept", index)),
             egui::Sense::click(),
         );
         round_button(
@@ -2188,7 +2188,7 @@ pub fn less_computer(
             let send = ui
                 .interact(
                     send_rect,
-                    egui::Id::new("less-computer-send"),
+                    egui::Id::unique("less-computer-send"),
                     egui::Sense::click(),
                 )
                 .on_hover_text(tr_l10n(lang, "less_computer.send"));
@@ -2221,13 +2221,13 @@ pub fn less_computer(
             );
             let response = child.add(
                 egui::TextEdit::singleline(composer)
-                    .id(egui::Id::new("less-computer-composer-input"))
+                    .id(egui::Id::unique("less-computer-composer-input"))
                     .hint_text(tr_l10n(lang, "less_computer.input_placeholder"))
                     .font(egui::FontId::proportional(13.5))
                     .text_color(theme::INK)
                     .frame(egui::Frame::NONE)
                     .desired_width(text_rect.width())
-                    .vertical_align(egui::Align::Center),
+                    .align(egui::Align2::CENTER_CENTER),
             );
             let submitted =
                 response.lost_focus() && child.input(|input| input.key_pressed(egui::Key::Enter));

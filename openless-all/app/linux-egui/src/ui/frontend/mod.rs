@@ -101,11 +101,11 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                 #[cfg(test)]
                 ctx.data_mut(|data| {
                     data.insert_temp(
-                        egui::Id::new("main-scroll-measure"),
+                        egui::Id::unique("main-scroll-measure"),
                         (
                             scroll_output.content_size.y,
                             scroll_output.inner_rect.height(),
-                            scroll_output.state.offset.y,
+                            scroll_output.state.clamped_offset().y,
                         ),
                     )
                 });
@@ -121,7 +121,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
             // 否则点「恢复/改密码」弹出的对话框会被设置面板盖住。
             cloud_sync::cloud_sync_overlay(ctx, body, vm, actions);
         } else if vm.settings_saving || vm.settings_save_error.is_some() {
-            egui::Area::new(egui::Id::new("preference-save-state"))
+            egui::Area::new(egui::Id::unique("preference-save-state"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 52.0))
                 .show(ctx, |ui| {
@@ -137,7 +137,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
     // 录制面板在 `recording_panel` 里把自己的矩形记进 memory，这里只负责判定。
     // 进入录制的那一帧就是按下鼠标的那一帧，所以先"武装"一帧再开始判外点。
     if vm.shortcut_recording.is_some() {
-        let id = egui::Id::new("openless-shortcut-recording");
+        let id = egui::Id::unique("openless-shortcut-recording");
         let state = ctx.data(|data| data.get_temp::<(egui::Rect, bool)>(id));
         let pressed = ctx.input(|input| {
             input
@@ -159,7 +159,7 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
     } else {
         // 录制结束后清掉陈旧矩形，避免下次录制首帧读到旧位置。
         ctx.data_mut(|data| {
-            data.remove::<(egui::Rect, bool)>(egui::Id::new("openless-shortcut-recording"))
+            data.remove::<(egui::Rect, bool)>(egui::Id::unique("openless-shortcut-recording"))
         });
     }
 
@@ -205,7 +205,7 @@ fn runtime_warning_overlay(
     let card_height = screen.height().clamp(220.0, 360.0);
     let card = egui::Rect::from_center_size(screen.center(), egui::vec2(card_width, card_height));
 
-    egui::Area::new(egui::Id::new("openless-runtime-warning-overlay"))
+    egui::Area::new(egui::Id::unique("openless-runtime-warning-overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .constrain(false)
@@ -455,7 +455,7 @@ mod tests {
             );
         }
         let heatmap: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-overview-heatmap-rect"))
+            data.get_temp(egui::Id::unique("openless-overview-heatmap-rect"))
                 .expect("populated overview should show the heatmap")
         });
         let content_bottom = layout::body_rect(&ctx).bottom() - layout::PAGE_BOTTOM_PADDING;
@@ -475,7 +475,7 @@ mod tests {
         render(&ctx, &mut vm, &mut Vec::new());
         let _ = end_pass(&ctx);
         let (content, visible, _): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("overview-scroll-measure"))
+            data.get_temp(egui::Id::unique("overview-scroll-measure"))
                 .expect("provider cards plus heatmap must enable page scrolling")
         });
         assert!(
@@ -652,7 +652,7 @@ mod tests {
             active_page: Page::Marketplace,
             ..Default::default()
         };
-        let id = egui::Id::new("openless-marketplace-search");
+        let id = egui::Id::unique("openless-marketplace-search");
         // warm up: egui needs a frame before the widget exists / accepts focus
         for _ in 0..3 {
             ctx.begin_pass(egui::RawInput {
@@ -690,7 +690,7 @@ mod tests {
         };
         let label =
             openless_linux_egui::tr_l10n(zh, "settings.recording.history_max_entries_label");
-        let id = egui::Id::new(("openless-settings-text", label));
+        let id = egui::Id::unique(("openless-settings-text", label));
         // 权限卡现在排在数据卡之前（与 Tauri 同序），留存输入框落到首屏之外。
         // 这个用例验证的是「输入不丢字」，与首屏布局无关，所以放大视口。
         let tall = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 1600.0));
@@ -763,7 +763,7 @@ mod tests {
             ..Default::default()
         };
         // 字段缓冲的键含渠道 id（不同渠道的同一字段互不串味）。
-        let id = egui::Id::new((
+        let id = egui::Id::unique((
             "openless-settings-provider-field",
             "channel",
             "Name".to_string(),
@@ -1132,7 +1132,7 @@ mod tests {
         );
         let (row, recorder) = ctx
             .data(|data| {
-                data.get_temp::<(egui::Rect, egui::Rect)>(egui::Id::new((
+                data.get_temp::<(egui::Rect, egui::Rect)>(egui::Id::unique((
                     "shortcut-row-rects",
                     dictation,
                 )))
@@ -1569,7 +1569,7 @@ mod tests {
     }
 
     /// 回归：连点筛选必须生效，尤其要从某个分类点回「全部」。
-    /// 之前筛选按钮的 id 跟着 `ui.id()` 走，切换分类会改变 auto-id，
+    /// 之前筛选按钮的 id 跟着 `ui.scope_id()` 走，切换分类会改变 auto-id，
     /// 点击落到别的控件上，表现就是「点全部没反应」。
     #[test]
     fn shortcut_filters_switch_and_return_to_all() {
@@ -1586,7 +1586,7 @@ mod tests {
             let rect = ctx
                 .data(|data| {
                     data.get_temp::<std::collections::BTreeMap<(String, String), egui::Rect>>(
-                        egui::Id::new("shortcut-filter-rects"),
+                        egui::Id::unique("shortcut-filter-rects"),
                     )
                 })
                 .and_then(|rects| rects.get(&key).copied());
@@ -2089,7 +2089,7 @@ mod tests {
             render(&ctx, &mut vm, &mut Vec::new());
             let layer = egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("openless-settings-page"),
+                egui::Id::unique("openless-settings-page"),
             );
             let paints_backdrop = ctx.graphics(|graphics| {
                 graphics.get(layer).is_some_and(|list| {
@@ -2109,7 +2109,7 @@ mod tests {
             );
             let card = ctx
                 .data(|data| {
-                    data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
+                    data.get_temp::<egui::Rect>(egui::Id::unique("openless-settings-card-rect"))
                 })
                 .expect("the settings page still publishes its surface rect");
             // 整页：surface 就是内容区本身，不再缩成居中卡片。
@@ -2142,7 +2142,7 @@ mod tests {
                 });
                 render(&ctx, &mut vm, &mut Vec::new());
                 let available: egui::Vec2 = ctx.data(|data| {
-                    data.get_temp(egui::Id::new("content-available-size"))
+                    data.get_temp(egui::Id::unique("content-available-size"))
                         .unwrap()
                 });
                 let expected = layout::body_rect(&ctx).size()
@@ -2176,7 +2176,7 @@ mod tests {
                 let _ = end_pass(&ctx);
             }
             let (list, detail): (egui::Rect, egui::Rect) = ctx.data(|data| {
-                data.get_temp(egui::Id::new("history-column-rects"))
+                data.get_temp(egui::Id::unique("history-column-rects"))
                     .unwrap()
             });
             assert!(
@@ -2232,6 +2232,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             phase: egui::TouchPhase::Move,
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Wheel,
                         });
                     }
                     ctx.begin_pass(egui::RawInput {
@@ -2243,7 +2244,7 @@ mod tests {
                     let _ = end_pass(&ctx);
                 }
                 let (content, visible, offset): (f32, f32, f32) =
-                    ctx.data(|data| data.get_temp(egui::Id::new(measure)).unwrap());
+                    ctx.data(|data| data.get_temp(egui::Id::unique(measure)).unwrap());
                 assert!(
                     content > visible + 10.0,
                     "{page:?} {measure} no scroll extent: {content}/{visible}"
@@ -2290,6 +2291,7 @@ mod tests {
                     delta: egui::vec2(0.0, -180.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
                 });
             }
             frame_with_pointer_routing(
@@ -2304,7 +2306,7 @@ mod tests {
             );
         }
         let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("main-scroll-measure"))
+            data.get_temp(egui::Id::unique("main-scroll-measure"))
                 .expect("the translation page must have a scroll container")
         });
         assert!(
@@ -2387,6 +2389,7 @@ mod tests {
                     delta: egui::vec2(0.0, -180.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
                 });
             }
             let size = if frame >= 4 { small } else { large };
@@ -2402,7 +2405,7 @@ mod tests {
             );
         }
         let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("overview-scroll-measure"))
+            data.get_temp(egui::Id::unique("overview-scroll-measure"))
                 .expect("the overview must offer page scrolling at the minimum size")
         });
         assert!(
@@ -2432,6 +2435,7 @@ mod tests {
                 delta: egui::vec2(0.0, -120.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             }],
             ..Default::default()
         };
@@ -2458,6 +2462,7 @@ mod tests {
                 delta: egui::vec2(0.0, -120.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             }],
             ..Default::default()
         };
@@ -2572,6 +2577,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             phase: egui::TouchPhase::Move,
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Wheel,
                         },
                     ]
                 } else {
@@ -2591,7 +2597,7 @@ mod tests {
                         "main-scroll-measure"
                     };
                     let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-                        data.get_temp(egui::Id::new(id))
+                        data.get_temp(egui::Id::unique(id))
                             .expect("scroll container must exist")
                     });
                     assert!(
@@ -2621,7 +2627,7 @@ mod tests {
             render(ctx, vm, &mut Vec::new());
             let _ = end_pass(ctx);
             ctx.data(|data| {
-                data.get_temp::<(f32, f32, f32)>(egui::Id::new("main-scroll-measure"))
+                data.get_temp::<(f32, f32, f32)>(egui::Id::unique("main-scroll-measure"))
                     .unwrap()
                     .2
             })
@@ -2649,6 +2655,7 @@ mod tests {
                         delta: egui::vec2(0.0, -130.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ],
             );
@@ -2704,7 +2711,7 @@ mod tests {
                 egui::vec2((screen.x - 250.0).max(80.0), (screen.y - 80.0).max(80.0)),
             );
             let mut measured = None;
-            egui::Area::new(egui::Id::new(("translation-layout", index)))
+            egui::Area::new(egui::Id::unique(("translation-layout", index)))
                 .fixed_pos(viewport.min)
                 .show(&ctx, |ui| {
                     ui.set_min_size(viewport.size());
@@ -2721,7 +2728,7 @@ mod tests {
                 });
             let (content, inner) = measured.expect("the page rendered into the area");
             let badge: egui::Rect = ctx.data(|data| {
-                data.get_temp(egui::Id::new("translation-style-badge"))
+                data.get_temp(egui::Id::unique("translation-style-badge"))
                     .expect("translation style has a badge")
             });
             assert!(
@@ -2891,7 +2898,7 @@ mod tests {
                     ctx.layer_id_at(pointer),
                     Some(egui::LayerId::new(
                         egui::Order::Middle,
-                        egui::Id::new("openless-sidebar"),
+                        egui::Id::unique("openless-sidebar"),
                     )),
                     "the sidebar must be the top input layer over its own column"
                 );
@@ -3070,7 +3077,7 @@ mod tests {
 
         // The tile is a 40×40 square flush with the card's right inner edge.
         let published: Vec<(usize, egui::Rect, egui::Rect, String)> = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-style-card-icon-rects")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-style-card-icon-rects")))
             .expect("the style cards must publish their icon tiles");
         assert_eq!(
             published.len(),
@@ -3188,7 +3195,7 @@ mod tests {
             let body = layout::body_rect(&ctx);
             let page = ctx
                 .data(|data| {
-                    data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
+                    data.get_temp::<egui::Rect>(egui::Id::unique("openless-settings-card-rect"))
                 })
                 .expect("the settings page must publish its surface rect");
             let expected = body;
@@ -3246,7 +3253,7 @@ mod tests {
         card_rect_key: &str,
         placement: CardPlacement,
     ) {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area_id));
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(area_id));
         // Areas 用第一帧建立屏幕矩形，第二帧才可查询。
         for _ in 0..2 {
             overlay_frame(ctx, vm, Vec::new());
@@ -3254,10 +3261,10 @@ mod tests {
         let body = layout::body_rect(ctx);
         // 遮罩区就是弹窗 `Area` 自己的矩形（遮罩 + 点击拦截 + 卡片同属它）。
         let overlay = ctx
-            .memory(|mem| mem.area_rect(egui::Id::new(area_id)))
+            .memory(|mem| mem.area_rect(egui::Id::unique(area_id)))
             .unwrap_or_else(|| panic!("{area_id} must exist while the overlay is open"));
         let card = ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(card_rect_key)))
             .unwrap_or_else(|| {
                 panic!("{card_rect_key} must be published while the overlay is open")
             });
@@ -3342,7 +3349,7 @@ mod tests {
             }],
         );
         let after = ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(card_rect_key)))
             .unwrap_or_else(|| panic!("{card_rect_key} must stay published"));
         assert_eq!(
             after, card,
@@ -3409,7 +3416,7 @@ mod tests {
         let body = layout::body_rect(&ctx);
         let card = ctx
             .data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::new("openless-marketplace-mine-card-rect"))
+                data.get_temp::<egui::Rect>(egui::Id::unique("openless-marketplace-mine-card-rect"))
             })
             .expect("the my-packs card rect must be published while open");
         assert!(body.contains_rect(card), "card={card:?} body={body:?}");
@@ -3419,7 +3426,7 @@ mod tests {
             ctx.layer_id_at(card.center()),
             Some(egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("openless-marketplace-mine-modal"),
+                egui::Id::unique("openless-marketplace-mine-modal"),
             ))
         );
     }
@@ -3518,11 +3525,11 @@ mod tests {
         }
         let output = output.unwrap();
         let card: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-style-editor-card-rect"))
+            data.get_temp(egui::Id::unique("openless-style-editor-card-rect"))
                 .unwrap()
         });
         let scroll: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("style-editor-scroll-rect"))
+            data.get_temp(egui::Id::unique("style-editor-scroll-rect"))
                 .unwrap()
         });
         assert!(
@@ -3663,7 +3670,7 @@ mod tests {
                 let _ = end_pass(&ctx);
             }
             let content = ctx.data(|data| {
-                data.get_temp::<f32>(egui::Id::new("style-editor-scroll-content-height"))
+                data.get_temp::<f32>(egui::Id::unique("style-editor-scroll-content-height"))
                     .unwrap()
             });
             let fields = if selection {
@@ -3675,7 +3682,7 @@ mod tests {
                 .iter()
                 .map(|id| {
                     ctx.data(|data| {
-                        data.get_temp::<(f32, f32, f32)>(egui::Id::new((
+                        data.get_temp::<(f32, f32, f32)>(egui::Id::unique((
                             "style-editor-textarea-measure",
                             id,
                         )))
@@ -3726,7 +3733,7 @@ mod tests {
         for frame in 0..6 {
             let rect: egui::Rect = ctx
                 .data(|data| {
-                    data.get_temp(egui::Id::new((
+                    data.get_temp(egui::Id::unique((
                         "style-editor-textarea-rect",
                         "dictation-prompt",
                     )))
@@ -3743,6 +3750,7 @@ mod tests {
                         delta: egui::vec2(0.0, -100.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ]
             } else {
@@ -3757,7 +3765,7 @@ mod tests {
             let _ = end_pass(&ctx);
         }
         let (_, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new((
+            data.get_temp(egui::Id::unique((
                 "style-editor-textarea-measure",
                 "dictation-prompt",
             )))
@@ -3768,7 +3776,7 @@ mod tests {
             "wheel did not scroll the bounded prompt: visible={visible}, offset={offset}"
         );
         let outer: f32 = ctx.data(|data| {
-            data.get_temp(egui::Id::new("style-editor-scroll-offset"))
+            data.get_temp(egui::Id::unique("style-editor-scroll-offset"))
                 .unwrap()
         });
         assert!(
@@ -3855,6 +3863,7 @@ mod tests {
                         delta: egui::vec2(0.0, -220.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ]
             } else {
@@ -4028,6 +4037,7 @@ mod tests {
                     delta: egui::vec2(0.0, -240.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::default(),
+                    source: egui::MouseWheelSource::Wheel,
                 });
             }
             ctx.begin_pass(egui::RawInput {

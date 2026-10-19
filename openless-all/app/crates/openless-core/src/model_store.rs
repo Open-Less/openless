@@ -3511,7 +3511,7 @@ mod tests {
                 path: "weights.bin".into(),
                 url: "https://example.test/weights.bin".into(),
                 size_bytes: body.len() as u64,
-                sha256: Some(format!("{:x}", Sha256::digest(&body))),
+                sha256: Some(hex::encode(Sha256::digest(&body))),
             }],
         )
         .unwrap();

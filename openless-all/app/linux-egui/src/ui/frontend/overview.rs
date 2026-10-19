@@ -72,11 +72,11 @@ pub fn page(ui: &mut egui::Ui, vm: &FrontendViewModel, actions: &mut Vec<Fronten
         #[cfg(test)]
         ui.ctx().data_mut(|data| {
             data.insert_temp(
-                egui::Id::new("overview-scroll-measure"),
+                egui::Id::unique("overview-scroll-measure"),
                 (
                     scroll_output.content_size.y,
                     scroll_output.inner_rect.height(),
-                    scroll_output.state.offset.y,
+                    scroll_output.state.clamped_offset().y,
                 ),
             )
         });
@@ -945,7 +945,7 @@ fn recent_row(
         );
     }
 
-    let copied_id = egui::Id::new(("overview-recent-copied", index));
+    let copied_id = egui::Id::unique(("overview-recent-copied", index));
     let now = ui.input(|input| input.time);
     let copied = ui
         .ctx()
@@ -1018,7 +1018,7 @@ fn heatmap_card(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     #[cfg(test)]
     ui.ctx()
-        .data_mut(|data| data.insert_temp(egui::Id::new("openless-overview-heatmap-rect"), rect));
+        .data_mut(|data| data.insert_temp(egui::Id::unique("openless-overview-heatmap-rect"), rect));
     card_scope(ui, rect, CARD_PADDING, |ui, inner| {
         let painter = ui.painter().with_clip_rect(inner);
         painter.text(
@@ -1219,7 +1219,7 @@ fn segmented(
             egui::pos2(x, rect.top() + 2.0),
             egui::vec2(width, rect.height() - 4.0),
         );
-        let id = ui.id().with((
+        let id = ui.scope_id().with((
             "overview-segment",
             index,
             rect.left().round() as i32,

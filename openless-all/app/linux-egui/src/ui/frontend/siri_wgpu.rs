@@ -161,7 +161,7 @@ pub fn visual_voice(raw: f32) -> f32 {
 }
 
 pub fn tick(ctx: &egui::Context, id: &str, drive: SiriDrive, dt: f32) -> SiriClock {
-    let key = egui::Id::new(("openless-siri-clock", id));
+    let key = egui::Id::unique(("openless-siri-clock", id));
     let dt = dt.clamp(0.0, 0.05);
     let mut clock = ctx.data_mut(|data| {
         data.get_temp::<SiriClock>(key).unwrap_or(SiriClock {
@@ -236,7 +236,7 @@ pub fn tick(ctx: &egui::Context, id: &str, drive: SiriDrive, dt: f32) -> SiriClo
 /// Tauri 里胶囊组件每次会话重新挂载，动画状态天然是新的；Linux 这边两个窗口进程都
 /// 常驻，所以由调用方在新会话开始时显式复位。
 pub fn reset(ctx: &egui::Context, id: &str) {
-    let key = egui::Id::new(("openless-siri-clock", id));
+    let key = egui::Id::unique(("openless-siri-clock", id));
     ctx.data_mut(|data| {
         data.remove::<SiriClock>(key);
     });

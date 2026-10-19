@@ -95,7 +95,7 @@ pub fn page(
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("history-column-rects"),
+            egui::Id::unique("history-column-rects"),
             (list_rect, detail_rect),
         )
     });
@@ -158,7 +158,7 @@ fn quick_note_shortcut_card(
             if ui
                 .interact(
                     close,
-                    ui.id().with("quick-note-shortcut-hide"),
+                    ui.scope_id().with("quick-note-shortcut-hide"),
                     egui::Sense::click(),
                 )
                 .on_hover_text(tr_l10n(lang, "common.hide"))
@@ -337,7 +337,7 @@ fn list_card(
             egui::Stroke::new(0.8, theme::LINE),
             egui::StrokeKind::Inside,
         );
-        let search_id = egui::Id::new("openless-history-search");
+        let search_id = egui::Id::unique("openless-history-search");
         if ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::K)) {
             ui.memory_mut(|memory| memory.request_focus(search_id));
         }
@@ -356,7 +356,7 @@ fn list_card(
                         .hint_text(hint)
                         .text_color(theme::INK)
                         .font(egui::FontId::proportional(12.5))
-                        .vertical_align(egui::Align::Center)
+                        .align(egui::Align2::CENTER_CENTER)
                         .frame(egui::Frame::NONE),
                 );
             });
@@ -421,11 +421,11 @@ fn list_card(
             #[cfg(test)]
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("history-list-scroll-measure"),
+                    egui::Id::unique("history-list-scroll-measure"),
                     (
                         scroll_output.content_size.y,
                         scroll_output.inner_rect.height(),
-                        scroll_output.state.offset.y,
+                        scroll_output.state.clamped_offset().y,
                     ),
                 )
             });
@@ -689,11 +689,11 @@ fn detail_card(
             #[cfg(test)]
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("history-detail-scroll-measure"),
+                    egui::Id::unique("history-detail-scroll-measure"),
                     (
                         scroll_output.content_size.y,
                         scroll_output.inner_rect.height(),
-                        scroll_output.state.offset.y,
+                        scroll_output.state.clamped_offset().y,
                     ),
                 )
             });
@@ -750,7 +750,7 @@ fn detail_body(
         egui::pos2(top.right() - more_size, top.center().y - more_size / 2.0),
         egui::vec2(more_size, more_size),
     );
-    let menu_id = egui::Id::new(("openless-history-menu", entry.id.as_str()));
+    let menu_id = egui::Id::unique(("openless-history-menu", entry.id.as_str()));
     let mut menu_open = ui
         .ctx()
         .data(|data| data.get_temp::<bool>(menu_id).unwrap_or(false));
@@ -772,7 +772,7 @@ fn detail_body(
             );
             let toggle = ui.interact(
                 button,
-                ui.id().with(("playback-toggle", &entry.id)),
+                ui.scope_id().with(("playback-toggle", &entry.id)),
                 egui::Sense::click(),
             );
             if toggle.hovered() {
@@ -831,7 +831,7 @@ fn detail_body(
                 let hit = track.expand2(egui::vec2(0.0, 10.0));
                 let response = ui.interact(
                     hit,
-                    ui.id().with(("playback-seek", &entry.id)),
+                    ui.scope_id().with(("playback-seek", &entry.id)),
                     egui::Sense::click_and_drag(),
                 );
                 let seek = if response.dragged() || response.clicked() {
@@ -920,7 +920,7 @@ fn detail_body(
 
     // 「查看原文 / 隐藏原文」开关：状态挂在条目 id 上（Tauri 是组件 state，
     // 切条目就重置；这里按条目记，行为等价且省一次跳变）。
-    let raw_id = egui::Id::new(("openless-history-raw", entry.id.as_str()));
+    let raw_id = egui::Id::unique(("openless-history-raw", entry.id.as_str()));
     let mut raw_open = ui
         .ctx()
         .data(|data| data.get_temp::<bool>(raw_id).unwrap_or(false));
@@ -1076,7 +1076,7 @@ fn history_action_menu(
         egui::vec2(MENU_WIDTH, height),
     );
 
-    egui::Area::new(egui::Id::new((
+    egui::Area::new(egui::Id::unique((
         "openless-history-menu-area",
         entry.id.as_str(),
     )))
@@ -1118,7 +1118,7 @@ fn history_action_menu(
                     );
                     let response = ui.interact(
                         item_rect,
-                        ui.id().with(label.as_str()),
+                        ui.scope_id().with(label.as_str()),
                         egui::Sense::click(),
                     );
                     if response.hovered() {
@@ -1146,7 +1146,7 @@ fn history_action_menu(
                         actions.push(*action);
                         ui.ctx().data_mut(|data| {
                             data.insert_temp(
-                                egui::Id::new(("openless-history-menu", entry.id.as_str())),
+                                egui::Id::unique(("openless-history-menu", entry.id.as_str())),
                                 false,
                             )
                         });
@@ -1242,7 +1242,7 @@ fn text_card_with_action(
     let mut toggled = false;
     let mut right = rect.right() - DETAIL_PADDING;
     if let Some((salt, text)) = copy {
-        let id = egui::Id::new(salt);
+        let id = egui::Id::unique(salt);
         let now = ui.input(|input| input.time);
         let copied = ui
             .ctx()
@@ -1312,7 +1312,7 @@ fn confirm_overlay(
     lang: Lang,
     actions: &mut Vec<FrontendAction>,
 ) {
-    egui::Area::new(egui::Id::new("openless-history-confirm"))
+    egui::Area::new(egui::Id::unique("openless-history-confirm"))
         .order(egui::Order::Foreground)
         // `click` 而不是 `hover`：遮罩必须**吃掉**点击，否则点遮罩会漏到下方页面（列表行
         // 会在确认框打开时被选中）。Tauri 这里用的是原生 `window.confirm()`——点外面
@@ -1330,7 +1330,7 @@ fn confirm_overlay(
             );
             // 对话框矩形写进 memory 供测试查询（Area 覆盖整个 body，面积已不等于卡片）。
             ctx.data_mut(|data| {
-                data.insert_temp(egui::Id::new("openless-history-confirm-card-rect"), dialog)
+                data.insert_temp(egui::Id::unique("openless-history-confirm-card-rect"), dialog)
             });
             paint_card(ui.painter(), dialog);
             let painter = ui.painter().with_clip_rect(dialog);

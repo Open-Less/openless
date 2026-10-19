@@ -185,7 +185,7 @@ pub fn draw_icon_sized(
         return;
     };
     let ctx = ui.ctx();
-    let id = egui::Id::new(("lucide-icon", name));
+    let id = egui::Id::unique(("lucide-icon", name));
     let texture = ctx
         .data(|data| data.get_temp::<egui::TextureHandle>(id))
         .or_else(|| {

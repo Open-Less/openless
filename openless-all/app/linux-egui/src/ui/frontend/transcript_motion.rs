@@ -146,12 +146,12 @@ pub(super) struct RailStyle {
 
 pub(super) fn clear(ui: &egui::Ui) {
     ui.data_mut(|data| {
-        data.remove_temp::<TranscriptMotion>(egui::Id::new("capsule-transcript-motion"))
+        data.remove_temp::<TranscriptMotion>(egui::Id::unique("capsule-transcript-motion"))
     });
 }
 
 pub(super) fn paint(ui: &egui::Ui, text: &str, style: RailStyle) {
-    let id = egui::Id::new("capsule-transcript-motion");
+    let id = egui::Id::unique("capsule-transcript-motion");
     let now = ui.input(|input| input.time);
     let mut motion = ui
         .data(|data| data.get_temp::<TranscriptMotion>(id))

@@ -83,8 +83,8 @@ pub fn settings_page(
     const RADIUS: u8 = 14;
     let surface = body;
     let size = surface.size();
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("openless-settings-card-rect"), surface));
-    egui::Area::new(egui::Id::new("openless-settings-page"))
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("openless-settings-card-rect"), surface));
+    egui::Area::new(egui::Id::unique("openless-settings-page"))
         // 仍是 Foreground：页内还有下拉菜单（`Order::Foreground`）需要压在上面。
         .order(egui::Order::Foreground)
         .fixed_pos(surface.min)
@@ -191,7 +191,7 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
         let response = ui.interact(
             rect,
-            egui::Id::new("openless-settings-back"),
+            egui::Id::unique("openless-settings-back"),
             egui::Sense::click(),
         );
         if response.hovered() {
@@ -231,13 +231,13 @@ fn rail(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronten
                 ui.add_sized(
                     [width, 20.0],
                     egui::TextEdit::singleline(&mut vm.settings_query)
-                        .id(egui::Id::new("openless-settings-search"))
+                        .id(egui::Id::unique("openless-settings-search"))
                         .hint_text(tr_l10n(lang, "modal.search_placeholder"))
                         // 明确文字颜色：默认的控件前景色在浅底上过淡，
                         // 看上去像「输入了但没有显示字符」。
                         .text_color(theme::INK)
                         .frame(egui::Frame::NONE)
-                        .vertical_align(egui::Align::Center),
+                        .align(egui::Align2::CENTER_CENTER),
                 );
             });
         ui.add_space(10.0);
@@ -1076,8 +1076,8 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         category: u8,
         status: u8,
     }
-    let filters_id = egui::Id::new("openless-shortcuts-filters");
-    let query_id = egui::Id::new("openless-shortcuts-query");
+    let filters_id = egui::Id::unique("openless-shortcuts-filters");
+    let query_id = egui::Id::unique("openless-shortcuts-query");
     let mut filters = ui
         .data(|data| data.get_temp::<Filters>(filters_id))
         .unwrap_or_default();
@@ -1317,7 +1317,7 @@ fn search_field(ui: &mut egui::Ui, value: &mut String, id: egui::Id) -> egui::Re
             .text_color(theme::INK)
             .frame(egui::Frame::NONE)
             .desired_width(inner.width())
-            .vertical_align(egui::Align::Center),
+            .align(egui::Align2::CENTER_CENTER),
     )
 }
 
@@ -1340,7 +1340,7 @@ fn filter_group(
     for (label, value) in options {
         let selected = active == *value;
         // id 由「分组标题 + 选项」经 `push_id` 派生：
-        //  * 不能跟着 `ui.id()` 走 —— 切换筛选会改变可见行数、连带改变 auto-id；
+        //  * 不能跟着 `ui.scope_id()` 走 —— 切换筛选会改变可见行数、连带改变 auto-id；
         //  * 也不能只用选项文字 —— 分类与分配状态两组各有一个「全部」，
         //    只按文字区分会让两个按钮抢同一个 id（日志里 `Second use of widget ID`）。
         // 交互用 `allocate_exact_size` 自己返回的 response：对同一矩形再 `interact`
@@ -1379,10 +1379,10 @@ fn filter_group(
         ui.ctx().data_mut(|data| {
             // 按「分组 + 选项」记录：两组各有一个「全部」，只按文字存会互相覆盖。
             let mut rects: std::collections::BTreeMap<(String, String), egui::Rect> = data
-                .get_temp(egui::Id::new("shortcut-filter-rects"))
+                .get_temp(egui::Id::unique("shortcut-filter-rects"))
                 .unwrap_or_default();
             rects.insert((title.to_string(), (*label).to_string()), rect);
-            data.insert_temp(egui::Id::new("shortcut-filter-rects"), rects);
+            data.insert_temp(egui::Id::unique("shortcut-filter-rects"), rects);
         });
         if response.clicked() {
             on_select(*value);
@@ -1435,7 +1435,7 @@ fn shortcut_row_layout(
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
-            egui::Id::new(("shortcut-row-rects", row_label.to_string())),
+            egui::Id::unique(("shortcut-row-rects", row_label.to_string())),
             (row_rect, recorder_rect),
         )
     });
@@ -1478,7 +1478,7 @@ pub(super) fn shortcut_recorder_row(
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click());
         let response = ui.interact(
             rect,
-            egui::Id::new(("openless-shortcut-record", format!("{:?}", row.field))),
+            egui::Id::unique(("openless-shortcut-record", format!("{:?}", row.field))),
             egui::Sense::click(),
         );
         if assigned {
@@ -1570,7 +1570,7 @@ fn style_pack_recorder_row(
             recorder_ui.allocate_exact_size(egui::vec2(chips, 26.0), egui::Sense::click());
         let response = recorder_ui.interact(
             rect,
-            egui::Id::new(("openless-style-shortcut-record", index)),
+            egui::Id::unique(("openless-style-shortcut-record", index)),
             egui::Sense::click(),
         );
         if !row.hotkey.trim().is_empty() {
@@ -1706,7 +1706,7 @@ fn bordered_icon_button(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
     let response = ui.interact(
         rect,
-        egui::Id::new(("openless-icon-button", format!("{salt:?}"))),
+        egui::Id::unique(("openless-icon-button", format!("{salt:?}"))),
         egui::Sense::click(),
     );
     let fill = if response.hovered() {
@@ -1772,7 +1772,7 @@ fn recording_panel(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(240.0, 44.0), egui::Sense::hover());
     // 录制面板的矩形交给主循环：点别处就取消录制（Tauri 的 Popover 点外部关闭）。
     // 记下"是否已经武装"——进入录制的那一帧是按下鼠标的那一帧，不能立刻取消。
-    let cancel_id = egui::Id::new("openless-shortcut-recording");
+    let cancel_id = egui::Id::unique("openless-shortcut-recording");
     let armed = ui
         .data(|data| data.get_temp::<(egui::Rect, bool)>(cancel_id))
         .is_some_and(|(_, armed)| armed);
@@ -2306,7 +2306,7 @@ fn omni_settings(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Ve
     use openless_linux_egui::omni_settings::{OmniAction, OmniField};
     let lang = vm.lang;
     let mut state = vm.omni.clone();
-    let timer = ui.id().with("omni-autosave");
+    let timer = ui.scope_id().with("omni-autosave");
     let mut changed = false;
     card(
         ui,
@@ -2522,7 +2522,7 @@ fn omni_text_field(
         changed = ui
             .add(
                 egui::TextEdit::singleline(value)
-                    .id(ui.id().with(label))
+                    .id(ui.scope_id().with(label))
                     .password(secret)
                     .hint_text(hint)
                     .desired_width(ui.available_width()),
@@ -2717,7 +2717,7 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                             });
                             if !held || vm.settings_notice.is_some() {
                                 ui.data_mut(|data| {
-                                    data.remove::<ChannelDrag>(egui::Id::new(
+                                    data.remove::<ChannelDrag>(egui::Id::unique(
                                         "openless-settings-channel-drag",
                                     ))
                                 });
@@ -3403,7 +3403,7 @@ fn channel_row(
     actions: &mut Vec<FrontendAction>,
 ) {
     // 拖动身份不随排序变化；同一次交换等宿主确认后再提交下一次。
-    let drag_id = egui::Id::new("openless-settings-channel-drag");
+    let drag_id = egui::Id::unique("openless-settings-channel-drag");
     let dragging = ui.data(|data| data.get_temp::<ChannelDrag>(drag_id));
 
     let card = egui::Frame::new()
@@ -3632,7 +3632,7 @@ fn channel_testing(ui: &egui::Ui, channel: &super::view_model::SettingsChannel) 
     /// 快照里出现这么新的结果就算回包了。
     const FRESH_RESULT_SECONDS: i64 = 30;
 
-    let id = egui::Id::new(("settings-channel-testing", &channel.id));
+    let id = egui::Id::unique(("settings-channel-testing", &channel.id));
     let Some(deadline) = ui.data(|data| data.get_temp::<f64>(id)) else {
         return false;
     };
@@ -3650,7 +3650,7 @@ fn channel_testing(ui: &egui::Ui, channel: &super::view_model::SettingsChannel) 
 fn mark_channel_testing(ui: &egui::Ui, channel: &super::view_model::SettingsChannel) {
     /// 与 `channel_testing` 的上限一致。
     const MAX_TESTING_SECONDS: f64 = 30.0;
-    let id = egui::Id::new(("settings-channel-testing", &channel.id));
+    let id = egui::Id::unique(("settings-channel-testing", &channel.id));
     let now = ui.input(|input| input.time);
     ui.data_mut(|data| data.insert_temp(id, now + MAX_TESTING_SECONDS));
 }
@@ -3867,7 +3867,7 @@ fn provider_model_block(
             // 同一行会让按钮被挤出右边界、根本画不出来。
             ui.vertical(|ui| {
                 let mut draft = editor.model.clone();
-                let id = egui::Id::new("openless-settings-provider-model");
+                let id = egui::Id::unique("openless-settings-provider-model");
                 let width = ui.available_width().min(420.0);
                 if layout::text_input_sized(
                     ui,
@@ -3948,7 +3948,7 @@ fn provider_model_block(
     );
     // Tauri 的「可用模型」是可搜索下拉（OrcaRouter 这类目录很大）；这里同样在下拉里
     // 带一个搜索框，并把过滤词存在 egui 自己的临时存储里。
-    let filter_id = egui::Id::new("openless-settings-provider-model-filter");
+    let filter_id = egui::Id::unique("openless-settings-provider-model-filter");
     let mut filter: String = ui.data(|data| data.get_temp(filter_id).unwrap_or_default());
     egui::ComboBox::from_id_salt("settings-provider-model-catalog")
         .selected_text(tr_l10n(lang, "settings.providers.selectModel"))
@@ -4023,7 +4023,7 @@ fn provider_field_hint(
         //     之后加载出来的 endpoint/model 再也进不了输入框——「编辑已有渠道读不到配置」；
         //   * 编辑完 A 再编辑 B，B 显示的是 A 的文字。
         // 现在额外记一份「播种时的宿主值」：宿主值变了就重新播种，没变就保留用户输入。
-        let id = egui::Id::new((
+        let id = egui::Id::unique((
             "openless-settings-provider-field",
             channel_id,
             format!("{field:?}"),
@@ -4112,7 +4112,7 @@ fn provider_small_button(ui: &mut egui::Ui, lang: Lang, key: &'static str, prima
 
 /// 自动保存的临时状态：存在即「有未落盘的改动」，值是防抖截止时刻（egui 时间轴）。
 fn editor_autosave_id() -> egui::Id {
-    egui::Id::new("openless-channel-editor-autosave")
+    egui::Id::unique("openless-channel-editor-autosave")
 }
 
 /// Match Tauri's debounce: persist 300ms after the last edit.
@@ -4226,7 +4226,7 @@ fn channel_editor_panel(
     );
     let back_response = ui.interact(
         back,
-        egui::Id::new("openless-channel-editor-back"),
+        egui::Id::unique("openless-channel-editor-back"),
         egui::Sense::click(),
     );
     ui.painter().rect_filled(
@@ -4368,7 +4368,7 @@ fn channel_editor_panel(
     });
 
     // ── 底部按钮 ───────────────────────────────────────────────────────────
-    let confirm_id = egui::Id::new(("settings-channel-delete", &editor.channel_id));
+    let confirm_id = egui::Id::unique(("settings-channel-delete", &editor.channel_id));
     let confirming = ui.data(|data| data.get_temp::<bool>(confirm_id).unwrap_or(false));
     let mut footer_ui = ui.new_child(
         egui::UiBuilder::new()
@@ -4441,7 +4441,7 @@ fn channel_editor_panel(
     }
     let done = footer_ui.interact(
         done_rect,
-        egui::Id::new("openless-channel-editor-done"),
+        egui::Id::unique("openless-channel-editor-done"),
         egui::Sense::click(),
     );
     footer_ui.painter().rect_filled(
@@ -4465,7 +4465,7 @@ fn channel_editor_panel(
     }
     let clear = footer_ui.interact(
         clear_rect,
-        egui::Id::new("openless-channel-editor-clear"),
+        egui::Id::unique("openless-channel-editor-clear"),
         egui::Sense::click(),
     );
     paint_ghost_small_button(
@@ -4882,7 +4882,7 @@ fn provider_editor_body(
                 if ui
                     .add(
                         egui::TextEdit::multiline(&mut headers)
-                            .id(egui::Id::new("settings-provider-extra-headers"))
+                            .id(egui::Id::unique("settings-provider-extra-headers"))
                             .desired_width(ui.available_width().min(420.0))
                             .desired_rows(3)
                             .hint_text(tr_l10n(lang, "settings.providers.extraHeadersPlaceholder")),
@@ -5234,7 +5234,7 @@ pub(super) fn card(
 /// A collapsible card group (Tauri wraps 插入与剪贴板 / 启动 in a `Collapsible`).
 /// The open state lives in egui memory, keyed by the group title.
 pub(super) fn card_group(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
-    let id = egui::Id::new(("openless-settings-group", title));
+    let id = egui::Id::unique(("openless-settings-group", title));
     let mut open = ui.data(|data| data.get_temp::<bool>(id).unwrap_or(true));
     egui::Frame::new()
         .fill(theme::SURFACE)
@@ -5334,7 +5334,7 @@ fn service_tabs(
         let tab = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(width, height));
         let response = ui.interact(
             tab,
-            ui.id().with(("openless-service-tab", index)),
+            ui.scope_id().with(("openless-service-tab", index)),
             if *inactive {
                 egui::Sense::hover()
             } else {
@@ -5707,7 +5707,7 @@ pub(super) fn text_edit_row(
         let response = layout::text_input(
             ui,
             value,
-            egui::Id::new(("openless-settings-text", label)),
+            egui::Id::unique(("openless-settings-text", label)),
             hint,
             ui.available_width().min(300.0),
             false,
@@ -5735,7 +5735,7 @@ fn text_area_row(
         let width = ui.available_width().clamp(220.0, 520.0);
         let response = ui.add(
             egui::TextEdit::multiline(value)
-                .id(egui::Id::new(("openless-settings-textarea", label)))
+                .id(egui::Id::unique(("openless-settings-textarea", label)))
                 .desired_rows(rows)
                 .desired_width(width)
                 .hint_text(egui::RichText::new(hint).size(12.0).color(theme::INK_4))
@@ -5939,7 +5939,7 @@ mod tests {
             );
             let clock = ctx
                 .data(|data| {
-                    data.get_temp::<super::super::siri_wgpu::SiriClock>(eframe::egui::Id::new((
+                    data.get_temp::<super::super::siri_wgpu::SiriClock>(eframe::egui::Id::unique((
                         "openless-siri-clock",
                         "settings-siri-preview",
                     )))
@@ -6032,7 +6032,7 @@ mod tests {
                 assert!(actions.is_empty());
             }
             ctx.memory_mut(|memory| {
-                memory.request_focus(egui::Id::new(("openless-settings-text", label)))
+                memory.request_focus(egui::Id::unique(("openless-settings-text", label)))
             });
         }
     }

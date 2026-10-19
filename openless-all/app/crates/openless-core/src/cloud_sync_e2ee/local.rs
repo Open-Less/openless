@@ -96,7 +96,7 @@ impl LocalStorage {
     pub(crate) fn account_namespace(origin: &str, owner: &str) -> SyncResult<String> {
         let binding =
             serde_json::to_vec(&[origin, owner]).map_err(|_| error("local_storage_unavailable"))?;
-        Ok(format!("remote-v2:{:x}", Sha256::digest(binding)))
+        Ok(format!("remote-v2:{}", hex::encode(Sha256::digest(binding))))
     }
 
     pub(crate) fn initialized(&self) -> SyncResult<bool> {
