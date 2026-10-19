@@ -144,6 +144,9 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: swatinem/rust-cache@v2
         with:
+          # Restores the tree the beta `cross-platform` job maintains, so a tag
+          # build starts warm instead of compiling every dependency from scratch.
+          shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           cache-on-failure: true
 
@@ -151,7 +154,9 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: swatinem/rust-cache@v2
         with:
-          key: macos-release-v1
+          # Same prefix as the beta macOS check. The weekly schedule run fills it
+          # with release-profile artifacts, so tag builds are warm.
+          shared-key: tauri-macos
           workspaces: 'openless-all/app/src-tauri -> target'
 
       - name: Prepare Windows Sherpa static libraries

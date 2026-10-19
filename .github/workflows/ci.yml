@@ -168,6 +168,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
+          shared-key: tauri-android
           workspaces: 'openless-all/app/src-tauri -> target'
           # Only beta maintains the shared dependency tree; PRs restore it.
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
@@ -380,6 +381,10 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: runner.os == 'Windows'
         with:
+          # `shared-key` replaces the job name in the cache prefix, so the release
+          # workflow restoring the same key can reuse this tree. Keep the two in
+          # sync (scripts/ci-cache-sharing.test.mjs enforces it).
+          shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
@@ -387,7 +392,9 @@ jobs:
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
-          key: macos-stable-v1
+          # Same prefix as `release-tauri.yml`, which is what lets a tag build
+          # restore the baseline branch's dependency tree instead of a cold one.
+          shared-key: tauri-macos
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app -> target

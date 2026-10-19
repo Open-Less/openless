@@ -12,9 +12,28 @@ on:
         required: false
         type: string
         default: full
+      # The tag whose commit is being packaged. Set by the release entry point so
+      # the version assertion and the GitHub Release linkage cannot be skipped by
+      # dispatching the workflow on a branch instead.
+      release_tag:
+        required: false
+        type: string
+        default: ''
+      # Attach the verified packages to that Release. Linux used to be
+      # administrator-attached only; the packages now ship in the same Release as
+      # the desktop and Android assets.
+      publish:
+        required: false
+        type: boolean
+        default: false
+      checkout_ref:
+        required: false
+        type: string
+        default: ''
 
 permissions:
-  contents: read
+  # `gh release upload` writes assets; nothing else in this workflow writes.
+  contents: write
 
 concurrency:
   group: linux-egui-build-${{ github.workflow }}-${{ github.ref }}
@@ -27,7 +46,7 @@ jobs:
     # A cold dependency tree costs ~18 minutes; anything past this is a hang.
     timeout-minutes: 90
     env:
-      RELEASE_TAG: ${{ github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri') && github.ref_name || '' }}
+      RELEASE_TAG: ${{ inputs.release_tag || (github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri') && github.ref_name || '') }}
       # Debug info dominates both compile time and cache size for this host, and
       # the gate below never reads it. The Linux job keeps its own cache so a
       # red run still starts warm.
@@ -40,6 +59,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: false
+          ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Install native build and packaging dependencies
         if: inputs.scope != 'none'
@@ -120,6 +140,8 @@ jobs:
           node scripts/linux-egui-release-contract.test.mjs
           node scripts/ci-changed-areas.test.mjs
           node scripts/ci-cache-usage.test.mjs
+          node scripts/ci-cache-sharing.test.mjs
+          node scripts/harmony-release-contract.test.mjs
           node scripts/tauri-linux-free-contract.test.mjs
           pwsh -NoProfile -File ./scripts/check-core-deps.ps1
           pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
@@ -163,6 +185,9 @@ jobs:
           set -euo pipefail
           OUTPUT=target/linux-egui-packages
           ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
+          # Release attachment name: the desktop and Android assets carry their own
+          # SHA256SUMS, so the Linux one is published under a distinct name.
+          cp "$OUTPUT/SHA256SUMS" "$OUTPUT/SHA256SUMS-linux"
           bash scripts/verify-linux-egui-packages.sh
 
       - name: Stage direct download aliases
@@ -190,6 +215,39 @@ jobs:
           name: openless-linux-egui-x86_64
           path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
+
+      - name: Attach Linux packages to the GitHub Release
+        # Runs only for the release entry point, which pins the tag; PR and push
+        # builds never publish.
+        if: inputs.scope != 'none' && inputs.publish && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          # The desktop workflow creates the Release for this tag; wait for it
+          # instead of racing it, and fail loudly if it never appears.
+          for attempt in $(seq 1 40); do
+            if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" = 40 ]; then
+              echo "::error::release $RELEASE_TAG was not created by the desktop workflow"
+              exit 1
+            fi
+            sleep 15
+          done
+          output=target/linux-egui-packages
+          alias_dir="$RUNNER_TEMP/openless-linux-egui-direct-download"
+          gh release upload "$RELEASE_TAG" \
+            "$output"/OpenLess-Linux-egui-*.deb \
+            "$output"/OpenLess-Linux-egui-*.rpm \
+            "$output"/SHA256SUMS-linux \
+            "$alias_dir"/OpenLess_linux_x86_64.deb \
+            "$alias_dir"/OpenLess_linux_x86_64.rpm \
+            --clobber
+          echo "attached Linux assets to $RELEASE_TAG"
 
       - name: Upload direct download aliases
         if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')

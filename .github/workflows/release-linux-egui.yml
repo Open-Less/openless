@@ -1,20 +1,40 @@
 name: Release Linux egui
 
-# Independent Linux builds retain the same tests and deb/rpm packaging as CI.
-# After product acceptance, an administrator builds the accepted release tag and
-# explicitly attaches the verified Actions artifacts to that existing Release.
+# Linux ships in the same GitHub Release as the desktop and Android assets.
+#
+# The entry point stays manual: the tag is created by an administrator after the
+# Linux host/UI acceptance in docs/linux-egui-handoff/07-acceptance.md, and this
+# workflow only rebuilds that already-reviewed tag. It never reacts to Tauri
+# tags, so a desktop release can never ship an unaccepted Linux package by
+# accident; but once dispatched, the packages are attached to the Release
+# automatically instead of being uploaded by hand.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and attach (v<version>-tauri)
+        required: true
+        type: string
+      publish:
+        description: Attach the verified packages to that Release
+        required: false
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: release-linux-egui-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: release-linux-egui-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   build-linux-egui:
     permissions:
-      contents: read
+      contents: write
     uses: ./.github/workflows/check-linux-egui.yml
+    with:
+      scope: full
+      release_tag: ${{ inputs.tag }}
+      publish: ${{ inputs.publish }}
+      checkout_ref: ${{ inputs.tag }}

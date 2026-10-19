@@ -24,6 +24,9 @@ const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, bu
 // CI must execute the exact test/build/package/checksum path used for tags.
 assert.match(ci, /linux-egui-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
 assert.match(ci, /linux-egui-package:[\s\S]*?permissions:\s*contents: read/);
+// The release entry point needs write access to attach assets; the CI caller is
+// read-only and must not be able to publish.
+assert.match(release, /permissions:\n  contents: write/);
 assert.deepEqual(
   [...ci.matchAll(/^  (linux-[\w-]+):/gm)].map((match) => match[1]),
   ['linux-egui-package'],
@@ -35,7 +38,7 @@ assert.match(
   /^on:\n  workflow_call:/m,
   'the reusable check must not run as a duplicate standalone workflow',
 );
-assert.match(check, /contents: read/);
+assert.match(check, /contents: write/);
 assert.match(check, /runs-on: ubuntu-24\.04/);
 assert.match(check, /cargo test --locked -p openless-core/);
 for (const crate of ['openless-core', 'openless-linux-egui']) {
@@ -64,7 +67,14 @@ assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 // Shared Tauri tags and PRs must never publish unaccepted Linux packages.
 assert.match(release, /^on:\n  workflow_dispatch:/m);
 assert.doesNotMatch(release, /^  (push|pull_request):/m);
-assert.doesNotMatch(release, /contents: write|action-gh-release|gh release/);
+// Linux now ships inside the same Release as the desktop and Android assets, so
+// the entry point attaches the verified packages itself. Publishing stays opt-in
+// per dispatch and requires the tag, which is what keeps an unaccepted package
+// out of a Tauri release.
+assert.match(check, /gh release upload/);
+assert.match(check, /inputs\.publish/);
+assert.match(check, /inputs\.release_tag != ''/);
+assert.match(check, /SHA256SUMS-linux/);
 assert.match(check, /github\.ref_type == 'tag'/);
 assert.match(check, /does not match package\.json version/);
 const revision = revisionFile.trim();
@@ -81,7 +91,8 @@ assert.match(verify, /OpenLess \$DEB_VERSION/);
 assert.match(pack, /linux-egui\/package-revision/);
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
-assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a Release');
+assert.match(release, /release_tag: \$\{\{ inputs\.tag \}\}/);
+assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 // Keep deb/rpm only, including dynamically-loaded desktop libraries and the
 // fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
