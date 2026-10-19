@@ -1219,27 +1219,37 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
         false
     };
 
-    let changed = asr_changed || llm_changed || seeded;
-    if changed {
-        if !root
-            .providers
-            .asr
-            .get(&root.active.asr)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.asr = current_channel_id(&root.providers.asr).unwrap_or_default();
-        }
-        if !root
-            .providers
-            .llm
-            .get(&root.active.llm)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.llm = current_channel_id(&root.providers.llm).unwrap_or_default();
-        }
-    }
+    let mut changed = asr_changed || llm_changed || seeded;
+    // 渠道指针修复不能挂在「这次映射迁移有没有改动」上：上一版写好的渠道卡片已经带
+    // `providerType`/`order`，`migrate_channel_map` 会返回“无变化”，于是 `if changed`
+    // 门槛让悬空指针永远停在不存在的渠道上——之后每一次渠道变更也不会覆盖它
+    // （`active_was_managed` 对未知 id 判定为 false）。所以每次读取都校正一次。
+    changed |= repair_active_channel(&mut root.active.asr, &root.providers.asr);
+    changed |= repair_active_channel(&mut root.active.llm, &root.providers.llm);
     // Omni normalization must not trigger the separate ASR/LLM active fallback.
     migrate_legacy_omni_slot(&mut root.omni) || changed
+}
+
+/// 把指向不存在（或已停用）渠道的当前渠道指针回落到列表里第一张启用卡片。
+///
+/// 偏好文件里的 `activeAsrProvider`/`activeLlmProvider` 与凭据库里的 `active` 是两份会漂移的
+/// 数据，指针落在不存在的渠道上是真实发生过的情况（例如升级把供应商 **类型** 当成渠道 id
+/// 写了进来）。这里只移动指针，绝不触碰任何凭据；回落到“排序第一”与渠道列表
+/// 「排序即优先级」的规则一致。
+fn repair_active_channel<V: HasChannelMeta>(active: &mut String, map: &HashMap<String, V>) -> bool {
+    if map.get(active).is_some_and(|entry| entry.meta().enabled) {
+        return false;
+    }
+    // 没有任何启用渠道能接管时保持原值不动：Core 会用偏好里的值做回退，
+    // 这里不该把一个空选中态写进凭据库。
+    let Some(next) = current_channel_id(map) else {
+        return false;
+    };
+    if *active == next {
+        return false;
+    }
+    *active = next;
+    true
 }
 
 /// Platform presets for fresh installs.
@@ -5127,6 +5137,121 @@ mod tests {
             lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
             Some("vk")
         );
+    }
+
+    /// 已渠道化的数据（每张卡片都带 `providerType`/`order`，`version` 已是 2）不会触发任何映射
+    /// 迁移，因此 `migrate_channel_map` 返回 false。此时一个悬空的当前渠道指针（升级把供应商
+    /// 类型当成渠道 id 写进来）必须仍然被校正回真实卡片，否则读凭据永远取不到 key，界面一直
+    /// 显示未配置，且后续任何渠道变更都不会覆盖它。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into(); // 供应商类型，不是渠道 id
+        root.providers.asr.insert(
+            "volcengine".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("volcengine".into()),
+                    order: Some(1),
+                    enabled: true,
+                    lastTest: None,
+                },
+                volcengineApiKey: Some("vk-empty".into()),
+                ..Default::default()
+            },
+        );
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                model: Some("fun-asr-realtime".into()),
+                ..Default::default()
+            },
+        );
+
+        assert!(super::migrate_channels(&mut root));
+
+        // 指针回落到排序第一的已配置卡片，凭据一个字节都没动。
+        assert_eq!(root.active.asr, "volcengine-2");
+        assert_eq!(
+            root.providers
+                .asr
+                .get("volcengine-2")
+                .unwrap()
+                .apiKey
+                .as_deref(),
+            Some("bk")
+        );
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::AsrApiKey).as_deref(),
+            Some("bk")
+        );
+        // 第二遍必须是幂等的：指针已经指向真实卡片，不再报改动。
+        assert!(!super::migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "volcengine-2");
+    }
+
+    /// LLM 侧同样需要这份校正：渠道 id 与供应商类型不同名时（`ark-2` vs `deepseek`），
+    /// 悬空指针会让润色整条链路取不到 key。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_llm_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.llm = "deepseek".into(); // 供应商类型，不是渠道 id
+        root.providers.llm.insert(
+            "ark-2".into(),
+            CredsLlmEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("deepseek".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("sk".into()),
+                model: Some("deepseek-v4-flash".into()),
+                ..Default::default()
+            },
+        );
+
+        super::migrate_channels(&mut root);
+
+        assert_eq!(root.active.llm, "ark-2");
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
+            Some("sk")
+        );
+    }
+
+    /// 没有任何启用渠道时保持原值不动，交给 Core 的偏好回退处理，避免把空选中态写进凭据库。
+    #[test]
+    fn active_pointer_is_left_alone_when_no_channel_can_take_over() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into();
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: false,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                ..Default::default()
+            },
+        );
+
+        super::migrate_channels(&mut root);
+
+        assert_eq!(root.active.asr, "bailian");
     }
 
     #[test]
