@@ -65,12 +65,46 @@ zip 2→9、x509-parser 0.16→0.18、toml 0.8.2→0.8.23（传递依赖，锁�
   `foundry-local-sdk`（winml 特性与 Windows 运行时绑定）。
 - `tauri-nspanel`：来自 git 分支 `v2`，没有版本化发布。
 
-## C. npm —— 次版本已升，剩 15 个主版本
+## B2. 用 `=` 钉住的 15 处（钉住 ≠ 落后）
+
+`Cargo.lock` 本来就把整个图锁定；这里的「钉」指 `Cargo.toml` 里的 `=x.y.z` 写法，
+它会让 `cargo update` 连补丁版本都不再前进。分三类看：
+
+**① 钉住且正好是最新（钉与不钉今天没区别，钉着防未来破坏性小版本）**
+
+| 包 | 钉住 | 最新 |
+|---|---|---|
+| egui / eframe | 0.37.0 | 0.37.0 |
+| resvg | 0.48.1 | 0.48.1 |
+| tauri | 2.11.6 | 2.11.6（2.x 稳定线） |
+| tauri-build / tauri-macros | 2.6.3 | 2.6.3 |
+| tauri-runtime | 2.11.3 | 2.11.3 |
+| tauri-runtime-wry | 2.11.4 | 2.11.4 |
+| tauri-utils | 2.9.3 | 2.9.3 |
+| security-framework | 3.7.0 | 3.7.0 |
+
+**② 钉住且确实落后（有升级空间，但都受外部条件约束）**
+
+| 包 | 钉住 | 最新 | 约束 |
+|---|---|---|---|
+| tauri-plugin-updater | 2.10.1 | 2.14.0 | 需要 `tauri-utils ^2.10`，即 tauri 2.12 训练线 |
+| sherpa-onnx | 1.13.2 | 1.13.8 | Android 用官方预编译库，`scripts/sherpa-onnx-android.mjs` 里写死了归档的 size + SHA-256，换版本要重新校验产物 |
+| foundry-local-sdk | 1.2.1 | 2.1.0 | Windows winml 绑定，主版本跨越大 |
+
+**③ 被上游依赖钉死，本仓改不了** —— 见上面 A / B 两节的表
+（`base64 0.22.1`、`generic-array 0.14.7`、`matchit 0.8.4`、tauri 2.12 全线）。
+
+## C. npm —— 次版本已升，剩 11 个主版本
 
 `npm update` 升了 13 个（`@base-ui/react`、`dompurify`、`i18next`、`lucide-react`、
 `react-i18next`、`shadcn`、`tailwind-merge`、`tailwindcss`/`@tailwindcss/vite`、
-`@tauri-apps/api`、`@tauri-apps/cli`、`@tauri-apps/plugin-*` 等），
-`npm run build` 与 `node scripts/frontend-test-runner.mjs` 通过。
+`@tauri-apps/api`、`@tauri-apps/cli`、`@tauri-apps/plugin-*` 等）。
+
+另外 4 个原本写成精确版本的开发工具也一起升了：
+`@playwright/test 1.63.0 → 1.64.1`、`prettier 3.9.6 → 3.9.10`、
+`prettier-plugin-sh 0.19.0 → 0.20.2`、`tsx 4.23.1 → 4.23.15`。
+
+`npm run build`（含 `tsc`）与 `node scripts/frontend-test-runner.mjs` 均通过。
 
 仍为主版本的：
 
