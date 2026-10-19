@@ -169,6 +169,18 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false'"),
   true,
 );
+// A macOS runner is only spent on MSRV while the declared MSRV is behind the
+// stable toolchain; otherwise `cross-platform` already compiles that code.
+check(
+  'msrv job is skipped when MSRV equals stable',
+  workflow.includes("needs.changes.outputs.msrv_needed == 'true'"),
+  true,
+);
+check(
+  'changes job publishes the msrv comparison',
+  workflow.includes('msrv_needed: ${{ steps.msrv.outputs.needed }}'),
+  true,
+);
 check(
   'android gate is fail-open',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.tauri != 'false'/.test(workflow),

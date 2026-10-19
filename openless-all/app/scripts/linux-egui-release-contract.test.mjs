@@ -49,7 +49,9 @@ assert.match(
   /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/,
 );
 assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
-assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);
+// `cargo test --all-targets` already compiles every target, so a following
+// `cargo check --all-targets` was a second full compile for no extra coverage.
+assert.doesNotMatch(check, /cargo check --locked -p openless-linux-egui/);
 assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
 assert.match(check, /ctest --test-dir build --output-on-failure/);
 assert.match(check, /cargo build --locked --release -p openless-linux-egui/);
