@@ -117,24 +117,20 @@ pub fn learned_rules_with_max_chars(edit: &EditPair, max_chars: usize) -> Vec<Le
                 old[a..b].iter().collect::<String>(),
                 new[c..d].iter().collect::<String>(),
             ),
-            (Some((a, b)), None)
-                if new_start < new_end && new[new_start..new_end].iter().all(|&c| is_cjk(c)) =>
-            {
-                (
-                    old[a..b].iter().collect(),
-                    new[new_start..new_end].iter().collect(),
-                )
+            (Some((a, b)), None) => {
+                let Some((c, d)) = leading_word_span(&new, new_start, new_end) else {
+                    // Do not join a partial identifier to neighboring punctuation.
+                    continue;
+                };
+                (old[a..b].iter().collect(), new[c..d].iter().collect())
             }
-            (None, Some((c, d)))
-                if old_start < old_end && old[old_start..old_end].iter().all(|&c| is_cjk(c)) =>
-            {
-                (
-                    old[old_start..old_end].iter().collect(),
-                    new[c..d].iter().collect(),
-                )
+            (None, Some((c, d))) => {
+                let Some((a, b)) = leading_word_span(&old, old_start, old_end) else {
+                    // Do not join a partial identifier to neighboring punctuation.
+                    continue;
+                };
+                (old[a..b].iter().collect(), new[c..d].iter().collect())
             }
-            // Do not join a partial identifier to neighboring punctuation.
-            (Some(_), None) | (None, Some(_)) => continue,
             (None, None) => {
                 if old_start == old_end
                     || new_start == new_end
@@ -263,10 +259,39 @@ fn identifier_span(text: &[char], start: usize, end: usize) -> Option<(usize, us
     // A component of a URL, filesystem path or email is not a vocabulary word.
     if (a > 0 && matches!(text[a - 1], '/' | '\\' | '@' | ':'))
         || (b < text.len() && matches!(text[b], '/' | '\\' | '@' | ':'))
+        || looks_like_host(&text[a..b])
     {
         return None;
     }
     Some((a, b))
+}
+
+fn leading_word_span(text: &[char], start: usize, end: usize) -> Option<(usize, usize)> {
+    let mut word_end = start;
+    while word_end < end && identifier_char(text, word_end) {
+        word_end += 1;
+    }
+    if word_end > start {
+        return identifier_span(text, start, word_end);
+    }
+    let mut cjk_end = start;
+    while cjk_end < end && is_cjk(text[cjk_end]) {
+        cjk_end += 1;
+    }
+    (cjk_end > start).then_some((start, cjk_end))
+}
+
+fn looks_like_host(text: &[char]) -> bool {
+    let value: String = text.iter().collect();
+    let labels: Vec<&str> = value.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        && labels[0].chars().any(|c| c.is_ascii_alphabetic())
+        && labels
+            .last()
+            .is_some_and(|label| label.chars().any(|c| c.is_ascii_alphabetic()))
 }
 
 fn trim_formatting(text: &[char], mut start: usize, mut end: usize) -> (usize, usize) {
@@ -398,6 +423,8 @@ mod tests {
             ("你好,ZIP.", "你好，VIP!", "ZIP", "VIP"),
             ("你好，ZIP", "你好，Codex。", "ZIP", "Codex"),
             ("你好，ZIP", "你好，VIP。继续写下一句", "ZIP", "VIP"),
+            ("你好，foo", "你好，bar。继续写", "foo", "bar"),
+            ("你好，foo", "你好，bar next", "foo", "bar"),
         ] {
             assert_rule(before, after, pattern, replacement);
         }
@@ -436,6 +463,8 @@ mod tests {
             ("/tmp/codx", "/tmp/codex"),
             ("codx@example.com", "codex@example.com"),
             ("https://foo.com", "https://bar.com"),
+            ("example.com", "example.net"),
+            ("www.example.com", "www.example.org"),
             ("/tmp/foo", "/tmp/bar"),
             ("foo@example.com", "bar@example.com"),
             ("，甲", "，乙"),
