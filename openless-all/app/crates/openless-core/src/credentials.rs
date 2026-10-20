@@ -686,7 +686,17 @@ impl CredentialMetadata {
         let mut reordered = false;
         if let Some(kind) = kind {
             let channels = self.channels.entry(kind).or_default();
-            if !channels.is_empty() && !channels.iter().any(|channel| channel.id == provider_id) {
+            let legacy_provider_type = match slot {
+                ProviderSlot::Asr => crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
+                    .contains(&provider_id),
+                ProviderSlot::Llm => crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES
+                    .contains(&provider_id),
+                ProviderSlot::Omni => false,
+            };
+            if !channels.is_empty()
+                && !channels.iter().any(|channel| channel.id == provider_id)
+                && !legacy_provider_type
+            {
                 return Err(unknown_channel(kind, provider_id));
             }
             if let Some(selected) = channels.iter().find(|channel| channel.id == provider_id) {
