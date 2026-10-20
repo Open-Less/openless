@@ -193,6 +193,14 @@ jobs:
           chmod 600 "$dir/keystore-password" "$dir/key-password" 2>/dev/null || true
           ls -l "$dir"
 
+      - name: Validate the signing material before building
+        # Cheap and early: a certificate that does not match the keystore, a
+        # profile issued for another certificate, a profile for a different
+        # bundleName or an expired profile would otherwise surface after a
+        # six-minute build, or only when a device refuses the install.
+        working-directory: openless-all/app
+        run: bash scripts/check-harmony-signing.sh "$OPENLESS_HARMONY_SIGNING_DIR" "${{ inputs.channel }}"
+
       - name: Build, sign and stage the HAP
         working-directory: openless-all/app
         env:

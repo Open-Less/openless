@@ -195,6 +195,18 @@ keytool -certreq -keystore release.p12 -alias harmony-release -file release.csr
 Keep `release.p12` and both passwords offline; they are the only copy of the
 private key that AppGallery will trust.
 
+Before uploading anything, dry-run the material:
+
+```bash
+bash openless-all/app/scripts/check-harmony-signing.sh \
+  ~/.local/share/harmony/signing/release release
+```
+
+It proves the four things that fail late otherwise: the certificate belongs to
+the keystore key, the profile was issued for that certificate, `bundle-info.bundle-name`
+equals `harmony/AppScope/app.json5`, and nothing has expired. The workflow runs the
+same check before it starts building.
+
 ### Storing them in the repository
 
 ```bash

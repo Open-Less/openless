@@ -111,3 +111,16 @@ console.log('harmony-release contract test passed');
     'the signing step must export OPENLESS_HARMONY_SIGNING_DIR through $GITHUB_ENV',
   );
 }
+
+// The signing material must be validated before the build: a mismatched
+// certificate or an expired profile would otherwise only surface after a
+// six-minute build, or when a device refuses the install.
+assert.match(
+  workflow,
+  /Validate the signing material before building[\s\S]*check-harmony-signing\.sh/,
+  'release-harmony.yml must run check-harmony-signing.sh before building',
+);
+assert.ok(
+  existsSync(join(appRoot, 'scripts/check-harmony-signing.sh')),
+  'scripts/check-harmony-signing.sh must exist',
+);
