@@ -22,11 +22,16 @@ on:
         required: true
         type: string
       channel:
-        description: 'release = AppGallery production signing, test = AppGallery test channel'
+        # `none` is the repository distribution path: build the HAP, attach the
+        # unsigned package to the GitHub Release, never sign, never touch the
+        # store. `release` / `test` add the AppGallery signing on top, and only
+        # the store upload ever sees the signed file.
+        description: 'none = unsigned (GitHub Release only), release = AppGallery production, test = AppGallery test channel'
         required: false
         type: choice
-        default: release
+        default: none
         options:
+          - none
           - release
           - test
       publish:
@@ -137,6 +142,7 @@ jobs:
           fi
 
       - name: Write the signing material for this channel
+        if: inputs.channel != 'none'
         # One secret set per channel: a `test` dispatch installs the test profile
         # under `test.*`, a `release` dispatch installs the production profile
         # under `release.*`. The packaging script picks the prefix by channel.
@@ -194,6 +200,7 @@ jobs:
           ls -l "$dir"
 
       - name: Validate the signing material before building
+        if: inputs.channel != 'none'
         # Cheap and early: a certificate that does not match the keystore, a
         # profile issued for another certificate, a profile for a different
         # bundleName or an expired profile would otherwise surface after a
@@ -228,8 +235,12 @@ jobs:
           # additionally prove its signature.
           bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
             "$toolchain" "$version_name" "$version_code" --allow-unsigned
-          bash scripts/verify-harmony-hap.sh \
-            "$output/OpenLess_harmony_arm64-signed.hap" "$toolchain"
+          if [ "${{ inputs.channel }}" != "none" ]; then
+            bash scripts/verify-harmony-hap.sh \
+              "$output/OpenLess_harmony_arm64-signed.hap" "$toolchain"
+          else
+            echo "channel=none: unsigned package only, no signature to verify"
+          fi
 
       - name: Upload the HAP as a workflow artifact
         uses: actions/upload-artifact@v4
@@ -267,7 +278,8 @@ jobs:
           echo "attached HarmonyOS assets to $RELEASE_TAG"
 
       - name: Upload to HUAWEI AppGallery Connect
-        if: inputs.upload_to_appgallery
+        # Nothing to upload for the unsigned distribution path.
+        if: inputs.upload_to_appgallery && inputs.channel != 'none'
         working-directory: openless-all/app
         # A fork without AGC credentials still gets the GitHub Release; the step
         # reports that it skipped instead of failing the whole release.

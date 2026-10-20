@@ -79,11 +79,18 @@ redistribution, which is also why it is fetched at job time rather than vendored
 | AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
 | 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
 
-Dispatch the workflow with `channel: release` (default) or `channel: test`; the
-input selects both the signing prefix (`release.cer/p7b/p12` vs
-`test.cer/p7b/p12`) and the AppGallery upload label. The workflow artifact
-bundle carries both packages, the Release step uploads only the unsigned pair,
-and the AppGallery step uploads only the signed one.
+Dispatch the workflow with `channel: none` (default), `channel: release` or
+`channel: test`:
+
+- `none` is the repository path. It builds the HAP, attaches the **unsigned**
+  package to the GitHub Release and touches neither the signing step nor the
+  store, so it needs no secret at all.
+- `release` / `test` select the signing prefix (`release.cer/p7b/p12` vs
+  `test.cer/p7b/p12`), sign, and upload to AppGallery.
+
+The workflow artifact bundle carries both packages; the Release step uploads only
+the unsigned pair, and the AppGallery step uploads only the signed one. CI never
+signs: `ci.yml` always builds with `OPENLESS_HARMONY_CHANNEL=none`.
 
 A local machine without store certificates can still produce a package:
 `OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and

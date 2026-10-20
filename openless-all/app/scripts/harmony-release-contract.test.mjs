@@ -42,7 +42,15 @@ assert.match(packaging, /@ohos\/hvigor\/bin\/hvigor\.js/);
 // Distribution policy: the repository only ever carries the unsigned package,
 // AppGallery gets the signed one, and the test channel signs with its own
 // material.
-assert.match(workflow, /channel:[\s\S]{0,400}default: release/);
+// The default dispatch is the unsigned repository path: signing only happens for
+// a store channel, and a plain release build must not need any secret.
+assert.match(workflow, /channel:[\s\S]{0,600}default: none/);
+assert.match(workflow, /options:[\s\S]{0,200}- none[\s\S]{0,80}- release[\s\S]{0,80}- test/);
+assert.match(
+  workflow,
+  /Write the signing material for this channel\n\s+if: inputs\.channel != 'none'/,
+  'the signing material step must be skipped for channel=none',
+);
 assert.match(workflow, /HARMONY_KEYSTORE_BASE64[\s\S]{0,400}prefix\.p12/);
 assert.match(workflow, /OPENLESS_HARMONY_CHANNEL: \$\{\{ inputs\.channel \}\}/);
 assert.match(workflow, /--channel "\$\{\{ inputs\.channel \}\}"/);
