@@ -55,7 +55,11 @@ assert.doesNotMatch(
   'stale submissions must still finish their draft callback',
 );
 assert.match(report, /return message/);
-assert.match(report, /OpenLessClipboardHistory\.recordCopy/);
+assert.match(
+  report,
+  /val persisted = retained && OpenLessClipboardHistory\.recordCopy\(this, text\)/,
+);
+assert.match(report, /cloudNoteFailureMessage\([\s\S]*?retained,\s+persisted,/);
 assert.match(report, /cloudNoteShouldRetain\(text\)/);
 assert.doesNotMatch(
   successBranch,
@@ -64,5 +68,6 @@ assert.doesNotMatch(
 );
 assert.match(copyScript, /'CloudNoteDelivery\.kt'/);
 assert.match(copyScript, /'CloudNoteDeliveryTest\.kt'/);
+assert.match(copyScript, /'OpenLessClipboardHistoryInstrumentedTest\.kt'/);
 
 console.log('android cloud note delivery contract passed');

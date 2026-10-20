@@ -3914,23 +3914,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         failure: CloudNoteFailure,
         httpCode: Int = 0,
     ): String {
-        val retained = if (cloudNoteShouldRetain(text)) {
-            try {
-                OpenLessClipboardHistory.recordCopy(this, text)
-                true
-            } catch (error: Throwable) {
-                android.util.Log.w(
-                    "OpenLessImeService",
-                    "cloud note clipboard retain failed: ${error.javaClass.simpleName}",
-                )
-                false
-            }
-        } else {
-            false
-        }
+        val retained = cloudNoteShouldRetain(text)
+        val persisted = retained && OpenLessClipboardHistory.recordCopy(this, text)
         val (messageZh, messageEn) = cloudNoteFailureMessage(
             cloudNoteFailureDetail(failure, httpCode),
             retained,
+            persisted,
         )
         val message = ui(messageZh, messageEn)
         if (requestId == imeRequestId) {

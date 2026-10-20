@@ -29,11 +29,13 @@ internal fun cloudNoteFailureDetail(failure: CloudNoteFailure, httpCode: Int = 0
 internal fun cloudNoteFailureMessage(
     detail: Pair<String, String>,
     retained: Boolean,
+    persisted: Boolean,
 ): Pair<String, String> {
     val (zh, en) = detail
-    return if (retained) {
-        "$zh，内容已保存在键盘剪贴板" to "$en. The text was saved in the keyboard clipboard."
-    } else {
-        zh to en
+    return when {
+        persisted -> "$zh，内容已保存在键盘剪贴板" to "$en. The text was saved in the keyboard clipboard."
+        retained -> "$zh，内容仅暂存在键盘剪贴板，应用重启后会丢失，请及时复制" to
+            "$en. The text is only in memory in the keyboard clipboard. Copy it before the app restarts."
+        else -> zh to en
     }
 }

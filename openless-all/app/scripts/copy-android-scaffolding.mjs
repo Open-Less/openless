@@ -106,6 +106,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessAccessibilityComponentIdsTest.kt',
 ];
 const KOTLIN_ANDROID_TEST_FILES = [
+  'OpenLessClipboardHistoryInstrumentedTest.kt',
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
   'OpenLessMigrationBundleInstrumentedTest.kt',
