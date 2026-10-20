@@ -1,0 +1,158 @@
+[
+  {
+    "path": "NOTICE",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v5/files/NOTICE",
+    "sizeBytes": 891,
+    "sha256": "d7721bec34cdc40474d48e1c3454915881c1b11b7ab2d58b35e2097107067415"
+  },
+  {
+    "path": "eg2_audio_l11.mlmodelc/analytics/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/eg2_audio_l11.mlmodelc/analytics/coremldata.bin",
+    "sizeBytes": 243,
+    "sha256": "26ef07ea49872366f2cb07143b65c2ee1b27a193f7765b2203130e6505356d93"
+  },
+  {
+    "path": "eg2_audio_l11.mlmodelc/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/eg2_audio_l11.mlmodelc/coremldata.bin",
+    "sizeBytes": 413,
+    "sha256": "6a2eb779f98459182f75eb411dd9fc7331ce499f8d9fa8ef22bdf03ed8b09a7b"
+  },
+  {
+    "path": "eg2_audio_l11.mlmodelc/metadata.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/eg2_audio_l11.mlmodelc/metadata.json",
+    "sizeBytes": 2616,
+    "sha256": "474eb132d5b5b4172e419cb35050070bfdf8ec26d35d74ccc0dbdc21182abca0"
+  },
+  {
+    "path": "eg2_audio_l11.mlmodelc/model.mil",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/eg2_audio_l11.mlmodelc/model.mil",
+    "sizeBytes": 549319,
+    "sha256": "94a4f965ff6821b9112bdc3afd236774dbea3bac958311e2f9caefa9173dd0fe"
+  },
+  {
+    "path": "eg2_audio_l11.mlmodelc/weights/weight.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/eg2_audio_l11.mlmodelc/weights/weight.bin",
+    "sizeBytes": 227280704,
+    "sha256": "1781b3491deef798302ff0594cf89af84512dca0baaee093f71dada0985f0aab"
+  },
+  {
+    "path": "hann_320.f32",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/hann_320.f32",
+    "sizeBytes": 1280,
+    "sha256": "8ac4fd109da552d6d3ef7a90083306384c9ee2bc32a60dd9f1ecfe931d8caf44"
+  },
+  {
+    "path": "mel_filters_257x128.f32",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/mel_filters_257x128.f32",
+    "sizeBytes": 131584,
+    "sha256": "669a99684b146cc243809c72bb0330261a56918ac30bdc0876fc112a8881a6b9"
+  },
+  {
+    "path": "punct_case.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_case.json",
+    "sizeBytes": 275841,
+    "sha256": "ff6df24c8be41942a1e5cf22be81c8a2ac3a1be19cce720f59703ed8703aeffb"
+  },
+  {
+    "path": "punct_headonly.mlmodelc/analytics/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_headonly.mlmodelc/analytics/coremldata.bin",
+    "sizeBytes": 243,
+    "sha256": "c678160cb94050a1f8adcbfe552f950b03a80ff440ba04596caa134f5c32426a"
+  },
+  {
+    "path": "punct_headonly.mlmodelc/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_headonly.mlmodelc/coremldata.bin",
+    "sizeBytes": 490,
+    "sha256": "03b8cb7e1b78d47e54fb1e9b4b05b20a6e44800d5284405a31894e22ab3a650a"
+  },
+  {
+    "path": "punct_headonly.mlmodelc/metadata.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_headonly.mlmodelc/metadata.json",
+    "sizeBytes": 2582,
+    "sha256": "4f0b7d6727a7bb4de550eb5b3ccf8a175e22717d01a7c6bea1bbc115ef4c388b"
+  },
+  {
+    "path": "punct_headonly.mlmodelc/model.mil",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_headonly.mlmodelc/model.mil",
+    "sizeBytes": 53561,
+    "sha256": "975d6d1427cf9a2f362935de5c9c2398a186d83db56d38009af0371e87319eb9"
+  },
+  {
+    "path": "punct_headonly.mlmodelc/weights/weight.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v3/files/punct_headonly.mlmodelc/weights/weight.bin",
+    "sizeBytes": 6772352,
+    "sha256": "c84e2dc00eb63ad6c800c1f25fb2250a8929553d10565725fb5eb67cf20fbfcc"
+  },
+  {
+    "path": "reader_P6.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/reader_G795_L11_big.json",
+    "sizeBytes": 294,
+    "sha256": "7a43e6557e6a202b59761ea0720fad9b807796e24776b2b331b0f03d67a6f700"
+  },
+  {
+    "path": "reader_P6.mlmodelc/analytics/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/reader_P6.mlmodelc/analytics/coremldata.bin",
+    "sizeBytes": 243,
+    "sha256": "d458d53c489dbb0915d37bbb91e5362396d83701486b34590b81826254da7f7e"
+  },
+  {
+    "path": "reader_P6.mlmodelc/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/reader_P6.mlmodelc/coremldata.bin",
+    "sizeBytes": 417,
+    "sha256": "8abedbc1f0c1ff01c8d131411479ae73096f83b700bcb832ee446fe0f5aead1d"
+  },
+  {
+    "path": "reader_P6.mlmodelc/metadata.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/reader_P6.mlmodelc/metadata.json",
+    "sizeBytes": 2728,
+    "sha256": "644f948514442720ac78040c1a21254b55317868c217b63a34101950597ce6b8"
+  },
+  {
+    "path": "reader_P6.mlmodelc/model.mil",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/reader_P6.mlmodelc/model.mil",
+    "sizeBytes": 133206,
+    "sha256": "c2401a5f0faeebb8b5618923d6513c1aeb486f821a7bfa0d00338007cb8bd22f"
+  },
+  {
+    "path": "reader_P6.mlmodelc/weights/weight.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v4/files/reader_P6.mlmodelc/weights/weight.bin",
+    "sizeBytes": 65689984,
+    "sha256": "b0697e6d084048918dc2ddde822da156e1b2400ff585bc63d4929d8e9721adbf"
+  },
+  {
+    "path": "reader_words.json",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/reader_words.json",
+    "sizeBytes": 2688088,
+    "sha256": "d651e2ec1ebd55de2d31c70f64803894580eb6f5e85239edcd0bbec99c918b53"
+  },
+  {
+    "path": "scorer_blk_d128_k16_b4_t500.mlmodelc/analytics/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/scorer_blk_d128_k16_b4_t500.mlmodelc/analytics/coremldata.bin",
+    "sizeBytes": 243,
+    "sha256": "2422632913713b3f624d65ac7e7a1020464782bb45826ef2be96e11f970e0e22"
+  },
+  {
+    "path": "scorer_blk_d128_k16_b4_t500.mlmodelc/coremldata.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/scorer_blk_d128_k16_b4_t500.mlmodelc/coremldata.bin",
+    "sizeBytes": 307,
+    "sha256": "25f5845dc7db1215842add5f51d78d9179d8ed940707a448b57828bddeb20b59"
+  },
+  {
+    "path": "scorer_blk_d128_k16_b4_t500.mlmodelc/model.mil",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/scorer_blk_d128_k16_b4_t500.mlmodelc/model.mil",
+    "sizeBytes": 3583,
+    "sha256": "3992faf39a83111a1664a8cbe35bee0a1427b79eadc33d85f83b49e888a59790"
+  },
+  {
+    "path": "scorer_blk_d128_k16_b4_t500.mlmodelc/weights/weight.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/scorer_blk_d128_k16_b4_t500.mlmodelc/weights/weight.bin",
+    "sizeBytes": 58938560,
+    "sha256": "823e7cace9dfc1d8c2c6575dc802814f15879c2b124b9da6693e5cf1f6f7034a"
+  },
+  {
+    "path": "word_unit_f16.bin",
+    "url": "https://haku-models.tslfiles.org/eg2demo/v1/files/word_unit_f16.bin",
+    "sizeBytes": 352445952,
+    "sha256": "36edb3cae02101c49ad3f3289ce5c526b1698916eb6b9faf116f4df227a25c9b"
+  }
+]

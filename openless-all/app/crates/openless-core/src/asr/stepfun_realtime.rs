@@ -372,11 +372,17 @@ impl StepfunRealtimeASR {
             self.cancel();
             return Err(error);
         }
-        if let Some(error) = self.state.lock().session_start_error.clone() {
+        self.finish_session_start()
+    }
+
+    fn finish_session_start(&self) -> Result<(), StepfunASRError> {
+        // Rust 2021 keeps an if-let scrutinee's temporary guard through its
+        // body. Release it before cancel() acquires the same non-reentrant lock.
+        let start_error = self.state.lock().session_start_error.clone();
+        if let Some(error) = start_error {
             self.cancel();
             return Err(StepfunASRError::TaskFailed(error));
         }
-
         Ok(())
     }
 
@@ -929,7 +935,7 @@ async fn send_text(writer: &SharedWriter, text: String) -> Result<(), StepfunASR
                 "websocket writer not available".to_string(),
             ));
         };
-        ws.send(Message::Text(text))
+        ws.send(Message::Text(text.into()))
             .await
             .map_err(|e| StepfunASRError::SendFailed(e.to_string()))
     })
@@ -948,6 +954,25 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), StepfunASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_start_failure_cancels_without_reentering_the_state_lock() {
+        let asr = create_test_asr();
+        asr.state.lock().session_start_error = Some("startup rejected".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = asr.finish_session_start();
+            assert!(asr.state.lock().session_finished);
+            tx.send(result).unwrap();
+        });
+        let result = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("provider startup failure must not deadlock cleanup");
+        assert!(
+            matches!(result, Err(StepfunASRError::TaskFailed(message)) if message == "startup rejected")
+        );
+        worker.join().unwrap();
+    }
 
     #[test]
     fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
@@ -1297,17 +1322,17 @@ mod tests {
                 ws.next().await.unwrap().unwrap(),
                 Message::Text(_)
             ));
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 json!({ "type": "session.updated" }).to_string(),
             ))
             .await
             .unwrap();
 
             release_events_rx.await.unwrap();
-            ws.send(Message::Text(speech_started_event()))
+            ws.send(Message::text(speech_started_event()))
                 .await
                 .unwrap();
-            ws.send(Message::Text(completed_event("delayed speech")))
+            ws.send(Message::text(completed_event("delayed speech")))
                 .await
                 .unwrap();
             // Keep the connection open until the client processes the completed and
@@ -1371,7 +1396,7 @@ mod tests {
                 ws.next().await.unwrap().unwrap(),
                 Message::Text(_)
             ));
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 json!({ "type": "session.updated" }).to_string(),
             ))
             .await
@@ -1382,7 +1407,7 @@ mod tests {
                     Message::Text(_) if !fired => {
                         fired = true;
                         for event in &events_on_first_audio {
-                            ws.send(Message::Text(event.clone())).await.unwrap();
+                            ws.send(Message::text(event.clone())).await.unwrap();
                         }
                     }
                     Message::Close(_) => break,

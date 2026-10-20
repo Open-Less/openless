@@ -937,6 +937,83 @@ async fn completed_selection_applies_corrections_before_insert_history_and_activ
 }
 
 #[tokio::test]
+async fn oversized_selection_polish_refuses_before_replacing_the_document() {
+    let oversized = "字".repeat(openless_core::prompts::MAX_XML_ENVELOPE_CHARS + 1);
+    let runtime = RecordingSelectionRuntime::new("unused capture");
+    let polisher = CountingTextPolisher::default();
+    let (backend, data_dir) = backend_with_selection_parts(
+        runtime.clone(),
+        Arc::new(polisher.clone()),
+        Arc::new(UnsupportedCredentialStore),
+    );
+    backend.start().await.expect("backend should start");
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
+    write_preferences(&backend, preferences);
+
+    let error = backend
+        .services()
+        .selection
+        .begin_polish(SelectionPolishRequest {
+            selected_text: Some(oversized.clone()),
+            mode: PolishMode::Formal,
+            instruction: None,
+        })
+        .await
+        .expect_err("an oversized selection must not be replaced");
+
+    assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+    assert!(error
+        .message
+        .contains(&openless_core::prompts::MAX_XML_ENVELOPE_CHARS.to_string()));
+    assert_eq!(polisher.call_count(), 0);
+    assert!(
+        runtime.applied().is_empty(),
+        "the original selection must stay untouched"
+    );
+    assert_eq!(
+        backend.services().selection.snapshot().await.unwrap().phase,
+        SelectionPhase::Failed
+    );
+
+    let cap = openless_core::prompts::MAX_XML_ENVELOPE_CHARS;
+    for length in [cap - 1, cap] {
+        backend
+            .services()
+            .selection
+            .begin_polish(SelectionPolishRequest {
+                selected_text: Some("字".repeat(length)),
+                mode: PolishMode::Formal,
+                instruction: None,
+            })
+            .await
+            .expect("a selection within the envelope cap still polishes");
+    }
+    assert_eq!(polisher.call_count(), 2);
+    assert_eq!(runtime.applied().len(), 2);
+
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_style_pack_id =
+        openless_core::BUILTIN_STYLE_PACK_RAW_ID.to_string();
+    write_preferences(&backend, preferences);
+    backend
+        .services()
+        .selection
+        .begin_polish(SelectionPolishRequest {
+            selected_text: Some(oversized.clone()),
+            mode: PolishMode::Raw,
+            instruction: None,
+        })
+        .await
+        .expect("oversized raw text must pass through without a model");
+    assert_eq!(polisher.call_count(), 2);
+    assert_eq!(runtime.applied()[2].2, oversized);
+
+    backend.shutdown().await.expect("backend should stop");
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn default_raw_selection_is_a_true_passthrough_without_an_llm_call() {
     let runtime = RecordingSelectionRuntime::new("keep this exactly");
     let polisher = CountingTextPolisher::default();

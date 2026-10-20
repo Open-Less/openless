@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenLess",
-  "version": "2.0.0-Beta.4+build.20260930",
+  "version": "2.0.2-Beta.1+build.20261017",
   "identifier": "com.openless.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run check:macos-metal-toolchain && npm run build",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },

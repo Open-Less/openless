@@ -144,6 +144,8 @@ pub struct ChannelRecord {
     pub enabled: bool,
     pub order: u32,
     pub active: bool,
+    #[serde(default)]
+    pub configuration: BTreeMap<String, String>,
 }
 
 impl ChannelRecord {
@@ -344,6 +346,22 @@ pub trait RestoreBackend: Send + Sync {
 }
 
 pub trait RestoreLease: Send {
+    /// Release a local Host fence after the durable Core receipt, before removing the journal.
+    fn finish_local_state(&mut self) -> DocumentResult<()> {
+        Ok(())
+    }
+    /// Local migration Hosts may attach an external store before the before-image is captured.
+    fn prepare_target(
+        &mut self,
+        _target: &ValidatedSyncDocuments,
+        revision: Option<&str>,
+    ) -> DocumentResult<()> {
+        if revision.is_some() {
+            Err(DocumentError::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
     fn capture(&mut self) -> BoxFuture<'_, DocumentResult<ExportSnapshot>>;
 
     /// Local-only side effects never enter cloud documents. The encrypted journal may retain

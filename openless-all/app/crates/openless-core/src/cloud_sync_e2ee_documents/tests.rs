@@ -79,6 +79,7 @@ pub(super) fn channel_snapshot() -> ExportSnapshot {
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "llm-one".into(),
@@ -116,6 +117,43 @@ fn all_current_preference_fields_have_an_explicit_registration() {
         "new persistent fields require a reviewed sync classification"
     );
     assert_eq!(registered.len(), registry::PREFERENCE_FIELDS.len());
+}
+
+#[test]
+fn public_endpoint_rejects_credential_like_hostnames() {
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://sk-live-abc123.example.test"
+    ));
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://token.example.test/v1"
+    ));
+    assert!(registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://api.example.test/v1"
+    ));
+}
+
+#[test]
+fn testing_features_opt_in_is_never_exported_or_accepted_from_another_device() {
+    let mut data = snapshot();
+    data.preferences = SecretJson::new(json!({"testingFeaturesEnabled": true}));
+    let exported = export_snapshot(data).unwrap();
+    assert!(!serde_json::to_string(exported.documents.documents())
+        .unwrap()
+        .contains("testingFeaturesEnabled"));
+    let mut invalid = sample().documents().clone();
+    invalid.documents.push(LogicalDocument {
+        id: "testingFeaturesEnabled".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!(true),
+    });
+    assert_eq!(
+        validate_sync_documents(invalid, Revision::new(3)).unwrap_err(),
+        DocumentError::ExcludedField
+    );
 }
 
 #[test]
@@ -162,6 +200,7 @@ fn local_asr_channels_are_archived_with_their_credentials_not_globally_activated
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "local-one".into(),
@@ -301,6 +340,133 @@ fn unknown_preference_values_roundtrip_and_merge_without_application() {
         .documents
         .iter()
         .any(|doc| doc.id == "futureAppearance" && doc.value["value"] == "preserve-me"));
+}
+
+#[test]
+fn capsule_display_exports_new_modes_with_a_v1_compatible_shadow() {
+    for mode in ["primaryScreen", "foregroundWindowScreen"] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({"capsuleDisplayMode": mode}));
+        let exported = export_snapshot(data).unwrap();
+        let value = |id: &str| {
+            exported
+                .documents
+                .documents()
+                .documents
+                .iter()
+                .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == id)
+                .map(|doc| doc.value.clone())
+        };
+        assert_eq!(value("capsuleDisplayMode"), Some(json!("cursorScreen")));
+        assert_eq!(value("capsuleDisplayModeV2"), Some(json!(mode)));
+    }
+}
+
+#[test]
+fn capsule_display_v2_survives_retention_upgrade_and_explicit_replacement() {
+    let retained = LogicalDocument {
+        id: "capsuleDisplayModeV2".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!("foregroundWindowScreen"),
+    };
+    for explicit in [None, Some("cursorScreen"), Some("allScreens")] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({"capsuleDisplayMode":"cursorScreen"}));
+        if let Some(mode) = explicit {
+            data.preferences.expose_mut()["capsuleDisplayModeV2"] = json!(mode);
+        }
+        data.retained_documents.push(retained.clone());
+        let exported = export_snapshot(data).unwrap();
+        let modes: Vec<_> = exported
+            .documents
+            .documents()
+            .documents
+            .iter()
+            .filter(|doc| doc.id == "capsuleDisplayModeV2")
+            .collect();
+        assert_eq!(modes.len(), 1);
+        assert_eq!(
+            modes[0].value,
+            json!(explicit.unwrap_or("foregroundWindowScreen"))
+        );
+    }
+}
+
+#[test]
+fn capsule_display_legacy_edits_are_not_v2_conflicts() {
+    for mode in [
+        "cursorScreen",
+        "primaryScreen",
+        "foregroundWindowScreen",
+        "allScreens",
+    ] {
+        let mut data = snapshot();
+        data.preferences = SecretJson::new(json!({
+            "themeMode":"system", "capsuleDisplayMode":"cursorScreen", "capsuleDisplayModeV2":mode
+        }));
+        let base = export_snapshot(data).unwrap().documents;
+        let local = change(
+            &base,
+            DocumentKind::Preferences,
+            "capsuleDisplayMode",
+            json!(if mode == "allScreens" {
+                "cursorScreen"
+            } else {
+                "allScreens"
+            }),
+        );
+        let remote = change(&base, DocumentKind::Preferences, "themeMode", json!("dark"));
+        let merged = diff_sync_documents(Some(&base), &local, &remote)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        let mirrored = diff_sync_documents(Some(&base), &remote, &local)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        assert_eq!(merged.documents(), mirrored.documents());
+        assert!(merged
+            .documents()
+            .documents
+            .iter()
+            .any(|doc| doc.id == "capsuleDisplayModeV2" && doc.value == json!(mode)));
+        assert!(merged
+            .documents()
+            .documents
+            .iter()
+            .any(|doc| doc.id == "themeMode" && doc.value == json!("dark")));
+    }
+}
+
+#[test]
+fn capsule_display_v2_rejects_invalid_and_duplicate_documents() {
+    let base = sample();
+    for value in [json!("sometimes"), Value::Null, json!(42)] {
+        let mut set = base.documents().clone();
+        set.documents.push(LogicalDocument {
+            id: "capsuleDisplayModeV2".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value,
+        });
+        assert_eq!(
+            validate_sync_documents(set, Revision::new(4)).unwrap_err(),
+            DocumentError::InvalidDocument
+        );
+    }
+    let mut set = base.documents().clone();
+    let doc = LogicalDocument {
+        id: "capsuleDisplayModeV2".into(),
+        kind: DocumentKind::Preferences,
+        schema_version: 1,
+        value: json!("cursorScreen"),
+    };
+    set.documents.extend([doc.clone(), doc]);
+    assert_eq!(
+        validate_sync_documents(set, Revision::new(4)).unwrap_err(),
+        DocumentError::DuplicateId
+    );
 }
 
 #[test]
@@ -602,4 +768,482 @@ fn collection_order_is_preserved_independently_of_stable_id_sorting() {
             .value["sortIndex"],
         1
     );
+}
+
+fn history_row(id: &str, created_at: &str, text: &str) -> SecretJson {
+    SecretJson::new(
+        json!({"id":id,"createdAt":created_at,"source":"quick_note","rawTranscript":text,"finalText":text,"mode":"raw","insertStatus":"notRequested","hasAudioRecording":false}),
+    )
+}
+
+/// Newest first, the way the history store keeps its list.
+fn history_set(rows: &[(&str, &str, &str)]) -> ValidatedSyncDocuments {
+    let mut data = snapshot();
+    data.history = rows
+        .iter()
+        .map(|(id, created_at, text)| history_row(id, created_at, text))
+        .collect();
+    export_snapshot(data).unwrap().documents
+}
+
+fn correction_row(id: &str, pattern: &str, replacement: &str, created_at: &str) -> SecretJson {
+    SecretJson::new(json!({
+        "id": id,
+        "pattern": pattern,
+        "replacement": replacement,
+        "enabled": true,
+        "createdAt": created_at,
+        "source": "manual"
+    }))
+}
+
+fn corrections_set(rows: &[(&str, &str, &str, &str)]) -> ValidatedSyncDocuments {
+    let mut data = snapshot();
+    data.corrections = rows
+        .iter()
+        .map(|(id, pattern, replacement, created_at)| {
+            correction_row(id, pattern, replacement, created_at)
+        })
+        .collect();
+    export_snapshot(data).unwrap().documents
+}
+
+fn dictionary_set(rows: Vec<Value>) -> ValidatedSyncDocuments {
+    let mut data = snapshot();
+    data.dictionary = rows.into_iter().map(SecretJson::new).collect();
+    export_snapshot(data).unwrap().documents
+}
+
+fn ids_in_order(set: &ValidatedSyncDocuments, kind: DocumentKind) -> Vec<String> {
+    let mut rows: Vec<_> = set
+        .documents()
+        .documents
+        .iter()
+        .filter(|doc| doc.kind == kind)
+        .collect();
+    rows.sort_by_key(|doc| doc.value["sortIndex"].as_u64().unwrap());
+    rows.into_iter().map(|doc| doc.id.clone()).collect()
+}
+
+#[test]
+fn dictating_on_two_devices_between_syncs_is_not_a_conflict() {
+    let shared = [
+        ("old-2", "2026-09-26T09:00:00Z", "second"),
+        ("old-1", "2026-09-26T08:00:00Z", "first"),
+    ];
+    let base = history_set(&shared);
+    // Each new row lands at the front of its own device's list, pushing every shared row
+    // down by a different amount on the two devices.
+    let local = history_set(&[
+        ("a-2", "2026-09-27T12:00:00Z", "a later"),
+        ("a-1", "2026-09-27T10:00:00Z", "a earlier"),
+        shared[0],
+        shared[1],
+    ]);
+    let remote = history_set(&[("b-1", "2026-09-27T11:00:00Z", "b"), shared[0], shared[1]]);
+
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert!(preview.conflicts().is_empty());
+    let merged = preview.resolve(&[]).unwrap();
+    // Both devices' rows are kept, interleaved by when they were dictated.
+    assert_eq!(
+        ids_in_order(&merged, DocumentKind::History),
+        ["a-2", "b-1", "a-1", "old-2", "old-1"]
+    );
+
+    // The other device reaches the same result from its side.
+    let mirrored = diff_sync_documents(Some(&base), &remote, &local)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    assert_eq!(
+        ids_in_order(&mirrored, DocumentKind::History),
+        ids_in_order(&merged, DocumentKind::History)
+    );
+}
+
+#[test]
+fn equal_or_undated_history_records_converge_with_stable_ties() {
+    let assert_converges = |created_at: &str| {
+        let local = history_set(&[
+            ("first", created_at, "first"),
+            ("second", created_at, "second"),
+        ]);
+        let remote = history_set(&[
+            ("second", created_at, "second"),
+            ("first", created_at, "first"),
+        ]);
+
+        assert_eq!(
+            ids_in_order(&local, DocumentKind::History),
+            ["first", "second"]
+        );
+        assert_eq!(
+            ids_in_order(&remote, DocumentKind::History),
+            ["second", "first"]
+        );
+
+        let forward = diff_sync_documents(None, &local, &remote)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        let mirrored = diff_sync_documents(None, &remote, &local)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        assert_eq!(
+            ids_in_order(&forward, DocumentKind::History),
+            ids_in_order(&mirrored, DocumentKind::History)
+        );
+        assert_eq!(
+            ids_in_order(&forward, DocumentKind::History),
+            ["first", "second"]
+        );
+
+        let third = history_set(&[
+            ("second", created_at, "second"),
+            ("first", created_at, "first"),
+        ]);
+        let forward_again = diff_sync_documents(None, &forward, &third)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        let mirrored_again = diff_sync_documents(None, &mirrored, &third)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        assert_eq!(
+            ids_in_order(&forward_again, DocumentKind::History),
+            ids_in_order(&mirrored_again, DocumentKind::History)
+        );
+        assert_eq!(
+            ids_in_order(&forward_again, DocumentKind::History),
+            ["first", "second"]
+        );
+    };
+
+    assert_converges("2026-09-27T10:00:00Z");
+    assert_converges("");
+}
+
+#[test]
+fn agreed_legacy_correction_order_survives_merge() {
+    let local = corrections_set(&[("z", "foo", "bar", ""), ("a", "bar", "baz", "")]);
+    let remote = corrections_set(&[("z", "foo", "bar", ""), ("a", "bar", "baz", "")]);
+
+    let merged = diff_sync_documents(None, &local, &remote)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+
+    assert_eq!(ids_in_order(&merged, DocumentKind::Corrections), ["z", "a"]);
+}
+
+#[test]
+fn shared_legacy_correction_order_survives_one_sided_addition() {
+    let local = corrections_set(&[
+        ("new", "new", "value", ""),
+        ("z", "foo", "bar", ""),
+        ("a", "bar", "baz", ""),
+    ]);
+    let remote = corrections_set(&[("z", "foo", "bar", ""), ("a", "bar", "baz", "")]);
+
+    let forward = diff_sync_documents(None, &local, &remote)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    let mirrored = diff_sync_documents(None, &remote, &local)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+
+    assert_eq!(
+        ids_in_order(&forward, DocumentKind::Corrections),
+        ["new", "z", "a"]
+    );
+    assert_eq!(
+        ids_in_order(&forward, DocumentKind::Corrections),
+        ids_in_order(&mirrored, DocumentKind::Corrections)
+    );
+}
+
+#[test]
+fn one_sided_legacy_correction_order_survives_merge() {
+    let empty = corrections_set(&[]);
+    let remote = corrections_set(&[("z", "cat", "dog", ""), ("a", "dog", "fox", "")]);
+
+    let forward = diff_sync_documents(None, &empty, &remote)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    let mirrored = diff_sync_documents(None, &remote, &empty)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+
+    assert_eq!(
+        ids_in_order(&forward, DocumentKind::Corrections),
+        ["z", "a"]
+    );
+    assert_eq!(
+        ids_in_order(&forward, DocumentKind::Corrections),
+        ids_in_order(&mirrored, DocumentKind::Corrections)
+    );
+}
+
+#[test]
+fn records_that_differ_only_in_list_position_merge_without_a_baseline() {
+    let local = history_set(&[
+        ("only-local", "2026-09-27T10:00:00Z", "local"),
+        ("shared", "2026-09-26T08:00:00Z", "same text"),
+    ]);
+    let remote = history_set(&[("shared", "2026-09-26T08:00:00Z", "same text")]);
+    let preview = diff_sync_documents(None, &local, &remote).unwrap();
+    assert!(preview.conflicts().is_empty());
+}
+
+#[test]
+fn editing_the_same_record_on_both_devices_is_still_a_conflict() {
+    let base = history_set(&[("shared", "2026-09-26T08:00:00Z", "original")]);
+    let local = history_set(&[("shared", "2026-09-26T08:00:00Z", "edited here")]);
+    let remote = history_set(&[
+        ("new-remote", "2026-09-27T10:00:00Z", "unrelated"),
+        ("shared", "2026-09-26T08:00:00Z", "edited there"),
+    ]);
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert_eq!(preview.conflicts().len(), 1);
+    assert_eq!(preview.conflicts()[0].kind, DocumentKind::History);
+    assert_eq!(preview.conflicts()[0].reason, ConflictReason::BothModified);
+}
+
+#[test]
+fn dictionary_hits_keep_the_highest_count_instead_of_conflicting() {
+    let word = |hits: u64, phrase: &str| json!({"id":"w1","phrase":phrase,"note":null,"enabled":true,"hits":hits,"createdAt":"2026-09-26T00:00:00Z"});
+    let word_of = |set: &ValidatedSyncDocuments| {
+        set.documents()
+            .documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::Dictionary)
+            .unwrap()
+            .value
+            .clone()
+    };
+    let base = dictionary_set(vec![word(1, "OpenLess")]);
+
+    // Used on both devices, edited on neither.
+    let preview = diff_sync_documents(
+        Some(&base),
+        &dictionary_set(vec![word(4, "OpenLess")]),
+        &dictionary_set(vec![word(6, "OpenLess")]),
+    )
+    .unwrap();
+    assert!(preview.conflicts().is_empty());
+    assert_eq!(word_of(&preview.resolve(&[]).unwrap())["hits"], 6);
+
+    // Renamed on the other device while this one kept using it: the rename wins, and
+    // this device's higher count is not thrown away with its old spelling.
+    let preview = diff_sync_documents(
+        Some(&base),
+        &dictionary_set(vec![word(9, "OpenLess")]),
+        &dictionary_set(vec![word(2, "OpenLess IME")]),
+    )
+    .unwrap();
+    assert!(preview.conflicts().is_empty());
+    let merged = word_of(&preview.resolve(&[]).unwrap());
+    assert_eq!(merged["phrase"], "OpenLess IME");
+    assert_eq!(merged["hits"], 9);
+
+    // Renamed differently on both devices is a real conflict; either choice keeps the
+    // highest count.
+    let local = dictionary_set(vec![word(9, "Open Less")]);
+    let remote = dictionary_set(vec![word(2, "OpenLess IME")]);
+    let preview = diff_sync_documents(Some(&base), &local, &remote).unwrap();
+    assert_eq!(preview.conflicts().len(), 1);
+    let choice = ConflictChoice {
+        conflict_id: preview.conflicts()[0].conflict_id.clone(),
+        side: ConflictSide::Remote,
+    };
+    let merged = word_of(&preview.resolve(&[choice]).unwrap());
+    assert_eq!(merged["phrase"], "OpenLess IME");
+    assert_eq!(merged["hits"], 9);
+}
+
+#[test]
+fn collection_order_is_canonicalized_only_after_merge() {
+    let learned = crate::shared_types::LEARNED_VOCAB_NOTE;
+    let entry = |id: &str, note: Option<&str>, created_at: &str| json!({"id":id,"phrase":id,"note":note,"enabled":true,"hits":0,"createdAt":created_at});
+    // Direct validation preserves the order exported by the local store.
+    let set = dictionary_set(vec![
+        entry("learned-new", Some(learned), "2026-09-28T00:00:00Z"),
+        entry("manual-old", None, "2026-09-28T17:00:00Z"),
+        entry("undated", None, ""),
+        entry("learned-old", Some(learned), "2026-09-27T00:00:00Z"),
+        entry("manual-new", None, "2026-09-29T00:00:00+08:00"),
+    ]);
+    assert_eq!(
+        ids_in_order(&set, DocumentKind::Dictionary),
+        [
+            "learned-new",
+            "manual-old",
+            "undated",
+            "learned-old",
+            "manual-new"
+        ]
+    );
+
+    // Merge validation canonicalizes by record data, including the offset instant.
+    let merged = diff_sync_documents(None, &set, &set)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    assert_eq!(
+        ids_in_order(&merged, DocumentKind::Dictionary),
+        [
+            "manual-old",
+            "manual-new",
+            "undated",
+            "learned-old",
+            "learned-new"
+        ]
+    );
+
+    let history = history_set(&[
+        ("morning", "2026-09-27T08:00:00Z", "m"),
+        ("evening", "2026-09-27T20:00:00Z", "e"),
+    ]);
+    let merged = diff_sync_documents(None, &history, &history)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    assert_eq!(
+        ids_in_order(&merged, DocumentKind::History),
+        ["evening", "morning"]
+    );
+}
+
+fn assert_collection_merge_is_stable(
+    baseline: Option<&ValidatedSyncDocuments>,
+    local: &ValidatedSyncDocuments,
+    remote: &ValidatedSyncDocuments,
+    kind: DocumentKind,
+    expected: &[&str],
+) -> ValidatedSyncDocuments {
+    let forward = diff_sync_documents(baseline, local, remote).unwrap();
+    assert!(forward.conflicts().is_empty());
+    let merged = forward.resolve(&[]).unwrap();
+    assert_eq!(ids_in_order(&merged, kind), expected);
+    let mirrored = diff_sync_documents(baseline, remote, local)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    assert!(merged.documents().documents == mirrored.documents().documents);
+    for original in [local, remote] {
+        let repeated = diff_sync_documents(None, &merged, original)
+            .unwrap()
+            .resolve(&[])
+            .unwrap();
+        assert!(merged.documents().documents == repeated.documents().documents);
+    }
+    merged
+}
+
+#[test]
+fn tied_correction_rules_keep_one_sided_execution_order() {
+    for created_at in ["", "2026-09-27T10:00:00Z"] {
+        let remote = corrections_set(&[
+            ("z", "foo", "bar", created_at),
+            ("a", "bar", "baz", created_at),
+        ]);
+        let local = corrections_set(&[
+            ("new", "start", "foo", created_at),
+            ("z", "foo", "bar", created_at),
+            ("a", "bar", "baz", created_at),
+        ]);
+        for baseline in [None, Some(&remote)] {
+            let merged = assert_collection_merge_is_stable(
+                baseline,
+                &local,
+                &remote,
+                DocumentKind::Corrections,
+                &["new", "z", "a"],
+            );
+            let apply = |set: &ValidatedSyncDocuments| {
+                let mut docs: Vec<_> = set
+                    .documents()
+                    .documents
+                    .iter()
+                    .filter(|doc| doc.kind == DocumentKind::Corrections)
+                    .collect();
+                docs.sort_by_key(|doc| doc.value["sortIndex"].as_u64().unwrap());
+                let rules: Vec<crate::types::CorrectionRule> = docs
+                    .into_iter()
+                    .map(|doc| serde_json::from_value(doc.value.clone()).unwrap())
+                    .collect();
+                crate::correction::apply_correction_rules("start", &rules)
+            };
+            assert_eq!(apply(&local), "baz");
+            assert_eq!(apply(&merged), apply(&local));
+        }
+    }
+}
+
+#[test]
+fn tied_collection_gaps_preserve_both_device_orders() {
+    let cases: &[(&[&str], &[&str], &[&str])] = &[
+        (&["new", "z", "a"], &["z", "a"], &["new", "z", "a"]),
+        (&["z", "new", "a"], &["z", "a"], &["z", "new", "a"]),
+        (&["z", "a", "new"], &["z", "a"], &["z", "a", "new"]),
+        (
+            &["l2", "l1", "z", "l4", "l3", "a", "l6", "l5"],
+            &["r2", "r1", "z", "r4", "r3", "a", "r6", "r5"],
+            &[
+                "l2", "l1", "r2", "r1", "z", "l4", "l3", "r4", "r3", "a", "l6", "l5", "r6", "r5",
+            ],
+        ),
+    ];
+    for kind in [
+        DocumentKind::Corrections,
+        DocumentKind::Dictionary,
+        DocumentKind::History,
+    ] {
+        for created_at in ["", "2026-09-27T10:00:00Z"] {
+            let collection = |ids: &[&str]| match kind {
+                DocumentKind::Corrections => corrections_set(
+                    &ids.iter()
+                        .map(|id| (*id, *id, "value", created_at))
+                        .collect::<Vec<_>>(),
+                ),
+                DocumentKind::Dictionary => dictionary_set(
+                    ids.iter()
+                        .map(|id| {
+                            json!({
+                                "id": id,
+                                "phrase": id,
+                                "note": null,
+                                "enabled": true,
+                                "hits": 0,
+                                "createdAt": created_at
+                            })
+                        })
+                        .collect(),
+                ),
+                DocumentKind::History => history_set(
+                    &ids.iter()
+                        .map(|id| (*id, created_at, *id))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => unreachable!(),
+            };
+            let baseline = collection(&["z", "a"]);
+            for &(local, remote, expected) in cases {
+                assert_collection_merge_is_stable(
+                    Some(&baseline),
+                    &collection(local),
+                    &collection(remote),
+                    kind,
+                    expected,
+                );
+            }
+        }
+    }
 }

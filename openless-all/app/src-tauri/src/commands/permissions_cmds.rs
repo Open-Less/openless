@@ -28,6 +28,25 @@ pub fn show_android_overlay() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_android_local_migration() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_activity_class(
+                env,
+                context,
+                "com.openless.app.OpenLessLocalMigrationActivity",
+            )
+        });
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Android local migration is unavailable on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn hide_android_overlay() -> Result<(), String> {
     crate::android::hide_android_overlay()
 }

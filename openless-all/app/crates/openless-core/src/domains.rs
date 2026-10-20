@@ -128,6 +128,9 @@ pub struct LocalAsrModel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrRuntimeStatus {
+    /// An explicit vendor download initialized native code in this process.
+    #[serde(default)]
+    pub restart_required: bool,
     pub runtime: LocalAsrRuntime,
     pub provider_id: String,
     pub available: bool,
@@ -209,6 +212,7 @@ pub struct LocalAsrActivationResult {
     pub target: LocalAsrTarget,
     pub provider_id: String,
     pub generation: u64,
+    /// Legacy wire field: the selected model ID, not a runtime-load receipt.
     pub prepared_model: String,
 }
 
@@ -298,6 +302,10 @@ pub trait LocalAsrApi: Send + Sync {
         &self,
         target: LocalAsrTarget,
     ) -> BoxFuture<'static, Result<LocalAsrTestResult, BackendError>>;
+    /// Whether the host has a native engine for this runtime.
+    fn engine_available(&self, _runtime: LocalAsrRuntime) -> bool {
+        false
+    }
     /// Run the native smoke test for a specific ASR channel without changing
     /// the globally active channel.
     fn test_channel(
@@ -533,6 +541,25 @@ pub struct SelectionVoiceEditRequest {
     pub instruction: String,
 }
 
+/// Host-independent request for the standalone Voice Edit Session flow.
+/// `field_context` is kept separate from `draft` so a caret target can still
+/// be revalidated and replaced as a complete field on Android.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceEditPlanRequest {
+    pub session_id: SessionId,
+    pub field_context: String,
+    pub draft: String,
+    pub instruction_raw: String,
+    pub instruction_polished: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceEditPlanResult {
+    pub instruction_polished: String,
+    pub plan: crate::edit_plan::EditPlan,
+    pub preview: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionVoiceEditPreviewResult {
     pub preview: SelectionVoicePreview,
@@ -762,6 +789,14 @@ pub trait SelectionVoiceApi: Send + Sync {
         &self,
         request: SelectionVoiceEditRequest,
     ) -> BoxFuture<'static, Result<SelectionVoiceEditPreviewResult, BackendError>>;
+    /// Generate and validate one deterministic EditPlan. This method never
+    /// performs native insertion.
+    fn voice_edit_plan(
+        &self,
+        _request: VoiceEditPlanRequest,
+    ) -> BoxFuture<'static, Result<VoiceEditPlanResult, BackendError>> {
+        unsupported("voice edit session")
+    }
     fn set_preview(
         &self,
         update: SelectionVoicePreviewUpdate,
@@ -1468,6 +1503,13 @@ pub struct LessComputerRunResult {
 /// the typed event and return the user's decision; they must not maintain a
 /// second token registry or conversation flag.
 pub trait LessComputerApi: Send + Sync {
+    /// Bind admission to this backend's device-local settings transaction.
+    fn bind_testing_features(
+        &self,
+        _preferences: Arc<crate::PreferencesStore>,
+        _settings_write_gate: Arc<std::sync::Mutex<()>>,
+    ) {
+    }
     #[doc(hidden)]
     fn bind_event_publisher(&self, _publisher: crate::events::BackendEventPublisher) {}
     #[doc(hidden)]
@@ -1786,6 +1828,12 @@ impl SelectionVoiceApi for UnsupportedDomainServices {
     ) -> BoxFuture<'static, Result<SelectionVoiceEditPreviewResult, BackendError>> {
         unsupported("selection voice")
     }
+    fn voice_edit_plan(
+        &self,
+        _: VoiceEditPlanRequest,
+    ) -> BoxFuture<'static, Result<VoiceEditPlanResult, BackendError>> {
+        unsupported("voice edit session")
+    }
     fn set_preview(
         &self,
         _: SelectionVoicePreviewUpdate,
@@ -2059,6 +2107,7 @@ pub struct BackendServices {
     pub auxiliary: Arc<dyn crate::auxiliary::AuxiliaryApi>,
     pub provider: Arc<dyn ProviderApi>,
     pub local_asr: Arc<dyn LocalAsrApi>,
+    pub experimental_asr: Option<Arc<crate::experimental_asr::ExperimentalAsrService>>,
     pub selection: Arc<dyn SelectionApi>,
     pub selection_voice: Arc<dyn SelectionVoiceApi>,
     pub qa: Arc<dyn QaApi>,
@@ -2083,6 +2132,7 @@ impl BackendServices {
             auxiliary: Arc::new(crate::auxiliary::UnsupportedAuxiliaryApi),
             provider: Arc::new(UnsupportedDomainServices),
             local_asr: Arc::new(UnsupportedDomainServices),
+            experimental_asr: None,
             selection: Arc::new(UnsupportedDomainServices),
             selection_voice: Arc::new(UnsupportedDomainServices),
             qa: Arc::new(UnsupportedDomainServices),

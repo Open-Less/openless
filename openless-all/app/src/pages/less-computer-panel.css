@@ -230,34 +230,24 @@ html[data-ol-theme='dark'] .lc-desktop {
   gap: 8px;
   flex-shrink: 0;
 }
+.lc-native-window-controls {
+  /* The actual NSWindow buttons are above the WebView, never reproduced in CSS. */
+  width: 72px;
+  height: 32px;
+  flex-shrink: 0;
+}
 .lc-window-controls button {
   display: grid;
   place-items: center;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  color: rgb(0 0 0 / 62%);
-  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 14%);
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  color: var(--lc-muted);
+  background: transparent;
 }
 .lc-window-controls svg {
-  width: 8px;
-  height: 8px;
-  stroke-width: 2.6;
-  opacity: 0;
-  transition: opacity 120ms var(--lc-soft);
-}
-.lc-window-controls:hover button:not(:disabled) svg,
-.lc-window-controls button:focus-visible svg {
-  opacity: 1;
-}
-.lc-window-close {
-  background: #ff5f57;
-}
-.lc-window-minimize {
-  background: #febc2e;
-}
-.lc-window-maximize {
-  background: #28c840;
+  width: 13px;
+  height: 13px;
 }
 .lc-window-controls button:disabled {
   filter: saturate(0.4);
@@ -274,7 +264,7 @@ html[data-ol-theme='dark'] .lc-desktop {
   padding: 8px 10px 6px;
   color: var(--lc-muted);
   font-size: 11.5px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
 }
 .lc-agent-list {
   display: flex;
@@ -301,7 +291,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 .lc-agent-text strong {
   overflow: hidden;
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -316,7 +306,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 }
 .lc-agent:not(.is-current) .lc-agent-text strong {
   color: var(--lc-ink-2);
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
 }
 .lc-sidebar-foot {
   padding: 10px;
@@ -365,7 +355,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 }
 .lc-github-text strong {
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .lc-github-text small {
   overflow: hidden;
@@ -422,7 +412,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 .lc-title-pill strong {
   overflow: hidden;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -499,7 +489,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 }
 .lc-empty h2 {
   font-size: 24px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   letter-spacing: -0.02em;
   line-height: 1.35;
 }
@@ -923,7 +913,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 }
 .lc-approval-heading strong {
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .lc-approval-command {
   overflow: hidden;
@@ -1000,7 +990,7 @@ html[data-ol-theme='dark'] .lc-desktop {
   border-radius: 999px;
   background: var(--lc-card);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   transition:
     background-color 160ms var(--lc-soft),
     opacity 160ms var(--lc-soft),
@@ -1268,7 +1258,7 @@ html[data-ol-theme='dark'] .lc-desktop {
   margin-right: -6px;
   color: var(--lc-muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
 }
 .lc-inspector-card {
   display: flex;
@@ -1289,7 +1279,7 @@ html[data-ol-theme='dark'] .lc-desktop {
 .lc-inspector-agent strong {
   overflow: hidden;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1301,7 +1291,7 @@ html[data-ol-theme='dark'] .lc-desktop {
   margin-bottom: 8px;
   color: var(--lc-muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
 }
 .lc-inspector-status {
   display: flex;

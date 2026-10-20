@@ -23,7 +23,7 @@ BACKGROUND_COLOR_KEYS = ("backgroundColorRed", "backgroundColorGreen", "backgrou
 def settings():
     tauri = APP_ROOT / "src-tauri"
     app = json.loads((tauri / "tauri.conf.json").read_text())
-    dmg = json.loads((tauri / "tauri.macos-mlx.conf.json").read_text())["bundle"]["macOS"]["dmg"]
+    dmg = json.loads((tauri / "tauri.macos.conf.json").read_text())["bundle"]["macOS"]["dmg"]
     style = json.loads((tauri / "dmg/layout.json").read_text())
     return app, dmg, style
 

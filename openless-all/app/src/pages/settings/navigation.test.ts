@@ -80,7 +80,7 @@ assert.equal(
   'desktop hides Android input method settings',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'lessComputer'),
+  visibleAdvancedPages('desktop', 'win', true).some((item) => item.id === 'lessComputer'),
   true,
   'Windows retains Less Computer configuration',
 );
@@ -91,7 +91,7 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['vocabularyLearning', 'debug'],
+  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
@@ -107,6 +107,37 @@ assert.equal(
   'macOS retains its native correction observer settings',
 );
 
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac')[0].id,
+  'localModels',
+  'macOS experiments entry is first',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'win').some((page) => page.id === 'localModels'),
+  false,
+  'Windows experiments stay unchanged',
+);
+assert.equal(
+  availableServiceViews(false, 'mac').includes('models'),
+  true,
+  'macOS retains only a disabled retirement placeholder',
+);
+assert.equal(
+  availableServiceViews(true, 'win').includes('models'),
+  true,
+  'Windows keeps model management',
+);
+
+assert.equal(
+  isServiceViewInactive('models', false, 'mac'),
+  true,
+  'Mac legacy entry is always disabled',
+);
+assert.equal(
+  resolveServiceView('models', availableServiceViews(false, 'mac'), false, 'mac'),
+  'llm',
+  'retired entry never opens old model controls',
+);
 const serviceViews = availableServiceViews(true);
 assert.deepEqual(
   serviceViews,
@@ -175,3 +206,27 @@ assert.deepEqual(
   'mobile service tabs stay stable',
 );
 console.log('settings service view tests passed');
+
+assert.equal(visibleSettingsSections(false, 'harmony').some((item) => item.id === 'inputMethod'), false, 'Harmony wiring does not add an Android input-method navigation entry');
+assert.deepEqual(visibleAdvancedPages('harmony', 'harmony').map((item) => item.id), ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'], 'Harmony retains shared utility settings without desktop coding-agent controls');
+for (const os of ['mac', 'win', 'android'] as const) {
+  assert.equal(
+    visibleAdvancedPages('desktop', os).some((item) =>
+      ['lessComputer', 'claudeConsole'].includes(item.id),
+    ),
+    false,
+    `${os}: unfinished features are hidden without a device opt-in`,
+  );
+  assert.equal(
+    visibleAdvancedPages('desktop', os).some((item) => item.id === 'testingFeatures'),
+    true,
+    `${os}: the Beta opt-in page remains reachable`,
+  );
+}
+assert.deepEqual(
+  visibleAdvancedPages('desktop', 'mac', true)
+    .filter((item) => ['lessComputer', 'claudeConsole'].includes(item.id))
+    .map((item) => item.id),
+  ['lessComputer', 'claudeConsole'],
+  'macOS exposes both testing features after opt-in',
+);

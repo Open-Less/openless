@@ -60,6 +60,7 @@ try {
   check('docs only: tauri', decide('tauri'), 'false');
   check('docs only: msrv', decide('msrv'), 'false');
   check('docs only: linux', decide('linux'), 'false');
+  check('docs only: harmony', decide('harmony'), 'false');
   reset();
 
   // The Linux host is a separate crate: only its own Rust sources stay in.
@@ -67,6 +68,14 @@ try {
   check('linux host source: tauri', decide('tauri'), 'false');
   check('linux host source: msrv', decide('msrv'), 'true');
   check('linux host source: linux', decide('linux'), 'true');
+  check('linux host source: harmony', decide('harmony'), 'false');
+  reset();
+
+  // HarmonyOS work touches the shared bundle and the Rust host, never the Linux
+  // package chain or the Tauri desktop build.
+  commit({ 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' }, 'arkts');
+  check('arkts source: harmony', decide('harmony'), 'true');
+  check('arkts source: tauri', decide('tauri'), 'true');
   reset();
 
   // ...but its manifest moves the shared workspace dependency graph.
@@ -84,6 +93,7 @@ try {
   check('frontend only: tauri', decide('tauri'), 'true');
   check('frontend only: msrv', decide('msrv'), 'false');
   check('frontend only: linux', decide('linux'), 'true');
+  check('frontend only: harmony', decide('harmony'), 'true');
   reset();
 
   // Native code keeps every check on.
@@ -103,15 +113,18 @@ try {
   check('workflow change: tauri', decide('tauri'), 'true');
   check('workflow change: msrv', decide('msrv'), 'true');
   check('workflow change: linux', decide('linux'), 'true');
+  check('workflow change: harmony', decide('harmony'), 'true');
   reset();
 
   // Unreadable or empty change sets never skip a platform check.
   check('no base revision: tauri', decide('tauri', null), 'true');
   check('no base revision: msrv', decide('msrv', null), 'true');
   check('no base revision: linux', decide('linux', null), 'true');
+  check('no base revision: harmony', decide('harmony', null), 'true');
   check('empty diff: tauri', decide('tauri'), 'true');
   check('empty diff: msrv', decide('msrv'), 'true');
   check('empty diff: linux', decide('linux'), 'true');
+  check('empty diff: harmony', decide('harmony'), 'true');
   check('unknown revision: tauri', decide('tauri', 'deadbeefdeadbeef'), 'true');
   check('unknown area', decide('nonsense'), 'true');
 } finally {
@@ -135,7 +148,7 @@ const reusable = readFileSync(
   ),
   'utf8',
 );
-const areas = ['tauri', 'msrv', 'linux'];
+const areas = ['tauri', 'msrv', 'linux', 'harmony'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -143,7 +156,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv linux; do/.test(workflow),
+  /for area in tauri msrv linux harmony; do/.test(workflow),
   true,
 );
 check(
@@ -156,9 +169,26 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false'"),
   true,
 );
+// A macOS runner is only spent on MSRV while the declared MSRV is behind the
+// stable toolchain; otherwise `cross-platform` already compiles that code.
+check(
+  'msrv job is skipped when MSRV equals stable',
+  workflow.includes("needs.changes.outputs.msrv_needed == 'true'"),
+  true,
+);
+check(
+  'changes job publishes the msrv comparison',
+  workflow.includes('msrv_needed: ${{ steps.msrv.outputs.needed }}'),
+  true,
+);
 check(
   'android gate is fail-open',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.tauri != 'false'/.test(workflow),
+  true,
+);
+check(
+  'harmony gate is fail-open',
+  workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
 check(

@@ -4,7 +4,7 @@ import { CloudIcon, XIcon } from 'lucide-react';
 import { isTauri } from '../lib/ipc/shared';
 import { cloudSyncE2eeClaimSetupPrompt } from '../lib/ipc/cloud-sync-e2ee';
 import { CloudSyncSection } from '../pages/settings/CloudSyncSection';
-import { Modal, PresenceModal } from './ui/Modal';
+import { PresenceModal } from './ui/Modal';
 
 const PROMPT_EVENTS = new Set([
   'backend_started',
@@ -110,72 +110,80 @@ export function CloudSyncSetupPrompt({
     };
   }, [open, blocked]);
 
-  // The Core eligibility gate revokes this automatic prompt immediately.
-  if (!open || blocked) return null;
+  // The eligibility gate revokes interaction immediately; keep only the inert
+  // last frame long enough to fade rather than flashing away.
   return (
-    <Modal onClose={() => setOpen(false)} width="min(480px, 100%)" zIndex={75}>
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sync-setup-title"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            setOpen(false);
-          }
-          if (event.key === 'Tab') {
-            const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
-            const last = buttons[buttons.length - 1];
-            const next = event.shiftKey ? last : buttons[0];
-            if (document.activeElement === (event.shiftKey ? buttons[0] : last)) {
+    <PresenceModal
+      open={open && !blocked}
+      onClose={() => setOpen(false)}
+      width="min(480px, 100%)"
+      zIndex={75}
+      render={() => (
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sync-setup-title"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
               event.preventDefault();
-              next?.focus();
+              event.stopPropagation();
+              setOpen(false);
             }
-          }
-        }}
-      >
-        <CloudIcon
-          size={28}
-          aria-hidden="true"
-          style={{ color: 'var(--ol-blue)', marginBottom: 16 }}
-        />
-        <h2 id="sync-setup-title" style={{ fontSize: 20, margin: '0 0 8px' }}>
-          {t('cloudSyncE2ee.setupPromptTitle')}
-        </h2>
-        <p style={{ color: 'var(--ol-ink-3)', lineHeight: 1.65 }}>
-          {t('cloudSyncE2ee.setupPromptBody')}
-        </p>
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            justifyContent: 'flex-end',
-            gap: 12,
-            marginTop: 20,
+            if (event.key === 'Tab') {
+              const buttons = [
+                ...event.currentTarget.querySelectorAll<HTMLButtonElement>('button'),
+              ];
+              const last = buttons[buttons.length - 1];
+              const next = event.shiftKey ? last : buttons[0];
+              if (document.activeElement === (event.shiftKey ? buttons[0] : last)) {
+                event.preventDefault();
+                next?.focus();
+              }
+            }
           }}
         >
-          <button
-            type="button"
-            className="ol-tool-button"
-            ref={focusRef}
-            onClick={() => setOpen(false)}
-          >
-            {t('cloudSyncE2ee.setupPromptLater')}
-          </button>
-          <button
-            type="button"
-            className="ol-tool-button is-primary"
-            onClick={() => {
-              setOpen(false);
-              onSetup();
+          <CloudIcon
+            size={28}
+            aria-hidden="true"
+            style={{ color: 'var(--ol-blue)', marginBottom: 16 }}
+          />
+          <h2 id="sync-setup-title" style={{ fontSize: 20, margin: '0 0 8px' }}>
+            {t('cloudSyncE2ee.setupPromptTitle')}
+          </h2>
+          <p style={{ color: 'var(--ol-ink-3)', lineHeight: 1.65 }}>
+            {t('cloudSyncE2ee.setupPromptBody')}
+          </p>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+              gap: 12,
+              marginTop: 20,
             }}
           >
-            {t('cloudSyncE2ee.setupPromptOpen')}
-          </button>
-        </div>
-      </section>
-    </Modal>
+            <button
+              type="button"
+              className="ol-tool-button"
+              ref={focusRef}
+              onClick={() => setOpen(false)}
+            >
+              {t('cloudSyncE2ee.setupPromptLater')}
+            </button>
+            <button
+              type="button"
+              className="ol-tool-button is-primary"
+              onClick={() => {
+                setOpen(false);
+                onSetup();
+              }}
+            >
+              {t('cloudSyncE2ee.setupPromptOpen')}
+            </button>
+          </div>
+        </section>
+      )}
+    />
   );
 }
 

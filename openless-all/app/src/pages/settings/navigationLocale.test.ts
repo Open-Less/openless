@@ -4,15 +4,31 @@ import { zhTW } from '../../i18n/zh-TW';
 import { en } from '../../i18n/en';
 import { ja } from '../../i18n/ja';
 import { ko } from '../../i18n/ko';
+import { de } from '../../i18n/de';
+import { fr } from '../../i18n/fr';
+import { es } from '../../i18n/es';
 import { ADVANCED_PAGES, SETTINGS_SECTIONS, searchSettingsSections } from './navigation';
 
 // Resources must resolve where the dialog actually reads them, not in a nested
 // feature's unrelated "modal" object. Type-shape parity alone cannot detect this.
-for (const [locale, translation] of Object.entries({ 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko })) {
+for (const [locale, translation] of Object.entries({
+  'zh-CN': zhCN,
+  'zh-TW': zhTW,
+  en,
+  ja,
+  ko,
+  de,
+  fr,
+  es,
+})) {
   const i18n = createInstance();
   await i18n.init({ lng: locale, fallbackLng: false, resources: { [locale]: { translation } } });
   for (const key of [
     'modal.backToAdvanced',
+    'modal.backToTestingFeatures',
+    ...['title', 'enable', 'description', 'unavailable'].map(
+      (key) => `settings.testingFeatures.${key}`,
+    ),
     ...ADVANCED_PAGES.flatMap((page) => [page.titleKey, `modal.advancedPages.${page.id}`]),
   ]) {
     if (!i18n.exists(key)) throw new Error(`${locale}: missing advanced navigation label ${key}`);
@@ -47,4 +63,4 @@ for (const [locale, translation] of Object.entries({ 'zh-CN': zhCN, 'zh-TW': zhT
   if (!i18n.t('modal.searchCount', { count: 2 }).includes('2'))
     throw new Error(`${locale}: result count is not rendered`);
 }
-console.log('settings localization and search routing passed in five languages');
+console.log('settings localization and search routing passed in eight languages');

@@ -608,12 +608,14 @@
 .qa-polish-text {
   flex: 1;
   min-height: 150px;
+  resize: none;
   padding: 12px;
   overflow: auto;
   border: 1px solid var(--qa-line);
   border-radius: 9px;
   background: var(--qa-wash);
   color: var(--qa-ink);
+  font-family: inherit;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;

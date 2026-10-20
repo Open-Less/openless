@@ -61,6 +61,10 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     coord
                         .inner
                         .host
+                        .cache_capsule_display_mode(work_target.capsule_display_mode);
+                    coord
+                        .inner
+                        .host
                         .cache_capsule_style(work_target.capsule_style);
                     Ok::<_, BackendError>(())
                 })
@@ -73,7 +77,8 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     crate::android::replace_android_overlay()
                 }
                 crate::types::AndroidOverlayTrigger::Background
-                | crate::types::AndroidOverlayTrigger::Keyboard => {
+                | crate::types::AndroidOverlayTrigger::Keyboard
+                | crate::types::AndroidOverlayTrigger::Never => {
                     crate::android::hide_android_overlay()
                 }
             }
@@ -133,6 +138,16 @@ impl Coordinator {
         }
         if !self.inner.host.is_bound() {
             return Err(failure("restore_host_not_bound"));
+        }
+        #[cfg(target_os = "android")]
+        {
+            let host = crate::android::local_migration::AndroidMigrationHost::new(
+                self.inner.backend.ensure_runtime_ready().is_err(),
+            )
+            .map_err(|_| failure("restore_android_state_unavailable"))?;
+            self.inner
+                .backend
+                .bind_android_migration_state(Arc::new(host))?;
         }
         self.inner
             .backend

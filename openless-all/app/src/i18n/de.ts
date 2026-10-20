@@ -1,7 +1,58 @@
 import type { zhCN } from './zh-CN';
 
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const de: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
+  voiceEdit: {
+    title: 'Sprachbearbeitung',
+    description:
+      'Diktieren Sie einen Entwurf oder laden Sie den Zieltext, bearbeiten Sie ihn per Sprache und bestätigen Sie die Übernahme.',
+    targetHint:
+      'Setzen Sie den Cursor in das Zielfeld oder markieren Sie den zu bearbeitenden Text.',
+    androidTargetHint:
+      'Weisen Sie einer Overlay-Wischgeste die Sprachbearbeitung zu. Nehmen Sie in der Ziel-App auf und wischen Sie zur Vorschau. Nach der Bestätigung wird das ursprüngliche Feld aktualisiert.',
+    startDraft: 'Entwurf diktieren',
+    status: 'Status: {{phase}}',
+    turns: 'Anweisungen: {{count}}',
+    draft: 'Entwurf',
+    preview: 'Aktuelle Vorschau',
+    history: 'Anweisungsverlauf',
+    turn: 'Anweisung {{count}}',
+    polishedInstruction: 'Überarbeitet: {{text}}',
+    turnPreview: 'Vorschau: {{text}}',
+    finishDraft: 'Entwurf abschließen',
+    nextInstruction: 'Nächste Anweisung aufnehmen',
+    finishInstruction: 'Anweisung abschließen',
+    commit: 'Bestätigen und übernehmen',
+    restart: 'Erneut starten',
+    openPanel: 'Panel öffnen',
+    errors: {
+      voiceEditFieldChanged:
+        'Der ursprüngliche Feldinhalt hat sich geändert. Starten Sie die Bearbeitung erneut.',
+      voiceEditTargetUnavailable:
+        'Das Zielfeld oder sein vollständiger Text konnte nicht gelesen werden. Wählen Sie das Ziel erneut.',
+    },
+    phase: {
+      dictating: 'Entwurf wird diktiert',
+      draft_ready: 'Entwurf bereit',
+      editing: 'Anweisung wird aufgenommen',
+      applying: 'Bearbeitungsplan wird angewendet',
+      preview: 'Bestätigung ausstehend',
+      committing: 'Text wird übernommen',
+      completed: 'Übernommen',
+      cancelled: 'Abgebrochen',
+    },
+  },
   cloudSyncE2ee: {
+    customServerTitle: 'Selbst gehosteter Sync-Server (erweitert)',
+    customServerOrigin: 'Server-Adresse (https://...)',
+    customServerToken: 'Anmelde-Token',
+    customServerSave: 'Speichern',
+    customServerHint:
+      'Leer lassen, um den offiziellen Sync-Server zu verwenden. Die Adresse muss mit https:// beginnen und eine Root-URL sein.',
     protocolTitle: 'Cloud-Sync: Vereinbarung und Datenschutz',
     protocolIntro:
       'OpenLess und seine unabhängigen Entwickler respektieren Ihre Privatsphäre und schützen Ihre Daten. Lesen Sie diese Hinweise, bevor Sie fortfahren.',
@@ -1221,6 +1272,13 @@ export const de: typeof zhCN = {
     cancelledTitle: 'Aufnahme abgebrochen',
   },
   settings: {
+    testingFeatures: {
+      title: 'Funktionen im Test',
+      enable: 'Funktionen im Test aktivieren',
+      description:
+        'Less Computer und die Claude-Konsole auf unterstützten Plattformen anzeigen, einrichten und verwenden. Das Ausschalten stoppt laufende Aufgaben und blendet die Einträge aus. Ihre Einstellungen bleiben erhalten. Gilt nur für dieses Gerät.',
+      unavailable: 'Auf dieser Plattform sind noch keine Testfunktionen verfügbar.',
+    },
     selectionWorkspace: {
       title: 'Assistent für Textauswahl',
       hint: 'Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.',
@@ -1298,7 +1356,18 @@ export const de: typeof zhCN = {
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Text rund um den Cursor zur Überarbeitung an das Modell senden (nur macOS). Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder und bekannte sensible Apps sind ausgeschlossen.',
+        'Einen kurzen Textabschnitt rund um den Cursor als Referenz für Eigennamen, Homophone und Bezüge mit der Überarbeitung an das Modell senden (macOS / Windows / Android). Diktat, Schnellnotizen und Cloud-Notizen nutzen ihn, der Kontext selbst wird aber nie in Notizen, Verlauf oder Protokolle geschrieben; bei einem Cloud-Modell wird er mit der Überarbeitungsanfrage an diesen Anbieter gesendet. Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.',
+    },
+    localMigration: {
+      title: 'Lokale Konfigurationsmigration',
+      description:
+        'Exportiere alle portablen lokalen Einstellungen in ein versioniertes Paket oder stelle sie auf einem anderen Android-Gerät wieder her. Der Freigabemodus ist standardmäßig anonymisiert; persönliche Migration darf Anmeldedaten nur passwortgeschützt enthalten. Der native Ablauf zeigt Quelle, Version, Kategorien und Änderungen vor dem Zusammenführen oder Ersetzen.',
+      safetyNote:
+        'Systemberechtigungen, OAuth-Sitzungen, Gerätepfade und Laufzeitstatus werden nie migriert. Vor dem Import wird eine lokale Sicherung erstellt.',
+      open: 'Lokale Migration öffnen',
+      opening: 'Wird geöffnet…',
+      openFailed:
+        'Die lokale Migration konnte nicht geöffnet werden. Versuche es erneut über die Einstellungen.',
     },
     codingConsole: {
       title: 'Claude-Konsole',
@@ -1463,12 +1532,28 @@ export const de: typeof zhCN = {
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
       capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
+      capsuleDisplayModeLabel: 'Kapsel auf mehreren Bildschirmen',
+      capsuleDisplayModeDesc:
+        'Wähle die Bildschirme für die Aufnahmekapsel. Alle Bildschirme benötigen zusätzliche Fenster und Grafikressourcen.',
+      capsuleDisplayCursorScreen: 'Bildschirm unter dem Mauszeiger',
+      capsuleDisplayPrimaryScreen: 'Nur Hauptbildschirm',
+      capsuleDisplayForegroundWindowScreen: 'Bildschirm des Vordergrundfensters',
+      capsuleDisplayAllScreens: 'Auf allen Bildschirmen anzeigen',
+      capsuleDisplayModeRestartTitle: 'OpenLess neu starten, um den Anzeigemodus anzuwenden',
+      capsuleDisplayModeRestartDesc:
+        'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',
       stableTranscriptionLabel: 'Stabiler Modus (erst aufnehmen, dann transkribieren)',
       stableTranscriptionDesc:
         'Wenn aktiviert, verbindet sich ASR erst nach dem Aufnahmestopp und erhält die gesamte Aufnahme. Das Ergebnis erscheint später, aber Verbindungsaufbau und Netzwerkschwankungen während der Aufnahme stören die Aufzeichnung nicht.',
+      lowLatencyDictationLabel: 'Aufnahme mit niedriger Latenz',
+      lowLatencyDictationDesc:
+        'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
+      audioEnhancementLabel: 'Leichte Mikrofonverbesserung',
+      audioEnhancementDesc:
+        'Wendet eine leichte Verstärkung, weiche Begrenzung und konservative Rauschunterdrückung auf das lokale Mikrofon an. Keine Echounterdrückung. Standardmäßig aus.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',
@@ -1486,6 +1571,9 @@ export const de: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (Standard / die meisten Apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / die meisten Terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Reintext-Einfügemodus',
+      plainTextInsertionDesc:
+        'Wenn aktiviert, verwendet das simulierte Einfügen Umschalt+Einfg statt Strg+V (der obige Kurzbefehl ist dabei gesperrt). Nur in sehr besonderen Fällen aktivieren, z. B. wenn ein Tastaturlayout-Umschalter wie Punto Switcher Strg+V abfängt. Gilt nur für die Einfügemethode über die Zwischenablage (nur Windows).',
       comboRecordLabel: 'Kurzbefehl aufzeichnen',
       comboRecordDesc:
         'Klicke hier und drücke die gewünschte Tastenkombination (z. B. ⌘⇧D). Unterstützt die Modi „Umschalten“ und „Gedrückt halten“.',
@@ -1536,6 +1624,9 @@ export const de: typeof zhCN = {
         'Ältere Einträge werden beim Speichern neuer Einträge entfernt. 0 = keine zeitabhängige Bereinigung.',
       historyMaxEntriesLabel: 'Maximale Verlaufseinträge',
       historyMaxEntriesDesc: 'Maximal lokal gespeicherte Sitzungen. Leer = 200. Bereich: 5–200.',
+      polishSkipMaxCharsLabel: 'Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)',
+      polishSkipMaxCharsDesc:
+        'Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.',
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
@@ -1685,6 +1776,7 @@ export const de: typeof zhCN = {
         stepfun: 'StepFun',
         custom: 'Benutzerdefiniert',
         asrVolcengine: 'Volcengine bigasr',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan Echtzeit-ASR',
         asrBailian: 'Alibaba Bailian Echtzeit-ASR',
         asrBailianQwen3: 'Bailian Qwen3 Realtime ASR',
@@ -1704,6 +1796,9 @@ export const de: typeof zhCN = {
         asrSherpaOnnxLocal: 'Lokales sherpa-onnx (experimentell)',
         asrFoundryLocalWhisper: 'Lokales Whisper (Foundry Local)',
         asrLocalWhisper: 'Lokales Whisper (Stapelverarbeitung)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'Lokales Qwen3-ASR',
         asrLocalQwen3Mlx: 'Lokales Qwen3-ASR (MLX / Metal)',
         asrLocalQwen3C: 'Lokales Qwen3-ASR (C / CPU)',
@@ -1712,6 +1807,12 @@ export const de: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe transkribiert hier wortgetreu; danach verarbeitet das konfigurierte LLM den Text. Für Smart-Transkription wähle dieses Modell im multimodalen Modus. Audio wird nach Aufnahmeende hochgeladen; Live-Transkription wird nicht unterstützt. Basis-URL: https://generativelanguage.googleapis.com/v1beta (auch /v1beta/interactions möglich).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe bietet Smart-Transkription: Füllwörter entfernen, gesprochene Korrekturen übernehmen und den Text nach Aufnahmeende formatieren. Arbeitssprachen und Wörterbucheinträge werden unterstützt. Stil-Prompts, Übersetzung, reine Textüberarbeitung und Fragen werden nicht unterstützt; verwende dafür den traditionellen Modus mit einem LLM.',
+      validateSuccessAudio:
+        'Audio-Verbindung mit einer kurzen Stilleprobe geprüft. Bestätige die Transkriptionsqualität mit einer kurzen Aufnahme.',
       elevenLabsUploadNotice:
         'ElevenLabs lädt die Audioaufnahme zur Stapeltranskription an den eingerichteten Endpunkt hoch.',
       zenmuxVocabularyNote:
@@ -1794,6 +1895,9 @@ export const de: typeof zhCN = {
       thinkingBudget: 'Festes Budget',
       maxTokensLabel: 'Maximale Ausgabetokens',
       thinkingBudgetLabel: 'Tokenbudget für das Denken',
+      serviceTierLabel: 'Ark-Inferenz mit niedriger Latenz (fast)',
+      serviceTierHint:
+        'Nur unterstützte Ark-Modelle können diese Option verwenden; andere Modelle geben möglicherweise 400 zurück.',
       responsesThinkingHint:
         'Bei einigen Modellen lässt sich das Denken nur reduzieren, nicht abschalten. Anfragen mit Denken senden keinen Temperaturparameter.',
       messagesThinkingHint:
@@ -1803,6 +1907,8 @@ export const de: typeof zhCN = {
       llmTokenLimitInvalid: 'Tokenlimits müssen positive ganze Zahlen sein.',
       llmThinkingBudgetInvalid:
         'Das Denkbudget muss mindestens 1024 betragen und im festen Modus unter der Ausgabegrenze liegen.',
+      llmServiceTierInvalid:
+        'Ungültige Option für Inferenz mit niedriger Latenz. Wähle sie erneut.',
       llmResponseIncomplete:
         'Die Antwort ist unvollständig oder hat die Ausgabegrenze erreicht. Bereits ausgegebener Text bleibt erhalten.',
       llmProtocolHeaderConflict:
@@ -1948,7 +2054,7 @@ export const de: typeof zhCN = {
       hotkeyFailed: 'Kurzbefehlüberwachung fehlgeschlagen',
       windowsImeLabel: 'Windows-Eingabemethode',
       windowsImeDesc:
-        'Wechselt während Sprachsitzungen vorübergehend zur OpenLess-TSF-Eingabemethode, um Einschränkungen der Zwischenablage zu umgehen.',
+        'Fügt diktierten Text über den OpenLess-TSF-Textdienst ein, der neben Ihrer Eingabemethode aktiv bleibt, um Einschränkungen der Zwischenablage zu umgehen.',
       windowsImeInstalled: 'Installiert',
       windowsImeUnavailable: 'Nicht verfügbar',
       androidImeLabel: 'Eingabemethode (IME)',
@@ -2068,6 +2174,7 @@ export const de: typeof zhCN = {
         background: 'Wenn die App im Hintergrund ist',
         keyboard: 'Wenn die Tastatur erscheint',
         always: 'Immer sichtbar',
+        never: 'Nie anzeigen',
       },
       androidOverlayTriggerHint: {
         background:
@@ -2075,6 +2182,7 @@ export const de: typeof zhCN = {
         keyboard:
           'Dieser Modus wird nicht weitergeführt. Bestehende Einstellungen werden auf „Im Hintergrund“ zurückgesetzt.',
         always: 'Jederzeit verfügbar, aber dauerhaft auf dem Bildschirm.',
+        never: 'Wird nie automatisch angezeigt; die Tastatur bleibt nutzbar.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2117,6 +2225,7 @@ export const de: typeof zhCN = {
         right: 'Nach rechts',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Sprachbearbeitung',
         none: 'Keine Aktion',
         quick_note: 'Schnellnotiz',
         translation: 'Übersetzung',
@@ -2159,6 +2268,9 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
+      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
+      windowsCompositionInputDesc:
+        'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',
@@ -2167,6 +2279,9 @@ export const de: typeof zhCN = {
         'Verlagert die Transkription von Cloud-ASR auf das Gerät. Für Offline-Nutzung oder sensible Daten.',
       localAsrWarningShort:
         'Lokale Inferenz ist langsamer. Zu schwache Hardware kann Wörter verlieren.',
+      localAsrFallbackLabel: 'Bei Cloud-Fehler lokales Modell verwenden',
+      localAsrFallbackDesc:
+        'Bei schwacher oder fehlender Verbindung wird die Aufnahme mit dem heruntergeladenen lokalen Modell erkannt, statt auf Cloud-Wiederholungen zu warten. Erfordert ein heruntergeladenes lokales Modell.',
       qwen3Desc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       sherpaDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       foundryDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
@@ -2368,7 +2483,12 @@ export const de: typeof zhCN = {
     noResults: 'Keine passenden Kategorien. Versuche „Mikrofon“, „Modelle“ oder „Design“.',
     autoSaveHint: 'Änderungen werden automatisch gespeichert',
     backToAdvanced: 'Zurück zu Experimente und Erweiterungen',
+    backToTestingFeatures: 'Zurück zu Funktionen im Test',
     advancedPages: {
+      customSyncServer:
+        'Nur für selbst gehostete Dienste; die offizielle Synchronisierung benötigt keine Konfiguration.',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'Funktionen, die noch getestet werden, bei Bedarf aktivieren.',
       vocabularyLearning:
         'Aus manuellen Korrekturen lernen; Beobachtung, Bestätigungszeit und Wortlänge einstellen.',
       lessComputer:
@@ -2386,7 +2506,7 @@ export const de: typeof zhCN = {
       appearance: 'Design, Seitenlayout und Sprache der Oberfläche für angenehmes Lesen anpassen.',
       privacy:
         'Systemberechtigungen und Verbindungen prüfen. Verlauf, Aufnahmen und lokale Daten verwalten.',
-      advanced: 'Less Computer und Diagnose nach Bedarf einrichten.',
+      advanced: 'Testfunktionen, Vokabellernen und Debugging-Werkzeuge konfigurieren.',
       about: 'Version, Updatekanal und automatische Updateeinstellungen anzeigen.',
     },
     searchKeywords: {
@@ -2540,7 +2660,10 @@ export const de: typeof zhCN = {
     foundryError: 'Foundry-Status',
     foundrySetDefault: 'Als Standard festlegen / lokale Windows-ASR aktivieren',
     foundryEnabling: 'Wird aktiviert…',
-    foundryPrepare: 'Vorbereiten / Herunterladen / Laden',
+    foundryPrepare: 'Modell herunterladen / prüfen',
+    runtimeDownloadRestart:
+      'Der Download hat native Laufzeitkomponenten verwendet. Starten Sie OpenLess vor dem Aktivieren neu. Das Modell wird nicht automatisch aktiviert. Jetzt neu starten?',
+    restartNow: 'Jetzt neu starten',
     foundryPreparing: 'Wird vorbereitet…',
     foundryReleasing: 'Wird entladen…',
     foundryRetryPrepare: 'Fortsetzen / Vorbereitung wiederholen',

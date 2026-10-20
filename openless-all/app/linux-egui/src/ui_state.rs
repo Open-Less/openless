@@ -125,6 +125,76 @@ fn write_state_value(key: &str, value: serde_json::Value) -> Result<(), UiStateE
         })
 }
 
+/// Reading typography (font family / scale / content width). Missing or
+/// unreadable fields fall back to the Tauri defaults instead of failing.
+pub fn load_typography() -> crate::typography::Typography {
+    use crate::typography::{ContentWidth, FontScale, Typography, UiFont};
+    let document = read_state_object();
+    let read = |key: &str| document.get(key).and_then(serde_json::Value::as_str);
+    Typography {
+        font: read("font_family")
+            .and_then(UiFont::from_tag)
+            .unwrap_or_default(),
+        scale: read("font_scale")
+            .and_then(FontScale::from_tag)
+            .unwrap_or_default(),
+        width: read("content_width")
+            .and_then(ContentWidth::from_tag)
+            .unwrap_or_default(),
+    }
+}
+
+/// Persist the whole typography document. Every field is written so a partial
+/// write can never leave the three controls disagreeing with each other.
+pub fn save_typography(typography: crate::typography::Typography) -> Result<(), UiStateError> {
+    write_state_values(&[
+        (
+            "font_family",
+            serde_json::Value::String(typography.font.tag().to_string()),
+        ),
+        (
+            "font_scale",
+            serde_json::Value::String(typography.scale.tag().to_string()),
+        ),
+        (
+            "content_width",
+            serde_json::Value::String(typography.width.tag().to_string()),
+        ),
+    ])
+}
+
+/// Merge several keys in one atomic write (one temp file + one rename).
+fn write_state_values(entries: &[(&str, serde_json::Value)]) -> Result<(), UiStateError> {
+    let Some(dir) = ui_state_dir() else {
+        return Err(io_error(
+            "resolve ui-state directory",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    let Some(path) = ui_state_path() else {
+        return Err(io_error(
+            "resolve ui-state path",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is unavailable"),
+        ));
+    };
+    std::fs::create_dir_all(&dir).map_err(|error| io_error("create ui-state directory", error))?;
+    let mut document = read_state_object();
+    for (key, value) in entries {
+        document.insert((*key).to_string(), value.clone());
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(document))
+        .map_err(|error| UiStateError::Json(error.to_string()))?;
+    atomic_save(&path, &bytes)
+        .map(|_| ())
+        .map_err(|error| match error {
+            crate::desktop::DesktopError::InvalidInput(message) => UiStateError::Json(message),
+            crate::desktop::DesktopError::Io { operation, source } => {
+                UiStateError::Io { operation, source }
+            }
+            other => UiStateError::Json(other.to_string()),
+        })
+}
+
 /// Whether the user dismissed the shortcut card on the Quick Note page.
 /// A missing key keeps the card visible, matching the upstream default.
 pub fn load_quick_note_shortcut_hidden() -> bool {
@@ -138,6 +208,47 @@ pub fn save_quick_note_shortcut_hidden(hidden: bool) -> Result<(), UiStateError>
     write_state_value(
         "quick_note_shortcut_hidden",
         serde_json::Value::Bool(hidden),
+    )
+}
+
+/// 胶囊「预备 → 就绪」的平均耗时（ms）：Tauri 存在 localStorage
+/// (`ol-capsule-warmup-ms`)，Linux 这边落在同一份 UI 状态文档里（`capsule_warmup_ms`）。
+/// 缺失 / 越界一律回落到默认值，学习值也不可能把动画带飞。
+pub fn load_capsule_warmup_ms() -> f32 {
+    let stored = read_state_object()
+        .get("capsule_warmup_ms")
+        .and_then(serde_json::Value::as_f64);
+    match stored {
+        Some(value) if value.is_finite() => (value as f32).clamp(
+            crate::siri_wgpu::MIN_WARMUP_MS,
+            crate::siri_wgpu::MAX_WARMUP_MS,
+        ),
+        _ => crate::siri_wgpu::DEFAULT_WARMUP_MS,
+    }
+}
+
+/// 用一次实测的「预备 → 就绪」耗时更新学习值，并把新值落盘、返回给调用方。
+///
+/// 异常样本直接丢弃（返回 `None`）：<20ms 多半不是真入场，>3s 多半是首次设备授权或
+/// 系统卡顿，都不代表常态。公式与 Tauri `Capsule.tsx` 完全一致：
+/// `clamp(prev * 0.7 + observed * 0.3, 60, 600)`。
+pub fn learn_capsule_warmup_ms(observed_ms: f32) -> Option<f32> {
+    if !observed_ms.is_finite() || !(20.0..=3000.0).contains(&observed_ms) {
+        return None;
+    }
+    let previous = load_capsule_warmup_ms();
+    let next = (previous * 0.7 + observed_ms * 0.3).clamp(
+        crate::siri_wgpu::MIN_WARMUP_MS,
+        crate::siri_wgpu::MAX_WARMUP_MS,
+    );
+    let _ = save_capsule_warmup_ms(next);
+    Some(next)
+}
+
+pub fn save_capsule_warmup_ms(warmup_ms: f32) -> Result<(), UiStateError> {
+    write_state_value(
+        "capsule_warmup_ms",
+        serde_json::Value::from(f64::from(warmup_ms)),
     )
 }
 
@@ -221,6 +332,44 @@ mod tests {
             // A later valid write repairs the state.
             save_locale_pref(LocalePref::Lang(Lang::Ja)).unwrap();
             assert_eq!(load_locale_pref(), LocalePref::Lang(Lang::Ja));
+        });
+    }
+
+    #[test]
+    fn capsule_warmup_defaults_and_learns_a_bounded_average() {
+        with_tmp_state(|_dir| {
+            // 缺省 = Tauri 的 150ms；损坏 / 越界值也回落默认。
+            assert_eq!(
+                load_capsule_warmup_ms(),
+                crate::siri_wgpu::DEFAULT_WARMUP_MS
+            );
+            save_capsule_warmup_ms(9_999.0).unwrap();
+            assert_eq!(load_capsule_warmup_ms(), crate::siri_wgpu::MAX_WARMUP_MS);
+            save_capsule_warmup_ms(1.0).unwrap();
+            assert_eq!(load_capsule_warmup_ms(), crate::siri_wgpu::MIN_WARMUP_MS);
+        });
+    }
+
+    #[test]
+    fn capsule_warmup_learning_moves_towards_the_observation() {
+        with_tmp_state(|_dir| {
+            // 异常样本（太快 / 太慢 / 非数）一律丢弃。
+            assert_eq!(learn_capsule_warmup_ms(5.0), None);
+            assert_eq!(learn_capsule_warmup_ms(9_000.0), None);
+            assert_eq!(learn_capsule_warmup_ms(f32::NAN), None);
+            // 正常样本：EMA 向观测值靠（150*0.7 + 500*0.3 = 255）。
+            let learned = learn_capsule_warmup_ms(500.0).expect("sample is plausible");
+            assert!((learned - 255.0).abs() < 0.01, "{learned}");
+            assert!((load_capsule_warmup_ms() - 255.0).abs() < 0.01);
+            // 连续更快就绪会把估计拉下来（但不会越出下限）。
+            let mut value = learned;
+            for _ in 0..40 {
+                value = learn_capsule_warmup_ms(25.0).expect("sample is plausible");
+            }
+            assert!(
+                (value - crate::siri_wgpu::MIN_WARMUP_MS).abs() < 0.01,
+                "{value}"
+            );
         });
     }
 }

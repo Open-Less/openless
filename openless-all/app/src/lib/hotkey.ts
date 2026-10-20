@@ -453,23 +453,28 @@ function formatPrimary(primary: string): string {
         return '\u2192';
     }
   }
+  const zh = i18n.language.toLowerCase().startsWith('zh');
+  const left = zh ? '左' : 'Left';
+  const right = zh ? '右' : 'Right';
   switch (trimmed.toLowerCase()) {
+    case 'rightalt':
     case 'rightoption':
-      return isMac ? 'Right ⌥' : 'Right Alt';
+      return `${right} ${isMac ? '⌥' : 'Alt'}`;
+    case 'leftalt':
     case 'leftoption':
-      return isMac ? 'Left ⌥' : 'Left Alt';
+      return `${left} ${isMac ? '⌥' : 'Alt'}`;
     case 'rightcontrol':
-      return isMac ? 'Right ⌃' : 'Right Ctrl';
+      return `${right} ${isMac ? '⌃' : 'Ctrl'}`;
     case 'leftcontrol':
-      return isMac ? 'Left ⌃' : 'Left Ctrl';
+      return `${left} ${isMac ? '⌃' : 'Ctrl'}`;
     case 'rightcommand':
-      return isMac ? 'Right ⌘' : currentPlatform().isWindows ? 'Right Win' : 'Right Super';
+      return `${right} ${isMac ? '⌘' : currentPlatform().isWindows ? 'Win' : 'Super'}`;
     case 'leftcommand':
-      return isMac ? 'Left ⌘' : currentPlatform().isWindows ? 'Left Win' : 'Left Super';
+      return `${left} ${isMac ? '⌘' : currentPlatform().isWindows ? 'Win' : 'Super'}`;
     case 'leftshift':
-      return isMac ? 'Left ⇧' : 'Left Shift';
+      return `${left} ${isMac ? '⇧' : 'Shift'}`;
     case 'rightshift':
-      return isMac ? 'Right ⇧' : 'Right Shift';
+      return `${right} ${isMac ? '⇧' : 'Shift'}`;
     case 'fn':
       return 'Fn';
     case 'mediaplaypause':

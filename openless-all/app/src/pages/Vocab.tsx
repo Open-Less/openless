@@ -848,7 +848,14 @@ export function Vocab() {
               {t('common.add')}
             </Btn>
           </div>
-          <div style={{ marginTop: 16, fontSize: 12.5, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+          <div
+            style={{
+              marginTop: 16,
+              fontSize: 12.5,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+              color: 'var(--ol-ink-2)',
+            }}
+          >
             {t('vocab.newWordTemplates')}
           </div>
           <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
@@ -886,7 +893,7 @@ export function Vocab() {
                       style={{
                         display: 'block',
                         fontSize: 13,
-                        fontWeight: 600,
+                        fontWeight: 'var(--ol-font-weight-semibold)',
                         color: 'var(--ol-ink)',
                       }}
                     >

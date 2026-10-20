@@ -8,6 +8,7 @@ import { isTauri, startMicrophoneLevelMonitor, stopMicrophoneLevelMonitor } from
 import type { MicrophoneDevice } from '../../lib/types';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { useMobileLayout } from '../../lib/useMobileLayout';
+import { isHarmonyHost } from '../../lib/harmonyBridge';
 
 interface MicrophoneSelectProps {
   devices: MicrophoneDevice[];
@@ -50,7 +51,18 @@ export function MicrophoneSelect({
     async function start() {
       await enqueueMonitorTask(async () => {
         try {
-          if (isTauri) {
+          if (isHarmonyHost) {
+            const onLevel = (event: Event) =>
+              setLevel(Math.max(0, Math.min(1, (event as CustomEvent<number>).detail)));
+            window.addEventListener('openless:harmony-level', onLevel);
+            unlisten = () => window.removeEventListener('openless:harmony-level', onLevel);
+            if (!cancelled) await startMicrophoneLevelMonitor(selectedName);
+            if (cancelled) {
+              unlisten();
+              unlisten = undefined;
+              await stopMicrophoneLevelMonitor();
+            }
+          } else if (isTauri) {
             const { listen } = await import('@tauri-apps/api/event');
             if (cancelled) return;
             const stopListening = await listen<{ level: number }>('microphone:level', (event) => {

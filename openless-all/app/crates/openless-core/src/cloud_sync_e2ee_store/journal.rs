@@ -32,6 +32,8 @@ fn sync_directory(path: &std::path::Path) -> DocumentResult<()> {
     std::fs::File::open(path)
         .and_then(|file| file.sync_all())
         .map_err(|_| DocumentError::JournalUnavailable)?;
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

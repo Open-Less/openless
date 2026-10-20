@@ -5,9 +5,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>OpenLess</title>
+    <style>
+      .ol-first-frame {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 16px;
+        text-align: center;
+        background: #fff;
+        color: #18181b;
+        font:
+          500 16px/1.5 system-ui,
+          sans-serif;
+      }
+      .ol-first-frame i {
+        width: 28px;
+        height: 28px;
+        border: 3px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 9px;
+        margin: auto;
+      }
+      @media (prefers-color-scheme: dark) {
+        .ol-first-frame {
+          background: #18181b;
+          color: #fafafa;
+        }
+      }
+      html[data-ol-theme='dark'] .ol-first-frame {
+        background: #18181b;
+        color: #fafafa;
+      }
+      html[data-ol-initial-light] .ol-first-frame {
+        background: #fff;
+        color: #18181b;
+      }
+      html[data-ol-aux] .ol-first-frame {
+        display: none;
+      }
+    </style>
+    <script src="/startup.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="ol-first-frame" aria-busy="true">
+        <i aria-hidden="true"></i><span>OpenLess</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,3 +1,6 @@
+@import '../components/Tooltip.css';
+@import '../components/ui/Select.css';
+
 html,
 body,
 #root {
@@ -112,6 +115,12 @@ textarea {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+/* Prose, not controls/inputs: avoid short last lines where supported. Assistant
+   markdown also has a content-preserving tail group for older webviews and CJK. */
+p {
+  text-wrap: pretty;
 }
 
 /* 窗口入场 —— 纯 opacity / transform（无 blur）：WKWebView 对带 filter 的
@@ -436,7 +445,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-advanced-entry-title {
   display: block;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   line-height: 1.5;
 }
 .ol-advanced-entry-description {
@@ -500,7 +509,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-settings-rail-btn[aria-current='page'] {
   color: var(--ol-blue);
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 
 /* 翻译页顶部两栏：左栏略宽让语言 chips 每行 4 个，
@@ -529,7 +538,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   color: var(--ol-ink-2);
   font-family: inherit;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -548,7 +557,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-blue);
   border-color: var(--ol-blue);
   color: #fff;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-chip[aria-pressed='true']:hover {
   border-color: var(--ol-blue);
@@ -564,38 +573,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   to {
     opacity: 1;
     transform: none;
-  }
-}
-
-/* ── 2.0 开屏 PV（仅首启播放一次）──────────────────────────────────────
-   任意窗口比例下 object-fit: cover 裁切铺满、无黑边；黑底防首帧前闪白。
-   入场短促淡入；播放结束后整层从最后一帧画面慢慢变透明直至消失——
-   「从哪来到哪去」，渐隐时长与 SplashVideo.tsx 的 FADE_MS 保持一致。 */
-.ol-splash {
-  position: fixed;
-  inset: 0;
-  z-index: 99999;
-  background: #000;
-  animation: ol-splash-in 0.25s ease both;
-}
-.ol-splash[data-fading] {
-  animation: ol-splash-out 1.2s ease both;
-  pointer-events: none;
-}
-.ol-splash-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-@keyframes ol-splash-in {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes ol-splash-out {
-  to {
-    opacity: 0;
   }
 }
 
@@ -622,7 +599,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   color: var(--ol-ink-3);
   font-family: inherit;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   cursor: default;
   transition:
     background 0.18s var(--ol-motion-quick),
@@ -635,7 +612,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-seg-item-active {
   background: var(--ol-surface);
   color: var(--ol-ink);
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   box-shadow: var(--ol-shadow-sm);
 }
 
@@ -767,7 +744,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   padding: 0 5px;
   border-radius: 999px;
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -901,7 +878,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   margin-bottom: 4px;
 }
 
-.ol-service-views > button {
+.ol-service-views button {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -915,7 +892,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: transparent;
   font: inherit;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   line-height: 1.35;
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -948,21 +925,21 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-ok, #16a34a);
 }
 
-.ol-service-views > button[aria-pressed='true'] {
+.ol-service-views button[aria-pressed='true'] {
   color: var(--ol-blue);
   border-bottom-color: transparent;
   font-weight: 650;
 }
 
-.ol-service-views > button:hover:not(:disabled) {
+.ol-service-views button:hover:not(:disabled) {
   color: var(--ol-ink);
 }
-.ol-service-views > button:disabled {
+.ol-service-views button:disabled {
   color: var(--ol-ink-4);
   cursor: not-allowed;
   opacity: 1;
 }
-.ol-service-views > button:focus-visible {
+.ol-service-views button:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: -3px;
 }
@@ -973,7 +950,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   padding: 2px 4px;
   border-radius: 4px;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -1007,13 +984,13 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   padding-top: 0;
 }
 .ol-omni-settings .ol-channel-form-row {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 .ol-omni-tools {
   border-top: 1px solid var(--ol-line);
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 6px;
+  padding-top: 6px;
 }
 .ol-omni-tools-actions {
   display: flex;
@@ -1042,7 +1019,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     transform: none;
   }
 }
-.ol-service-views > button,
+.ol-service-views button,
 .ol-service-pipeline-option,
 .ol-omni-tools-actions > button {
   transition:
@@ -1050,7 +1027,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     background 140ms var(--ol-motion-quick),
     transform 140ms var(--ol-motion-quick);
 }
-.ol-service-views > button:active:not(:disabled),
+.ol-service-views button:active:not(:disabled),
 .ol-service-pipeline-option:active:not(:disabled),
 .ol-omni-tools-actions > button:active:not(:disabled) {
   transform: scale(0.97);
@@ -1059,7 +1036,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   .ol-service-views {
     gap: 2px;
   }
-  .ol-service-views > button {
+  .ol-service-views button {
     font-size: 11px;
     padding-inline: 2px;
   }
@@ -1186,7 +1163,9 @@ html[data-ol-platform='android'] .ol-capsule-pill {
   background: var(--ol-sidebar-bg);
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-header {
-  padding: 18px 24px;
+  /* The embedded editor starts at the window edge, beneath the native drag strip. */
+  padding: calc(18px + var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)) 24px
+    18px;
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-body {
   padding: 8px 24px 22px;
@@ -1296,7 +1275,8 @@ html[data-ol-platform='android'] .ol-capsule-pill {
 }
 @media (max-width: 600px) {
   .ol-channel-dialog-embedded .ol-channel-dialog-header {
-    padding: 18px 16px;
+    padding: calc(18px + var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)) 16px
+      18px;
   }
   .ol-channel-dialog-embedded .ol-channel-dialog-body {
     padding: 4px 12px 18px;
@@ -1406,7 +1386,7 @@ html[data-ol-platform='android'] .ol-capsule-pill {
 .ol-channel-dialog-title h2 {
   margin: 0;
   font-size: 21px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   line-height: 1.35;
   letter-spacing: -0.02em;
 }
@@ -1725,7 +1705,7 @@ html:lang(de) {
 .ol-cloud-sync h3 {
   margin: 0;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-cloud-sync p {
   font-size: 12.5px;

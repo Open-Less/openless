@@ -88,16 +88,16 @@ pub type BackdropImage = egui::TextureId;
 pub fn publish(ctx: &egui::Context, image: Option<BackdropImage>) {
     ctx.data_mut(|data| {
         if let Some(image) = image {
-            data.insert_temp(egui::Id::new(IMAGE_KEY), image);
+            data.insert_temp(egui::Id::unique(IMAGE_KEY), image);
         } else {
-            data.remove::<BackdropImage>(egui::Id::new(IMAGE_KEY));
+            data.remove::<BackdropImage>(egui::Id::unique(IMAGE_KEY));
         }
     });
 }
 
 /// The blurred backdrop the overlay should sample, if this frame has one.
 pub fn published(ctx: &egui::Context) -> Option<BackdropImage> {
-    ctx.data(|data| data.get_temp::<BackdropImage>(egui::Id::new(IMAGE_KEY)))
+    ctx.data(|data| data.get_temp::<BackdropImage>(egui::Id::unique(IMAGE_KEY)))
 }
 
 /// Texture coordinates for `rect` (window points) inside the published backdrop.
@@ -521,7 +521,7 @@ fn backdrop_layers(ctx: &egui::Context) -> Vec<egui::LayerId> {
     // registered as an area and `layer_ids` cannot see it.
     let mut layers = vec![egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("openless-window-background"),
+        egui::Id::unique("openless-window-background"),
     )];
     ctx.memory(|memory| {
         for layer in memory.layer_ids() {
@@ -627,7 +627,7 @@ mod tests {
             (egui::Order::Foreground, "openless-settings-modal"),
             (egui::Order::Tooltip, "tooltip"),
         ] {
-            egui::Area::new(egui::Id::new(id))
+            egui::Area::new(egui::Id::unique(id))
                 .order(order)
                 .fixed_pos(egui::pos2(10.0, 10.0))
                 .show(&ctx, |ui| {
@@ -637,14 +637,14 @@ mod tests {
         let layers = backdrop_layers(&ctx);
         assert!(layers.contains(&egui::LayerId::new(
             egui::Order::Middle,
-            egui::Id::new("page")
+            egui::Id::unique("page")
         )));
         assert!(!layers
             .iter()
-            .any(|layer| layer.id == egui::Id::new("openless-settings-modal")));
+            .any(|layer| layer.id == egui::Id::unique("openless-settings-modal")));
         assert!(!layers
             .iter()
-            .any(|layer| layer.id == egui::Id::new("tooltip")));
+            .any(|layer| layer.id == egui::Id::unique("tooltip")));
         end_pass(&ctx);
     }
 
@@ -691,7 +691,7 @@ mod tests {
             // 把首帧画成 `Shape::Noop`，那样这里就什么都测不到了。
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Background,
-                egui::Id::new("openless-window-background"),
+                egui::Id::unique("openless-window-background"),
             ));
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(256.0, 256.0)),

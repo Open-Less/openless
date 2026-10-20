@@ -43,7 +43,7 @@
 .ol-selection-ask-guide > h2 {
   margin: 0 0 17px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-selection-ask-steps {
   display: grid;
@@ -72,7 +72,7 @@
 .ol-selection-ask-steps h3 {
   margin: 0 0 7px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-selection-ask-steps p {
   margin: 0;
@@ -131,7 +131,7 @@
 .ol-selection-ask-history h2 {
   margin: 0 0 5px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-selection-ask-history p {
   margin: 0;

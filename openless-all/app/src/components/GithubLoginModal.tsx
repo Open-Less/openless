@@ -1,3 +1,4 @@
+import { isHarmonyHost, invokeHarmony } from '../lib/harmonyBridge';
 // GitHub login modal — the style marketplace and extension marketplace share one
 // login UI. GitHub OAuth Device Flow: start on open → show the user code and wait
 // for browser authorization → poll until authorized. All phases share one minHeight
@@ -177,7 +178,8 @@ export function GithubLoginModal({
   const copyCode = async () => {
     if (phase.kind !== 'pending') return;
     try {
-      await navigator.clipboard.writeText(phase.userCode);
+      if (isHarmonyHost) await invokeHarmony<void>('copy_text', { text: phase.userCode });
+      else await navigator.clipboard.writeText(phase.userCode);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {

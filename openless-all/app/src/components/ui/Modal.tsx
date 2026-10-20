@@ -49,6 +49,8 @@ export function Modal({
 }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useOverlayMotion(overlayRef, closing, 'backdrop');
   useOverlayMotion(cardRef, closing);
   useLayoutEffect(() => {
@@ -62,7 +64,14 @@ export function Modal({
     const card = cardRef.current;
     if (card && !card.contains(document.activeElement)) card.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !card || openModals[openModals.length - 1] !== id) return;
+      if (event.defaultPrevented || !card || openModals[openModals.length - 1] !== id) return;
+      if (event.key === 'Escape' && !event.isComposing && !card.inert) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
       if (card.inert) {
         event.preventDefault();
         return;
@@ -145,23 +154,39 @@ export function Modal({
   );
 }
 
+/** Retain the last render closure (including its data) until exit completes. */
+export function ExitPresence({
+  open,
+  render,
+}: {
+  open: boolean;
+  render: (closing: boolean) => ReactNode;
+}) {
+  const presence = useExitMount(open);
+  const previous = useRef<typeof render | null>(null);
+  const content = open ? render : previous.current;
+  useLayoutEffect(() => {
+    if (open) previous.current = render;
+    else if (!presence.mounted) previous.current = null;
+  });
+  if (!presence.mounted || !content) return null;
+  return <>{content(presence.closing)}</>;
+}
+
 /** Preserve the last visible content while its non-interactive exit finishes. */
 export function PresenceModal({
   open,
   render,
   ...props
 }: Omit<ModalProps, 'children' | 'closing'> & { open: boolean; render: () => ReactNode }) {
-  const presence = useExitMount(open);
-  const previous = useRef<{ render: () => ReactNode; props: typeof props } | null>(null);
-  const content = open ? { render, props } : previous.current;
-  useLayoutEffect(() => {
-    if (open) previous.current = { render, props };
-    else if (!presence.mounted) previous.current = null;
-  });
-  if (!presence.mounted || !content) return null;
   return (
-    <Modal {...content.props} closing={presence.closing}>
-      {content.render()}
-    </Modal>
+    <ExitPresence
+      open={open}
+      render={(closing) => (
+        <Modal {...props} closing={closing}>
+          {render()}
+        </Modal>
+      )}
+    />
   );
 }

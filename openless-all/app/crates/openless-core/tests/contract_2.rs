@@ -243,6 +243,20 @@ async fn core_streams_polish_deltas_through_one_insertion_session() {
         uuid::Uuid::new_v4().simple()
     ));
     let inserter = FixtureTextInserter::with_outcome(InsertOutcome::Inserted);
+    // Streaming polish only runs with a configured LLM channel (issue #1032).
+    let credential_store = Arc::new(InMemoryCredentialStore::default());
+    openless_core::CredentialStore::write(
+        credential_store.as_ref(),
+        openless_core::credentials::CredentialKey::new(
+            openless_core::credentials::CredentialNamespace::Llm,
+            Some("ark".to_string()),
+            openless_core::credentials::LLM_API_KEY_ACCOUNT,
+        )
+        .unwrap(),
+        openless_core::credentials::SecretValue::new("fixture-key"),
+    )
+    .await
+    .unwrap();
     let backend = openless_core::OpenLessBackend::new(
         BackendConfig {
             data_dir: data_dir.clone(),
@@ -265,7 +279,7 @@ async fn core_streams_polish_deltas_through_one_insertion_session() {
                 ]),
             ),
             task_spawner: Arc::new(TokioTaskSpawner),
-            credential_store: Arc::new(InMemoryCredentialStore::default()),
+            credential_store: credential_store.clone(),
             ..BackendDependencies::unsupported()
         },
     )

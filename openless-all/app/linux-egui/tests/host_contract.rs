@@ -474,6 +474,7 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     for enabled in [true, false] {
         let mut preferences = backend.get_preferences();
         preferences.coding_agent_enabled = enabled;
+        preferences.testing_features_enabled = true;
         preferences.coding_agent_voice_hotkey = Some(ShortcutBinding {
             primary: "F10".into(),
             modifiers: vec!["ctrl".into()],

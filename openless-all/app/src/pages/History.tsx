@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { LearnVocabulary } from '../components/LearnVocabulary';
-import { Tooltip } from '../components/Tooltip';
+import { Hint } from '../components/Tooltip';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
@@ -619,7 +619,8 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         <span
                           style={{
                             fontSize: 11,
-                            fontFamily: 'var(--ol-font-mono)',
+                            fontFamily: 'var(--ol-font-numeric)',
+                            fontVariantNumeric: 'tabular-nums',
                             color: 'var(--ol-ink-3)',
                           }}
                         >
@@ -629,7 +630,8 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                           style={{
                             fontSize: 10,
                             color: 'var(--ol-ink-4)',
-                            fontFamily: 'var(--ol-font-mono)',
+                            fontFamily: 'var(--ol-font-numeric)',
+                            fontVariantNumeric: 'tabular-nums',
                           }}
                         >
                           {formatDuration(s.durationMs, t, locale)}
@@ -788,23 +790,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                   {(item.asrProvider || item.asrMs != null) && (
                     <>
                       <span style={{ display: 'flex' }}>
-                        <Tooltip
-                          content={t('history.stepAsrHint')}
-                          wrap
-                          placement="bottom"
-                          focusable
-                        >
-                          <span
-                            style={{
-                              cursor: 'help',
-                              textDecoration: 'underline dotted',
-                              textDecorationColor: 'var(--ol-ink-4)',
-                              textUnderlineOffset: 3,
-                            }}
-                          >
-                            {t('history.stepAsr')}
-                          </span>
-                        </Tooltip>
+                        <Hint content={t('history.stepAsrHint')}>{t('history.stepAsr')}</Hint>
                       </span>
                       <span
                         style={{
@@ -1397,30 +1383,11 @@ function RepolishPanel({
             alignItems: 'center',
             gap: 6,
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 'var(--ol-font-weight-semibold)',
             color: 'var(--ol-ink-2)',
           }}
         >
-          {t('history.repolish.title')}
-          {/* Persistent hint text collapsed into a "?" badge, expanded on hover/focus (same
-            pattern as the settings pages). */}
-          <Tooltip content={t('history.repolish.hint')} wrap placement="bottom" focusable>
-            <span
-              style={{
-                width: 16,
-                height: 16,
-                borderRadius: 999,
-                background: 'var(--ol-control-muted)',
-                color: 'var(--ol-ink-3)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'help',
-              }}
-            >
-              <Icon name="help" size={10} />
-            </span>
-          </Tooltip>
+          <Hint content={t('history.repolish.hint')}>{t('history.repolish.title')}</Hint>
         </span>
         <span style={{ display: 'inline-flex', gap: 6 }}>
           {results.length > 0 && (

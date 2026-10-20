@@ -35,6 +35,7 @@ pub struct FoundryStatusWire {
     pub provider_id: String,
     pub available: bool,
     pub runtime_ready: bool,
+    pub restart_required: bool,
     pub runtime_source: String,
     pub active_model: String,
     pub loaded_model_id: Option<String>,
@@ -49,6 +50,7 @@ impl From<openless_core::LocalAsrRuntimeStatus> for FoundryStatusWire {
             provider_id: status.provider_id,
             available: status.available,
             runtime_ready: status.loaded,
+            restart_required: status.restart_required,
             runtime_source: status.runtime_source.unwrap_or_default().as_str().into(),
             active_model: status.active_model,
             loaded_model_id: status.model_id,
@@ -156,6 +158,19 @@ pub async fn foundry_local_asr_set_keep_loaded_secs(
 }
 
 #[tauri::command]
+pub async fn foundry_local_asr_download(
+    backend: CoreState<'_>,
+    model_alias: String,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .start_download(foundry_target(model_alias)?, None)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
 pub async fn foundry_local_asr_prepare(
     backend: CoreState<'_>,
     model_alias: String,
@@ -236,6 +251,7 @@ mod wire_contract_tests {
     #[test]
     fn foundry_status_keeps_the_legacy_react_wire_shape() {
         let status = FoundryStatusWire::from(openless_core::LocalAsrRuntimeStatus {
+            restart_required: false,
             runtime: LocalAsrRuntime::Foundry,
             provider_id: "foundry-local-whisper".into(),
             available: true,
@@ -260,6 +276,7 @@ mod wire_contract_tests {
                 "providerId": "foundry-local-whisper",
                 "available": true,
                 "runtimeReady": false,
+                "restartRequired": false,
                 "runtimeSource": "ort-nightly",
                 "activeModel": "whisper-small",
                 "loadedModelId": null,

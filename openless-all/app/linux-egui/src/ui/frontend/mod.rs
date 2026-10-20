@@ -1,3 +1,5 @@
+pub mod capsule_motion;
+pub mod cloud_sync;
 pub mod corrections;
 pub mod format;
 pub mod history;
@@ -6,16 +8,19 @@ pub mod layout;
 pub mod marketplace;
 pub mod overview;
 pub mod pages;
+pub mod paging;
 pub mod popups;
 pub mod selection_ask;
 pub mod settings;
-pub mod siri_gl;
+mod transcript_motion;
+pub use openless_linux_egui::siri_wgpu;
 pub mod style;
 pub mod translation;
 pub mod view_model;
 pub mod vocab;
 
 use eframe::egui;
+use openless_linux_egui::tr_l10n;
 use view_model::{FrontendAction, FrontendViewModel, Page};
 
 /// Re-export the theme module from the parent ui module.
@@ -75,38 +80,32 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                     )
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        match page {
-                            Page::Marketplace => {
-                                marketplace::marketplace_page(ui, vm, actions, body);
-                            }
-                            Page::SelectionAsk => {
-                                selection_ask::page(ui, vm, actions);
-                            }
-                            Page::Translation => {
-                                translation::page(ui, vm, actions);
-                            }
-                            Page::Corrections => {
-                                corrections::page(ui, vm, actions);
-                            }
-                            Page::Overview
-                            | Page::History
-                            | Page::QuickNote
-                            | Page::Style
-                            | Page::Vocab
-                            | Page::Settings => {
-                                // Handled above or via overlay.
-                            }
+                        // 阅读宽度（外观 → 排版）：Tauri 用 `--ol-reading-width`
+                        // 限制内容列，这里等价地把滚动内容收窄并居中。
+                        let content_width =
+                            openless_linux_egui::typography::load().width.max_width();
+                        if ui.available_width() > content_width {
+                            let margin = (ui.available_width() - content_width) / 2.0;
+                            ui.horizontal(|ui| {
+                                ui.add_space(margin);
+                                ui.vertical(|ui| {
+                                    ui.set_max_width(content_width);
+                                    page_content(ui, vm, actions, page, body);
+                                });
+                            });
+                        } else {
+                            page_content(ui, vm, actions, page, body);
                         }
                         ui.add_space(32.0);
                     });
                 #[cfg(test)]
                 ctx.data_mut(|data| {
                     data.insert_temp(
-                        egui::Id::new("main-scroll-measure"),
+                        egui::Id::unique("main-scroll-measure"),
                         (
                             scroll_output.content_size.y,
                             scroll_output.inner_rect.height(),
-                            scroll_output.state.offset.y,
+                            scroll_output.state.clamped_offset().y,
                         ),
                     )
                 });
@@ -117,9 +116,12 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
 
         // Settings overlay (rendered on top of everything).
         if vm.settings_open {
-            settings::settings_overlay(ctx, vm, actions, body);
+            settings::settings_page(ctx, vm, actions, body);
+            // 云同步的模态框必须在设置卡片之后创建：同层 Area 后创建的在上，
+            // 否则点「恢复/改密码」弹出的对话框会被设置面板盖住。
+            cloud_sync::cloud_sync_overlay(ctx, body, vm, actions);
         } else if vm.settings_saving || vm.settings_save_error.is_some() {
-            egui::Area::new(egui::Id::new("preference-save-state"))
+            egui::Area::new(egui::Id::unique("preference-save-state"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 52.0))
                 .show(ctx, |ui| {
@@ -130,6 +132,119 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                 });
         }
     });
+
+    // 快捷键录制中：「点别处」＝取消（Tauri 的 Popover 点外部关闭）。
+    // 录制面板在 `recording_panel` 里把自己的矩形记进 memory，这里只负责判定。
+    // 进入录制的那一帧就是按下鼠标的那一帧，所以先"武装"一帧再开始判外点。
+    if vm.shortcut_recording.is_some() {
+        let id = egui::Id::unique("openless-shortcut-recording");
+        let state = ctx.data(|data| data.get_temp::<(egui::Rect, bool)>(id));
+        let pressed = ctx.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        match state {
+            None => {}
+            Some((rect, armed)) => {
+                if !armed {
+                    ctx.data_mut(|data| data.insert_temp(id, (rect, true)));
+                } else if pressed.is_some_and(|pos| !rect.contains(pos)) {
+                    actions.push(FrontendAction::ShortcutRecording(None));
+                }
+            }
+        }
+    } else {
+        // 录制结束后清掉陈旧矩形，避免下次录制首帧读到旧位置。
+        ctx.data_mut(|data| {
+            data.remove::<(egui::Rect, bool)>(egui::Id::unique("openless-shortcut-recording"))
+        });
+    }
+
+    if vm.runtime_warning.is_some() {
+        runtime_warning_overlay(ctx, vm, actions);
+    }
+}
+
+/// Body of one non-overlay page: everything that scrolls inside the main area.
+fn page_content(
+    ui: &mut egui::Ui,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+    page: Page,
+    body: egui::Rect,
+) {
+    match page {
+        Page::Marketplace => marketplace::marketplace_page(ui, vm, actions, body),
+        Page::SelectionAsk => selection_ask::page(ui, vm, actions),
+        Page::Translation => translation::page(ui, vm, actions),
+        Page::Corrections => corrections::page(ui, vm, actions),
+        Page::Overview
+        | Page::History
+        | Page::QuickNote
+        | Page::Style
+        | Page::Vocab
+        | Page::Settings => {
+            // Handled above or via the settings overlay.
+        }
+    }
+}
+
+fn runtime_warning_overlay(
+    ctx: &egui::Context,
+    vm: &mut FrontendViewModel,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let Some(warning) = vm.runtime_warning.as_deref() else {
+        return;
+    };
+    let screen = ctx.input(|input| input.viewport_rect());
+    let card_width = screen.width().clamp(280.0, 600.0);
+    let card_height = screen.height().clamp(220.0, 360.0);
+    let card = egui::Rect::from_center_size(screen.center(), egui::vec2(card_width, card_height));
+
+    egui::Area::new(egui::Id::unique("openless-runtime-warning-overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            ui.set_max_size(screen.size());
+            let _ = ui.allocate_rect(screen, egui::Sense::click());
+            ui.painter().rect_filled(
+                screen,
+                egui::CornerRadius::ZERO,
+                egui::Color32::from_black_alpha(150),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .shadow(egui::Shadow {
+                        offset: [0, 10],
+                        blur: 24,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(48),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_size(card.size());
+                        ui.set_max_size(card.size());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(28.0);
+                            ui.heading(tr_l10n(vm.lang, "startup.input_method_unavailable_title"));
+                            ui.add_space(16.0);
+                            ui.label(warning);
+                            ui.add_space(20.0);
+                            if ui.button(tr_l10n(vm.lang, "common.close")).clicked() {
+                                actions.push(FrontendAction::DismissRuntimeWarning);
+                            }
+                        });
+                    });
+            });
+        });
 }
 
 /// egui 0.36 起 `FullOutput` 里的 `TexturesDelta` 必须被消费，未应用就 drop 会
@@ -202,6 +317,38 @@ mod tests {
         for expected in ["Unsaved", "Retry", "fixture registration failed"] {
             assert!(text.contains(expected), "{text}");
         }
+    }
+
+    #[test]
+    fn unavailable_input_method_renders_a_localized_dismissible_overlay() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::En,
+            runtime_warning: Some("fixture input method error".into()),
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut actions);
+            let _ = end_pass(&ctx);
+        }
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            ..Default::default()
+        });
+        render(&ctx, &mut vm, &mut actions);
+        let painted = painted_text(&end_pass(&ctx));
+        assert!(
+            painted.contains(tr_l10n(vm.lang, "startup.input_method_unavailable_title")),
+            "painted output: {painted}"
+        );
+        assert!(painted.contains("fixture input method error"));
+        assert!(painted.contains(tr_l10n(vm.lang, "common.close")));
+        assert!(actions.is_empty(), "the overlay only dismisses on a click");
     }
 
     #[test]
@@ -308,7 +455,7 @@ mod tests {
             );
         }
         let heatmap: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-overview-heatmap-rect"))
+            data.get_temp(egui::Id::unique("openless-overview-heatmap-rect"))
                 .expect("populated overview should show the heatmap")
         });
         let content_bottom = layout::body_rect(&ctx).bottom() - layout::PAGE_BOTTOM_PADDING;
@@ -328,7 +475,7 @@ mod tests {
         render(&ctx, &mut vm, &mut Vec::new());
         let _ = end_pass(&ctx);
         let (content, visible, _): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("overview-scroll-measure"))
+            data.get_temp(egui::Id::unique("overview-scroll-measure"))
                 .expect("provider cards plus heatmap must enable page scrolling")
         });
         assert!(
@@ -505,7 +652,7 @@ mod tests {
             active_page: Page::Marketplace,
             ..Default::default()
         };
-        let id = egui::Id::new("openless-marketplace-search");
+        let id = egui::Id::unique("openless-marketplace-search");
         // warm up: egui needs a frame before the widget exists / accepts focus
         for _ in 0..3 {
             ctx.begin_pass(egui::RawInput {
@@ -543,10 +690,13 @@ mod tests {
         };
         let label =
             openless_linux_egui::tr_l10n(zh, "settings.recording.history_max_entries_label");
-        let id = egui::Id::new(("openless-settings-text", label));
+        let id = egui::Id::unique(("openless-settings-text", label));
+        // 权限卡现在排在数据卡之前（与 Tauri 同序），留存输入框落到首屏之外。
+        // 这个用例验证的是「输入不丢字」，与首屏布局无关，所以放大视口。
+        let tall = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 1600.0));
         for _ in 0..2 {
             ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport()),
+                screen_rect: Some(tall),
                 ..Default::default()
             });
             let mut actions = Vec::new();
@@ -557,7 +707,7 @@ mod tests {
         for step in ["7", "7"] {
             ctx.memory_mut(|m| m.request_focus(id));
             ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport()),
+                screen_rect: Some(tall),
                 events: vec![egui::Event::Text(step.into())],
                 ..Default::default()
             });
@@ -574,7 +724,9 @@ mod tests {
             "the typed value must actually be painted"
         );
 
-        // 3) 添加渠道表单里的名称输入框（AI 服务与模型 → 语音识别）
+        // 3) 渠道编辑器（右栏覆盖）里的「渠道名称」输入框：输入立刻推
+        //    `SettingsProviderField`，宿主写回草稿并自动保存；这里按宿主的行为把
+        //    动作回灌到 VM，验证字段吃字、并且画得出来。
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
             lang: zh,
@@ -582,10 +734,40 @@ mod tests {
             settings_open: true,
             settings_section: super::view_model::SettingsSection::Services,
             services_view: 1,
-            channel_form_open: true,
+            provider_editor: Some(super::view_model::SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: true,
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
+                name: String::new(),
+                endpoint: String::new(),
+                model: String::new(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: false,
+                protocol: Default::default(),
+                busy: false,
+            }),
             ..Default::default()
         };
-        let id = egui::Id::new("openless-settings-channel-name");
+        // 字段缓冲的键含渠道 id（不同渠道的同一字段互不串味）。
+        let id = egui::Id::unique((
+            "openless-settings-provider-field",
+            "channel",
+            "Name".to_string(),
+        ));
         let mut painted = String::new();
         for _ in 0..2 {
             ctx.begin_pass(egui::RawInput {
@@ -606,30 +788,78 @@ mod tests {
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
             painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            // 宿主行为：把字段写回草稿（自动保存只负责落盘，不改草稿值）。
+            for action in actions {
+                if let super::view_model::FrontendAction::SettingsProviderField(
+                    super::view_model::SettingsProviderField::Name,
+                    value,
+                ) = action
+                {
+                    if let Some(editor) = vm.provider_editor.as_mut() {
+                        editor.name = value;
+                    }
+                }
+            }
         }
         assert_eq!(
-            vm.channel_form_name, "my",
-            "the add-channel form must accept typed characters"
+            vm.provider_editor
+                .as_ref()
+                .map(|editor| editor.name.clone()),
+            Some("my".to_string()),
+            "the channel editor must accept typed characters"
         );
         assert!(
             painted.contains("my"),
-            "the add-channel form must paint what was typed"
+            "the channel editor must paint what was typed"
         );
     }
 
+    /// 回归：渠道编辑器只能盖住「AI 服务与模型」这一页的右栏。以前只要
+    /// `provider_editor` 有值就整栏覆盖，用户一进设置只看得到模型编辑器，
+    /// 其它设置页全都改不了。
     #[test]
-    fn settings_overlay_opens_from_every_page() {
-        // Regression: Overview / Style / History returned early from `render`, so
-        // the settings overlay at the end of the function never ran and the
-        // 设置 button did nothing on those pages.
+    fn the_channel_editor_never_covers_other_settings_sections() {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
-        let rail_general = openless_linux_egui::tr_l10n(zh, "modal.sections.general");
-        for page in [Page::Overview, Page::Style, Page::History, Page::Vocab] {
+        let editor = || {
+            Some(super::view_model::SettingsProviderEditor {
+                channel_id: "channel".to_string(),
+                is_asr: false,
+                is_draft: false,
+                provider: "DeepSeek".to_string(),
+                provider_type: "deepseek".to_string(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
+                name: "DeepSeek".to_string(),
+                endpoint: String::new(),
+                model: "deepseek-v4-flash".to_string(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: false,
+                protocol: Default::default(),
+                busy: false,
+            })
+        };
+        for section in [
+            super::view_model::SettingsSection::General,
+            super::view_model::SettingsSection::Appearance,
+            super::view_model::SettingsSection::About,
+        ] {
             let mut vm = FrontendViewModel {
                 lang: zh,
-                active_page: page,
+                active_page: Page::Settings,
                 settings_open: true,
+                settings_section: section,
+                provider_editor: editor(),
                 ..Default::default()
             };
             let mut painted = String::new();
@@ -643,90 +873,12 @@ mod tests {
                 painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
             }
             assert!(
-                painted.contains(rail_general),
-                "the settings overlay must render on {page:?} too"
+                !painted.contains(openless_linux_egui::tr_l10n(
+                    zh,
+                    "settings.channels.edit_title"
+                )),
+                "an open channel editor must not cover the {section:?} section"
             );
-        }
-    }
-
-    #[test]
-    fn settings_overlay_lists_every_section() {
-        let ctx = egui::Context::default();
-        let zh = openless_linux_egui::Lang::ZhCn;
-        for section in [
-            super::view_model::SettingsSection::General,
-            super::view_model::SettingsSection::Shortcuts,
-            super::view_model::SettingsSection::Appearance,
-            super::view_model::SettingsSection::Services,
-            super::view_model::SettingsSection::Privacy,
-            super::view_model::SettingsSection::Advanced,
-            super::view_model::SettingsSection::About,
-        ] {
-            let mut vm = FrontendViewModel {
-                lang: zh,
-                active_page: Page::Settings,
-                settings_open: true,
-                settings_section: section,
-                ..Default::default()
-            };
-            // The shortcuts section renders key caps for the live bindings.
-            vm.dictation_hotkey = "Ctrl+Shift+Z".to_string();
-            for _ in 0..2 {
-                ctx.begin_pass(egui::RawInput {
-                    screen_rect: Some(viewport()),
-                    ..Default::default()
-                });
-                let mut actions = Vec::new();
-                render(&ctx, &mut vm, &mut actions);
-                let _ = crate::ui::frontend::end_pass(&ctx);
-            }
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport()),
-                ..Default::default()
-            });
-            let mut actions = Vec::new();
-            render(&ctx, &mut vm, &mut actions);
-            let output = crate::ui::frontend::end_pass(&ctx);
-            let painted = painted_text(&output);
-            for key in [
-                "modal.sections.general",
-                "modal.sections.shortcuts",
-                "modal.sections.appearance",
-                "modal.sections.services",
-                "modal.sections.privacy",
-                "modal.sections.advanced",
-                "modal.sections.about",
-            ] {
-                let expected = openless_linux_egui::tr_l10n(zh, key);
-                assert!(
-                    painted.contains(expected),
-                    "settings rail must paint {key} ({expected:?})"
-                );
-            }
-            // Section blurb under the title, mirroring the Tauri modal.
-            let desc_key = match section {
-                super::view_model::SettingsSection::General => "modal.descriptions.general",
-                super::view_model::SettingsSection::Shortcuts => "modal.descriptions.shortcuts",
-                super::view_model::SettingsSection::Services => "modal.descriptions.services",
-                super::view_model::SettingsSection::Appearance => "modal.descriptions.appearance",
-                super::view_model::SettingsSection::Privacy => "modal.descriptions.privacy",
-                super::view_model::SettingsSection::Advanced => "modal.descriptions.advanced",
-                super::view_model::SettingsSection::About => "modal.descriptions.about",
-            };
-            let desc = openless_linux_egui::tr_l10n(zh, desc_key);
-            assert!(
-                painted.contains(desc),
-                "settings section blurb must paint {desc_key} ({desc:?})"
-            );
-            if section == super::view_model::SettingsSection::Shortcuts {
-                // Key caps: one painted chip per key in the binding.
-                for cap in ["Ctrl", "Shift", "Z"] {
-                    assert!(
-                        painted.contains(cap),
-                        "shortcut rows must paint the {cap} key cap"
-                    );
-                }
-            }
         }
     }
 
@@ -789,6 +941,7 @@ mod tests {
                 ..Default::default()
             };
             vm.settings.less_computer = enabled;
+            vm.settings.testing_features = true;
             let mut painted = String::new();
             for _ in 0..2 {
                 ctx.begin_pass(egui::RawInput {
@@ -807,7 +960,35 @@ mod tests {
         }
     }
 
-    /// 渲染设置页并把这一帧画出的文字按行返回。
+    #[test]
+    fn testing_features_hide_root_entries_and_revoke_an_open_detail_page() {
+        use super::view_model::SettingsSection;
+        let mut vm = FrontendViewModel::default();
+        let root = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        let title = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.testing_features.title",
+        );
+        assert!(root.iter().any(|line| line.contains(title)));
+        assert!(!root.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 3;
+        let off = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(!off.iter().any(|line| line == "Less Computer"));
+        vm.settings.testing_features = true;
+        let on = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert!(on.iter().any(|line| line == "Less Computer"));
+        vm.advanced_open = 0;
+        vm.settings.less_computer = true;
+        vm.settings.testing_features = false;
+        let revoked = painted_settings_lines(SettingsSection::Advanced, &mut vm);
+        assert_eq!(vm.advanced_open, 3);
+        assert!(!revoked.iter().any(|line| line == "Less Computer"));
+        let shortcuts = painted_settings_lines(SettingsSection::Shortcuts, &mut vm);
+        let agent_voice = openless_linux_egui::tr_l10n(vm.lang, "settings.shortcuts.agent_voice");
+        assert!(!shortcuts.iter().any(|line| line == agent_voice));
+    }
+
+    /// Render two frames so layout and text are settled.
     fn painted_settings_lines(
         section: super::view_model::SettingsSection,
         vm: &mut FrontendViewModel,
@@ -834,31 +1015,678 @@ mod tests {
         lines
     }
 
+    /// The pipeline selector remains available in both modes, matching Tauri.
     #[test]
-    fn shortcut_menu_reveals_record_and_disable() {
+    fn the_pipeline_mode_row_is_available_in_both_modes() {
         let zh = openless_linux_egui::Lang::ZhCn;
-        let record = openless_linux_egui::tr_l10n(zh, "settings.recording.combo_record_btn");
-        let disable = openless_linux_egui::tr_l10n(zh, "settings.shortcuts.disable");
-        let mut vm = FrontendViewModel {
-            shortcut_menu: Some(super::view_model::ShortcutField::Qa),
-            ..Default::default()
-        };
-        let open = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
-        assert!(
-            open.iter().any(|line| line == record),
-            "the record button must be painted"
-        );
-        assert!(
-            open.iter().any(|line| line == disable),
-            "the disable button must be painted"
-        );
-        // 收起菜单后两个按钮都要消失。
-        vm.shortcut_menu = None;
-        let closed = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
-        assert!(!closed.iter().any(|line| line == record));
-        assert!(!closed.iter().any(|line| line == disable));
+        for multimodal in [false, true] {
+            let mut vm = FrontendViewModel {
+                multimodal_view: multimodal,
+                pipeline_multimodal: multimodal,
+                ..Default::default()
+            };
+            let lines =
+                painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+            for key in [
+                "settings.providers.pipeline_mode_label",
+                "settings.providers.pipeline_mode_traditional",
+                "settings.providers.pipeline_mode_multimodal",
+                "settings.providers.pipeline_isolation_notice",
+            ] {
+                let text = openless_linux_egui::tr_l10n(zh, key);
+                assert!(
+                    lines.iter().any(|line| line == text),
+                    "{key} must remain available, multimodal={multimodal}: {lines:?}"
+                );
+            }
+        }
     }
 
+    /// 渠道卡片的状态块（Tauri `ChannelTestStatus`）：失败的渠道要给出错误、
+    /// 「不会自动停用」的说明、多久以前，以及超过 24 小时的过期提示；有结果
+    /// 时验证按钮变成「重新验证」。
+    #[test]
+    fn a_failed_channel_card_explains_the_failure_and_the_stale_result() {
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            channels: vec![super::view_model::SettingsChannel {
+                id: "deepseek-1".into(),
+                name: "DeepSeek".into(),
+                provider: "DeepSeek".into(),
+                provider_type: "deepseek".into(),
+                model: "deepseek-v4-flash".into(),
+                is_active: true,
+                enabled: true,
+                last_ok: Some(false),
+                last_error: Some("-401".into()),
+                last_latency_ms: None,
+                // 25 小时前：既要有「1 天前」，也要有过期提示。
+                last_check_age_seconds: Some(25 * 60 * 60),
+            }],
+            ..Default::default()
+        };
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        let painted = |text: &str| lines.iter().any(|line| line.contains(text));
+        for text in [
+            openless_linux_egui::tr_l10n(zh, "settings.channels.last_check"),
+            &openless_linux_egui::fmt_l10n(zh, "settings.channels.failed", &[&"-401"]),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.failure_keeps_enabled"),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.reverify"),
+            &openless_linux_egui::fmt_l10n(zh, "settings.channels.days_ago", &[&1]),
+            openless_linux_egui::tr_l10n(zh, "settings.channels.stale_result"),
+        ] {
+            assert!(painted(text), "{text:?} must be painted: {lines:?}");
+        }
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.trim()
+                    == openless_linux_egui::tr_l10n(zh, "settings.channels.verify")),
+            "a channel with a past result offers a re-check, not a first check"
+        );
+
+        // 从未验证过的渠道：只说「尚未验证」，不给出过期/失败字样。
+        vm.channels[0].last_ok = None;
+        vm.channels[0].last_error = None;
+        vm.channels[0].last_check_age_seconds = None;
+        let fresh = painted_settings_lines(super::view_model::SettingsSection::Services, &mut vm);
+        let painted = |text: &str| fresh.iter().any(|line| line.contains(text));
+        assert!(painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.not_verified"
+        )));
+        assert!(!painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.stale_result"
+        )));
+        assert!(!painted(openless_linux_egui::tr_l10n(
+            zh,
+            "settings.channels.reverify"
+        )));
+    }
+
+    /// 录制器（键帽 + ↻ + ✕）必须贴内容区右边缘：之前用 `allocate_ui_with_layout`
+    /// 的两列，`top_down` 会按内容收缩，标签列只占文字宽，录制器停在中途。
+    #[test]
+    fn shortcut_recorder_hugs_the_right_edge() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            ..Default::default()
+        };
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1321.0, 856.0));
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let dictation = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.shortcuts.start_stop",
+        );
+        let (row, recorder) = ctx
+            .data(|data| {
+                data.get_temp::<(egui::Rect, egui::Rect)>(egui::Id::unique((
+                    "shortcut-row-rects",
+                    dictation,
+                )))
+            })
+            .expect("the dictation row must publish its rects");
+        // 录制器右边缘 == 行的右边缘（也就是内容区右边缘）。
+        assert!(
+            (recorder.right() - row.right()).abs() <= 1.0,
+            "the recorder must hug the right edge: row={row:?} recorder={recorder:?}"
+        );
+        // 录制器有固定上限，不能把标签区吃掉。
+        assert!(
+            (recorder.width() - 260.0).abs() <= 1.0,
+            "the recorder column must cap at 260: {recorder:?}"
+        );
+    }
+
+    /// 设置页任何分区都不能把 i18n key 当文案画出来。
+    ///
+    /// 之前「字体与排版」的三行显示成 `uiRefinement.native` / `.comfortable`：
+    /// 标签是通过 `font.label_key()` 取到的，i18n 同步脚本只扫字面量，
+    /// key 没进 egui 目录，`tr_l10n` 就原样回吐。这里用「点后面带大写字母」
+    /// 的启发式认 key（域名不会长成这样），把这类回归钉住。
+    #[test]
+    fn no_settings_section_paints_a_raw_i18n_key() {
+        fn looks_like_key(text: &str) -> bool {
+            let Some((head, tail)) = text.split_once('.') else {
+                return false;
+            };
+            !head.is_empty()
+                && head.chars().all(|c| c.is_ascii_alphanumeric())
+                && tail.chars().any(|c| c.is_ascii_uppercase())
+                && tail
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+        }
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().trim().to_string()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let sections = [
+            super::view_model::SettingsSection::General,
+            super::view_model::SettingsSection::Shortcuts,
+            super::view_model::SettingsSection::Services,
+            super::view_model::SettingsSection::Appearance,
+            super::view_model::SettingsSection::Privacy,
+            super::view_model::SettingsSection::Advanced,
+            super::view_model::SettingsSection::About,
+        ];
+        for section in sections {
+            let ctx = egui::Context::default();
+            let mut vm = FrontendViewModel {
+                lang: openless_linux_egui::Lang::ZhCn,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: section,
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            for _ in 0..2 {
+                // 视口放宽到整页高度，否则 ScrollArea 只渲染首屏，检查不到下面
+                // 的分区（这条测试因此可能漏掉真正的原始 key）。
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 4000.0),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut actions);
+                let output = crate::ui::frontend::end_pass(&ctx);
+                let mut lines = Vec::new();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut lines);
+                }
+                let raw: Vec<&String> = lines.iter().filter(|line| looks_like_key(line)).collect();
+                assert!(raw.is_empty(), "{section:?} painted raw i18n keys: {raw:?}");
+            }
+        }
+    }
+
+    /// 选区助手卡片的行为设置只在「语音编辑」开启后出现（对齐 Tauri：
+    /// 自动判断意图 / 线索词 / 编辑方案格式 / 系统提示词都在 voiceEnabled 里）。
+    #[test]
+    fn selection_assistant_rows_follow_the_voice_edit_toggle() {
+        use openless_linux_egui::{tr_l10n, Lang};
+        let ctx = egui::Context::default();
+        let render_section = |voice: bool, auto_intent: bool| -> String {
+            let mut vm = FrontendViewModel {
+                lang: Lang::ZhCn,
+                active_page: Page::Settings,
+                settings_open: true,
+                settings_section: super::view_model::SettingsSection::General,
+                ..Default::default()
+            };
+            vm.settings.selection_voice_enabled = voice;
+            vm.settings.selection_voice_auto_intent = auto_intent;
+            let mut out = String::new();
+            for _ in 0..2 {
+                // 「录音与输入」很长，选区助手在首屏之外；视口放大到能容纳整页，
+                // 否则 ScrollArea 会把卡片裁掉（不是没画，是裁了）。
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 4000.0),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, &mut vm, &mut Vec::new());
+                let output = crate::ui::frontend::end_pass(&ctx);
+                fn collect(shape: &egui::Shape, out: &mut String) {
+                    match shape {
+                        egui::Shape::Text(text) => {
+                            out.push_str(text.galley.text());
+                            out.push('\n');
+                        }
+                        egui::Shape::Vec(shapes) => {
+                            for shape in shapes {
+                                collect(shape, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if voice {
+                    // 只在第二轮（滚动到分区后）收集，避免重复。
+                }
+                let mut text = String::new();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut text);
+                }
+                out = text;
+            }
+            out
+        };
+        let auto_intent = tr_l10n(Lang::ZhCn, "settings.selection_workspace.auto_intent");
+        let plan_format = tr_l10n(Lang::ZhCn, "settings.selection_workspace.edit_plan_format");
+        let keywords = tr_l10n(Lang::ZhCn, "settings.selection_workspace.edit_keywords");
+        let prompt = tr_l10n(
+            Lang::ZhCn,
+            "settings.selection_workspace.edit_system_prompt",
+        );
+        let voice_enable = tr_l10n(Lang::ZhCn, "settings.selection_workspace.voice_enable");
+
+        let off = render_section(false, false);
+        assert!(
+            off.contains(voice_enable),
+            "the voice-edit toggle must always be visible: {off}"
+        );
+        assert!(
+            !off.contains(auto_intent),
+            "auto-intent must stay hidden while voice edit is off: {off}"
+        );
+        assert!(
+            !off.contains(plan_format),
+            "edit plan format must stay hidden while voice edit is off"
+        );
+        assert!(
+            !off.contains(prompt),
+            "the system prompt must stay hidden while voice edit is off"
+        );
+
+        let on = render_section(true, false);
+        assert!(
+            on.contains(auto_intent),
+            "auto-intent must appear once voice edit is on"
+        );
+        assert!(
+            on.contains(keywords),
+            "keyword cues must appear while auto-intent is off"
+        );
+        assert!(
+            on.contains(plan_format),
+            "edit plan format must appear once voice edit is on"
+        );
+        assert!(
+            on.contains(prompt),
+            "the system prompt must appear once voice edit is on"
+        );
+
+        let auto = render_section(true, true);
+        assert!(
+            !auto.contains(keywords),
+            "keyword cues must hide once auto-intent is on"
+        );
+    }
+
+    /// 渠道编辑器的输入框草稿按「渠道 + 字段」保存，并在宿主值变化时重新播种。
+    ///
+    /// 早期只按字段类型做 key：编辑器第一次渲染时 `value` 还是空的，这个空缓冲会
+    /// 被每帧写回，之后加载出来的 endpoint / model 再也进不了输入框——表现就是
+    /// 「编辑已有渠道读不到配置」。同一份缓冲还会在渠道之间串味。
+    #[test]
+    fn provider_editor_fields_reseed_when_the_channel_config_arrives() {
+        let ctx = egui::Context::default();
+        let render_services = |vm: &mut FrontendViewModel| -> String {
+            let mut text = String::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1321.0, 1400.0),
+                    )),
+                    ..Default::default()
+                });
+                render(&ctx, vm, &mut Vec::new());
+                let output = crate::ui::frontend::end_pass(&ctx);
+                fn collect(shape: &egui::Shape, out: &mut String) {
+                    match shape {
+                        egui::Shape::Text(text) => {
+                            out.push_str(text.galley.text());
+                            out.push('\n');
+                        }
+                        egui::Shape::Vec(shapes) => {
+                            for shape in shapes {
+                                collect(shape, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                text.clear();
+                for clipped in &output.shapes {
+                    collect(&clipped.shape, &mut text);
+                }
+            }
+            text
+        };
+        let base = || FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Services,
+            services_view: 0,
+            ..Default::default()
+        };
+        let editor = |channel_id: &str, endpoint: &str, model: &str| {
+            super::view_model::SettingsProviderEditor {
+                channel_id: channel_id.to_string(),
+                is_asr: false,
+                is_draft: false,
+                provider: "DeepSeek".into(),
+                provider_type: "deepseek".into(),
+                endpoint_presets: Vec::new(),
+                api_key_optional: false,
+                default_endpoint: String::new(),
+                name: channel_id.to_string(),
+                endpoint: endpoint.to_string(),
+                model: model.to_string(),
+                resource_id: String::new(),
+                auth_mode: String::new(),
+                auth: super::view_model::SettingsProviderAuth::ApiKey,
+                primary_secret: String::new(),
+                secondary_secret: String::new(),
+                models: Vec::new(),
+                models_loading: false,
+                static_models: Vec::new(),
+                default_model: String::new(),
+                has_models_url: false,
+                custom_model: true,
+                protocol: Default::default(),
+                busy: false,
+            }
+        };
+
+        // 1) 先开一个「添加渠道」草稿（字段是空的）——用户先新建再编辑已有的路径。
+        let mut vm = base();
+        let mut draft = editor("new-channel", "", "");
+        draft.is_draft = true;
+        vm.provider_editor = Some(draft);
+        let painted = render_services(&mut vm);
+        assert!(painted.contains("new-channel") || painted.contains("DeepSeek"));
+        // 编辑器还没加载完时面板不渲染，但字段缓冲不应因此被"锁定"为空。
+        vm.provider_editor = None;
+        let _ = render_services(&mut vm);
+
+        // 2) 加载出已有渠道的真实配置：输入框必须显示它们。
+        vm.provider_editor = Some(editor(
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            "deepseek-chat",
+        ));
+        let painted = render_services(&mut vm);
+        assert!(
+            painted.contains("https://api.deepseek.com/v1"),
+            "the saved endpoint must be painted:\n{painted}"
+        );
+        assert!(
+            painted.contains("deepseek-chat"),
+            "the saved model must be painted:\n{painted}"
+        );
+
+        // 3) 换一个渠道：不能继续显示上一个渠道的文字。
+        vm.provider_editor = Some(editor(
+            "ark",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "ep-2024",
+        ));
+        let painted = render_services(&mut vm);
+        assert!(painted.contains("https://ark.cn-beijing.volces.com/api/v3"));
+        assert!(
+            !painted.contains("https://api.deepseek.com/v1"),
+            "the previous channel's endpoint must not leak into the next one"
+        );
+    }
+
+    /// 「权限与数据」页的卡片顺序必须与 Tauri 一致：权限 → 数据与存储 → 云端同步。
+    /// 之前把数据卡放在最前面，用户先看到留存输入框，找不到「哪里报错了」。
+    #[test]
+    fn privacy_page_lists_permissions_before_storage_and_sync() {
+        use openless_linux_egui::Lang;
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Privacy,
+            ..Default::default()
+        };
+        let mut text = String::new();
+        for _ in 0..2 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1321.0, 4000.0),
+                )),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut Vec::new());
+            let output = crate::ui::frontend::end_pass(&ctx);
+            fn collect(shape: &egui::Shape, out: &mut String) {
+                match shape {
+                    egui::Shape::Text(text) => {
+                        out.push_str(text.galley.text());
+                        out.push('\n');
+                    }
+                    egui::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            collect(shape, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            text.clear();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut text);
+            }
+        }
+        // 用具名函数而不是闭包：闭包捕获 `text` 会让借用逃逸出闭包体。
+        fn position(text: &str, key: &'static str) -> Option<usize> {
+            text.find(openless_linux_egui::tr_l10n(
+                openless_linux_egui::Lang::ZhCn,
+                key,
+            ))
+        }
+        let permissions = position(&text, "settings.permissions.title")
+            .unwrap_or_else(|| panic!("permissions card missing:\n{text}"));
+        let storage = position(&text, "settings.data_storage.title")
+            .unwrap_or_else(|| panic!("storage card missing:\n{text}"));
+        let sync = position(&text, "cloudSyncE2ee.title")
+            .unwrap_or_else(|| panic!("cloud sync card missing:\n{text}"));
+        assert!(
+            permissions < storage && storage < sync,
+            "permissions ({permissions}) then storage ({storage}) then sync ({sync})"
+        );
+        // 权限卡必须先给出网络结论，再谈留存；否则「不可用」藏在页面底部。
+        let network = position(&text, "settings.permissions.network_label")
+            .unwrap_or_else(|| panic!("network row missing:\n{text}"));
+        let retention = position(&text, "settings.recording.history_retention_label")
+            .unwrap_or_else(|| panic!("retention row missing:\n{text}"));
+        assert!(network < retention, "network status must precede retention");
+    }
+
+    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。    /// 录制中点击别处必须停止录制（Tauri 的 Popover 点外部关闭）。
+    #[test]
+    fn clicking_outside_the_recording_panel_stops_recording() {
+        use super::view_model::{FrontendAction, ShortcutField};
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            shortcut_recording: Some(ShortcutField::Qa),
+            ..Default::default()
+        };
+        // 前两帧只建立面板矩形（这一帧先"武装"，不判外点）。
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            actions.clear();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            render(&ctx, &mut vm, &mut actions);
+            let _ = crate::ui::frontend::end_pass(&ctx);
+        }
+        let cancels = |actions: &Vec<FrontendAction>| {
+            actions
+                .iter()
+                .any(|action| matches!(action, FrontendAction::ShortcutRecording(None)))
+        };
+        assert!(
+            !cancels(&actions),
+            "a plain frame must not cancel recording"
+        );
+        // 第三帧：在左上角（录制面板之外）按下鼠标。
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(viewport()),
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(40.0, 60.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        });
+        actions.clear();
+        render(&ctx, &mut vm, &mut actions);
+        let _ = crate::ui::frontend::end_pass(&ctx);
+        assert!(
+            cancels(&actions),
+            "clicking outside must stop recording: {} actions",
+            actions.len()
+        );
+    }
+
+    /// 回归：连点筛选必须生效，尤其要从某个分类点回「全部」。
+    /// 之前筛选按钮的 id 跟着 `ui.scope_id()` 走，切换分类会改变 auto-id，
+    /// 点击落到别的控件上，表现就是「点全部没反应」。
+    #[test]
+    fn shortcut_filters_switch_and_return_to_all() {
+        let ctx = egui::Context::default();
+        let mut vm = FrontendViewModel {
+            lang: openless_linux_egui::Lang::ZhCn,
+            active_page: Page::Settings,
+            settings_open: true,
+            settings_section: super::view_model::SettingsSection::Shortcuts,
+            ..Default::default()
+        };
+        let click = |ctx: &egui::Context, vm: &mut FrontendViewModel, group: &str, label: &str| {
+            let key = (group.to_string(), label.to_string());
+            let rect = ctx
+                .data(|data| {
+                    data.get_temp::<std::collections::BTreeMap<(String, String), egui::Rect>>(
+                        egui::Id::unique("shortcut-filter-rects"),
+                    )
+                })
+                .and_then(|rects| rects.get(&key).copied());
+            // 先在上一帧里找到按钮位置，再按下并抬起。
+            let rect = rect.unwrap_or_else(|| panic!("no rect painted for {group}/{label}"));
+            let pos = rect.center();
+            for events in [
+                vec![egui::Event::PointerMoved(pos)],
+                vec![
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+            ] {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    events,
+                    ..Default::default()
+                });
+                render(ctx, vm, &mut Vec::new());
+                let _ = crate::ui::frontend::end_pass(ctx);
+            }
+        };
+        // 注意：必须在**同一个 Context** 里渲染 —— 筛选状态存在 egui 的临时记忆里，
+        // 换一个 Context 就等于换了份状态（`painted_settings_lines` 自带 Context，
+        // 这里不能用它）。
+        let lines = |ctx: &egui::Context, vm: &mut FrontendViewModel| -> Vec<String> {
+            let mut out = Vec::new();
+            for _ in 0..2 {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(viewport()),
+                    ..Default::default()
+                });
+                render(ctx, vm, &mut Vec::new());
+                out = painted_text(&crate::ui::frontend::end_pass(ctx))
+                    .lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            }
+            out
+        };
+        let all_rows = lines(&ctx, &mut vm);
+        // 用行标签而不是「翻译」二字：左侧导航栏也有「翻译」，会误判。
+        assert!(all_rows.iter().any(|line| line == "翻译修饰键"));
+
+        // 切到「风格」：只剩切风格那条 + 添加动作。
+        click(&ctx, &mut vm, "分类", "风格");
+        let filtered = lines(&ctx, &mut vm);
+        assert!(
+            !filtered.iter().any(|line| line == "翻译修饰键"),
+            "风格分类不该包含翻译行: {filtered:?}"
+        );
+
+        // 关键：点回「全部」，所有行必须回来。
+        click(&ctx, &mut vm, "分类", "全部");
+        let back = lines(&ctx, &mut vm);
+        assert!(
+            back.iter().any(|line| line == "翻译修饰键"),
+            "点『全部』必须恢复完整列表: {back:?}"
+        );
+    }
+
+    /// Tauri beta 4+ 的快捷键页：录制器内联（键帽 + ↻ + ✕），
+    /// 不再有 chevron 菜单；每行都要画出重置/清空两个图标按钮。
+    #[test]
+    fn every_shortcut_row_has_inline_reset_and_clear() {
+        use super::view_model::ShortcutField;
+        let mut vm = FrontendViewModel {
+            dictation_hotkey: "Alt+Z".to_string(),
+            ..Default::default()
+        };
+        let lines = painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        // 命令行不再出现菜单里的「录制快捷键 / 停用」按钮文案。
+        let record = openless_linux_egui::tr_l10n(
+            openless_linux_egui::Lang::ZhCn,
+            "settings.recording.combo_record_btn",
+        );
+        assert!(!lines.iter().any(|line| line == record));
+        // 点击键帽开始录制后，同一行换成录制提示。
+        vm.shortcut_recording = Some(ShortcutField::Qa);
+        let recording =
+            painted_settings_lines(super::view_model::SettingsSection::Shortcuts, &mut vm);
+        assert!(
+            recording.iter().any(|line| line.contains("Esc")),
+            "the recording panel must offer Esc to cancel: {recording:?}"
+        );
+    }
+
+    /// 新快捷键页的行序（Tauri `ShortcutsSection` 的 commands 顺序）：
+    /// 语音与文本 → 风格 → 系统，最后是只读的 Esc。
     #[test]
     fn shortcut_rows_follow_the_video_order() {
         let zh = openless_linux_egui::Lang::ZhCn;
@@ -877,18 +1705,23 @@ mod tests {
         let start = index_of("settings.shortcuts.start_stop");
         let translation = index_of("hotkey.translation");
         let qa = index_of("selection_ask.hotkey_title");
+        let polish = index_of("settings.selection_workspace.polish_hotkey");
         let switch_style = index_of("settings.shortcuts.switch_style");
-        let style_pack = index_of("settings.shortcuts.style_pack_title");
         let open_app = index_of("settings.shortcuts.open_app");
         let cancel = index_of("settings.shortcuts.cancel");
         assert!(
             start < translation
                 && translation < qa
-                && qa < switch_style
-                && switch_style < style_pack
-                && style_pack < open_app
+                && qa < polish
+                && polish < switch_style
+                && switch_style < open_app
                 && open_app < cancel,
             "shortcut rows must keep the Tauri order, painted: {lines:?}"
+        );
+        let add = openless_linux_egui::tr_l10n(zh, "settings.shortcuts.style_pack_add");
+        assert!(
+            lines.iter().any(|line| line.contains(add)),
+            "the add-style-shortcut action must be painted: {lines:?}"
         );
     }
 
@@ -907,6 +1740,7 @@ mod tests {
             shortcut_recording: Some(ShortcutField::CodingAgentVoice),
             ..Default::default()
         };
+        vm.settings.testing_features = true;
         let held = egui::Modifiers {
             ctrl: true,
             command: true,
@@ -1234,17 +2068,14 @@ mod tests {
         }
     }
 
-    /// 设置页遮罩用的是离屏模糊背板，而不是一层暗色：发布的纹理必须真的落到弹窗图层
-    /// 上，否则用户看到的还是旧的黑遮罩。
+    /// 设置现在是整页：不再有磨砂遮罩、没有压暗层，页本身也不能退化成弹窗。
     #[test]
-    fn the_settings_overlay_paints_the_published_blurred_backdrop() {
+    fn the_settings_page_paints_no_backdrop_any_more() {
         let ctx = egui::Context::default();
         let mut vm = FrontendViewModel {
             settings_open: true,
             ..Default::default()
         };
-        // Area 首帧只建立屏幕矩形，而且 `Area::fade_in` 会把刚出现的图层整个淡入：
-        // 淡入没走完时 painter 记下的是 `Shape::Noop`，看不到背板。所以推时间跑几帧。
         for frame in 0..4 {
             crate::ui::backdrop::publish(&ctx, Some(egui::TextureId::User(9)));
             ctx.begin_pass(egui::RawInput {
@@ -1258,45 +2089,32 @@ mod tests {
             render(&ctx, &mut vm, &mut Vec::new());
             let layer = egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("openless-settings-modal"),
+                egui::Id::unique("openless-settings-page"),
             );
-            let backdrop_corners = ctx.graphics(|graphics| {
-                graphics.get(layer).and_then(|list| {
-                    list.all_entries().find_map(|entry| match &entry.shape {
-                        // 模糊背板是「带纹理的矩形」，只有这样圆角才跟着内容区走
-                        // （用整块的 `image` 会是直角，底部两角顶出窗口圆角）。
-                        egui::Shape::Rect(rect)
-                            if rect.fill_texture_id() == egui::TextureId::User(9) =>
-                        {
-                            Some(rect.corner_radius)
+            let paints_backdrop = ctx.graphics(|graphics| {
+                graphics.get(layer).is_some_and(|list| {
+                    list.all_entries().any(|entry| match &entry.shape {
+                        // 模糊背板（带纹理的矩形）与 `--ol-overlay-bg` 压暗层都算遮罩。
+                        egui::Shape::Rect(rect) => {
+                            rect.fill_texture_id() == egui::TextureId::User(9)
+                                || rect.fill == theme::OVERLAY
                         }
-                        _ => None,
+                        _ => false,
                     })
                 })
             });
-            if frame == 3 {
-                let corners = backdrop_corners.expect("the modal layer must sample the backdrop");
-                assert_eq!(
-                    corners,
-                    layout::body_corner_radius(&ctx),
-                    "the blurred backdrop must use the content corners"
-                );
-                // macOS 一致：模糊之上还有一层 `--ol-overlay-bg` 压暗。
-                let paints_tint = ctx.graphics(|graphics| {
-                    graphics.get(layer).is_some_and(|list| {
-                        list.all_entries().any(|entry| match &entry.shape {
-                            egui::Shape::Rect(rect) => rect.fill == theme::OVERLAY,
-                            _ => false,
-                        })
-                    })
-                });
-                assert!(paints_tint, "the modal layer must tint above the blur");
-            }
-            // 卡片矩形依然要写进 memory：遮罩换了材质，弹窗几何不能跟着变。
-            assert!(ctx
-                .data(|data| data
-                    .get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect")))
-                .is_some());
+            assert!(
+                !paints_backdrop,
+                "the settings page must not paint a modal backdrop"
+            );
+            let card = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::unique("openless-settings-card-rect"))
+                })
+                .expect("the settings page still publishes its surface rect");
+            // 整页：surface 就是内容区本身，不再缩成居中卡片。
+            // 整页贴满内容区（不再内缩，避免多出白边）。
+            assert_eq!(card, layout::body_rect(&ctx));
             let _ = end_pass(&ctx);
         }
     }
@@ -1324,7 +2142,7 @@ mod tests {
                 });
                 render(&ctx, &mut vm, &mut Vec::new());
                 let available: egui::Vec2 = ctx.data(|data| {
-                    data.get_temp(egui::Id::new("content-available-size"))
+                    data.get_temp(egui::Id::unique("content-available-size"))
                         .unwrap()
                 });
                 let expected = layout::body_rect(&ctx).size()
@@ -1358,7 +2176,7 @@ mod tests {
                 let _ = end_pass(&ctx);
             }
             let (list, detail): (egui::Rect, egui::Rect) = ctx.data(|data| {
-                data.get_temp(egui::Id::new("history-column-rects"))
+                data.get_temp(egui::Id::unique("history-column-rects"))
                     .unwrap()
             });
             assert!(
@@ -1414,6 +2232,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             phase: egui::TouchPhase::Move,
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Wheel,
                         });
                     }
                     ctx.begin_pass(egui::RawInput {
@@ -1425,7 +2244,7 @@ mod tests {
                     let _ = end_pass(&ctx);
                 }
                 let (content, visible, offset): (f32, f32, f32) =
-                    ctx.data(|data| data.get_temp(egui::Id::new(measure)).unwrap());
+                    ctx.data(|data| data.get_temp(egui::Id::unique(measure)).unwrap());
                 assert!(
                     content > visible + 10.0,
                     "{page:?} {measure} no scroll extent: {content}/{visible}"
@@ -1472,6 +2291,7 @@ mod tests {
                     delta: egui::vec2(0.0, -180.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
                 });
             }
             frame_with_pointer_routing(
@@ -1486,7 +2306,7 @@ mod tests {
             );
         }
         let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("main-scroll-measure"))
+            data.get_temp(egui::Id::unique("main-scroll-measure"))
                 .expect("the translation page must have a scroll container")
         });
         assert!(
@@ -1569,6 +2389,7 @@ mod tests {
                     delta: egui::vec2(0.0, -180.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
                 });
             }
             let size = if frame >= 4 { small } else { large };
@@ -1584,7 +2405,7 @@ mod tests {
             );
         }
         let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("overview-scroll-measure"))
+            data.get_temp(egui::Id::unique("overview-scroll-measure"))
                 .expect("the overview must offer page scrolling at the minimum size")
         });
         assert!(
@@ -1614,6 +2435,7 @@ mod tests {
                 delta: egui::vec2(0.0, -120.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             }],
             ..Default::default()
         };
@@ -1640,6 +2462,7 @@ mod tests {
                 delta: egui::vec2(0.0, -120.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             }],
             ..Default::default()
         };
@@ -1754,6 +2577,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             phase: egui::TouchPhase::Move,
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Wheel,
                         },
                     ]
                 } else {
@@ -1773,7 +2597,7 @@ mod tests {
                         "main-scroll-measure"
                     };
                     let (content, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-                        data.get_temp(egui::Id::new(id))
+                        data.get_temp(egui::Id::unique(id))
                             .expect("scroll container must exist")
                     });
                     assert!(
@@ -1803,7 +2627,7 @@ mod tests {
             render(ctx, vm, &mut Vec::new());
             let _ = end_pass(ctx);
             ctx.data(|data| {
-                data.get_temp::<(f32, f32, f32)>(egui::Id::new("main-scroll-measure"))
+                data.get_temp::<(f32, f32, f32)>(egui::Id::unique("main-scroll-measure"))
                     .unwrap()
                     .2
             })
@@ -1831,6 +2655,7 @@ mod tests {
                         delta: egui::vec2(0.0, -130.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ],
             );
@@ -1886,7 +2711,7 @@ mod tests {
                 egui::vec2((screen.x - 250.0).max(80.0), (screen.y - 80.0).max(80.0)),
             );
             let mut measured = None;
-            egui::Area::new(egui::Id::new(("translation-layout", index)))
+            egui::Area::new(egui::Id::unique(("translation-layout", index)))
                 .fixed_pos(viewport.min)
                 .show(&ctx, |ui| {
                     ui.set_min_size(viewport.size());
@@ -1903,7 +2728,7 @@ mod tests {
                 });
             let (content, inner) = measured.expect("the page rendered into the area");
             let badge: egui::Rect = ctx.data(|data| {
-                data.get_temp(egui::Id::new("translation-style-badge"))
+                data.get_temp(egui::Id::unique("translation-style-badge"))
                     .expect("translation style has a badge")
             });
             assert!(
@@ -2073,7 +2898,7 @@ mod tests {
                     ctx.layer_id_at(pointer),
                     Some(egui::LayerId::new(
                         egui::Order::Middle,
-                        egui::Id::new("openless-sidebar"),
+                        egui::Id::unique("openless-sidebar"),
                     )),
                     "the sidebar must be the top input layer over its own column"
                 );
@@ -2252,7 +3077,7 @@ mod tests {
 
         // The tile is a 40×40 square flush with the card's right inner edge.
         let published: Vec<(usize, egui::Rect, egui::Rect, String)> = ctx
-            .data(|data| data.get_temp(egui::Id::new("openless-style-card-icon-rects")))
+            .data(|data| data.get_temp(egui::Id::unique("openless-style-card-icon-rects")))
             .expect("the style cards must publish their icon tiles");
         assert_eq!(
             published.len(),
@@ -2339,12 +3164,10 @@ mod tests {
         );
     }
 
-    /// 用户报告「缩放窗口时并不是始终居中」：模态卡片此前用 `Area::anchor`
-    /// 定位，垂直方向稳定偏下 19.5px，且卡片被内容撑宽 22px（横向偏 11px）。
-    /// 现在位置由 `body.center()` 显式算出，两种偏差都必须消失，并且**改变窗口
-    /// 尺寸后的第一帧**就要居中（不能靠后续帧收敛）。
+    /// 设置页整页铺满内容区：改窗口尺寸后的**第一帧**就得贴住内容区四边，
+    /// 不能再有「居中卡片」留下的边距。
     #[test]
-    fn the_settings_modal_stays_centred_across_window_resizes() {
+    fn the_settings_page_fills_the_content_area_across_resizes() {
         let ctx = egui::Context::default();
         let zh = openless_linux_egui::Lang::ZhCn;
         let mut vm = FrontendViewModel {
@@ -2360,7 +3183,6 @@ mod tests {
             (1100.0, 900.0),
         ] {
             let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
-            // 等一帧让内容成型，下一帧断言（尺寸变化不接受「过渡帧」偏差）。
             for _ in 0..2 {
                 ctx.begin_pass(egui::RawInput {
                     screen_rect: Some(viewport),
@@ -2370,33 +3192,20 @@ mod tests {
                 render(&ctx, &mut vm, &mut actions);
                 let _ = crate::ui::frontend::end_pass(&ctx);
             }
-            ctx.begin_pass(egui::RawInput {
-                screen_rect: Some(viewport),
-                ..Default::default()
-            });
-            let mut actions = Vec::new();
-            render(&ctx, &mut vm, &mut actions);
-            let _ = crate::ui::frontend::end_pass(&ctx);
             let body = layout::body_rect(&ctx);
-            // 卡片矩形现在由叠层自己写入 memory（Area 覆盖整个 body，面积已不等于卡片）。
-            let modal = ctx
+            let page = ctx
                 .data(|data| {
-                    data.get_temp::<egui::Rect>(egui::Id::new("openless-settings-card-rect"))
+                    data.get_temp::<egui::Rect>(egui::Id::unique("openless-settings-card-rect"))
                 })
-                .expect("the settings card rect must be published while the overlay is open");
+                .expect("the settings page must publish its surface rect");
+            let expected = body;
             assert!(
-                (modal.center().x - body.center().x).abs() <= 1.5,
-                "modal must be horizontally centred at {width}x{height}: modal={modal:?} body={body:?}"
+                (page.min - expected.min).length() <= 1.5,
+                "the settings sheet must start at the content origin at {width}x{height}: page={page:?} body={body:?}"
             );
             assert!(
-                (modal.center().y - body.center().y).abs() <= 1.5,
-                "modal must be vertically centred at {width}x{height}: modal={modal:?} body={body:?}"
-            );
-            // 卡片不会被内容撑宽（撑宽就会把居中算歪）。
-            let expected_width = (body.width() - 40.0).clamp(320.0, 960.0);
-            assert!(
-                (modal.width() - expected_width).abs() <= 2.0,
-                "the content must fit the requested modal width {expected_width}: {modal:?}"
+                (page.size() - expected.size()).length() <= 1.5,
+                "the settings sheet must fill the content area at {width}x{height}: page={page:?} body={body:?}"
             );
         }
     }
@@ -2444,7 +3253,7 @@ mod tests {
         card_rect_key: &str,
         placement: CardPlacement,
     ) {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area_id));
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(area_id));
         // Areas 用第一帧建立屏幕矩形，第二帧才可查询。
         for _ in 0..2 {
             overlay_frame(ctx, vm, Vec::new());
@@ -2452,10 +3261,10 @@ mod tests {
         let body = layout::body_rect(ctx);
         // 遮罩区就是弹窗 `Area` 自己的矩形（遮罩 + 点击拦截 + 卡片同属它）。
         let overlay = ctx
-            .memory(|mem| mem.area_rect(egui::Id::new(area_id)))
+            .memory(|mem| mem.area_rect(egui::Id::unique(area_id)))
             .unwrap_or_else(|| panic!("{area_id} must exist while the overlay is open"));
         let card = ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(card_rect_key)))
             .unwrap_or_else(|| {
                 panic!("{card_rect_key} must be published while the overlay is open")
             });
@@ -2540,7 +3349,7 @@ mod tests {
             }],
         );
         let after = ctx
-            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(card_rect_key)))
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(card_rect_key)))
             .unwrap_or_else(|| panic!("{card_rect_key} must stay published"));
         assert_eq!(
             after, card,
@@ -2607,7 +3416,7 @@ mod tests {
         let body = layout::body_rect(&ctx);
         let card = ctx
             .data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::new("openless-marketplace-mine-card-rect"))
+                data.get_temp::<egui::Rect>(egui::Id::unique("openless-marketplace-mine-card-rect"))
             })
             .expect("the my-packs card rect must be published while open");
         assert!(body.contains_rect(card), "card={card:?} body={body:?}");
@@ -2617,7 +3426,7 @@ mod tests {
             ctx.layer_id_at(card.center()),
             Some(egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("openless-marketplace-mine-modal"),
+                egui::Id::unique("openless-marketplace-mine-modal"),
             ))
         );
     }
@@ -2716,11 +3525,11 @@ mod tests {
         }
         let output = output.unwrap();
         let card: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-style-editor-card-rect"))
+            data.get_temp(egui::Id::unique("openless-style-editor-card-rect"))
                 .unwrap()
         });
         let scroll: egui::Rect = ctx.data(|data| {
-            data.get_temp(egui::Id::new("style-editor-scroll-rect"))
+            data.get_temp(egui::Id::unique("style-editor-scroll-rect"))
                 .unwrap()
         });
         assert!(
@@ -2861,7 +3670,7 @@ mod tests {
                 let _ = end_pass(&ctx);
             }
             let content = ctx.data(|data| {
-                data.get_temp::<f32>(egui::Id::new("style-editor-scroll-content-height"))
+                data.get_temp::<f32>(egui::Id::unique("style-editor-scroll-content-height"))
                     .unwrap()
             });
             let fields = if selection {
@@ -2873,7 +3682,7 @@ mod tests {
                 .iter()
                 .map(|id| {
                     ctx.data(|data| {
-                        data.get_temp::<(f32, f32, f32)>(egui::Id::new((
+                        data.get_temp::<(f32, f32, f32)>(egui::Id::unique((
                             "style-editor-textarea-measure",
                             id,
                         )))
@@ -2924,7 +3733,7 @@ mod tests {
         for frame in 0..6 {
             let rect: egui::Rect = ctx
                 .data(|data| {
-                    data.get_temp(egui::Id::new((
+                    data.get_temp(egui::Id::unique((
                         "style-editor-textarea-rect",
                         "dictation-prompt",
                     )))
@@ -2941,6 +3750,7 @@ mod tests {
                         delta: egui::vec2(0.0, -100.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ]
             } else {
@@ -2955,7 +3765,7 @@ mod tests {
             let _ = end_pass(&ctx);
         }
         let (_, visible, offset): (f32, f32, f32) = ctx.data(|data| {
-            data.get_temp(egui::Id::new((
+            data.get_temp(egui::Id::unique((
                 "style-editor-textarea-measure",
                 "dictation-prompt",
             )))
@@ -2966,7 +3776,7 @@ mod tests {
             "wheel did not scroll the bounded prompt: visible={visible}, offset={offset}"
         );
         let outer: f32 = ctx.data(|data| {
-            data.get_temp(egui::Id::new("style-editor-scroll-offset"))
+            data.get_temp(egui::Id::unique("style-editor-scroll-offset"))
                 .unwrap()
         });
         assert!(
@@ -3053,6 +3863,7 @@ mod tests {
                         delta: egui::vec2(0.0, -220.0),
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Wheel,
                     },
                 ]
             } else {
@@ -3216,14 +4027,27 @@ mod tests {
         vm.dictation_hotkey = "Alt+A".to_string();
         vm.settings.microphone_options = vec!["USB microphone".to_string()];
         let mut painted = String::new();
-        for _ in 0..2 {
+        // The full-aspect Siri preview makes this section taller. Verify the
+        // rows across scrolling rather than assuming they all fit above fold.
+        for frame in 0..8 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(900.0, 500.0))];
+            if frame == 2 {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -240.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::default(),
+                    source: egui::MouseWheelSource::Wheel,
+                });
+            }
             ctx.begin_pass(egui::RawInput {
                 screen_rect: Some(viewport()),
+                events,
                 ..Default::default()
             });
             let mut actions = Vec::new();
             render(&ctx, &mut vm, &mut actions);
-            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+            painted.push_str(&painted_text(&crate::ui::frontend::end_pass(&ctx)));
         }
         for key in [
             "settings.recording.hotkey_label",
@@ -3408,6 +4232,50 @@ mod tests {
         assert!(
             !focused[3] && !focused[4],
             "a focused window must not re-ask every frame: {focused:?}"
+        );
+    }
+    /// 宿主分页下发历史时，**整页**必须画出「已载入 X / 共 Y」并给出继续加载的入口。
+    /// 只测 `load_more_footer` 自己不够：真正会漏掉的是 `list_card` 里那句接线。
+    #[test]
+    fn history_page_paints_the_paging_footer_when_more_entries_exist() {
+        let ctx = egui::Context::default();
+        let zh = openless_linux_egui::Lang::ZhCn;
+        let mut vm = FrontendViewModel {
+            lang: zh,
+            active_page: Page::History,
+            history_loading: false,
+            history_list_total: 1_234,
+            history_entries: vec![super::view_model::HistoryEntry {
+                id: "a".into(),
+                created_at: "2026-01-15T12:34:00+00:00".into(),
+                mode: super::view_model::OverviewMode::Raw,
+                style_label: "raw".into(),
+                raw_transcript: "kept transcript".into(),
+                final_text: "kept final".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut painted = String::new();
+        let mut actions = Vec::new();
+        // 滚动区域要一帧才发布尺寸，所以多跑两帧再取最终画面。
+        for _ in 0..3 {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(viewport()),
+                ..Default::default()
+            });
+            actions.clear();
+            render(&ctx, &mut vm, &mut actions);
+            painted = painted_text(&crate::ui::frontend::end_pass(&ctx));
+        }
+        let expected = openless_linux_egui::fmt_l10n(zh, "common.loaded_of_total", &[&1, &1_234]);
+        assert!(
+            painted.contains(&expected),
+            "the history page must show paging progress ({expected:?}): {painted}"
+        );
+        assert!(
+            painted.contains(openless_linux_egui::tr_l10n(zh, "common.load_more")),
+            "the history page must offer the way to load the rest"
         );
     }
 }

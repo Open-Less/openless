@@ -488,6 +488,9 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }
+                    "selectionPolishSelectionTooLong" => {
+                        "选区超过 4000 字，未替换，以免删掉中间没有读到的原文"
+                    }
                     "selectionPolishTargetUnavailable" => "目标输入框不可用，请重新选择",
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
@@ -1451,15 +1454,36 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
             // second press.
             ComboHotkeyEvent::Pressed { at } => {
                 current_press_id = crate::hotkey::next_press_id();
-                inner.host.block_on(async {
-                    handle_pressed_edge(&inner_cloned, at, current_press_id).await;
-                });
+                if matches!(
+                    hotkey_runtime_target(&inner_cloned).dictation_mode,
+                    crate::types::HotkeyMode::Hold
+                ) {
+                    let press_id = current_press_id;
+                    let task_inner = Arc::clone(&inner_cloned);
+                    let _ = inner_cloned.host.spawn(async move {
+                        handle_pressed_edge(&task_inner, at, press_id).await;
+                    });
+                } else {
+                    inner.host.block_on(async {
+                        handle_pressed_edge(&inner_cloned, at, current_press_id).await;
+                    });
+                }
             }
             ComboHotkeyEvent::Released { at } => {
                 let press_id = std::mem::take(&mut current_press_id);
-                inner.host.block_on(async {
-                    handle_released_edge(&inner_cloned, at, press_id).await;
-                });
+                if matches!(
+                    hotkey_runtime_target(&inner_cloned).dictation_mode,
+                    crate::types::HotkeyMode::Hold
+                ) {
+                    let task_inner = Arc::clone(&inner_cloned);
+                    let _ = inner_cloned.host.spawn(async move {
+                        handle_released_edge(&task_inner, at, press_id).await;
+                    });
+                } else {
+                    inner.host.block_on(async {
+                        handle_released_edge(&inner_cloned, at, press_id).await;
+                    });
+                }
             }
         }
     }
@@ -1479,7 +1503,8 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         }
 
         let binding = hotkey_runtime_target(&inner).translation;
-        if is_builtin_translation_shift(&binding)
+        if is_unconfigured_shortcut(&binding)
+            || is_builtin_translation_shift(&binding)
             || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some()
         {
             take_translation_hotkey_on_main_thread(&inner);
@@ -2181,14 +2206,34 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // bridge immediately recv's Released → end_session. Correct
             // behavior, only a brief stop delay.
             HotkeyEvent::Pressed { at, press_id } => {
-                inner.host.block_on(async {
-                    handle_pressed_edge(&inner_cloned, at, press_id).await;
-                });
+                if matches!(
+                    hotkey_runtime_target(&inner_cloned).dictation_mode,
+                    crate::types::HotkeyMode::Hold
+                ) {
+                    let task_inner = Arc::clone(&inner_cloned);
+                    let _ = inner_cloned.host.spawn(async move {
+                        handle_pressed_edge(&task_inner, at, press_id).await;
+                    });
+                } else {
+                    inner.host.block_on(async {
+                        handle_pressed_edge(&inner_cloned, at, press_id).await;
+                    });
+                }
             }
             HotkeyEvent::Released { at, press_id } => {
-                inner.host.block_on(async {
-                    handle_released_edge(&inner_cloned, at, press_id).await;
-                });
+                if matches!(
+                    hotkey_runtime_target(&inner_cloned).dictation_mode,
+                    crate::types::HotkeyMode::Hold
+                ) {
+                    let task_inner = Arc::clone(&inner_cloned);
+                    let _ = inner_cloned.host.spawn(async move {
+                        handle_released_edge(&task_inner, at, press_id).await;
+                    });
+                } else {
+                    inner.host.block_on(async {
+                        handle_released_edge(&inner_cloned, at, press_id).await;
+                    });
+                }
             }
             // Esc cancel and combo abort are not in this enum: they go through
             // esc_cancel_bridge_loop / combo_abort_bridge_loop so they are not
@@ -2420,7 +2465,11 @@ pub(crate) mod less_computer_test_support {
         };
         let data_dir =
             std::env::temp_dir().join(format!("openless-less-host-{}", uuid::Uuid::new_v4()));
-        let recorder = Arc::new(FixtureAudioRecorder::default());
+        // Successful capture fixtures must provide real PCM, including at very low volume.
+        let recorder = Arc::new(FixtureAudioRecorder::new(
+            vec![1i16.to_le_bytes().repeat(1920)],
+            Vec::new(),
+        ));
         let backend = Arc::new(
             openless_core::OpenLessBackend::new(
                 openless_core::BackendConfig {
@@ -2448,12 +2497,15 @@ pub(crate) mod less_computer_test_support {
             .unwrap(),
         );
         let mut prefs = backend.get_preferences();
+        prefs.testing_features_enabled = true;
         prefs.coding_agent_enabled = true;
         prefs.hotkey.mode = mode;
         crate::set_backend_preferences_for_test(&backend, prefs);
+        let qa_context = Arc::new(crate::qa_adapter::TauriQaHostContext::default());
         let inner = Arc::new(Inner {
             host: crate::tauri_coordinator_host::TauriCoordinatorHost::new(
                 crate::core_adapters::app_handle_slot(),
+                qa_context,
             ),
             hotkey_runtime_target: Mutex::new((&backend.get_preferences()).into()),
             backend,
@@ -2484,6 +2536,9 @@ pub(crate) mod less_computer_test_support {
             )),
             #[cfg(target_os = "windows")]
             selection_voice_capture: Mutex::new(None),
+            voice_edit_host: Arc::new(
+                Mutex::new(voice_edit_session::VoiceEditHostState::default()),
+            ),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
@@ -2816,6 +2871,7 @@ pub(crate) mod windows_less_computer_tests {
             fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
         coordinator.inner.host.begin_insert_fallback_card();
         let expected = CapsulePayload {
+            session_id: None,
             state: CapsuleState::Recording,
             level: 0.0,
             elapsed_ms: 0,
@@ -3075,6 +3131,7 @@ pub(crate) mod windows_less_computer_tests {
         )
         .unwrap();
         let mut prefs = backend.get_preferences();
+        prefs.testing_features_enabled = true;
         prefs.coding_agent_enabled = true;
         crate::set_backend_preferences_for_test(&backend, prefs);
 

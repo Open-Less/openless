@@ -37,9 +37,9 @@ import { AssistantMarkdown } from '../components/chat/markdown';
 import { useChatPanelLifecycle } from '../components/chat/lifecycle';
 import { GithubLoginModal } from '../components/GithubLoginModal';
 import { Tooltip } from '../components/Tooltip';
+import { detectOS } from '../components/WindowChrome';
 import {
   chatPanelFocusKeyboard,
-  getSettings,
   isTauri,
   lessComputerApprove,
   lessComputerSubmitText,
@@ -51,6 +51,7 @@ import {
   lessComputerWindowDismiss,
   marketplaceAuthStatus,
 } from '../lib/ipc';
+import { getSettings } from '../lib/ipc/settings';
 import { reconcileLessComputerReplay, reduceLessComputerVoice } from '../lib/lessComputerReplay';
 import {
   claimDictationResult,
@@ -214,6 +215,7 @@ let lcAppliedSeq = 0;
 
 export function LessComputerPanel() {
   const { t } = useTranslation();
+  const nativeMacControls = detectOS() === 'mac';
   const [turns, setTurns] = useState<Turn[]>([]);
   const [voice, setVoice] = useState<LessComputerVoiceEvent | null>(null);
   const [sessionSeq, setSessionSeq] = useState(0);
@@ -596,35 +598,43 @@ export function LessComputerPanel() {
       >
         <aside className="lc-sidebar" aria-label={t('lessComputer.desktop.agents')}>
           <div className="lc-sidebar-head" data-tauri-drag-region>
-            <div className="lc-window-controls">
-              <button
-                className="lc-window-close"
-                type="button"
-                disabled={!isTauri}
-                aria-label={t('lessComputer.closeTooltip')}
-                onClick={() => void windowAction('hide')}
-              >
-                <XIcon />
-              </button>
-              <button
-                className="lc-window-minimize"
-                type="button"
-                disabled={!isTauri}
-                aria-label={t('lessComputer.desktop.minimize')}
-                onClick={() => void windowAction('minimize')}
-              >
-                <MinusIcon />
-              </button>
-              <button
-                className="lc-window-maximize"
-                type="button"
-                disabled={!isTauri}
-                aria-label={t('lessComputer.desktop.maximize')}
-                onClick={() => void windowAction('maximize')}
-              >
-                <Maximize2Icon />
-              </button>
-            </div>
+            {nativeMacControls ? (
+              <div
+                className="lc-native-window-controls"
+                aria-hidden="true"
+                data-tauri-drag-region
+              />
+            ) : (
+              <div className="lc-window-controls">
+                <button
+                  className="lc-window-close"
+                  type="button"
+                  disabled={!isTauri}
+                  aria-label={t('lessComputer.closeTooltip')}
+                  onClick={() => void windowAction('hide')}
+                >
+                  <XIcon />
+                </button>
+                <button
+                  className="lc-window-minimize"
+                  type="button"
+                  disabled={!isTauri}
+                  aria-label={t('lessComputer.desktop.minimize')}
+                  onClick={() => void windowAction('minimize')}
+                >
+                  <MinusIcon />
+                </button>
+                <button
+                  className="lc-window-maximize"
+                  type="button"
+                  disabled={!isTauri}
+                  aria-label={t('lessComputer.desktop.maximize')}
+                  onClick={() => void windowAction('maximize')}
+                >
+                  <Maximize2Icon />
+                </button>
+              </div>
+            )}
             <Tooltip content={t('lessComputer.desktop.sessionUnavailable')} placement="bottom">
               <button
                 className="lc-icon-button"

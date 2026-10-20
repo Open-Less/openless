@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { Hint } from '../../components/Tooltip';
 import {
   listProviderModels,
   openExternal,
@@ -74,7 +75,14 @@ export function ChannelSectionHeading({
 }) {
   return (
     <div className="ol-channel-section-heading" style={{ marginBottom: 6 }}>
-      <h3 style={{ margin: 0, fontSize: 14, color: 'var(--ol-ink)', fontWeight: 600 }}>
+      <h3
+        style={{
+          margin: 0,
+          fontSize: 14,
+          color: 'var(--ol-ink)',
+          fontWeight: 'var(--ol-font-weight-semibold)',
+        }}
+      >
         {icon && <Icon name={icon} size={15} />}
         {title}
       </h3>
@@ -106,7 +114,6 @@ function LlmThinkingToggle({
   const layoutStack = conservative || baseLayoutStack;
   return (
     <div
-      title={t('settings.providers.thinkingModeHint')}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -118,9 +125,11 @@ function LlmThinkingToggle({
       }}
     >
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
-        {t('settings.providers.thinkingModeLabel')}
+        <Hint content={t('settings.providers.thinkingModeHint')}>
+          {t('settings.providers.thinkingModeLabel')}
+        </Hint>
       </span>
-      <Toggle on={enabled} onToggle={onToggle} />
+      <Toggle label={t('settings.providers.thinkingModeLabel')} on={enabled} onToggle={onToggle} />
       <span style={{ fontSize: 11.5, color: enabled ? 'var(--ol-blue)' : 'var(--ol-ink-4)' }}>
         {enabled ? t('settings.providers.thinkingModeOn') : t('settings.providers.thinkingModeOff')}
       </span>
@@ -319,6 +328,7 @@ export function ChannelCredentialFields({
         {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
           <LlmProtocolFields
             channelId={channelId}
+            providerType={providerType}
             defaultFormat={descriptor.defaultRequestFormat}
             formats={descriptor.supportedRequestFormats}
             onUserMutation={onLlmMutation}
@@ -730,7 +740,16 @@ export function ChannelCredentialFields({
     );
   }
 
-  // Local engines (qwen3 / sherpa / foundry / Apple speech) have no key or address; model
+  // Apple Speech uses the OS recognizer and its authorization, not a model catalog.
+  if (kind === 'asr' && providerType === 'apple-speech') {
+    return (
+      <p className="ol-channel-system-recognition-hint">
+        {t('settings.providers.appleSpeechLocalNote')}
+      </p>
+    );
+  }
+
+  // Downloaded engines (qwen3 / sherpa / foundry) have no key or address; model
   // download and switching stay with <LocalAsr embedded /> under "Advanced -> Local models",
   // so only a one-line note here.
   if (descriptor?.authRequirement === 'none') {
@@ -872,6 +891,14 @@ export function ChannelCredentialFields({
           style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}
         >
           {t('settings.providers.elevenLabsUploadNotice')}
+        </div>
+      )}
+      {providerType === 'gemini' && (
+        <div
+          role="note"
+          style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}
+        >
+          {t('settings.providers.geminiTranscribeNotice')}
         </div>
       )}
       {providerType === 'zenmux' && (
@@ -1320,6 +1347,7 @@ function ProviderTools({
   showFetchModels = true,
   disabled = false,
   compact = false,
+  audioValidation = false,
 }: {
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
@@ -1331,6 +1359,7 @@ function ProviderTools({
   showFetchModels?: boolean;
   disabled?: boolean;
   compact?: boolean;
+  audioValidation?: boolean;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -1379,9 +1408,11 @@ function ProviderTools({
         result.ok ? 'success' : 'error',
         t(
           result.ok
-            ? kind === 'omni'
-              ? 'settings.providers.validateSuccessOmni'
-              : 'settings.providers.validateSuccess'
+            ? audioValidation
+              ? 'settings.providers.validateSuccessAudio'
+              : kind === 'omni'
+                ? 'settings.providers.validateSuccessOmni'
+                : 'settings.providers.validateSuccess'
             : 'settings.providers.validateFailed',
         ),
       );
@@ -1525,7 +1556,13 @@ function ProviderTools({
               : t('settings.channels.verify')}
           </button>
         </div>
-        <p className="ol-omni-tools-hint">{t('settings.channels.validationHintOmni')}</p>
+        <p className="ol-omni-tools-hint">
+          {t(
+            audioValidation
+              ? 'settings.channels.validationHint'
+              : 'settings.channels.validationHintOmni',
+          )}
+        </p>
         {resultMessage}
       </section>
     );
@@ -1587,7 +1624,7 @@ function ProviderTools({
             icon="bolt"
             title={t('settings.channels.validationTitle')}
             description={t(
-              kind === 'omni'
+              kind === 'omni' && !audioValidation
                 ? 'settings.channels.validationHintOmni'
                 : 'settings.channels.validationHint',
             )}
@@ -1630,6 +1667,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
     'llmThinkingModeInvalid',
     'llmTokenLimitInvalid',
     'llmThinkingBudgetInvalid',
+    'llmServiceTierInvalid',
     'llmResponseIncomplete',
     'llmStreamError',
     'llmProtocolHeaderConflict',
@@ -2075,7 +2113,7 @@ const miniBtnStyle: CSSProperties = {
   cursor: 'pointer',
   flexShrink: 0,
   fontSize: 12.5,
-  fontWeight: 500,
+  fontWeight: 'var(--ol-font-weight-medium)',
   letterSpacing: '0.01em',
   transition:
     'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.16s var(--ol-motion-quick)',
@@ -2107,6 +2145,7 @@ export function OmniChannelSection() {
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
   const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const [omniModel, setOmniModel] = useState('');
   const formRef = useRef<HTMLDivElement>(null);
   useContentMotion(formRef, committedOmniProvider);
 
@@ -2181,6 +2220,8 @@ export function OmniChannelSection() {
   };
 
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
+  const geminiTranscribe =
+    committedOmniProvider === 'gemini' && omniModel.trim() === 'gemini-3.5-transcribe';
 
   return (
     <Card className="ol-omni-settings" padding={16}>
@@ -2206,9 +2247,18 @@ export function OmniChannelSection() {
             label={t('settings.providers.modelLabel')}
             account="omni.model"
             placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+            onValueChange={setOmniModel}
             mono
           />
         </div>
+        {committedOmniProvider === 'gemini' && (
+          <div
+            role="note"
+            style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
+          >
+            {t('settings.providers.geminiTranscribeOmniNotice')}
+          </div>
+        )}
         <CredentialField
           key={`${committedOmniProvider}:api_key`}
           label={t('settings.providers.apiKeyLabel')}
@@ -2242,11 +2292,12 @@ export function OmniChannelSection() {
           </div>
         )}
         <ProviderTools
-          key={`omni:${committedOmniProvider}`}
+          key={`omni:${committedOmniProvider}:${geminiTranscribe}`}
           kind="omni"
           modelAccount="omni.model"
           onModelSelected={() => setOmniModelRevision((v) => v + 1)}
           compact
+          audioValidation={geminiTranscribe}
         />
       </div>
     </Card>

@@ -30,9 +30,18 @@ pub(crate) type SelectionVoiceTargetBinder = Arc<
 #[derive(Default)]
 pub(crate) struct TauriQaHostContext {
     focus_target: Mutex<Option<usize>>,
+    external_focus_target: Mutex<Option<usize>>,
     front_app: Mutex<Option<String>>,
     panel_visible: AtomicBool,
     selection_voice_target_binder: Mutex<Option<SelectionVoiceTargetBinder>>,
+}
+
+fn retain_external_focus_target(
+    was_visible: bool,
+    captured: Option<usize>,
+    existing: Option<usize>,
+) -> Option<usize> {
+    captured.or_else(|| was_visible.then_some(existing).flatten())
 }
 
 impl TauriQaHostContext {
@@ -42,7 +51,15 @@ impl TauriQaHostContext {
 
     pub(crate) fn prepare_show(&self) {
         let was_visible = self.panel_visible.swap(true, Ordering::AcqRel);
-        if let Some(target) = crate::coordinator::capture_external_focus_target() {
+        let captured_external_focus_target = crate::coordinator::capture_external_focus_target();
+        let existing_external_focus_target = *self.external_focus_target.lock();
+        let external_focus_target = retain_external_focus_target(
+            was_visible,
+            captured_external_focus_target,
+            existing_external_focus_target,
+        );
+        *self.external_focus_target.lock() = external_focus_target;
+        if let Some(target) = external_focus_target {
             *self.focus_target.lock() = Some(target);
         } else if !was_visible {
             *self.focus_target.lock() = crate::coordinator::capture_focus_target();
@@ -55,7 +72,13 @@ impl TauriQaHostContext {
     pub(crate) fn clear(&self) {
         self.panel_visible.store(false, Ordering::Release);
         *self.focus_target.lock() = None;
+        *self.external_focus_target.lock() = None;
         *self.front_app.lock() = None;
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn external_focus_target(&self) -> Option<usize> {
+        *self.external_focus_target.lock()
     }
 
     /// Bind the narrow host operation needed to attach an opaque selection
@@ -758,6 +781,22 @@ mod tests {
 
         context.clear();
         assert!(!context.is_panel_visible());
+    }
+
+    #[test]
+    fn external_focus_target_is_retained_when_a_visible_qa_panel_reopens() {
+        assert_eq!(
+            super::retain_external_focus_target(true, None, Some(42)),
+            Some(42)
+        );
+        assert_eq!(
+            super::retain_external_focus_target(true, Some(84), Some(42)),
+            Some(84)
+        );
+        assert_eq!(
+            super::retain_external_focus_target(false, None, Some(42)),
+            None
+        );
     }
 
     #[test]

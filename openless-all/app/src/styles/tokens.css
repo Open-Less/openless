@@ -54,10 +54,10 @@
   --ol-frost-grain: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='100'%20height='100'%3E%3Cfilter%20id='g'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.95'%20numOctaves='1'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='matrix'%20values='0.34%200.34%200.34%200%200%200.34%200.34%200.34%200%200%200.34%200.34%200.34%200%200%200%200%200%200%201'/%3E%3C/filter%3E%3Crect%20width='100'%20height='100'%20filter='url(%23g)'/%3E%3C/svg%3E");
 
   /* Motion */
-  --ol-motion-spring: cubic-bezier(0.16, 1, 0.3, 1);
-  --ol-motion-soft: cubic-bezier(0.22, 0.8, 0.22, 1);
-  --ol-motion-quick: cubic-bezier(0.2, 0, 0, 1);
-  --ol-motion-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ol-motion-spring: cubic-bezier(0.23, 1, 0.32, 1);
+  --ol-motion-soft: cubic-bezier(0.32, 0.72, 0, 1);
+  --ol-motion-quick: cubic-bezier(0.23, 1, 0.32, 1);
+  --ol-motion-exit: cubic-bezier(0.23, 1, 0.32, 1);
 
   /* Shadows（shadcn 弱阴影：模糊与 alpha 约砍半） */
   --ol-shadow-sm: 0 1px 1px rgba(15, 17, 22, 0.02), 0 0 0 0.5px rgba(0, 0, 0, 0.02);
@@ -83,9 +83,14 @@
   --ol-r-2xl: var(--ol-card-radius);
   --ol-r-pill: var(--ol-pill-radius);
 
-  /* Typography */
-  --ol-font-display:
-    'Aptos', 'Segoe UI Variable Display', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* Typography: compensate bright-on-dark irradiation without changing the type scale.
+     Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --ol-font-weight-medium: 500;
+  --ol-font-weight-semibold: 600;
+  --ol-font-display: var(--ol-font-sans);
+  --ol-font-body: var(--ol-font-sans);
+  --ol-font-numeric: var(--ol-font-sans);
+  --ol-reading-width: 72ch;
   --ol-font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ol-font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
 
@@ -223,6 +228,8 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-medium: 460;
+  --ol-font-weight-semibold: 560;
   --ol-accent-solid-bg: #3b82f6;
   --ol-accent-solid-bg-hover: #60a5fa;
   --ol-accent-solid-ink: #f8fbff;
@@ -383,7 +390,8 @@ body {
   color: var(--ol-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  font-optical-sizing: auto;
+  line-height: 1.5;
 }
 
 /* Hide scrollbars where we want flat surfaces */
@@ -399,6 +407,8 @@ body {
    scrollbar-gutter: stable 让滚动条槽位常驻预留，滚动条出现/消失不再触发布局回流。 */
 .ol-thinscroll {
   scrollbar-gutter: stable;
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
 }
 /* 概览是 overflow:hidden 的单屏固定页，永远不会有滚动条 —— 不占槽位。 */
 .ol-thinscroll[data-ol-page-fixed] {

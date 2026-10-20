@@ -23,6 +23,9 @@ import android.widget.ImageView
 import android.widget.Toast
 import kotlin.math.abs
 
+internal fun shouldIgnoreOverlayRecordingFrame(processing: Boolean, message: String?): Boolean =
+    processing && message.isNullOrBlank()
+
 /** Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control. */
 class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateListener {
 
@@ -103,7 +106,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (intent?.action) {
             null, ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
-                showOverlay()
+                if (!showOverlay()) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 if (!tryPromoteRecordingForeground()) {
                     abortRecordingStart(startId)
                     return START_NOT_STICKY
@@ -116,7 +122,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 stopSelf(startId)
             }
             ACTION_REPLACE_OVERLAY -> replaceOverlay()
-            ACTION_TOGGLE_EXPAND -> handleIconClick()
+            ACTION_TOGGLE_EXPAND -> {
+                if (overlayDisplayAllowed()) {
+                    handleIconClick()
+                } else {
+                    hideOverlay()
+                }
+            }
             ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
             ACTION_REFRESH_LAYOUT -> refreshOverlayLayout()
         }
@@ -147,6 +159,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
         when (state) {
             "recording" -> {
+                // Queued meter frames must not undo a stop/handoff gesture.
+                if (shouldIgnoreOverlayRecordingFrame(processing, message)) return
                 recording = true
                 processing = false
                 if (!tryPromoteRecordingForeground()) {
@@ -186,7 +200,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun showOverlay() = withOverlayLock {
+    private fun showOverlay(): Boolean = withOverlayLock {
+        if (!overlayDisplayAllowed()) {
+            clearAllOverlayRoots()
+            Log.i(TAG, "overlay show skipped by preference")
+            return@withOverlayLock false
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         overlayRoots.lastOrNull()?.let { existing ->
@@ -194,7 +213,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             if (params != null) {
                 refreshExistingOverlayLayout(existing, params)
                 Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
-                return@withOverlayLock
+                return@withOverlayLock true
             }
             removeOverlayRoot(existing)
             synchronized(overlayRoots) {
@@ -215,6 +234,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         if (removed > 0) {
             Log.i(TAG, "overlay replace cleared removed=$removed")
         }
+        if (!overlayDisplayAllowed()) {
+            Log.i(TAG, "overlay replace skipped by preference")
+            return@withOverlayLock
+        }
         if (!canDrawOverlays()) {
             Log.i(TAG, "overlay replace skipped no overlay permission")
             return@withOverlayLock
@@ -230,6 +253,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun hideOverlay() = withOverlayLock {
         val removed = clearAllOverlayRoots()
+        if (!overlayDisplayAllowed()) {
+            OpenLessAccessibilityService.sendVocabularyCommand("refresh")
+        }
         if (removed > 0) {
             Log.i(TAG, "overlay hidden removed=$removed")
         }
@@ -316,6 +342,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return OpenLessPermissionBridge.canDrawOverlaysSafely(this)
     }
 
+    private fun overlayDisplayAllowed(): Boolean {
+        return OpenLessAndroidPreferences.overlayDisplayAllowed(this)
+    }
+
     private fun refreshExistingOverlayLayout(
         root: FrameLayout,
         params: WindowManager.LayoutParams,
@@ -333,6 +363,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun refreshOverlayLayout() = withOverlayLock {
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
+        if (!overlayDisplayAllowed()) {
+            clearAllOverlayRoots()
+            Log.i(TAG, "overlay refresh skipped by preference")
+            return@withOverlayLock
+        }
         val root = overlayRoots.lastOrNull() ?: rootView
         if (root == null || !root.isAttachedToWindow) {
             Log.i(TAG, "overlay refresh skipped roots=0")
@@ -623,7 +658,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             "quick_note",
             "translation",
             "style_pack" -> applyVisualState(OverlayVisualState.Processing)
-            "qa" -> applyVisualState(OverlayVisualState.Processing)
+            "qa",
+            "voice_edit" -> applyVisualState(OverlayVisualState.Processing)
             "cancel" -> applyVisualState(OverlayVisualState.Error)
             else -> Unit
         }
@@ -639,6 +675,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 if (recording) stopRecordingFromOverlay()
             }
             "qa" -> finalizeQaFromOverlay()
+            "voice_edit" -> finalizeVoiceEditFromOverlay()
             "cancel" -> cancelRecordingFromOverlay(direction)
             else -> Unit
         }
@@ -690,6 +727,22 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
+    private fun finalizeVoiceEditFromOverlay() {
+        if (!recording) return
+        try {
+            OpenLessNative.nativeFinalizeVoiceEditFromOverlay()
+            recording = false
+            processing = true
+            setArmed(false)
+            applyVisualState(OverlayVisualState.Processing)
+        } catch (error: Throwable) {
+            Log.w(TAG, "finalize voice edit bridge unavailable", error)
+            processing = false
+            applyVisualState(OverlayVisualState.Recording)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
     private fun abortRecordingStart(startId: Int) {
         recording = false
         processing = false
@@ -729,7 +782,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun startRecordingFromOverlay(translation: Boolean = false) {
-        showOverlay()
+        if (!showOverlay()) {
+            return
+        }
         if (tryPromoteRecordingForeground()) {
             beginDictationFromOverlay(translation)
             return

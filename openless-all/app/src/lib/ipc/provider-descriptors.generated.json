@@ -246,6 +246,20 @@
       "validationProbe": "asr_silence_allows_no_final"
     },
     {
+      "authRequirement": "api_key",
+      "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
+      "defaultModel": "gemini-3.5-transcribe",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrGemini",
+      "providerType": "gemini",
+      "staticModels": [
+        "gemini-3.5-transcribe"
+      ],
+      "supportedRequestFormats": [],
+      "validationProbe": "asr_silence"
+    },
+    {
       "authRequirement": "none",
       "defaultEndpoint": null,
       "defaultModel": null,
@@ -277,6 +291,42 @@
       "kind": "asr",
       "labelKey": "asrSherpaOnnxLocal",
       "providerType": "sherpa-onnx-local",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
+      "defaultModel": "experimental-textstream-qwen3",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalTextStream",
+      "providerType": "experimental-textstream",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
+      "defaultModel": "experimental-sensevoice-small",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalSenseVoice",
+      "providerType": "experimental-sensevoice",
+      "staticModels": [],
+      "supportedRequestFormats": [],
+      "validationProbe": "unsupported"
+    },
+    {
+      "authRequirement": "none",
+      "defaultEndpoint": null,
+      "defaultModel": "experimental-embedding-gemma-en",
+      "defaultRequestFormat": null,
+      "kind": "asr",
+      "labelKey": "asrExperimentalGemma",
+      "providerType": "experimental-embedding-gemma",
       "staticModels": [],
       "supportedRequestFormats": [],
       "validationProbe": "unsupported"

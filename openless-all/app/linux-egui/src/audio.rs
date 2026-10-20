@@ -1,4 +1,6 @@
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use futures_util::future::BoxFuture;
 use openless_core::{
@@ -31,6 +33,102 @@ impl LinuxCpalRecorder {
     }
 }
 
+#[cfg(target_os = "linux")]
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+
+#[cfg(target_os = "linux")]
+struct RawAudioFrame {
+    samples: Vec<f32>,
+    channels: usize,
+    input_sample_rate: u32,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxRecordingOptions {
+    preferred_device_name: Option<String>,
+    recordings_dir: Option<std::path::PathBuf>,
+    require_archive: bool,
+    mute_during_recording: bool,
+    audio_processing: openless_core::AudioProcessingConfig,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxAudioThreadArgs {
+    preferred_device_name: Option<String>,
+    consumer: Arc<dyn AudioConsumer>,
+    progress: Arc<dyn RecordingProgressSink>,
+    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    audio_processing: openless_core::AudioProcessingConfig,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
+    startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
+}
+
+#[cfg(target_os = "linux")]
+struct AudioProcessingWorker {
+    join_handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl AudioProcessingWorker {
+    fn start(
+        processing: openless_core::AudioProcessingConfig,
+        consumer: Arc<dyn AudioConsumer>,
+        progress: Arc<dyn RecordingProgressSink>,
+        writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    ) -> Result<(Self, SyncSender<RawAudioFrame>), BackendError> {
+        let (sender, receiver) = sync_channel::<RawAudioFrame>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let started = std::time::Instant::now();
+        let join_handle = std::thread::Builder::new()
+            .name("openless-linux-audio-processor".to_string())
+            .spawn(move || {
+                let mut processor = openless_core::AudioProcessor::new(processing);
+                while let Ok(frame) = receiver.recv() {
+                    if let Some(chunk) =
+                        processor.process(&frame.samples, frame.channels, frame.input_sample_rate)
+                    {
+                        consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                        if let Some(writer) = &writer {
+                            if let Err(error) = writer
+                                .lock()
+                                .expect("Linux WAV writer lock poisoned")
+                                .append(&chunk.pcm_i16_le)
+                            {
+                                log::warn!("Linux recording archive write failed: {error}");
+                            }
+                        }
+                        let _ = progress
+                            .publish_level(started.elapsed().as_millis() as u64, chunk.level);
+                    }
+                }
+            })
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("failed to spawn Linux audio processor: {error}"),
+                )
+            })?;
+        Ok((
+            Self {
+                join_handle: Some(join_handle),
+            },
+            sender,
+        ))
+    }
+
+    fn finish(mut self) -> Result<(), BackendError> {
+        if let Some(handle) = self.join_handle.take() {
+            handle.join().map_err(|_| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    "Linux audio processor thread panicked while stopping",
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
 impl AudioRecorder for LinuxCpalRecorder {
     fn start(
         &self,
@@ -47,6 +145,7 @@ impl AudioRecorder for LinuxCpalRecorder {
         // Platform effect, applied by the host recorder exactly like the Tauri
         // audio adapter. Never owned by Core; restore is the guard's Drop.
         let mute_during_recording = context.recording.mute_during_recording;
+        let audio_processing = context.recording.audio_processing;
         let recordings_dir = self.recordings_dir.clone();
         let require_archive =
             context.output_target == openless_core::DictationOutputTarget::QuickNote;
@@ -56,10 +155,13 @@ impl AudioRecorder for LinuxCpalRecorder {
                 tokio::task::spawn_blocking(move || {
                     start_linux_recording(
                         session_id,
-                        preferred_device_name,
-                        recordings_dir,
-                        require_archive,
-                        mute_during_recording,
+                        LinuxRecordingOptions {
+                            preferred_device_name,
+                            recordings_dir,
+                            require_archive,
+                            mute_during_recording,
+                            audio_processing,
+                        },
                         consumer,
                         progress,
                     )
@@ -194,14 +296,19 @@ impl ActiveRecording for LinuxActiveRecording {
 #[cfg(target_os = "linux")]
 fn start_linux_recording(
     session_id: SessionId,
-    preferred_device_name: Option<String>,
-    recordings_dir: Option<std::path::PathBuf>,
-    require_archive: bool,
-    mute_during_recording: bool,
+    options: LinuxRecordingOptions,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
 ) -> Result<Box<dyn ActiveRecording>, BackendError> {
     use std::sync::atomic::AtomicBool;
+
+    let LinuxRecordingOptions {
+        preferred_device_name,
+        recordings_dir,
+        require_archive,
+        mute_during_recording,
+        audio_processing,
+    } = options;
 
     // Mute is best-effort and independent of capture availability (mirrors the
     // Tauri reference): if it fails we log and continue recording. If capture
@@ -251,15 +358,16 @@ fn start_linux_recording(
     let thread = std::thread::Builder::new()
         .name("openless-linux-recorder".to_string())
         .spawn(move || {
-            run_audio_thread(
+            run_audio_thread(LinuxAudioThreadArgs {
                 preferred_device_name,
                 consumer,
                 progress,
                 writer,
-                stop_for_thread,
-                runtime_error_for_thread,
-                startup_tx,
-            );
+                audio_processing,
+                stop: stop_for_thread,
+                runtime_error: runtime_error_for_thread,
+                startup: startup_tx,
+            });
         })
         .map_err(|error| {
             BackendError::new(
@@ -293,15 +401,25 @@ fn start_linux_recording(
 }
 
 #[cfg(target_os = "linux")]
-fn run_audio_thread(
-    preferred_device_name: Option<String>,
-    consumer: Arc<dyn AudioConsumer>,
-    progress: Arc<dyn RecordingProgressSink>,
-    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
-    startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
-) {
+fn run_audio_thread(args: LinuxAudioThreadArgs) {
+    let LinuxAudioThreadArgs {
+        preferred_device_name,
+        consumer,
+        progress,
+        writer,
+        audio_processing,
+        stop,
+        runtime_error,
+        startup,
+    } = args;
+    let (processor, frame_tx) =
+        match AudioProcessingWorker::start(audio_processing, consumer, progress, writer) {
+            Ok(worker) => worker,
+            Err(error) => {
+                let _ = startup.send(Err(error));
+                return;
+            }
+        };
     let mut result = Err(BackendError::new(
         BackendErrorCode::Platform,
         "no Linux audio backend is available",
@@ -328,15 +446,17 @@ fn run_audio_thread(
             &host,
             backend,
             preferred_device_name.as_deref(),
-            &consumer,
-            &progress,
-            &writer,
+            &frame_tx,
             &stop,
             &runtime_error,
         ) {
             Ok(stream) => {
                 result = Ok(stream);
                 break;
+            }
+            Err(error) if error.code == BackendErrorCode::PermissionDenied => {
+                let _ = startup.send(Err(error));
+                return;
             }
             Err(error) => {
                 log::warn!("{backend} audio backend failed; trying next backend: {error}");
@@ -351,6 +471,8 @@ fn run_audio_thread(
             stream
         }
         Err(error) => {
+            drop(frame_tx);
+            let _ = processor.finish();
             let _ = startup.send(Err(error));
             return;
         }
@@ -359,6 +481,8 @@ fn run_audio_thread(
         std::thread::park_timeout(std::time::Duration::from_millis(25));
     }
     drop(stream);
+    drop(frame_tx);
+    let _ = processor.finish();
 }
 
 #[cfg(target_os = "linux")]
@@ -374,9 +498,7 @@ fn try_start_audio_stream(
     host: &cpal::Host,
     backend: &str,
     preferred_device_name: Option<&str>,
-    consumer: &Arc<dyn AudioConsumer>,
-    progress: &Arc<dyn RecordingProgressSink>,
-    writer: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    frame_tx: &SyncSender<RawAudioFrame>,
     stop: &Arc<std::sync::atomic::AtomicBool>,
     runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
 ) -> Result<cpal::Stream, BackendError> {
@@ -385,29 +507,92 @@ fn try_start_audio_stream(
     let device = select_input_device(host, preferred_device_name).map_err(|error| {
         BackendError::new(error.code, format!("{backend} backend: {}", error.message))
     })?;
-    let supported = device
-        .default_input_config()
-        .map_err(|error| classify_audio_error("default input config", error.to_string()))?;
-    let sample_format = supported.sample_format();
-    let input_sample_rate = supported.sample_rate();
-    let channels = usize::from(supported.channels());
-    let config: cpal::StreamConfig = supported.into();
-    let stream = build_input_stream(
-        &device,
-        &config,
-        sample_format,
-        input_sample_rate,
-        channels,
-        Arc::clone(consumer),
-        Arc::clone(progress),
-        writer.clone(),
-        Arc::clone(stop),
-        Arc::clone(runtime_error),
-    )?;
-    stream
-        .play()
-        .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
-    Ok(stream)
+    let mut native = None;
+    let mut start = |supported: cpal::SupportedStreamConfig| -> Result<cpal::Stream, BackendError> {
+        let accepting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let config = supported.config();
+        let stream = build_input_stream(
+            &device,
+            &config,
+            supported.sample_format(),
+            supported.sample_rate(),
+            usize::from(supported.channels()),
+            frame_tx.clone(),
+            Arc::clone(stop),
+            Arc::clone(runtime_error),
+            Arc::clone(&accepting),
+        )?;
+        stream
+            .play()
+            .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
+        accepting.store(true, std::sync::atomic::Ordering::Release);
+        Ok(stream)
+    };
+    let initial_error = match device.default_input_config() {
+        Ok(config) => {
+            native = Some(config);
+            match start(config) {
+                Ok(stream) => return Ok(stream),
+                Err(error) if error.code == BackendErrorCode::PermissionDenied => {
+                    return Err(error)
+                }
+                Err(error) => error,
+            }
+        }
+        Err(error) => classify_audio_error("default input config", error.to_string()),
+    };
+    if initial_error.code == BackendErrorCode::PermissionDenied {
+        return Err(initial_error);
+    }
+    let ranges = match device.supported_input_configs() {
+        Ok(ranges) => ranges,
+        Err(_) => return Err(initial_error),
+    };
+    try_input_candidates(
+        native_input_alternatives(native.as_ref(), ranges),
+        initial_error,
+        &mut start,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn try_input_candidates<T, U>(
+    candidates: impl IntoIterator<Item = T>,
+    mut last_error: BackendError,
+    mut start: impl FnMut(T) -> Result<U, BackendError>,
+) -> Result<U, BackendError> {
+    for candidate in candidates {
+        match start(candidate) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.code == BackendErrorCode::PermissionDenied => return Err(error),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+#[cfg(target_os = "linux")]
+fn native_input_alternatives(
+    default: Option<&cpal::SupportedStreamConfig>,
+    ranges: impl IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+) -> Vec<cpal::SupportedStreamConfig> {
+    let native_rate = default.map(|config| config.sample_rate());
+    let mut candidates = Vec::new();
+    for range in ranges {
+        let min = range.min_sample_rate();
+        let max = range.max_sample_rate();
+        for rate in [native_rate.unwrap_or(max).clamp(min, max), min, max] {
+            let candidate = range.with_sample_rate(rate);
+            let same = |other: &cpal::SupportedStreamConfig| {
+                other.config() == candidate.config()
+                    && other.sample_format() == candidate.sample_format()
+            };
+            if !default.is_some_and(same) && !candidates.iter().any(same) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
 }
 
 #[cfg(target_os = "linux")]
@@ -446,48 +631,61 @@ fn build_input_stream(
     sample_format: cpal::SampleFormat,
     input_sample_rate: u32,
     channels: usize,
-    consumer: Arc<dyn AudioConsumer>,
-    progress: Arc<dyn RecordingProgressSink>,
-    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    frame_tx: SyncSender<RawAudioFrame>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
+    accepting: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<cpal::Stream, BackendError> {
     use cpal::traits::DeviceTrait;
 
     macro_rules! make_stream {
         ($sample:ty, $to_f32:expr) => {{
-            let consumer = Arc::clone(&consumer);
-            let progress = Arc::clone(&progress);
+            let frame_tx = frame_tx.clone();
             let stop_for_error = Arc::clone(&stop);
-            let runtime_error = Arc::clone(&runtime_error);
-            let writer = writer.clone();
-            let started = std::time::Instant::now();
-            let mut normalizer = openless_core::PcmNormalizer::default();
+            let stop_for_callback = Arc::clone(&stop);
+            let runtime_error_for_callback = Arc::clone(&runtime_error);
+            let runtime_error_for_error = Arc::clone(&runtime_error);
+            let accepting_audio = Arc::clone(&accepting);
+            let accepting_error = Arc::clone(&accepting);
             device
                 .build_input_stream::<$sample, _, _>(
                     *config,
                     move |data: &[$sample], _| {
-                        let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
-                        if let Some(chunk) =
-                            normalizer.process(&samples, channels, input_sample_rate)
+                        if !accepting_audio.load(std::sync::atomic::Ordering::Acquire)
+                            || stop_for_callback.load(std::sync::atomic::Ordering::Acquire)
                         {
-                            consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                            if let Some(writer) = &writer {
-                                if let Err(error) = writer
+                            return;
+                        }
+                        let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
+                        match frame_tx.try_send(RawAudioFrame {
+                            samples,
+                            channels,
+                            input_sample_rate,
+                        }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Disconnected(_)) => {
+                                stop_for_callback.store(true, std::sync::atomic::Ordering::Release);
+                            }
+                            Err(TrySendError::Full(_)) => {
+                                stop_for_callback.store(true, std::sync::atomic::Ordering::Release);
+                                let mut slot = runtime_error_for_callback
                                     .lock()
-                                    .expect("Linux WAV writer lock poisoned")
-                                    .append(&chunk.pcm_i16_le)
-                                {
-                                    log::warn!("Linux recording archive write failed: {error}");
+                                    .expect("Linux recorder error lock poisoned");
+                                if slot.is_none() {
+                                    *slot = Some(BackendError::new(
+                                        BackendErrorCode::Platform,
+                                        "Linux audio processing queue overflow",
+                                    ));
                                 }
                             }
-                            let _ = progress
-                                .publish_level(started.elapsed().as_millis() as u64, chunk.level);
                         }
                     },
                     move |error| {
+                        if !accepting_error.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
                         let error = classify_audio_error("input stream", error.to_string());
-                        let mut slot = runtime_error
+                        let mut slot = runtime_error_for_error
                             .lock()
                             .expect("Linux recorder error lock poisoned");
                         if slot.is_none() {
@@ -503,6 +701,18 @@ fn build_input_stream(
 
     match sample_format {
         cpal::SampleFormat::F32 => make_stream!(f32, |sample: f32| sample),
+        cpal::SampleFormat::F64 => make_stream!(f64, |sample: f64| sample as f32),
+        cpal::SampleFormat::I64 => {
+            make_stream!(i64, |sample: i64| (sample as f64 / i64::MAX as f64) as f32)
+        }
+        cpal::SampleFormat::U64 => make_stream!(
+            u64,
+            |sample: u64| (sample as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32
+        ),
+        cpal::SampleFormat::U32 => make_stream!(
+            u32,
+            |sample: u32| (sample as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32
+        ),
         cpal::SampleFormat::I16 => {
             make_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32)
         }
@@ -648,6 +858,55 @@ mod tests {
             classify_audio_error("start", "device disappeared".to_string()).code,
             BackendErrorCode::Platform
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_alternatives_preserve_channels_format_and_advertised_rates() {
+        let range = cpal::SupportedStreamConfigRange::new(
+            2,
+            44_100,
+            48_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+        let native = range.with_sample_rate(48_000);
+        let alternatives = native_input_alternatives(Some(&native), [range, range]);
+        assert_eq!(alternatives.len(), 1);
+        assert_eq!(alternatives[0].channels(), 2);
+        assert_eq!(alternatives[0].sample_format(), cpal::SampleFormat::F32);
+        assert_eq!(alternatives[0].sample_rate(), 44_100);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn candidates_stop_at_success_or_permission_failure() {
+        let mut attempts = Vec::new();
+        let result = try_input_candidates(
+            [1, 2, 3],
+            classify_audio_error("start", "failed".into()),
+            |candidate| {
+                attempts.push(candidate);
+                if candidate == 2 {
+                    Ok(candidate)
+                } else {
+                    Err(classify_audio_error("start", "failed".into()))
+                }
+            },
+        );
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(attempts, [1, 2]);
+        let mut attempts = 0;
+        let result: Result<(), _> = try_input_candidates(
+            [1, 2],
+            classify_audio_error("start", "failed".into()),
+            |_| {
+                attempts += 1;
+                Err(classify_audio_error("start", "permission denied".into()))
+            },
+        );
+        assert_eq!(result.unwrap_err().code, BackendErrorCode::PermissionDenied);
+        assert_eq!(attempts, 1);
     }
 
     #[test]
