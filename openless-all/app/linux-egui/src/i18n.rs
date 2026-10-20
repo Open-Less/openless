@@ -149,6 +149,32 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
+    Msg { key: "settings.audioDsp.noiseStage", text: row("降噪", "降噪", "Noise reduction", "ノイズ低減", "잡음 감소") },
+    Msg { key: "settings.audioDsp.combStage", text: row("梳状滤波", "梳狀濾波", "Comb filter", "コムフィルター", "콤 필터") },
+    Msg { key: "settings.audioDsp.Speech_enhancement_settings", text: row("语音增强设置", "語音增強設置", "Speech enhancement settings", "音声強調設定", "음성 향상 설정") },
+    Msg { key: "settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording", text: row("RNNoise 更轻量，PureVox 模型降噪耗时较高。设置在下一次录音生效。", "RNNoise 更輕量，PureVox 模型降噪耗時較高。設置在下一次錄音生效。", "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.", "RNNoise は軽量、PureVox は CPU 使用量が多めです。設定は次の録音に適用されます。", "RNNoise는 가볍고 PureVox는 CPU를 더 사용합니다. 설정은 다음 녹음에 적용됩니다.") },
+    Msg { key: "settings.audioDsp.Noise_reduction_off", text: row("关闭降噪", "關闭降噪", "Noise reduction off", "ノイズ低減オフ", "잡음 감소 끄기") },
+    Msg { key: "settings.audioDsp.Spectral_subtraction", text: row("频谱减法", "頻譜減法", "Spectral subtraction", "スペクトル減算法", "스펙트럼 차감") },
+    Msg { key: "settings.audioDsp.Off", text: row("关闭降噪", "關闭降噪", "Off", "オフ", "끄기") },
+    Msg { key: "settings.audioDsp.Noise_reduction", text: row("降噪强度 %", "降噪強度 %", "Noise reduction %", "ノイズ低減 %", "잡음 감소 %") },
+    Msg { key: "settings.audioDsp.Input_gain_dB", text: row("输入增益 dB", "輸入增益 dB", "Input gain dB", "入力ゲイン dB", "입력 게인 dB") },
+    Msg { key: "settings.audioDsp.Automatic_gain", text: row("自动增益", "自動增益", "Automatic gain", "自動ゲイン", "자동 게인") },
+    Msg { key: "settings.audioDsp.Target_level", text: row("目标电平 %", "目標電平 %", "Target level %", "目標レベル %", "목표 레벨 %") },
+    Msg { key: "settings.audioDsp.Attack_speed", text: row("启动速度", "啟動速度", "Attack speed", "アタック速度", "어택 속도") },
+    Msg { key: "settings.audioDsp.Release_speed", text: row("释放速度", "釋放速度", "Release speed", "リリース速度", "릴리스 속도") },
+    Msg { key: "settings.audioDsp.Speech_gate_does_not_stop_recording", text: row("语音门限（不自动停止录音）", "語音門限（不自動停止錄音）", "Speech gate (does not stop recording)", "音声ゲート（録音は停止しません）", "음성 게이트 (녹음을 중지하지 않음)") },
+    Msg { key: "settings.audioDsp.Threshold_dB", text: row("门限 dB", "門限 dB", "Threshold dB", "しきい値 dB", "임계값 dB") },
+    Msg { key: "settings.audioDsp.A_high_threshold_can_remove_quiet_speech", text: row("门限过高可能丢失轻声。", "門限過高可能丟失輕聲。", "A high threshold can remove quiet speech.", "しきい値が高いと小さな声が失われる場合があります。", "임계값이 높으면 작은 목소리가 사라질 수 있습니다.") },
+    Msg { key: "settings.audioDsp.Tone_and_room_adjustments", text: row("音色与房间调整", "音色與房間調整", "Tone and room adjustments", "音色と室内音響の調整", "음색 및 실내 음향 조정") },
+    Msg { key: "settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0", text: row("梳状滤波沿用 MicYou 的延迟相减方式，可能改变音色，建议从 0% 开始。", "梳狀濾波沿用 MicYou 的延遲相減方式，可能改變音色，建議從 0% 开始。", "The MicYou comb filter can color speech. Start at 0%.", "MicYou のコムフィルターは音色を変える場合があります。0% から始めてください。", "MicYou 콤 필터는 음색을 바꿀 수 있습니다. 0%부터 시작하세요.") },
+    Msg { key: "settings.audioDsp.Comb_filter", text: row("梳状滤波 %", "梳狀濾波 %", "Comb filter %", "コムフィルター %", "콤 필터 %") },
+    Msg { key: "settings.audioDsp.10_band_equalizer", text: row("十段均衡器", "十段均衡器", "10-band equalizer", "10 バンドイコライザー", "10밴드 이퀄라이저") },
+    Msg { key: "settings.audioDsp.Preamp_dB", text: row("前置增益 dB", "前置增益 dB", "Preamp dB", "プリアンプ dB", "프리앰프 dB") },
+    Msg { key: "settings.audioDsp.Processing_order", text: row("处理顺序", "處理順序", "Processing order", "処理順序", "처리 순서") },
+    Msg { key: "settings.audioDsp.Equalizer", text: row("均衡器", "均衡器", "Equalizer", "イコライザー", "이퀄라이저") },
+    Msg { key: "settings.audioDsp.Input_gain", text: row("输入增益", "輸入增益", "Input gain", "入力ゲイン", "입력 게인") },
+    Msg { key: "settings.audioDsp.Speech_gate", text: row("语音门限", "語音門限", "Speech gate", "音声ゲート", "음성 게이트") },
+    Msg { key: "settings.audioDsp.Reset_enhancement_settings", text: row("恢复增强默认设置", "恢復增強默認設置", "Reset enhancement settings", "強調設定を初期化", "향상 설정 초기화") },
     Msg {
         key: "providers.extra_headers_hint",
         text: row(
