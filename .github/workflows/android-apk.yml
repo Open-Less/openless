@@ -16,8 +16,14 @@ name: Android APK (debug)
 
 on:
   push:
+    # Same reasoning as release-tauri: an APK per branch push cost 13-18 minutes
+    # and duplicated the Gradle + Rust trees that `android-check` already keeps
+    # warm. Tags, a weekly smoke build and explicit dispatch cover it.
     tags:
       - 'v*-tauri'
+  schedule:
+    # Monday 05:23 UTC: weekly APK smoke build (debug-grade, not published).
+    - cron: '23 5 * * 1'
   workflow_dispatch:
     inputs:
       abis:
@@ -163,9 +169,6 @@ jobs:
         with:
           # Android does not use the local Qwen3/Whisper C submodules.
           submodules: false
-
-      - name: Disable macOS-only Qwen3 MLX dependency
-        run: node openless-all/app/scripts/ci-disable-macos-qwen3.mjs
 
       - name: Check updater signing availability (tag release)
         if: needs.plan.outputs.is_tag_release == 'true'
@@ -331,6 +334,7 @@ jobs:
         if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
         env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -340,6 +344,7 @@ jobs:
         if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
         env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
           # Resolve signing credentials at execution time; compiled Gradle scripts
           # are cached and must never contain secret literals.
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -493,6 +498,19 @@ jobs:
             "$out_dir/OpenLess_${version}_x86.apk" \
             "$out_dir/OpenLess_${version}_x86_64.apk"
 
+      - name: Stage direct download aliases
+        if: needs.plan.outputs.is_tag_release == 'true'
+        working-directory: openless-all/app
+        env:
+          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ steps.stage.outputs.out_dir }}
+          OPENLESS_DOWNLOAD_OUTPUT_DIR: ${{ steps.stage.outputs.out_dir }}
+        run: |
+          set -euo pipefail
+          for arch in aarch64 armv7 i686 x86_64; do
+            OPENLESS_DOWNLOAD_TARGET=android OPENLESS_DOWNLOAD_ARCH="$arch" \
+              node scripts/stage-release-download-aliases.mjs
+          done
+
       - name: Write Android updater manifests
         working-directory: openless-all/app
         env:
@@ -516,7 +534,7 @@ jobs:
           out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json; do
+            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json "$out_dir"/OpenLess_android_*.apk; do
               [ -e "$f" ] && echo "$f"
             done
           } > "$RUNNER_TEMP/android-release-files.txt"
@@ -548,7 +566,8 @@ jobs:
           name: OpenLess ${{ github.ref_name }}
           # The desktop and Android jobs share one Beta draft. Publish it only
           # after all jobs and package verification have finished.
-          draft: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
+          # Publication is administrator-controlled after both asset workflows pass.
+          draft: true
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md

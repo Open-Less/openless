@@ -1,29 +1,68 @@
 #![allow(dead_code, unused_imports, unused_variables)]
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use crate::windows_ime_protocol::ImeSubmitStatus;
+use crate::windows_ime_protocol::{
+    is_failed_hresult, ImeSubmitOp, ImeSubmitStatus, IME_STATUS_ACCEPTED, IME_STATUS_BAD_REQUEST,
+    IME_STATUS_COMMITTED, IME_STATUS_COMPOSITION_CONFLICT,
+    IME_STATUS_COMPOSITION_RECOVERY_REQUIRED, IME_STATUS_NOT_DISPATCHED, IME_STATUS_PENDING,
+    IME_STATUS_PROTOCOL_VERSION,
+};
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
-const IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS: u64 = 2000;
-const IME_ASYNC_EDIT_SESSION_TIMEOUT_MS: u64 = 2000;
-const IME_SUBMIT_TIMEOUT_MARGIN_MS: u64 = 1000;
-const IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS: u64 =
-    IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS + IME_ASYNC_EDIT_SESSION_TIMEOUT_MS;
 
-// The DLL posts to its owner thread with PostMessageW and then waits on an
-// event; async TSF edits have a second wait. A timed-out wait only requests
-// cancellation: an edit already inside COM can still commit afterwards.
-// Every post-dispatch timeout therefore remains OutcomeUnknown, never a
-// definite failure that authorizes another insertion attempt.
-pub const IME_SUBMIT_TIMEOUT: Duration =
-    Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS + IME_SUBMIT_TIMEOUT_MARGIN_MS);
-const IME_PIPE_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+// The DLL commits from a message it posts to the host's TSF thread, and some
+// hosts only grant an async edit session later. Once the submit message has
+// been delivered, a timeout proves nothing: the edit can still commit
+// afterwards. Every post-dispatch timeout therefore remains OutcomeUnknown,
+// never a definite failure that authorizes another insertion attempt.
+pub const IME_SUBMIT_TIMEOUT: Duration = Duration::from_millis(5000);
+const IME_SEND_TIMEOUT_MS: u32 = 2000;
+const IME_QUERY_SEND_TIMEOUT_MS: u32 = 500;
+const IME_QUERY_INTERVAL: Duration = Duration::from_millis(10);
+const IME_WINDOW_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
-const ERROR_FILE_NOT_FOUND: u32 = 2;
-const ERROR_PATH_NOT_FOUND: u32 = 3;
-const ERROR_SEM_TIMEOUT: u32 = 121;
-const ERROR_PIPE_BUSY: u32 = 231;
-const NMPWAIT_NOWAIT: u32 = 0x00000001;
+const HRESULT_TIMEOUT: u32 = 0x8007_05B4;
+const HRESULT_CANCELLED: u32 = 0x8007_04C7;
+
+#[cfg(target_os = "windows")]
+fn diagnostic_build_id() -> &'static str {
+    let value = option_env!("OPENLESS_BUILD_ID").unwrap_or("unbound");
+    if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        value
+    } else {
+        "unbound"
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn emit_tsf_diagnostic_probe(
+    probe_id: &str,
+    hypothesis_ids: &str,
+    session_id: &str,
+    event: &str,
+    outcome: &str,
+    safe_fields: String,
+) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    log::info!(
+        target: "diagnosing-bugs",
+        "{{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"{}\",\"run_id\":\"tsf-runtime-{}\",\"build_id\":\"{}\",\"protocol_revision\":\"0x{:08X}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":{}}}",
+        session_id,
+        std::process::id(),
+        diagnostic_build_id(),
+        IME_STATUS_PROTOCOL_VERSION,
+        probe_id,
+        hypothesis_ids,
+        event,
+        outcome,
+        safe_fields,
+        ts,
+    );
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeIpcError {
@@ -60,110 +99,139 @@ impl WindowsImeIpcError {
 
 pub type WindowsImeIpcResult<T> = Result<T, WindowsImeIpcError>;
 
-fn classify_dispatched_submit_response(
-    response: &str,
-    pending: &mut PendingImeSubmit,
-) -> WindowsImeIpcResult<ImeSubmitStatus> {
-    use crate::windows_ime_protocol::{
-        decode_message, ImePipeMessage, OPENLESS_IME_PROTOCOL_VERSION,
-    };
-    match decode_message(response.trim_end()).map_err(|error| {
-        WindowsImeIpcError::OutcomeUnknown(format!("invalid post-dispatch response: {error}"))
-    })? {
-        ImePipeMessage::SubmitResult {
-            protocol_version,
-            session_id,
-            status,
-            error_code,
-        } if protocol_version == OPENLESS_IME_PROTOCOL_VERSION => {
-            if status != ImeSubmitStatus::Committed {
-                log::warn!(
-                    "[windows-ime] submit result status={status:?} error_code={error_code:?}"
-                );
-            }
-            let status = pending
-                .accept_result(&session_id, status)
-                .map_err(|error| {
-                    WindowsImeIpcError::OutcomeUnknown(format!(
-                        "ambiguous post-dispatch result: {error}"
-                    ))
-                })?;
-            if status != ImeSubmitStatus::Committed
-                && matches!(
-                    error_code.as_deref(),
-                    Some("hresult:0x800705B4" | "hresult:0x800704C7")
-                )
-            {
-                // Keep the 1.x classification: a native timeout/cancel reply
-                // does not prove InsertTextAtSelection never committed. R01's
-                // definitive rejection fallback must not replay this text.
-                return Err(WindowsImeIpcError::OutcomeUnknown(format!(
-                    "native IME submission may still complete after {}",
-                    error_code.as_deref().unwrap_or("cancellation")
-                )));
-            }
-            Ok(status)
-        }
-        ImePipeMessage::SubmitResult {
-            protocol_version, ..
-        } => Err(WindowsImeIpcError::OutcomeUnknown(format!(
-            "unsupported IME protocol version {protocol_version}"
-        ))),
-        _ => Err(WindowsImeIpcError::OutcomeUnknown(
-            "message is not a submit result".into(),
+/// Reply to the submit message itself. Any error here is definite: the DLL
+/// did not queue the text, so the caller may fall back to another insertion.
+fn classify_submit_reply(reply: u32) -> WindowsImeIpcResult<()> {
+    match reply {
+        IME_STATUS_ACCEPTED => Ok(()),
+        0 => Err(WindowsImeIpcError::Protocol(
+            "IME window ignored the submit message; the installed OpenLessIme.dll predates the message protocol"
+                .to_string(),
         )),
+        IME_STATUS_BAD_REQUEST => Err(WindowsImeIpcError::Protocol(
+            "IME rejected the submit payload; the target process may still have an older OpenLessIme.dll loaded; restart the target app after updating OpenLess"
+                .to_string(),
+        )),
+        code if is_failed_hresult(code) => Err(WindowsImeIpcError::Io(format!(
+            "IME could not queue the submit: hresult:0x{code:08X}"
+        ))),
+        other => Err(WindowsImeIpcError::Protocol(format!(
+            "unexpected IME submit reply 0x{other:08X}"
+        ))),
     }
 }
 
-fn map_wait_named_pipe_error(error_code: Option<u32>) -> WindowsImeIpcError {
-    match error_code {
-        Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_PIPE_BUSY) => {
-            WindowsImeIpcError::NoReadyClient
+/// Reply to a query sent after the submit was accepted. `Ok(None)` means the
+/// commit is still pending. Anything that is not a clear result stays
+/// OutcomeUnknown, because the text may already be in the document.
+fn classify_query_reply(reply: u32) -> WindowsImeIpcResult<Option<ImeSubmitStatus>> {
+    match reply {
+        IME_STATUS_PENDING => Ok(None),
+        IME_STATUS_COMMITTED => Ok(Some(ImeSubmitStatus::Committed)),
+        IME_STATUS_COMPOSITION_CONFLICT => Ok(Some(ImeSubmitStatus::CompositionConflict)),
+        IME_STATUS_COMPOSITION_RECOVERY_REQUIRED => {
+            Ok(Some(ImeSubmitStatus::CompositionRecoveryRequired))
         }
-        Some(ERROR_SEM_TIMEOUT) => WindowsImeIpcError::Timeout,
-        Some(code) => WindowsImeIpcError::Io(format!("WaitNamedPipeW failed with OS error {code}")),
-        None => WindowsImeIpcError::Io("WaitNamedPipeW failed without OS error".to_string()),
+        IME_STATUS_NOT_DISPATCHED => Ok(Some(ImeSubmitStatus::NotDispatched)),
+        HRESULT_TIMEOUT | HRESULT_CANCELLED => {
+            // Keep the 1.x classification: a native timeout/cancel reply
+            // does not prove InsertTextAtSelection never committed. R01's
+            // definitive rejection fallback must not replay this text.
+            Err(WindowsImeIpcError::OutcomeUnknown(format!(
+                "native IME submission may still complete after hresult:0x{reply:08X}"
+            )))
+        }
+        code if is_failed_hresult(code) => {
+            log::warn!(
+                "[windows-ime] submit result status=Rejected error_code=hresult:0x{code:08X}"
+            );
+            Ok(Some(ImeSubmitStatus::Rejected))
+        }
+        other => Err(WindowsImeIpcError::OutcomeUnknown(format!(
+            "ambiguous post-dispatch reply 0x{other:08X}"
+        ))),
     }
 }
 
-fn is_retryable_pipe_error(error_code: Option<u32>) -> bool {
-    matches!(
-        error_code,
-        Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_PIPE_BUSY | ERROR_SEM_TIMEOUT)
-    )
+/// Tokens only have to differ between consecutive submits to one IME window,
+/// including across an OpenLess restart; zero is reserved by the DLL.
+fn next_submit_token() -> u32 {
+    static SEQUENCE: AtomicU32 = AtomicU32::new(1);
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed) & 0xFFFF;
+    (((std::process::id() & 0xFFFF) << 16) | sequence).max(1)
 }
 
-#[derive(Debug)]
-pub struct PendingImeSubmit {
-    session_id: String,
-    completed: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImeWindow {
+    hwnd: isize,
+    process_id: u32,
+    thread_id: u32,
 }
 
-impl PendingImeSubmit {
-    pub fn new(session_id: String) -> Self {
-        Self {
-            session_id,
-            completed: false,
-        }
+/// Order eligible IME windows by safety: all windows on the captured target thread first,
+/// followed by same-process windows only for explicit native recovery. A request cannot use
+/// another UI thread's service during normal insertion because the native service resolves its
+/// focused document manager from its own thread manager.
+fn ordered_ime_windows(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+) -> Vec<ImeWindow> {
+    let mut ordered = windows
+        .iter()
+        .copied()
+        .filter(|window| {
+            window.process_id == target.process_id
+                && (window.thread_id == target.thread_id || allow_same_process_fallback)
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|window| window.thread_id != target.thread_id);
+    ordered
+}
+
+fn select_ime_window(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+) -> Option<ImeWindow> {
+    ordered_ime_windows(target, windows, allow_same_process_fallback)
+        .into_iter()
+        .next()
+}
+
+/// Probe candidates in priority order and return the first window running the current protocol.
+/// The caller supplies the probe so the selection policy can be tested without Win32 windows.
+fn select_ime_window_with_probe<F>(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+    mut probe: F,
+) -> WindowsImeIpcResult<Option<ImeWindow>>
+where
+    F: FnMut(ImeWindow) -> WindowsImeIpcResult<()>,
+{
+    let candidates = ordered_ime_windows(target, windows, allow_same_process_fallback);
+    if candidates.is_empty() {
+        return Ok(None);
     }
 
-    pub fn accept_result(
-        &mut self,
-        session_id: &str,
-        status: ImeSubmitStatus,
-    ) -> WindowsImeIpcResult<ImeSubmitStatus> {
-        if self.completed {
-            return Err(WindowsImeIpcError::Protocol(
-                "submit result arrived after completion".to_string(),
-            ));
+    let mut last_error = None;
+    for window in candidates {
+        match probe(window) {
+            Ok(()) => return Ok(Some(window)),
+            Err(error) => last_error = Some(error),
         }
-        if self.session_id != session_id {
-            return Err(WindowsImeIpcError::Protocol(
-                "submit result belongs to a different session".to_string(),
-            ));
-        }
-        self.completed = true;
-        Ok(status)
+    }
+    Err(last_error.expect("non-empty candidate list must produce a probe result"))
+}
+
+fn classify_protocol_probe_reply(reply: u32) -> WindowsImeIpcResult<()> {
+    if reply == IME_STATUS_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(WindowsImeIpcError::Protocol(format!(
+            "the target process has no current OpenLessIme.dll protocol; protocol probe returned 0x{reply:08X}"
+        )))
     }
 }
 
@@ -173,12 +241,24 @@ pub struct ImeSubmitRequest {
     pub text: String,
     pub created_at: String,
     pub target: Option<ImeSubmitTarget>,
+    pub op: ImeSubmitOp,
+    /// Stable owner for the live composition across submit/query tokens.
+    pub composition_owner: u32,
+    /// OpenLess process instance that owns the composition. A changed value permits native
+    /// recovery after the process that created an orphaned composition has exited.
+    pub composition_process_id: u32,
+    /// Allow a recovery Cancel to use another same-process IME window when the original target
+    /// thread has no registered OpenLess service. This is only safe for native recovery because
+    /// owner checks still reject a same-process composition owned by another insertion.
+    pub allow_same_process_fallback: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImeSubmitTarget {
     pub process_id: u32,
     pub thread_id: u32,
+    /// Focused control captured with the target, used by the native prime guard.
+    pub window_handle: usize,
 }
 
 #[derive(Clone)]
@@ -237,235 +317,463 @@ impl Default for WindowsImeIpcServer {
 async fn submit_text_to_platform(
     request: ImeSubmitRequest,
 ) -> WindowsImeIpcResult<ImeSubmitStatus> {
-    windows_pipe::submit_text_over_pipe(request).await
+    // Sending and polling block on the host's message loop; keep that off the
+    // async runtime workers.
+    tokio::task::spawn_blocking(move || windows_message::submit_text_to_window(request))
+        .await
+        .map_err(|error| {
+            WindowsImeIpcError::OutcomeUnknown(format!("IME submit task failed: {error}"))
+        })?
 }
 
 #[cfg(target_os = "windows")]
-mod windows_pipe {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
+mod windows_message {
+    use std::ffi::c_void;
     use std::time::Instant;
 
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
-
     use super::{
-        ImeSubmitRequest, PendingImeSubmit, WindowsImeIpcError, WindowsImeIpcResult,
-        IME_CLIENT_WAIT_TIMEOUT, IME_PIPE_RETRY_INTERVAL, IME_SUBMIT_TIMEOUT,
+        classify_protocol_probe_reply, classify_query_reply, classify_submit_reply,
+        emit_tsf_diagnostic_probe, next_submit_token, select_ime_window_with_probe,
+        ImeSubmitRequest, ImeSubmitTarget, ImeWindow, WindowsImeIpcError, WindowsImeIpcResult,
+        IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS,
+        IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
-        decode_message, encode_message, ime_pipe_candidate_names_for_target,
-        ime_pipe_name_for_target, ImePipeMessage, OPENLESS_IME_PROTOCOL_VERSION,
+        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus,
+        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES, IME_STATUS_ACCEPTED,
+        IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
 
+    const HWND_MESSAGE: isize = -3;
+    const WM_COPYDATA: u32 = 0x004A;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    const ERROR_TIMEOUT: u32 = 1460;
+    const MAX_ENUMERATED_WINDOWS: usize = 4096;
+
+    #[repr(C)]
+    struct CopyDataStruct {
+        dw_data: usize,
+        cb_data: u32,
+        lp_data: *const c_void,
+    }
+
+    #[link(name = "user32")]
     extern "system" {
-        fn WaitNamedPipeW(lpNamedPipeName: *const u16, nTimeOut: u32) -> i32;
+        fn FindWindowExW(
+            hWndParent: isize,
+            hWndChildAfter: isize,
+            lpszClass: *const u16,
+            lpszWindow: *const u16,
+        ) -> isize;
+        fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn SendMessageTimeoutW(
+            hWnd: isize,
+            Msg: u32,
+            wParam: usize,
+            lParam: isize,
+            fuFlags: u32,
+            uTimeout: u32,
+            lpdwResult: *mut usize,
+        ) -> isize;
     }
 
-    pub async fn submit_text_over_pipe(
-        request: ImeSubmitRequest,
-    ) -> WindowsImeIpcResult<crate::windows_ime_protocol::ImeSubmitStatus> {
-        let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
-        let mut pending = PendingImeSubmit::new(request.session_id.clone());
-        let (pipe_name, pipe) = open_pipe_with_retry(target).await?;
-        let (read_half, mut write_half) = tokio::io::split(pipe);
-        let mut reader = BufReader::new(read_half);
-
-        let message = ImePipeMessage::SubmitText {
-            protocol_version: OPENLESS_IME_PROTOCOL_VERSION,
-            session_id: request.session_id,
-            text: request.text,
-            created_at: request.created_at,
-        };
-        let line = encode_message(&message)
-            .map_err(|error| WindowsImeIpcError::Protocol(error.to_string()))?;
-
-        let response = tokio::time::timeout(IME_SUBMIT_TIMEOUT, async {
-            log::debug!("[windows-ime] submitting text over pipe {pipe_name}");
-            write_half
-                .write_all(line.as_bytes())
-                .await
-                .map_err(|error| WindowsImeIpcError::OutcomeUnknown(error.to_string()))?;
-            write_half
-                .flush()
-                .await
-                .map_err(|error| WindowsImeIpcError::OutcomeUnknown(error.to_string()))?;
-
-            let mut response = String::new();
-            let bytes_read = reader
-                .read_line(&mut response)
-                .await
-                .map_err(|error| WindowsImeIpcError::OutcomeUnknown(error.to_string()))?;
-
-            if bytes_read == 0 {
-                return Err(WindowsImeIpcError::OutcomeUnknown(
-                    "IME pipe closed before submit result".to_string(),
-                ));
-            }
-
-            Ok(response)
-        })
-        .await
-        .map_err(|_| {
-            WindowsImeIpcError::OutcomeUnknown(
-                "OpenLess IME IPC timed out after submit dispatch".to_string(),
-            )
-        })??;
-
-        super::classify_dispatched_submit_response(&response, &mut pending)
+    enum SendFailure {
+        /// The host did not answer in time; the message may still be handled.
+        TimedOut,
+        /// The message never reached the window (OS error code).
+        NotDelivered(u32),
     }
 
-    async fn open_pipe_with_retry(
-        target: super::ImeSubmitTarget,
-    ) -> WindowsImeIpcResult<(String, NamedPipeClient)> {
-        let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
-        let exact_pipe_name = ime_pipe_name_for_target(target.process_id, target.thread_id);
-
-        loop {
-            let mut retry_error = WindowsImeIpcError::NoReadyClient;
-
-            for pipe_name in pipe_names_for_target(target) {
-                retry_error = match wait_for_pipe_client(&pipe_name) {
-                    Ok(()) => match ClientOptions::new().open(&pipe_name) {
-                        Ok(pipe) => {
-                            if pipe_name != exact_pipe_name {
-                                log::info!(
-                                    "[windows-ime] exact target pipe {exact_pipe_name} was not ready; using same-process pipe {pipe_name}"
-                                );
-                            }
-                            return Ok((pipe_name, pipe));
-                        }
-                        Err(error) => {
-                            let error_code = error.raw_os_error().map(|code| code as u32);
-                            if !super::is_retryable_pipe_error(error_code) {
-                                return Err(WindowsImeIpcError::Io(error.to_string()));
-                            }
-                            super::map_wait_named_pipe_error(error_code)
-                        }
-                    },
-                    Err(error) => {
-                        if !is_retryable_wait_error(&error) {
-                            return Err(error);
-                        }
-                        error
-                    }
-                };
+    fn verify_protocol_version(hwnd: isize, timeout_ms: u32) -> WindowsImeIpcResult<()> {
+        match send_copy_data(hwnd, IME_COPYDATA_VERSION, &[], timeout_ms) {
+            Ok(reply) if reply == IME_STATUS_PROTOCOL_VERSION => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "current",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
+                log::debug!(
+                    "[windows-ime] protocol probe status=current raw_status=0x{:08X}",
+                    reply,
+                );
+                Ok(())
             }
-
-            if Instant::now() >= deadline {
-                return Err(retry_error);
+            Ok(reply) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "rejected",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
+                log::warn!(
+                    "[windows-ime] protocol probe status=stale_or_unknown raw_status=0x{:08X}",
+                    reply,
+                );
+                classify_protocol_probe_reply(reply)
             }
-            tokio::time::sleep(next_retry_delay(deadline)).await;
+            Err(SendFailure::TimedOut) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "timeout",
+                    "\"error_class\":\"timeout\"".to_string(),
+                );
+                Err(WindowsImeIpcError::Protocol(
+                    "the target process did not answer the OpenLessIme.dll protocol probe"
+                        .to_string(),
+                ))
+            }
+            Err(SendFailure::NotDelivered(code)) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "not_delivered",
+                    format!("\"error_code\":{}", code),
+                );
+                Err(WindowsImeIpcError::Io(format!(
+                    "sending the OpenLessIme.dll protocol probe failed: OS error {code}"
+                )))
+            }
         }
     }
 
-    fn pipe_names_for_target(target: super::ImeSubmitTarget) -> Vec<String> {
-        ime_pipe_candidate_names_for_target(
+    pub fn submit_text_to_window(
+        request: ImeSubmitRequest,
+    ) -> WindowsImeIpcResult<ImeSubmitStatus> {
+        let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
+        let token = next_submit_token();
+        let payload = if request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit {
+            crate::windows_ime_protocol::encode_commit_submit_payload(
+                token,
+                request.composition_process_id,
+                target.window_handle as u64,
+                &request.text,
+            )
+        } else {
+            encode_composition_submit_payload(
+                token,
+                request.composition_owner,
+                request.composition_process_id,
+                target.window_handle as u64,
+                &request.text,
+            )
+        };
+        if payload.len() > IME_MAX_SUBMIT_BYTES {
+            return Err(WindowsImeIpcError::Protocol(format!(
+                "text is too large for one IME submit ({} bytes)",
+                payload.len()
+            )));
+        }
+
+        let window = find_ime_window_with_retry(target, request.allow_same_process_fallback)?;
+        log::info!(
+            "[windows-ime] submit begin op={} target_pid={} target_tid={} target_hwnd=0x{:X} ime_pid={} ime_tid={} owner={} process={} payload_bytes={} same_process_fallback={}",
+            request.op.label(),
             target.process_id,
             target.thread_id,
-            available_pipe_names(),
+            target.window_handle,
+            window.process_id,
+            window.thread_id,
+            request.composition_owner,
+            request.composition_process_id,
+            payload.len(),
+            request.allow_same_process_fallback,
+        );
+
+        let reply = send_copy_data(
+            window.hwnd,
+            request.op.copydata_tag(),
+            &payload,
+            IME_SEND_TIMEOUT_MS,
         )
+        .map_err(|failure| match failure {
+            SendFailure::TimedOut => WindowsImeIpcError::OutcomeUnknown(
+                "OpenLess IME did not acknowledge the submit in time".to_string(),
+            ),
+            SendFailure::NotDelivered(ERROR_ACCESS_DENIED) => WindowsImeIpcError::Io(
+                "IME window refused the message (target runs at a higher integrity level)"
+                    .to_string(),
+            ),
+            SendFailure::NotDelivered(code) => {
+                WindowsImeIpcError::Io(format!("sending to the IME window failed: OS error {code}"))
+            }
+        })?;
+        log::info!(
+            "[windows-ime] submit ack op={} raw_status=0x{:08X}",
+            request.op.label(),
+            reply,
+        );
+        emit_tsf_diagnostic_probe(
+            "P3",
+            "[\"H4\"]",
+            &request.session_id,
+            "submit_ack",
+            if reply == IME_STATUS_ACCEPTED {
+                "accepted"
+            } else {
+                "rejected"
+            },
+            format!(
+                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                request.op.label()
+            ),
+        );
+        classify_submit_reply(reply)?;
+
+        let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
+        let query = encode_query_payload(token);
+        loop {
+            std::thread::sleep(IME_QUERY_INTERVAL);
+            match send_copy_data(
+                window.hwnd,
+                IME_COPYDATA_QUERY,
+                &query,
+                IME_QUERY_SEND_TIMEOUT_MS,
+            ) {
+                Ok(reply) => {
+                    log::debug!(
+                        "[windows-ime] submit query op={} raw_status=0x{:08X}",
+                        request.op.label(),
+                        reply,
+                    );
+                    if let Some(status) = classify_query_reply(reply)? {
+                        emit_tsf_diagnostic_probe(
+                            "P3",
+                            "[\"H4\"]",
+                            &request.session_id,
+                            "submit_complete",
+                            match status {
+                                ImeSubmitStatus::Committed => "committed",
+                                ImeSubmitStatus::NotDispatched => "not_dispatched",
+                                ImeSubmitStatus::CompositionConflict => "composition_conflict",
+                                ImeSubmitStatus::CompositionRecoveryRequired => {
+                                    "composition_recovery_required"
+                                }
+                                ImeSubmitStatus::Rejected => "rejected",
+                                ImeSubmitStatus::Failed => "failed",
+                            },
+                            format!(
+                                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                                request.op.label()
+                            ),
+                        );
+                        log::info!(
+                            "[windows-ime] submit complete op={} status={:?}",
+                            request.op.label(),
+                            status,
+                        );
+                        return Ok(status);
+                    }
+                }
+                // The host is busy, possibly inside the commit itself.
+                Err(SendFailure::TimedOut) => {}
+                Err(SendFailure::NotDelivered(code)) => {
+                    return Err(WindowsImeIpcError::OutcomeUnknown(format!(
+                        "IME window went away after submit dispatch: OS error {code}"
+                    )));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(WindowsImeIpcError::OutcomeUnknown(
+                    "OpenLess IME IPC timed out after submit dispatch".to_string(),
+                ));
+            }
+        }
     }
 
-    fn available_pipe_names() -> Vec<String> {
-        let Ok(entries) = std::fs::read_dir(r"\\.\pipe\") else {
-            return Vec::new();
-        };
+    fn find_ime_window_with_retry(
+        target: ImeSubmitTarget,
+        allow_same_process_fallback: bool,
+    ) -> WindowsImeIpcResult<ImeWindow> {
+        let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
+        let mut last_probe_error = None;
+        loop {
+            let windows = enumerate_ime_windows();
+            log::debug!(
+                "[windows-ime] discover target_pid={} target_tid={} candidates={} same_process_fallback={}",
+                target.process_id,
+                target.thread_id,
+                windows.len(),
+                allow_same_process_fallback,
+            );
+            match select_ime_window_with_probe(
+                target,
+                &windows,
+                allow_same_process_fallback,
+                |window| {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let timeout_ms = remaining.as_millis().min(u32::MAX as u128) as u32;
+                    let result = if timeout_ms == 0 {
+                        Err(WindowsImeIpcError::Protocol(
+                            "the IME protocol probe deadline expired".to_string(),
+                        ))
+                    } else {
+                        verify_protocol_version(window.hwnd, timeout_ms)
+                    };
+                    if let Err(error) = &result {
+                        log::debug!(
+                            "[windows-ime] protocol candidate rejected pid={} tid={} hwnd=0x{:X} error={}",
+                            window.process_id,
+                            window.thread_id,
+                            window.hwnd,
+                            error,
+                        );
+                    }
+                    emit_tsf_diagnostic_probe(
+                        "P2",
+                        "[\"H1\",\"H3\"]",
+                        "runtime",
+                        "ime_candidate_probe",
+                        if result.is_ok() { "accepted" } else { "rejected" },
+                        format!(
+                            "\"candidate_pid\":{},\"candidate_tid\":{},\"target_pid\":{},\"target_tid\":{},\"same_process_fallback\":{}",
+                            window.process_id,
+                            window.thread_id,
+                            target.process_id,
+                            target.thread_id,
+                            allow_same_process_fallback,
+                        ),
+                    );
+                    result
+                },
+            ) {
+                Ok(Some(window)) => {
+                    if window.thread_id != target.thread_id {
+                        log::info!(
+                            "[windows-ime] no IME window on target thread {}; using current same-process thread {}",
+                            target.thread_id,
+                            window.thread_id
+                        );
+                    } else {
+                        log::debug!(
+                            "[windows-ime] selected current exact target thread pid={} tid={}",
+                            window.process_id,
+                            window.thread_id,
+                        );
+                    }
+                    return Ok(window);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    last_probe_error = Some(error);
+                }
+            }
 
-        entries
-            .filter_map(Result::ok)
-            .map(|entry| format!(r"\\.\pipe\{}", entry.file_name().to_string_lossy()))
-            .collect()
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                if let Some(error) = last_probe_error {
+                    return Err(error);
+                }
+                log::warn!(
+                    "[windows-ime] no message window for target_pid={} target_tid={} after {:?}",
+                    target.process_id,
+                    target.thread_id,
+                    IME_CLIENT_WAIT_TIMEOUT,
+                );
+                return Err(WindowsImeIpcError::NoReadyClient);
+            }
+            std::thread::sleep(remaining.min(IME_WINDOW_RETRY_INTERVAL));
+        }
     }
 
-    fn wait_for_pipe_client(pipe_name: &str) -> WindowsImeIpcResult<()> {
-        let pipe_name = OsStr::new(pipe_name)
-            .encode_wide()
+    fn enumerate_ime_windows() -> Vec<ImeWindow> {
+        let class_name = OPENLESS_IME_MESSAGE_WINDOW_CLASS
+            .encode_utf16()
             .chain(std::iter::once(0))
             .collect::<Vec<u16>>();
 
-        let is_ready = unsafe { WaitNamedPipeW(pipe_name.as_ptr(), super::NMPWAIT_NOWAIT) };
-        if is_ready != 0 {
-            return Ok(());
+        let mut windows = Vec::new();
+        let mut previous = 0isize;
+        for _ in 0..MAX_ENUMERATED_WINDOWS {
+            let hwnd = unsafe {
+                FindWindowExW(
+                    HWND_MESSAGE,
+                    previous,
+                    class_name.as_ptr(),
+                    std::ptr::null(),
+                )
+            };
+            if hwnd == 0 {
+                break;
+            }
+            let mut process_id = 0u32;
+            let thread_id = unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) };
+            if thread_id != 0 && process_id != 0 {
+                windows.push(ImeWindow {
+                    hwnd,
+                    process_id,
+                    thread_id,
+                });
+            }
+            previous = hwnd;
+        }
+        windows
+    }
+
+    fn send_copy_data(
+        hwnd: isize,
+        kind: usize,
+        payload: &[u8],
+        timeout_ms: u32,
+    ) -> Result<u32, SendFailure> {
+        let data = CopyDataStruct {
+            dw_data: kind,
+            cb_data: payload.len() as u32,
+            lp_data: payload.as_ptr().cast(),
+        };
+        let mut reply = 0usize;
+        let delivered = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                WM_COPYDATA,
+                0,
+                &data as *const CopyDataStruct as isize,
+                SMTO_ABORTIFHUNG,
+                timeout_ms,
+                &mut reply,
+            )
+        };
+        if delivered != 0 {
+            // The DLL's replies fit in 32 bits; a 32-bit host sign-extends them.
+            return Ok(reply as u32);
         }
 
-        Err(super::map_wait_named_pipe_error(
-            std::io::Error::last_os_error()
-                .raw_os_error()
-                .map(|code| code as u32),
-        ))
-    }
-
-    fn is_retryable_wait_error(error: &WindowsImeIpcError) -> bool {
-        matches!(
-            error,
-            WindowsImeIpcError::NoReadyClient | WindowsImeIpcError::Timeout
-        )
-    }
-
-    fn next_retry_delay(deadline: Instant) -> std::time::Duration {
-        deadline
-            .saturating_duration_since(Instant::now())
-            .min(IME_PIPE_RETRY_INTERVAL)
+        match std::io::Error::last_os_error()
+            .raw_os_error()
+            .map(|code| code as u32)
+        {
+            None | Some(0) | Some(ERROR_TIMEOUT) => Err(SendFailure::TimedOut),
+            Some(code) => Err(SendFailure::NotDelivered(code)),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::windows_ime_protocol::IME_STATUS_UNKNOWN_TOKEN;
 
-    #[test]
-    fn pending_submit_accepts_only_matching_session() {
-        let mut pending = PendingImeSubmit::new("session-1".to_string());
-        assert!(pending
-            .accept_result("session-2", ImeSubmitStatus::Committed)
-            .is_err());
-        assert_eq!(
-            pending.accept_result("session-1", ImeSubmitStatus::Committed),
-            Ok(ImeSubmitStatus::Committed)
-        );
-    }
-
-    #[test]
-    fn pending_submit_rejects_second_result_after_completion() {
-        let mut pending = PendingImeSubmit::new("session-1".to_string());
-        assert_eq!(
-            pending.accept_result("session-1", ImeSubmitStatus::Committed),
-            Ok(ImeSubmitStatus::Committed)
-        );
-        assert!(pending
-            .accept_result("session-1", ImeSubmitStatus::Committed)
-            .is_err());
-    }
-
-    #[test]
-    fn submit_timeout_covers_native_async_commit_path() {
-        assert!(IME_SUBMIT_TIMEOUT > Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS));
+    fn window(hwnd: isize, process_id: u32, thread_id: u32) -> ImeWindow {
+        ImeWindow {
+            hwnd,
+            process_id,
+            thread_id,
+        }
     }
 
     #[test]
     fn submit_timeout_stays_within_followup_stall_budget() {
         assert_eq!(IME_SUBMIT_TIMEOUT, Duration::from_millis(5000));
-    }
-
-    #[test]
-    fn wait_pipe_error_mapping_treats_missing_or_busy_pipe_as_no_ready_client() {
-        assert_eq!(
-            map_wait_named_pipe_error(Some(2)),
-            WindowsImeIpcError::NoReadyClient
-        );
-        assert_eq!(
-            map_wait_named_pipe_error(Some(231)),
-            WindowsImeIpcError::NoReadyClient
-        );
-    }
-
-    #[test]
-    fn wait_pipe_error_mapping_treats_wait_timeout_as_timeout() {
-        assert_eq!(
-            map_wait_named_pipe_error(Some(121)),
-            WindowsImeIpcError::Timeout
-        );
     }
 
     #[test]
@@ -476,54 +784,237 @@ mod tests {
     }
 
     #[test]
-    fn native_timeout_and_cancel_responses_are_not_safe_to_retry() {
-        for status in ["rejected", "failed"] {
-            for code in ["hresult:0x800705B4", "hresult:0x800704C7"] {
-                let response = serde_json::json!({
-                    "type": "submitResult", "protocolVersion": 1,
-                    "sessionId": "session-1", "status": status, "errorCode": code,
-                })
-                .to_string();
-                let mut pending = PendingImeSubmit::new("session-1".into());
-                assert!(matches!(
-                    classify_dispatched_submit_response(&response, &mut pending),
-                    Err(WindowsImeIpcError::OutcomeUnknown(_))
-                ));
-            }
-        }
+    fn submit_tokens_are_nonzero_and_change_between_submits() {
+        let first = next_submit_token();
+        let second = next_submit_token();
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+        assert_ne!(first, second);
     }
 
     #[test]
-    fn dispatched_responses_validate_ownership_before_allowing_definite_fallback() {
-        for response in [
-            "{",
-            r#"{"type":"ping","protocolVersion":1}"#,
-            r#"{"type":"submitResult","protocolVersion":2,"sessionId":"session-1","status":"committed"}"#,
-            r#"{"type":"submitResult","protocolVersion":1,"sessionId":"other","status":"committed"}"#,
-        ] {
-            let mut pending = PendingImeSubmit::new("session-1".into());
-            assert!(matches!(
-                classify_dispatched_submit_response(response, &mut pending),
-                Err(WindowsImeIpcError::OutcomeUnknown(_))
-            ));
-        }
-        let mut pending = PendingImeSubmit::new("session-1".into());
+    fn exact_thread_window_wins_over_same_process_window() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [
+            window(1, 4321, 1111),
+            window(2, 1234, 9999),
+            window(3, 1234, 5678),
+        ];
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[2]));
+    }
+
+    #[test]
+    fn same_process_window_is_used_only_for_explicit_recovery() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[1]));
+        assert_eq!(select_ime_window(target, &windows, false), None);
+        assert_eq!(select_ime_window(target, &windows[..1], true), None);
+    }
+
+    #[test]
+    fn composition_requires_a_window_on_the_captured_thread() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        assert_eq!(select_ime_window(target, &windows, false), None);
+    }
+
+    #[test]
+    fn protocol_candidates_keep_exact_thread_first() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [
+            window(1, 1234, 9999),
+            window(2, 1234, 5678),
+            window(3, 1234, 9999),
+        ];
         assert_eq!(
-            classify_dispatched_submit_response(
-                r#"{"type":"submitResult","protocolVersion":1,"sessionId":"session-1","status":"rejected","errorCode":"hresult:0x80004005"}"#,
-                &mut pending
-            ),
-            Ok(ImeSubmitStatus::Rejected)
+            ordered_ime_windows(target, &windows, true),
+            vec![windows[1], windows[0], windows[2]]
         );
     }
 
     #[test]
-    fn missing_busy_and_timeout_pipe_errors_are_retryable_before_deadline() {
-        assert!(is_retryable_pipe_error(Some(2)));
-        assert!(is_retryable_pipe_error(Some(3)));
-        assert!(is_retryable_pipe_error(Some(121)));
-        assert!(is_retryable_pipe_error(Some(231)));
-        assert!(!is_retryable_pipe_error(Some(5)));
-        assert!(!is_retryable_pipe_error(None));
+    fn stale_protocol_candidate_is_skipped_for_current_candidate() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let mut probed = Vec::new();
+        let selected = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            probed.push(candidate.hwnd);
+            if candidate.hwnd == 2 {
+                Ok(())
+            } else {
+                classify_protocol_probe_reply(0x4F4C_0005)
+            }
+        })
+        .expect("a current candidate should be selected");
+        assert_eq!(selected, Some(windows[1]));
+        assert_eq!(probed, vec![1, 2]);
+    }
+
+    #[test]
+    fn current_protocol_candidate_short_circuits_probe() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let mut probed = Vec::new();
+        let selected = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            probed.push(candidate.hwnd);
+            Ok(())
+        })
+        .expect("the first current candidate should be selected");
+        assert_eq!(selected, Some(windows[0]));
+        assert_eq!(probed, vec![1]);
+    }
+
+    #[test]
+    fn ordinary_probe_does_not_cross_same_process_threads() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 9999)];
+        let mut probed = Vec::new();
+        assert_eq!(
+            select_ime_window_with_probe(target, &windows, false, |candidate| {
+                probed.push(candidate.hwnd);
+                Ok(())
+            })
+            .expect("no eligible candidate is not a probe error"),
+            None
+        );
+        assert!(probed.is_empty());
+    }
+
+    #[test]
+    fn recovery_probe_can_cross_to_same_process_thread() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        let selected = select_ime_window_with_probe(target, &windows, true, |_| Ok(()))
+            .expect("same-process recovery candidate should be eligible");
+        assert_eq!(selected, Some(windows[1]));
+    }
+
+    #[test]
+    fn all_protocol_candidates_return_the_last_probe_error() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 1234, 5678), window(2, 1234, 5678)];
+        let error = select_ime_window_with_probe(target, &windows, false, |candidate| {
+            Err(WindowsImeIpcError::Protocol(format!(
+                "stale hwnd={}",
+                candidate.hwnd
+            )))
+        })
+        .expect_err("all stale candidates should preserve a definite protocol error");
+        assert_eq!(
+            error,
+            WindowsImeIpcError::Protocol("stale hwnd=2".to_string())
+        );
+    }
+
+    #[test]
+    fn no_eligible_protocol_candidate_is_not_a_probe_failure() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678)];
+        assert_eq!(
+            select_ime_window_with_probe(target, &windows, true, |_| {
+                panic!("other-process windows must not be probed")
+            })
+            .expect("other-process windows are ineligible"),
+            None
+        );
+    }
+
+    #[test]
+    fn protocol_probe_accepts_only_the_current_version() {
+        assert_eq!(
+            classify_protocol_probe_reply(IME_STATUS_PROTOCOL_VERSION),
+            Ok(())
+        );
+        for reply in [0, 0x4F4C_0005, IME_STATUS_BAD_REQUEST] {
+            assert!(matches!(
+                classify_protocol_probe_reply(reply),
+                Err(WindowsImeIpcError::Protocol(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn submit_reply_failures_are_definite_and_allow_fallback() {
+        assert_eq!(classify_submit_reply(IME_STATUS_ACCEPTED), Ok(()));
+        for reply in [0, IME_STATUS_BAD_REQUEST, IME_STATUS_COMMITTED, 0x8007_000E] {
+            let error = classify_submit_reply(reply).unwrap_err();
+            assert!(!error.is_outcome_unknown(), "reply 0x{reply:08X}");
+        }
+    }
+
+    #[test]
+    fn query_reply_reports_pending_committed_and_definite_rejection() {
+        assert_eq!(classify_query_reply(IME_STATUS_PENDING), Ok(None));
+        assert_eq!(
+            classify_query_reply(IME_STATUS_COMMITTED),
+            Ok(Some(ImeSubmitStatus::Committed))
+        );
+        assert_eq!(
+            classify_query_reply(0x8000_4005),
+            Ok(Some(ImeSubmitStatus::Rejected))
+        );
+    }
+
+    #[test]
+    fn native_timeout_and_cancel_responses_are_not_safe_to_retry() {
+        for reply in [HRESULT_TIMEOUT, HRESULT_CANCELLED] {
+            assert!(matches!(
+                classify_query_reply(reply),
+                Err(WindowsImeIpcError::OutcomeUnknown(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn ambiguous_query_replies_never_allow_definite_fallback() {
+        // An unhandled message, a superseded token or a stray ack all mean the
+        // dispatched text can no longer be accounted for.
+        for reply in [0, IME_STATUS_UNKNOWN_TOKEN, IME_STATUS_ACCEPTED, 0x1234] {
+            assert!(matches!(
+                classify_query_reply(reply),
+                Err(WindowsImeIpcError::OutcomeUnknown(_))
+            ));
+        }
     }
 }

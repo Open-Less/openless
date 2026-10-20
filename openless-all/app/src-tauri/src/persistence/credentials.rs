@@ -634,6 +634,12 @@ struct CredsRoot {
     metadata_revision: u64,
     #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server (an
+    /// alternative to GitHub OAuth). Isolated from `marketplace` on purpose:
+    /// it authenticates a different, optional server and must never be
+    /// confused with the GitHub identity used for account-change detection.
+    #[serde(default, skip_serializing_if = "CredsCloudSync::is_empty")]
+    cloud_sync: CredsCloudSync,
 }
 
 fn credsroot_default_version() -> u32 {
@@ -758,6 +764,29 @@ impl CredsMarketplace {
 struct MarketplaceGithubToken(String);
 
 impl std::fmt::Debug for MarketplaceGithubToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[allow(non_snake_case)]
+struct CredsCloudSync {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    customToken: Option<CloudSyncCustomToken>,
+}
+
+impl CredsCloudSync {
+    fn is_empty(&self) -> bool {
+        self.customToken.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
+struct CloudSyncCustomToken(String);
+
+impl std::fmt::Debug for CloudSyncCustomToken {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("[REDACTED]")
     }
@@ -955,6 +984,8 @@ struct CredsLlmEntry {
     maxTokens: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinkingBudget: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serviceTier: Option<String>,
 }
 
 impl CredsLlmEntry {
@@ -965,6 +996,7 @@ impl CredsLlmEntry {
             MESSAGES_THINKING_ACCOUNT => Ok(&mut self.messagesThinking),
             MAX_TOKENS_ACCOUNT => Ok(&mut self.maxTokens),
             THINKING_BUDGET_ACCOUNT => Ok(&mut self.thinkingBudget),
+            SERVICE_TIER_ACCOUNT => Ok(&mut self.serviceTier),
             _ => anyhow::bail!("unsupported LLM protocol option"),
         }
     }
@@ -990,6 +1022,7 @@ impl CredsLlmEntry {
             && self.messagesThinking.is_none()
             && self.maxTokens.is_none()
             && self.thinkingBudget.is_none()
+            && self.serviceTier.is_none()
             && self
                 .extraHeaders
                 .as_ref()
@@ -1041,21 +1074,6 @@ impl HasChannelMeta for CredsLlmEntry {
 /// instead would break the entire ASR routing.
 fn channel_provider_type<'a, V: HasChannelMeta>(key: &'a str, entry: &'a V) -> &'a str {
     entry.meta().providerType.as_deref().unwrap_or(key)
-}
-
-/// Only for the v1 -> v2 migration to repair a lost active; runtime active
-/// policy lives in Core.
-fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<String> {
-    map.iter()
-        .filter(|(_, entry)| entry.meta().enabled)
-        .min_by(|(left_key, left), (right_key, right)| {
-            let left_order = left.meta().order.unwrap_or(u32::MAX);
-            let right_order = right.meta().order.unwrap_or(u32::MAX);
-            left_order
-                .cmp(&right_order)
-                .then_with(|| left_key.as_str().cmp(right_key.as_str()))
-        })
-        .map(|(key, _)| key.clone())
 }
 
 /// v1 (one slot per preset) → v2 (channel cards).
@@ -1186,26 +1204,19 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
         false
     };
 
-    let changed = asr_changed || llm_changed || seeded;
-    if changed {
-        if !root
-            .providers
-            .asr
-            .get(&root.active.asr)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.asr = current_channel_id(&root.providers.asr).unwrap_or_default();
-        }
-        if !root
-            .providers
-            .llm
-            .get(&root.active.llm)
-            .is_some_and(|entry| entry.meta().enabled)
-        {
-            root.active.llm = current_channel_id(&root.providers.llm).unwrap_or_default();
-        }
+    // Reconcile on every successful load, including already-channelized vaults
+    // restored from disk/sync. Status and credential lookups must use the same
+    // first-enabled selection as Core and the settings list. This only changes
+    // the loaded copy; the next gated mutation owns durable persistence.
+    let metadata = credential_metadata(root);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
+    let selection_changed = root.active.asr != active_asr || root.active.llm != active_llm;
+    if selection_changed {
+        root.metadata_revision = root.metadata_revision.saturating_add(1);
     }
-    // Omni normalization must not trigger the separate ASR/LLM active fallback.
+    let changed = asr_changed || llm_changed || seeded || selection_changed;
+    // Omni uses its own explicit provider selection.
     migrate_legacy_omni_slot(&mut root.omni) || changed
 }
 
@@ -1694,6 +1705,25 @@ fn write_marketplace_github_token(root: &mut CredsRoot, value: Option<String>) {
             None
         } else {
             Some(MarketplaceGithubToken(token))
+        }
+    });
+}
+
+fn lookup_cloud_sync_custom_token(root: &CredsRoot) -> Option<String> {
+    root.cloud_sync
+        .customToken
+        .as_ref()
+        .map(|token| token.0.as_str())
+        .filter(|token| !token.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn write_cloud_sync_custom_token(root: &mut CredsRoot, value: Option<String>) {
+    root.cloud_sync.customToken = value.and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(CloudSyncCustomToken(token))
         }
     });
 }
@@ -2955,7 +2985,7 @@ fn channel_summaries<V: HasChannelMeta>(
             }
         })
         .collect();
-    // Same ordering as current_channel_id: ascending order, ties broken by id alphabetical order.
+    // Same ordering as Core channel selection: ascending order, ties broken by id alphabetical order.
     list.sort_by(|left, right| {
         left.order
             .cmp(&right.order)
@@ -3019,8 +3049,8 @@ fn apply_credential_metadata(
         metadata.list_channels(ChannelKind::Llm),
         |entry, name| entry.displayName = name,
     );
-    root.active.asr = metadata.active_provider(openless_core::ProviderSlot::Asr);
-    root.active.llm = metadata.active_provider(openless_core::ProviderSlot::Llm);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
     root.omni.active = metadata.active_provider(openless_core::ProviderSlot::Omni);
     root.metadata_revision = metadata.revision();
     Ok(())
@@ -3066,6 +3096,7 @@ fn sync_channel(
         enabled: meta.enabled,
         order: meta.order.unwrap_or(u32::MAX),
         active: id == active,
+        configuration: BTreeMap::new(),
     }
 }
 
@@ -3116,7 +3147,8 @@ fn export_sync_credentials_root(
         ));
         let mut values = accounts!(entry, "ark.api_key"=>apiKey, "ark.endpoint"=>baseURL, "ark.model_id"=>model,
             "ark.request_format"=>requestFormat, "ark.messages_thinking"=>messagesThinking,
-            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget);
+            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget,
+            "ark.service_tier"=>serviceTier);
         if let Some(value) = entry.temperature {
             values.insert("ark.temperature".into(), value.to_string());
         }
@@ -3385,6 +3417,7 @@ fn apply_sync_credentials_root(
                     "ark.messages_thinking",
                     "ark.max_tokens",
                     "ark.thinking_budget",
+                    "ark.service_tier",
                 ] {
                     if let Some(value) = values.get(key) {
                         protocol.apply(key, value)?;
@@ -3417,6 +3450,7 @@ fn apply_sync_credentials_root(
                         messagesThinking: value("ark.messages_thinking"),
                         maxTokens: value("ark.max_tokens"),
                         thinkingBudget: value("ark.thinking_budget"),
+                        serviceTier: value("ark.service_tier"),
                     },
                 );
                 if channel.active {
@@ -3557,12 +3591,27 @@ impl CredentialsVault {
         last_vault_read_error_slot().lock().clone()
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn retire_macos_local_asr() -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::LocalOnly, |root| {
+            let mut metadata = credential_metadata(root);
+            let changed = metadata.retire_macos_local_asr();
+            if changed { apply_credential_metadata(root, metadata)?; }
+            Ok(changed)
+        })
+    }
+
     pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
         let _guard = credentials_lock().lock();
-        Ok(credential_metadata(&load_credentials_for_update()?))
+        let metadata = credential_metadata(&load_credentials_for_update()?);
+        #[cfg(target_os = "macos")]
+        let metadata = metadata.retired_macos_view();
+        Ok(metadata)
     }
 
     pub fn save_metadata(metadata: openless_core::CredentialMetadata) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        let metadata = metadata.retired_macos_view();
         mutate_credentials(
             openless_core::credentials::ChangeOrigin::User,
             move |root| {
@@ -3685,6 +3734,34 @@ impl CredentialsVault {
             load_credentials_for_update,
             save_credentials,
         )
+    }
+
+    /// Static bearer token for a self-hosted `cloud_sync_e2ee` server. Unlike
+    /// the GitHub token, this has no OAuth revocation/verification semantics
+    /// (no "rejected" tombstone) — it is a plain opaque secret, same tier as
+    /// an ASR/LLM API key.
+    pub fn get_cloud_sync_custom_token() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(lookup_cloud_sync_custom_token(
+            &load_credentials_for_update()?,
+        ))
+    }
+
+    pub fn set_cloud_sync_custom_token(value: &str) -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(
+                root,
+                (!value.trim().is_empty()).then(|| value.to_string()),
+            );
+            Ok(true)
+        })
+    }
+
+    pub fn remove_cloud_sync_custom_token() -> Result<()> {
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            write_cloud_sync_custom_token(root, None);
+            Ok(true)
+        })
     }
 
     #[cfg(test)]
@@ -4018,15 +4095,15 @@ mod tests {
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
         android_credentials_root_for_update, android_persistable_credentials, chunk_json_payload,
-        credentials_cache, get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
-        lookup_account, lookup_marketplace_github_token, lookup_omni_account,
-        omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
-        parse_llm_temperature, reset_credentials_cache_for_tests,
+        configuration_snapshot_with, credentials_cache, get_android_marketplace_token_at,
+        load_android_credentials_from_path, load_android_credentials_from_path_with_crypto,
+        load_credentials_into_cache_with, lookup_account, lookup_marketplace_github_token,
+        lookup_omni_account, migrate_channels, omni_extra_headers_json, omni_temperature_string,
+        parse_extra_headers_json, parse_llm_temperature, reset_credentials_cache_for_tests,
         set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
-        write_account, write_marketplace_github_token, write_omni_account, CredentialAccount,
-        CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
-        KEYRING_CHUNK_MAX_UTF16_UNITS,
+        write_account, write_marketplace_github_token, write_omni_account, ChannelMeta,
+        CredentialAccount, CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot,
+        MarketplaceGithubToken, CHANNELS_SCHEMA_VERSION, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
@@ -4273,7 +4350,7 @@ mod tests {
         use openless_core::llm_protocol::*;
         let mut root = CredsRoot::default();
         let entry = root.providers.llm.entry("channel-b".into()).or_default();
-        let values = ["messages", "budget", "8192", "2048"];
+        let values = ["messages", "budget", "8192", "2048", "fast"];
         for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
             *entry.protocol_option(account).unwrap() = Some(value.into());
         }
@@ -4929,6 +5006,88 @@ mod tests {
         // The second run must be a no-op (returns false) with byte-identical results.
         assert!(!super::migrate_channels(&mut root));
         assert_eq!(serde_json::to_string(&root).expect("encode"), after_first);
+    }
+
+    #[test]
+    fn loaded_channel_selection_repairs_stale_active_without_changing_credentials() {
+        for stale in ["local-qwen3-mlx", "local-account", "missing", ""] {
+            let mut root = CredsRoot::default();
+            root.version = CHANNELS_SCHEMA_VERSION;
+            root.active.asr = stale.into();
+            root.providers.asr.insert(
+                "local-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("local-qwen3-mlx".into()),
+                        order: Some(1),
+                        enabled: false,
+                        lastTest: None,
+                    },
+                    ..Default::default()
+                },
+            );
+            root.providers.asr.insert(
+                "cloud-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("tencent-cloud".into()),
+                        order: Some(0),
+                        enabled: true,
+                        lastTest: None,
+                    },
+                    model: Some("Hy-ASR-3.0-preview".into()),
+                    tencentCloudSecretKey: Some("fixture-secret".into()),
+                    ..Default::default()
+                },
+            );
+            let providers = serde_json::to_value(&root.providers).unwrap();
+            assert!(migrate_channels(&mut root));
+            assert_eq!(root.active.asr, "cloud-account");
+            assert_eq!(root.metadata_revision, 1);
+            assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+            let serialized = serde_json::to_string(&root).unwrap();
+            let mut restarted: CredsRoot = serde_json::from_str(&serialized).unwrap();
+            assert!(!migrate_channels(&mut restarted));
+            assert_eq!(
+                serde_json::to_value(&restarted).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&serialized).unwrap()
+            );
+            let status = configuration_snapshot_with(false, || Ok(restarted)).unwrap();
+            assert_eq!(status.active_asr_provider, "tencent-cloud");
+            assert_eq!(
+                status.credentials.asr_model.as_deref(),
+                Some("Hy-ASR-3.0-preview")
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_channel_selection_uses_order_even_when_old_active_is_enabled() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        root.providers.asr.get_mut("groq").unwrap().channel.order = Some(0);
+        root.providers
+            .asr
+            .get_mut("volcengine")
+            .unwrap()
+            .channel
+            .order = Some(1);
+        assert!(migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "groq");
+        assert!(!migrate_channels(&mut root));
+    }
+
+    #[test]
+    fn loaded_channel_selection_does_not_reactivate_disabled_models() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        for entry in root.providers.asr.values_mut() {
+            entry.channel.enabled = false;
+        }
+        root.active.asr = "local-qwen3-mlx".into();
+        assert!(migrate_channels(&mut root));
+        assert!(root.active.asr.is_empty());
+        assert!(!migrate_channels(&mut root));
     }
 
     #[test]
@@ -5645,6 +5804,7 @@ mod encrypted_sync_tests {
                 messagesThinking: Some("adaptive".into()),
                 maxTokens: Some("4096".into()),
                 thinkingBudget: None,
+                serviceTier: Some("fast".into()),
             },
         );
         root.omni.active = "custom".into();

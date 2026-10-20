@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/TypelessCapsule';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -13,8 +13,12 @@ import {
   showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
+import {
+  isPlainTextInsertionActive,
+  pasteShortcutForPlainTextToggle,
+} from '../../lib/plainTextInsertion';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
-import { getPlatformCapabilities } from '../../lib/platform';
+import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
   CapsuleStyle,
   HotkeyMode,
@@ -28,10 +32,12 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Card, Collapsible } from '../_atoms';
+import { PresenceModal } from '../../components/ui/Modal';
+import { Card, Collapsible, Btn } from '../_atoms';
+import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
-import { detectOS } from '../../components/WindowChrome';
+import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
@@ -51,30 +57,24 @@ async function autostartDisable(): Promise<void> {
   await invoke('plugin:autostart|disable');
 }
 
-export function RecordingInputSection() {
+export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
   const { t } = useTranslation();
-  const os = detectOS();
+  const os = forcedOs ?? detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
-  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
+    getCachedPlatformCapabilities,
+  );
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
+  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
+  const displayModeRestartTitleId = useId();
+  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
-
-  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中，
-  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
-  useEffect(() => {
-    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
-    void savePrefs((current) => {
-      if (current.pasteShortcut !== 'shiftInsert') return current;
-      return { ...current, pasteShortcut: 'ctrlV' };
-    }).catch((error) => {
-      console.warn('[settings] migrate Windows paste shortcut failed', error);
-    });
-  }, [os, prefs?.pasteShortcut, savePrefs]);
 
   const loadMicrophoneDevices = useCallback(
     async (signal?: { cancelled: boolean }, options: { showLoading?: boolean } = {}) => {
@@ -142,6 +142,30 @@ export function RecordingInputSection() {
     [savePrefs, refresh, t],
   );
 
+  const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
+  const modeTrackRef = useRef<HTMLDivElement | null>(null);
+  const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
+  const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
+  const activeMode = prefs?.hotkey.mode;
+  // Hooks must also run while preferences are loading. Read the cached platform
+  // capabilities on return so the recording controls don't disappear for a frame.
+  useLayoutEffect(() => {
+    const track = modeTrackRef.current;
+    if (!track) return;
+    const measure = () => {
+      const active = activeMode ? modeButtonsRef.current.get(activeMode) : undefined;
+      if (!active) return;
+      const next = { left: active.offsetLeft, width: active.offsetWidth };
+      setModeThumb((current) =>
+        current?.left === next.left && current.width === next.width ? current : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [activeMode, showDesktopHotkey]);
+
   if (!prefs || !capability) {
     return (
       <Card>
@@ -151,11 +175,40 @@ export function RecordingInputSection() {
   }
 
   const isAndroid = platformCaps?.platform === 'android';
-  const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
-  const effectivePasteShortcut =
-    os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+  const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
+  const effectiveCapsuleDisplayMode =
+    os === 'win' ||
+    prefs.capsuleDisplayMode === 'cursorScreen' ||
+    prefs.capsuleDisplayMode === 'allScreens'
+      ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
+      : 'cursorScreen';
+
+  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
+    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
+    const changeSequence = ++displayModeChangeSequenceRef.current;
+    await savePrefs({ ...prefs, capsuleDisplayMode: next });
+    if (
+      changeSequence === displayModeChangeSequenceRef.current &&
+      os === 'win' &&
+      previous === 'allScreens' &&
+      next !== 'allScreens'
+    ) {
+      setDisplayModeRestartPending(true);
+    }
+  };
+  const onRestartForDisplayMode = async () => {
+    setDisplayModeRestarting(true);
+    try {
+      await restartApp();
+      setDisplayModeRestartPending(false);
+    } catch (error) {
+      console.error('[settings] restart after capsule display mode change failed', error);
+    } finally {
+      setDisplayModeRestarting(false);
+    }
+  };
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -163,12 +216,18 @@ export function RecordingInputSection() {
   const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
     savePrefs({ ...prefs, muteDuringRecording });
   const onAudioCueChange = (audioCueOnRecord: boolean) => savePrefs({ ...prefs, audioCueOnRecord });
+  const onLowLatencyDictationChange = (lowLatencyDictationEnabled: boolean) =>
+    savePrefs({ ...prefs, lowLatencyDictationEnabled });
+  const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
+    savePrefs({ ...prefs, audioEnhancementEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onPasteShortcutChange = (pasteShortcut: PasteShortcut) =>
     savePrefs({ ...prefs, pasteShortcut });
+  const onPlainTextInsertionChange = (on: boolean) =>
+    savePrefs({ ...prefs, pasteShortcut: pasteShortcutForPlainTextToggle(on) });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
@@ -188,39 +247,6 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
     savePrefs({ ...prefs, autoUpdateCheck });
-
-  // Sliding thumb of the horizontal segmented control for the recording mode
-  // (hold-to-talk / auto, etc.): follows the selected item, and the left/width transition
-  // is the switch animation. The button's offsetParent is the track (position:relative),
-  // and offsetLeft shares the containing block origin of the absolutely positioned thumb
-  // (the track's padding edge), so assign directly; useLayoutEffect positions before
-  // paint, so no first-frame flash.
-  // The dependency list must include showDesktopHotkey: prefs and platformCaps load
-  // asynchronously, so on first entry there can be a timing where activeMode is set but
-  // the buttons aren't mounted yet (prefs before caps) and the effect returns early; only
-  // after the buttons mount does this effect run again — without this dependency the thumb
-  // would never be positioned (user report: the selected recording mode wasn't shown on
-  // first visit to settings).
-  const modeTrackRef = useRef<HTMLDivElement | null>(null);
-  const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
-  const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
-  const activeMode = prefs?.hotkey.mode;
-  useLayoutEffect(() => {
-    const track = modeTrackRef.current;
-    if (!track) return;
-    const measure = () => {
-      const active = activeMode ? modeButtonsRef.current.get(activeMode) : undefined;
-      if (!active) return;
-      setModeThumb({ left: active.offsetLeft, width: active.offsetWidth });
-    };
-    measure();
-    // Language switches (button text reflow) and window resizes both change button sizes;
-    // the ResizeObserver re-measures as a safety net so the thumb never stays at a stale
-    // position (pr_agent #912 feedback).
-    const observer = new ResizeObserver(measure);
-    observer.observe(track);
-    return () => observer.disconnect();
-  }, [activeMode, showDesktopHotkey]);
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -254,7 +280,12 @@ export function RecordingInputSection() {
             }}
           >
             <div
-              style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-blue)', marginBottom: 4 }}
+              style={{
+                fontSize: 12.5,
+                fontWeight: 'var(--ol-font-weight-semibold)',
+                color: 'var(--ol-blue)',
+                marginBottom: 4,
+              }}
             >
               {t('settings.recording.migrationNoticeTitle')}
             </div>
@@ -271,11 +302,11 @@ export function RecordingInputSection() {
             <ShortcutRecorder
               value={prefs.dictationHotkey}
               sideSpecificModifiers
-              allowMacDictationKey={os === 'mac'}
               allowMouseButtons={os === 'win'}
-              // 录音快捷键是核心热键，Rust 端不接受 null，不可停用——置灰并提示。
-              disableDisabled
-              disableHint={t('settings.recording.comboDisableHint')}
+              onDisable={async () => {
+                await setDictationHotkey(null);
+                await refresh();
+              }}
               onSave={async (binding) => {
                 await setDictationHotkey(binding);
                 // setDictationHotkey has already persisted and broadcast the preference
@@ -308,13 +339,14 @@ export function RecordingInputSection() {
                     position: 'absolute',
                     top: 2,
                     bottom: 2,
-                    left: modeThumb.left,
-                    width: modeThumb.width,
+                    left: 0,
+                    width: 100,
+                    transformOrigin: 'left center',
+                    transform: `translate3d(${modeThumb.left}px, 0, 0) scaleX(${modeThumb.width / 100})`,
                     borderRadius: 6,
                     background: 'var(--ol-segmented-active-bg)',
                     boxShadow: 'var(--ol-segmented-active-shadow)',
-                    transition:
-                      'left 0.18s var(--ol-motion-soft), width 0.18s var(--ol-motion-soft)',
+                    transition: 'transform 0.18s var(--ol-motion-soft)',
                     pointerEvents: 'none',
                   }}
                 />
@@ -329,7 +361,7 @@ export function RecordingInputSection() {
                   style={{
                     padding: '5px 14px',
                     fontSize: 12,
-                    fontWeight: 500,
+                    fontWeight: 'var(--ol-font-weight-medium)',
                     border: 0,
                     borderRadius: 6,
                     fontFamily: 'inherit',
@@ -442,10 +474,52 @@ export function RecordingInputSection() {
         </SettingRow>
         {!isAndroid && (
           <SettingRow
+            label={t('settings.recording.audioEnhancementLabel')}
+            desc={t('settings.recording.audioEnhancementDesc')}
+          >
+            <Toggle on={prefs.audioEnhancementEnabled} onToggle={onAudioEnhancementChange} />
+          </SettingRow>
+        )}
+        {!isAndroid && (
+          <SettingRow
             label={t('settings.recording.capsuleLabel')}
             desc={t('settings.recording.capsuleDesc')}
           >
             <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
+          </SettingRow>
+        )}
+        {!isAndroid && (os === 'mac' || os === 'win') && (
+          <SettingRow
+            label={t('settings.recording.capsuleDisplayModeLabel')}
+            desc={t('settings.recording.capsuleDisplayModeDesc')}
+          >
+            <SelectLite
+              value={effectiveCapsuleDisplayMode}
+              onChange={(next) =>
+                void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
+              }
+              options={[
+                {
+                  value: 'cursorScreen',
+                  label: t('settings.recording.capsuleDisplayCursorScreen'),
+                },
+                ...(os === 'win'
+                  ? [
+                      {
+                        value: 'primaryScreen',
+                        label: t('settings.recording.capsuleDisplayPrimaryScreen'),
+                      },
+                      {
+                        value: 'foregroundWindowScreen',
+                        label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
+                      },
+                    ]
+                  : []),
+                { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
+              ]}
+              ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
+              style={{ maxWidth: 240, minWidth: 200 }}
+            />
           </SettingRow>
         )}
         {!isAndroid && (
@@ -503,6 +577,17 @@ export function RecordingInputSection() {
             onToggle={(next) => savePrefs({ ...prefs, stableTranscriptionEnabled: next })}
           />
         </SettingRow>
+        {showDesktopHotkey && os === 'win' && (
+          <SettingRow
+            label={t('settings.recording.lowLatencyDictationLabel')}
+            desc={t('settings.recording.lowLatencyDictationDesc')}
+          >
+            <Toggle
+              on={prefs.lowLatencyDictationEnabled ?? false}
+              onToggle={onLowLatencyDictationChange}
+            />
+          </SettingRow>
+        )}
         <SettingRow
           label={t('settings.recording.muteDuringRecordingLabel')}
           desc={t('settings.recording.muteDuringRecordingDesc')}
@@ -521,7 +606,7 @@ export function RecordingInputSection() {
               style={{
                 padding: '5px 12px',
                 fontSize: 12,
-                fontWeight: 500,
+                fontWeight: 'var(--ol-font-weight-medium)',
                 fontFamily: 'inherit',
                 border: '0.5px solid var(--ol-line-strong)',
                 borderRadius: 8,
@@ -552,17 +637,40 @@ export function RecordingInputSection() {
               desc={t('settings.recording.pasteShortcutDesc')}
             >
               <SelectLite
-                value={effectivePasteShortcut}
+                value={prefs.pasteShortcut}
                 onChange={(next) => onPasteShortcutChange(next as PasteShortcut)}
-                options={[
-                  { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
-                  { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                  // 这个「粘贴与剪贴板」组只在 Windows 出现（mac 走
-                  // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
-                  // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
-                ]}
+                // 纯文本插入模式开启时，Shift+Insert 由开关接管，这里只读展示。
+                disabled={plainTextInsertionOn}
+                options={
+                  plainTextInsertionOn
+                    ? [
+                        {
+                          value: 'shiftInsert',
+                          label: t('settings.recording.pasteShortcutShiftInsert'),
+                        },
+                      ]
+                    : [
+                        { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
+                        {
+                          value: 'ctrlShiftV',
+                          label: t('settings.recording.pasteShortcutCtrlShiftV'),
+                        },
+                      ]
+                }
                 ariaLabel={t('settings.recording.pasteShortcutLabel')}
                 style={{ ...inputStyle, maxWidth: 220 }}
+              />
+            </SettingRow>
+          )}
+          {os === 'win' && capability.adapter !== 'macEventTap' && (
+            <SettingRow
+              label={t('settings.recording.plainTextInsertionLabel')}
+              desc={t('settings.recording.plainTextInsertionDesc')}
+            >
+              <Toggle
+                on={plainTextInsertionOn}
+                onToggle={onPlainTextInsertionChange}
+                label={t('settings.recording.plainTextInsertionLabel')}
               />
             </SettingRow>
           )}
@@ -684,6 +792,17 @@ export function RecordingInputSection() {
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
+          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
+            <SettingRow
+              label={t('settings.advanced.windowsCompositionInputLabel')}
+              desc={t('settings.advanced.windowsCompositionInputDesc')}
+            >
+              <Toggle
+                on={!!prefs.windowsCompositionInput}
+                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
+              />
+            </SettingRow>
+          )}
         </Collapsible>
       )}
       {/* ─── Startup (collapsed) ──────────────────────────────────────────── */}
@@ -698,6 +817,43 @@ export function RecordingInputSection() {
           </SettingRow>
         </Collapsible>
       )}
+      <PresenceModal
+        open={displayModeRestartPending}
+        onClose={() => {
+          if (!displayModeRestarting) setDisplayModeRestartPending(false);
+        }}
+        zIndex={1000}
+        width="min(420px, calc(100vw - 32px))"
+        style={{ padding: 18 }}
+        labelledBy={displayModeRestartTitleId}
+        render={() => (
+          <>
+            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
+              {t('settings.recording.capsuleDisplayModeRestartTitle')}
+            </h2>
+            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
+              {t('settings.recording.capsuleDisplayModeRestartDesc')}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Btn
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => setDisplayModeRestartPending(false)}
+              >
+                {t('common.cancel')}
+              </Btn>
+              <Btn
+                variant="blue"
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => void onRestartForDisplayMode()}
+              >
+                {t('settings.about.updateDialog.restartNow')}
+              </Btn>
+            </div>
+          </>
+        )}
+      />
     </>
   );
 }

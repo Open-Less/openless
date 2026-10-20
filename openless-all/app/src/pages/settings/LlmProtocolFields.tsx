@@ -5,22 +5,24 @@ import { readCredential, setCredential } from '../../lib/ipc';
 import type { LlmRequestFormat } from '../../lib/ipc/providers';
 import { emitSaved } from '../../lib/savedEvent';
 import { Btn } from '../_atoms';
-import { SettingRow, inputStyle } from './shared';
+import { SettingRow, Toggle, inputStyle } from './shared';
 import { ProviderFormContext } from './ProviderForm';
 
-const accounts = [
+const protocolAccounts = [
   'ark.request_format',
   'ark.messages_thinking',
   'ark.max_tokens',
   'ark.thinking_budget',
 ] as const;
-type Account = (typeof accounts)[number];
+const serviceTierAccount = 'ark.service_tier' as const;
+type Account = (typeof protocolAccounts)[number] | typeof serviceTierAccount;
 export type ProtocolValues = Record<Account, string>;
 const emptyValues: ProtocolValues = {
   'ark.request_format': '',
   'ark.messages_thinking': '',
   'ark.max_tokens': '',
   'ark.thinking_budget': '',
+  'ark.service_tier': '',
 };
 
 /** Immediate UI hint; Core still validates the same rules for what is stored and sent. */
@@ -29,6 +31,9 @@ export function protocolValidationError(
   defaultFormat: LlmRequestFormat,
 ): string | null {
   const format = values['ark.request_format'] || defaultFormat;
+  if (values['ark.service_tier'] && values['ark.service_tier'] !== 'fast') {
+    return 'llmServiceTierInvalid';
+  }
   if (!['chat_completions', 'responses', 'messages'].includes(format))
     return 'llmRequestFormatInvalid';
   const mode = values['ark.messages_thinking'] || 'adaptive';
@@ -51,6 +56,7 @@ export function protocolValidationError(
 
 export function LlmProtocolFields({
   channelId,
+  providerType,
   defaultFormat,
   formats,
   onUserMutation,
@@ -58,6 +64,7 @@ export function LlmProtocolFields({
   onSaved,
 }: {
   channelId: string;
+  providerType: string;
   defaultFormat: LlmRequestFormat;
   formats: LlmRequestFormat[];
   onUserMutation: () => void;
@@ -71,6 +78,8 @@ export function LlmProtocolFields({
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<'read' | 'save' | null>(null);
+  const arkServiceTier = providerType === 'ark';
+  const accounts = arkServiceTier ? [...protocolAccounts, serviceTierAccount] : protocolAccounts;
   const mounted = useRef(true);
   const writing = useRef(false);
   const pendingWrite = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -83,9 +92,10 @@ export function LlmProtocolFields({
     Promise.all(accounts.map((account) => readCredential(account, channelId)))
       .then((result) => {
         if (!mounted.current) return;
-        const next = Object.fromEntries(
-          accounts.map((account, index) => [account, result[index] ?? '']),
-        ) as ProtocolValues;
+        const next = {
+          ...emptyValues,
+          ...Object.fromEntries(accounts.map((account, index) => [account, result[index] ?? ''])),
+        } as ProtocolValues;
         setValues(next);
         setSaved(next);
         setLoaded(true);
@@ -96,7 +106,7 @@ export function LlmProtocolFields({
     return () => {
       mounted.current = false;
     };
-  }, [channelId]);
+  }, [channelId, providerType]);
 
   useEffect(() => {
     onBlockedChange(
@@ -191,6 +201,19 @@ export function LlmProtocolFields({
         <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
           {t('settings.providers.responsesThinkingHint')}
         </p>
+      )}
+      {arkServiceTier && (
+        <SettingRow
+          label={t('settings.providers.serviceTierLabel')}
+          desc={t('settings.providers.serviceTierHint')}
+        >
+          <Toggle
+            on={values['ark.service_tier'] === 'fast'}
+            disabled={disabled}
+            label={t('settings.providers.serviceTierLabel')}
+            onToggle={(enabled) => change('ark.service_tier', enabled ? 'fast' : '', true)}
+          />
+        </SettingRow>
       )}
       {format === 'messages' && (
         <>

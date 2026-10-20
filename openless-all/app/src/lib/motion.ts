@@ -1,11 +1,13 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
+import { keyboardInteraction } from './interactionMode';
+
 export const OVERLAY_EXIT_MS = 180;
 const ENTER_MS = 240;
-const SETTINGS_ENTER_MS = 360;
+const SETTINGS_ENTER_MS = 240;
 const SETTINGS_BACKDROP_MS = 220;
 const CONTENT_MS = 160;
-const PAGE_EXIT_MS = 90;
+const CONTENT_EXIT_MS = 120;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 let media: MediaQueryList | undefined;
 
@@ -48,10 +50,13 @@ function animate(
   const style = getComputedStyle(element);
   const easing = style.getPropertyValue(easingToken).trim();
   const previousWillChange = element.style.willChange;
-  element.style.willChange = 'opacity, transform';
+  // A flat page/backdrop fade must not create a transform containing block or
+  // promote its text as if it were scaling. Cards/indicators still need both.
+  element.style.willChange =
+    from.transform === 'none' && to.transform === 'none' ? 'opacity' : 'opacity, transform';
   const animation = element.animate([from, to], {
     duration,
-    easing: easing || (exiting ? 'ease-in' : 'ease-out'),
+    easing: easing || 'cubic-bezier(0.23, 1, 0.32, 1)',
     fill: 'both',
   });
   animation.id = exiting ? 'ol-surface-exit' : 'ol-surface-enter';
@@ -163,7 +168,7 @@ export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
     const changed = previous.current !== key;
     previous.current = key;
     const element = ref.current;
-    if (!element || reduced || typeof element.animate !== 'function') {
+    if (!element || reduced || keyboardInteraction() || typeof element.animate !== 'function') {
       interrupted.current = null;
       return;
     }
@@ -218,7 +223,7 @@ export function useSelectionMotion(
       indicator.style.height = `${underline ? 2 : button.offsetHeight}px`;
       indicator.style.visibility = 'visible';
       lastTarget = target;
-      if (moving && !reduced && typeof indicator.animate === 'function') {
+      if (moving && !reduced && !keyboardInteraction() && typeof indicator.animate === 'function') {
         motion = animate(indicator, from, { opacity: 1, transform: target }, ENTER_MS, false);
         motion.animation.id = 'ol-selection-move';
         void motion.animation.finished.then(motion.cancel).catch(() => {});
@@ -236,64 +241,56 @@ export function useSelectionMotion(
   }, [groupRef, indicatorRef, selection, underline, reduced]);
 }
 
-/** Only the latest navigation may replace the page, including a rapid return to the current page. */
+/** Keep the outgoing page alive for its fade. Rapid navigation always settles on
+ * the latest destination; text is never scaled or translated during a page change. */
 export function usePageTransition<T extends string>(
   requested: T,
   ref: RefObject<HTMLElement>,
-  mobile: boolean,
+  _mobile: boolean,
 ) {
   const [displayed, setDisplayed] = useState(requested);
-  const reduced = useReducedMotion();
+  const painted = useRef(displayed);
   const interrupted = useRef<{ element: HTMLElement; frame: Frame } | null>(null);
-  const first = useRef(true);
+  const reduced = useReducedMotion();
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!element) return;
-    if (reduced || typeof element.animate !== 'function') {
-      first.current = false;
+    const entering = displayed === requested;
+    const changed = painted.current !== displayed;
+    painted.current = displayed;
+    if (!element || reduced || typeof element.animate !== 'function') {
       interrupted.current = null;
-      setDisplayed(requested);
+      if (!entering) setDisplayed(requested);
       return;
     }
-    const entering = requested === displayed;
-    if (first.current && entering) {
-      first.current = false;
-      return;
-    }
-    first.current = false;
-    const hidden = {
-      opacity: 0,
-      transform: mobile ? 'none' : `translate3d(${entering ? 6 : -4}px, 0, 0)`,
-    };
-    const from =
-      interrupted.current?.element === element
-        ? interrupted.current.frame
-        : entering
-          ? hidden
-          : currentFrame(element);
+    const resume = interrupted.current?.element === element ? interrupted.current.frame : null;
     interrupted.current = null;
-    element.inert = !entering;
+    if (entering && !changed && !resume) return;
     const motion = animate(
       element,
-      from,
-      entering ? VISIBLE : hidden,
-      entering ? CONTENT_MS : PAGE_EXIT_MS,
+      resume ?? (entering ? FADED : currentFrame(element)),
+      entering ? VISIBLE : FADED,
+      entering ? CONTENT_MS : CONTENT_EXIT_MS,
       !entering,
     );
+    element.inert = !entering;
     let cancelled = false;
     void motion.animation.finished
       .then(() => {
         if (cancelled) return;
+        motion.releaseLayer();
         if (entering) motion.cancel();
         else setDisplayed(requested);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
-      interrupted.current = { element, frame: currentFrame(element) };
-      motion.cancel();
+      interrupted.current =
+        motion.animation.playState === 'running' || motion.animation.playState === 'paused'
+          ? { element, frame: currentFrame(element) }
+          : null;
       element.inert = false;
+      motion.cancel();
     };
-  }, [requested, displayed, ref, mobile, reduced]);
+  }, [requested, displayed, ref, reduced]);
   return displayed;
 }

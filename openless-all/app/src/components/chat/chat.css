@@ -49,6 +49,8 @@
 }
 
 @theme inline {
+  --font-weight-medium: var(--ol-font-weight-medium);
+  --font-weight-semibold: var(--ol-font-weight-semibold);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -271,10 +273,34 @@
  * Inherit host color so History/QuickNote follow app light/dark ink tokens.
  * Inside .olchat-shell the shell still pins a light foreground (intentional). */
 .olchat-answer {
+  font-family: var(--ol-font-body, var(--ol-font-sans));
+  max-width: var(--ol-reading-width, 72ch);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: inherit;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.olchat-answer :is(p, li) {
+  text-wrap: pretty;
+}
+/* Move the final pair as a unit; exceptionally long words may still wrap inside it
+   at the container width rather than causing horizontal overflow on narrow screens. */
+.olchat-answer .ol-prose-tail {
+  display: inline-block;
+  width: max-content;
+  max-width: 100%;
+  vertical-align: bottom;
+  text-wrap: wrap;
+}
+.olchat-answer pre,
+.olchat-answer pre code {
+  text-wrap: nowrap;
+  overflow-wrap: normal;
+}
+.olchat-answer strong {
+  font-weight: var(--ol-font-weight-semibold);
 }
 .olchat-shell .olchat-answer {
   color: var(--color-foreground);
@@ -289,7 +315,7 @@
 .olchat-answer h2,
 .olchat-answer h3 {
   margin: 10px 0 5px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   line-height: 1.35;
 }
 .olchat-answer h1 {
@@ -350,6 +376,9 @@
 
 /* Opaque backing prevents desktop text from bleeding through the floating panel. */
 .olchat-shell {
+  /* This surface stays light even when the app is dark: do not thin its type. */
+  --ol-font-weight-medium: 500;
+  --ol-font-weight-semibold: 600;
   --ol-surface: #ffffff;
   --ol-ink: #202937;
   --ol-ink-2: #455166;
@@ -492,7 +521,7 @@
 }
 .olchat-empty [data-slot='empty-title'] {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .olchat-empty [data-slot='empty-description'] {
   max-width: 245px;

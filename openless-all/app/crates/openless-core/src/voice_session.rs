@@ -208,7 +208,7 @@ impl RuntimeActivityGate {
         }
     }
 
-    fn cleanup_hold(self: &Arc<Self>) -> RuntimeActivityHold {
+    pub(crate) fn cleanup_hold(self: &Arc<Self>) -> RuntimeActivityHold {
         let mut state = self.state.lock().expect("runtime activity lock poisoned");
         state.active = state
             .active
@@ -220,28 +220,16 @@ impl RuntimeActivityGate {
         }
     }
 
-    pub(crate) fn runtime_restore_idle(&self) -> bool {
-        self.state
-            .lock()
-            .is_ok_and(|state| state.active == 0 && !state.abandoned_cleanup)
-    }
-
-    /// A restore-enabled Host owns cleanup through its existing TaskSpawner.
-    /// Dropping the IPC waiter does not release the lease or cancel cleanup.
-    /// Hosts without restore binding retain their original executor behavior.
-    pub(crate) fn cleanup<T: Send + 'static>(
+    pub(crate) fn cleanup_with_hold<T: Send + 'static>(
         self: &Arc<Self>,
+        hold: RuntimeActivityHold,
         work: futures_util::future::BoxFuture<'static, Result<T, BackendError>>,
     ) -> futures_util::future::BoxFuture<'static, Result<T, BackendError>> {
-        let gate = Arc::clone(self);
         let spawner = self
             .binding
             .get()
             .map(|binding| Arc::clone(&binding.spawner));
         Box::pin(async move {
-            // Claim before handing the task to the scheduler: the caller may
-            // drop its main lease as soon as this future first yields.
-            let hold = gate.cleanup_hold();
             let task = async move {
                 let result = work.await;
                 hold.complete();
@@ -263,6 +251,26 @@ impl RuntimeActivityGate {
             }
         })
     }
+
+    pub(crate) fn runtime_restore_idle(&self) -> bool {
+        self.state
+            .lock()
+            .is_ok_and(|state| state.active == 0 && !state.abandoned_cleanup)
+    }
+
+    /// A restore-enabled Host owns cleanup through its existing TaskSpawner.
+    /// Dropping the IPC waiter does not release the lease or cancel cleanup.
+    /// Hosts without restore binding retain their original executor behavior.
+    pub(crate) fn cleanup<T: Send + 'static>(
+        self: &Arc<Self>,
+        work: futures_util::future::BoxFuture<'static, Result<T, BackendError>>,
+    ) -> futures_util::future::BoxFuture<'static, Result<T, BackendError>> {
+        let gate = Arc::clone(self);
+        Box::pin(async move {
+            let hold = gate.cleanup_hold();
+            gate.cleanup_with_hold(hold, work).await
+        })
+    }
 }
 
 pub(crate) struct RuntimeActivityHold {
@@ -270,7 +278,7 @@ pub(crate) struct RuntimeActivityHold {
     clean: bool,
 }
 impl RuntimeActivityHold {
-    fn complete(mut self) {
+    pub(crate) fn complete(mut self) {
         // Consume the whole guard so async field capture cannot leave its
         // Drop on the caller while moving only the Copy completion flag.
         self.clean = true;
@@ -413,6 +421,14 @@ mod tests {
         fn spawn(&self, task: futures_util::future::BoxFuture<'static, ()>) {
             self.tasks.lock().unwrap().push(tokio::spawn(task));
         }
+    }
+
+    #[tokio::test]
+    async fn dropping_unpolled_cleanup_does_not_latch_abandoned_state() {
+        let gate = Arc::new(RuntimeActivityGate::default());
+        let cleanup = gate.cleanup(Box::pin(async { Ok::<(), BackendError>(()) }));
+        drop(cleanup);
+        assert!(gate.runtime_restore_idle());
     }
 
     #[tokio::test]

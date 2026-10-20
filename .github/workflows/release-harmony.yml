@@ -1,0 +1,216 @@
+name: Release HarmonyOS
+
+# HarmonyOS ships its HAP in the same GitHub Release as the desktop, Android and
+# Linux assets, and the same package is pushed to HUAWEI AppGallery Connect.
+#
+# The build uses the official HarmonyOS command-line tools. Huawei's own download
+# page needs an account, but the same archive is mirrored publicly (the mirror
+# sherpa-onnx's own CI uses); `scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
+# so the workflow needs no variables and no self-hosted runner. Only the AppGallery
+# signing profile is secret - which it has to be.
+#
+# Override `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` when a newer tools release is
+# needed, and `runner_labels` for a machine that already has the tools installed.
+#
+# Dispatch it after the tag exists; it rebuilds that tag, signs it with material
+# from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and attach (v<version>-tauri)
+        required: true
+        type: string
+      channel:
+        description: 'release = AppGallery production signing, test = AppGallery test channel'
+        required: false
+        type: choice
+        default: release
+        options:
+          - release
+          - test
+      publish:
+        description: Attach the HAP to that GitHub Release
+        required: false
+        type: boolean
+        default: true
+      upload_to_appgallery:
+        description: Upload the HAP to HUAWEI AppGallery Connect
+        required: false
+        type: boolean
+        default: true
+      runner_labels:
+        description: JSON array of runner labels (a hosted runner is enough; use a self-hosted one only if it already has the tools)
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-harmony-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-harmony-hap:
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    timeout-minutes: 120
+    env:
+      # Device-independent: the SDK path can be overridden per runner with a
+      # repository variable instead of patching this file.
+      OPENLESS_HARMONY_TOOLCHAIN: ${{ vars.HARMONY_TOOLCHAIN }}
+      # Empty until the signing step resolves `$RUNNER_TEMP`; the `runner`
+      # context is not available in a job-level `env`, only inside a step.
+      OPENLESS_HARMONY_SIGNING_DIR: ""
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      # Signing material: files are base64 secrets, passwords are plain secrets
+      # and never touch the workspace.
+      HARMONY_KEYSTORE_PASSWORD: ${{ secrets.HARMONY_KEYSTORE_PASSWORD }}
+      HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
+      HARMONY_KEY_ALIAS: ${{ vars.HARMONY_KEY_ALIAS }}
+      APPGALLERY_CLIENT_ID: ${{ secrets.APPGALLERY_CLIENT_ID }}
+      APPGALLERY_CLIENT_SECRET: ${{ secrets.APPGALLERY_CLIENT_SECRET }}
+      APPGALLERY_APP_ID: ${{ secrets.APPGALLERY_APP_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          submodules: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache the HarmonyOS toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/harmony/current
+          key: harmony-tools-6.0.1.251-${{ runner.os }}
+
+      - name: Prepare the HarmonyOS toolchain
+        env:
+          HARMONY_SDK_URL: ${{ vars.HARMONY_SDK_URL }}
+          HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
+        run: |
+          set -euo pipefail
+          bash openless-all/app/scripts/prepare-harmony-sdk.sh
+          toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
+          echo "OPENLESS_HARMONY_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          echo "HVIGOR_USER_HOME=$toolchain/hvigor-home" >> "$GITHUB_ENV"
+
+      - name: Validate the tag against package.json
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${RELEASE_TAG#v}
+          TAG_VERSION=${TAG_VERSION%-tauri}
+          if [ "${VERSION%%+*}" != "$TAG_VERSION" ]; then
+            echo "::error::tag $RELEASE_TAG does not match package.json version $VERSION"
+            exit 1
+          fi
+
+      - name: Write the signing material for this channel
+        # One secret set per channel: a `test` dispatch installs the test profile
+        # under `test.*`, a `release` dispatch installs the production profile
+        # under `release.*`. The packaging script picks the prefix by channel.
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/harmony-signing"
+          prefix="${{ inputs.channel }}"
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          umask 077
+          echo "OPENLESS_HARMONY_SIGNING_DIR=$dir" >> "$GITHUB_ENV"
+          for pair in "HARMONY_CERT_BASE64:$prefix.cer" \
+                      "HARMONY_PROFILE_BASE64:$prefix.p7b" \
+                      "HARMONY_KEYSTORE_BASE64:$prefix.p12"; do
+            name="${pair%%:*}"
+            file="${pair##*:}"
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "::error::missing secret $name (base64 of $file)"
+              exit 1
+            fi
+            printf '%s' "$value" | base64 -d > "$dir/$file"
+          done
+          ls -l "$dir"
+
+      - name: Build, sign and stage the HAP
+        working-directory: openless-all/app
+        env:
+          OPENLESS_HARMONY_CHANNEL: ${{ inputs.channel }}
+        run: bash scripts/package-harmony-hap.sh
+
+      - name: Verify the packaged HAP
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          output=target/harmony-packages
+          ( cd "$output" && sha256sum --check --strict SHA256SUMS )
+          # AppGallery needs a numeric versionName, so the packaging script keeps
+          # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
+          version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
+          version_code=$(cat linux-egui/package-revision)
+          toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
+          # The Release only carries the unsigned package; the store copy must
+          # additionally prove its signature.
+          bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
+            "$toolchain" "$version_name" "$version_code" --allow-unsigned
+          bash scripts/verify-harmony-hap.sh \
+            "$output/OpenLess_harmony_arm64-signed.hap" "$toolchain"
+
+      - name: Upload the HAP as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-harmony-hap
+          # `-signed` stays in the workflow artifacts for the store upload; the
+          # repository never publishes it.
+          path: |
+            openless-all/app/target/harmony-packages/*
+          if-no-files-found: error
+
+      - name: Attach the HAP to the GitHub Release
+        if: inputs.publish
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          # The desktop workflow creates the Release for this tag; wait for it
+          # rather than racing its creation.
+          for attempt in $(seq 1 40); do
+            if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" = 40 ]; then
+              echo "::error::release $RELEASE_TAG was not created by the desktop workflow"
+              exit 1
+            fi
+            sleep 15
+          done
+          output=target/harmony-packages
+          gh release upload "$RELEASE_TAG" \
+            "$output"/OpenLess_harmony_arm64.hap \
+            "$output"/OpenLess_harmony.hap \
+            "$output"/SHA256SUMS \
+            --clobber
+          echo "attached HarmonyOS assets to $RELEASE_TAG"
+
+      - name: Upload to HUAWEI AppGallery Connect
+        if: inputs.upload_to_appgallery
+        working-directory: openless-all/app
+        # A fork without AGC credentials still gets the GitHub Release; the step
+        # reports that it skipped instead of failing the whole release.
+        run: >-
+          # Only the signed package is uploaded; the unsigned one is what the
+          # GitHub Release distributes.
+          node scripts/upload-appgallery.mjs \
+            --channel "${{ inputs.channel }}" \
+            --file target/harmony-packages/OpenLess_harmony_arm64-signed.hap \
+            --skip-if-unconfigured

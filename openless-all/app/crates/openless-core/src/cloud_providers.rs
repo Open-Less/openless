@@ -15,7 +15,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::asr::tencent_cloud::TencentCloudASRError;
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
-    ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials,
+    ElevenLabsBatchASR, GeminiBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials,
     StepfunRealtimeASR, StepfunRealtimeCredentials, TencentCloudCredentials,
     TencentCloudStreamingASR, VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
     XfyunCredentials, XfyunStreamingASR,
@@ -34,10 +34,11 @@ use crate::credentials::{
 use crate::dictation_context::{DictationAudioSource, DictationContext};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
-    ActiveRecording, AudioConsumer, AudioRecorder, DictationEngine, EngineFailure,
-    EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult, EngineStage,
-    PolishOutput, PreparedTranscription, RecordingProgressSink, TextPolisher, TextStreamChunk,
-    TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, DictationEngine,
+    EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
+    EngineStage, PendingAudioCapture, PolishOutput, PreparedTranscription, RecordingProgressSink,
+    TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession,
 };
 use crate::provider_rules::{
     default_asr_endpoint, default_asr_model, default_llm_endpoint, default_llm_model,
@@ -65,6 +66,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "xiaomi-mimo-asr",
     "iflytek",
     "tencent-cloud",
+    "gemini",
 ];
 
 pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
@@ -169,12 +171,17 @@ impl PreparedTranscription for PreparedCloudTranscription {
         let preparation = self.preparation.clone();
         let task_spawner = Arc::clone(&self.task_spawner);
         Box::pin(async move {
-            let (kind, asr_call_label) =
-                build_cloud_transcription_session(&preparation, task_spawner, partials).await?;
+            let (kind, asr_call_label) = build_cloud_transcription_session(
+                &preparation,
+                Arc::clone(&task_spawner),
+                partials,
+            )
+            .await?;
             Ok(Arc::new(CloudTranscriptionSession {
                 kind,
                 asr_call_label,
                 finished: AtomicBool::new(false),
+                task_spawner,
             }) as Arc<dyn TranscriptionSession>)
         })
     }
@@ -187,6 +194,7 @@ enum CloudTranscriptionSessionKind {
     Mimo(Arc<MimoBatchASR>),
     DashScope(Arc<DashScopeMultimodalASR>),
     ElevenLabs(Arc<ElevenLabsBatchASR>),
+    Gemini(Arc<GeminiBatchASR>),
     Bailian(Arc<BailianRealtimeASR>),
     QwenRealtime(Arc<Qwen3RealtimeASR>),
     StepfunRealtime(Arc<StepfunRealtimeASR>),
@@ -198,6 +206,7 @@ struct CloudTranscriptionSession {
     kind: CloudTranscriptionSessionKind,
     asr_call_label: crate::AsrCallLabel,
     finished: AtomicBool,
+    task_spawner: Arc<dyn TaskSpawner>,
 }
 
 impl TranscriptionEngine for SharedCloudTranscriptionEngine {
@@ -239,6 +248,7 @@ impl AudioConsumer for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::Mimo(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::DashScope(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::ElevenLabs(provider) => provider.consume_pcm_chunk(pcm),
+            CloudTranscriptionSessionKind::Gemini(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::Bailian(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::QwenRealtime(provider) => {
                 provider.consume_pcm_chunk(pcm)
@@ -269,6 +279,7 @@ impl TranscriptionSession for CloudTranscriptionSession {
             });
         }
         let kind = self.kind.clone();
+        let task_spawner = Arc::clone(&self.task_spawner);
         Box::pin(async move {
             let transcript = match kind {
                 CloudTranscriptionSessionKind::Volcengine(provider) => {
@@ -295,6 +306,28 @@ impl TranscriptionSession for CloudTranscriptionSession {
                         provider.buffer_duration_ms() as f64 / 1000.0,
                     );
                     timeout_transcription(timeout, provider.transcribe()).await?
+                }
+                CloudTranscriptionSessionKind::Gemini(provider) => {
+                    let worker = Arc::clone(&provider);
+                    let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+                    task_spawner.spawn(Box::pin(async move {
+                        let _ = result_sender.send(worker.transcribe().await);
+                    }));
+                    // Verify may drop finish on cancellation; the worker still owns file cleanup.
+                    let mut cleanup = crate::asr::gemini::CancelOnDrop {
+                        provider: Some(provider),
+                        task_spawner,
+                    };
+                    let result = result_receiver.await;
+                    cleanup.provider = None;
+                    result
+                        .map_err(|_| {
+                            BackendError::new(
+                                BackendErrorCode::Internal,
+                                "Gemini transcription task failed",
+                            )
+                        })?
+                        .map_err(map_asr_error)?
                 }
                 CloudTranscriptionSessionKind::Bailian(provider) => {
                     let _ = provider.send_last_frame().await;
@@ -335,6 +368,13 @@ impl TranscriptionSession for CloudTranscriptionSession {
     }
 
     fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        if let CloudTranscriptionSessionKind::Gemini(provider) = &self.kind {
+            let provider = Arc::clone(provider);
+            return Box::pin(async move {
+                provider.cancel().await;
+                Ok(())
+            });
+        }
         match &self.kind {
             CloudTranscriptionSessionKind::Volcengine(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::Whisper(provider) => provider.cancel(),
@@ -346,6 +386,7 @@ impl TranscriptionSession for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::StepfunRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::Xfyun(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::TencentCloud(provider) => provider.cancel(),
+            CloudTranscriptionSessionKind::Gemini(_) => unreachable!(),
         }
         Box::pin(async { Ok(()) })
     }
@@ -370,6 +411,61 @@ where
     }
 }
 
+async fn read_asr_channel_credentials(
+    credentials: &dyn CredentialStore,
+    channel_id: &str,
+) -> Result<HashMap<&'static str, Option<String>>, BackendError> {
+    let mut values = HashMap::new();
+    for account in ASR_SNAPSHOT_ACCOUNTS {
+        values.insert(
+            *account,
+            read_channel_credential(credentials, CredentialNamespace::Asr, channel_id, account)
+                .await?,
+        );
+    }
+    Ok(values)
+}
+
+pub(crate) async fn asr_channel_configured(
+    credentials: &dyn CredentialStore,
+    asr: &crate::dictation_context::ProviderInvocation,
+) -> Result<bool, BackendError> {
+    let values = read_asr_channel_credentials(credentials, &asr.provider_id).await?;
+    let value = |account: &str| {
+        values
+            .get(account)
+            .and_then(|value| value.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let configuration = crate::provider_rules::CredentialConfiguration {
+        asr_api_key: value(ASR_API_KEY_ACCOUNT).is_some(),
+        asr_endpoint: value(ASR_ENDPOINT_ACCOUNT).is_some(),
+        asr_model: asr
+            .model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty())
+            || value(ASR_MODEL_ACCOUNT).is_some(),
+        volcengine_service: value(crate::credentials::VOLCENGINE_SERVICE_ACCOUNT)
+            .map(str::to_string),
+        volcengine_auth_mode: value(VOLCENGINE_AUTH_MODE_ACCOUNT).map(str::to_string),
+        volcengine_app_key: value(VOLCENGINE_APP_KEY_ACCOUNT).is_some(),
+        volcengine_access_key: value(VOLCENGINE_ACCESS_KEY_ACCOUNT).is_some(),
+        volcengine_api_key: value(VOLCENGINE_API_KEY_ACCOUNT).is_some(),
+        xfyun_app_id: value(XFYUN_APP_ID_ACCOUNT).is_some(),
+        xfyun_api_key: value(XFYUN_API_KEY_ACCOUNT).is_some(),
+        tencent_cloud_app_id: value(TENCENT_CLOUD_APP_ID_ACCOUNT).is_some(),
+        tencent_cloud_secret_id: value(TENCENT_CLOUD_SECRET_ID_ACCOUNT).is_some(),
+        tencent_cloud_secret_key: value(TENCENT_CLOUD_SECRET_KEY_ACCOUNT).is_some(),
+        ..Default::default()
+    };
+    Ok(crate::provider_rules::asr_configured(
+        &asr.provider_type,
+        &configuration,
+        None,
+    ))
+}
+
 async fn prepare_cloud_transcription(
     credentials: &dyn CredentialStore,
     context: Arc<DictationContext>,
@@ -390,14 +486,7 @@ async fn prepare_cloud_transcription(
             "shared cloud ASR provider is not supported",
         ));
     }
-    let mut values = HashMap::new();
-    for account in ASR_SNAPSHOT_ACCOUNTS {
-        values.insert(
-            *account,
-            read_channel_credential(credentials, CredentialNamespace::Asr, &channel_id, account)
-                .await?,
-        );
-    }
+    let values = read_asr_channel_credentials(credentials, &channel_id).await?;
     let value = |account: &str| values.get(account).cloned().flatten();
     let model = context
         .asr
@@ -445,7 +534,8 @@ fn validate_cloud_transcription_preparation(
         | ActiveAsrProviderKind::StepfunRealtime
         | ActiveAsrProviderKind::Mimo
         | ActiveAsrProviderKind::DashScopeMultimodal
-        | ActiveAsrProviderKind::ElevenLabs => {
+        | ActiveAsrProviderKind::ElevenLabs
+        | ActiveAsrProviderKind::Gemini => {
             require_configured(&preparation.api_key, "ASR API key")?;
         }
         ActiveAsrProviderKind::WhisperCompatible => {
@@ -660,6 +750,25 @@ async fn build_cloud_transcription_session(
                     non_blank_owned(endpoint)
                         .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_ENDPOINT.to_string()),
                     effective_model.clone(),
+                ))),
+                Some(effective_model),
+            )
+        }
+        ActiveAsrProviderKind::Gemini => {
+            let effective_model = non_blank_owned(model)
+                .unwrap_or_else(|| crate::asr::gemini::DEFAULT_MODEL.to_string());
+            crate::provider_rules::validate_gemini_asr_model(&effective_model)
+                .map_err(|message| BackendError::new(BackendErrorCode::InvalidArgument, message))?;
+            let endpoint = non_blank_owned(endpoint)
+                .unwrap_or_else(|| crate::asr::gemini::DEFAULT_ENDPOINT.to_string());
+            let hotwords = context.polish.hotwords.clone();
+            (
+                CloudTranscriptionSessionKind::Gemini(Arc::new(GeminiBatchASR::new(
+                    api_key,
+                    endpoint,
+                    effective_model.clone(),
+                    context.asr.language.clone(),
+                    hotwords,
                 ))),
                 Some(effective_model),
             )
@@ -965,8 +1074,14 @@ impl TextPolisher for SharedCloudTextPolisher {
                     "polish input must not be empty",
                 ));
             }
-            let provider =
+            let mut provider =
                 build_cloud_polisher_provider(credentials.as_ref(), context.as_ref()).await?;
+            if let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(
+                provider,
+            )) = &mut provider
+            {
+                provider.set_dictation_session(session_id);
+            }
             tokio::select! {
                 _ = cancellation.cancelled() => Err(cancelled_provider_error()),
                 result = run_cloud_polish(
@@ -1174,7 +1289,7 @@ async fn run_cloud_polish(
     if let Some(error) = stream.take_error() {
         return Err(error);
     }
-    let polished = result.map_err(map_llm_error)?;
+    let polished = result.map_err(map_polish_error)?;
     if cancellation.is_cancelled() {
         return Err(cancelled_provider_error());
     }
@@ -1230,7 +1345,7 @@ async fn run_cloud_polish(
                 if let Some(error) = stream.take_error() {
                     return Err(error);
                 }
-                let text = result.map_err(map_llm_error)?;
+                let text = result.map_err(map_polish_error)?;
                 PolishOutput::text(text.trim().to_owned())
             }
         }
@@ -1248,6 +1363,65 @@ async fn run_cloud_polish(
     }
     output.llm_call_label = Some(call_label);
     Ok(output)
+}
+
+/// Whether the LLM channel a session would polish through is configured enough
+/// to send a request (issue #1032). Mirrors the checks in
+/// `build_cloud_polisher_provider` without constructing a provider. A failed
+/// credential read counts as configured so the existing error path still runs.
+pub(crate) async fn llm_channel_configured(
+    credentials: &dyn CredentialStore,
+    channel_id: &str,
+    provider_type: &str,
+    model: Option<&str>,
+) -> bool {
+    let channel_id = channel_id.trim();
+    let provider_type = provider_type.trim();
+    if channel_id.is_empty() || provider_type.is_empty() {
+        return false;
+    }
+    let has_model = model.map(str::trim).is_some_and(|value| !value.is_empty())
+        || default_llm_model(provider_type).is_some();
+    if !has_model {
+        return false;
+    }
+    if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
+        return true;
+    }
+    let Ok(api_key) = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_API_KEY_ACCOUNT,
+    )
+    .await
+    else {
+        return true;
+    };
+    let Ok(endpoint) = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_ENDPOINT_ACCOUNT,
+    )
+    .await
+    else {
+        return true;
+    };
+    let api_key_blank = api_key.is_none_or(|value| value.trim().is_empty());
+    if api_key_blank
+        && crate::provider_rules::api_key_required(
+            crate::ProviderKind::Llm,
+            provider_type,
+            endpoint.as_deref(),
+        )
+    {
+        return false;
+    }
+    endpoint
+        .and_then(non_blank_owned)
+        .or_else(|| default_llm_endpoint(provider_type).map(str::to_string))
+        .is_some()
 }
 
 async fn build_cloud_polisher_provider(
@@ -1365,7 +1539,7 @@ async fn build_cloud_polisher_provider(
     ))
 }
 
-fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
+pub fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
@@ -1394,6 +1568,18 @@ fn map_llm_error(error: impl std::fmt::Display) -> BackendError {
         BackendErrorCode::Provider,
         format!("LLM provider failed: {error}"),
     )
+}
+
+/// A polish failure, marked retryable when the network never answered
+/// (connection failure or timeout) — unlike a rejected key, exhausted quota or
+/// malformed reply. The dictation pipeline uses it to tell "offline" apart
+/// when the transcript came from a local model.
+fn map_polish_error(error: crate::polish::LLMError) -> BackendError {
+    let transient = matches!(
+        error,
+        crate::polish::LLMError::Network(_) | crate::polish::LLMError::Timeout
+    );
+    map_llm_error(error).retryable(transient)
 }
 
 pub struct SharedAuxiliaryTextPolisher {
@@ -1682,19 +1868,43 @@ async fn build_omni_provider(
         ),
         thinking_enabled: context.polish.llm_thinking_enabled,
     };
-    Ok(crate::omni::OmniProvider::new(config))
+    let provider = crate::omni::OmniProvider::new(config)
+        .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
+    validate_omni_context(&provider, context)?;
+    Ok(provider)
+}
+
+/// Dedicated transcription cannot apply a translation prompt.
+fn validate_omni_context(
+    provider: &crate::omni::OmniProvider,
+    context: &DictationContext,
+) -> Result<(), BackendError> {
+    if provider.is_transcription_only() && context.polish.translation_active {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidArgument,
+            "Gemini Transcribe does not support translation in Multimodal mode; use Traditional mode with a language model",
+        ));
+    }
+    Ok(())
 }
 
 /// Validate an Omni provider using the same construction and request path as
-/// the production dictation pipeline.  The probe is intentionally text-only:
-/// it exercises credential, endpoint, model and protocol resolution without
-/// retaining user audio.  UI must not treat text success as proof that audio
-/// dictation works (issue #1118).
+/// dictation. Dedicated transcription uses synthetic silence; general-purpose
+/// models use a text probe, which does not prove audio support (issue #1118).
 pub async fn validate_shared_omni_provider(
     credentials: Arc<dyn CredentialStore>,
     context: Arc<DictationContext>,
 ) -> Result<(), BackendError> {
     let provider = build_omni_provider(credentials.as_ref(), context.as_ref()).await?;
+    if provider.is_transcription_only() {
+        let wav = crate::asr::wav::encode_wav_16k_mono(&vec![0; 8_000]);
+        provider
+            .complete("", "", Some(&wav))
+            .await
+            .map_err(map_omni_error)?;
+        // Completed silence legitimately produces no transcript.
+        return Ok(());
+    }
     let result = provider
         .complete("验证连接", "ping", None)
         .await
@@ -1746,6 +1956,7 @@ pub struct SharedOmniDictationEngine {
     credentials: Arc<dyn CredentialStore>,
     recorder: Arc<dyn AudioRecorder>,
     sessions: Arc<Mutex<HashMap<SessionId, Arc<OmniSession>>>>,
+    pending_captures: Arc<Mutex<HashMap<SessionId, Box<dyn PendingAudioCapture>>>>,
 }
 
 impl SharedOmniDictationEngine {
@@ -1754,6 +1965,7 @@ impl SharedOmniDictationEngine {
             credentials,
             recorder,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            pending_captures: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1807,6 +2019,129 @@ impl RecordingProgressSink for OmniRecordingProgress {
 }
 
 impl DictationEngine for SharedOmniDictationEngine {
+    fn arm_audio_capture(
+        &self,
+        request: CaptureStartRequest,
+    ) -> Result<Box<dyn PendingAudioCapture>, BackendError> {
+        self.recorder.arm_capture(request)
+    }
+
+    fn start_with_audio_capture(
+        &self,
+        session_id: SessionId,
+        context: Arc<DictationContext>,
+        progress: Arc<dyn EngineProgressSink>,
+        capture: Box<dyn PendingAudioCapture>,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let credentials = Arc::clone(&self.credentials);
+        let sessions = Arc::clone(&self.sessions);
+        let pending_captures = Arc::clone(&self.pending_captures);
+        Box::pin(async move {
+            let mut capture = Some(capture);
+            let duplicate_pending = {
+                let mut pending = pending_captures.lock();
+                if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(session_id)
+                {
+                    entry.insert(capture.take().expect("Omni capture was not consumed"));
+                    false
+                } else {
+                    true
+                }
+            };
+            if duplicate_pending {
+                let _ = capture
+                    .take()
+                    .expect("duplicate Omni capture was lost")
+                    .discard()
+                    .await;
+                return Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "Omni provisional capture already exists",
+                ));
+            }
+            let provider = match build_omni_provider(credentials.as_ref(), &context).await {
+                Ok(provider) => Arc::new(provider),
+                Err(error) => {
+                    let pending_capture = pending_captures.lock().remove(&session_id);
+                    if let Some(capture) = pending_capture {
+                        let _ = capture.discard().await;
+                    }
+                    return Err(error);
+                }
+            };
+            let Some(capture) = pending_captures.lock().remove(&session_id) else {
+                return Err(cancelled_omni_error());
+            };
+            let pcm = Arc::new(OmniPcm::default());
+            let cancellation = Arc::new(ProviderCancellation::default());
+            let session = Arc::new(OmniSession {
+                context: RwLock::new(Arc::clone(&context)),
+                provider,
+                pcm: Arc::clone(&pcm),
+                recording: Mutex::new(None),
+                cancellation,
+                finishing: AtomicBool::new(false),
+                progress: Arc::clone(&progress),
+            });
+            let duplicate = {
+                let mut active = sessions.lock();
+                match active.entry(session_id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(Arc::clone(&session));
+                        false
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => true,
+                }
+            };
+            if duplicate {
+                let _ = capture.discard().await;
+                return Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "Omni dictation session already exists",
+                ));
+            }
+            if context.audio_source == DictationAudioSource::External {
+                let _ = capture.discard().await;
+                return Ok(());
+            }
+            if session.cancellation.is_cancelled() {
+                let _ = capture.discard().await;
+                remove_omni_session(&sessions, session_id, &session);
+                return Err(cancelled_omni_error());
+            }
+            let consumer: Arc<dyn AudioConsumer> = pcm;
+            let level_progress: Arc<dyn RecordingProgressSink> = Arc::new(OmniRecordingProgress {
+                session_id,
+                progress,
+            });
+            let recording = match capture
+                .commit(session_id, Arc::clone(&context), consumer, level_progress)
+                .await
+            {
+                Ok(recording) => recording,
+                Err(error) => {
+                    remove_omni_session(&sessions, session_id, &session);
+                    return Err(error);
+                }
+            };
+            if session.cancellation.is_cancelled() {
+                let _ = recording.stop().await;
+                remove_omni_session(&sessions, session_id, &session);
+                return Err(cancelled_omni_error());
+            }
+            *session.recording.lock() = Some(recording);
+            if session.cancellation.is_cancelled() {
+                let recording = session.recording.lock().take();
+                if let Some(recording) = recording {
+                    let _ = recording.stop().await;
+                }
+                remove_omni_session(&sessions, session_id, &session);
+                return Err(cancelled_omni_error());
+            }
+            Ok(())
+        })
+    }
+
     fn start(
         &self,
         session_id: SessionId,
@@ -2066,6 +2401,7 @@ impl DictationEngine for SharedOmniDictationEngine {
                     "Omni dictation context can only change before finalization",
                 ));
             }
+            validate_omni_context(&session.provider, &context)?;
             *session.context.write() = context;
             Ok(())
         })
@@ -2117,8 +2453,12 @@ impl DictationEngine for SharedOmniDictationEngine {
 
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let session = self.sessions.lock().get(&session_id).cloned();
+        let pending_capture = self.pending_captures.lock().remove(&session_id);
         let sessions = Arc::clone(&self.sessions);
         Box::pin(async move {
+            if let Some(capture) = pending_capture {
+                capture.discard().await?;
+            }
             let Some(session) = session else {
                 return Ok(());
             };
@@ -2463,6 +2803,7 @@ mod tests {
         context.polish.translation_target_language = "English".into();
         let sink = Arc::new(ObservedTranslationStream::new());
         let session_id = SessionId::new();
+        crate::testing::logging::start();
         let run = polisher.polish(
             session_id,
             Arc::new(context),
@@ -2541,6 +2882,34 @@ mod tests {
                     },
                 ]
             );
+        }
+        if !gemini {
+            let logs = crate::testing::logging::matching(&format!("session_id={session_id} "));
+            let requests: Vec<_> = logs
+                .iter()
+                .filter(|line| line.contains("request_id="))
+                .collect();
+            assert_eq!(requests.len(), if fallback { 2 } else { 1 });
+            let request_ids: std::collections::HashSet<_> = requests
+                .iter()
+                .map(|line| {
+                    line.split_whitespace()
+                        .find(|field| field.starts_with("request_id="))
+                        .unwrap()
+                })
+                .collect();
+            assert_eq!(request_ids.len(), requests.len());
+            if !cancel {
+                for request_id in request_ids {
+                    let records = crate::testing::logging::matching(request_id);
+                    assert!(records
+                        .iter()
+                        .any(|line| line.contains("[llm] stream done")));
+                    assert!(!records
+                        .iter()
+                        .any(|line| line.contains("原始语音") || line.contains("Hello 🌍")));
+                }
+            }
         }
     }
 
@@ -2737,6 +3106,95 @@ mod tests {
             Err(error) => assert_eq!(error.message, "LLM model is not configured"),
             Ok(_) => panic!("LM Studio must not generate without a selected model"),
         }
+    }
+
+    #[tokio::test]
+    async fn asr_channel_configured_matches_provider_credential_requirements() {
+        for (provider, accounts) in [
+            ("whisper", vec![ASR_API_KEY_ACCOUNT]),
+            ("bailian", vec![ASR_API_KEY_ACCOUNT]),
+            (
+                "volcengine",
+                vec![VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT],
+            ),
+            ("iflytek", vec![XFYUN_APP_ID_ACCOUNT, XFYUN_API_KEY_ACCOUNT]),
+            (
+                "tencent-cloud",
+                vec![
+                    TENCENT_CLOUD_APP_ID_ACCOUNT,
+                    TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                    TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+                ],
+            ),
+        ] {
+            let store = InMemoryCredentialStore::default();
+            let invocation = ProviderInvocation::new("cloud-channel", provider);
+            assert!(
+                !asr_channel_configured(&store, &invocation).await.unwrap(),
+                "{provider}"
+            );
+            for account in accounts {
+                assert!(!asr_channel_configured(&store, &invocation).await.unwrap());
+                write_channel_secret(
+                    &store,
+                    CredentialNamespace::Asr,
+                    "cloud-channel",
+                    account,
+                    "fixture-key",
+                )
+                .await;
+            }
+            assert!(
+                asr_channel_configured(&store, &invocation).await.unwrap(),
+                "{provider}"
+            );
+            let context = Arc::new(DictationContext {
+                asr: invocation,
+                ..Default::default()
+            });
+            assert!(
+                prepare_cloud_transcription(&store, context).await.is_ok(),
+                "{provider}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn asr_configuration_does_not_hide_credential_read_errors() {
+        let invocation = ProviderInvocation::new("channel", "whisper");
+        let error = asr_channel_configured(&crate::UnsupportedCredentialStore, &invocation)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn llm_channel_configured_matches_polisher_requirements() {
+        let store = InMemoryCredentialStore::default();
+        // Keyed provider with defaults: unconfigured until an API key is saved (issue #1032).
+        assert!(!llm_channel_configured(&store, "ark", "ark", None).await);
+        write_channel_secret(
+            &store,
+            CredentialNamespace::Llm,
+            "ark",
+            LLM_API_KEY_ACCOUNT,
+            "fixture-key",
+        )
+        .await;
+        assert!(llm_channel_configured(&store, "ark", "ark", None).await);
+
+        // Keyless local provider: configured once a model is selected, matching the builder.
+        assert!(
+            !llm_channel_configured(&store, "lmstudio-channel", "lmstudio", None).await,
+            "LM Studio without a model is unconfigured"
+        );
+        assert!(
+            llm_channel_configured(&store, "lmstudio-channel", "lmstudio", Some("local-model"))
+                .await
+        );
+
+        // Empty identifiers are never configured.
+        assert!(!llm_channel_configured(&store, "", "ark", None).await);
     }
 
     #[tokio::test]

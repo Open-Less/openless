@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use md5::{Digest as Md5Digest, Md5};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::Value;
@@ -629,7 +629,7 @@ async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), XfyunAS
             "websocket not open".to_string(),
         ));
     };
-    ws.send(Message::Binary(data))
+    ws.send(Message::Binary(data.into()))
         .await
         .map_err(|e| XfyunASRError::ConnectionFailed(e.to_string()))
 }

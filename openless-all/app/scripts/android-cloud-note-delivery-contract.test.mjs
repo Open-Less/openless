@@ -26,14 +26,35 @@ function functionBody(source, signature) {
 
 const submit = functionBody(service, 'private fun submitCloudNoteText');
 const report = functionBody(service, 'private fun reportCloudNoteFailure');
-const successStart = submit.indexOf('if (code in 200..299)');
+const successStart = submit.indexOf('if (success)');
 const successElse = submit.indexOf('} else {', successStart);
 assert.ok(successStart !== -1 && successElse > successStart, 'missing webhook success branch');
 const successBranch = submit.slice(successStart, successElse);
 
+assert.match(submit, /val success = code in 200\.\.299/);
 assert.match(submit, /CloudNoteFailure\.MissingDestination/);
 assert.match(submit, /CloudNoteFailure\.Http/);
 assert.match(submit, /CloudNoteFailure\.Network/);
+// The draft workflow must receive a completion even when a newer request owns the status line.
+assert.match(
+  submit,
+  /val message = reportCloudNoteFailure\(requestId, text, CloudNoteFailure\.MissingDestination\)\s+onFinished\?\.invoke\(false, message\)/,
+);
+assert.match(
+  submit,
+  /val message = reportCloudNoteFailure\(requestId, text, CloudNoteFailure\.Network\)\s+onFinished\?\.invoke\(false, message\)/,
+);
+assert.match(
+  submit,
+  /reportCloudNoteFailure\(requestId, text, CloudNoteFailure\.Http, code\)\s+}\s+onFinished\?\.invoke\(success, message\)/,
+);
+assert.match(successBranch, /if \(requestId == imeRequestId\)/);
+assert.doesNotMatch(
+  submit,
+  /return@post/,
+  'stale submissions must still finish their draft callback',
+);
+assert.match(report, /return message/);
 assert.match(report, /OpenLessClipboardHistory\.recordCopy/);
 assert.match(report, /cloudNoteShouldRetain\(text\)/);
 assert.doesNotMatch(

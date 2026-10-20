@@ -7,6 +7,14 @@ pub async fn get_startup_snapshot(
     core.start().await.map_err(|error| error.to_string())
 }
 
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn get_capsule_snapshot(
+    coord: CoordinatorState<'_>,
+) -> Result<Option<crate::tauri_coordinator_host::CapsuleSnapshot>, String> {
+    Ok(coord.tauri_host().capsule_snapshot())
+}
+
 async fn ensure_core_started(core: &openless_core::OpenLessBackend) -> Result<(), String> {
     if !core.snapshot().running {
         core.start().await.map_err(|error| error.to_string())?;
@@ -46,6 +54,23 @@ pub async fn cancel_dictation(
     ensure_core_started(&core).await?;
     coord.cancel_active_voice().await;
     Ok(())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn set_capsule_transcript_visible(
+    coord: CoordinatorState<'_>,
+    visible: bool,
+) -> Result<(), String> {
+    let host = coord.tauri_host();
+    let Some(capsule) = host.capsule_window() else {
+        return Ok(());
+    };
+    host.run_on_main_thread(move || {
+        if let Err(error) = capsule.set_transcript_visible(visible) {
+            log::warn!("[capsule] transcript visibility layout failed: {error}");
+        }
+    })
 }
 
 #[tauri::command]

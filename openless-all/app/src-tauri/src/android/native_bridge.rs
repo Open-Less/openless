@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use base64::Engine;
 use openless_core::{
     BackendError, BackendErrorCode, DictationStartOptions, DictationStopOptions, OpenLessBackend,
 };
@@ -185,6 +186,169 @@ fn import_provider_settings_json(json: &str, selection: bool, credentials: bool)
         }
     }
     serde_json::json!({"applied":applied,"errors":errors}).to_string()
+}
+
+fn local_bundle_error(error: impl std::fmt::Display) -> String {
+    serde_json::json!({"ok": false, "error": error.to_string()}).to_string()
+}
+
+fn export_local_migration_bundle_json(
+    mode: &str,
+    include_credentials: bool,
+    password: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let mode = match mode {
+            "share_redacted" => openless_core::local_migration_bundle::BundleMode::ShareRedacted,
+            "personal_migration" => {
+                openless_core::local_migration_bundle::BundleMode::PersonalMigration
+            }
+            _ => return Err("invalid migration bundle mode".into()),
+        };
+        let (credential_policy, password) = if include_credentials {
+            let password = openless_core::local_migration_bundle::BundlePassword::new(password)
+                .map_err(|error| error.to_string())?;
+            (
+                openless_core::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+                Some(password),
+            )
+        } else {
+            (
+                openless_core::local_migration_bundle::CredentialPolicy::Omit,
+                None,
+            )
+        };
+        let options = openless_core::local_migration_bundle::BundleExportOptions {
+            mode,
+            credential_policy,
+            password,
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            portable_android_preferences: None,
+        };
+        let artifact =
+            tauri::async_runtime::block_on(backend.export_local_migration_bundle(options))
+                .map_err(|error| error.message)?;
+        Ok(serde_json::json!({
+            "inspection": artifact.inspection,
+            "bundleBase64": base64::engine::general_purpose::STANDARD.encode(&artifact.bytes),
+        }))
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn inspect_local_migration_bundle_json(bundle_base64: &str) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let inspection = backend
+            .inspect_local_migration_bundle(&bytes)
+            .map_err(|error| error.message)?;
+        serde_json::to_value(inspection).map_err(|_| "invalid bundle inspection".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn preview_local_migration_bundle_json(bundle_base64: &str, password: &str, mode: &str) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let password = if password.is_empty() {
+            None
+        } else {
+            Some(
+                openless_core::local_migration_bundle::BundlePassword::new(password)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let mode = match mode {
+            "merge" => openless_core::local_migration_bundle::RestoreMode::Merge,
+            "replace" => openless_core::local_migration_bundle::RestoreMode::Replace,
+            _ => return Err("invalid migration restore mode".into()),
+        };
+        let preview = tauri::async_runtime::block_on(
+            backend.preview_local_migration_bundle(&bytes, password, mode),
+        )
+        .map_err(|error| error.message)?;
+        serde_json::to_value(preview).map_err(|_| "invalid bundle preview".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
+}
+
+fn import_local_migration_bundle_json(
+    bundle_base64: &str,
+    password: &str,
+    mode: &str,
+    choices_json: &str,
+    expected_generation: &str,
+    android_revision: &str,
+) -> String {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(bundle_base64)
+            .map_err(|_| "invalid bundle encoding")?;
+        let password = if password.is_empty() {
+            None
+        } else {
+            Some(
+                openless_core::local_migration_bundle::BundlePassword::new(password)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let restore_mode = match mode {
+            "merge" => openless_core::local_migration_bundle::RestoreMode::Merge,
+            "replace" => openless_core::local_migration_bundle::RestoreMode::Replace,
+            _ => return Err("invalid migration restore mode".into()),
+        };
+        let choices: Vec<openless_core::cloud_sync_e2ee_documents::ConflictChoice> =
+            serde_json::from_str(choices_json).map_err(|_| "invalid conflict choices")?;
+        let expected_generation = if expected_generation.is_empty() {
+            return Err("missing expected generation".into());
+        } else {
+            let value = expected_generation
+                .parse::<u64>()
+                .map_err(|_| "invalid expected generation")?;
+            if value.to_string() != expected_generation {
+                return Err("invalid expected generation".into());
+            }
+            Some(openless_core::cloud_sync_e2ee_documents::Revision::new(
+                value,
+            ))
+        };
+        let expected_android_revision =
+            (!android_revision.is_empty()).then(|| android_revision.to_owned());
+        let inspection = tauri::async_runtime::block_on(backend.import_local_migration_bundle(
+            &bytes,
+            password,
+            restore_mode,
+            &choices,
+            expected_generation,
+            expected_android_revision,
+        ))
+        .map_err(|error| error.message)?;
+        backend.publish_local_migration_state_changed();
+        tauri::async_runtime::block_on(backend.refresh_and_publish_credentials())
+            .map_err(|error| error.message)?;
+        serde_json::to_value(inspection).map_err(|_| "invalid bundle inspection".into())
+    })();
+    match result {
+        Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
+        Err(error) => local_bundle_error(error),
+    }
 }
 
 pub fn register_android_backend(backend: Arc<OpenLessBackend>) {
@@ -487,6 +651,14 @@ struct ImeCommand {
     quick_note: bool,
     #[serde(default)]
     cloud: bool,
+    // Sent with "start" only: the editor's package and the text around the caret,
+    // snapshotted by the IME when recording begins.
+    #[serde(default)]
+    front_app: Option<String>,
+    #[serde(default)]
+    cursor_before: Option<String>,
+    #[serde(default)]
+    cursor_after: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -524,6 +696,22 @@ fn ime_command(json: &str) -> Result<(), String> {
                     );
                     return;
                 }
+                // Core owns the window budget and the envelope format; Kotlin only hands
+                // over the two sides of the caret. Metadata only in the log, never the text.
+                let cursor_context = openless_core::host_document::window_from_split(
+                    command.cursor_before.as_deref().unwrap_or_default(),
+                    command.cursor_after.as_deref().unwrap_or_default(),
+                    crate::host_document::DEFAULT_BUDGET_CHARS,
+                )
+                .map(|window| {
+                    log::info!(
+                        "[cursor-context] status=ok source=input_connection chars_before={} chars_after={} app={:?}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        command.front_app,
+                    );
+                    openless_core::prompts::cursor_context_input(window.before(), window.after())
+                });
                 let mut starting =
                     Box::pin(backend.start_dictation_with_options(DictationStartOptions {
                         insert_text: false,
@@ -532,6 +720,8 @@ fn ime_command(json: &str) -> Result<(), String> {
                         } else {
                             openless_core::DictationOutputTarget::ForegroundApp
                         },
+                        front_app: command.front_app.clone(),
+                        cursor_context,
                         ..Default::default()
                     }));
                 // The first poll reserves the Core session before any async preparation.
@@ -932,6 +1122,41 @@ fn spawn_finalize_qa_from_overlay() {
     });
 }
 
+fn spawn_finalize_voice_edit_from_overlay() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.finalize_voice_edit_from_overlay().await {
+            log::warn!("[android-native] finalize voice edit failed: {error}");
+            // A failed capture leaves the original recording available for retry/cancel.
+            let recording = CORE_BACKEND.get().is_some_and(|backend| {
+                matches!(
+                    backend.snapshot().dictation.phase,
+                    openless_core::DictationPhase::Starting
+                        | openless_core::DictationPhase::Recording
+                )
+            });
+            #[cfg(target_os = "android")]
+            let _ = crate::android::jni::android::with_android_env(|env, context| {
+                crate::android::jni::android::notify_overlay_bridge(
+                    env,
+                    context,
+                    if recording { "recording" } else { "error" },
+                    recording.then_some("无法启动语音编辑，请确认已启用该功能并聚焦外部输入框"),
+                    0.0,
+                )?;
+                crate::android::jni::android::show_overlay_toast(
+                    env,
+                    context,
+                    "无法启动语音编辑，请确认已启用该功能并聚焦外部输入框",
+                )
+            });
+            let _ = recording;
+        }
+    });
+}
+
 fn capsule_state_name(state: CapsuleState) -> &'static str {
     match state {
         CapsuleState::Idle => "idle",
@@ -1015,6 +1240,69 @@ mod jni_exports {
         let mut env =
             JniEnv::from_raw(env_ptr).map_err(|error| format!("attach JNI env: {error}"))?;
         f(&mut env, &context)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativePublicDictionary(
+        env: *mut JNIEnv,
+        _class: JClass,
+        base: jstring,
+        action: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let result = (|| -> Result<serde_json::Value, String> {
+            let base = env
+                .get_string(&JString::from_raw(base))
+                .map(String::from)
+                .map_err(|_| "invalid dictionary path")?;
+            let action = env
+                .get_string(&JString::from_raw(action))
+                .map(String::from)
+                .map_err(|_| "invalid dictionary action")?;
+            let base = std::path::PathBuf::from(base);
+            if base.file_name().and_then(|s| s.to_str())
+                != Some(openless_core::ime_dictionary::BUNDLED_DIRECTORY)
+            {
+                return Err("unexpected dictionary directory".into());
+            }
+            let status = match action.as_str() {
+                "select" => openless_core::ime_dictionary::select(&base),
+                "reject" => openless_core::ime_dictionary::reject(&base),
+                "update" => tauri::async_runtime::block_on(openless_core::ime_dictionary::update(
+                    &base, false,
+                ))?,
+                _ => return Err("unsupported dictionary action".into()),
+            };
+            serde_json::to_value(status).map_err(|_| "encode dictionary status".into())
+        })();
+        crate::android::jni::android::export_jstring(
+            &mut env,
+            &match result {
+                Ok(value) => value.to_string(),
+                Err(error) => serde_json::json!({"error":error}).to_string(),
+            },
+        )
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeCloudPinyin(
+        env: *mut JNIEnv,
+        _class: JClass,
+        pinyin: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let input = env.get_string(&JString::from_raw(pinyin)).map(String::from);
+        let result = input
+            .map(|query| tauri::async_runtime::block_on(openless_core::ime_cloud::query(&query)))
+            .unwrap_or_default();
+        crate::android::jni::android::export_jstring(
+            &mut env,
+            &serde_json::json!(result).to_string(),
+        )
     }
 
     #[no_mangle]
@@ -1206,6 +1494,51 @@ mod jni_exports {
         spawn_remove_correction_rule(pattern_str);
     }
 
+    /// "local", "cloud" or "unavailable": which recognizer the next dictation
+    /// uses (OpenLessBackend::asr_route()), for the keyboard's status dot.
+    /// Blocks on a credential read — call it off the main thread.
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAsrRoute(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let route = match CORE_BACKEND.get() {
+            Some(backend) => match tauri::async_runtime::block_on(backend.asr_route()) {
+                openless_core::AsrRoute::Local => "local",
+                openless_core::AsrRoute::LocalRaw => "localRaw",
+                openless_core::AsrRoute::Cloud => "cloud",
+                openless_core::AsrRoute::Unavailable => "unavailable",
+            },
+            None => "unavailable",
+        };
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, route),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    /// "<local>,<cloud>,<latest>" from history, latest being "local", "cloud"
+    /// or empty; null when the backend is not up.
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAsrUsage(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let Some(usage) = CORE_BACKEND.get().and_then(|backend| backend.asr_usage().ok()) else {
+            return std::ptr::null_mut();
+        };
+        let latest = match usage.last_local {
+            Some(true) => "local",
+            Some(false) => "cloud",
+            None => "",
+        };
+        let encoded = format!("{},{},{}", usage.local, usage.cloud, latest);
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &encoded),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeBackendSnapshot(
         env: *mut JNIEnv,
@@ -1232,6 +1565,14 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_finalize_qa_from_overlay();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeFinalizeVoiceEditFromOverlay(
+        _env: jni::JNIEnv,
+        _class: jni::objects::JClass,
+    ) {
+        spawn_finalize_voice_edit_from_overlay();
     }
 
     // Registered from OpenLessRuntimeService.onCreate()/onDestroy() (a
@@ -1343,6 +1684,140 @@ mod jni_exports {
         let response = match json {
             Ok(json) => import_provider_settings_json(&json, selection != 0, credentials != 0),
             Err(_) => serde_json::json!({"applied":[],"errors":{"providerSelection":"invalid JNI input","credentials":"invalid JNI input"}}).to_string(),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeExportLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        mode: jstring,
+        include_credentials: jboolean,
+        password: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (mode, password) {
+            (Ok(mode), Ok(password)) => {
+                export_local_migration_bundle_json(&mode, include_credentials != 0, &password)
+            }
+            _ => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativePreviewLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+        password: jstring,
+        mode: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (bundle_base64, password, mode) {
+            (Ok(bundle), Ok(password), Ok(mode)) => {
+                preview_local_migration_bundle_json(&bundle, &password, &mode)
+            }
+            _ => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeInspectLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match bundle_base64 {
+            Ok(bundle) => inspect_local_migration_bundle_json(&bundle),
+            Err(_) => local_bundle_error("invalid JNI input"),
+        };
+        crate::android::jni::android::export_jstring(&mut env, &response)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeImportLocalMigrationBundle(
+        env: *mut JNIEnv,
+        _class: JClass,
+        bundle_base64: jstring,
+        password: jstring,
+        mode: jstring,
+        choices_json: jstring,
+        expected_generation: jstring,
+        android_revision: jstring,
+    ) -> jstring {
+        let Ok(mut env) = JniEnv::from_raw(env) else {
+            return std::ptr::null_mut();
+        };
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let choices_json = env
+            .get_string(&JString::from_raw(choices_json))
+            .map(|value| value.to_string_lossy().into_owned());
+        let expected_generation = env
+            .get_string(&JString::from_raw(expected_generation))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_revision = env
+            .get_string(&JString::from_raw(android_revision))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (
+            bundle_base64,
+            password,
+            mode,
+            choices_json,
+            expected_generation,
+            android_revision,
+        ) {
+            (
+                Ok(bundle),
+                Ok(password),
+                Ok(mode),
+                Ok(choices),
+                Ok(expected_generation),
+                Ok(android_revision),
+            ) => import_local_migration_bundle_json(
+                &bundle,
+                &password,
+                &mode,
+                &choices,
+                &expected_generation,
+                &android_revision,
+            ),
+            _ => local_bundle_error("invalid JNI input"),
         };
         crate::android::jni::android::export_jstring(&mut env, &response)
     }

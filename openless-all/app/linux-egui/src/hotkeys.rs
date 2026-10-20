@@ -15,8 +15,6 @@ static NEXT_PRESS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 struct HotkeyPressIds {
     dictation: std::sync::atomic::AtomicU64,
     less_computer: std::sync::atomic::AtomicU64,
-    qa: std::sync::atomic::AtomicBool,
-    quick_note: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -81,6 +79,7 @@ pub enum LinuxHotkeyEvent {
 pub struct Fcitx5HotkeyListener {
     receiver: Mutex<std::sync::mpsc::Receiver<LinuxHotkeyEvent>>,
     error: Arc<Mutex<Option<BackendError>>>,
+    waker: Arc<Mutex<Option<std::thread::Thread>>>,
     #[cfg(target_os = "linux")]
     stop: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(target_os = "linux")]
@@ -100,6 +99,10 @@ impl Fcitx5HotkeyListener {
                 "fcitx5 hotkey listener is only available on Linux",
             ))
         }
+    }
+
+    pub fn set_waker(&self, thread: std::thread::Thread) {
+        *self.waker.lock().expect("hotkey waker lock poisoned") = Some(thread);
     }
 
     pub fn drain(&self, mut apply: impl FnMut(LinuxHotkeyEvent)) -> usize {
@@ -143,10 +146,18 @@ fn start_linux_listener() -> Result<Fcitx5HotkeyListener, BackendError> {
     let error = Arc::new(Mutex::new(None));
     let stop_for_thread = Arc::clone(&stop);
     let error_for_thread = Arc::clone(&error);
+    let waker = Arc::new(Mutex::new(None));
+    let waker_for_thread = Arc::clone(&waker);
     let thread = std::thread::Builder::new()
         .name("openless-fcitx5-hotkeys".to_string())
         .spawn(move || {
-            run_listener(event_tx, startup_tx, stop_for_thread, error_for_thread);
+            run_listener(
+                event_tx,
+                startup_tx,
+                stop_for_thread,
+                error_for_thread,
+                waker_for_thread,
+            );
         })
         .map_err(|error| {
             BackendError::new(
@@ -158,6 +169,7 @@ fn start_linux_listener() -> Result<Fcitx5HotkeyListener, BackendError> {
         Ok(Ok(())) => Ok(Fcitx5HotkeyListener {
             receiver: Mutex::new(event_rx),
             error,
+            waker,
             stop,
             thread: Some(thread),
         }),
@@ -181,6 +193,7 @@ fn run_listener(
     startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     error: Arc<Mutex<Option<BackendError>>>,
+    waker: Arc<Mutex<Option<std::thread::Thread>>>,
 ) {
     let connection = match dbus::blocking::SyncConnection::new_session() {
         Ok(connection) => connection,
@@ -222,6 +235,9 @@ fn run_listener(
                 if events.send(event).is_err() {
                     stop_for_match.store(true, std::sync::atomic::Ordering::Release);
                     return false;
+                }
+                if let Some(thread) = waker.lock().expect("hotkey waker lock poisoned").as_ref() {
+                    thread.unpark();
                 }
             }
             true
@@ -334,32 +350,11 @@ fn event_from_signal(
                 .load(std::sync::atomic::Ordering::Acquire),
             at,
         }),
-        ("QaShortcutEvent", true)
-            if !press_ids.qa.swap(true, std::sync::atomic::Ordering::AcqRel) =>
-        {
-            Some(LinuxHotkeyEvent::QaPressed)
-        }
-        ("QaShortcutEvent", true) => None,
-        ("QaShortcutEvent", false) => {
-            press_ids
-                .qa
-                .store(false, std::sync::atomic::Ordering::Release);
-            None
-        }
-        ("QuickNoteEvent", true)
-            if !press_ids
-                .quick_note
-                .swap(true, std::sync::atomic::Ordering::AcqRel) =>
-        {
-            Some(LinuxHotkeyEvent::QuickNotePressed)
-        }
-        ("QuickNoteEvent", true) => None,
-        ("QuickNoteEvent", false) => {
-            press_ids
-                .quick_note
-                .store(false, std::sync::atomic::Ordering::Release);
-            None
-        }
+        // Like the Tauri Linux bridge, action shortcuts are press notifications,
+        // not held-key generations. Focus changes and modifier-first release can
+        // omit key-up; latching here would disable the shortcut indefinitely.
+        ("QaShortcutEvent", true) => Some(LinuxHotkeyEvent::QaPressed),
+        ("QuickNoteEvent", true) => Some(LinuxHotkeyEvent::QuickNotePressed),
         ("SelectionPolishEvent", true) => Some(LinuxHotkeyEvent::SelectionPolishPressed),
         ("TranslationModifierEvent", true) => {
             Some(LinuxHotkeyEvent::TranslationPressed { symbol, states })

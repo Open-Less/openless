@@ -418,8 +418,24 @@ export function SiriGL({
     let elapsed = 0;
     let raf = 0;
     let last = performance.now();
+    let inViewport = true;
+    let w = 1,
+      h = 1;
+    const resizeCanvas = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2) * RENDER_SCALE;
+      w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        gl.viewport(0, 0, w, h);
+      }
+    };
+    resizeCanvas();
 
     const frame = (now: number) => {
+      raf = 0;
+      if (!inViewport || document.hidden) return;
       const dt = reducedMotion ? 0 : Math.min(0.05, (now - last) / 1000);
       if (reducedMotion) {
         smoothLevel = visualVoice(levelRef.current);
@@ -432,15 +448,6 @@ export function SiriGL({
       smoothSpeed += (speedRef.current - smoothSpeed) * (1 - Math.exp(-dt * 2.5));
       shaderTime += dt * smoothSpeed;
       const t = shaderTime;
-
-      const dpr = Math.min(window.devicePixelRatio || 1, 2) * RENDER_SCALE;
-      const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-      const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-        gl.viewport(0, 0, w, h);
-      }
 
       // In the converged state (resolved→0) level loses meaning; switch to a subdued
       // slow-breathing signal to pulse the orb.
@@ -496,15 +503,34 @@ export function SiriGL({
     // Draw the first frame synchronously (don't wait for the next vsync): visuals
     // exist at mount, one frame less hotkey latency.
     frame(performance.now());
-    const redraw = () => frame(performance.now());
-    // Only static effects expose redraw; normal effects own a single RAF chain.
+    const redraw = () => {
+      cancelAnimationFrame(raf);
+      last = performance.now();
+      frame(last);
+    };
+    // Pause both offscreen previews and hidden windows. Resume one RAF chain only.
+    const visibility = () => redraw();
+    document.addEventListener('visibilitychange', visibility);
+    const intersection = new IntersectionObserver(([entry]) => {
+      if (inViewport === entry.isIntersecting) return;
+      inViewport = entry.isIntersecting;
+      redraw();
+    });
+    intersection.observe(host);
     redrawRef.current = reducedMotion ? redraw : null;
-    const resize = reducedMotion ? new ResizeObserver(redraw) : null;
-    resize?.observe(host);
+    const resize = new ResizeObserver(() => {
+      resizeCanvas();
+      if (reducedMotion) redraw();
+    });
+    resize.observe(host);
+    window.addEventListener('resize', resizeCanvas);
 
     return () => {
       if (redrawRef.current === redraw) redrawRef.current = null;
-      resize?.disconnect();
+      resize.disconnect();
+      intersection.disconnect();
+      document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener('resize', resizeCanvas);
       cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);

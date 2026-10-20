@@ -40,6 +40,19 @@ impl BackendError {
         self.retryable = retryable;
         self
     }
+
+    pub fn target_unavailable(mut self) -> Self {
+        self.details = Some(serde_json::json!({"target_unavailable": true}));
+        self
+    }
+
+    pub fn is_target_unavailable(&self) -> bool {
+        self.details
+            .as_ref()
+            .and_then(|details| details.get("target_unavailable"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

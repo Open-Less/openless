@@ -113,7 +113,7 @@ pub fn body_rect(ctx: &egui::Context) -> egui::Rect {
 // ── App icon ────────────────────────────────────────────────────────────────
 
 pub fn load_app_icon(ctx: &egui::Context) -> egui::TextureHandle {
-    let id = egui::Id::new("openless-frontend-app-icon");
+    let id = egui::Id::unique("openless-frontend-app-icon");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return texture;
     }
@@ -137,7 +137,7 @@ pub fn style_pack_icon_texture(
     data_url: &str,
 ) -> Option<egui::TextureHandle> {
     use base64::Engine as _;
-    let key = egui::Id::new(("openless-style-icon", pack_id));
+    let key = egui::Id::unique(("openless-style-icon", pack_id));
     if let Some((cached_url, texture)) =
         ctx.data(|data| data.get_temp::<(String, egui::TextureHandle)>(key))
     {
@@ -181,7 +181,7 @@ pub fn paint_window_background(ctx: &egui::Context) {
     let body = body_rect(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("openless-window-background"),
+        egui::Id::unique("openless-window-background"),
     ));
     // 整张窗口底板：白。内容区就是这块白（Tauri 的 `ol-console-main` 是
     // `--ol-surface`），不要再用灰画 body——否则侧栏/内容的白灰层次正好搞反。
@@ -226,7 +226,7 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
         egui::pos2(window.max.x, window.min.y + TITLEBAR_HEIGHT),
     );
 
-    egui::Area::new(egui::Id::new("openless-titlebar"))
+    egui::Area::new(egui::Id::unique("openless-titlebar"))
         .order(egui::Order::Middle)
         // The titlebar defines its own drag zone and window-control buttons.
         // Keep the area in the hit-test stack for its children, without adding
@@ -246,7 +246,7 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             );
             let drag = ui.interact(
                 drag_rect,
-                ui.id().with("titlebar-drag"),
+                ui.scope_id().with("titlebar-drag"),
                 egui::Sense::click_and_drag(),
             );
             // Ask the compositor to move the window on the *press* frame: on
@@ -306,11 +306,11 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             );
             let maximize = close.translate(egui::vec2(-button_width, 0.0));
             let minimize = maximize.translate(egui::vec2(-button_width, 0.0));
-            let close_response = ui.interact(close, ui.id().with("close"), egui::Sense::click());
+            let close_response = ui.interact(close, ui.scope_id().with("close"), egui::Sense::click());
             let maximize_response =
-                ui.interact(maximize, ui.id().with("maximize"), egui::Sense::click());
+                ui.interact(maximize, ui.scope_id().with("maximize"), egui::Sense::click());
             let minimize_response =
-                ui.interact(minimize, ui.id().with("minimize"), egui::Sense::click());
+                ui.interact(minimize, ui.scope_id().with("minimize"), egui::Sense::click());
             if close_response.clicked() {
                 actions.push(FrontendAction::WindowClose);
             }
@@ -488,7 +488,7 @@ pub fn resize_handles(ctx: &egui::Context) {
     // become the top hit-test layer for the entire UI, including its transparent
     // interior, and would swallow every button click.
     for (index, (rect, direction)) in zones.into_iter().enumerate() {
-        let response = egui::Area::new(egui::Id::new(("openless-resize", index)))
+        let response = egui::Area::new(egui::Id::unique(("openless-resize", index)))
             // 条带要在设置遮罩（Foreground）之上：遮罩盖住了 body 范围内的外圈像素，
             // 否则弹窗打开时拖边缘会被遮罩吃掉、窗口改不了大小（用户报「设置页面下
             // 无法修改窗口大小」）。Tooltip 只是层级，条带本身仍只占外圈 6px/18px。
@@ -532,7 +532,7 @@ fn resize_cursor(direction: egui::ResizeDirection) -> egui::CursorIcon {
 
 pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec<FrontendAction>) {
     let body = body_rect(ctx);
-    egui::Area::new(egui::Id::new("openless-sidebar"))
+    egui::Area::new(egui::Id::unique("openless-sidebar"))
         .order(egui::Order::Middle)
         // Navigation rows own their input. A hover-only area preserves their
         // layer while avoiding an invisible area-wide click target.
@@ -891,7 +891,7 @@ const ORPHANED_PRESS_TIMEOUT: f64 = 0.4;
 /// 而 `ScrollArea` 正好用 `ctx.dragged_id().is_none()` 当作吃滚轮的前置条件——「拖过
 /// 窗口/缩完窗口后整页滚不动，点一下页面（那一次点击的释放）才恢复」。
 pub fn note_window_gesture_handoff(ctx: &egui::Context) {
-    let id = egui::Id::new(WINDOW_GESTURE_HANDOFF);
+    let id = egui::Id::unique(WINDOW_GESTURE_HANDOFF);
     let now = ctx.input(|input| input.time);
     ctx.data_mut(|data| {
         // 已经有一次等待中的交接就别把截止时间往后推（`holding && !focused` 那条
@@ -920,7 +920,7 @@ fn pointer_release_event(event: &egui::Event) -> bool {
 }
 
 fn release_orphaned_press(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-    let id = egui::Id::new(WINDOW_GESTURE_HANDOFF);
+    let id = egui::Id::unique(WINDOW_GESTURE_HANDOFF);
     let Some(handed_off_at) = ctx.data(|data| data.get_temp::<f64>(id)) else {
         return;
     };
@@ -990,7 +990,7 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
         ),
         egui::pos2(body.right() - 2.0, body.bottom() - PAGE_BOTTOM_PADDING),
     );
-    egui::Area::new(egui::Id::new("openless-content"))
+    egui::Area::new(egui::Id::unique("openless-content"))
         .order(egui::Order::Middle)
         // Buttons and text fields inside the panel register their own hit targets.
         .sense(egui::Sense::hover())
@@ -1009,7 +1009,7 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
             ui.set_clip_rect(content);
             #[cfg(test)]
             ctx.data_mut(|data| {
-                data.insert_temp(egui::Id::new("content-available-size"), ui.available_size());
+                data.insert_temp(egui::Id::unique("content-available-size"), ui.available_size());
             });
             let scroll = &mut ui.style_mut().spacing.scroll;
             scroll.floating = true;
@@ -1105,8 +1105,6 @@ pub enum ButtonKind {
     Ghost,
     /// Filled with the accent blue, white text.
     Blue,
-    /// Shortcut recorder menu: pale blue fill, blue outline and blue text.
-    BlueSoft,
     /// Greyed-out button that swallows clicks (Tauri's 置灰 停用).
     Disabled,
 }
@@ -1120,7 +1118,7 @@ pub fn action_button(
     icon: Option<IconName>,
     kind: ButtonKind,
 ) -> egui::Response {
-    let id = ui.id().with((
+    let id = ui.scope_id().with((
         "openless-action-button",
         label,
         rect.left().round() as i32,
@@ -1145,18 +1143,6 @@ pub fn action_button(
             },
             None,
             egui::Color32::WHITE,
-        ),
-        ButtonKind::BlueSoft => (
-            if response.hovered() {
-                theme::BLUE_SOFT.linear_multiply(0.92)
-            } else {
-                theme::BLUE_SOFT
-            },
-            Some(egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgba_unmultiplied(37, 99, 235, 64),
-            )),
-            theme::BLUE,
         ),
         ButtonKind::Disabled => (
             egui::Color32::TRANSPARENT,
@@ -1266,7 +1252,7 @@ pub fn toggle(
     on: bool,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> egui::Response {
-    let response = ui.interact(rect, ui.id().with(id_salt), egui::Sense::click());
+    let response = ui.interact(rect, ui.scope_id().with(id_salt), egui::Sense::click());
     // Tauri `Toggle`: 开启 --ol-blue，关闭 --ol-toggle-off-bg。
     let track = if on { theme::BLUE } else { theme::TOGGLE_OFF };
     ui.painter()
@@ -1341,7 +1327,7 @@ pub fn segmented(
             egui::pos2(x, rect.top() + 2.0),
             egui::vec2(width, rect.height() - 4.0),
         );
-        let id = ui.id().with((
+        let id = ui.scope_id().with((
             "openless-segment",
             index,
             rect.left().round() as i32,
@@ -1413,8 +1399,30 @@ pub fn text_input(
     width: f32,
     password: bool,
 ) -> egui::Response {
-    let width = width.clamp(80.0, INPUT_MAX_WIDTH);
-    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, INPUT_HEIGHT), egui::Sense::hover());
+    text_input_sized(
+        ui,
+        value,
+        id,
+        hint,
+        width.clamp(80.0, INPUT_MAX_WIDTH),
+        INPUT_HEIGHT,
+        password,
+    )
+}
+
+/// 与 [`text_input`] 相同，但宽高由调用方给：渠道编辑弹窗里的字段照 Tauri 是
+/// 整列宽、38px 高，比设置行里的紧凑输入框大一号。
+pub fn text_input_sized(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    id: egui::Id,
+    hint: &str,
+    width: f32,
+    height: f32,
+    password: bool,
+) -> egui::Response {
+    let width = width.clamp(80.0, 640.0);
+    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::same(8), theme::SURFACE);
     ui.painter().rect_stroke(
@@ -1438,7 +1446,7 @@ pub fn text_input(
         .text_color(theme::INK)
         .frame(egui::Frame::NONE)
         .desired_width(inner.width())
-        .vertical_align(egui::Align::Center);
+        .align(egui::Align2::CENTER_CENTER);
     if password {
         edit = edit.password(true);
     }

@@ -15,6 +15,9 @@ pub fn patch_preferences(
             .ok_or_else(|| invalid(format!("unknown preference: {pointer}")))?;
         *destination = value.clone();
     }
+    if let Some(mode) = edits.get("/capsuleDisplayMode") {
+        document["capsuleDisplayModeV2"] = mode.clone();
+    }
     serde_json::from_value(document).map_err(invalid)
 }
 
@@ -49,6 +52,40 @@ pub fn update_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capsule_display_edits_establish_v2_without_opt_in_from_unrelated_edits() {
+        let mut current = UserPreferences::default();
+        let unrelated = BTreeMap::from([("/showCapsule".into(), Value::Bool(false))]);
+        assert_eq!(
+            patch_preferences(&current, &unrelated)
+                .unwrap()
+                .capsule_display_mode_v2,
+            None
+        );
+        for mode in [
+            "primaryScreen",
+            "foregroundWindowScreen",
+            "allScreens",
+            "cursorScreen",
+        ] {
+            current = patch_preferences(
+                &current,
+                &BTreeMap::from([("/capsuleDisplayMode".into(), Value::from(mode))]),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&current).unwrap()["capsuleDisplayModeV2"],
+                mode
+            );
+            let next = patch_preferences(&current, &unrelated).unwrap();
+            assert_eq!(next.capsule_display_mode, current.capsule_display_mode);
+            assert_eq!(
+                next.capsule_display_mode_v2,
+                current.capsule_display_mode_v2
+            );
+        }
+    }
+
     #[test]
     fn independent_field_edits_survive_conflicting_revisions() {
         let current = UserPreferences::default();

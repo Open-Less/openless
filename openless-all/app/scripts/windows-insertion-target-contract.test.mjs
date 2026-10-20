@@ -53,7 +53,7 @@ assert.match(
 );
 assert.match(
   capsule,
-  /'insert:fallback'[\s\S]*?setInsertFallback\(event\.payload \?\? null\)/,
+  /subscribe<InsertFallbackCardPayload \| null>\([\s\S]*?'insert:fallback'[\s\S]*?setInsertFallback\(payload \?\? null\)/,
   'the capsule must consume the fallback card payload',
 );
 assert.match(

@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{tr_l10n, Lang};
 
@@ -115,10 +115,17 @@ impl LinuxTray {
             let shutdown = Arc::new(AtomicBool::new(false));
             let worker_error = Arc::clone(&last_error);
             let worker_shutdown = Arc::clone(&shutdown);
+            let command_waker = std::thread::current();
             let worker = std::thread::Builder::new()
                 .name("openless-tray".into())
                 .spawn(move || {
-                    let result = run_dbus_worker(command_tx, control_rx, worker_shutdown, ready_tx);
+                    let result = run_dbus_worker(
+                        command_tx,
+                        control_rx,
+                        worker_shutdown,
+                        ready_tx,
+                        command_waker,
+                    );
                     if let Err(error) = result {
                         *worker_error.lock().expect("tray error lock poisoned") =
                             Some(error.to_string());
@@ -204,12 +211,14 @@ fn run_dbus_worker(
     control_rx: mpsc::Receiver<TrayControl>,
     shutdown: Arc<AtomicBool>,
     ready: mpsc::SyncSender<Result<(), TrayError>>,
+    command_waker: std::thread::Thread,
 ) -> Result<(), TrayError> {
     use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
     use dbus::blocking::Connection;
     use dbus::channel::{MatchingReceiver, Sender};
     use dbus::message::MatchRule;
 
+    let icon = Arc::new(tray_icon_pixmaps()?);
     let connection = Connection::new_session().map_err(dbus_error)?;
     let service_name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
     let ownership = connection
@@ -223,17 +232,41 @@ fn run_dbus_worker(
 
     let menu = Arc::new(Mutex::new(TrayMenuState::default()));
     let callback_menu = Arc::clone(&menu);
+    let callback_icon = Arc::clone(&icon);
     let callback_commands = command_tx;
     connection.start_receive(
         MatchRule::new_method_call(),
         Box::new(move |message, connection| {
-            if let Some(reply) = handle_method_call(&message, &callback_menu, &callback_commands) {
+            if let Some(reply) = handle_method_call(
+                &message,
+                &callback_menu,
+                &callback_commands,
+                &callback_icon,
+                &command_waker,
+            ) {
                 let _ = connection.send(reply);
             }
             true
         }),
     );
 
+    // The panel/extension can replace its watcher while the application stays
+    // alive. Keep the item registered with the new owner, without restarting UI.
+    let registration_pending = Arc::new(AtomicBool::new(false));
+    let owner_pending = Arc::clone(&registration_pending);
+    connection
+        .add_match(
+            MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged")
+                .with_sender("org.freedesktop.DBus")
+                .with_path("/org/freedesktop/DBus"),
+            move |(name, _old, new): (String, String, String), _, _| {
+                if name == WATCHER_NAME {
+                    owner_pending.store(!new.is_empty(), Ordering::Release);
+                }
+                true
+            },
+        )
+        .map_err(dbus_error)?;
     let watcher = connection.with_proxy(WATCHER_NAME, WATCHER_PATH, REGISTRATION_TIMEOUT);
     let registration: Result<(), dbus::Error> = watcher.method_call(
         WATCHER_INTERFACE,
@@ -248,6 +281,7 @@ fn run_dbus_worker(
         return Err(error);
     }
     let _ = ready.send(Ok(()));
+    let mut registration_retry = Instant::now();
 
     while !shutdown.load(Ordering::Acquire) {
         while let Ok(control) = control_rx.try_recv() {
@@ -286,6 +320,21 @@ fn run_dbus_worker(
             }
         }
         connection.process(PROCESS_INTERVAL).map_err(dbus_error)?;
+        if registration_pending.swap(false, Ordering::AcqRel) {
+            if Instant::now() >= registration_retry {
+                let result: Result<(), dbus::Error> = watcher.method_call(
+                    WATCHER_INTERFACE,
+                    "RegisterStatusNotifierItem",
+                    (service_name.as_str(),),
+                );
+                if result.is_err() {
+                    registration_pending.store(true, Ordering::Release);
+                    registration_retry = Instant::now() + Duration::from_secs(1);
+                }
+            } else {
+                registration_pending.store(true, Ordering::Release);
+            }
+        }
     }
     Ok(())
 }
@@ -293,6 +342,31 @@ fn run_dbus_worker(
 #[cfg(target_os = "linux")]
 fn dbus_error(error: dbus::Error) -> TrayError {
     TrayError::Dbus(error.to_string())
+}
+
+#[cfg(target_os = "linux")]
+type IconPixmaps = Vec<(i32, i32, Vec<u8>)>;
+
+#[cfg(target_os = "linux")]
+fn tray_icon_pixmaps() -> Result<IconPixmaps, TrayError> {
+    // Same AppIcon as macOS, decoded once. SNI's a(iiay) payload requires
+    // unpremultiplied ARGB32 in network byte order, NOT RGBA or native-endian u32.
+    let source = image::load_from_memory(include_bytes!("../../public/AppIcon.png"))
+        .map_err(|error| TrayError::Worker(format!("tray icon decoding failed: {error}")))?
+        .into_rgba8();
+    Ok([16, 22, 24, 32, 48, 64, 96, 128]
+        .into_iter()
+        .map(|size| {
+            let resized =
+                image::imageops::resize(&source, size, size, image::imageops::FilterType::Lanczos3);
+            let mut argb = Vec::with_capacity((size * size * 4) as usize);
+            for pixel in resized.pixels() {
+                let [r, g, b, a] = pixel.0;
+                argb.extend_from_slice(&[a, r, g, b]);
+            }
+            (size as i32, size as i32, argb)
+        })
+        .collect())
 }
 
 #[cfg(target_os = "linux")]
@@ -318,16 +392,87 @@ fn menu_properties(label: &str) -> Properties {
 }
 
 #[cfg(target_os = "linux")]
-fn menu_item(
+struct MenuNode {
     id: i32,
     properties: Properties,
-    children: Children,
-) -> dbus::arg::Variant<Box<dyn dbus::arg::RefArg>> {
-    property((id, properties, children))
+    children: Vec<MenuNode>,
 }
 
 #[cfg(target_os = "linux")]
-fn menu_layout(state: &TrayMenuState) -> (i32, Properties, Children) {
+impl MenuNode {
+    fn contains(&self, id: i32) -> bool {
+        self.id == id || self.children.iter().any(|node| node.contains(id))
+    }
+
+    fn select(self, id: i32) -> Option<Self> {
+        if self.id == id {
+            Some(self)
+        } else {
+            self.children.into_iter().find_map(|node| node.select(id))
+        }
+    }
+
+    fn layout(mut self, depth: i32, names: &[String]) -> (i32, Properties, Children) {
+        filter_menu_properties(&mut self.properties, names);
+        let children = if depth == 0 {
+            Vec::new()
+        } else {
+            let next_depth = if depth < 0 { -1 } else { depth - 1 };
+            self.children
+                .into_iter()
+                .map(|node| property(node.layout(next_depth, names)))
+                .collect()
+        };
+        (self.id, self.properties, children)
+    }
+
+    fn group_properties(
+        mut self,
+        ids: &[i32],
+        names: &[String],
+        entries: &mut Vec<(i32, Properties)>,
+    ) {
+        if ids.is_empty() || ids.contains(&self.id) {
+            filter_menu_properties(&mut self.properties, names);
+            entries.push((self.id, self.properties));
+        }
+        for child in self.children {
+            child.group_properties(ids, names, entries);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn filter_menu_properties(properties: &mut Properties, names: &[String]) {
+    if !names.is_empty() {
+        properties.retain(|name, _| names.contains(name));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn menu_default_property(name: &str) -> Option<dbus::arg::Variant<Box<dyn dbus::arg::RefArg>>> {
+    match name {
+        "type" | "disposition" => Some(property("normal".to_owned())),
+        "label" | "icon-name" | "toggle-type" | "children-display" => Some(property(String::new())),
+        "enabled" | "visible" => Some(property(true)),
+        "toggle-state" => Some(property(0i32)),
+        "icon-data" => Some(property(Vec::<u8>::new())),
+        "shortcut" => Some(property(Vec::<Vec<String>>::new())),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn menu_item(id: i32, properties: Properties, children: Vec<MenuNode>) -> MenuNode {
+    MenuNode {
+        id,
+        properties,
+        children,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn menu_tree(state: &TrayMenuState) -> MenuNode {
     let lang = state.lang.unwrap_or(Lang::ZhCn);
     let mut microphone_children = Vec::new();
     let default_selected = state.microphones.iter().all(|device| !device.selected);
@@ -351,7 +496,7 @@ fn menu_layout(state: &TrayMenuState) -> (i32, Properties, Children) {
     let mut microphone_props = menu_properties(tr_l10n(lang, "settings.microphone"));
     microphone_props.insert("children-display".into(), property("submenu".to_string()));
     let separator = HashMap::from([("type".into(), property("separator".to_string()))]);
-    (
+    menu_item(
         0,
         HashMap::new(),
         vec![
@@ -377,10 +522,20 @@ fn menu_layout(state: &TrayMenuState) -> (i32, Properties, Children) {
 }
 
 #[cfg(target_os = "linux")]
+fn menu_error(message: &dbus::Message, name: &str, text: &std::ffi::CStr) -> dbus::Message {
+    message.error(
+        &dbus::strings::ErrorName::new(name).expect("valid static D-Bus error name"),
+        text,
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn handle_method_call(
     message: &dbus::Message,
     menu: &Arc<Mutex<TrayMenuState>>,
     commands: &mpsc::Sender<TrayCommand>,
+    icon: &IconPixmaps,
+    command_waker: &std::thread::Thread,
 ) -> Option<dbus::Message> {
     use dbus::arg::Variant;
 
@@ -392,24 +547,87 @@ fn handle_method_call(
         return Some(message.method_return().append1(INTROSPECTION_XML));
     }
     if path == ITEM_PATH && interface == ITEM_INTERFACE {
-        if member == "Activate" || member == "SecondaryActivate" {
-            let _ = commands.send(TrayCommand::ShowMain);
+        // Match macOS: primary click opens the window; right click belongs to
+        // the desktop's DBusMenu, and middle click has no application action.
+        if member == "Activate" && commands.send(TrayCommand::ShowMain).is_ok() {
+            command_waker.unpark();
         }
         return Some(message.method_return());
     }
     if path == MENU_PATH && interface == MENU_INTERFACE {
         match member.as_str() {
             "GetLayout" => {
+                let Ok((parent, depth, names)) = message.read3::<i32, i32, Vec<String>>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected parent ID, recursion depth and property names",
+                    ));
+                };
+                if depth < -1 {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Recursion depth must be -1 or nonnegative",
+                    ));
+                }
                 let state = menu.lock().expect("tray menu lock poisoned");
+                let Some(node) = menu_tree(&state).select(parent) else {
+                    return Some(menu_error(
+                        message,
+                        "com.canonical.dbusmenu.Error.InvalidMenuItem",
+                        c"Unknown menu item",
+                    ));
+                };
                 return Some(
                     message
                         .method_return()
-                        .append2(state.revision, menu_layout(&state)),
+                        .append2(state.revision, node.layout(depth, &names)),
                 );
             }
             "GetGroupProperties" => {
-                let entries: Vec<(i32, Properties)> = Vec::new();
+                let Ok((ids, names)) = message.read2::<Vec<i32>, Vec<String>>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected item IDs and property names",
+                    ));
+                };
+                let state = menu.lock().expect("tray menu lock poisoned");
+                let mut entries = Vec::new();
+                menu_tree(&state).group_properties(&ids, &names, &mut entries);
                 return Some(message.method_return().append1(entries));
+            }
+            "GetProperty" => {
+                let Ok((id, name)) = message.read2::<i32, String>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected item ID and property name",
+                    ));
+                };
+                let state = menu.lock().expect("tray menu lock poisoned");
+                let Some(mut node) = menu_tree(&state).select(id) else {
+                    return Some(menu_error(
+                        message,
+                        "com.canonical.dbusmenu.Error.InvalidMenuItem",
+                        c"Unknown menu item",
+                    ));
+                };
+                return Some(
+                    match node
+                        .properties
+                        .remove(&name)
+                        .or_else(|| menu_default_property(&name))
+                    {
+                        Some(value) => message.method_return().append1(value),
+                        None => menu_error(
+                            message,
+                            "com.canonical.dbusmenu.Error.UnknownProperty",
+                            c"Unknown menu property",
+                        ),
+                    },
+                );
             }
             "Event" => {
                 if let Ok((id, event, _data, _timestamp)) =
@@ -421,19 +639,79 @@ fn handle_method_call(
                             .expect("tray menu lock poisoned")
                             .command_for_id(id)
                         {
-                            let _ = commands.send(command);
+                            if commands.send(command).is_ok() {
+                                command_waker.unpark();
+                            }
                         }
                     }
                 }
                 return Some(message.method_return());
             }
-            "AboutToShow" => return Some(message.method_return().append1(false)),
+            "EventGroup" => {
+                type MenuEvent = (i32, String, Variant<Box<dyn dbus::arg::RefArg>>, u32);
+                let Ok(events) = message.read1::<Vec<MenuEvent>>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected menu events",
+                    ));
+                };
+                let state = menu.lock().expect("tray menu lock poisoned");
+                let tree = menu_tree(&state);
+                let mut errors = Vec::new();
+                for (id, event, _, _) in events {
+                    if !tree.contains(id) {
+                        errors.push(id);
+                        continue;
+                    }
+                    if event == "clicked" {
+                        if let Some(command) = state.command_for_id(id) {
+                            if commands.send(command).is_ok() {
+                                command_waker.unpark();
+                            }
+                        }
+                    }
+                }
+                return Some(message.method_return().append1(errors));
+            }
+            "AboutToShow" => {
+                let Ok(id) = message.read1::<i32>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected item ID",
+                    ));
+                };
+                let state = menu.lock().expect("tray menu lock poisoned");
+                return Some(if menu_tree(&state).contains(id) {
+                    message.method_return().append1(false)
+                } else {
+                    menu_error(
+                        message,
+                        "com.canonical.dbusmenu.Error.InvalidMenuItem",
+                        c"Unknown menu item",
+                    )
+                });
+            }
+            "AboutToShowGroup" => {
+                let Ok(ids) = message.read1::<Vec<i32>>() else {
+                    return Some(menu_error(
+                        message,
+                        "org.freedesktop.DBus.Error.InvalidArgs",
+                        c"Expected item IDs",
+                    ));
+                };
+                let state = menu.lock().expect("tray menu lock poisoned");
+                let tree = menu_tree(&state);
+                let errors: Vec<i32> = ids.into_iter().filter(|id| !tree.contains(*id)).collect();
+                return Some(message.method_return().append2(Vec::<i32>::new(), errors));
+            }
             _ => return Some(message.method_return()),
         }
     }
     if interface == DBUS_PROPERTIES && member == "Get" {
         if let Ok((requested_interface, name)) = message.read2::<String, String>() {
-            let value = item_property(&requested_interface, &name)
+            let value = item_property(&requested_interface, &name, icon)
                 .or_else(|| menu_property(&requested_interface, &name));
             if let Some(value) = value {
                 return Some(message.method_return().append1(value));
@@ -443,7 +721,7 @@ fn handle_method_call(
     if interface == DBUS_PROPERTIES && member == "GetAll" {
         let requested_interface = message.read1::<String>().unwrap_or_default();
         let properties = if requested_interface == ITEM_INTERFACE {
-            item_properties()
+            item_properties(icon)
         } else if requested_interface == MENU_INTERFACE {
             menu_properties_all()
         } else {
@@ -458,6 +736,7 @@ fn handle_method_call(
 fn item_property(
     interface: &str,
     name: &str,
+    icon: &IconPixmaps,
 ) -> Option<dbus::arg::Variant<Box<dyn dbus::arg::RefArg>>> {
     if interface != ITEM_INTERFACE {
         return None;
@@ -467,7 +746,19 @@ fn item_property(
         "Id" => Some(property("openless".to_string())),
         "Title" => Some(property("OpenLess".to_string())),
         "Status" => Some(property("Active".to_string())),
-        "IconName" => Some(property("openless".to_string())),
+        // Empty IconName forces the host to use our actual full-color pixels,
+        // not a theme override (in particular, a symbolic/monochrome icon).
+        "IconName" | "OverlayIconName" | "AttentionIconName" | "AttentionMovieName"
+        | "IconThemePath" => Some(property(String::new())),
+        "IconPixmap" => Some(property(icon.clone())),
+        "OverlayIconPixmap" | "AttentionIconPixmap" => Some(property(IconPixmaps::new())),
+        "WindowId" => Some(property(0u32)),
+        "ToolTip" => Some(property((
+            String::new(),
+            IconPixmaps::new(),
+            "OpenLess".to_owned(),
+            String::new(),
+        ))),
         "Menu" => Some(property(
             dbus::Path::new(MENU_PATH).expect("static D-Bus path"),
         )),
@@ -477,18 +768,27 @@ fn item_property(
 }
 
 #[cfg(target_os = "linux")]
-fn item_properties() -> Properties {
+fn item_properties(icon: &IconPixmaps) -> Properties {
     [
         "Category",
         "Id",
         "Title",
         "Status",
         "IconName",
+        "IconPixmap",
+        "IconThemePath",
+        "WindowId",
+        "OverlayIconName",
+        "OverlayIconPixmap",
+        "AttentionIconName",
+        "AttentionIconPixmap",
+        "AttentionMovieName",
+        "ToolTip",
         "Menu",
         "ItemIsMenu",
     ]
     .into_iter()
-    .filter_map(|name| item_property(ITEM_INTERFACE, name).map(|value| (name.into(), value)))
+    .filter_map(|name| item_property(ITEM_INTERFACE, name, icon).map(|value| (name.into(), value)))
     .collect()
 }
 
@@ -520,13 +820,44 @@ fn menu_properties_all() -> Properties {
 #[cfg(target_os = "linux")]
 const INTROSPECTION_XML: &str = r#"<node>
  <interface name="org.kde.StatusNotifierItem">
+  <property name="Category" type="s" access="read"/>
+  <property name="Id" type="s" access="read"/>
+  <property name="Title" type="s" access="read"/>
+  <property name="Status" type="s" access="read"/>
+  <property name="WindowId" type="u" access="read"/>
+  <property name="IconName" type="s" access="read"/>
+  <property name="IconPixmap" type="a(iiay)" access="read"/>
+  <property name="IconThemePath" type="s" access="read"/>
+  <property name="OverlayIconName" type="s" access="read"/>
+  <property name="OverlayIconPixmap" type="a(iiay)" access="read"/>
+  <property name="AttentionIconName" type="s" access="read"/>
+  <property name="AttentionIconPixmap" type="a(iiay)" access="read"/>
+  <property name="AttentionMovieName" type="s" access="read"/>
+  <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
+  <property name="ItemIsMenu" type="b" access="read"/>
+  <property name="Menu" type="o" access="read"/>
+  <signal name="NewTitle"/>
+  <signal name="NewIcon"/>
+  <signal name="NewOverlayIcon"/>
+  <signal name="NewAttentionIcon"/>
+  <signal name="NewToolTip"/>
+  <signal name="NewStatus"><arg type="s"/></signal>
   <method name="Activate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
   <method name="SecondaryActivate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
   <method name="ContextMenu"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
  </interface>
  <interface name="com.canonical.dbusmenu">
+  <property name="Version" type="u" access="read"/>
+  <property name="TextDirection" type="s" access="read"/>
+  <property name="Status" type="s" access="read"/>
+  <property name="IconThemePath" type="as" access="read"/>
   <method name="GetLayout"><arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="as" direction="in"/><arg type="u" direction="out"/><arg type="(ia{sv}av)" direction="out"/></method>
   <method name="GetGroupProperties"><arg type="ai" direction="in"/><arg type="as" direction="in"/><arg type="a(ia{sv})" direction="out"/></method>
+  <method name="GetProperty"><arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="out"/></method>
+  <method name="EventGroup"><arg type="a(isvu)" direction="in"/><arg type="ai" direction="out"/></method>
+  <method name="AboutToShowGroup"><arg type="ai" direction="in"/><arg type="ai" direction="out"/><arg type="ai" direction="out"/></method>
+  <signal name="LayoutUpdated"><arg type="u"/><arg type="i"/></signal>
+  <signal name="ItemsPropertiesUpdated"><arg type="a(ia{sv})"/><arg type="a(ias)"/></signal>
   <method name="Event"><arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/><arg type="u" direction="in"/></method>
   <method name="AboutToShow"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
  </interface>

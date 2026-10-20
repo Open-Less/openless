@@ -25,6 +25,147 @@ pub fn clean_polish_output(content: &str) -> String {
     output.trim().to_string()
 }
 
+const NEAR_DUPLICATE_MIN_CHARS: usize = 12;
+const NEAR_DUPLICATE_MIN_LENGTH_RATIO: f64 = 0.65;
+const NEAR_DUPLICATE_MIN_ADJUSTED_SIMILARITY: f64 = 0.90;
+const NEAR_DUPLICATE_MAX_SEGMENT_CHARS: usize = 512;
+
+/// Privacy-safe metadata for two adjacent polished segments that look unusually
+/// similar. The finding deliberately does not retain either segment's contents.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdjacentNearDuplicate {
+    pub left_chars: usize,
+    pub right_chars: usize,
+    pub similarity: f64,
+    pub length_adjusted_similarity: f64,
+}
+
+/// Finds adjacent sentence-like segments that may be an accidental repetition.
+///
+/// This is an observation-only detector. It never changes the text because an
+/// SSE delta and an intentional repeated sentence are indistinguishable without
+/// provider metadata or user intent. Punctuation and whitespace define the
+/// candidate boundaries; the comparison itself is Unicode scalar-safe.
+pub fn find_adjacent_near_duplicates(content: &str) -> Vec<AdjacentNearDuplicate> {
+    let segments = sentence_like_segments(content);
+    segments
+        .windows(2)
+        .filter_map(|pair| near_duplicate_finding(pair[0], pair[1]))
+        .collect()
+}
+
+fn sentence_like_segments(content: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for (index, character) in content.char_indices() {
+        let period_boundary = character == '.'
+            && content[index + 1..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+            && !is_abbreviation(&content[start..index]);
+        if matches!(
+            character,
+            '\n' | '。' | '！' | '？' | '!' | '?' | ';' | '；'
+        ) || period_boundary
+        {
+            let end = index + character.len_utf8();
+            let segment = content[start..end].trim();
+            if !segment.is_empty() {
+                segments.push(segment);
+            }
+            start = end;
+        }
+    }
+    let tail = content[start..].trim();
+    if !tail.is_empty() {
+        segments.push(tail);
+    }
+    segments
+}
+
+fn is_abbreviation(before_period: &str) -> bool {
+    let word = before_period.split_whitespace().next_back().unwrap_or("");
+    // shortcut: recognize common English titles and initials; extend for observed false boundaries.
+    (word.len() == 1 && word.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        || (word.contains('.')
+            && word
+                .split('.')
+                .all(|part| part.len() == 1 && part.bytes().all(|byte| byte.is_ascii_alphabetic())))
+        || matches!(
+            word.to_ascii_lowercase().as_str(),
+            "mr" | "mrs" | "ms" | "dr" | "prof" | "sr" | "jr" | "st" | "vs" | "etc"
+        )
+}
+
+fn near_duplicate_finding(left: &str, right: &str) -> Option<AdjacentNearDuplicate> {
+    let left = normalized_segment(left);
+    let right = normalized_segment(right);
+    if left.len() < NEAR_DUPLICATE_MIN_CHARS
+        || right.len() < NEAR_DUPLICATE_MIN_CHARS
+        || (left.len().min(right.len()) as f64 / left.len().max(right.len()) as f64)
+            < NEAR_DUPLICATE_MIN_LENGTH_RATIO
+        || left.len() > NEAR_DUPLICATE_MAX_SEGMENT_CHARS
+        || right.len() > NEAR_DUPLICATE_MAX_SEGMENT_CHARS
+    {
+        return None;
+    }
+
+    let distance = levenshtein_distance(&left, &right);
+    let longest = left.len().max(right.len());
+    let shortest = left.len().min(right.len());
+    let length_difference = left.len().abs_diff(right.len());
+    let similarity = 1.0 - distance as f64 / longest as f64;
+    let adjusted_distance = distance.saturating_sub(length_difference);
+    let length_adjusted_similarity = 1.0 - adjusted_distance as f64 / shortest as f64;
+    (length_adjusted_similarity >= NEAR_DUPLICATE_MIN_ADJUSTED_SIMILARITY).then_some(
+        AdjacentNearDuplicate {
+            left_chars: left.len(),
+            right_chars: right.len(),
+            similarity,
+            length_adjusted_similarity,
+        },
+    )
+}
+
+fn normalized_segment(segment: &str) -> Vec<char> {
+    use unicode_normalization::UnicodeNormalization;
+
+    segment
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+    for (left_index, left_character) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_character) in right.iter().enumerate() {
+            let substitution =
+                previous[right_index] + usize::from(left_character != right_character);
+            current[right_index + 1] =
+                (substitution.min(previous[right_index + 1] + 1)).min(current[right_index] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
+/// Hashes text without exposing it in logs. The short digest is only intended
+/// to correlate stages within a diagnostic record, not to authenticate content.
+pub(crate) fn privacy_text_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(text.as_bytes());
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// XML structured-output cleaning: strips thinking blocks, keeps the edit_plan
 /// envelope.
 pub fn clean_xml_llm_output(content: &str) -> String {
@@ -277,6 +418,68 @@ mod tests {
         assert_eq!(
             strip_thinking_blocks("<think>未闭合正文"),
             "<think>未闭合正文"
+        );
+    }
+
+    #[test]
+    fn adjacent_near_duplicate_detector_reports_only_metadata() {
+        let findings = find_adjacent_near_duplicates(
+            "这个问题需要及时处理，避免重复内容。这个问题需要及时处理，避免出现重复内容。",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].left_chars >= NEAR_DUPLICATE_MIN_CHARS);
+        assert!(findings[0].right_chars > findings[0].left_chars);
+        assert!(findings[0].length_adjusted_similarity >= 0.9);
+    }
+
+    #[test]
+    fn adjacent_near_duplicate_detector_does_not_treat_short_or_distinct_text_as_duplicate() {
+        assert!(find_adjacent_near_duplicates("非常非常重要。").is_empty());
+        assert!(
+            find_adjacent_near_duplicates("第一段内容完全不同。第二段也完全不一样。").is_empty()
+        );
+    }
+
+    #[test]
+    fn near_duplicate_observation_never_changes_cleaned_text() {
+        let content = "这个问题需要及时处理，避免重复内容。这个问题需要及时处理，避免重复内容。";
+        assert_eq!(find_adjacent_near_duplicates(content).len(), 1);
+        assert_eq!(clean_polish_output(content), content);
+    }
+
+    #[test]
+    fn adjacent_near_duplicates_support_english_sentence_endings() {
+        for separator in [". ", "! ", "? ", "\n"] {
+            let text = format!(
+                "Please submit the final report today{separator}Please submit the final report today."
+            );
+            assert_eq!(
+                find_adjacent_near_duplicates(&text).len(),
+                1,
+                "{separator:?}"
+            );
+        }
+        assert_eq!(
+            find_adjacent_near_duplicates(
+                "Please submit the final report today. Please submit the revised final report today."
+            ).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn sentence_boundaries_preserve_decimals_and_abbreviations() {
+        assert_eq!(
+            sentence_like_segments("Dr. A. Smith paid 3.14 dollars, e.g. in cash. Next sentence."),
+            [
+                "Dr. A. Smith paid 3.14 dollars, e.g. in cash.",
+                "Next sentence."
+            ]
+        );
+        assert_eq!(
+            sentence_like_segments("The price is 3.14. Next sentence."),
+            ["The price is 3.14.", "Next sentence."]
         );
     }
 }

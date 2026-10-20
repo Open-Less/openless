@@ -41,7 +41,7 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
 
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
   return platformCapabilities().then((caps) => {
-    if (caps.platform === 'android') {
+    if (caps.platform !== 'desktop') {
       return androidWindowsImeStatus;
     }
     return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);
@@ -60,8 +60,13 @@ export function validateShortcutBinding(binding: ShortcutBinding): Promise<void>
   return invokeOrMock('validate_shortcut_binding', { binding }, () => undefined);
 }
 
-export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
-  return invokeOrMock('set_dictation_hotkey', { binding }, () => undefined);
+export function setDictationHotkey(binding: ShortcutBinding | null): Promise<void> {
+  return invokeOrMock('set_dictation_hotkey', { binding }, () => {
+    mockSetSettings({
+      ...mockSettings,
+      dictationHotkey: binding ?? { primary: '', modifiers: [] },
+    });
+  });
 }
 
 // binding = null disables the hotkey. Once the Tauri side persists, the settings page re-reads prefs immediately.
@@ -72,8 +77,13 @@ export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promi
   });
 }
 
-export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
-  return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
+export function setTranslationHotkey(binding: ShortcutBinding | null): Promise<void> {
+  return invokeOrMock('set_translation_hotkey', { binding }, () => {
+    mockSetSettings({
+      ...mockSettings,
+      translationHotkey: binding ?? { primary: '', modifiers: [] },
+    });
+  });
 }
 
 // binding = null disables (clears the global key), matching set_qa_hotkey (issue #576).

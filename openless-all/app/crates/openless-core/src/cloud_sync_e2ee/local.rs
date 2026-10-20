@@ -37,6 +37,8 @@ pub(crate) struct ClientSettings {
     pub enabled: bool,
     pub consent_version: Option<String>,
     pub owner_id: Option<String>,
+    #[serde(default)]
+    pub service_origin: Option<String>,
     pub remember_key: bool,
     #[serde(default)]
     pub key_preference_epoch: u64,
@@ -58,10 +60,11 @@ pub(crate) struct UiEnvelope {
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             enabled: false,
             consent_version: None,
             owner_id: None,
+            service_origin: None,
             remember_key: false,
             key_preference_epoch: 0,
             last_success: None,
@@ -88,6 +91,12 @@ impl LocalStorage {
             cipher: Arc::new(OnceCell::new()),
             io: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    pub(crate) fn account_namespace(origin: &str, owner: &str) -> SyncResult<String> {
+        let binding =
+            serde_json::to_vec(&[origin, owner]).map_err(|_| error("local_storage_unavailable"))?;
+        Ok(format!("remote-v2:{}", hex::encode(Sha256::digest(binding))))
     }
 
     pub(crate) fn initialized(&self) -> SyncResult<bool> {
@@ -121,8 +130,11 @@ impl LocalStorage {
     ) -> SyncResult<SyncSecretAccount> {
         let binding = serde_json::to_vec(&[&self.origin, owner, vault, key, &self.device_id])
             .map_err(|_| error("local_storage_unavailable"))?;
-        SyncSecretAccount::new(format!("cloud-sync.e2ee.key.{:x}", Sha256::digest(binding)))
-            .map_err(|_| error("local_storage_unavailable"))
+        SyncSecretAccount::new(format!(
+            "cloud-sync.e2ee.key.{}",
+            hex::encode(Sha256::digest(binding))
+        ))
+        .map_err(|_| error("local_storage_unavailable"))
     }
 
     pub(crate) async fn key(&self) -> SyncResult<Arc<DerivedKey>> {
@@ -130,8 +142,8 @@ impl LocalStorage {
             .get_or_try_init(|| async {
                 let aad = self.aad("device", "storage-key")?;
                 let account = SyncSecretAccount::new(format!(
-                    "cloud-sync.e2ee.local.{:x}",
-                    Sha256::digest(aad)
+                    "cloud-sync.e2ee.local.{}",
+                    hex::encode(Sha256::digest(aad))
                 ))
                 .map_err(|_| error("local_storage_unavailable"))?;
                 let value = self
@@ -214,8 +226,10 @@ impl LocalStorage {
 
     fn path(&self, owner: &str, name: &str) -> PathBuf {
         let id = format!("{owner}\0{name}");
-        self.root
-            .join(format!("{:x}.enc", Sha256::digest(id.as_bytes())))
+        self.root.join(format!(
+            "{}.enc",
+            hex::encode(Sha256::digest(id.as_bytes()))
+        ))
     }
 
     pub(crate) async fn read<T: DeserializeOwned + Send + 'static>(

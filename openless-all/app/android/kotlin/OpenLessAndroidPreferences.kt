@@ -20,12 +20,12 @@ object OpenLessAndroidPreferences {
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
     private const val MAX_OVERLAY_SIZE_DP = 120
-    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always")
+    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always", "never")
     private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
     private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
     private val VALID_OVERLAY_GESTURE_ACTIONS =
-        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa")
+        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa", "voice_edit")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
@@ -34,6 +34,13 @@ object OpenLessAndroidPreferences {
         }
         return value.takeIf { it in VALID_OVERLAY_TRIGGERS }
     }
+
+    fun overlayDisplayAllowed(context: Context): Boolean {
+        return shouldDisplayOverlay(overlayTriggerMode(context))
+    }
+
+    /** The `never` mode blocks every automatic overlay creation path. */
+    internal fun shouldDisplayOverlay(trigger: String?): Boolean = trigger != "never"
 
     /** True when preferences still store legacy `"keyboard"` (before migration). */
     fun isKeyboardOverlayTrigger(context: Context): Boolean {
@@ -98,6 +105,9 @@ object OpenLessAndroidPreferences {
 
     fun strokeUsageEnabled(context: Context): Boolean =
         readPreferenceBoolean(context, "strokeUsageEnabled") ?: true
+
+    fun cursorContextEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "cursorContextEnabled") ?: false
 
     private fun readPreferenceString(context: Context, key: String): String? {
         for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {

@@ -1,0 +1,25 @@
+name: Cache npm from beta
+description: Reuse the baseline npm download cache without creating per-PR copies.
+runs:
+  using: composite
+  steps:
+    - name: Resolve npm cache identity
+      id: npm
+      shell: bash
+      run: |
+        echo "path=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+        echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
+    # Keep setup-node's existing key and path so the current beta cache remains
+    # reusable. Cache lookup falls back to the PR base/default branch on a miss.
+    - name: Restore npm outside beta builds
+      if: github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch')
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.npm.outputs.path }}
+        key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles('openless-all/app/package-lock.json') }}
+    - name: Maintain npm cache on beta builds
+      if: github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.npm.outputs.path }}
+        key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles('openless-all/app/package-lock.json') }}

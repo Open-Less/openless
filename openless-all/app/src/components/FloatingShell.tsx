@@ -1,30 +1,49 @@
 // Main window shell: sidebar navigation, page switching, mobile panels, and the
 // settings modal. Pages share preference state; business reads/writes go to Core via typed IPC.
 
-import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from 'react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+} from 'react';
+import { afterPaint } from '../lib/startupMetrics';
+import { PageSkeleton } from './ui/PageSkeleton';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { AudioCueListener } from './AudioCue';
-import { SettingsModal } from './SettingsModal';
+const SettingsModal = lazy(() =>
+  import('./SettingsModal').then((m) => ({ default: m.SettingsModal })),
+);
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
-import { History } from '../pages/History';
-import { Vocab } from '../pages/Vocab';
-import { Style } from '../pages/Style';
-import { Marketplace } from '../pages/Marketplace';
-import { Translation } from '../pages/Translation';
-import { SelectionAsk } from '../pages/SelectionAsk';
-import { QuickNote } from '../pages/QuickNote';
-import { Corrections } from '../pages/Corrections';
+const History = lazy(() => import('../pages/History').then((m) => ({ default: m.History })));
+const Vocab = lazy(() => import('../pages/Vocab').then((m) => ({ default: m.Vocab })));
+const Style = lazy(() => import('../pages/Style').then((m) => ({ default: m.Style })));
+const Marketplace = lazy(() =>
+  import('../pages/Marketplace').then((m) => ({ default: m.Marketplace })),
+);
+const Translation = lazy(() =>
+  import('../pages/Translation').then((m) => ({ default: m.Translation })),
+);
+const SelectionAsk = lazy(() =>
+  import('../pages/SelectionAsk').then((m) => ({ default: m.SelectionAsk })),
+);
+const QuickNote = lazy(() => import('../pages/QuickNote').then((m) => ({ default: m.QuickNote })));
+const Corrections = lazy(() =>
+  import('../pages/Corrections').then((m) => ({ default: m.Corrections })),
+);
 import { IS_BETA_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
-import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { useExitMount } from '../lib/useExitMount';
 import { useOverlayMotion, usePageTransition } from '../lib/motion';
 import { getCredentials } from '../lib/ipc';
@@ -146,11 +165,10 @@ function FloatingShellBody({
   const pageRef = useRef<HTMLDivElement>(null);
   const displayTab = usePageTransition(currentTab, pageRef, mobile);
 
-  // Font scale — applied once from localStorage at startup; later changes come from
-  // the Settings "personalization" section.
+  // Already applied before React mounts; no first-frame scale jump.
   useEffect(() => {
-    applyFontScale(readFontScale());
-  }, []);
+    if (prefs) return afterPaint('interactive');
+  }, [!!prefs]);
 
   useEffect(() => {
     applyStackedLayoutFromPrefs(prefs?.stackedRowLayout);
@@ -330,6 +348,9 @@ function FloatingShellBody({
                 color: 'var(--ol-ink-4)',
               }}
             >
+              <strong style={{ fontSize: 15, color: 'var(--ol-ink)', letterSpacing: '-0.02em' }}>
+                OpenLess
+              </strong>
               {IS_BETA_BUILD && (
                 <span
                   style={{
@@ -338,7 +359,7 @@ function FloatingShellBody({
                     padding: '1px 6px',
                     fontSize: 10,
                     lineHeight: '14px',
-                    fontWeight: 600,
+                    fontWeight: 'var(--ol-font-weight-semibold)',
                     letterSpacing: '0.05em',
                     textTransform: 'uppercase',
                     color: 'var(--ol-blue)',
@@ -406,6 +427,10 @@ function FloatingShellBody({
                     {/* Children: the grid-rows 0fr↔1fr transition gives an expand
                         animation without hardcoded heights. */}
                     <div
+                      aria-hidden={!expanded}
+                      ref={(element) => {
+                        if (element) element.inert = !expanded;
+                      }}
                       style={{
                         display: 'grid',
                         gridTemplateRows: expanded ? '1fr' : '0fr',
@@ -517,14 +542,13 @@ function FloatingShellBody({
               className="ol-thinscroll ol-scroll-fade"
               // Overview is a fixed single-screen page (overflow hidden, never scrolls):
               // no scrollbar gutter reserved.
-              data-ol-page-fixed={displayTab === 'overview' && !mobile ? 'true' : undefined}
               style={{
                 flex: 1,
                 minHeight: 0,
                 // Overview is a fixed single-screen page: no scrolling; all dashboards
                 // fit one screen with heights distributed by Overview.tsx's internal
                 // flex; other pages keep the thin scrollbar.
-                overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
+                overflow: 'auto',
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
                   : displayTab === 'overview'
@@ -538,30 +562,32 @@ function FloatingShellBody({
                 flexDirection: 'column',
               }}
             >
-              {displayTab === 'overview' ? (
-                <Overview
-                  onOpenHistory={() => setCurrentTab('history')}
-                  onOpenSettings={openSettings}
-                />
-              ) : (
-                <div
-                  className={conservative ? 'ol-conservative-scope' : undefined}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    // Keep the usage-guide content height so the outer scroll area's
-                    // bottom-nav spacing applies.
-                    flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
-                    minHeight: 0,
-                  }}
-                >
-                  {displayTab === 'selectionAsk' ? (
-                    <SelectionAsk onOpenShortcuts={() => openSettings('shortcuts')} />
-                  ) : (
-                    <Page />
-                  )}
-                </div>
-              )}
+              <Suspense fallback={<PageSkeleton />}>
+                {displayTab === 'overview' ? (
+                  <Overview
+                    onOpenHistory={() => setCurrentTab('history')}
+                    onOpenSettings={openSettings}
+                  />
+                ) : (
+                  <div
+                    className={conservative ? 'ol-conservative-scope' : undefined}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      // Keep the usage-guide content height so the outer scroll area's
+                      // bottom-nav spacing applies.
+                      flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
+                      minHeight: 0,
+                    }}
+                  >
+                    {displayTab === 'selectionAsk' ? (
+                      <SelectionAsk onOpenShortcuts={() => openSettings('shortcuts')} />
+                    ) : (
+                      <Page />
+                    )}
+                  </div>
+                )}
+              </Suspense>
             </div>
           </main>
         </div>
@@ -613,13 +639,21 @@ function FloatingShellBody({
 
       {/* Settings modal — rendered inside this window; settingsMount gates the exit animation */}
       {settingsMount.mounted && (
-        <SettingsModal
-          key={settingsInitialSection ?? 'default'}
-          os={os}
-          closing={settingsMount.closing}
-          initialSettingsSection={settingsInitialSection}
-          onClose={() => setSettingsOpen(false)}
-        />
+        <Suspense
+          fallback={
+            <div className="ol-settings-placeholder">
+              <PageSkeleton rows={5} />
+            </div>
+          }
+        >
+          <SettingsModal
+            key={settingsInitialSection ?? 'default'}
+            os={os}
+            closing={settingsMount.closing}
+            initialSettingsSection={settingsInitialSection}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </Suspense>
       )}
 
       {providerPromptMount.mounted ? (
@@ -656,11 +690,11 @@ function FloatingShellBody({
            consumers keep their inline background, so the active bg doesn't affect them. */
         .ol-nav-btn {
           color: var(--ol-ink-3);
-          font-weight: 500;
+          font-weight: var(--ol-font-weight-medium);
         }
         .ol-nav-btn.ol-nav-btn-active {
           color: var(--ol-ink);
-          font-weight: 600;
+          font-weight: var(--ol-font-weight-semibold);
           background: var(--ol-surface-2);
         }
         .ol-nav-btn:not(.ol-nav-btn-active):hover {
@@ -710,7 +744,7 @@ function MobileTopBar({
         <span
           style={{
             fontSize: 16,
-            fontWeight: 600,
+            fontWeight: 'var(--ol-font-weight-semibold)',
             letterSpacing: '-0.02em',
             color: 'var(--ol-ink)',
             overflow: 'hidden',
@@ -798,7 +832,14 @@ function MobileBottomNav({
             style={mobileNavBtnStyle}
           >
             <Icon name={tab.icon} size={18} />
-            <span style={{ fontSize: 10.5, fontWeight: active ? 600 : 500 }}>
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: active
+                  ? 'var(--ol-font-weight-semibold)'
+                  : 'var(--ol-font-weight-medium)',
+              }}
+            >
               {t(`nav.${tab.id}`)}
             </span>
           </button>
@@ -811,7 +852,14 @@ function MobileBottomNav({
         style={mobileNavBtnStyle}
       >
         <Icon name="style" size={18} />
-        <span style={{ fontSize: 10.5, fontWeight: styleActive ? 600 : 500 }}>
+        <span
+          style={{
+            fontSize: 10.5,
+            fontWeight: styleActive
+              ? 'var(--ol-font-weight-semibold)'
+              : 'var(--ol-font-weight-medium)',
+          }}
+        >
           {t('nav.group.style')}
         </span>
       </button>
@@ -822,7 +870,16 @@ function MobileBottomNav({
         style={mobileNavBtnStyle}
       >
         <Icon name="more" size={18} />
-        <span style={{ fontSize: 10.5, fontWeight: moreActive ? 600 : 500 }}>{t('nav.more')}</span>
+        <span
+          style={{
+            fontSize: 10.5,
+            fontWeight: moreActive
+              ? 'var(--ol-font-weight-semibold)'
+              : 'var(--ol-font-weight-medium)',
+          }}
+        >
+          {t('nav.more')}
+        </span>
       </button>
     </nav>
   );
@@ -921,7 +978,13 @@ function ProviderSetupPrompt({
           >
             <Icon name="settings" size={17} />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+              color: 'var(--ol-ink)',
+            }}
+          >
             {t('shell.providerPrompt.title')}
           </div>
         </div>
@@ -948,7 +1011,7 @@ function ProviderSetupPrompt({
               color: 'var(--ol-ink-3)',
               fontFamily: 'inherit',
               fontSize: 12.5,
-              fontWeight: 500,
+              fontWeight: 'var(--ol-font-weight-medium)',
               cursor: 'default',
               transition:
                 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
@@ -967,7 +1030,7 @@ function ProviderSetupPrompt({
               color: 'var(--ol-primary-solid-ink)',
               fontFamily: 'inherit',
               fontSize: 12.5,
-              fontWeight: 500,
+              fontWeight: 'var(--ol-font-weight-medium)',
               cursor: 'default',
               transition:
                 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
@@ -1039,7 +1102,13 @@ function HotkeyModeMigrationPrompt({
           >
             <Icon name="mic" size={17} />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+              color: 'var(--ol-ink)',
+            }}
+          >
             {t('shell.hotkeyModePrompt.title')}
           </div>
         </div>
@@ -1058,7 +1127,7 @@ function HotkeyModeMigrationPrompt({
               color: 'var(--ol-ink-3)',
               fontFamily: 'inherit',
               fontSize: 12.5,
-              fontWeight: 500,
+              fontWeight: 'var(--ol-font-weight-medium)',
               cursor: 'default',
               transition:
                 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
@@ -1077,7 +1146,7 @@ function HotkeyModeMigrationPrompt({
               color: 'var(--ol-primary-solid-ink)',
               fontFamily: 'inherit',
               fontSize: 12.5,
-              fontWeight: 500,
+              fontWeight: 'var(--ol-font-weight-medium)',
               cursor: 'default',
               transition:
                 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',

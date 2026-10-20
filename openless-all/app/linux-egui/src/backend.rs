@@ -136,7 +136,19 @@ impl LinuxBackendBuilder {
             .with_auxiliary_polisher(auxiliary_polisher)
             .with_credential_store(credential_store)
             .with_services(services)
-            .with_marketplace_config(MarketplaceConfig::production())
+            // 加密云同步是 Marketplace 的可选扩展：不装这个配置，Core 里
+            // `encrypted_sync` 永远是 None，界面上任何同步动作都会得到
+            // `service_unavailable`（用户看到「同步暂不可用」）。
+            // Tauri 在 coordinator.rs 里也是这么接的，两边保持一致。
+            .with_marketplace_config(MarketplaceConfig::production().with_encrypted_sync(
+                openless_core::cloud_sync_e2ee::EncryptedSyncConfig {
+                    // 自建源是运行时偏好；这里固定本地加密存储的身份，
+                    // 换服务器不会改变本地保险库标识。
+                    service_origin:
+                        openless_core::cloud_sync_e2ee::DEFAULT_SYNC_SERVICE_ORIGIN.into(),
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                },
+            ))
             .with_settings_runtime(Arc::new(LinuxSettingsRuntime::new(store))))
     }
 
@@ -432,6 +444,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
+    /// 加密云同步必须由宿主显式装配。漏掉 `with_encrypted_sync` 时 Core 的
+    /// `encrypted_sync` 是 `None`，界面每个同步动作都返回 `service_unavailable`，
+    /// 用户只能看到「暂不可用」——这正是之前那块卡片「用不了」的原因。
+    #[tokio::test]
+    async fn shared_provider_builder_wires_encrypted_cloud_sync() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-linux-encrypted-sync-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let runtime = LinuxBackendBuilder::from_shared_providers(BackendConfig {
+            data_dir: data_dir.clone(),
+            ..BackendConfig::default()
+        })
+        .unwrap()
+        .with_recorder(Arc::new(FixtureAudioRecorder::new(Vec::new(), Vec::new())))
+        .with_text_inserter(Arc::new(FixtureTextInserter::with_outcome(
+            InsertOutcome::Inserted,
+        )))
+        .build()
+        .unwrap();
+
+        let status = runtime
+            .backend
+            .cloud_sync_e2ee_status()
+            .expect("encrypted sync must be constructed by the production builder");
+        assert!(!status.enabled, "a fresh data dir starts disabled");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
     #[tokio::test]
     async fn shared_provider_factory_does_not_fall_back_to_unsupported() -> Result<(), BackendError>
     {
@@ -471,6 +513,19 @@ mod tests {
         ));
         let recorder = FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(20, 0.5)]);
         let transcription = FixtureTranscriptionEngine::successful("fixture raw", 20);
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        credentials
+            .write(
+                openless_core::CredentialKey::new(
+                    openless_core::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    "ark.api_key",
+                )
+                .unwrap(),
+                openless_core::SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
         let runtime = LinuxBackendBuilder::new(
             BackendConfig {
                 data_dir: data_dir.clone(),
@@ -483,7 +538,7 @@ mod tests {
         .with_text_inserter(Arc::new(FixtureTextInserter::with_outcome(
             InsertOutcome::Inserted,
         )))
-        .with_credential_store(Arc::new(InMemoryCredentialStore::default()))
+        .with_credential_store(credentials)
         .build()
         .unwrap();
 
@@ -609,20 +664,37 @@ mod tests {
         .unwrap()
         .build()
         .unwrap();
+        let request = CodingAgentTestRequest {
+            provider: CodingAgentProvider::ClaudeCodeCli,
+            executable: Some("openless-command-that-does-not-exist".into()),
+            prompt: "test".into(),
+            permission_mode: openless_core::CodingAgentPermissionMode::Plan,
+            workdir: None,
+            model: None,
+            max_budget_usd: Some(0.5),
+            timeout_secs: 5,
+        };
+        let denied = runtime
+            .backend
+            .services()
+            .coding_agent
+            .run_test(request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, BackendErrorCode::PermissionDenied);
+        let mut preferences = runtime.backend.get_preferences();
+        preferences.testing_features_enabled = true;
+        runtime
+            .backend
+            .repositories()
+            .preferences
+            .set(preferences)
+            .unwrap();
         let error = runtime
             .backend
             .services()
             .coding_agent
-            .run_test(CodingAgentTestRequest {
-                provider: CodingAgentProvider::ClaudeCodeCli,
-                executable: Some("openless-command-that-does-not-exist".into()),
-                prompt: "test".into(),
-                permission_mode: openless_core::CodingAgentPermissionMode::Plan,
-                workdir: None,
-                model: None,
-                max_budget_usd: Some(0.5),
-                timeout_secs: 5,
-            })
+            .run_test(request)
             .await
             .expect_err("missing coding agent executable must be explicit");
         assert_eq!(error.code, BackendErrorCode::Unsupported);

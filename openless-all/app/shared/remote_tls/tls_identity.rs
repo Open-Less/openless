@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose,
+    Issuer, KeyPair, KeyUsagePurpose,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
@@ -46,9 +46,13 @@ fn matching_key(cert: &[u8], key: &[u8]) -> Result<(), String> {
     .map_err(|error| format!("remote TLS certificate/key mismatch: {error}"))
 }
 
-fn parse_cert(cert: &[u8]) -> Result<CertificateParams, String> {
-    CertificateParams::from_ca_cert_der(&CertificateDer::from(cert))
-        .map_err(|error| format!("invalid remote TLS certificate: {error}"))
+fn parse_cert(cert: &[u8]) -> Result<x509_parser::certificate::X509Certificate<'_>, String> {
+    let (remaining, parsed) = x509_parser::parse_x509_certificate(cert)
+        .map_err(|error| format!("invalid remote TLS certificate: {error}"))?;
+    if !remaining.is_empty() {
+        return Err("remote TLS certificate has trailing bytes".into());
+    }
+    Ok(parsed)
 }
 
 fn read_identity(path: &Path) -> Result<Option<StoredIdentity>, String> {
@@ -127,16 +131,9 @@ fn valid_leaf(identity: &StoredIdentity, sans: &[String], now: OffsetDateTime) -
     let Ok(params) = parse_cert(&identity.leaf_cert) else {
         return false;
     };
-    let Ok(required) = CertificateParams::new(sans.to_vec()) else {
-        return false;
-    };
-    if !matches!(params.is_ca, IsCa::NoCa | IsCa::ExplicitNoCa)
-        || params.not_before > now
-        || params.not_after < now + Duration::days(30)
-        || !required
-            .subject_alt_names
-            .iter()
-            .all(|san| params.subject_alt_names.contains(san))
+    if params.is_ca()
+        || params.validity().not_before.to_datetime() > now
+        || params.validity().not_after.to_datetime() < now + Duration::days(30)
         || matching_key(&identity.leaf_cert, &identity.leaf_key).is_err()
     {
         return false;
@@ -158,26 +155,26 @@ fn valid_leaf(identity: &StoredIdentity, sans: &[String], now: OffsetDateTime) -
     .build() else {
         return false;
     };
-    let Some(name) = sans
-        .first()
-        .and_then(|name| rustls::pki_types::ServerName::try_from(name.clone()).ok())
-    else {
-        return false;
-    };
     let Ok(timestamp) = u64::try_from(now.unix_timestamp()) else {
         return false;
     };
-    verifier
-        .verify_server_cert(
-            &CertificateDer::from(identity.leaf_cert.as_slice()),
-            &[],
-            &name,
-            &[],
-            rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(
-                timestamp,
-            )),
-        )
-        .is_ok()
+    !sans.is_empty()
+        && sans.iter().all(|name| {
+            let Ok(name) = rustls::pki_types::ServerName::try_from(name.clone()) else {
+                return false;
+            };
+            verifier
+                .verify_server_cert(
+                    &CertificateDer::from(identity.leaf_cert.as_slice()),
+                    &[],
+                    &name,
+                    &[],
+                    rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(
+                        timestamp,
+                    )),
+                )
+                .is_ok()
+        })
 }
 
 pub(super) fn load_or_create(directory: &Path, sans: &[String]) -> Result<TlsIdentity, String> {
@@ -207,20 +204,23 @@ fn load_at(directory: &Path, sans: &[String], now: OffsetDateTime) -> Result<Tls
         return Err("remote TLS CA signature is invalid; restore the identity from backup".into());
     }
     let ca_params = parse_cert(&identity.ca_cert)?;
-    if !matches!(ca_params.is_ca, IsCa::Ca(_))
-        || !ca_params.key_usages.contains(&KeyUsagePurpose::KeyCertSign)
-        || ca_params.not_before > now
-        || ca_params.not_after <= now + Duration::days(30)
+    if !ca_params.is_ca()
+        || !ca_params
+            .key_usage()
+            .map_err(|error| error.to_string())?
+            .is_some_and(|usage| usage.value.key_cert_sign())
+        || ca_params.validity().not_before.to_datetime() > now
+        || ca_params.validity().not_after.to_datetime() <= now + Duration::days(30)
     {
         return Err("remote TLS CA is invalid or expires soon; restore a valid identity or explicitly reset it and trust the new certificate on each phone".into());
     }
     if !valid_leaf(&identity, sans, now) {
         let ca_key = KeyPair::try_from(&key_der(identity.ca_key.clone()))
             .map_err(|error| error.to_string())?;
-        let ca_expiry = ca_params.not_after;
-        let ca = ca_params
-            .self_signed(&ca_key)
-            .map_err(|error| error.to_string())?;
+        let ca_expiry = ca_params.validity().not_after.to_datetime();
+        let ca =
+            Issuer::from_ca_cert_der(&CertificateDer::from(identity.ca_cert.as_slice()), &ca_key)
+                .map_err(|error| error.to_string())?;
         let key = KeyPair::generate().map_err(|error| error.to_string())?;
         let mut params =
             CertificateParams::new(sans.to_vec()).map_err(|error| error.to_string())?;
@@ -234,7 +234,7 @@ fn load_at(directory: &Path, sans: &[String], now: OffsetDateTime) -> Result<Tls
         params.not_after = (now + Duration::days(365)).min(ca_expiry);
         params.use_authority_key_identifier_extension = true;
         let cert = params
-            .signed_by(&key, &ca, &ca_key)
+            .signed_by(&key, &ca)
             .map_err(|error| error.to_string())?;
         identity.leaf_cert = cert.der().to_vec();
         identity.leaf_key = key.serialize_der();
@@ -265,7 +265,10 @@ fn load_at(directory: &Path, sans: &[String], now: OffsetDateTime) -> Result<Tls
 /// 电脑通过本地 IPC 显示完整值，供用户从独立渠道核对。
 pub(super) fn fingerprint_sha256(cert: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(cert))
+    Sha256::digest(cert)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The profile contains a public CA only. IDs include its fingerprint so two
@@ -332,10 +335,8 @@ mod tests {
 
         // 两张证书的名称完全相同，描述文件的名称和标识也可以照抄。
         assert_eq!(
-            parse_cert(&original.trust_cert).unwrap().distinguished_name,
-            parse_cert(&replacement.trust_cert)
-                .unwrap()
-                .distinguished_name
+            parse_cert(&original.trust_cert).unwrap().subject(),
+            parse_cert(&replacement.trust_cert).unwrap().subject()
         );
         let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
         let substituted = mobileconfig(&original.trust_cert).replace(
@@ -436,15 +437,26 @@ mod tests {
         let saved = stored(dir.path());
         let ca = parse_cert(&saved.ca_cert).unwrap();
         let leaf = parse_cert(&saved.leaf_cert).unwrap();
-        assert!(matches!(
-            ca.is_ca,
-            IsCa::Ca(BasicConstraints::Constrained(0))
-        ));
-        assert!(matches!(leaf.is_ca, IsCa::NoCa | IsCa::ExplicitNoCa));
-        assert!(leaf
-            .extended_key_usages
-            .contains(&ExtendedKeyUsagePurpose::ServerAuth));
-        assert!(leaf.not_after - leaf.not_before <= Duration::days(366));
+        assert_eq!(
+            ca.basic_constraints()
+                .unwrap()
+                .unwrap()
+                .value
+                .path_len_constraint,
+            Some(0)
+        );
+        assert!(!leaf.is_ca());
+        assert!(
+            leaf.extended_key_usage()
+                .unwrap()
+                .unwrap()
+                .value
+                .server_auth
+        );
+        assert!(
+            leaf.validity().not_after.to_datetime() - leaf.validity().not_before.to_datetime()
+                <= Duration::days(366)
+        );
     }
 
     #[test]
@@ -477,7 +489,14 @@ mod tests {
         let after = stored(dir.path());
         assert_eq!(before.ca_cert, after.ca_cert);
         assert_ne!(before.leaf_cert, after.leaf_cert);
-        assert!(parse_cert(&after.leaf_cert).unwrap().not_after > now + Duration::days(700));
+        assert!(
+            parse_cert(&after.leaf_cert)
+                .unwrap()
+                .validity()
+                .not_after
+                .to_datetime()
+                > now + Duration::days(700)
+        );
     }
 
     #[test]

@@ -311,18 +311,14 @@ fn wrong_nonce_length_and_permuted_aad_never_authenticate() {
     let nonce = snapshot.nonce.clone();
     let mut frame = Zeroizing::new(snapshot.decoded_ciphertext().unwrap());
     cipher
-        .decrypt_in_place(
-            XNonce::from_slice(nonce.bytes()),
-            &aad(&snapshot).unwrap(),
-            &mut *frame,
-        )
+        .decrypt_in_place(nonce.bytes().into(), &aad(&snapshot).unwrap(), &mut *frame)
         .unwrap();
     let mut reordered: Value = serde_json::from_slice(&aad(&snapshot).unwrap()).unwrap();
     reordered.as_array_mut().unwrap().swap(3, 4);
     // Public deterministic fixture only; production never accepts injected nonces.
     cipher
         .encrypt_in_place(
-            XNonce::from_slice(nonce.bytes()),
+            nonce.bytes().into(),
             &serde_json::to_vec(&reordered).unwrap(),
             &mut *frame,
         )

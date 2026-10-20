@@ -1,0 +1,36 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ime_panel_background",
+      "value": "#E3E4E6"
+    },
+    {
+      "name": "ime_key_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ime_function_background",
+      "value": "#BDC1C5"
+    },
+    {
+      "name": "ime_foreground",
+      "value": "#17191C"
+    },
+    {
+      "name": "ime_secondary",
+      "value": "#666B72"
+    },
+    {
+      "name": "ime_accent",
+      "value": "#0A59F7"
+    },
+    {
+      "name": "ime_key_shadow",
+      "value": "#33000000"
+    }
+  ]
+}

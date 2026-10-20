@@ -652,6 +652,24 @@ class OpenLessBackendWarmupActivity : MainActivity() {
             return !activity.isFinishing && !activity.isDestroyed && activity.webViewRef != null
         }
 
+        /** Restore the exact external editor task before strict Voice Edit target validation. */
+        @androidx.annotation.Keep
+        @JvmStatic
+        fun backgroundForVoiceEdit(context: Context): Boolean {
+            val activity = activeInstance?.get() ?: return false
+            if (activity.isFinishing || activity.isDestroyed) return false
+            activity.runOnUiThread {
+                activity.settingsRequested = false
+                activity.qaRequested = false
+                settingsOpenPending = false
+                qaOpenPending = false
+                activity.warmupHandler.removeCallbacks(activity.sendToBackground)
+                activity.overridePendingTransition(0, 0)
+                activity.moveTaskToBack(true)
+            }
+            return true
+        }
+
         /** Bring the existing Tauri host forward instead of creating a black second host. */
         fun openSettingsIfRunning(context: Context): Boolean {
             val activity = activeInstance?.get() ?: return false
@@ -713,7 +731,7 @@ class OpenLessBackendWarmupActivity : MainActivity() {
             })
         }
 
-        /** Bring the existing Tauri host forward for the embedded mobile QA panel. */
+        /** Bring the existing Tauri host forward for embedded mobile panels. */
         fun openForQaIfRunning(context: Context): Boolean {
             val activity = activeInstance?.get() ?: return false
             if (activity.isFinishing || activity.isDestroyed || activity.webViewRef == null) return false

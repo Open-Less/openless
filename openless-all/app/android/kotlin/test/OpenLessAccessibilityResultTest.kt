@@ -19,5 +19,6 @@ class OpenLessAccessibilityResultTest {
     fun ipcProtocolErrorIsNotRetriablePasteFailure() {
         assertEquals("IPC_PROTOCOL_ERROR", AccessibilityPasteResult.IPC_PROTOCOL_ERROR.reason)
         assertEquals("SERVICE_NOT_CONNECTED", AccessibilityPasteResult.SERVICE_NOT_CONNECTED.reason)
+        assertEquals("TARGET_CHANGED", AccessibilityPasteResult.TARGET_CHANGED.reason)
     }
 }
