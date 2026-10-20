@@ -218,6 +218,16 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
+      - name: Build the fcitx5 plugin for packaging
+        if: inputs.scope != 'none'
+        # The package installs `libopenless.so` + `openless.conf`, so the
+        # packaging job needs the artifact. The assertions and `ctest` run in the
+        # parallel `test-linux-egui` job; this is the build only.
+        working-directory: openless-all/app/scripts/linux-fcitx5-plugin
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+
       - name: Validate Linux desktop metadata
         if: inputs.scope != 'none'
         run: |

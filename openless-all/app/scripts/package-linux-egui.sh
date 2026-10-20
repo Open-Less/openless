@@ -33,15 +33,40 @@ HICOLOR_ICONS=(
   "512x512:icon.png"
 )
 
-test -x "$BINARY"
-test -d "$ICON_DIR"
-for spec in "${HICOLOR_ICONS[@]}"; do test -s "$ICON_DIR/${spec#*:}"; done
-test -s "$PLUGIN_ROOT/libopenless.so"
-test -s "$PLUGIN_ROOT/openless.conf"
-test -s "$PACKAGING/openless.desktop"
-test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
-command -v dpkg-deb >/dev/null
-command -v rpmbuild >/dev/null
+# Never fail silently: a bare `test -s` exits 1 with no output, which in CI looks
+# like "the packaging step failed for no reason".
+require_file() {
+  [ -s "$1" ] || {
+    echo "missing or empty $1" >&2
+    case "$1" in
+      */linux-fcitx5-plugin/build/*) echo "  build it with: (cd scripts/linux-fcitx5-plugin && cmake -S . -B build && cmake --build build)" >&2 ;;
+      */release/openless-linux-egui) echo "  build it with: cargo build --release -p openless-linux-egui" >&2 ;;
+    esac
+    exit 1
+  }
+}
+require_command() {
+  command -v "$1" > /dev/null || {
+    echo "missing build tool: $1" >&2
+    exit 1
+  }
+}
+
+[ -x "$BINARY" ] || {
+  echo "missing release binary $BINARY (cargo build --release -p openless-linux-egui)" >&2
+  exit 1
+}
+[ -d "$ICON_DIR" ] || {
+  echo "missing icon directory $ICON_DIR" >&2
+  exit 1
+}
+for spec in "${HICOLOR_ICONS[@]}"; do require_file "$ICON_DIR/${spec#*:}"; done
+require_file "$PLUGIN_ROOT/libopenless.so"
+require_file "$PLUGIN_ROOT/openless.conf"
+require_file "$PACKAGING/openless.desktop"
+require_file "$PACKAGING/top.openless.OpenLess.metainfo.xml"
+require_command dpkg-deb
+require_command rpmbuild
 
 mkdir -p "$OUTPUT"
 

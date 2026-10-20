@@ -153,3 +153,20 @@ assert.doesNotMatch(
   /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/,
 );
 console.log('linux-egui-release-contract.test.mjs passed');
+
+// The package installs the fcitx5 plugin, so the packaging job must build it
+// even though `ctest` lives in the parallel test job: dropping it made
+// `package-linux-egui.sh` fail on an empty `test -s` with no output at all.
+{
+  const buildJob = check.match(/  build-linux-egui:[\s\S]*$/)?.[0] ?? '';
+  assert.match(
+    buildJob,
+    /cmake --build build --parallel/,
+    'build-linux-egui must compile the fcitx5 plugin that the package installs',
+  );
+  assert.match(
+    pack,
+    /require_file "\$PLUGIN_ROOT\/libopenless\.so"/,
+    'package-linux-egui.sh must report a missing plugin artifact instead of a bare test -s',
+  );
+}
