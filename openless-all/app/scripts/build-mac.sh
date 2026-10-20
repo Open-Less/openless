@@ -24,36 +24,18 @@ else
   echo "▶ 检测到 Apple 签名环境，交给 Tauri 做 Developer ID 签名 / 公证"
 fi
 
-echo "▶ 检查 Apple Silicon MLX 构建依赖"
-npm run check:macos-metal-toolchain
-
 source scripts/macos-build-env.sh
 echo "▶ Cargo release codegen units: ${CARGO_PROFILE_RELEASE_CODEGEN_UNITS} (macOS only)"
 echo "▶ Cargo release strip: ${CARGO_PROFILE_RELEASE_STRIP} (macOS only)"
 echo "▶ Rust proc-macro host wrapper: ${RUSTC_WRAPPER}"
 
-# Cargo creates different directories for build-script executables and OUT_DIR. Clean only
-# among the metallib outputs, keeping all build-script caches to avoid recompiling every time.
-KEEP_QWEN_DIR=""
-for d in src-tauri/target/release/build/qwen3-asr-rs-*; do
-  [ -s "$d/out/lib/mlx.metallib" ] || continue
-  if [ -z "$KEEP_QWEN_DIR" ] || [ "$d/out/lib/mlx.metallib" -nt "$KEEP_QWEN_DIR/out/lib/mlx.metallib" ]; then
-    KEEP_QWEN_DIR="$d"
-  fi
-done
-if [ -n "$KEEP_QWEN_DIR" ]; then
-  for d in src-tauri/target/release/build/qwen3-asr-rs-*; do
-    [ -s "$d/out/lib/mlx.metallib" ] || continue
-    [ "$d" = "$KEEP_QWEN_DIR" ] || rm -rf "$d"
-  done
-fi
-
+# Optional speech dependencies are downloaded into owned modules, never linked into this build.
 echo "▶ tauri build"
 TAURI_BUILD_ARGS=(build --ci)
 case "$(uname -m)" in
   arm64)
     MAC_BUNDLE_ARCH="aarch64"
-    TAURI_BUILD_ARGS+=(--config src-tauri/tauri.macos-mlx.conf.json)
+    TAURI_BUILD_ARGS+=(--config src-tauri/tauri.macos.conf.json)
     ;;
   x86_64)
     MAC_BUNDLE_ARCH="x64"
@@ -115,69 +97,17 @@ fi
 
 echo "▶ 校验 Info.plist / 签名"
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" > /dev/null
-bash scripts/check-macos-speech-usage-description.sh "$INFO"
+bash scripts/check-macos-audio-usage-description.sh "$INFO"
 codesign -d --entitlements :- "$APP" 2> /dev/null | grep -q "com.apple.security.device.audio-input"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
-if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
-  echo "▶ 校验 MLX metallib 已进入 app / DMG / updater"
-  APP_METALLIB="$APP/Contents/Resources/mlx.metallib"
-  if [ ! -s "$APP_METALLIB" ]; then
-    echo "✗ Apple Silicon app 缺少 Contents/Resources/mlx.metallib"
-    exit 1
-  fi
-  # Non-Mach-O files inside Contents/MacOS are treated as nested code by codesign.
-  if [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
-    echo "✗ mlx.metallib 不能放在 Contents/MacOS（ad-hoc codesign 会失败）"
-    exit 1
-  fi
-  APP_METALLIB_SHA="$(shasum -a 256 "$APP_METALLIB" | awk '{print $1}')"
-
-  if [ ! -f "$DMG_PATH" ]; then
-    echo "✗ 未找到 Tauri 生成的 DMG：$DMG_PATH"
-    exit 1
-  fi
-  DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg-verify.XXXXXX")"
-  cleanup_dmg_mount() {
-    hdiutil detach "$DMG_MOUNT" > /dev/null 2>&1 || true
-    rmdir "$DMG_MOUNT" > /dev/null 2>&1 || true
-  }
-  trap cleanup_dmg_mount EXIT
-  hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$DMG_MOUNT" > /dev/null
-  DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/Resources/mlx.metallib"
-  if [ ! -s "$DMG_METALLIB" ]; then
-    echo "✗ DMG 中缺少 OpenLess.app/Contents/Resources/mlx.metallib"
-    exit 1
-  fi
-  if [ -e "$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib" ]; then
-    echo "✗ DMG 中的 mlx.metallib 不能放在 Contents/MacOS"
-    exit 1
-  fi
-  DMG_METALLIB_SHA="$(shasum -a 256 "$DMG_METALLIB" | awk '{print $1}')"
-  if [ "$DMG_METALLIB_SHA" != "$APP_METALLIB_SHA" ]; then
-    echo "✗ app 与 DMG 中的 mlx.metallib SHA-256 不一致"
-    exit 1
-  fi
-  cleanup_dmg_mount
-  trap - EXIT
-
-  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
-    UPDATER_ARCHIVE="src-tauri/target/release/bundle/macos/OpenLess.app.tar.gz"
-    if [ ! -f "$UPDATER_ARCHIVE" ]; then
-      echo "✗ 未找到 Tauri updater archive：$UPDATER_ARCHIVE"
-      exit 1
-    fi
-    UPDATER_METALLIB_SHA="$(tar -xOf "$UPDATER_ARCHIVE" \
-      OpenLess.app/Contents/Resources/mlx.metallib | shasum -a 256 | awk '{print $1}')"
-    if [ "$UPDATER_METALLIB_SHA" != "$APP_METALLIB_SHA" ]; then
-      echo "✗ app 与 updater 中的 mlx.metallib SHA-256 不一致"
-      exit 1
-    fi
-  fi
-  echo "✓ MLX metallib sha256=$APP_METALLIB_SHA"
-elif [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
-  echo "✗ Intel app 不应包含 Apple Silicon MLX metallib"
+# A stale legacy resource must never leak into the new application bundle.
+if [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
+  echo "✗ app 包含已下架的 MLX 运行资源"
   exit 1
+fi
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
+  test -f "${APP}.tar.gz" || { echo "✗ 未找到 Tauri updater archive"; exit 1; }
 fi
 
 HAS_DEVELOPER_ID=0

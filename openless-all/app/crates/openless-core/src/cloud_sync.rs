@@ -59,6 +59,7 @@ pub(crate) struct CloudSyncService {
     marketplace: Arc<MarketplaceService>,
     repositories: BackendRepositories,
     settings_gate: Arc<Mutex<()>>,
+    legacy_restore_allowed: bool,
     operation: tokio::sync::Mutex<()>,
 }
 
@@ -67,11 +68,13 @@ impl CloudSyncService {
         marketplace: Arc<MarketplaceService>,
         repositories: BackendRepositories,
         settings_gate: Arc<Mutex<()>>,
+        legacy_restore_allowed: bool,
     ) -> Self {
         Self {
             marketplace,
             repositories,
             settings_gate,
+            legacy_restore_allowed,
             operation: tokio::sync::Mutex::new(()),
         }
     }
@@ -296,19 +299,28 @@ impl CloudSyncService {
     }
 
     fn restore_local(&self, payload: &CloudSyncPayload) -> Result<(), BackendError> {
-        // The legacy four-command protocol has no encrypted crash journal or Host-effect
-        // convergence. It must never bypass an installed E2EE repository write barrier.
-        if crate::cloud_sync_e2ee_store::gate::gate_for_path(
-            self.repositories.preferences.persistence_path(),
-        )
-        .map_err(|error| BackendError::new(BackendErrorCode::InvalidState, error.to_string()))?
-        .is_some()
-        {
+        if !self.legacy_restore_allowed {
             return Err(BackendError::new(
                 BackendErrorCode::Unsupported,
                 "当前仓库暂不支持旧版云端恢复，请使用加密云同步的确认恢复流程。",
             ));
         }
+        let preferences_path = self
+            .repositories
+            .preferences
+            .persistence_path()
+            .to_path_buf();
+        crate::cloud_sync_e2ee_store::gate::with_registered_mutation(
+            &preferences_path,
+            crate::cloud_sync_e2ee_store::gate::ChangeOrigin::Restore,
+            || self.restore_local_unchecked(payload),
+        )
+    }
+
+    fn restore_local_unchecked(&self, payload: &CloudSyncPayload) -> Result<(), BackendError> {
+        // The legacy protocol is still constrained by the same registered write barrier as
+        // encrypted sync and local migration. Validation and transaction logic below run inside
+        // the permit acquired by restore_local.
         validate_payload(payload).map_err(|_| invalid_remote())?;
         let mut next_packs = validated_native_packs(payload)?;
         let dictionary: Vec<DictionaryEntry> = payload
@@ -534,6 +546,8 @@ fn capture_preferences(
     SyncPreferences {
         theme_mode: Some(preferences.theme_mode),
         capsule_style: Some(preferences.capsule_style),
+        capsule_display_mode: None,
+        capsule_display_mode_v2: None,
         default_mode: Some(preferences.default_mode),
         enabled_modes: Some(preferences.enabled_modes.clone()),
         active_style_pack_id: Some(preferences.active_style_pack_id.clone()),
@@ -557,6 +571,18 @@ fn capture_preferences(
 }
 
 fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferences) {
+    let v2 = incoming
+        .capsule_display_mode_v2
+        .or(preferences.capsule_display_mode_v2)
+        .or_else(|| {
+            incoming
+                .capsule_display_mode
+                .and_then(crate::CapsuleDisplayMode::extended_sync_mode)
+        });
+    if let Some(mode) = v2.or(incoming.capsule_display_mode) {
+        preferences.capsule_display_mode = mode;
+        preferences.capsule_display_mode_v2 = v2;
+    }
     macro_rules! apply { ($($field:ident),+ $(,)?) => { $(if let Some(value) = &incoming.$field { preferences.$field = value.clone(); })+ }; }
     apply!(
         theme_mode,
@@ -658,7 +684,10 @@ mod encrypted_gate_tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    fn service(repositories: BackendRepositories) -> CloudSyncService {
+    fn service(
+        repositories: BackendRepositories,
+        legacy_restore_allowed: bool,
+    ) -> CloudSyncService {
         let marketplace = MarketplaceService::new(
             crate::MarketplaceConfig::new("https://market.example.test").unwrap(),
             Arc::new(crate::InMemoryCredentialStore::default()),
@@ -672,6 +701,7 @@ mod encrypted_gate_tests {
             Arc::new(marketplace),
             repositories,
             Arc::new(Mutex::new(())),
+            legacy_restore_allowed,
         )
     }
     #[test]
@@ -680,7 +710,7 @@ mod encrypted_gate_tests {
             let temp = Temp::new();
             let gate = crate::cloud_sync_e2ee_store::gate::open_for_data_dir(&temp.0).unwrap();
             let repositories = BackendRepositories::open(&temp.0).unwrap();
-            let sync = service(repositories.clone());
+            let sync = service(repositories.clone(), false);
             let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
             payload.dictionary.push(SyncDictionaryEntry {
                 id: "legacy-extra".into(),
@@ -711,10 +741,33 @@ mod encrypted_gate_tests {
         }
     }
     #[test]
+    fn legacy_restore_commits_the_shared_gate_generation() {
+        let temp = Temp::new();
+        let gate = crate::cloud_sync_e2ee_store::gate::open_for_data_dir(&temp.0).unwrap();
+        let repositories = BackendRepositories::open(&temp.0).unwrap();
+        let sync = service(repositories, true);
+        let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
+        payload.dictionary.push(SyncDictionaryEntry {
+            id: "legacy-extra".into(),
+            phrase: "generation bump".into(),
+            note: None,
+            enabled: true,
+            hits: 0,
+            created_at: "2026-09-26T00:00:00Z".into(),
+        });
+        let generation = gate.generation().unwrap();
+        sync.restore_local(&payload).unwrap();
+        assert_eq!(
+            gate.generation().unwrap(),
+            generation.checked_next().unwrap()
+        );
+    }
+
+    #[test]
     fn standalone_legacy_repositories_without_an_encrypted_gate_keep_their_existing_restore() {
         let temp = Temp::new();
         let repositories = BackendRepositories::open(&temp.0).unwrap();
-        let sync = service(repositories.clone());
+        let sync = service(repositories.clone(), true);
         let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
         payload.dictionary.push(SyncDictionaryEntry {
             id: "legacy-extra".into(),

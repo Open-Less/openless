@@ -13,7 +13,8 @@ use crate::cloud_sync_e2ee_protocol::types::{
 
 use super::registry::{
     credential_accounts, excluded_extension_key, is_device_channel, preference_field,
-    validate_preference_value, PreferenceClass,
+    public_credential_account, public_credential_value_safe, validate_preference_value,
+    PreferenceClass,
 };
 use super::types::*;
 
@@ -54,6 +55,10 @@ pub fn validate_sync_documents(
             return Err(DocumentError::DuplicateId);
         }
     }
+    normalize_capsule_display_mode(&mut set)?;
+    if set.documents.len().saturating_add(set.tombstones.len()) > MAX_DOCUMENTS {
+        return Err(DocumentError::PayloadTooLarge);
+    }
     normalize_collection_order(&mut set)?;
     let mut limit = SizeLimit { bytes: 0 };
     serde_json::to_writer(&mut limit, &set).map_err(|_| DocumentError::PayloadTooLarge)?;
@@ -66,6 +71,52 @@ pub fn validate_sync_documents(
         set,
         revision: observed_revision,
     })
+}
+
+fn normalize_capsule_display_mode(set: &mut DocumentSet) -> DocumentResult<()> {
+    use crate::CapsuleDisplayMode;
+
+    let mode = |id: &str| -> DocumentResult<Option<CapsuleDisplayMode>> {
+        set.documents
+            .iter()
+            .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == id)
+            .map(|doc| {
+                serde_json::from_value(doc.value.clone())
+                    .map_err(|_| DocumentError::InvalidDocument)
+            })
+            .transpose()
+    };
+    let legacy = mode("capsuleDisplayMode")?;
+    let incoming_v2 = mode("capsuleDisplayModeV2")?;
+    let Some(v2) = incoming_v2.or_else(|| legacy.and_then(CapsuleDisplayMode::extended_sync_mode))
+    else {
+        return Ok(());
+    };
+    if incoming_v2.is_none() {
+        if set
+            .tombstones
+            .iter()
+            .any(|mark| mark.kind == DocumentKind::Preferences && mark.id == "capsuleDisplayModeV2")
+        {
+            return Err(DocumentError::InvalidDocument);
+        }
+        set.documents.push(LogicalDocument {
+            id: "capsuleDisplayModeV2".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: DOCUMENT_SCHEMA_VERSION,
+            value: serde_json::to_value(v2).map_err(|_| DocumentError::InvalidDocument)?,
+        });
+    }
+    if let Some(doc) = set
+        .documents
+        .iter_mut()
+        .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == "capsuleDisplayMode")
+    {
+        // The old key is only a compatibility shadow, not an independent merge conflict.
+        doc.value = serde_json::to_value(v2.legacy_sync_mode())
+            .map_err(|_| DocumentError::InvalidDocument)?;
+    }
+    Ok(())
 }
 
 struct SizeLimit {
@@ -335,6 +386,13 @@ fn validate_channel(channel: &ChannelRecord) -> DocumentResult<()> {
     }
     if channel.namespace == SyncNamespace::Omni && channel.id != channel.provider_type {
         return Err(DocumentError::InvalidReference);
+    }
+    if channel.configuration.iter().any(|(account, value)| {
+        !public_credential_account(channel.namespace, account)
+            || !public_credential_value_safe(account, value)
+            || value.len() > 4096
+    }) {
+        return Err(DocumentError::ExcludedField);
     }
     Ok(())
 }
@@ -724,7 +782,51 @@ pub(crate) fn uuid_v4(value: &str) -> DocumentResult<()> {
     Ok(())
 }
 
+/// Where a record belongs in its collection, derived from what the record says instead of
+/// from one device's list position — a position shifts on every device with each new row,
+/// so two devices in ordinary use could never agree on it.
+///
+/// Mirrors how the stores themselves insert: history and corrections newest first; the
+/// dictionary keeps manual entries (newest first) ahead of learned ones (oldest first).
+/// Rows without a usable `createdAt` sort last in their group.
+fn collection_rank(kind: DocumentKind, value: &Value) -> (bool, bool, i64) {
+    let learned = kind == DocumentKind::Dictionary
+        && value.get("note").and_then(Value::as_str)
+            == Some(crate::shared_types::LEARNED_VOCAB_NOTE);
+    let created = value
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+        .map(|time| time.timestamp_micros());
+    match created {
+        Some(micros) if learned => (learned, false, micros),
+        Some(micros) => (learned, false, micros.saturating_neg()),
+        None => (learned, true, 0),
+    }
+}
+
+/// `sortIndex` stays on the wire as a dense index so older clients and the local stores keep
+/// their existing order. Merge results opt into [`collection_rank`] separately.
 fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
+    let merge_tie_order = BTreeMap::new();
+    normalize_collection_order_with_ties(set, &merge_tie_order, false)
+}
+
+/// Normalize merged records with a device-independent tie-breaker. When shared records agree
+/// on order, ties retain both inputs' order, including one-sided inserts between shared records.
+/// Disagreement on shared order falls back to ID order for tied records.
+pub(crate) fn normalize_merged_collection_order(
+    set: &mut DocumentSet,
+    merge_tie_order: &BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
+) -> DocumentResult<()> {
+    normalize_collection_order_with_ties(set, merge_tie_order, true)
+}
+
+fn normalize_collection_order_with_ties(
+    set: &mut DocumentSet,
+    merge_tie_order: &BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
+    use_collection_rank: bool,
+) -> DocumentResult<()> {
     for kind in [
         DocumentKind::Dictionary,
         DocumentKind::Corrections,
@@ -746,24 +848,34 @@ fn normalize_collection_order(set: &mut DocumentSet) -> DocumentResult<()> {
                 return Err(DocumentError::InvalidDocument);
             }
         }
-        indices.sort_by(|left, right| {
-            let left = &set.documents[*left];
-            let right = &set.documents[*right];
-            (
-                left.value
-                    .get("sortIndex")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(u64::MAX),
-                &left.id,
-            )
-                .cmp(&(
-                    right
-                        .value
+        indices.sort_by_cached_key(|index| {
+            let doc = &set.documents[*index];
+            let tie_order = merge_tie_order.get(&kind);
+            let (tie_group, tie_index, tie_id) = match tie_order {
+                Some(Some(order)) => match order.get(&doc.id) {
+                    Some(index) => (
+                        0u8,
+                        u64::try_from(*index).unwrap_or(u64::MAX),
+                        String::new(),
+                    ),
+                    None => (1u8, 0, doc.id.clone()),
+                },
+                Some(None) => (0u8, 0, doc.id.clone()),
+                None => (
+                    0u8,
+                    doc.value
                         .get("sortIndex")
                         .and_then(Value::as_u64)
                         .unwrap_or(u64::MAX),
-                    &right.id,
-                ))
+                    doc.id.clone(),
+                ),
+            };
+            let rank = if use_collection_rank {
+                collection_rank(kind, &doc.value)
+            } else {
+                (false, false, 0)
+            };
+            (rank, tie_group, tie_index, tie_id)
         });
         for (order, index) in indices.into_iter().enumerate() {
             set.documents[index]

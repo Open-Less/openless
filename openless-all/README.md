@@ -1,6 +1,6 @@
 # OpenLess All-Platform
 
-This directory contains the cross-platform OpenLess application and design handoff material. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
+This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
 ## App Directory
 
@@ -9,7 +9,10 @@ The runnable sources live in `app/`:
 - `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
 - `app/src`: React frontend for the Tauri hosts;
 - `app/src-tauri`: macOS, Windows, and Android Tauri Host and native adapters;
-- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK.
+- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK;
+- `app/harmony`: HarmonyOS host (ArkTS + ArkWeb) with the shared Rust backend;
+- `app/mobile-ime`: native input-method backend shared by Android and HarmonyOS;
+- `app/scripts/linux-fcitx5-plugin`: the fcitx5 addon Linux dictation goes through.
 
 The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
 
@@ -34,7 +37,7 @@ pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm/AppImage and the fcitx5 plugin without WebKitGTK. It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
+The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm and the fcitx5 plugin without WebKitGTK (AppImage is retired). It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
 
 ## macOS Build
 

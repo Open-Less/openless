@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  rmSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -44,6 +45,7 @@ const KOTLIN_FILES = [
   'OpenLessOverlayService.kt',
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
+  'OpenLessAccessibilitySelection.kt',
   'OpenLessAccessibilityResult.kt',
   'OpenLessAccessibilityTarget.kt',
   'OpenLessPasteVerification.kt',
@@ -58,14 +60,18 @@ const KOTLIN_FILES = [
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessMigrationBundlePolicy.kt',
+  'OpenLessMigrationState.kt',
   'OpenLessImeService.kt',
   'ImeLearningPolicy.kt',
+  'DictationSpan.kt',
+  'ImePrivacyPolicy.kt',
+  'ImeDraftReplacement.kt',
   'StrokeInputController.kt',
   'StrokeInput.kt',
-  'LitePinyinController.kt',
-  'LitePinyinRepository.kt',
-  'LitePinyinUserFrequency.kt',
-  'LitePinyinLearnedPhrases.kt',
+  'OpenLessRime.kt',
+  'RimePinyinController.kt',
+  'LegacyPinyinBackup.kt',
   'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
@@ -75,16 +81,24 @@ const KOTLIN_FILES = [
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'OpenLessLocalMigrationActivity.kt',
   'OpenLessProcessRestartStats.kt',
   'OpenLessBuildInfo.kt',
 ];
 
 const KOTLIN_TEST_FILES = [
   'ImeLearningPolicyTest.kt',
+  'DictationSpanTest.kt',
+  'ImePrivacyPolicyTest.kt',
+  'ImeDraftReplacementTest.kt',
+  'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
+  'OpenLessMigrationBundleContractTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
+  'OpenLessAccessibilitySelectionTest.kt',
+  'OpenLessOverlayStateTest.kt',
   'OpenLessAccessibilityTargetTest.kt',
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
@@ -92,6 +106,8 @@ const KOTLIN_TEST_FILES = [
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
+  'OpenLessMigrationBundleInstrumentedTest.kt',
+  'RimeEngineIntegrationTest.kt',
 ];
 
 const XML_FILES = [
@@ -388,6 +404,29 @@ function main() {
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
   if (existsSync(androidAssetsRoot)) {
     copyDirectoryContents(androidAssetsRoot, assetsDest, dryRun);
+  }
+  // Generated projects survive upgrades. Retire only known obsolete files so
+  // an incremental build cannot keep packaging the removed pinyin engine.
+  for (const name of [
+    'LitePinyinController.kt',
+    'LitePinyinRepository.kt',
+    'LitePinyinUserFrequency.kt',
+    'LitePinyinLearnedPhrases.kt',
+  ]) {
+    const path = join(kotlinDest, name);
+    if (dryRun) console.log(`[dry-run] Would remove retired source ${path}`);
+    else rmSync(path, { force: true });
+  }
+  for (const name of [
+    'pinyin_chars.tsv',
+    'pinyin_phrases.tsv',
+    'pinyin_chars.LICENSE.txt',
+    'pinyin_phrases.LICENSE.txt',
+    'pinyin_dictionary_meta.json',
+  ]) {
+    const path = join(assetsDest, name);
+    if (dryRun) console.log(`[dry-run] Would remove retired asset ${path}`);
+    else rmSync(path, { force: true });
   }
   copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
   ensureMainActivityOpen(dryRun);

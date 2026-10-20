@@ -46,7 +46,7 @@ export function PageHeader({
           <div
             style={{
               fontSize: 11,
-              fontWeight: 600,
+              fontWeight: 'var(--ol-font-weight-semibold)',
               letterSpacing: '.08em',
               textTransform: 'uppercase',
               color: 'var(--ol-ink-4)',
@@ -61,7 +61,7 @@ export function PageHeader({
             style={{
               margin: 0,
               fontSize: mobile ? 22 : 26,
-              fontWeight: 600,
+              fontWeight: 'var(--ol-font-weight-semibold)',
               letterSpacing: '-0.02em',
               color: 'var(--ol-ink)',
             }}
@@ -115,7 +115,8 @@ interface CardProps {
 export function Card({ children, style, padding = 18, glassy = false, className }: CardProps) {
   return (
     <div
-      className={className}
+      className={['ol-card', className].filter(Boolean).join(' ')}
+      data-ol-toggle-group=""
       style={{
         background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
@@ -169,7 +170,7 @@ export function Pill({ children, tone = 'default', size = 'md', style }: PillPro
         background: t.bg,
         color: t.color,
         border: t.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${t.bd}`,
-        fontWeight: 500,
+        fontWeight: 'var(--ol-font-weight-medium)',
         whiteSpace: 'nowrap',
         flexShrink: 0,
         ...sz,
@@ -254,7 +255,7 @@ export function Btn({
         borderRadius: 8,
         boxShadow: muted ? 'none' : v.sh,
         fontFamily: 'inherit',
-        fontWeight: 500,
+        fontWeight: 'var(--ol-font-weight-medium)',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled && !muted ? 0.55 : 1,
         transition:
@@ -335,7 +336,7 @@ export function Collapsible({
         }}
       >
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+          <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>{title}</div>
           {desc && (
             <div
               style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 3, lineHeight: 1.5 }}

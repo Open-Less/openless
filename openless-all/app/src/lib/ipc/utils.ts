@@ -1,8 +1,13 @@
 import { isTauri, invokeOrMock } from './shared';
+import { isHarmonyHost, invokeHarmony } from '../harmonyBridge';
 
 export { isTauri };
 
 export async function openExternal(url: string): Promise<void> {
+  if (isHarmonyHost) {
+    await invokeHarmony<void>('open_external_url', { url });
+    return;
+  }
   if (!isTauri) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
@@ -32,6 +37,10 @@ export async function openExternal(url: string): Promise<void> {
  * Android writes the log to public Downloads through MediaStore.
  */
 export async function exportErrorLog(suggestedFileName: string): Promise<string | null> {
+  if (isHarmonyHost)
+    return invokeHarmony<string | null>('export_harmony_error_log', {
+      fileName: suggestedFileName,
+    });
   if (!isTauri) {
     return `~/Downloads/${suggestedFileName}`;
   }
@@ -44,12 +53,10 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
     );
   }
   const { save } = await import('@tauri-apps/plugin-dialog');
-  const target = await save(
-    {
-      defaultPath: suggestedFileName,
-      filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
-    },
-  );
+  const target = await save({
+    defaultPath: suggestedFileName,
+    filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+  });
   if (!target) return null;
   await invokeOrMock<void>('export_error_log', { targetPath: target }, () => undefined);
   return target;
@@ -78,6 +85,7 @@ export async function logClientError(message: string): Promise<void> {
 export async function debugReadCursorContext(
   delayMs: number,
 ): Promise<import('../types').HostDocumentReadResult> {
+  if (isHarmonyHost) throw new Error('鸿蒙跨应用文字读取尚未接入');
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke('debug_read_cursor_context', { delayMs });
 }

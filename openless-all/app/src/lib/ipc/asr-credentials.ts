@@ -1,3 +1,4 @@
+import { isHarmonyHost } from '../harmonyBridge';
 import type { CredentialsStatus } from '../types';
 import { invokeOrMock, isTauri } from './shared';
 import { mockCredentialsStatus, mockCredentialValues } from './mock-data';
@@ -92,13 +93,18 @@ export async function listProviderModels(
   channelId?: string,
   providerType?: string,
 ): Promise<ProviderModelsResult> {
-  if (!isTauri) {
+  if (!isTauri && !isHarmonyHost) {
     const descriptor = (await listProviderDescriptors(kind)).find(
       (item) => item.providerType === providerType,
     );
     if (descriptor?.staticModels.length) return { models: descriptor.staticModels };
   }
-  if (!isTauri && providerType === 'orcarouter' && (kind === 'llm' || kind === 'asr')) {
+  if (
+    !isTauri &&
+    !isHarmonyHost &&
+    providerType === 'orcarouter' &&
+    (kind === 'llm' || kind === 'asr')
+  ) {
     const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
     const endpoint = mockCredentialValues.get(`${channelId ?? ''}:${endpointAccount}`);
     if (endpoint && new URL(endpoint).hostname.toLowerCase() === 'api.orcarouter.ai') {

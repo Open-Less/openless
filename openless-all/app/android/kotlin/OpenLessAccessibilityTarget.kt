@@ -24,6 +24,21 @@ internal object OpenLessAccessibilityTarget {
         return cachedWindowId == activeWindowId
     }
 
+    fun isSelectionRangeValid(text: String?, start: Int, end: Int): Boolean {
+        if (text == null || start < 0 || end < 0 || start == end) return false
+        val from = minOf(start, end)
+        val to = maxOf(start, end)
+        return to <= text.length && from < to
+    }
+
+    /** Validates both a non-empty selection and a caret used as a full-field target. */
+    fun isFieldTargetValid(text: String?, start: Int, end: Int): Boolean {
+        if (text == null || start < 0 || end < 0) return false
+        val from = minOf(start, end)
+        val to = maxOf(start, end)
+        return to <= text.length && from <= to
+    }
+
     fun hasPasteOrSetTextAction(actions: List<AccessibilityNodeInfo.AccessibilityAction>): Boolean {
         return hasPasteOrSetTextActionIds(actions.map { it.id })
     }

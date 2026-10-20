@@ -4,7 +4,7 @@ version = "0.1.0"
 license = "AGPL-3.0-only"
 description = "Linux host seam for the OpenLess egui frontend"
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 
 [dependencies]
@@ -14,13 +14,14 @@ fs2 = "0.4"
 futures-util = "0.3"
 log = "0.4"
 simplelog = "0.12"
-base64 = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+base64 = "0.23.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "stream", "query", "form"] }
 semver = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+unicode-segmentation = "1.13"
 
 [features]
 default = ["x11-overlay"]
@@ -30,33 +31,30 @@ x11-overlay = ["dep:x11rb"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
-keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
+keyring = "4.2.0"
 cpal = { version = "0.18.2", default-features = false, features = ["pipewire", "pulseaudio"] }
-rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
-egui = "=0.36.2"
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+egui = "=0.37.0"
 # wlr-layer-shell 胶囊窗口：KWin 6.7+/sway/Hyprland 等合成器直接给
 # 「贴底居中 + 不抢键盘焦点」的 overlay surface；不支持时回退到 X11 叠加层。
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-glutin = { version = "0.32", default-features = false, features = ["egl", "wayland"] }
-egui_glow = "0.36.2"
-glow = "0.17"
 raw-window-handle = "0.6"
-eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
+eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu_no_default_features", "wayland", "x11"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Rasterize user-supplied SVG icons locally before sending PNG to Core.
-resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts"] }
-roxmltree = "0.20"
+resvg = { version = "=0.48.1", default-features = false, features = ["text", "system-fonts"] }
+roxmltree = "0.21.1"
 libc = "0.2"
-x11rb = { version = "0.13.2", optional = true }
-axum = { version = "0.7", default-features = false, features = ["ws", "http1", "tokio"] }
+x11rb = { version = "0.14.0", optional = true, features = ["randr"] }
+axum = { version = "0.8.9", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }
 local-ip-address = "0.6"
-base64 = "0.22"
-sha2 = "0.10"
-rcgen = { version = "0.13", features = ["x509-parser"] }
-x509-parser = { version = "0.16", features = ["verify"] }
+base64 = "0.23.1"
+sha2 = "0.11.0"
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
+x509-parser = { version = "0.18.1", features = ["verify"] }
 time = "0.3"
 tempfile = "3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

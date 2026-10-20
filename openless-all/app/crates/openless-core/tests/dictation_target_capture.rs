@@ -4,11 +4,12 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 use openless_core::testing::{FixtureDictationEngine, RecordingHostActions};
 use openless_core::{
-    BackendConfig, BackendDependencies, BackendError, BackendErrorCode, CliDispatchOutcome,
-    CliIntent, CredentialKey, CredentialStore, CredentialsStatus, DictationContext,
-    DictationHotkeyEdge, DictationInsertStatus, DictationStartOptions, InMemoryCredentialStore,
-    InsertOutcome, InsertWriteResult, OpenLessBackend, ProviderSlot, SecretValue, SessionId,
-    TextInserter, TextInsertionSession, UserPreferences,
+    BackendConfig, BackendDependencies, BackendError, BackendErrorCode, CapturedTextTarget,
+    CliDispatchOutcome, CliIntent, CredentialKey, CredentialStore, CredentialsStatus,
+    DictationContext, DictationHotkeyEdge, DictationInsertStatus, DictationStartOptions,
+    HostContextAdapter, HostContextCapture, InMemoryCredentialStore, InsertOutcome,
+    InsertWriteResult, OpenLessBackend, ProviderSlot, SecretValue, SessionId, TextInserter,
+    TextInsertionSession, UserPreferences,
 };
 use tokio::sync::Notify;
 
@@ -70,8 +71,34 @@ impl CredentialStore for DelayedCredentials {
 struct Focus {
     current: &'static str,
     captured: Vec<&'static str>,
+    context_captured: Vec<&'static str>,
     prepared: Vec<&'static str>,
     delivered: Vec<(&'static str, String)>,
+}
+
+struct FocusContextAdapter {
+    focus: Arc<Mutex<Focus>>,
+    target: &'static str,
+}
+
+impl HostContextAdapter for FocusContextAdapter {
+    fn capture(
+        &self,
+        _include_cursor: bool,
+    ) -> BoxFuture<'static, Result<HostContextCapture, BackendError>> {
+        self.focus
+            .lock()
+            .unwrap()
+            .context_captured
+            .push(self.target);
+        let front_app = self.target.to_string();
+        Box::pin(async move {
+            Ok(HostContextCapture {
+                front_app: Some(front_app),
+                cursor_context: None,
+            })
+        })
+    }
 }
 
 struct FocusInserter {
@@ -80,14 +107,20 @@ struct FocusInserter {
 }
 
 impl TextInserter for FocusInserter {
-    fn capture_target(&self) -> Option<Arc<dyn TextInserter>> {
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
         let mut focus = self.focus.lock().unwrap();
         let target = focus.current;
         focus.captured.push(target);
-        Some(Arc::new(Self {
-            focus: self.focus.clone(),
-            target: Some(target),
-        }))
+        Some(CapturedTextTarget {
+            inserter: Arc::new(Self {
+                focus: self.focus.clone(),
+                target: Some(target),
+            }),
+            host_context: Arc::new(FocusContextAdapter {
+                focus: self.focus.clone(),
+                target,
+            }),
+        })
     }
 
     fn begin(
@@ -150,6 +183,7 @@ impl Fixture {
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
             captured: Vec::new(),
+            context_captured: Vec::new(),
             prepared: Vec::new(),
             delivered: Vec::new(),
         }));
@@ -227,6 +261,7 @@ async fn every_dictation_entry_freezes_target_before_waiting_for_credentials() {
             "route {route}"
         );
         assert_eq!(focus.captured, vec!["A"]);
+        assert_eq!(focus.context_captured, vec!["A"]);
         assert_eq!(focus.prepared, vec!["A"]);
     }
 }
@@ -248,6 +283,7 @@ async fn cancelled_context_capture_never_prepares_or_reuses_its_target() {
     fixture.backend.stop_dictation().await.unwrap();
     let focus = fixture.focus.lock().unwrap();
     assert_eq!(focus.captured, vec!["A", "B"]);
+    assert_eq!(focus.context_captured, vec!["A", "B"]);
     assert_eq!(focus.prepared, vec!["B"]);
     assert_eq!(focus.delivered, vec![("B", "spoken".to_string())]);
 }

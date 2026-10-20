@@ -16,7 +16,7 @@ fi
 ARCH=${OPENLESS_LINUX_ARCH:-x86_64}
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
-PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
+PLUGIN_ROOT="$APP_ROOT/scripts/linux-fcitx5-plugin/build"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
 # 图标：与 Tauri 侧共用同一套画（`icon.png` 与 `public/AppIcon.png` 的 md5 相同，
@@ -114,7 +114,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: OpenLess Contributors
 Description: OpenLess Linux egui host
-Depends: fcitx5, fcitx5-module-dbus, libasound2, libbz2-1.0, libc6, libdbus-1-3, libegl1, libfcitx5config6, libfcitx5core7, libfcitx5utils2, libffi8, libgcc-s1, liblzma5, libpipewire-0.3-0, libpulse0, libstdc++6, libsystemd0, libuuid1, libvulkan1, libwayland-client0, libwayland-egl1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0
+Depends: fcitx5, fcitx5-module-dbus, libasound2, libbz2-1.0, libc6, libdbus-1-3, libfcitx5config6, libfcitx5core7, libfcitx5utils2, libffi8, libgcc-s1, liblzma5, libpipewire-0.3-0, libpulse0, libstdc++6, libsystemd0, libuuid1, libvulkan1, libwayland-client0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0
 Recommends: mesa-vulkan-drivers
 Homepage: https://github.com/Open-Less/openless
 EOF
@@ -154,7 +154,7 @@ License: AGPL-3.0-only
 URL: https://github.com/Open-Less/openless
 BuildArch: x86_64
 Source0: openless-$RPM_VERSION.tar.gz
-Requires: fcitx5, dbus-libs, alsa-lib, pipewire-libs, pulseaudio-libs, libX11, libxcb, libwayland-client, libxkbcommon, libglvnd-egl, vulkan-loader, libXi.so.6()(64bit), libXcursor.so.1()(64bit), libX11-xcb.so.1()(64bit), libxkbcommon-x11.so.0()(64bit), libwayland-egl.so.1()(64bit)
+Requires: fcitx5, dbus-libs, alsa-lib, pipewire-libs, pulseaudio-libs, libX11, libxcb, libwayland-client, libxkbcommon, vulkan-loader, libXi.so.6()(64bit), libXcursor.so.1()(64bit), libX11-xcb.so.1()(64bit), libxkbcommon-x11.so.0()(64bit)
 Recommends: mesa-vulkan-drivers
 %description
 OpenLess Linux egui host.
@@ -190,5 +190,10 @@ rpmbuild --define "_topdir $RPM_TOP" --define "_dbpath $RPM_TOP/rpmdb" \
   --define "_tmppath $RPM_TOP/tmp" -bb "$RPM_TOP/SPECS/openless.spec"
 mv "$RPM_TOP/RPMS/x86_64/openless-$RPM_VERSION-1.x86_64.rpm" \
   "$OUTPUT/OpenLess-Linux-egui-${VERSION}-${ARCH}.rpm"
+
+# The checksums are part of the delivery, not a step for the caller to remember:
+# a stale file here makes `verify-linux-egui-packages.sh` fail on freshly built
+# packages.
+( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm > SHA256SUMS )
 
 find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort

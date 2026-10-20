@@ -19,8 +19,8 @@
 
 | 区域 | 跳过条件（全部改动都命中才算跳过） | 覆盖的 job |
 |---|---|---|
-| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
-| `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.88 MSRV |
+| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`app/scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
+| `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.99 MSRV |
 | `linux` | 全部改动都是散文（`docs/**`、`*.md`、`LICENSE`、`NOTICE`） | Linux Core/egui 测试与 deb/rpm 打包链 |
 
 规则是**失败即运行**，而且这一原则贯穿三层：
@@ -37,10 +37,11 @@
 
 ## 2. MSRV 为什么是独立 job
 
-- `openless-core`、`src-tauri`、`src-tauri/backend-tests` 都声明 `rust-version = "1.88"`，README 对外承诺该版本，因此必须有 CI 用真的 1.88 编译：MSRV 只会被“依赖升级抬高要求”或“自己用了更新的语言特性/API”打破，两者都只有在 1.88 下编译才会暴露。
+- `openless-core`、`src-tauri`、`src-tauri/backend-tests`、`linux-egui` 统一声明 `rust-version = "1.99"`，README 对外承诺该版本，因此必须有 CI 用真的 1.99 编译：MSRV 只会被“依赖升级抬高要求”或“自己用了更新的语言特性/API”打破，两者都只有在 1.99 下编译才会暴露。
+  该数字由依赖实际要求决定：`tauri 2.12` 要 1.90、`aes 0.9.3`/`uuid 1.28` 要 1.89，代码库选择跟随当前 stable（1.99）以保持单一数字，不再为旧工具链回退依赖。
 - 工具链不同 ⇒ cargo fingerprint 全失效、产物与缓存不能共用。历史上 stable 与 MSRV 挤在同一个 job 里共用缓存，串行 29 分 59 秒（见 [`macos-build-performance.md`](macos-build-performance.md)）；拆成并行独立 job、缓存分开后是 stable 8m36s / MSRV 3m39s。
 - 平台专属依赖图不同，所以 macOS 与 Windows 各自验证：macOS 是 `keyring/apple-native`、MLX/qwen-asr；Windows 是 `keyring/windows-native`、TSF IME。
-- Linux 宿主 `linux-egui` 声明 `rust-version = "1.95"`（egui 0.36 的要求），因此 Linux 侧不存在 1.88 检查，README 已按此修正。
+- Linux 宿主 `linux-egui` 与桌面侧同用 `rust-version = "1.99"`（egui 0.37 本身只要求 1.95），Linux 侧按 stable 验证。
 
 ## 3. 缓存配额分配（10 GB / 仓库）
 
@@ -50,7 +51,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 | job | 缓存 | 命中收益 | 性价比 |
 |---|---|---|---|
-| macOS Rust 1.88 MSRV | 0.72 GB | −13.1 min | 1102 s/GB |
+| macOS Rust 1.99 MSRV | 0.72 GB | −13.1 min | 1102 s/GB |
 | macOS stable | 0.88 GB | −11.4 min | 775 s/GB |
 | Linux egui | 1.34 GB | −10.8 min | 483 s/GB |
 | Android | 0.75 GB | −2.4 min | 188 s/GB |
@@ -90,7 +91,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 | macOS checks | 20m01s | 8m36s | 6m16s |
 | Windows checks | 20m04s | 15m30s | 13m17s |
 | Android | 8m11s | 5m50s | 5m50s |
-| macOS Rust 1.88 MSRV | 16m47s | 3m39s | 3m39s |
+| macOS Rust 1.99 MSRV | 16m47s | 3m39s | 3m39s |
 | Linux egui（测试 + 打包） | 17m21s | 6m35s（旧缓存前缀） | 8m08s（新前缀首次命中） |
 
 同一步骤的冷 / 热对照：`cargo test -p openless-core` 命中 201 s、冷启动 579 s；`cargo build --release -p openless-linux-egui` 命中 124 s、冷启动 463 s。整轮墙钟时间由最慢的 job 决定（本轮 Windows 13m17s），改动前是 20m12s。

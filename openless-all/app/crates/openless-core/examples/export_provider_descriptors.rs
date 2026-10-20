@@ -16,6 +16,17 @@ fn main() -> anyhow::Result<()> {
     let mut bytes = serde_json::to_vec_pretty(&catalog)?;
     bytes.push(b'\n');
     fs::write(&destination, bytes)?;
+    // Both browser adapters consume the same canonical metadata. Keep the
+    // flattened contract fixture in sync instead of requiring a second edit.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src/lib/ipc/mock-provider-descriptors.json");
+    let providers = [ProviderKind::Llm, ProviderKind::Asr, ProviderKind::Omni]
+        .into_iter()
+        .flat_map(provider_descriptors)
+        .collect::<Vec<_>>();
+    let mut bytes = serde_json::to_vec_pretty(&providers)?;
+    bytes.push(b'\n');
+    fs::write(fixture, bytes)?;
     println!(
         "Provider preview catalog exported to {}",
         destination.display()

@@ -103,6 +103,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_display_mode",
+        key: "capsuleDisplayMode",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "capsule_display_mode_v2",
+        key: "capsuleDisplayModeV2",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "capsule_transcript_enabled",
         key: "capsuleTranscriptEnabled",
         class: PreferenceClass::Portable,
@@ -159,6 +173,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "low_latency_dictation_enabled",
+        key: "lowLatencyDictationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
+        rust_name: "audio_enhancement_enabled",
+        key: "audioEnhancementEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "active_asr_provider",
         key: "activeAsrProvider",
         class: PreferenceClass::Excluded,
@@ -206,6 +234,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::Boolean,
         reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "sync_custom_server_origin",
+        key: "syncCustomServerOrigin",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::OptionalText,
+        reason: "local_consent_or_secret",
     },
     PreferenceField {
         rust_name: "restore_clipboard_after_paste",
@@ -334,6 +369,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "voice_edit_enabled",
+        key: "voiceEditEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "selection_voice_intent_mode",
         key: "selectionVoiceIntentMode",
         class: PreferenceClass::Portable,
@@ -409,6 +451,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::ObjectList,
         reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "testing_features_enabled",
+        key: "testingFeaturesEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
     },
     PreferenceField {
         rust_name: "coding_agent_enabled",
@@ -586,6 +635,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "local_asr_fallback_enabled",
+        key: "localAsrFallbackEnabled",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Boolean,
+        reason: "device_bound",
+    },
+    PreferenceField {
         rust_name: "update_channel",
         key: "updateChannel",
         class: PreferenceClass::Portable,
@@ -609,6 +665,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "polish_context_window_minutes",
         key: "polishContextWindowMinutes",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned32,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_skip_max_chars",
+        key: "polishSkipMaxChars",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Unsigned32,
         reason: "portable_setting",
@@ -644,6 +707,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "streaming_insert_save_clipboard",
         key: "streamingInsertSaveClipboard",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "windows_composition_input",
+        key: "windowsCompositionInput",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
         reason: "portable_setting",
@@ -858,6 +928,12 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
     let choices: &[&str] = match field.key {
         "defaultMode" => &["raw", "light", "structured", "formal"],
         "capsuleStyle" => &["siri", "classic", "typeless"],
+        "capsuleDisplayMode" | "capsuleDisplayModeV2" => &[
+            "cursorScreen",
+            "primaryScreen",
+            "foregroundWindowScreen",
+            "allScreens",
+        ],
         "pipelineMode" => &["traditional", "multimodal"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
@@ -912,6 +988,7 @@ pub const LLM_ACCOUNTS: &[&str] = &[
     "ark.messages_thinking",
     "ark.max_tokens",
     "ark.thinking_budget",
+    "ark.service_tier",
 ];
 pub const OMNI_ACCOUNTS: &[&str] = &[
     "omni.api_key",
@@ -926,6 +1003,103 @@ pub fn credential_accounts(namespace: SyncNamespace) -> &'static [&'static str] 
         SyncNamespace::Llm => LLM_ACCOUNTS,
         SyncNamespace::Omni => OMNI_ACCOUNTS,
     }
+}
+
+pub fn public_credential_account(namespace: SyncNamespace, account: &str) -> bool {
+    matches!(
+        (namespace, account),
+        (
+            SyncNamespace::Asr,
+            "asr.endpoint" | "asr.model" | "asr.vocabulary_id"
+        ) | (
+            SyncNamespace::Llm,
+            "ark.endpoint"
+                | "ark.model_id"
+                | "ark.temperature"
+                | "ark.request_format"
+                | "ark.messages_thinking"
+                | "ark.max_tokens"
+                | "ark.thinking_budget"
+                | "ark.service_tier"
+        ) | (
+            SyncNamespace::Omni,
+            "omni.endpoint" | "omni.model" | "omni.temperature"
+        )
+    )
+}
+
+pub fn public_credential_value_safe(account: &str, value: &str) -> bool {
+    if !account.ends_with(".endpoint") {
+        return true;
+    }
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host_is_safe = host.parse::<std::net::IpAddr>().is_ok()
+        || (host.len() <= 253
+            && host.split('.').all(|label| {
+                let label = label.to_ascii_lowercase();
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    })
+                    && ![
+                        "token",
+                        "secret",
+                        "bearer",
+                        "apikey",
+                        "api-key",
+                        "access",
+                        "refresh",
+                        "oauth",
+                        "credential",
+                        "password",
+                        "passwd",
+                        "jwt",
+                    ]
+                    .iter()
+                    .any(|marker| label.contains(marker))
+                    && !["sk-", "pk-", "rk-"]
+                        .iter()
+                        .any(|prefix| label.starts_with(prefix))
+            }));
+    if !host_is_safe {
+        return false;
+    }
+    let path_is_safe = url.path().len() <= 256
+        && url
+            .path()
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .all(|segment| {
+                segment.len() <= 32
+                    && segment.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || matches!(character, '-' | '.' | '~')
+                    })
+                    && !segment.contains("token")
+                    && !segment.contains("secret")
+                    && !segment.contains("bearer")
+                    && !segment.contains("key")
+            });
+    path_is_safe
 }
 
 pub fn is_device_channel(namespace: SyncNamespace, provider: &str) -> bool {

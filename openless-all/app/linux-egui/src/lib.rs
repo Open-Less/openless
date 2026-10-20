@@ -10,20 +10,26 @@ mod audio_mute;
 mod audio_player;
 mod backend;
 mod capabilities;
+pub mod cloud_sync_ui;
+
 mod coding_agent;
 mod credentials;
 mod desktop;
 mod dictation_feedback;
 mod fcitx5;
+pub mod frame_stats;
 mod host_actions;
 mod hotkeys;
 mod i18n;
+pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
+pub mod omni_settings;
 mod popup;
 mod popup_layer;
 mod popup_window;
 mod preference_patch;
+pub mod provider_protocol;
 mod qa;
 mod recordings;
 mod remote_input;
@@ -33,7 +39,14 @@ mod selection;
 mod settings;
 mod single_instance;
 mod tray;
+pub mod typography;
 mod ui_state;
+pub mod wgpu_device;
+
+// Shared by the eframe windows and the native Wayland layer-shell renderer so
+// every Vulkan surface uses the exact same WGPU callback resource type.
+#[path = "ui/frontend/siri_wgpu.rs"]
+pub mod siri_wgpu;
 
 pub use audio::LinuxCpalRecorder;
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
@@ -49,7 +62,7 @@ pub use desktop::{
 pub use dictation_feedback::{
     capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
     capsule_outcome, is_backend_error_code, is_expected_stop_error, normalize_stop_result,
-    phase_shows_capsule, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
+    phase_shows_capsule, vocab_card_allowed, CapsuleOutcome, CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 #[cfg(target_os = "linux")]
 pub use fcitx5::prepare_fcitx5;
@@ -84,24 +97,24 @@ pub use local_hotkeys::{
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
-    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, HostToPopup, LessComputerApproval,
-    LessComputerEntry, LessComputerPopupState, PopupActionGuard, PopupChatMessage, PopupKind,
-    PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
-    ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
+    ApplyOutcome as PopupApplyOutcome, CapsulePopupState, CapsuleSuggestion, HostToPopup,
+    LessComputerApproval, LessComputerEntry, LessComputerPopupState, PopupActionGuard,
+    PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent,
+    PopupToHost, ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
     QaPolishState, QaPopupState, MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
 };
 pub use popup_layer::{
     capsule_geometry, capsule_path_override, choose_capsule_path, detect_capsule_path,
     has_layer_shell, layer_shell_available, pointer_events, probe_layer_shell, run_layer_capsule,
-    CapsuleGeometry, CapsulePath, LayerFrame, CAPSULE_PATH_ENV, CONFIGURE_TIMEOUT, LAYER_NAMESPACE,
-    LAYER_SHELL_GLOBAL, MAX_FRAME_PAUSE,
+    wayland_display_available, CapsuleGeometry, CapsulePath, LayerFrame, CAPSULE_PATH_ENV,
+    CONFIGURE_TIMEOUT, LAYER_NAMESPACE, LAYER_SHELL_GLOBAL, MAX_FRAME_PAUSE,
 };
 #[cfg(all(target_os = "linux", feature = "x11-overlay"))]
 pub use popup_window::X11Overlay;
 pub use popup_window::{
-    bottom_center, clamp_to_area, monitor_containing, place_overlay, popup_position, popup_size,
-    select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement, OverlayX11,
-    WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
+    bottom_center, clamp_to_area, monitor_containing, place_overlay, place_panel, popup_position,
+    popup_size, select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement,
+    OverlayX11, WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
     LESS_COMPUTER_WINDOW_SIZE, QA_WINDOW_SIZE,
 };
 
@@ -114,13 +127,16 @@ pub use resources::{
 };
 pub use runtime::{LinuxNativeRuntime, LinuxRuntimePumpResult};
 pub use selection::LinuxSelectionRuntime;
-pub use settings::{is_bare_modifier_binding, LinuxSettingsEffects, LinuxSettingsRuntime};
+pub use settings::{
+    is_bare_modifier_binding, shortcut_display_label, LinuxSettingsEffects, LinuxSettingsRuntime,
+};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
 pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
 pub use ui_state::{
-    load_locale_pref, load_quick_note_shortcut_hidden, save_locale_pref,
+    learn_capsule_warmup_ms, load_capsule_warmup_ms, load_locale_pref,
+    load_quick_note_shortcut_hidden, save_capsule_warmup_ms, save_locale_pref,
     save_quick_note_shortcut_hidden, ui_state_dir, ui_state_path, UiStateError,
 };
 

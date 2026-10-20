@@ -1,0 +1,5 @@
+{
+  "boolean": [
+    { "name": "ime_clipboard_auto_read", "value": false }
+  ]
+}

@@ -17,6 +17,9 @@ export {
 // shared
 export { isTauri, invokeOrMock, getPlatformCapabilities } from './shared';
 
+// local migration
+export { openAndroidLocalMigration } from './local-migration';
+
 // settings
 export type { StartupSnapshot } from './settings';
 export {
@@ -96,6 +99,8 @@ export {
   startDictation,
   stopDictation,
   cancelDictation,
+  getCapsuleSnapshot,
+  setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
 } from './dictation';
 
@@ -184,6 +189,19 @@ export {
   confirmSelectionVoicePreview,
   revertSelectionVoicePreview,
 } from './selection-voice-preview';
+
+export {
+  startVoiceEditSession,
+  openVoiceEditWindow,
+  closeVoiceEditWindow,
+  finalizeVoiceEditDictation,
+  startVoiceEditInstruction,
+  finalizeVoiceEditInstruction,
+  commitVoiceEditSession,
+  cancelVoiceEditSession,
+  getVoiceEditState,
+} from './voice-edit-session';
+export type { VoiceEditSnapshot } from './voice-edit-session';
 
 // less-computer
 export {

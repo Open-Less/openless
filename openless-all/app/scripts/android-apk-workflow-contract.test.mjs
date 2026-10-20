@@ -117,7 +117,14 @@ try {
 // --- workflow contract (#1103) ---
 const workflow = readFileSync(workflowPath, 'utf8');
 const parsed = load(workflow);
-assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'workflow_dispatch']);
+// Tags build the release APK; a weekly schedule keeps the Gradle/Rust cache
+// warm now that a per-branch push would cost 13-18 minutes and duplicate what
+// `android-check` already covers.
+assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
+assert.equal(parsed.on.push.branches, undefined);
+assert.deepEqual(parsed.on.push.tags, ['v*-tauri']);
+assert.equal(parsed.on.schedule.length, 1);
+assert.match(parsed.on.schedule[0].cron, /^\d+ \d+ \* \* [0-6]$/);
 assert.equal(typeof parsed.concurrency.group, 'string');
 assert.equal(parsed.jobs['build-android-apk'].steps[0].with.submodules, false);
 assert.equal(parsed.on.workflow_dispatch.inputs.signed_debug.type, 'boolean');
@@ -148,6 +155,52 @@ assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO/);
 assert.match(workflow, /first ABI may compile twice|android-studio-script/);
 assert.match(workflow, /publish-android-release/);
 assert.match(workflow, /download-artifact/);
+assert.match(workflow, /stage-release-download-aliases\.mjs/);
+assert.match(workflow, /OpenLess_android_\*\.apk/);
 assert.match(workflow, /Rust cache/);
+
+// Exercise the upload list so overlapping globs cannot upload the same asset twice.
+const releaseTmp = mkdtempSync(join(tmpdir(), 'openless-apk-assets-'));
+try {
+  const directory = releaseTmp.replace(/\\/g, '/');
+  const version = '2.0.0-Beta.3+build.20260925';
+  const originals = [];
+  const names = ANDROID_ABI_MATRIX.flatMap(({ abi, gradleAbi }) => {
+    const apk = `OpenLess_${version}_${gradleAbi}.apk`;
+    const alias = `OpenLess_android_${gradleAbi}.apk`;
+    originals.push(`${directory}/${apk}`);
+    return [
+      apk,
+      `${apk}.sig`,
+      alias,
+      `${alias}.sig`,
+      `latest-android-${abi}.json`,
+      `latest-android-${abi}-mirror.json`,
+    ];
+  });
+  for (const name of names) writeFileSync(join(releaseTmp, name), 'fixture');
+  const step = parsed.jobs['publish-android-release'].steps.find(
+    (step) => step.id === 'release_assets',
+  );
+  const result = spawnSync('bash', ['-s'], {
+    input: step.run
+      .replaceAll('${{ steps.stage.outputs.out_dir }}', '$RUNNER_TEMP')
+      .replaceAll('${{ steps.stage.outputs.release_files }}', '$RELEASE_FILES'),
+    env: {
+      ...process.env,
+      RUNNER_TEMP: directory,
+      GITHUB_OUTPUT: `${directory}/output`,
+      RELEASE_FILES: originals.join('\n'),
+    },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const assets = readFileSync(join(releaseTmp, 'android-release-files.txt'), 'utf8')
+    .trim()
+    .split(/\r?\n/);
+  assert.deepEqual(assets.sort(), names.map((name) => `${directory}/${name}`).sort());
+} finally {
+  rmSync(releaseTmp, { recursive: true, force: true });
+}
 
 console.log('android-apk-workflow-contract checks passed');

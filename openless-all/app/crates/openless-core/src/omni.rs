@@ -7,7 +7,10 @@
 //! - OpenAI-compatible chat completions: the user content carries base64 WAV
 //!   in an `input_audio` part;
 //! - Gemini native generateContent: an `inlineData(audio/wav)` part
-//!   (reuses `llm_gemini.rs`).
+//!   (reuses `llm_gemini.rs`);
+//! - Gemini Transcribe: Files + Interactions with Smart transcription.
+
+mod gemini_transcribe;
 
 use std::collections::HashMap;
 
@@ -219,16 +222,27 @@ impl OpenAICompatibleOmni {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut cancelled = false;
-        loop {
+        'stream: loop {
             if should_cancel() {
                 log::info!("[omni] stream cancelled by caller; breaking SSE loop");
                 cancelled = true;
                 break;
             }
-            let chunk_opt = response
-                .chunk()
-                .await
-                .map_err(crate::polish::llm_error_from_reqwest)?;
+            // A silent/half-open SSE connection must not prevent caller cancellation.
+            // Keep the read future alive while polling; do not restart body reads.
+            let read = response.chunk();
+            tokio::pin!(read);
+            let chunk_opt = loop {
+                tokio::select! {
+                    result = &mut read => break result.map_err(crate::polish::llm_error_from_reqwest)?,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                        if should_cancel() {
+                            cancelled = true;
+                            break 'stream;
+                        }
+                    }
+                }
+            };
             let Some(chunk) = chunk_opt else { break };
             append_utf8_sse_chunk(&mut buffer, &mut utf8_pending, &chunk)?;
             while let Some(idx) = buffer.find("\n\n") {
@@ -242,8 +256,14 @@ impl OpenAICompatibleOmni {
                         continue;
                     };
                     let payload = payload.trim();
-                    if payload.is_empty() || payload == "[DONE]" {
+                    if payload.is_empty() {
                         continue;
+                    }
+                    if payload == "[DONE]" {
+                        // SSE completion is authoritative. Compatible gateways may
+                        // keep HTTP alive after this marker; waiting for EOF can leave
+                        // Processing active until the 90-second request timeout.
+                        break 'stream;
                     }
                     let value: Value = match serde_json::from_str(payload) {
                         Ok(value) => value,
@@ -329,6 +349,10 @@ impl OpenAICompatibleOmni {
 /// Unified multimodal-channel entry point: routes by config to the Gemini
 /// native or OpenAI-compatible client.
 pub enum OmniProvider {
+    GeminiTranscribe {
+        provider: gemini_transcribe::GeminiTranscribeOmni,
+        label: OmniCallLabel,
+    },
     Gemini {
         provider: crate::llm_gemini::GeminiProvider,
         label: OmniCallLabel,
@@ -343,6 +367,12 @@ impl OmniProvider {
                 provider: config.provider_id.clone(),
                 model: config.model.clone(),
             };
+            if config.model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+                return Self::GeminiTranscribe {
+                    provider: gemini_transcribe::GeminiTranscribeOmni::new(config),
+                    label,
+                };
+            }
             let gemini_config = crate::llm_gemini::GeminiConfig::new(
                 config.api_key.clone(),
                 config.model.clone(),
@@ -362,9 +392,21 @@ impl OmniProvider {
         }
     }
 
+    /// Forward structured hints to dedicated transcription without injecting prompts.
+    pub fn with_transcription_hints(mut self, languages: &[String], hotwords: &[String]) -> Self {
+        if let Self::GeminiTranscribe { provider, .. } = &mut self {
+            provider.set_hints(languages, hotwords);
+        }
+        self
+    }
+
+    pub fn is_transcription_only(&self) -> bool {
+        matches!(self, Self::GeminiTranscribe { .. })
+    }
+
     pub fn call_label(&self) -> OmniCallLabel {
         match self {
-            Self::Gemini { label, .. } => label.clone(),
+            Self::Gemini { label, .. } | Self::GeminiTranscribe { label, .. } => label.clone(),
             Self::OpenAI(provider) => OmniCallLabel {
                 provider: provider.config.provider_id.clone(),
                 model: provider.config.model.clone(),
@@ -381,6 +423,9 @@ impl OmniProvider {
         wav_bytes: Option<&[u8]>,
     ) -> Result<String, LLMError> {
         match self {
+            Self::GeminiTranscribe { provider, .. } => {
+                provider.complete(user_text, wav_bytes).await
+            }
             Self::Gemini { provider, .. } => {
                 provider
                     .complete_omni(system_prompt, user_text, wav_bytes)
@@ -407,6 +452,11 @@ impl OmniProvider {
         C: Fn() -> bool + Send + Sync,
     {
         match self {
+            Self::GeminiTranscribe { provider, .. } => {
+                provider
+                    .complete_streaming(user_text, wav_bytes, on_delta, should_cancel)
+                    .await
+            }
             Self::Gemini { provider, .. } => {
                 let text = provider
                     .complete_omni(system_prompt, user_text, wav_bytes)
@@ -443,6 +493,151 @@ mod tests {
             temperature: Some(0.3),
             thinking_enabled: false,
         }
+    }
+
+    // Keeps the HTTP body open until the test explicitly releases it. This
+    // reproduces compatible gateways that send [DONE] without closing TCP.
+    async fn open_sse(
+        payload: &str,
+    ) -> (
+        OpenAICompatibleOmni,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let payload = payload.to_string();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0, "request ended before body");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&request[..index]).to_ascii_lowercase();
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    if request.len() >= index + 4 + length {
+                        break;
+                    }
+                }
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
+            let chunk = format!("{:x}\r\n{}\r\n", payload.len(), payload);
+            stream.write_all(chunk.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+            let _ = released.await;
+        });
+        let mut cfg = config();
+        cfg.base_url = format!("http://{address}/v1");
+        // Do not inherit machine-specific proxy settings or the global cache.
+        let provider = OpenAICompatibleOmni {
+            config: cfg,
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        };
+        (provider, release, server)
+    }
+
+    #[tokio::test]
+    async fn stream_done_finishes_without_waiting_for_http_eof() {
+        let (provider, release, server) = open_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"完整结果\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+        ).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.complete_streaming("system", "", Some(&[0u8; 8]), |_| {}, || false),
+        )
+        .await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert_eq!(
+            result.expect("[DONE] must finish before EOF").unwrap(),
+            "完整结果"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_done_fails_promptly_instead_of_waiting_for_eof() {
+        let (provider, release, server) = open_sse("data: [DONE]\n\n").await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.complete_streaming("system", "", None, |_| {}, || false),
+        )
+        .await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert!(matches!(
+            result.expect("empty completion must terminate"),
+            Err(LLMError::InvalidResponse { status: 200, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_a_silent_stream_body_read() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let (provider, release, server) =
+            open_sse("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n").await;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        let (seen, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = async move {
+            received.recv().await.expect("first delta");
+            // Let the next body read become pending before cancellation.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            flag.store(true, Ordering::Release);
+        };
+        let request = provider.complete_streaming(
+            "system",
+            "",
+            None,
+            |_| {
+                let _ = seen.send(());
+            },
+            || cancelled.load(Ordering::Acquire),
+        );
+        let (result, ()) = tokio::join!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), request),
+            cancel
+        );
+        let _ = release.send(());
+        server.await.unwrap();
+        assert_eq!(
+            result
+                .expect("cancellation must wake a stalled read")
+                .unwrap(),
+            "partial"
+        );
+    }
+
+    #[test]
+    fn dedicated_transcription_does_not_change_general_gemini_or_openai_routing() {
+        let mut gemini = config();
+        gemini.provider_id = "gemini".into();
+        gemini.model = "gemini-2.5-flash".into();
+        assert!(matches!(
+            OmniProvider::new(gemini.clone()),
+            OmniProvider::Gemini { .. }
+        ));
+        gemini.model = format!(" {} ", crate::asr::gemini::DEFAULT_MODEL);
+        assert!(OmniProvider::new(gemini).is_transcription_only());
+        let mut compatible = config();
+        compatible.model = crate::asr::gemini::DEFAULT_MODEL.into();
+        assert!(matches!(
+            OmniProvider::new(compatible),
+            OmniProvider::OpenAI(_)
+        ));
     }
 
     #[test]
@@ -584,6 +779,26 @@ mod tests {
                 body.get("temperature").is_none(),
                 "{model} must not receive temperature (issue #1101)"
             );
+        }
+    }
+
+    #[test]
+    fn omni_body_maps_reasoning_effort_for_openai_model_effort_tiers() {
+        for (model, disabled_expected) in [
+            ("gpt-5.6-sol", "none"),
+            ("gpt-6-luna", "none"),
+            ("gpt-6-astra", "low"),
+            ("gpt-6.1-sol", "low"),
+        ] {
+            for (thinking_enabled, expected) in [(false, disabled_expected), (true, "medium")] {
+                let mut omni = config();
+                omni.model = model.into();
+                omni.thinking_enabled = thinking_enabled;
+                let provider = OpenAICompatibleOmni::new(omni);
+                let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+                assert_eq!(body["reasoning_effort"], expected, "{model}");
+            }
         }
     }
 

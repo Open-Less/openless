@@ -663,6 +663,15 @@ impl SelectionApi for SelectionService {
                 let (mut context, output_mode, uses_llm) = inner
                     .polish_context(&request, inner.source_app(session_id)?)
                     .await?;
+                // The polish prompt truncates at the XML envelope cap, but DirectReplace
+                // writes the model output over the entire captured selection. Refuse
+                // before any provider call so the unseen tail cannot be deleted.
+                if uses_llm && crate::prompts::exceeds_xml_envelope_cap(&capture.text) {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        crate::prompts::truncated_selection_replacement_message(),
+                    ));
+                }
                 context.polish.selection_input = true;
                 let context = Arc::new(context);
                 inner.set_context(session_id, Arc::clone(&context))?;

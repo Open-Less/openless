@@ -99,6 +99,7 @@ fn reopened_service(fixture: &Fixture, server: &Server) -> EncryptedSyncService 
         marketplace,
         local,
         fixture.data.clone(),
+        fixture.vault.clone(),
         events,
     )
 }

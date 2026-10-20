@@ -123,7 +123,7 @@ const errorGlowTextStyle: CSSProperties = {
   transform: 'translateX(-50%)',
   maxWidth: 400,
   fontSize: 12,
-  fontWeight: 600,
+  fontWeight: 'var(--ol-font-weight-semibold)',
   lineHeight: 1.4,
   textAlign: 'center',
   color: 'var(--ol-err)',

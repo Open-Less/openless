@@ -9,7 +9,7 @@ use crate::credentials::{CredentialKey, CredentialNamespace, CredentialStore};
 
 use super::registry::{
     credential_accounts, excluded_extension_key, is_device_channel, preference_field,
-    PreferenceClass,
+    public_credential_account, public_credential_value_safe, PreferenceClass,
 };
 use super::types::*;
 use super::validate::validate_sync_documents;
@@ -77,7 +77,7 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
     let mut seen_channels = BTreeSet::new();
     let mut device_channels = Vec::new();
     let mut device_credentials = Vec::new();
-    for channel in std::mem::take(&mut snapshot.channels) {
+    for mut channel in std::mem::take(&mut snapshot.channels) {
         let id = channel.document_id();
         if !seen_channels.insert(id.clone()) {
             return Err(DocumentError::DuplicateId);
@@ -85,6 +85,15 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
         let credential = credentials
             .remove(&id)
             .ok_or(DocumentError::InvalidReference)?;
+        channel.configuration = credential
+            .accounts
+            .iter()
+            .filter(|(account, value)| {
+                public_credential_account(channel.namespace, account)
+                    && public_credential_value_safe(account, value)
+            })
+            .map(|(account, value)| (account.clone(), value.clone()))
+            .collect();
         if is_device_channel(channel.namespace, &channel.provider_type) {
             device_channels.push(channel);
             device_credentials.push(credential);
@@ -193,7 +202,22 @@ pub fn export_snapshot(mut snapshot: ExportSnapshot) -> DocumentResult<ExportedD
     // Retained documents must be explicit source profiles or unknown preferences. Never let
     // an archive silently replace live source fields or resurrect a deleted record.
     for retained in std::mem::take(&mut snapshot.retained_documents) {
+        let capsule_v2 =
+            retained.kind == DocumentKind::Preferences && retained.id == "capsuleDisplayModeV2";
+        if capsule_v2
+            && (preferences.contains_key("capsuleDisplayModeV2")
+                || matches!(
+                    preferences
+                        .get("capsuleDisplayMode")
+                        .and_then(Value::as_str),
+                    Some("primaryScreen" | "foregroundWindowScreen")
+                ))
+        {
+            // Explicit native V2 settings supersede an extension retained by an older client.
+            continue;
+        }
         let permitted = retained.kind == DocumentKind::DeviceProfile
+            || capsule_v2
             || retained.kind == DocumentKind::Preferences
                 && preference_field(&retained.id).is_none()
             || retained.kind == DocumentKind::UiPreferences

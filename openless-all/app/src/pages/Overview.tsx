@@ -26,6 +26,8 @@ import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } fro
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
+import { isHarmonyHost } from '../lib/harmonyBridge';
+import { HarmonyDictation } from '../components/HarmonyDictation';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -278,6 +280,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         }
       />
 
+      {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
+
       {showProvidersSection && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
           <div
@@ -289,7 +293,14 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
               gap: 8,
             }}
           >
-            <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
+            <h2
+              style={{
+                fontSize: 13,
+                fontWeight: 'var(--ol-font-weight-semibold)',
+                color: 'var(--ol-ink-2)',
+                margin: 0,
+              }}
+            >
               {t('overview.servicesTitle')}
             </h2>
             <Btn
@@ -342,7 +353,14 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 
       {/* Usage records: title + four metric cards as one group. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-        <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
+        <h2
+          style={{
+            fontSize: 13,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink-2)',
+            margin: 0,
+          }}
+        >
           {t('overview.statsTitle')}
         </h2>
         <div
@@ -423,7 +441,13 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 'var(--ol-font-weight-semibold)',
+                color: 'var(--ol-ink-2)',
+              }}
+            >
               {t('overview.recentTitle')}
             </span>
             <Btn size="sm" variant="ghost" disabled={!onOpenHistory} onClick={onOpenHistory}>
@@ -517,7 +541,13 @@ function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
               marginBottom: 4,
             }}
           >
-            <span style={{ fontSize: 12.5, color: 'var(--ol-ink-4)', fontWeight: 600 }}>
+            <span
+              style={{
+                fontSize: 12.5,
+                color: 'var(--ol-ink-4)',
+                fontWeight: 'var(--ol-font-weight-semibold)',
+              }}
+            >
               {t(`overview.${kind}Kind`)}
             </span>
             {status === 'configured' && (
@@ -537,7 +567,7 @@ function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
           <div
             style={{
               fontSize: 15,
-              fontWeight: 600,
+              fontWeight: 'var(--ol-font-weight-semibold)',
               color: 'var(--ol-ink)',
               overflowWrap: 'anywhere',
             }}
@@ -600,7 +630,14 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
   }, [activity, i18n.resolvedLanguage, i18n.language]);
   return (
     <Card padding={12} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', flexShrink: 0 }}>
+      <span
+        style={{
+          fontSize: 13,
+          fontWeight: 'var(--ol-font-weight-semibold)',
+          color: 'var(--ol-ink-2)',
+          flexShrink: 0,
+        }}
+      >
         {t('overview.activityTitle')}
       </span>
       {/* Cells no longer cap: 53 columns fill the card width to the right edge.
@@ -643,9 +680,10 @@ function Metric({ icon, label, value, trend }: MetricProps) {
         <span style={{ fontSize: 13 }}>{label}</span>
       </div>
       <div
+        data-numeric
         style={{
           fontSize: 22,
-          fontWeight: 600,
+          fontWeight: 'var(--ol-font-weight-semibold)',
           letterSpacing: '-0.02em',
           color: 'var(--ol-ink)',
           lineHeight: 1.2,
@@ -695,7 +733,9 @@ function SegmentedToggle<T extends string | number>({
             style={{
               padding: '3px 9px',
               fontSize: 12.5,
-              fontWeight: selected ? 600 : 500,
+              fontWeight: selected
+                ? 'var(--ol-font-weight-semibold)'
+                : 'var(--ol-font-weight-medium)',
               border: 0,
               borderRadius: 6,
               background: selected ? 'var(--ol-blue)' : 'transparent',
@@ -805,7 +845,7 @@ function PeriodMetricsCard({
             <div
               style={{
                 fontSize: 26,
-                fontWeight: 600,
+                fontWeight: 'var(--ol-font-weight-semibold)',
                 letterSpacing: '-0.02em',
                 color: 'var(--ol-ink)',
                 lineHeight: 1.1,
@@ -878,7 +918,7 @@ function PeriodChart({
                   style={{
                     fontSize: 9.5,
                     color: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
-                    fontWeight: isToday ? 600 : 400,
+                    fontWeight: isToday ? 'var(--ol-font-weight-semibold)' : 400,
                     flexShrink: 0,
                   }}
                 >

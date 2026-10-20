@@ -102,7 +102,7 @@ const factory = new Function(
   'exports',
   'require',
   '__listen',
-  `${compiled};return {CloudSyncSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview};`,
+  `${compiled};return {CloudSyncSection,CustomSyncServerSection,PasswordForm,ConsentForm,ProtocolWarning,RestoreReview,normalizeCustomServerOrigin};`,
 );
 
 const initial: EncryptedSyncStatus = {
@@ -140,6 +140,11 @@ const calls: Array<[string, any?]> = [];
 let server = { ...initial };
 let deferredStatus: Promise<EncryptedSyncStatus> | null = null;
 let nextStep: api.EnablePreparation['nextStep'] = 'unlock';
+let mockMarketplaceSignedIn = true;
+let savedOrigin: string | null = null;
+let savedToken: string | null = null;
+let failOriginWrite = false;
+let credentialReads = 0;
 const update = (value: Partial<EncryptedSyncStatus>) => {
   server = { ...server, ...value, sequence: (BigInt(server.sequence) + 1n).toString() };
   return { ...server };
@@ -153,20 +158,30 @@ const dependencies: Record<string, any> = {
   useId: () => 'fixture-id',
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
   useHotkeySettings: () => ({
-    prefs: { marketplaceDevLogin: 'fixture' },
+    prefs: { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin },
     refresh: async () => {
       calls.push(['refresh']);
     },
-    updatePrefs: async () => {},
+    updatePrefs: async (next: any) => {
+      const current = { marketplaceDevLogin: 'fixture', syncCustomServerOrigin: savedOrigin };
+      const resolved = typeof next === 'function' ? next(current) : next;
+      const nextOrigin = resolved.syncCustomServerOrigin ?? null;
+      if (nextOrigin === savedOrigin) return;
+      if (failOriginWrite && nextOrigin !== savedOrigin) throw new Error('origin write failed');
+      savedOrigin = nextOrigin;
+      calls.push(['updatePrefs', savedOrigin]);
+    },
   }),
   Icon: 'icon',
   GithubLoginModal: 'login',
   Modal: 'modal',
+  ExitPresence: 'exit-presence',
+  Collapse: 'collapse',
   Btn: 'button',
   Card: 'card',
   Toggle: 'toggle',
-  isTauri: true,
-  marketplaceAuthStatus: async () => ({ signedIn: true }),
+  isTauriNow: () => true,
+  marketplaceAuthStatus: async () => ({ signedIn: mockMarketplaceSignedIn }),
   cloudSyncE2eeStatus: async () => deferredStatus ?? { ...server },
   mirrorEncryptedSyncUiPreferences: async () => {
     calls.push(['mirror']);
@@ -202,8 +217,29 @@ const dependencies: Record<string, any> = {
     calls.push(['enable', enabled]);
     return update({ enabled });
   },
+  cloudSyncE2eeSignInWithToken: async () => update({ authState: 'signed_in', syncState: 'ready' }),
+  cloudSyncE2eeSignOut: async () => {
+    savedToken = null;
+    return update({ authState: 'signed_out', syncState: 'disabled', account: null });
+  },
+  readCredential: async (_account: string) => {
+    credentialReads += 1;
+    return savedToken;
+  },
+  cloudSyncE2eeConfigureServer: async (input: { origin: string | null; token: string }) => {
+    calls.push(['configureServer', input]);
+    if (failOriginWrite) throw new Error('native configuration write failed');
+    savedOrigin = input.origin;
+    savedToken = input.token || null;
+    return update({ authState: 'signed_out', syncState: 'disabled', account: null });
+  },
 };
-const jsx = (type: unknown, props: Record<string, unknown>) => ({ type, props });
+const jsx = (type: unknown, props: Record<string, any>) => {
+  if (type === 'exit-presence') return props.open ? props.render(false) : null;
+  if (type === 'collapse')
+    return props.open ? { type: 'fragment', props: { children: props.children } } : null;
+  return { type, props };
+};
 const components = factory(
   ...imports.map((name) => dependencies[name]),
   {},
@@ -213,7 +249,27 @@ const components = factory(
     return () => events.delete(name);
   },
 );
-Object.defineProperty(globalThis, 'window', { configurable: true, value: new EventTarget() });
+assert.equal(
+  components.normalizeCustomServerOrigin(' https://sync.example.com/ '),
+  'https://sync.example.com',
+);
+assert.equal(components.normalizeCustomServerOrigin('https://sync.example.com/path'), undefined);
+assert.equal(components.normalizeCustomServerOrigin(''), null);
+const syncPolls = new Map<number, () => void>();
+let pollId = 0;
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: Object.assign(new EventTarget(), {
+    setInterval(callback: () => void) {
+      const id = ++pollId;
+      syncPolls.set(id, callback);
+      return id;
+    },
+    clearInterval(id: number) {
+      syncPolls.delete(id);
+    },
+  }),
+});
 
 try {
   for (const mode of ['create', 'unlock', 'password'] as const) {
@@ -300,6 +356,7 @@ try {
   const syncSwitch = (view: unknown) => find(view, (node) => node.type === 'toggle');
   assert.equal(syncSwitch(tree).props.on, false);
   assert.deepEqual(calls, [], 'mount must not enable, upload or consent');
+  assert.equal(credentialReads, 0, 'normal sync must not load the self-hosted server token');
   syncSwitch(tree).props.onToggle(true);
   tree = render();
   find(tree, (node) => node.type === components.ConsentForm).props.onConfirm();
@@ -472,6 +529,110 @@ try {
   freshHooks.unmount();
   await settle();
   assert.equal(events.size, 0);
+
+  // A configuration page opened during sync becomes editable when sync finishes.
+  server = { ...initial, syncState: 'syncing' };
+  const pollingHooks = new Hooks();
+  const polling = () => pollingHooks.render(() => components.CustomSyncServerSection());
+  polling();
+  await settle();
+  tree = polling();
+  assert.equal(
+    find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.disabled,
+    true,
+  );
+  assert.equal(syncPolls.size, 1);
+  server = { ...server, syncState: 'ready' };
+  for (const tick of syncPolls.values()) tick();
+  await settle();
+  tree = polling();
+  assert.equal(
+    find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.disabled,
+    false,
+  );
+  assert.equal(syncPolls.size, 0, 'stop polling when sync is no longer running');
+  pollingHooks.unmount();
+  assert.equal(syncPolls.size, 0);
+
+  // Configuration uses one native transaction; the UI never writes a token separately.
+  mockMarketplaceSignedIn = true;
+  savedOrigin = 'https://old.example.com';
+  savedToken = 'old-token';
+  failOriginWrite = true;
+  server = {
+    ...initial,
+    authState: 'signed_out',
+    syncState: 'disabled',
+    account: null,
+    serviceOrigin: savedOrigin,
+  };
+  calls.length = 0;
+  const customHooks = new Hooks();
+  const custom = () => customHooks.render(() => components.CustomSyncServerSection());
+  custom();
+  await settle();
+  tree = custom();
+  find(tree, (node) => node.type === 'input' && node.props.type === 'text').props.onChange({
+    currentTarget: { value: 'https://new.example.com/' },
+  });
+  find(tree, (node) => node.type === 'input' && node.props.type === 'password').props.onChange({
+    currentTarget: { value: 'new-token' },
+  });
+  tree = custom();
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.onClick();
+  await settle();
+  assert.equal(savedOrigin, 'https://old.example.com');
+  assert.equal(savedToken, 'old-token');
+  assert.deepEqual(
+    calls.map(([name, ...args]) => [name, ...args]),
+    [['configureServer', { origin: 'https://new.example.com', token: 'new-token' }]],
+  );
+  failOriginWrite = false;
+  calls.length = 0;
+  tree = custom();
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.customServerSave').props.onClick();
+  await settle();
+  tree = custom();
+  assert.equal(savedOrigin, 'https://new.example.com');
+  assert.equal(savedToken, 'new-token');
+  assert.equal(
+    find(tree, (node) => node.type === 'input' && node.props.type === 'password').props.value,
+    '',
+    'clear the token draft after saving',
+  );
+  customHooks.unmount();
+  const configuredHooks = new Hooks();
+  const configured = () => configuredHooks.render(() => components.CloudSyncSection());
+  configured();
+  await settle();
+  tree = configured();
+  assert(
+    !nodes(tree).some((node) => node.props.children === 'cloudSyncE2ee.customServerSave'),
+    'normal sync flow must not render advanced configuration',
+  );
+  find(tree, (node) => node.props.children === 'cloudSyncE2ee.signOut').props.onClick();
+  await settle();
+  tree = configured();
+  assert.equal(
+    find(tree, (node) => node.type === 'toggle').props.disabled,
+    true,
+    'Marketplace auth cannot enable a signed-out custom sync server',
+  );
+  configuredHooks.unmount();
+  await settle();
+  assert.equal(events.size, 0);
+  mockMarketplaceSignedIn = false;
+  const signedOutCustomHooks = new Hooks();
+  const signedOutCustom = () => signedOutCustomHooks.render(() => components.CloudSyncSection());
+  signedOutCustom();
+  await settle();
+  tree = signedOutCustom();
+  assert(
+    !nodes(tree).some((node) => node.props.children === 'cloudSyncE2ee.signIn'),
+    'custom sync must not offer a GitHub sign-in button',
+  );
+  signedOutCustomHooks.unmount();
+  await settle();
 } finally {
   Reflect.deleteProperty(globalThis, 'window');
 }

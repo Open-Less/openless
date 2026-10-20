@@ -43,10 +43,19 @@ pub(crate) fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
         return None;
     }
 
-    Some(ImeSubmitTarget {
+    let target = ImeSubmitTarget {
         process_id,
         thread_id,
-    })
+        window_handle: target_window.0 as usize,
+    };
+    log::info!(
+        "[windows-ime] captured target pid={} tid={} hwnd=0x{:X} foreground_hwnd=0x{:X}",
+        target.process_id,
+        target.thread_id,
+        target.window_handle,
+        foreground.0 as usize,
+    );
+    Some(target)
 }
 
 #[cfg(test)]

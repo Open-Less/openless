@@ -21,9 +21,17 @@ export default defineConfig({
     { name: 'chromium', use: { browserName: 'chromium' } },
     { name: 'webkit', use: { browserName: 'webkit' } },
   ],
-  webServer: {
-    command: 'npm run preview -- --host 127.0.0.1 --port 5325 --strictPort',
-    url: 'http://127.0.0.1:5325',
-    reuseExistingServer: !process.env.CI,
-  },
+  webServer: [
+    {
+      command: 'npm run preview -- --host 127.0.0.1 --port 5325 --strictPort',
+      url: 'http://127.0.0.1:5325',
+      reuseExistingServer: !process.env.CI,
+    },
+    // Isolated React fixtures use real source modules, without shipping test routes/hooks.
+    {
+      command: 'npm run dev -- --host 127.0.0.1 --port 5326 --strictPort',
+      url: 'http://127.0.0.1:5326',
+      reuseExistingServer: !process.env.CI,
+    },
+  ],
 });

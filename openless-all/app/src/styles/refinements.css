@@ -1,0 +1,718 @@
+/* Utility-app motion: native scrolling, short local feedback, no perpetual page effects. */
+h1,
+h2,
+h3 {
+  font-family: var(--ol-font-display);
+  line-height: 1.25;
+}
+p,
+.ol-chat-markdown {
+  font-family: var(--ol-font-body);
+}
+code,
+pre {
+  font-family: var(--ol-font-mono);
+}
+time,
+[data-numeric],
+.ol-shortcuts-count {
+  font-family: var(--ol-font-numeric);
+  font-variant-numeric: tabular-nums;
+}
+.ol-chat-markdown,
+.ol-reading-text {
+  max-width: var(--ol-reading-width);
+}
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  touch-action: manipulation;
+}
+button:focus-visible,
+[role='switch']:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+.ol-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.ol-section-note {
+  margin: 8px 0 16px;
+  color: var(--ol-ink-3);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.ol-text-action {
+  color: var(--ol-blue);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+/* Do not composite a masked copy of every scrolling page. Native wheel momentum
+   stays under OS control; no preventDefault, debounce or second inertia engine. */
+.ol-scroll-fade {
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+  animation: none !important;
+}
+.ol-frost::before {
+  display: none;
+}
+.ol-thinscroll {
+  overflow-anchor: auto;
+}
+.ol-dialog-overlay {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.ol-console-main,
+.ol-settings-scroll {
+  min-width: 0;
+}
+
+/* The app's settings destination uses the window itself, not another nested frame. */
+.ol-settings-workspace {
+  isolation: isolate;
+}
+.ol-settings-surface {
+  background: var(--ol-surface) !important;
+}
+.ol-settings-content-pane {
+  background: var(--ol-surface) !important;
+}
+.ol-settings-return {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  text-align: left;
+  color: var(--ol-ink-2);
+  font-size: 13px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+.ol-settings-sections {
+  width: 100%;
+  max-width: 1000px;
+  margin-inline: auto;
+  padding-top: 12px;
+}
+.ol-settings-sections > .ol-card {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 0 20px !important;
+}
+.ol-settings-sections > .ol-card + .ol-card {
+  border-top: 1px solid var(--ol-line) !important;
+  padding-top: 20px !important;
+}
+.ol-setting-row {
+  line-height: 1.5;
+}
+.ol-setting-row .ol-shortcut-recorder {
+  max-width: 300px;
+}
+.ol-settings-placeholder {
+  position: absolute;
+  inset: 0;
+  background: var(--ol-surface);
+  z-index: 50;
+  padding: 60px 32px 32px 254px;
+}
+
+/* Search and the command list share the right-hand settings pane. */
+.ol-settings-search-field {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: 8px;
+  color: var(--ol-ink);
+  background: var(--ol-surface);
+  font: inherit;
+  font-size: 13px;
+}
+.ol-settings-search-field:focus-visible {
+  outline: 2px solid var(--ol-blue-ring);
+  outline-offset: 1px;
+  border-color: var(--ol-blue);
+}
+.ol-shortcuts-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 16px;
+}
+.ol-shortcuts-toolbar input {
+  max-width: 520px;
+}
+.ol-shortcuts-count {
+  white-space: nowrap;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+.ol-shortcuts-layout {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.ol-shortcuts-filters {
+  position: sticky;
+  top: 0;
+}
+.ol-shortcuts-filters h3 {
+  font-size: 11px;
+  color: var(--ol-ink-3);
+  font-weight: 500;
+  margin: 0 10px 8px;
+}
+.ol-shortcuts-filters nav + nav {
+  margin-top: 24px;
+}
+.ol-shortcuts-filters button {
+  display: flex;
+  width: 100%;
+  padding: 8px 10px;
+  margin: 2px 0;
+  border-radius: 7px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--ol-ink-2);
+}
+.ol-shortcuts-filters button[aria-pressed='true'] {
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
+  font-weight: var(--ol-font-weight-semibold);
+}
+.ol-shortcut-results {
+  min-width: 0;
+}
+.ol-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(150px, 260px);
+  align-items: center;
+  gap: 20px;
+  min-height: 64px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--ol-line-soft);
+  font-size: 13.5px;
+}
+.ol-shortcut-row small {
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--ol-ink-3);
+}
+.ol-shortcut-row > kbd {
+  justify-self: end;
+}
+.ol-shortcut-pack {
+  grid-template-columns: minmax(100px, 1fr) minmax(140px, 240px) 24px;
+  gap: 12px;
+}
+.ol-shortcut-recorder {
+  min-width: 0;
+}
+.ol-shortcut-recorder > div {
+  width: 100%;
+}
+.ol-shortcut-binding {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex: 1;
+  min-height: 32px;
+  padding: 4px;
+  text-align: right;
+}
+.ol-shortcut-binding > span {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.ol-shortcut-recording {
+  background: var(--ol-blue-soft);
+  border: 1px solid var(--ol-blue);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--ol-ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ol-shortcut-recording small {
+  display: block;
+  margin-top: 4px;
+}
+.ol-shortcut-menu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+.ol-shortcut-empty {
+  padding: 24px 0;
+  color: var(--ol-ink-3);
+}
+.ol-shortcut-remove {
+  font-size: 20px;
+  color: var(--ol-ink-3);
+}
+.ol-shortcut-pack-add {
+  margin-top: 12px;
+}
+
+.ol-collapse {
+  height: var(--collapsible-panel-height);
+  opacity: 1;
+  overflow: clip;
+  transition:
+    height 200ms var(--ol-motion-spring),
+    opacity 160ms var(--ol-motion-quick);
+}
+.ol-collapse[data-starting-style],
+.ol-collapse[data-ending-style],
+.ol-collapse[data-closed] {
+  height: 0;
+  opacity: 0;
+}
+.ol-collapse > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.ol-expandable-text {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--ol-ink-3);
+  line-height: 1.6;
+}
+.ol-expandable-text-clip {
+  overflow: hidden;
+  transition: height 200ms var(--ol-motion-spring);
+}
+.ol-expandable-text p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.ol-expandable-text button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  color: var(--ol-blue);
+  font-size: 12px;
+}
+.ol-expandable-text svg {
+  transition: transform 180ms var(--ol-motion-spring);
+}
+.ol-drag-handle {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 28px;
+  min-height: 32px;
+  color: var(--ol-ink-3);
+  font-size: 21px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.ol-drag-handle:active {
+  cursor: grabbing;
+}
+.ol-reorder-list {
+  position: relative;
+}
+[data-reordering='active'] {
+  outline: 1px solid var(--ol-line-strong);
+  z-index: 3;
+  background: var(--ol-surface) !important;
+  box-shadow: var(--ol-shadow-md) !important;
+}
+.ol-switch {
+  touch-action: manipulation;
+}
+.ol-choice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  padding: 3px;
+}
+.ol-choice-chips button {
+  position: relative;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  border-radius: 8px;
+  border: 1px solid var(--ol-line);
+  background: var(--ol-surface);
+  color: var(--ol-ink-2);
+}
+.ol-choice-chips button[aria-pressed='true'] {
+  padding-inline: 16px;
+  color: var(--ol-blue);
+  background: var(--ol-blue-soft);
+  border-color: var(--ol-blue-ring);
+}
+
+.ol-typography .ol-select-trigger {
+  width: 280px;
+}
+.ol-advanced-settings-detail > .ol-experimental-models {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+.ol-experimental-models .ol-flex-row {
+  gap: 10px !important;
+  justify-content: flex-end !important;
+  min-height: 28px;
+}
+.ol-experimental-model-row {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+.ol-model-state {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding-bottom: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: right;
+}
+.ol-model-state progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: block;
+  width: min(100%, 160px);
+  height: 4px;
+  margin: 0;
+  accent-color: var(--ol-blue);
+}
+.ol-model-action {
+  width: 28px;
+  flex-shrink: 0;
+}
+.ol-model-channel-link {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--ol-blue);
+}
+.ol-global-downloads {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(320px, calc(100vw - 28px));
+}
+.ol-download-card {
+  padding: 10px 12px;
+  border: 0.5px solid var(--ol-line-strong);
+  border-radius: 10px;
+  background: var(--ol-surface);
+  box-shadow: var(--ol-shadow-lg);
+}
+.ol-download-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.ol-download-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ol-download-status {
+  color: var(--ol-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ol-download-heading button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 5px;
+}
+.ol-download-card progress {
+  display: block;
+  width: 100%;
+  height: 5px;
+  margin-top: 6px;
+  accent-color: var(--ol-blue);
+}
+.ol-download-card p {
+  color: var(--ol-warn);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ol-experimental-model-status {
+  display: block;
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ol-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An honest first frame: finite, pure CSS mark. No video, sound, fixed delay or fake percentage. */
+.ol-startup {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 100%;
+  padding: 24px;
+  background: var(--ol-surface);
+  color: var(--ol-ink);
+}
+.ol-startup-content {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+.ol-startup-content > strong {
+  font-size: 18px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: -0.025em;
+}
+.ol-startup-content > p {
+  margin: 8px 0;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+}
+.ol-startup-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 44px;
+  margin: 0 auto 16px;
+}
+.ol-startup-mark span {
+  width: 4px;
+  height: 18px;
+  border-radius: 3px;
+  background: currentColor;
+  animation: ol-startup-wave 800ms var(--ol-motion-soft) 3;
+}
+.ol-startup-mark span:nth-child(2) {
+  height: 32px;
+  animation-delay: 50ms;
+}
+.ol-startup-mark span:nth-child(3) {
+  height: 24px;
+  animation-delay: 100ms;
+}
+.ol-startup-mark[data-error='true'] span {
+  animation: none;
+  color: var(--ol-err);
+}
+.ol-startup-retry {
+  padding: 8px 14px;
+  background: var(--ol-primary-solid-bg);
+  color: var(--ol-primary-solid-ink);
+  border-radius: 8px;
+  margin: 10px;
+}
+.ol-startup details {
+  text-align: left;
+  font-size: 12px;
+  margin-top: 18px;
+}
+.ol-startup pre,
+.ol-startup-diagnostics pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ol-startup-diagnostics {
+  font-size: 12px;
+  color: var(--ol-ink-3);
+  padding: 12px 0;
+}
+.ol-startup[data-compact] {
+  padding: 6px;
+}
+.ol-startup[data-compact] strong,
+.ol-startup[data-compact] p {
+  font-size: 11px;
+}
+@keyframes ol-startup-wave {
+  0%,
+  100% {
+    transform: scaleY(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scaleY(0.6);
+    opacity: 0.45;
+  }
+}
+.ol-page-skeleton {
+  width: 100%;
+  padding: 4px 0;
+  contain: layout paint;
+}
+.ol-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--ol-surface-2);
+}
+.ol-skeleton-heading {
+  width: 38%;
+  height: 24px;
+  margin-bottom: 24px;
+}
+.ol-skeleton-row {
+  height: 64px;
+  margin: 12px 0;
+}
+.ol-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--ol-surface), transparent);
+  opacity: 0.55;
+  transform: translateX(-100%);
+  animation: ol-skeleton-shimmer 1.4s linear 3;
+}
+@keyframes ol-skeleton-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-settings-return:hover,
+  .ol-shortcuts-filters button:hover {
+    background: var(--ol-surface-2);
+  }
+  .ol-shortcut-binding:hover {
+    background: var(--ol-surface-2);
+    border-radius: 6px;
+  }
+}
+@media (max-width: 840px) {
+  .ol-shortcuts-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .ol-shortcuts-filters {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .ol-shortcuts-filters nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+  }
+  .ol-shortcuts-filters nav + nav {
+    margin: 0;
+  }
+  .ol-shortcuts-filters h3 {
+    margin: 0 6px 0 0;
+  }
+  .ol-shortcuts-filters button {
+    width: auto;
+    padding: 6px 9px;
+  }
+}
+@media (max-width: 540px) {
+  .ol-shortcut-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .ol-shortcut-row > kbd {
+    justify-self: start;
+  }
+  .ol-shortcut-pack {
+    grid-template-columns: minmax(0, 1fr) 24px;
+  }
+  .ol-shortcut-pack > :first-child {
+    grid-column: 1 / -1;
+  }
+  .ol-settings-placeholder {
+    padding: 32px 16px;
+  }
+  .ol-settings-search-field {
+    font-size: 16px;
+  }
+}
+html[data-ol-input='keyboard'] .ol-expandable-text-clip,
+html[data-ol-input='keyboard'] .ol-expandable-text svg,
+html[data-ol-input='keyboard'] .ol-settings-rail-thumb,
+html[data-ol-input='keyboard'] .ol-switch span {
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-collapse,
+  .ol-expandable-text-clip,
+  .ol-expandable-text svg,
+  .ol-switch span {
+    transition: none !important;
+  }
+  .ol-startup-mark span,
+  .ol-skeleton::after {
+    animation: none;
+  }
+  .ol-choice-chips button {
+    transform: none !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .ol-dialog-overlay,
+  .ol-glass {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .ol-dialog-card {
+    background: var(--ol-surface) !important;
+  }
+}
+@media (prefers-contrast: more) {
+  .ol-choice-chips button,
+  .ol-settings-search-field,
+  .ol-select-trigger {
+    border-color: var(--ol-ink-2);
+  }
+}

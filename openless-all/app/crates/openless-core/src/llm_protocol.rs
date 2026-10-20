@@ -12,11 +12,13 @@ pub const REQUEST_FORMAT_ACCOUNT: &str = "ark.request_format";
 pub const MESSAGES_THINKING_ACCOUNT: &str = "ark.messages_thinking";
 pub const MAX_TOKENS_ACCOUNT: &str = "ark.max_tokens";
 pub const THINKING_BUDGET_ACCOUNT: &str = "ark.thinking_budget";
-pub const CONFIG_ACCOUNTS: [&str; 4] = [
+pub const SERVICE_TIER_ACCOUNT: &str = "ark.service_tier";
+pub const CONFIG_ACCOUNTS: [&str; 5] = [
     REQUEST_FORMAT_ACCOUNT,
     MESSAGES_THINKING_ACCOUNT,
     MAX_TOKENS_ACCOUNT,
     THINKING_BUDGET_ACCOUNT,
+    SERVICE_TIER_ACCOUNT,
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,12 +117,21 @@ pub enum MessagesThinking {
     Budget,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmServiceTier {
+    #[default]
+    Off,
+    Fast,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmProtocolConfig {
     pub format: LlmRequestFormat,
     pub messages_thinking: MessagesThinking,
     pub max_tokens: u32,
     pub thinking_budget: u32,
+    pub service_tier: LlmServiceTier,
 }
 
 impl Default for LlmProtocolConfig {
@@ -130,6 +141,7 @@ impl Default for LlmProtocolConfig {
             messages_thinking: MessagesThinking::Adaptive,
             max_tokens: 8192,
             thinking_budget: 1024,
+            service_tier: LlmServiceTier::Off,
         }
     }
 }
@@ -194,6 +206,12 @@ impl LlmProtocolConfig {
                     return Err(config_error("llmThinkingBudgetInvalid"));
                 }
             }
+            SERVICE_TIER_ACCOUNT => {
+                self.service_tier = match value {
+                    "fast" => LlmServiceTier::Fast,
+                    _ => return Err(config_error("llmServiceTierInvalid")),
+                }
+            }
             _ => return Err(config_error("llmRequestFormatInvalid")),
         }
         Ok(())
@@ -208,6 +226,12 @@ impl LlmProtocolConfig {
             return Err(config_error("llmThinkingBudgetInvalid"));
         }
         Ok(())
+    }
+
+    pub(crate) fn apply_service_tier(&self, provider_id: &str, body: &mut Value) {
+        if provider_id.trim() == "ark" && self.service_tier == LlmServiceTier::Fast {
+            body["service_tier"] = json!("fast");
+        }
     }
 }
 
@@ -293,6 +317,9 @@ pub(crate) fn request_body(
             body["temperature"] = crate::polish::temperature_json(temperature);
         }
     }
+    config
+        .protocol
+        .apply_service_tier(&config.provider_id, &mut body);
     body
 }
 
@@ -310,9 +337,15 @@ fn check_stop_reason(value: &Value) -> Result<bool, LLMError> {
     Ok(false)
 }
 
+#[cfg(test)]
 pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<String, LLMError> {
+    let extracted = extract_text_raw(format, text)?;
+    Ok(crate::polish::clean_polish_output(&extracted))
+}
+
+pub(crate) fn extract_text_raw(format: LlmRequestFormat, text: &str) -> Result<String, LLMError> {
     if format == LlmRequestFormat::ChatCompletions {
-        return crate::polish::extract_assistant_content(text);
+        return crate::polish::extract_assistant_content_raw(text);
     }
     let value: Value =
         serde_json::from_str(text).map_err(|_| response_error("invalid LLM JSON"))?;
@@ -344,7 +377,7 @@ pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<Strin
     if output.is_empty() {
         return Err(response_error("empty LLM response"));
     }
-    Ok(crate::polish::clean_polish_output(&output))
+    Ok(output)
 }
 
 fn append_blocks(output: &mut String, blocks: &Value, kind: &str) {
@@ -727,6 +760,36 @@ mod tests {
     }
 
     #[test]
+    fn service_tier_is_validated_and_applied_only_to_ark_requests() {
+        let mut protocol = LlmProtocolConfig::default();
+        assert!(protocol.apply(SERVICE_TIER_ACCOUNT, "invalid").is_err());
+        protocol.apply(SERVICE_TIER_ACCOUNT, "fast").unwrap();
+        assert_eq!(protocol.service_tier, LlmServiceTier::Fast);
+
+        let messages = vec![json!({"role":"user","content":"hi"})];
+        for format in [LlmRequestFormat::Responses, LlmRequestFormat::Messages] {
+            let mut config = OpenAICompatibleConfig::new(
+                "ark",
+                "test",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "key",
+                "test-model",
+            )
+            .with_protocol(LlmProtocolConfig {
+                format,
+                service_tier: LlmServiceTier::Fast,
+                ..Default::default()
+            });
+            let body = request_body(&config, false, messages.clone());
+            assert_eq!(body["service_tier"], "fast");
+
+            config.provider_id = "openai".into();
+            let body = request_body(&config, false, messages.clone());
+            assert!(body.get("service_tier").is_none());
+        }
+    }
+
+    #[test]
     fn budgets_are_validated_and_non_streaming_extracts_only_complete_text() {
         let mut config = LlmProtocolConfig {
             format: LlmRequestFormat::Messages,
@@ -753,6 +816,20 @@ mod tests {
         ] {
             assert_eq!(extract_text(format, &body.to_string()).unwrap(), "你好");
         }
+        let chat_body = json!({
+            "choices": [{
+                "message": {"content": "<think>secret</think>\n正文"}
+            }]
+        });
+        assert!(
+            extract_text_raw(LlmRequestFormat::ChatCompletions, &chat_body.to_string())
+                .unwrap()
+                .contains("<think>")
+        );
+        assert_eq!(
+            extract_text(LlmRequestFormat::ChatCompletions, &chat_body.to_string()).unwrap(),
+            "正文"
+        );
         assert!(extract_text(
             LlmRequestFormat::Responses,
             r#"{"status":"incomplete","output":[]}"#
@@ -796,6 +873,25 @@ mod tests {
             assert!(stream.done, "recognize the terminal marker before EOF");
             stream.finish().unwrap();
         }
+    }
+
+    #[test]
+    fn chat_sse_appends_incremental_deltas_without_guessing_repetition() {
+        let mut stream = TextEventStream::new(LlmRequestFormat::ChatCompletions);
+        stream
+            .push(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"非常\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"非常重要\"}}]}\n\ndata: [DONE]\n\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().unwrap() {
+            if let StreamEvent::Text(delta) = event {
+                text.push_str(&delta);
+            }
+        }
+        stream.finish().unwrap();
+        assert_eq!(text, "非常非常重要");
     }
 
     #[test]

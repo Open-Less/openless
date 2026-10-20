@@ -69,7 +69,7 @@ export function SavedToast({
     background: failed ? '#fef2f2' : '#eff4ff',
     color: failed ? '#dc2626' : '#2563eb',
     fontSize: 11.5,
-    fontWeight: 600,
+    fontWeight: 'var(--ol-font-weight-semibold)',
     lineHeight: 1.5,
     boxShadow: failed
       ? '0 4px 12px -8px rgba(239,68,68,.28)'

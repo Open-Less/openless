@@ -1,0 +1,10 @@
+{
+  "app": {
+    "bundleName": "openless.hm.com",
+    "vendor": "OpenLess",
+    "versionCode": 1,
+    "versionName": "0.1.0",
+    "icon": "$media:openless_layered_icon",
+    "label": "$string:app_name"
+  }
+}

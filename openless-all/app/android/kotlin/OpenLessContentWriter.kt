@@ -11,36 +11,66 @@ import androidx.annotation.Keep
 import java.io.File
 import java.io.IOException
 
-/**
- * Writes bytes to a SAF content:// URI via ContentResolver.
- *
- * Prefer this over tauri-plugin-fs for exports: fs detaches the FD early and some providers
- * finalize a 0-byte file before Rust finishes writing.
- */
+@Keep
+sealed class OpenLessWriteResult {
+    data object Success : OpenLessWriteResult()
+    data class Failure(val reason: Reason) : OpenLessWriteResult()
+
+    enum class Reason {
+        INVALID_URI,
+        ACCESS_DENIED,
+        SHORT_WRITE,
+        FLUSH_FAILED,
+        WRITE_FAILED,
+        CANCELLED,
+    }
+}
+
+/** Writes bounded bytes to a user-selected SAF document. */
 @Keep
 object OpenLessContentWriter {
     private const val TAG = "OpenLessContentWriter"
 
     @Keep
     @JvmStatic
-    fun writeBytes(context: Context, uriString: String, bytes: ByteArray): Boolean {
+    fun writeStrict(context: Context, uriString: String, bytes: ByteArray): OpenLessWriteResult {
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+            ?: return OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.INVALID_URI)
+        if (uri.scheme != "content") {
+            return OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.INVALID_URI)
+        }
         return try {
-            val uri = Uri.parse(uriString)
-            context.contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(bytes)
-                output.flush()
-            }
-                ?: run {
-                    Log.w(TAG, "openOutputStream returned null for selected document")
-                    return false
+            val output = context.contentResolver.openOutputStream(uri)
+                ?: return OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.WRITE_FAILED)
+            var written = 0
+            output.use { stream ->
+                stream.write(bytes)
+                written = bytes.size
+                try {
+                    stream.flush()
+                } catch (_: Throwable) {
+                    return OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.FLUSH_FAILED)
                 }
-            Log.i(TAG, "wrote ${bytes.size} bytes to selected document")
-            true
+            }
+            if (written != bytes.size) {
+                OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.SHORT_WRITE)
+            } else {
+                OpenLessWriteResult.Success
+            }
+        } catch (_: SecurityException) {
+            OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.ACCESS_DENIED)
+        } catch (_: java.util.concurrent.CancellationException) {
+            OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.CANCELLED)
         } catch (error: Throwable) {
             Log.e(TAG, "failed to write selected document", error)
-            false
+            OpenLessWriteResult.Failure(OpenLessWriteResult.Reason.WRITE_FAILED)
         }
     }
+
+    @Keep
+    @JvmStatic
+    fun writeBytes(context: Context, uriString: String, bytes: ByteArray): Boolean =
+        writeStrict(context, uriString, bytes) is OpenLessWriteResult.Success
 
     /**
      * Writes an app-generated export into Downloads without a SAF picker.

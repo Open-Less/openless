@@ -19,12 +19,7 @@ export function readFontScale(): FontScaleId {
   } catch {
     /* localStorage unavailable: ignore, fall back to the default */
   }
-  // Windows defaults to 'large' (user feedback: medium reads too small on Windows); other
-  // platforms keep medium.
-  if (typeof navigator !== 'undefined') {
-    const hint = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
-    if (/Windows|Win32|Win64/.test(hint)) return 'large';
-  }
+  // One default on every platform. An explicit user choice above always wins.
   return 'medium';
 }
 
@@ -33,13 +28,16 @@ export function applyFontScale(id: FontScaleId): void {
   // CSS zoom isn't in the W3C standard but WebKit/Blink both support it; Tauri desktop runs
   // Wry/WebKit, so it's fine.
   (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale);
+  document.documentElement.style.setProperty('--ol-interface-scale', String(scale));
 }
 
 export function setFontScale(id: FontScaleId, source: 'user' | 'sync-restore' = 'user'): void {
   applyFontScale(id);
   try {
     window.localStorage.setItem(FONT_SCALE_KEY, id);
-    window.dispatchEvent(new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'fontScale' } }));
+    window.dispatchEvent(
+      new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'fontScale' } }),
+    );
   } catch {
     /* ignore */
   }

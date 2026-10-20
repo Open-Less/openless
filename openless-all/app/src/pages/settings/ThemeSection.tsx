@@ -37,7 +37,7 @@ export function ThemeSection() {
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+      <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)', marginBottom: 6 }}>
         {t('settings.theme.title')}
       </div>
       <SettingRow label={t('settings.theme.label')}>

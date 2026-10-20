@@ -55,11 +55,15 @@ mod credentials;
 mod dictation;
 mod dictionary;
 #[cfg(not(mobile))]
+mod experimental_asr;
+#[cfg(not(mobile))]
 mod foundry_asr;
 mod github_oauth;
 mod history;
 mod hotkeys;
-#[cfg(not(mobile))]
+// Local ASR commands also exist on arm64 Android, which links sherpa-onnx
+// (build.rs `local_asr_sherpa`).
+#[cfg(any(not(mobile), local_asr_sherpa))]
 mod local_asr;
 mod marketplace;
 mod misc;
@@ -75,9 +79,10 @@ mod selection_polish_preview;
 #[cfg(all(not(mobile), target_os = "windows"))]
 mod selection_voice;
 mod settings;
-#[cfg(not(mobile))]
+#[cfg(any(not(mobile), local_asr_sherpa))]
 mod sherpa_asr;
 mod style_packs;
+mod voice_edit;
 
 pub use channels::*;
 pub use cloud_sync::*;
@@ -86,11 +91,13 @@ pub use credentials::*;
 pub use dictation::*;
 pub use dictionary::*;
 #[cfg(not(mobile))]
+pub use experimental_asr::*;
+#[cfg(not(mobile))]
 pub use foundry_asr::*;
 pub use github_oauth::*;
 pub use history::*;
 pub use hotkeys::*;
-#[cfg(not(mobile))]
+#[cfg(any(not(mobile), local_asr_sherpa))]
 pub use local_asr::*;
 pub use marketplace::*;
 pub use misc::*;
@@ -106,17 +113,31 @@ pub use selection_polish_preview::*;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub use selection_voice::*;
 pub use settings::*;
-#[cfg(not(mobile))]
-// Sherpa commands are registered on Windows only; other desktop targets keep
-// an empty re-export.
+#[cfg(any(not(mobile), local_asr_sherpa))]
+// Sherpa commands are registered on Windows and arm64 Android; other desktop
+// targets keep an empty re-export.
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
 pub use style_packs::*;
+pub use voice_edit::*;
 
 pub(crate) type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub(crate) type CoreState<'a> = State<'a, Arc<openless_core::OpenLessBackend>>;
 #[cfg(not(mobile))]
-pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
+pub struct MicrophoneMonitorState {
+    pub(crate) operation: Mutex<()>,
+    pub(crate) recorder: Mutex<Option<Recorder>>,
+}
+
+#[cfg(not(mobile))]
+impl MicrophoneMonitorState {
+    pub(crate) fn new(recorder: Option<Recorder>) -> Self {
+        Self {
+            operation: Mutex::new(()),
+            recorder: Mutex::new(recorder),
+        }
+    }
+}
 #[cfg(not(mobile))]
 pub type TrayMicrophoneMenuState = Mutex<Vec<TrayMicrophoneMenuItem>>;
 
@@ -228,6 +249,13 @@ pub(crate) fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+/// Model folders live in app-private storage on Android, which no file
+/// manager can open; the local ASR "reveal" commands report that instead.
+#[cfg(all(target_os = "android", local_asr_sherpa))]
+pub(crate) fn open_path_in_file_manager(_path: &std::path::Path) -> Result<(), String> {
+    Err("Opening the model folder is not supported on Android".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_valid_local_pack_id, is_valid_session_id};
@@ -330,27 +358,24 @@ mod tests {
             &whisper_keyless_ready
         ));
 
-        #[cfg(target_os = "macos")]
-        {
-            assert!(asr_configured_for_provider(
-                crate::asr::local::PROVIDER_ID,
-                &snapshot()
-            ));
-            assert!(asr_configured_for_provider(
-                crate::asr::local::LOCAL_QWEN3_C_PROVIDER_ID,
-                &snapshot()
-            ));
-        }
-        #[cfg(not(target_os = "macos"))]
-        assert!(!asr_configured_for_provider(
+        // Retired metadata IDs can never count as a configured native runtime.
+        for provider in [
             crate::asr::local::PROVIDER_ID,
-            &snapshot()
-        ));
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        assert!(asr_configured_for_provider(
+            crate::asr::local::LOCAL_QWEN3_C_PROVIDER_ID,
             crate::asr::local::LOCAL_QWEN3_MLX_PROVIDER_ID,
-            &snapshot()
-        ));
+        ] {
+            assert!(!asr_configured_for_provider(provider, &snapshot()));
+        }
+        #[cfg(target_os = "macos")]
+        for provider in ["local-whisper", "apple-whisper"] {
+            assert!(!asr_configured_for_provider(provider, &snapshot()));
+        }
+        // System recognition needs no cloud credential, but only the macOS
+        // host registers its native engine. Retired models remain unavailable.
+        assert_eq!(
+            asr_configured_for_provider("apple-speech", &snapshot()),
+            cfg!(target_os = "macos")
+        );
         #[cfg(target_os = "windows")]
         assert!(asr_configured_for_provider(
             crate::asr::local::foundry::PROVIDER_ID,

@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Icon } from '../../components/Icon';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
+import { ExitPresence } from '../../components/ui/Modal';
 import { Btn, Card } from '../_atoms';
 import { SectionTitle } from './shared';
 import { marketplaceAuthStatus, marketplaceLogout } from '../../lib/ipc';
@@ -100,7 +101,7 @@ export function MarketplaceSection() {
             <div
               style={{
                 fontSize: 13.5,
-                fontWeight: 600,
+                fontWeight: 'var(--ol-font-weight-semibold)',
                 color: 'var(--ol-ink)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -123,17 +124,21 @@ export function MarketplaceSection() {
         </div>
       )}
 
-      {showLogin && (
-        <GithubLoginModal
-          onClose={() => setShowLogin(false)}
-          onSuccess={(nextLogin) => {
-            setSignedIn(true);
-            void savePrefs((current) => ({ ...current, marketplaceDevLogin: nextLogin })).catch(
-              (e) => console.warn('[marketplace] save login to prefs failed', e),
-            );
-          }}
-        />
-      )}
+      <ExitPresence
+        open={showLogin}
+        render={(closing) => (
+          <GithubLoginModal
+            closing={closing}
+            onClose={() => setShowLogin(false)}
+            onSuccess={(nextLogin) => {
+              setSignedIn(true);
+              void savePrefs((current) => ({ ...current, marketplaceDevLogin: nextLogin })).catch(
+                (e) => console.warn('[marketplace] save login to prefs failed', e),
+              );
+            }}
+          />
+        )}
+      />
     </Card>
   );
 }

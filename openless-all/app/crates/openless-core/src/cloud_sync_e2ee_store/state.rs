@@ -54,5 +54,5 @@ pub fn scope_id(scope: &SyncScope) -> DocumentResult<String> {
         &scope.device_id,
     ))
     .map_err(|_| DocumentError::InvalidDocument)?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }

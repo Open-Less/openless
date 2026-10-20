@@ -73,7 +73,13 @@ export function MobileMoreSheet({
             padding: '4px 8px 12px',
           }}
         >
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 'var(--ol-font-weight-semibold)',
+              color: 'var(--ol-ink)',
+            }}
+          >
             {t('nav.more')}
           </span>
           <button

@@ -31,6 +31,7 @@ import {
   deleteSherpaOnnxAsrModel,
   deleteLocalAsrModel,
   downloadLocalAsrModel,
+  downloadFoundryLocalAsrModel,
   downloadSherpaOnnxAsrModel,
   fetchLocalAsrHfCard,
   fetchLocalAsrRemoteInfo,
@@ -45,6 +46,7 @@ import {
   getSherpaOnnxAsrStatus,
   listLocalAsrModels,
   preloadLocalAsr,
+  prepareSherpaOnnxAsr,
   releaseFoundryLocalAsr,
   releaseLocalAsrEngine,
   releaseSherpaOnnxAsr,
@@ -116,6 +118,9 @@ import type { RemoteSize } from './types';
 const OS = detectOS();
 const IS_WINDOWS = OS === 'win';
 const IS_QWEN_PLATFORM = OS === 'mac';
+// sherpa-onnx models: Windows and arm64 Android (this page only shows where
+// the backend reports local ASR support). Foundry stays Windows-only.
+const IS_SHERPA_PLATFORM = IS_WINDOWS || OS === 'android';
 
 function effectiveModelMirror(modelId: string, mirror: string): LocalAsrMirror {
   if (mirror === 'modelscope' && !modelId.startsWith('qwen3-asr-')) return 'huggingface';
@@ -162,7 +167,7 @@ function LocalAsrGroupTitle({ children }: { children: ReactNode }) {
     <div
       style={{
         fontSize: 12.5,
-        fontWeight: 600,
+        fontWeight: 'var(--ol-font-weight-semibold)',
         color: 'var(--ol-ink-3)',
         letterSpacing: '0.02em',
         margin: '18px 0 8px',
@@ -418,6 +423,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       const message = err instanceof Error ? err.message : String(err);
       setFoundryStatus({
         providerId: 'foundry-local-whisper',
+        restartRequired: false,
         available: false,
         runtimeReady: false,
         runtimeSource: selectedFoundryRuntimeSource,
@@ -532,6 +538,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         void refreshFoundryStatus();
         void refreshFoundryCatalog();
         void refreshFoundryModelDir(selectedFoundryAlias);
+      }
+      if (IS_SHERPA_PLATFORM) {
         void refreshSherpaStatus();
         void refreshSherpaCatalog();
         void refreshSherpaModelDir(selectedSherpaAlias);
@@ -808,7 +816,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!isTauri || !IS_WINDOWS) return;
+    if (!isTauri || !IS_SHERPA_PLATFORM) return;
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
@@ -839,7 +847,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!isTauri || !IS_WINDOWS) return;
+    if (!isTauri || !IS_SHERPA_PLATFORM) return;
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
@@ -1018,6 +1026,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
   const handleEnableFoundry = async (aliasOverride?: FoundryLocalAsrModelAlias) => {
     if (!foundryAvailable) return;
+    if (foundryStatus?.restartRequired) {
+      setError(t('localAsr.runtimeDownloadRestart'));
+      return;
+    }
     const alias = aliasOverride ?? selectedFoundryAlias;
     setFoundryBusy('enable');
     try {
@@ -1046,10 +1058,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     });
     try {
       setError(null);
-      await activateLocalAsr('foundry', alias, 'foundry-local-whisper');
-      foundrySelectionDirty.current = false;
+      await downloadFoundryLocalAsrModel(alias);
       await refreshFoundryStatus();
       await refreshFoundryCatalog();
+      if (window.confirm(t('localAsr.runtimeDownloadRestart'))) {
+        await restartApp();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       await refreshFoundryStatus();
@@ -1058,12 +1072,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       setFoundryBusy(null);
       setFoundryCancelRequested(false);
     }
-  };
-
-  // Sidebar "download" action: enable first (switch provider + write model), then prepare/download/load in order.
-  // Atomic activation already covers prepare/preload; sidebar actions must not chain a second settings write.
-  const handleEnableAndPrepareFoundry = async (alias: FoundryLocalAsrModelAlias) => {
-    await handleEnableFoundry(alias);
   };
 
   const handleCancelFoundryPrepare = async () => {
@@ -1201,8 +1209,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     });
     try {
       setError(null);
-      await activateSherpaProvider(selectedSherpaAlias);
-      sherpaSelectionDirty.current = false;
+      await prepareSherpaOnnxAsr(selectedSherpaAlias);
       await refreshSherpaStatus();
       await refreshSherpaCatalog();
     } catch (e) {
@@ -1238,12 +1245,13 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  const handleRevealSherpaDir = async () => {
+  const handleRevealSherpaDir = async (aliasOverride?: SherpaOnnxModelAlias) => {
+    const alias = aliasOverride ?? selectedSherpaAlias;
     setSherpaBusy('reveal');
     try {
       setError(null);
-      await revealSherpaOnnxAsrModelDir(selectedSherpaAlias);
-      await refreshSherpaModelDir(selectedSherpaAlias);
+      await revealSherpaOnnxAsrModelDir(alias);
+      await refreshSherpaModelDir(alias);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1314,7 +1322,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         modelAlias,
         effectiveSherpaMirror(settings?.mirror ?? 'huggingface'),
       );
-      await activateSherpaProvider(modelAlias);
+      await refreshSherpaCatalog();
+      await refreshSherpaStatus();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
@@ -1760,7 +1769,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       });
     }
     // Windows：sherpa-onnx + foundry
-    for (const c of IS_WINDOWS ? sherpaCatalog : []) {
+    for (const c of IS_SHERPA_PLATFORM ? sherpaCatalog : []) {
       const isDownloading =
         Boolean(sherpaDownloadProgress[c.alias]) &&
         (sherpaDownloadProgress[c.alias]?.phase === 'started' ||
@@ -1785,7 +1794,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         isActive:
           sherpaStatus?.activeModel === c.alias && activeAsrProvider === 'sherpa-onnx-local',
         engine: 'sherpa',
-        runtimeLabel: 'Windows · sherpa-onnx',
+        runtimeLabel: OS === 'android' ? 'Android · sherpa-onnx' : 'Windows · sherpa-onnx',
         downloadError:
           sherpaDownloadProgress[c.alias]?.phase === 'failed'
             ? sherpaDownloadProgress[c.alias]?.error || t('localAsr.failed')
@@ -1895,12 +1904,14 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       } else if (action === 'delete') {
         setSelectedSherpaAlias(alias);
         window.setTimeout(() => void handleDeleteSherpa(alias), 0);
+      } else if (action === 'reveal') {
+        void handleRevealSherpaDir(alias);
       }
     } else if (entry.engine === 'foundry') {
       const alias = entry.id as FoundryLocalAsrModelAlias;
       if (action === 'download') {
         setSelectedFoundryAlias(alias);
-        void handleEnableAndPrepareFoundry(alias);
+        void handlePrepareFoundry(alias);
       } else if (action === 'delete') {
         setSelectedFoundryAlias(alias);
         void handleDeleteFoundry(alias);
@@ -2051,6 +2062,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     }}
                     onDelete={() => selectedEntry && dispatchEntryAction(selectedEntry, 'delete')}
                     onReveal={() => selectedEntry && dispatchEntryAction(selectedEntry, 'reveal')}
+                    showReveal={!(OS === 'android' && selectedEntry?.engine === 'sherpa')}
                     onCleanup={
                       selectedEntry &&
                       (selectedEntry.engine === 'qwen3' || selectedEntry.engine === 'whisper') &&
@@ -2136,7 +2148,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     <div
                       style={{
                         fontSize: 12,
-                        fontWeight: 600,
+                        fontWeight: 'var(--ol-font-weight-semibold)',
                         color: 'var(--ol-ink-4)',
                         marginBottom: 4,
                       }}
@@ -2198,7 +2210,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                         <div
                           style={{
                             fontSize: 12,
-                            fontWeight: 600,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
                             color: 'var(--ol-ink-4)',
                             marginBottom: 4,
                           }}
@@ -2243,7 +2255,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                         <div
                           style={{
                             fontSize: 12,
-                            fontWeight: 600,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
                             color: 'var(--ol-ink-4)',
                             marginBottom: 4,
                           }}
@@ -2420,6 +2432,23 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
           }}
           onStart={startDownloadFromDialog}
           onClose={() => setDownloadDialog(false)}
+          // The settings-section mirror picker below is macOS-only; everywhere
+          // else this is the only way to leave HuggingFace, which is often
+          // unreachable (mainland China). Sherpa models have no ModelScope copy.
+          mirror={{
+            label: t('localAsr.mirrorLabel'),
+            value: IS_QWEN_PLATFORM
+              ? (settings?.mirror ?? 'huggingface')
+              : effectiveSherpaMirror(settings?.mirror ?? 'huggingface'),
+            options: [
+              { value: 'huggingface', label: t('localAsr.mirrorHuggingface') },
+              { value: 'hf-mirror', label: t('localAsr.mirrorHfMirror') },
+              ...(IS_QWEN_PLATFORM
+                ? [{ value: 'modelscope', label: t('localAsr.mirrorModelscope') }]
+                : []),
+            ],
+            onChange: (value) => void handleMirrorChange(value),
+          }}
         />
       )}
 
@@ -2719,6 +2748,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
               )}
             </div>
 
+            {foundryStatus?.restartRequired && (
+              <div role="status" className="ol-model-error">
+                {t('localAsr.runtimeDownloadRestart')}
+                <Btn size="sm" onClick={() => void restartApp()}>
+                  {t('localAsr.restartNow')}
+                </Btn>
+              </div>
+            )}
+
             {(foundryBusy === 'prepare' || foundryProgress) && (
               <FoundryPrepareProgressBlock
                 progress={foundryProgress}
@@ -2737,7 +2775,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
               <Btn
                 variant="blue"
                 size="sm"
-                disabled={foundryBusy !== null || !foundryAvailable}
+                disabled={
+                  foundryBusy !== null ||
+                  !foundryAvailable ||
+                  foundryStatus?.restartRequired ||
+                  !selectedFoundryCatalog?.cached
+                }
                 onClick={() => void handleEnableFoundry()}
               >
                 {foundryBusy === 'enable'

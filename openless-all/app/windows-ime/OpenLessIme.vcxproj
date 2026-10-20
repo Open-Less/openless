@@ -96,7 +96,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;oleaut32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -111,7 +111,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;oleaut32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -130,7 +130,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;oleaut32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -149,23 +149,23 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;oleaut32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\class_factory.cpp" />
+    <ClCompile Include="src\display_attribute.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\edit_session.cpp" />
-    <ClCompile Include="src\ipc_client.cpp" />
     <ClCompile Include="src\registry.cpp" />
     <ClCompile Include="src\text_service.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\class_factory.h" />
+    <ClInclude Include="src\display_attribute.h" />
     <ClInclude Include="src\edit_session.h" />
     <ClInclude Include="src\guids.h" />
-    <ClInclude Include="src\ipc_client.h" />
     <ClInclude Include="src\registry.h" />
     <ClInclude Include="src\text_service.h" />
   </ItemGroup>
