@@ -174,8 +174,8 @@ committed, cached or printed.
 | Secret | `HARMONY_PROFILE_BASE64` | base64 of the release `.p7b` provisioning profile |
 | Secret | `HARMONY_KEYSTORE_PASSWORD` | keystore password |
 | Secret | `HARMONY_KEY_PASSWORD` | key password (falls back to the keystore password) |
-| Variable | `HARMONY_KEY_ALIAS` | key alias inside the keystore |
-| Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
+| Variable (optional) | `HARMONY_KEY_ALIAS` | key alias inside the keystore; defaults to `harmony-<channel>` |
+| Variable (optional) | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
 | Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
 
@@ -186,6 +186,13 @@ time matches the channel being built.
 | Secret | `APPGALLERY_CLIENT_ID` | AppGallery Connect API client id |
 | Secret | `APPGALLERY_CLIENT_SECRET` | AppGallery Connect API client secret |
 | Secret | `APPGALLERY_APP_ID` | AppGallery Connect app id of the HarmonyOS app |
+
+Nothing else has to be configured: the build downloads the official command-line
+tools from the checksum-pinned mirror, so a hosted runner needs no variable, no
+self-hosted machine and no Huawei account. The signing directory is exported by
+the workflow itself (`$RUNNER_TEMP/harmony-signing`) and must not be redeclared as
+an `env:` key - YAML `env` outranks `$GITHUB_ENV`, so an empty placeholder would
+shadow it and the build would fall back to a directory that does not exist.
 
 The upload replaces the candidate package in AppGallery Connect; it never submits
 the app for review, because AGC requires a human submission. Without the

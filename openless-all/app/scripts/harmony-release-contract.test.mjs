@@ -94,3 +94,20 @@ assert.match(workflow, /gh release upload/);
 assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
 
 console.log('harmony-release contract test passed');
+
+// `env:` at job level outranks `$GITHUB_ENV`, so a placeholder key here would
+// shadow the value the signing step exports and the build would look for
+// signing material in `~/.local/share/harmony/signing/release`.
+{
+  const jobEnv = workflow.match(/\n    env:\n((?:      [A-Z_]+:.*\n)+)/)?.[1] ?? '';
+  assert.doesNotMatch(
+    jobEnv,
+    /OPENLESS_HARMONY_SIGNING_DIR/,
+    'release-harmony.yml must not declare OPENLESS_HARMONY_SIGNING_DIR as job-level env',
+  );
+  assert.match(
+    workflow,
+    /OPENLESS_HARMONY_SIGNING_DIR=\$dir.*GITHUB_ENV|echo "OPENLESS_HARMONY_SIGNING_DIR=\$dir" >> "\$GITHUB_ENV"/,
+    'the signing step must export OPENLESS_HARMONY_SIGNING_DIR through $GITHUB_ENV',
+  );
+}

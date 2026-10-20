@@ -60,9 +60,11 @@ jobs:
       # Device-independent: the SDK path can be overridden per runner with a
       # repository variable instead of patching this file.
       OPENLESS_HARMONY_TOOLCHAIN: ${{ vars.HARMONY_TOOLCHAIN }}
-      # Empty until the signing step resolves `$RUNNER_TEMP`; the `runner`
-      # context is not available in a job-level `env`, only inside a step.
-      OPENLESS_HARMONY_SIGNING_DIR: ""
+      # `OPENLESS_HARMONY_SIGNING_DIR` is deliberately *not* declared here: the
+      # `runner` context is unavailable at job level, so the signing step writes
+      # it to `$GITHUB_ENV` - and GitHub resolves YAML `env` above `$GITHUB_ENV`,
+      # so an empty placeholder here would shadow it and the build would look for
+      # signing material in `~/.local/share/harmony/signing/release`.
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       # Signing material: files are base64 secrets, passwords are plain secrets
@@ -146,7 +148,13 @@ jobs:
         working-directory: openless-all/app
         env:
           OPENLESS_HARMONY_CHANNEL: ${{ inputs.channel }}
-        run: bash scripts/package-harmony-hap.sh
+        run: |
+          set -euo pipefail
+          if [ "$OPENLESS_HARMONY_CHANNEL" != "none" ] && [ -z "${OPENLESS_HARMONY_SIGNING_DIR:-}" ]; then
+            echo "::error::OPENLESS_HARMONY_SIGNING_DIR is unset; the signing step must export it"
+            exit 1
+          fi
+          bash scripts/package-harmony-hap.sh
 
       - name: Verify the packaged HAP
         working-directory: openless-all/app
