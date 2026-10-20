@@ -770,6 +770,8 @@ impl CredentialMetadata {
                 .get(&mutation_kind)
                 .is_some_and(|channels| {
                     channels.iter().any(|channel| channel.id == active)
+                        || (matches!(&mutation, ChannelMutation::Create { .. })
+                            && channels.is_empty())
                         || (!channels.is_empty()
                             && first_enabled_channel(channels)
                                 .map(|channel| channel.id.as_str())
