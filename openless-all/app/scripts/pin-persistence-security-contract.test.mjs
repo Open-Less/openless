@@ -61,7 +61,9 @@ assert.match(
 );
 assert.match(
   ci,
-  /if: runner\.os == 'Windows'[\s\S]*cargo test --locked --manifest-path src-tauri\/Cargo\.toml --lib --no-run/,
+  // `--bins` was folded in when the duplicate `cargo check` pass was removed;
+  // the requirement is only that Windows compiles the owning module's tests.
+  /if: runner\.os == 'Windows'[\s\S]*cargo test --locked --manifest-path src-tauri\/Cargo\.toml --lib(?: --bins)? --no-run/,
   'Windows CI must at least compile the owning Tauri module tests when native runtime DLLs prevent execution',
 );
 
