@@ -26,13 +26,15 @@ SOURCES = {
 
 def fetch(name, url):
     dest = CACHE / 'sources' / name
+    archive = CACHE / 'downloads' / (name + '.tar.gz')
     required = dest / 'boost/core/detail/sp_thread_sleep.hpp' if name == 'boost-1.85.0' else None
     if dest.exists():
         if required is None or required.is_file():
             return dest
         print('Repair incomplete ' + name, flush=True)
         shutil.rmtree(dest)
-    archive = CACHE / 'downloads' / (name + '.tar.gz')
+        if archive.exists():
+            archive.unlink()
     archive.parent.mkdir(parents=True, exist_ok=True)
     if not archive.exists():
         print('Download ' + name, flush=True)
