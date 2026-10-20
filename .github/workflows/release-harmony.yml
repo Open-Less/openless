@@ -158,9 +158,12 @@ jobs:
 
           # Prefer `HARMONY_<CHANNEL>_*` (so release and test material can both
           # live in the repository), fall back to the channel-agnostic names.
+          # Secret names put the channel first: HARMONY_RELEASE_CERT_BASE64,
+          # HARMONY_TEST_CERT_BASE64. The channel-agnostic fallback is the plain
+          # name without that segment.
           resolve() {
             local base=$1 specific
-            specific="${base}_${upper}"
+            specific="HARMONY_${upper}_${base#HARMONY_}"
             if [ -n "${!specific:-}" ]; then printf '%s' "$specific"; return 0; fi
             printf '%s' "$base"
           }

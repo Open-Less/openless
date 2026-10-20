@@ -132,3 +132,16 @@ assert.ok(
   existsSync(join(appRoot, 'scripts/check-harmony-signing.sh')),
   'scripts/check-harmony-signing.sh must exist',
 );
+
+// Secret names carry the channel first (`HARMONY_RELEASE_CERT_BASE64`), so the
+// resolver must insert the channel after `HARMONY_` rather than appending it.
+assert.match(
+  workflow,
+  /specific="HARMONY_\$\{upper\}_\$\{base#HARMONY_\}"/,
+  'channel-specific secret lookup must build HARMONY_<CHANNEL>_<FIELD>',
+);
+assert.match(
+  workflow,
+  /HARMONY_RELEASE_CERT_BASE64: \$\{\{ secrets\.HARMONY_RELEASE_CERT_BASE64 \}\}/,
+  'the release channel secret must be wired into the job environment',
+);
