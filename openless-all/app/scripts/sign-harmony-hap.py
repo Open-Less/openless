@@ -48,7 +48,12 @@ if not password:
     if not password_file.is_file():
         sys.exit(f'missing signing password: set HARMONY_KEYSTORE_PASSWORD or {password_file}')
     password = password_file.read_text().strip()
-key_password = os.environ.get('HARMONY_KEY_PASSWORD', '').strip() or password
+key_password = os.environ.get('HARMONY_KEY_PASSWORD', '').strip()
+if not key_password:
+    key_password_file = signing / 'key-password'
+    if key_password_file.is_file():
+        key_password = key_password_file.read_text().strip()
+key_password = key_password or password
 
 required = [signing / f'{prefix}.cer', signing / f'{prefix}.p7b', signing / f'{prefix}.p12']
 missing = [str(path) for path in required if not path.is_file()]

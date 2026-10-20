@@ -69,6 +69,24 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       # Signing material: files are base64 secrets, passwords are plain secrets
       # and never touch the workspace.
+      #
+      # Two naming schemes are accepted. The channel-specific one
+      # (`HARMONY_RELEASE_*` / `HARMONY_TEST_*`) lets production and test material
+      # coexist in the repository; the plain names remain for a repo that only
+      # ever signs one channel.
+      HARMONY_RELEASE_CERT_BASE64: ${{ secrets.HARMONY_RELEASE_CERT_BASE64 }}
+      HARMONY_RELEASE_PROFILE_BASE64: ${{ secrets.HARMONY_RELEASE_PROFILE_BASE64 }}
+      HARMONY_RELEASE_KEYSTORE_BASE64: ${{ secrets.HARMONY_RELEASE_KEYSTORE_BASE64 }}
+      HARMONY_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.HARMONY_RELEASE_KEYSTORE_PASSWORD }}
+      HARMONY_RELEASE_KEY_PASSWORD: ${{ secrets.HARMONY_RELEASE_KEY_PASSWORD }}
+      HARMONY_TEST_CERT_BASE64: ${{ secrets.HARMONY_TEST_CERT_BASE64 }}
+      HARMONY_TEST_PROFILE_BASE64: ${{ secrets.HARMONY_TEST_PROFILE_BASE64 }}
+      HARMONY_TEST_KEYSTORE_BASE64: ${{ secrets.HARMONY_TEST_KEYSTORE_BASE64 }}
+      HARMONY_TEST_KEYSTORE_PASSWORD: ${{ secrets.HARMONY_TEST_KEYSTORE_PASSWORD }}
+      HARMONY_TEST_KEY_PASSWORD: ${{ secrets.HARMONY_TEST_KEY_PASSWORD }}
+      HARMONY_CERT_BASE64: ${{ secrets.HARMONY_CERT_BASE64 }}
+      HARMONY_PROFILE_BASE64: ${{ secrets.HARMONY_PROFILE_BASE64 }}
+      HARMONY_KEYSTORE_BASE64: ${{ secrets.HARMONY_KEYSTORE_BASE64 }}
       HARMONY_KEYSTORE_PASSWORD: ${{ secrets.HARMONY_KEYSTORE_PASSWORD }}
       HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
       HARMONY_KEY_ALIAS: ${{ vars.HARMONY_KEY_ALIAS }}
@@ -126,22 +144,53 @@ jobs:
           set -euo pipefail
           dir="$RUNNER_TEMP/harmony-signing"
           prefix="${{ inputs.channel }}"
+          upper=$(printf '%s' "$prefix" | tr '[:lower:]' '[:upper:]')
           rm -rf "$dir"
           mkdir -p "$dir"
           umask 077
           echo "OPENLESS_HARMONY_SIGNING_DIR=$dir" >> "$GITHUB_ENV"
+
+          # Prefer `HARMONY_<CHANNEL>_*` (so release and test material can both
+          # live in the repository), fall back to the channel-agnostic names.
+          resolve() {
+            local base=$1 specific
+            specific="${base}_${upper}"
+            if [ -n "${!specific:-}" ]; then printf '%s' "$specific"; return 0; fi
+            printf '%s' "$base"
+          }
+          missing=()
           for pair in "HARMONY_CERT_BASE64:$prefix.cer" \
                       "HARMONY_PROFILE_BASE64:$prefix.p7b" \
                       "HARMONY_KEYSTORE_BASE64:$prefix.p12"; do
-            name="${pair%%:*}"
+            base="${pair%%:*}"
             file="${pair##*:}"
+            name=$(resolve "$base")
             value="${!name:-}"
             if [ -z "$value" ]; then
-              echo "::error::missing secret $name (base64 of $file)"
-              exit 1
+              missing+=("$name")
+              continue
             fi
             printf '%s' "$value" | base64 -d > "$dir/$file"
           done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::missing signing secrets for channel '$prefix': ${missing[*]} (base64 of the .cer/.p7b/.p12 downloaded from AppGallery Connect)"
+            exit 1
+          fi
+
+          # Passwords follow the same scheme. They are written next to the
+          # keystore instead of re-exported through `$GITHUB_ENV`: YAML `env`
+          # outranks `$GITHUB_ENV`, so the job-level plain-name secret would
+          # shadow the resolved channel-specific one. `sign-harmony-hap.py`
+          # reads these files when the environment has nothing.
+          keystore_password=$(resolve HARMONY_KEYSTORE_PASSWORD)
+          if [ -n "${!keystore_password:-}" ]; then
+            printf '%s' "${!keystore_password}" > "$dir/keystore-password"
+          fi
+          key_password=$(resolve HARMONY_KEY_PASSWORD)
+          if [ -n "${!key_password:-}" ]; then
+            printf '%s' "${!key_password}" > "$dir/key-password"
+          fi
+          chmod 600 "$dir/keystore-password" "$dir/key-password" 2>/dev/null || true
           ls -l "$dir"
 
       - name: Build, sign and stage the HAP

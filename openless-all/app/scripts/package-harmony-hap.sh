@@ -21,15 +21,21 @@ TOOLCHAIN="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
 # Channels, matching how the artifacts are distributed:
 #   release  production build for HUAWEI AppGallery (signed with release.*)
 #   test     beta build for the AppGallery test channel (signed with test.*)
-#   none     no store signing; the debug material is used when it is present
-# The GitHub Release only ever carries the *unsigned* HAP.
+#   debug    local development build (signed with debug.*, installable only on the
+#            devices listed in that debug profile); never published
+#   none     no store signing (the GitHub Release only ships the unsigned HAP)
 CHANNEL="${OPENLESS_HARMONY_CHANNEL:-release}"
 case "$CHANNEL" in
   release | test) SIGN_PREFIX="$CHANNEL" ;;
+  debug)
+    SIGN_PREFIX="debug"
+    # Local material lives beside the store channels but in its own directory.
+    SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/local-test}"
+    ;;
   none) SIGN_PREFIX="" ;;
-  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test or none' >&2; exit 1 ;;
+  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test, debug or none' >&2; exit 1 ;;
 esac
-SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}"
+SIGNING_DIR="${SIGNING_DIR:-${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}}"
 CACHE_ROOT="${OPENLESS_CACHE_ROOT:-$APP_ROOT/target/harmony-cache}"
 OUTPUT="${OPENLESS_HARMONY_OUTPUT:-$APP_ROOT/target/harmony-packages}"
 

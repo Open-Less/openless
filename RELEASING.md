@@ -167,6 +167,57 @@ Before dispatching the Linux release build, additionally require all of the foll
 The HAP build reads everything from the environment; no key material is ever
 committed, cached or printed.
 
+### Where each piece comes from
+
+Everything below is done once, on a machine you trust, with your own HUAWEI
+developer account. Nothing here can be automated: AppGallery issues the material
+only to a verified developer, and it will not accept a self-signed substitute.
+
+| Step | Where | What you get |
+|---|---|---|
+| 1 | <https://developer.huawei.com> → 注册 + 实名认证（个人或企业） | an account that may create certificates |
+| 2 | AppGallery Connect → 我的项目 → 创建项目 → 添加应用（HarmonyOS，包名必须是 `openless.hm.com`，与 `harmony/AppScope/app.json5` 一致） | `APPGALLERY_APP_ID`（应用信息里的 APP ID） |
+| 3 | 本地：生成密钥库与证书请求 | `release.p12` + `release.csr` + 两个密码 |
+| 4 | AGC → 用户与访问 → 证书管理 → 申请证书（**发布证书**）→ 上传 `release.csr` | `release.cer` |
+| 5 | AGC → Profile 管理 → 申请 Profile（**发布 Profile**，绑定上面的证书与包名） | `release.p7b` |
+| 6 | AGC → 用户与访问 → API 密钥 → 创建客户端（勾选发布相关权限） | `APPGALLERY_CLIENT_ID` / `APPGALLERY_CLIENT_SECRET` |
+
+Step 3, without DevEco Studio:
+
+```bash
+keytool -genkeypair -keystore release.p12 -storetype PKCS12 \
+  -alias harmony-release -keyalg EC -groupname secp256r1 \
+  -sigalg SHA256withECDSA -validity 9125 \
+  -dname "CN=OpenLess, O=<你的组织>, C=CN"
+keytool -certreq -keystore release.p12 -alias harmony-release -file release.csr
+```
+
+Keep `release.p12` and both passwords offline; they are the only copy of the
+private key that AppGallery will trust.
+
+### Storing them in the repository
+
+```bash
+base64 -w0 release.cer       # → HARMONY_RELEASE_CERT_BASE64
+base64 -w0 release.p7b       # → HARMONY_RELEASE_PROFILE_BASE64
+base64 -w0 release.p12       # → HARMONY_RELEASE_KEYSTORE_BASE64
+```
+
+`HARMONY_<CHANNEL>_*` names let production and test material coexist. The
+channel-agnostic `HARMONY_CERT_BASE64` / `HARMONY_PROFILE_BASE64` /
+`HARMONY_KEYSTORE_BASE64` are still accepted and are used when no
+channel-specific secret is set.
+
+### What the workflow does, and what it cannot do
+
+Automated: build → sign → verify the signature → upload as the AppGallery
+*candidate* package → attach the **unsigned** HAP to the GitHub Release.
+
+Manual, always: AGC requires a human to fill in the store listing (icon,
+screenshots, privacy-policy URL, 软件著作权, 分类与年龄分级) and to press
+提交审核. `scripts/upload-appgallery.mjs` deliberately stops at replacing the
+candidate package.
+
 | Kind | Name | Purpose |
 |---|---|---|
 | Secret | `HARMONY_KEYSTORE_BASE64` | base64 of the release `.p12` keystore |
