@@ -1,14 +1,20 @@
 --- a/crates/micyou-dsp/src/lib.rs
 +++ b/crates/micyou-dsp/src/lib.rs
-@@ -13,7 +13,6 @@
+@@ -13,7 +13,12 @@
   * GNU General Public License for more details.
   */
  
 -#[cfg(feature = "noise-suppression")]
++// Keep upstream FFT indexing and error conversion intact in the import patch.
++#![allow(
++    clippy::needless_range_loop,
++    clippy::needless_return_with_question_mark
++)]
++
  use std::collections::VecDeque;
  use std::path::PathBuf;
  use std::sync::{Arc, RwLock};
-@@ -25,8 +24,12 @@
+@@ -25,8 +30,12 @@
  #[cfg(feature = "noise-suppression")]
  use rustfft::num_complex::Complex;
  
@@ -23,7 +29,7 @@
  
  /// Host-provided DSP stage invoked at plugin chain nodes. The first argument
  /// is the chain node name: either the legacy synthetic [`PLUGIN_CHAIN_NODE`]
-@@ -35,7 +38,7 @@
+@@ -35,7 +44,7 @@
  pub type ExternalDspHook = Box<dyn FnMut(&str, &mut Vec<f32>, usize, f64) + Send>;
  
  #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -32,7 +38,7 @@
  pub struct EqualizerConfig {
      pub enabled: bool,
      pub pre_amp: f32,
-@@ -54,7 +57,7 @@
+@@ -54,7 +63,7 @@
  
  /// Audio DSP settings, synced from the frontend.
  #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -41,7 +47,7 @@
  pub struct AudioDspSettings {
      pub gain: f32, // dB, -50 to +50
      pub ns_enabled: bool,
-@@ -874,76 +877,13 @@
+@@ -874,76 +883,13 @@
      }
  }
  
@@ -120,7 +126,7 @@
      // RNNoise states - separate per channel to avoid RNN state cross-contamination
      #[cfg(feature = "dsp")]
      denoiser_left: Box<DenoiseState<'static>>,
-@@ -983,9 +923,6 @@
+@@ -983,9 +929,6 @@
      speex_ns: SpeexStyleNS,
      // Equalizer
      equalizer: EqualizerEffect,
@@ -130,7 +136,7 @@
      // Dereverb state
      dereverb_buffer_left: Vec<f32>,
      dereverb_buffer_right: Vec<f32>,
-@@ -1042,6 +979,8 @@
+@@ -1042,6 +985,8 @@
      pub fn new(settings: Arc<RwLock<AudioDspSettings>>, _model_dir: Option<PathBuf>) -> Self {
          Self {
              settings: settings.clone(),
@@ -139,7 +145,7 @@
              #[cfg(feature = "dsp")]
              denoiser_left: DenoiseState::new(),
              #[cfg(feature = "dsp")]
-@@ -1069,7 +1008,6 @@
+@@ -1069,7 +1014,6 @@
              #[cfg(feature = "dsp")]
              speex_ns: SpeexStyleNS::new(),
              equalizer: EqualizerEffect::new(),
@@ -147,7 +153,7 @@
              dereverb_buffer_left: vec![0.0; 480],
              dereverb_buffer_right: vec![0.0; 480],
              dereverb_index: 0,
-@@ -1176,6 +1114,14 @@
+@@ -1176,6 +1120,14 @@
                              settings.agc_target,
                              attack_rate,
                              decay_rate,
@@ -162,7 +168,7 @@
                          );
                      }
                  }
-@@ -1186,7 +1132,12 @@
+@@ -1186,7 +1138,12 @@
                      // Legacy synthetic plugin stage (may be absent): runs
                      // every registered plugin at this chain position.
                      if let Some(hook) = &mut self.external_hook {
@@ -176,7 +182,7 @@
                      }
                  }
                  node if node.starts_with(PLUGIN_NODE_PREFIX) => {
-@@ -1200,8 +1151,8 @@
+@@ -1200,8 +1157,8 @@
              }
          }
  
@@ -187,7 +193,7 @@
  
          // Soft clip — avoids harsh hard-clipping artifacts (crackling/pops)
          for sample in self.output_buffer.iter_mut() {
-@@ -1368,14 +1319,45 @@
+@@ -1368,14 +1325,45 @@
          channels: usize,
          settings: &AudioDspSettings,
      ) {
@@ -237,7 +243,7 @@
          }
      }
  
-@@ -1397,18 +1379,19 @@
+@@ -1397,18 +1385,19 @@
              }
  
              // Process each channel with its own denoiser (no RNN state cross-contamination)
@@ -259,7 +265,7 @@
  
              data.clear();
              for i in 0..frames {
-@@ -1416,7 +1399,7 @@
+@@ -1416,7 +1405,7 @@
                  data.push(right[i]);
              }
          } else {
@@ -268,7 +274,7 @@
                  data,
                  &mut self.ns_buffer_left,
                  &mut self.denoiser_left,
-@@ -1431,12 +1414,13 @@
+@@ -1431,12 +1420,13 @@
          ns_buffer: &mut Vec<f32>,
          denoiser: &mut DenoiseState<'static>,
          intensity: f32,
@@ -283,7 +289,7 @@
  
          while ns_buffer.len() >= RNNOISE_FRAME_SIZE {
              let frame: Vec<f32> = ns_buffer.drain(..RNNOISE_FRAME_SIZE).collect();
-@@ -1444,7 +1428,8 @@
+@@ -1444,7 +1434,8 @@
              let input_frame: Vec<f32> = frame.iter().map(|s| s * 32767.0).collect();
              let mut output_frame = vec![0.0f32; RNNOISE_FRAME_SIZE];
  
@@ -293,7 +299,7 @@
  
              for i in 0..RNNOISE_FRAME_SIZE {
                  let clean = output_frame[i] / 32767.0;
-@@ -1463,6 +1448,7 @@
+@@ -1463,6 +1454,7 @@
          }
  
          data.copy_from_slice(&output);
@@ -301,7 +307,7 @@
      }
  
      #[cfg(feature = "noise-suppression")]
-@@ -1618,7 +1604,14 @@
+@@ -1618,7 +1610,14 @@
  
      // ── AGC ─────────────────────────────────────────────────────────────────
  
@@ -317,7 +323,7 @@
          let target_linear = target / 32767.0;
          // Noise gate threshold: below this level, don't apply AGC gain
          // (prevents amplifying hiss/noise floor during speech pauses)
-@@ -1633,7 +1626,7 @@
+@@ -1633,7 +1632,7 @@
              }
              if self.agc_envelope > gate_threshold {
                  let desired_gain = target_linear / self.agc_envelope;
@@ -326,3 +332,25 @@
                  // Smooth gain transition to avoid pops (exponential moving average)
                  let smooth_factor = 0.005_f32;
                  self.agc_smoothed_gain += smooth_factor * (clamped_gain - self.agc_smoothed_gain);
+--- a/crates/micyou-infer/src/lib.rs
++++ b/crates/micyou-infer/src/lib.rs
+@@ -48,6 +48,19 @@
+ //! packing and re-checked in debug builds ([`Graph::validate_layout`]):
+ //! at every op, the output region never overlaps any input region.
+ 
++// Preserve upstream numerical kernels and operation signatures for reproducible imports.
++#![allow(
++    clippy::needless_range_loop,
++    clippy::excessive_precision,
++    clippy::approx_constant,
++    clippy::manual_checked_ops,
++    clippy::manual_range_contains,
++    clippy::unnecessary_fold,
++    clippy::too_many_arguments,
++    clippy::chunks_exact_to_as_chunks,
++    clippy::type_complexity
++)]
++
+ use std::fmt;
+ 
+ mod ops;

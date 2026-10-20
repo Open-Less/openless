@@ -102,7 +102,7 @@ def apply_patch(sources, patch):
         patch_file = stage / "adapter.patch"
         patch_file.write_bytes(patch)
         for args in [["--check"], []]:
-            result = subprocess.run(["git", "apply", *args, "--whitespace=error-all", str(patch_file)], cwd=stage, capture_output=True, text=True)
+            result = subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", *args, "--whitespace=error-all", str(patch_file)], cwd=stage, capture_output=True, text=True)
             if result.returncode:
                 raise ValueError("MicYou adapter no longer applies cleanly; review upstream changes and refresh the patch:\n" + result.stderr)
         return {local: (stage / local).read_bytes() for local in IMPORTS}

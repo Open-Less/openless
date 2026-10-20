@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import os
 import unittest
 from unittest import mock
 
@@ -38,6 +39,13 @@ class SyncTests(unittest.TestCase):
         with mock.patch.object(sync, "fetch_sources", return_value=self.sources):
             self.assertFalse(sync.sync(self.root, self.manifest, "a"*40, True))
         self.assertEqual(before, (self.root / sync.MANIFEST).read_bytes())
+
+    def test_git_autocrlf_does_not_change_imported_bytes(self):
+        # Git for Windows commonly enables autocrlf globally. The staging
+        # operation must still produce the canonical bytes in the manifest.
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.autocrlf", "GIT_CONFIG_VALUE_0": "true"}):
+            with mock.patch.object(sync, "fetch_sources", return_value=self.sources):
+                self.assertFalse(sync.sync(self.root, self.manifest, "a"*40, True))
 
     def test_new_upstream_fix_preserves_adapter_and_advances_pin(self):
         changed = dict(self.sources)

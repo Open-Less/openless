@@ -194,7 +194,9 @@ impl AudioRecorder for ExternalAudioRecorder {
         let elapsed_ms = state.bytes_received.saturating_mul(1_000) / 32_000;
         if let Some(processor) = &mut state.processor {
             let samples: Vec<f32> = pcm
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
                 .collect();
             if let Some(chunk) = processor.process(&samples, 1, crate::audio::DICTATION_SAMPLE_RATE)

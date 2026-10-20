@@ -22,7 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wav = std::fs::read(&args[1])?;
     let pcm = openless_core::audio::decode_dictation_wav(&wav)?;
     let samples: Vec<f32> = pcm
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| i16::from_le_bytes([p[0], p[1]]) as f32 / 32768.0)
         .collect();
     let mut processor = AudioProcessor::new(AudioProcessingConfig {
@@ -59,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .write_all(&result)?;
     fn rms(pcm: &[u8]) -> f64 {
         let power = pcm
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| (i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0).powi(2))
             .sum::<f64>();
         (power / (pcm.len() / 2).max(1) as f64).sqrt()

@@ -51,7 +51,9 @@ These measurements do not establish speech quality or recognition accuracy.
 The authoritative current revision and source/model SHA-256 values live in
 `../../scripts/micyou-upstream.json`. The version above records the original
 import. OpenLess-specific edits live in `../../scripts/micyou-dsp.patch`;
-the inference VM remains an unmodified upstream import.
+the inference VM retains upstream algorithms with explicit Clippy exceptions
+for its numerical kernels and operation signatures. These exceptions are
+recorded in the patch; OpenLess application code keeps strict lint checks.
 
 From the app directory:
 

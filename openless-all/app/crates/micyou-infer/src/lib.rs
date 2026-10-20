@@ -48,6 +48,19 @@
 //! packing and re-checked in debug builds ([`Graph::validate_layout`]):
 //! at every op, the output region never overlaps any input region.
 
+// Preserve upstream numerical kernels and operation signatures for reproducible imports.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    clippy::manual_checked_ops,
+    clippy::manual_range_contains,
+    clippy::unnecessary_fold,
+    clippy::too_many_arguments,
+    clippy::chunks_exact_to_as_chunks,
+    clippy::type_complexity
+)]
+
 use std::fmt;
 
 mod ops;

@@ -13,6 +13,12 @@
  * GNU General Public License for more details.
  */
 
+// Keep upstream FFT indexing and error conversion intact in the import patch.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::needless_return_with_question_mark
+)]
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
