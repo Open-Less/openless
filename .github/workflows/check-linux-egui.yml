@@ -110,6 +110,12 @@ jobs:
         working-directory: openless-all/app
         run: |
           cargo test --locked -p openless-core
+          # Named re-run of the hotkey edge gate that used to be a standalone
+          # script spawning its own `cargo test`: the binary is already built by
+          # the line above, so this is free, and a rename now fails loudly here
+          # instead of silently dropping the gate.
+          cargo test --locked -p openless-core \
+            shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact
           cargo test --locked -p openless-harmony-host
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --all-targets

@@ -125,7 +125,6 @@ coordinator `handle_pressed` / `handle_released` path, asserts the log contains
 
 ```powershell
 cd app
-npm run check:hotkey-injection
 ```
 
 ### Windows Runtime Notes
