@@ -63,6 +63,11 @@ def fetch(name, url):
         raise RuntimeError('Unexpected archive structure: ' + name)
     roots[0].rename(dest)
     unpack.rmdir()
+    if required is not None and not required.is_file():
+        print('Repair incomplete ' + name, flush=True)
+        shutil.rmtree(dest)
+        archive.unlink(missing_ok=True)
+        return fetch(name, url)
     return dest
 
 def run(*args):
