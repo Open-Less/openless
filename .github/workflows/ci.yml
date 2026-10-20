@@ -431,8 +431,10 @@ jobs:
           python-version: "3.x"
 
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
+      # Same rule as the macOS MSRV job: a second toolchain is only worth the
+      # install + full rebuild while the declared MSRV is behind stable.
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -510,10 +512,6 @@ jobs:
           OPENLESS_CODEX_TEST_EXE: codex
         run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
-      - name: Check Tauri backend (cargo check)
-        if: runner.os == 'Windows'
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
-
       # test compiles and runs lib/bin, covering the production binary paths that plain cargo
       # check misses. Avoids a metadata-only check followed by another codegen pass over the same
       # dependency graph.
@@ -527,7 +525,10 @@ jobs:
         # the cfg/link coverage here; the shared Core's public compatibility contract is actually
         # executed in the next step.
         if: runner.os == 'Windows'
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
+        # `--bins` keeps the binary coverage that the removed `cargo check` used to
+        # provide: `cargo check` writes metadata, so the following codegen pass
+        # recompiled the whole dependency graph anyway (measured: 6.4 min of it).
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run
 
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
@@ -542,11 +543,11 @@ jobs:
         run: python scripts/test-recorder-module.py
 
       - name: Check Tauri backend with Rust 1.99 MSRV
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Compile backend tests with Rust 1.99 MSRV
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
         run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
       - name: Build the Windows TSF input method

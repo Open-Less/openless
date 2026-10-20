@@ -181,6 +181,25 @@ check(
   workflow.includes('msrv_needed: ${{ steps.msrv.outputs.needed }}'),
   true,
 );
+// Windows spends ~10 minutes on its own MSRV pass; it must follow the same rule
+// as the macOS job instead of running unconditionally.
+check(
+  'windows msrv steps follow the comparison',
+  workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
+  true,
+);
+// `cargo check` immediately followed by `cargo test --no-run` compiles the graph
+// twice; the no-run pass now covers bins itself.
+check(
+  'windows has one codegen pass, not check plus no-run',
+  !/run: cargo check --locked --manifest-path src-tauri\/Cargo\.toml$/m.test(workflow),
+  true,
+);
+check(
+  'windows codegen pass covers lib and bins',
+  workflow.includes('cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run'),
+  true,
+);
 check(
   'android gate is fail-open',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.tauri != 'false'/.test(workflow),
