@@ -51,26 +51,36 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 | job | 缓存 | 命中收益 | 性价比 |
 |---|---|---|---|
-| macOS Rust 1.99 MSRV | 0.72 GB | −13.1 min | 1102 s/GB |
-| macOS stable | 0.88 GB | −11.4 min | 775 s/GB |
-| Linux egui | 1.34 GB | −10.8 min | 483 s/GB |
-| Android | 0.75 GB | −2.4 min | 188 s/GB |
-| Windows | 1.62 GB | −4.6 min | 169 s/GB |
+| macOS stable | 0.87 GB | −11.4 min | 786 s/GB |
+| Linux egui | 0.75 GB（+ 旧前缀 1.28 GB 待回收） | −10.8 min | 864 s/GB |
+| macOS Rust 1.99 MSRV | 0.72 GB | −13.1 min | 1102 s/GB（与 stable 同号时整个 job 跳过，见 §2） |
+| Android | 0.85 GB | −2.4 min | 169 s/GB |
+| Windows | 1.57 GB | −4.6 min | 176 s/GB |
+| Harmony Rust host | 0.28 GB | −2–4 min | ~600 s/GB |
+| Android Rime NDK | 0.40 GB | −3 min | 450 s/GB |
+| Playwright 浏览器 | 0.37 GB | −1.5 min | 243 s/GB |
+
+**不缓存鸿蒙命令行工具链**：解压后 7.1 GB，缓存条目 1.77 GB，而下载 2.1 GB 只要 ~18 s（108 MB/s）、解压 ~70 s。恢复缓存本身就要几十秒，还要占掉 18% 的配额，性价比为负。`prepare-harmony-sdk.sh` 按 SHA-256 固定校验和，每次重下反而是更可靠的选择。
 
 分配原则：**按平台配额 + 只有基线分支/tag/迭代中的 job 允许写。**
 
 | 归属 | 目标 | 谁写 | 谁读 |
 |---|---|---|---|
-| Windows 依赖树 | 1.2–1.6 GB | `push`（beta/main）、tag | 所有 PR、发版 |
-| macOS（stable 0.88 + MSRV 0.72 + MLX 0.30） | ~1.9 GB | 同上 | 同上 |
-| Linux（egui + core） | ~1.7 GB | `push`、tag，**以及 PR 里的 `build-linux-egui`** | 同上 |
-| Android | 0.75 GB | `push`、tag | PR |
+| Windows 依赖树 | ~1.6 GB | `push`（beta）、tag | 所有 PR、发版 |
+| macOS（stable 0.87 + MSRV 0.72） | ~1.6 GB | 同上 | 同上 |
+| Linux（egui 0.75 + core） | ~1.7 GB | `push`、tag，**以及 PR 里的 `build-linux-egui`** | 同上 |
+| Android（Rust 0.85 + Rime 0.40 + gradle 0.31） | ~1.6 GB | `push`、tag | PR |
+| Harmony Rust host | 0.28 GB | `push`、tag | PR |
+| Playwright 浏览器 | 0.37 GB | `push`、tag | PR |
+| 鸿蒙工具链 | **0（不缓存）** | — | — |
 | 发版（tag 作用域） | ~1.0 GB | tag / 发版前预热 | — |
-| 余量 | ≥2 GB | — | — |
+| 余量 | ≥1.5 GB | — | — |
 
 对应的机制：
 
-- 重量级 job 用 `save-if: ${{ github.event_name != 'pull_request' }}`：PR 只从基线分支恢复，不再各自复制一份 1.6 GB 依赖树（此前两个 PR 就占了 10.87 GB，把基线缓存挤掉）。
+- 重量级 job 用 `save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}`：PR 只从基线分支恢复，不再各自复制一份 1.6 GB 依赖树（此前两个 PR 就占了 10.87 GB，把基线缓存挤掉）。
+- **禁止 `uses: actions/cache@v4`**：它会在每次运行时自动保存，包括 `refs/pull/<n>/merge` 这种此后再也不会被恢复的作用域。鸿蒙工具链（1.77 GB）和 Rime NDK（0.40 GB）都这样泄漏过——两个 PR 推送就能把 beta 的依赖树挤掉。规则统一成 `actions/cache/restore@v4` 无条件恢复 + 独立的 `actions/cache/save@v4` 且 `if:` 限定 beta。
+- `playwright` 与 `mobile-rime` 使用 restore/save 拆分；`swatinem/rust-cache` 用 `save-if` 达到同样效果。
 - `build-linux-egui` 保留 PR 内自写并开 `cache-on-failure: true`：失败的运行也会把依赖缓存存下来，下一次迭代仍然热；同时关掉 dev/test debug info，缓存更小、链接更快。
 - key 结构为 `v0-rust-<job>-<os>-<环境哈希>-<lockfile哈希>`：环境哈希含工具链与 `CARGO_PROFILE_*`，所以 stable / MSRV / release 天然分开，不要用跨平台 `shared-key` 混合。
 - `Cargo.lock` 变化时精确键失效，但 `restore-keys` 前缀回退会拿到同前缀的旧缓存，所以“锁变了”不等于“全冷”——前提是那份没被淘汰，这正是要守预算的原因。
@@ -79,6 +89,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 - 报告与清理：`bash openless-all/app/scripts/ci-cache-usage.sh [--prune] [--limit-gb 8] [--repo OWNER/NAME]`。`--prune` 只删已关闭/已合并 PR 的 `refs/pull/*` 作用域（先查 PR 状态，状态读不到就保留），永不触碰分支与 tag 作用域；用量超过预算时退出码为 1。
 - 自动维护：`.github/workflows/cache-maintenance.yml` 每周一 03:17 UTC 运行并支持手动触发，预算 8 GB。
+- 契约测试 `scripts/ci-cache-sharing.test.mjs` 会拒绝任何 `uses: actions/cache@v4`（自动保存）以及任何鸿蒙工具链缓存键，防止上面两条规则被无意改回去。
 - 合并/关闭 PR 后可手动立即回收：`gh api -X DELETE repos/Open-Less/openless/actions/caches?ref=refs/pull/<N>/merge`。
 
 ## 5. 实测对照

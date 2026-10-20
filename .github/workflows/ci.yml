@@ -239,11 +239,20 @@ jobs:
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
 
-      - name: Cache Android Rime instrumentation dependencies
-        uses: actions/cache@v4
+      - name: Restore Android Rime instrumentation dependencies
+        id: rime_cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/openless-cache/mobile-rime
           key: mobile-rime-ndk26-x86_64-${{ hashFiles('openless-all/app/scripts/build-mobile-rime.py', 'openless-all/app/mobile-ime/**') }}
+      - name: Save Android Rime dependencies on beta builds
+        # 400 MB per entry: pull request scopes are never restored again, so only
+        # the beta branch may write this cache.
+        if: steps.rime_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/openless-cache/mobile-rime
+          key: ${{ steps.rime_cache.outputs.cache-primary-key }}
 
       - name: Build and stage Rime for Android instrumentation tests
         env:
@@ -301,7 +310,7 @@ jobs:
   harmony-check:
     needs: [changes]
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
-    name: Harmony (ArkTS contracts + ArkWeb bundle, HAP when the SDK is set)
+    name: Harmony (ArkTS contracts, Rust host, HAP)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -333,12 +342,10 @@ jobs:
           node scripts/harmony-clipboard-history.test.mjs
           node scripts/harmony-symbol-gesture.test.mjs
           node scripts/harmony-rime-startup.test.mjs
-      - name: Build the ArkWeb bundle
-        env:
-          VITE_OPENLESS_PLATFORM: harmony
-        # The frontend half of the HAP: same sources, harmony platform flag,
-        # relative base for the rawfile origin.
-        run: npm run build -- --base=./ --outDir=dist-harmony
+      # The ArkWeb bundle is not built here: `package-harmony-hap.sh` ->
+      # `build-harmony-frontend.sh` runs the same
+      # `npm run build -- --base=./ --outDir=…`, so building it twice only
+      # doubled the vite pass.
       - uses: dtolnay/rust-toolchain@stable
         with:
           # Tier-2 OHOS target; `rustup target list` above lists it for stable.
@@ -351,14 +358,10 @@ jobs:
           key: harmony-host
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
-      - name: Cache the HarmonyOS toolchain
-        # The official command-line tools, downloaded from the public mirror that
-        # `prepare-harmony-sdk.sh` pins by checksum. No Huawei account is involved,
-        # so this runs on every pull request.
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/harmony/current
-          key: harmony-tools-6.0.1.251-${{ runner.os }}
+      # No toolchain cache. The download is 2.1 GB at ~100 MB/s plus ~70 s to
+      # unpack, while the extracted tree is 1.77 GB of the repository's 10 GB
+      # cache budget - and `actions/cache` wrote one copy per pull request
+      # scope. Downloading is both cheaper and shorter than restoring it.
       - name: Build the HAP (compiles ArkTS and the Rust host)
         env:
           OPENLESS_HARMONY_CHANNEL: none

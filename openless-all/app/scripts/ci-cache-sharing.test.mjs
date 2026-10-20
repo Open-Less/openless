@@ -22,9 +22,44 @@ const release = read('release-tauri.yml');
 const androidApk = read('android-apk.yml');
 const linux = read('check-linux-egui.yml');
 const linuxRelease = read('release-linux-egui.yml');
+const releaseHarmony = read('release-harmony.yml');
 
 const sharedKeys = (yaml) =>
   [...yaml.matchAll(/shared-key:\s*([^\s#]+)/g)].map((match) => match[1].trim());
+
+// Every write path must be gated on the beta branch. An ungated `actions/cache`
+// writes one copy per pull request scope (`refs/pull/<n>/merge`), and those
+// copies are never restored again - they just occupy the 10 GB budget and evict
+// the branch trees. The HarmonyOS toolchain cache (1.77 GB) and the Rime NDK
+// cache (400 MB) both leaked this way before this contract existed.
+//
+// `actions/cache@v4` saves on every run it executes, including pull request
+// scopes (`refs/pull/<n>/merge`) that are never restored again. The rule is:
+// restore unconditionally, save only from beta.
+for (const [yaml, label] of [
+  [ci, 'ci.yml'],
+  [release, 'release-tauri.yml'],
+  [androidApk, 'android-apk.yml'],
+  [linux, 'check-linux-egui.yml'],
+  [linuxRelease, 'release-linux-egui.yml'],
+  [releaseHarmony, 'release-harmony.yml'],
+]) {
+  assert.ok(
+    !/uses: actions\/cache@v4/.test(yaml),
+    `${label} must not use actions/cache@v4 (auto-save); pair cache/restore@v4 with a beta-gated cache/save@v4`,
+  );
+}
+// The extracted toolchain is 1.77 GB for a 2.1 GB download, so neither workflow
+// may cache it.
+for (const [yaml, label] of [
+  [ci, 'ci.yml'],
+  [releaseHarmony, 'release-harmony.yml'],
+]) {
+  assert.ok(
+    !yaml.includes('harmony-tools-'),
+    `${label} must not cache the HarmonyOS toolchain: the download is shorter than restoring 1.77 GB`,
+  );
+}
 
 // 1. The baseline job must own a stable, job-name-independent key per platform.
 for (const key of ['tauri-windows', 'tauri-macos']) {

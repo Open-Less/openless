@@ -88,11 +88,10 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Cache the HarmonyOS toolchain
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/harmony/current
-          key: harmony-tools-6.0.1.251-${{ runner.os }}
+      # No toolchain cache here either: `prepare-harmony-sdk.sh` downloads the
+      # checksum-pinned official tools in under two minutes, and a 1.77 GB entry
+      # that a tag build rarely restores would sit in the 10 GB budget and evict
+      # the caches the pull request path depends on.
 
       - name: Prepare the HarmonyOS toolchain
         env:
