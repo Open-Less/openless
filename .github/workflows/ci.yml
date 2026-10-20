@@ -283,12 +283,62 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Restore the Android emulator and AVD
+        # ~400 MB of SDK packages plus the created AVD. Restoring them shortens
+        # the job and, more importantly, keeps the flaky download out of the
+        # critical path. The build is pinned, so the key is stable: once one run
+        # has saved the tree, later runs restore it and skip the save.
+        id: emulator_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/emulator
+            ${{ env.ANDROID_HOME }}/system-images
+            ~/.android/avd
+          key: android-emulator-37.2.12-${{ runner.os }}-${{ runner.arch }}
+      - name: Save the Android emulator on beta builds
+        if: steps.emulator_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/emulator
+            ${{ env.ANDROID_HOME }}/system-images
+            ~/.android/avd
+          key: android-emulator-37.2.12-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install the Android emulator with retries
+        # `sdkmanager --install emulator` regularly returns a truncated archive on
+        # this image ("Error on ZipFile unknown archive"), which used to fail the
+        # whole job and force a rerun - that is why Android was the last job to
+        # finish even though it is one of the shortest. Pin the build and retry.
+        shell: bash
+        run: |
+          set -uo pipefail
+          installed="$ANDROID_HOME/emulator/package.xml"
+          if [ -f "$installed" ] && grep -q '<major>37</major>' "$installed"; then
+            echo "emulator 37.x already present"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "sdkmanager --install emulator (attempt $attempt)"
+            if sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"; then
+              exit 0
+            fi
+            rm -rf "$ANDROID_HOME/emulator"
+            sleep 15
+          done
+          echo "::error::could not install the Android emulator after 3 attempts"
+          exit 1
+
       - name: Run Android Keystore instrumentation tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
+          # Pinned instead of "latest": the resolved build is the one cached
+          # above, so the action does not re-download 400 MB per run.
+          emulator-build: 16555280
           # The suite exercises AndroidKeyStore and the real packaged Rime JNI
           # without launching Tauri. Rime is staged for this emulator ABI above.
           script: >-
