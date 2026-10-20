@@ -227,7 +227,26 @@ check(
 );
 
 if (failures > 0) {
-  console.error(`ci-changed-areas contract test failed (${failures})`);
+  console.error(`// Wall-clock guards: the Windows runner is the slowest one, so the frontend
+// suite must not serialise behind the Rust compile, and the Linux tests must not
+// serialise in front of the deb/rpm build.
+check(
+  'windows frontend runs in its own job',
+  /  windows-frontend:[\s\S]*?runs-on: windows-latest/.test(workflow),
+  true,
+);
+check(
+  'windows only runs the platform-sensitive contracts',
+  workflow.includes('--platform-only windows'),
+  true,
+);
+check(
+  'macOS still runs the full contract suite',
+  /if: runner\.os == 'macOS'\n\s+run: npm test/.test(workflow),
+  true,
+);
+
+ci-changed-areas contract test failed (${failures})`);
   process.exit(1);
 }
 console.log('ci-changed-areas contract test passed');

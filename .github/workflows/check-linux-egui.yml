@@ -42,6 +42,97 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  test-linux-egui:
+    # Same runner and cache as the packaging job, run in parallel: the tests used
+    # to serialise ~8 minutes in front of the ~7 minute release build, making this
+    # workflow the critical path of the whole CI run.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/target
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+        if: inputs.scope != 'none'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+        if: inputs.scope != 'none'
+
+      - name: Install native build and test dependencies
+        if: inputs.scope != 'none'
+        # Same list as the packaging job: the fcitx5 plugin build and the
+        # `pwsh` contract scripts both live here now.
+        run: |
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream build-essential cmake cpio desktop-file-utils \
+            fcitx5-modules-dev file libasound2-dev libdbus-1-dev \
+            libfcitx5config-dev libfcitx5core-dev libfcitx5utils-dev \
+            liblzma-dev libpipewire-0.3-dev libpulse-dev libssl-dev \
+            libwayland-dev libx11-dev libxkbcommon-dev pkg-config ripgrep rpm
+
+      - uses: swatinem/rust-cache@v2
+        if: inputs.scope != 'none'
+        with:
+          # `shared-key` replaces the job name in the cache key, so this job and
+          # the packaging job (and the tag release, which calls the same workflow
+          # as `build-linux-egui`) all share one tree. Without it the key would be
+          # `…-test-linux-egui-…` and every test run would start cold.
+          shared-key: build-linux-egui
+          workspaces: |
+            openless-all/app -> target
+            openless-all/app/src-tauri/backend-tests -> ../../target
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
+      - name: Build and test fcitx5 plugin
+        if: inputs.scope != 'none'
+        working-directory: openless-all/app/scripts/linux-fcitx5-plugin
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          test -s build/libopenless.so
+          test -s build/openless.conf
+
+      - name: Test Core, Linux host, and platform boundaries
+        if: inputs.scope != 'none'
+        working-directory: openless-all/app
+        run: |
+          cargo test --locked -p openless-core
+          cargo test --locked -p openless-harmony-host
+          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo test --locked -p openless-linux-egui --all-targets
+          cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
+          node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
+          node scripts/ci-changed-areas.test.mjs
+          node scripts/ci-cache-usage.test.mjs
+          node scripts/ci-cache-sharing.test.mjs
+          node scripts/harmony-release-contract.test.mjs
+          node scripts/tauri-linux-free-contract.test.mjs
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
+          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
+          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
+          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
+
+      - name: Test remote input TLS identity and Unix key permissions
+        if: inputs.scope != 'none'
+        working-directory: openless-all/app
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
+
   build-linux-egui:
     # PipeWire/libspa in this host needs 24.04. Packages target glibc >= 2.39.
     runs-on: ubuntu-24.04
@@ -110,6 +201,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: inputs.scope != 'none'
         with:
+          # Identical to the job name, so the key is unchanged; declaring it keeps
+          # the parallel test job on the same tree (see `test-linux-egui`).
+          shared-key: build-linux-egui
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri/backend-tests -> ../../target
@@ -117,44 +211,6 @@ jobs:
           # their own copy, even when tests fail or dependencies change.
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
-
-      - name: Build and test fcitx5 plugin
-        if: inputs.scope != 'none'
-        working-directory: openless-all/app/scripts/linux-fcitx5-plugin
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
-          test -s build/libopenless.so
-          test -s build/openless.conf
-
-      - name: Test Core, Linux host, and platform boundaries
-        if: inputs.scope != 'none'
-        working-directory: openless-all/app
-        run: |
-          cargo test --locked -p openless-core
-          cargo test --locked -p openless-harmony-host
-          cargo clippy --locked -p openless-core --all-targets -- -D warnings
-          cargo test --locked -p openless-linux-egui --all-targets
-          cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
-          node scripts/linux-egui-tauri-free-contract.test.mjs
-          node scripts/linux-egui-release-contract.test.mjs
-          node scripts/ci-changed-areas.test.mjs
-          node scripts/ci-cache-usage.test.mjs
-          node scripts/ci-cache-sharing.test.mjs
-          node scripts/harmony-release-contract.test.mjs
-          node scripts/tauri-linux-free-contract.test.mjs
-          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
-          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
-          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
-          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
-          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
-          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
-
-      - name: Test remote input TLS identity and Unix key permissions
-        if: inputs.scope != 'none'
-        working-directory: openless-all/app
-        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
 
       - name: Validate Linux desktop metadata
         if: inputs.scope != 'none'

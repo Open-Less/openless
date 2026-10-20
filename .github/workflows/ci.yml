@@ -392,6 +392,53 @@ jobs:
       # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
       scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
 
+  windows-frontend:
+    # Split out of `cross-platform`: the job used to serialise 6 minutes of
+    # frontend work behind 15 minutes of Rust compiling on the same runner, and
+    # the Windows runner is the slowest of the three. Running them in parallel
+    # costs one extra setup but removes ~6 minutes from the critical path.
+    needs: [changes]
+    if: needs.changes.outputs.tauri != 'false'
+    name: Windows frontend and contracts
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Check Windows prerequisites
+        shell: pwsh
+        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+      - name: Check PowerShell scripts
+        shell: pwsh
+        run: |
+          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
+            $errors = $null
+            [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
+            if ($errors) {
+              $errors | Format-List
+              exit 1
+            }
+          }
+      - name: Build frontend
+        run: npm run build
+      - name: Run the platform-sensitive contracts
+        # `process.platform` branches and the `windows-*` contracts only mean
+        # anything here; everything else runs on macOS (full suite) and Linux.
+        run: node scripts/frontend-test-runner.mjs --platform-only windows
+
   cross-platform:
     needs: [changes]
     # 失败即运行：只有判定脚本明确说“够不到”才跳过。
@@ -472,11 +519,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Check Windows prerequisites
-        if: matrix.preflight
-        shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
-
       - name: Check PowerShell scripts
         if: matrix.preflight
         shell: pwsh
@@ -491,6 +533,10 @@ jobs:
           }
 
       - name: Build frontend and run frontend/contract tests
+        # Windows runs the platform-sensitive subset in its own job: spawning 144
+        # node processes there costs ~3x the macOS time, and the rest of the suite
+        # is already covered here.
+        if: runner.os == 'macOS'
         run: npm test
 
       - name: Install pinned Codex CLI for sandbox contract
