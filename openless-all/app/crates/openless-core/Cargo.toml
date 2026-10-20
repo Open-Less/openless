@@ -8,6 +8,7 @@ rust-version = "1.99"
 publish = false
 
 [dependencies]
+micyou-dsp = { path = "../micyou-dsp" }
 anyhow = "1"
 argon2 = { version = "0.6.0", features = ["zeroize"] }
 base64 = "0.23.1"

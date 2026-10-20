@@ -90,6 +90,10 @@ stage_common() {
     "$root/usr/share/applications/openless.desktop"
   install -Dm644 "$PACKAGING/top.openless.OpenLess.metainfo.xml" \
     "$root/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
+  for notice in LICENSE LICENSE-RNNoise.txt LICENSE-PureVox.txt LICENSE-AEC7.txt UPSTREAM.md; do
+    install -Dm644 "$APP_ROOT/crates/micyou-dsp/$notice" \
+      "$root/usr/share/doc/openless/micyou/$notice"
+  done
   # 多档 hicolor 尺寸：桌面环境按需选档（任务栏 32/48、菜单 64/128、大图标 256/512）。
   # 旧的单档安装把 512×512 的图放进了 256x256 目录（那档根本不是 256px）。
   for spec in "${HICOLOR_ICONS[@]}"; do

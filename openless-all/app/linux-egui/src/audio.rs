@@ -101,6 +101,20 @@ impl AudioProcessingWorker {
                             .publish_level(started.elapsed().as_millis() as u64, chunk.level);
                     }
                 }
+                if let Some(chunk) = processor.finish() {
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if let Some(writer) = &writer {
+                        if let Err(error) = writer
+                            .lock()
+                            .expect("Linux WAV writer lock poisoned")
+                            .append(&chunk.pcm_i16_le)
+                        {
+                            log::warn!("Linux recording archive write failed: {error}");
+                        }
+                    }
+                    let _ =
+                        progress.publish_level(started.elapsed().as_millis() as u64, chunk.level);
+                }
             })
             .map_err(|error| {
                 BackendError::new(

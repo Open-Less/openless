@@ -1,0 +1,105 @@
+name: Sync MicYou DSP
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Optional immutable MicYou commit SHA (empty checks master)
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: micyou-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'Open-Less/openless'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      revision: ${{ steps.sync.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: beta
+          persist-credentials: false
+      - name: Verify importer and detect relevant upstream changes
+        id: sync
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          python3 openless-all/app/scripts/test_sync_micyou.py
+          args=()
+          if [ -n "$REVISION" ]; then args+=(--revision "$REVISION"); fi
+          python3 openless-all/app/scripts/sync-micyou.py --sync "${args[@]}" --github-output "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.sync.outputs.changed == 'true'
+      - name: Validate models, callback boundaries and the full shared core
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          cargo test --locked --manifest-path openless-all/app/Cargo.toml -p micyou-dsp --release
+          cargo test --locked --manifest-path openless-all/app/Cargo.toml -p openless-core --lib -- --test-threads=1
+      # Exact paths only. The publish job never compiles candidate code and
+      # receives only source/model imports plus their checksum manifest.
+      - uses: actions/upload-artifact@v4
+        if: steps.sync.outputs.changed == 'true'
+        with:
+          name: micyou-candidate
+          retention-days: 7
+          path: |
+            openless-all/app/crates/micyou-dsp/src/lib.rs
+            openless-all/app/crates/micyou-dsp/src/assets/purevox6.mcy
+            openless-all/app/crates/micyou-dsp/src/assets/aec7.mcy
+            openless-all/app/crates/micyou-dsp/LICENSE
+            openless-all/app/crates/micyou-dsp/LICENSE-PureVox.txt
+            openless-all/app/crates/micyou-dsp/LICENSE-AEC7.txt
+            openless-all/app/crates/micyou-infer/src/lib.rs
+            openless-all/app/crates/micyou-infer/src/ops.rs
+            openless-all/app/crates/micyou-infer/LICENSE
+            openless-all/app/scripts/micyou-upstream.json
+
+  publish:
+    needs: candidate
+    if: needs.candidate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: beta
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: micyou-candidate
+          path: openless-all/app
+      - name: Verify imported file checksums (no candidate code execution)
+        run: python3 openless-all/app/scripts/sync-micyou.py --verify
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: beta
+          branch: fix/micyou-upstream-sync
+          title: "chore(audio): sync MicYou DSP fixes"
+          commit-message: "chore(audio): sync MicYou to ${{ needs.candidate.outputs.revision }}"
+          draft: true
+          add-paths: |
+            openless-all/app/crates/micyou-dsp
+            openless-all/app/crates/micyou-infer
+            openless-all/app/scripts/micyou-upstream.json
+          body: |
+            Import relevant MicYou source/model changes and reapply the reviewed OpenLess DSP adapter.
+
+            Upstream commit: https://github.com/MicYou-Dev/MicYou/commit/${{ needs.candidate.outputs.revision }}
+
+            Automated validation: model property tests and full shared Core regression.
+            This is a draft update; native platform CI and real microphone listening still require review. This workflow does not enable auto-merge.
+            PRs created with GITHUB_TOKEN do not automatically trigger the separate PR workflows; run the normal CI workflow on this branch before merging.

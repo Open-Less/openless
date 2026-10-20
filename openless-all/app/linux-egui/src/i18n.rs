@@ -2541,11 +2541,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.audio_enhancement_label",
         text: row(
-            "轻量麦克风增强",
-            "輕量麥克風增強",
-            "Lightweight microphone enhancement",
-            "軽量マイク拡張",
-            "가벼운 마이크 향상",
+            "语音增强",
+            "語音增強",
+            "Speech enhancement",
+            "音声強調",
+            "음성 향상",
         ),
     },
     Msg {
@@ -4652,11 +4652,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.audio_enhancement_desc",
         text: row(
-            "对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。",
-            "對本機麥克風套用輕量降噪、增益與軟限幅，不包含回聲消除。預設關閉。",
-            "Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.",
-            "ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。",
-            "로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.",
+            "应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。",
+            "套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。",
+            "Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.",
+            "RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。",
+            "RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.",
         ),
     },
         Msg {

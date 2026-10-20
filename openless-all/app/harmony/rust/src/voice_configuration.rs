@@ -19,6 +19,7 @@ const FIELDS: &[&str] = &[
     "polishSkipMaxChars",
     "stableTranscriptionEnabled",
     "audioEnhancementEnabled",
+    "audioDsp",
     "recordAudioForDebug",
 ];
 

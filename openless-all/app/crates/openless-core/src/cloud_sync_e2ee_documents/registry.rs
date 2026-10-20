@@ -187,6 +187,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "audio_dsp",
+        key: "audioDsp",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Object,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "active_asr_provider",
         key: "activeAsrProvider",
         class: PreferenceClass::Excluded,

@@ -631,6 +631,11 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            if vm.settings.audio_enhancement
+                && super::audio_dsp::settings(ui, &mut vm.settings.audio_dsp, lang)
+            {
+                actions.push(FrontendAction::SettingsAudioDsp(vm.settings.audio_dsp));
+            }
             // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
             toggle_row(
                 ui,

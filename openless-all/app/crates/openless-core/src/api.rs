@@ -4457,6 +4457,7 @@ impl OpenLessBackend {
             pre_roll_ms: 500,
             audio_processing: crate::audio::AudioProcessingConfig {
                 enhancement_enabled: preferences.audio_enhancement_enabled,
+                dsp: preferences.audio_dsp,
             },
         };
         match self.deps.dictation_engine.arm_audio_capture(request) {

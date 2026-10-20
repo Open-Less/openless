@@ -67,6 +67,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../crates/micyou-dsp/LICENSE": "licenses/micyou/LICENSE",
+      "../crates/micyou-dsp/LICENSE-RNNoise.txt": "licenses/micyou/LICENSE-RNNoise.txt",
+      "../crates/micyou-dsp/LICENSE-PureVox.txt": "licenses/micyou/LICENSE-PureVox.txt",
+      "../crates/micyou-dsp/LICENSE-AEC7.txt": "licenses/micyou/LICENSE-AEC7.txt",
+      "../crates/micyou-dsp/UPSTREAM.md": "licenses/micyou/UPSTREAM.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

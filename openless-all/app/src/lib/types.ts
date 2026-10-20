@@ -340,6 +340,25 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+export type AudioDspStage =
+  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+export interface AudioDspConfig {
+  noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
+  noiseStrength: number;
+  gainDb: number;
+  agcEnabled: boolean;
+  agcTarget: number;
+  agcAttack: number;
+  agcDecay: number;
+  vadEnabled: boolean;
+  vadThresholdDb: number;
+  dereverbLevel: number;
+  equalizerEnabled: boolean;
+  equalizerPreampDb: number;
+  equalizerBandsDb: number[];
+  processingOrder: AudioDspStage[];
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -362,8 +381,9 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
-  /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
+  /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  audioDsp?: AudioDspConfig;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
