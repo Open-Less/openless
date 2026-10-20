@@ -582,10 +582,17 @@ jobs:
             }
           }
 
+      - name: Build the frontend for the Tauri context
+        # `tauri::generate_context!()` embeds `../dist` at compile time, so the
+        # Rust compile below needs the frontend built even on Windows, where the
+        # contract suite runs in its own job.
+        if: runner.os == 'Windows'
+        run: npm run build
+
       - name: Build frontend and run frontend/contract tests
         # Windows runs the platform-sensitive subset in its own job: spawning 144
         # node processes there costs ~3x the macOS time, and the rest of the suite
-        # is already covered here.
+        # is already covered here. The frontend build it needs is the step above.
         if: runner.os == 'macOS'
         run: npm test
 

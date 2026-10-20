@@ -250,3 +250,12 @@ ci-changed-areas contract test failed (${failures})`);
   process.exit(1);
 }
 console.log('ci-changed-areas contract test passed');
+
+// `tauri::generate_context!()` embeds ../dist at compile time, so any job that
+// compiles the Tauri lib must build the frontend first — including the matrix
+// job on Windows, where the contract suite moved to its own job.
+check(
+  'windows builds the frontend before compiling the Tauri lib',
+  /if: runner\.os == 'Windows'\n\s+run: npm run build/.test(workflow),
+  true,
+);
