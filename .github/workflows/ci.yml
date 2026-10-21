@@ -389,6 +389,45 @@ jobs:
       # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
       scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
 
+  native-capsule:
+    # The capsule crates compile into the desktop shells, so a break there would
+    # otherwise only surface inside the long Tauri matrix. They are checked on
+    # both desktop platforms inside this workflow rather than in a second
+    # workflow: one run per pull request, one `Changed areas` gate, one cache
+    # policy.
+    needs: [changes]
+    if: needs.changes.outputs.tauri != 'false'
+    name: Native capsule (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Stable prefix per platform instead of the job name, so renaming or
+          # splitting the job keeps the tree.
+          shared-key: native-capsule
+          workspaces: openless-all/app -> target
+          # Pull requests restore the beta tree and never write their own copy:
+          # `refs/pull/<n>/merge` scopes are never restored again and only evict
+          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+      - run: cargo check --locked -p openless-native-capsule
+      - run: cargo test --locked -p openless-capsule --features ui,host
+      - run: cargo clippy --locked -p openless-native-capsule -p openless-capsule --features openless-capsule/ui,openless-capsule/host -- -D warnings
+
   cross-platform:
     needs: [changes]
     # 失败即运行：只有判定脚本明确说“够不到”才跳过。

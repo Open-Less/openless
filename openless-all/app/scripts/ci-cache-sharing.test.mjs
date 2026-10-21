@@ -10,7 +10,7 @@
 // Runs without `npm ci` (the Linux contract job has no node_modules), so the
 // workflows are read as text.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,7 +23,6 @@ const androidApk = read('android-apk.yml');
 const linux = read('check-linux-egui.yml');
 const linuxRelease = read('release-linux-egui.yml');
 const releaseHarmony = read('release-harmony.yml');
-const nativeCapsule = read('native-capsule.yml');
 
 const sharedKeys = (yaml) =>
   [...yaml.matchAll(/shared-key:\s*([^\s#]+)/g)].map((match) => match[1].trim());
@@ -64,22 +63,25 @@ assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 console.log('ci-cache-sharing contract test passed');
 
-// `native-capsule` used to run on pull requests only, with an ungated
-// `rust-cache` step: every PR saved a dependency tree under
-// `refs/pull/<n>/merge`, and beta never produced one to restore. It now runs on
-// beta pushes and writes only there.
-assert.match(
-  nativeCapsule,
-  /push:[\s\S]*?branches: \[main, beta\]/,
-  'native-capsule.yml must run on beta pushes so the PRs have a tree to restore',
-);
-assert.match(
-  nativeCapsule,
-  /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/,
-  'native-capsule.yml must only save its cache from beta',
-);
-assert.match(
-  nativeCapsule,
-  /shared-key: native-capsule/,
-  'native-capsule.yml must use a stable shared-key instead of the job name',
-);
+// `native-capsule` used to be a separate pull-request-only workflow: it wrote a
+// dependency tree under `refs/pull/<n>/merge` (never restored again) while beta
+// produced nothing to restore. It now lives in this workflow, gated by the same
+// `Changed areas` verdict, and saves only from beta.
+{
+  const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
+  assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
+  assert.match(
+    capsuleJob,
+    /shared-key: native-capsule/,
+    'the native-capsule job must use a stable shared-key instead of the job name',
+  );
+  assert.match(
+    capsuleJob,
+    /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/,
+    'the native-capsule job must only save its cache from beta',
+  );
+  assert.ok(
+    !existsSync(join(root, '.github/workflows/native-capsule.yml')),
+    'native-capsule.yml must stay merged into ci.yml',
+  );
+}

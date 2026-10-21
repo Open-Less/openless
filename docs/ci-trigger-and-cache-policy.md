@@ -74,7 +74,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 - `build-linux-egui` 保留 PR 内自写并开 `cache-on-failure: true`：失败的运行也会把依赖缓存存下来，下一次迭代仍然热；同时关掉 dev/test debug info，缓存更小、链接更快。
 - key 结构为 `v0-rust-<job>-<os>-<环境哈希>-<lockfile哈希>`：环境哈希含工具链与 `CARGO_PROFILE_*`，所以 stable / MSRV / release 天然分开，不要用跨平台 `shared-key` 混合。
 - `Cargo.lock` 变化时精确键失效，但 `restore-keys` 前缀回退会拿到同前缀的旧缓存，所以“锁变了”不等于“全冷”——前提是那份没被淘汰，这正是要守预算的原因。
-- `native-capsule.yml` 原本只在 `pull_request` 上跑：它写的缓存落在 `refs/pull/<n>/merge`，而那是一个**此后再也不会被恢复**的作用域，等于每个 PR 白写一份依赖树；同时 beta 上没有任何 job 产出同 key 的树，所以 PR 永远冷启动。现在它也在 `beta`/`main` 的 `push` 上跑，用 `shared-key: native-capsule` 做稳定前缀、`save-if` 只在 beta 写，PR 只读。
+- 原生胶囊（`native-capsule` job）原本是一个**独立的** `pull_request`-only workflow：它写的缓存落在 `refs/pull/<n>/merge`，而那是一个**此后再也不会被恢复**的作用域，等于每个 PR 白写一份依赖树；同时 beta 上没有任何 job 产出同 key 的树，所以 PR 永远冷启动。现在它已并入 `ci.yml`（同一个 `Changed areas` 门禁、同一次运行），用 `shared-key: native-capsule` 做稳定前缀、`save-if` 只在 beta 写，PR 只读。
 
 ## 4. 维护
 
