@@ -6,7 +6,7 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
     let before = *config;
     let label = |key| tr_l10n(lang, key);
     egui::CollapsingHeader::new(label("settings.audioDsp.Speech_enhancement_settings"))
-        .id_salt("audio-dsp-settings").default_open(true).show(ui, |ui| {
+        .id_salt("audio-dsp-settings").default_open(false).show(ui, |ui| {
         if !enabled { ui.small(label("settings.audioDsp.disabledHint")); }
         ui.add_enabled_ui(enabled, |ui| {
         ui.small(label("settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording"));
