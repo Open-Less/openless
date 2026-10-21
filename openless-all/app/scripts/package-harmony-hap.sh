@@ -111,6 +111,7 @@ UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2>/dev/null | head -1)
 [ -n "$UNSIGNED" ] || { echo "hvigor produced no unsigned HAP in $OUT_DIR" >&2; exit 1; }
 
 SIGNED=""
+APP_PACK=""
 if [ -n "$SIGN_PREFIX" ]; then
   python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
     "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --prefix "$SIGN_PREFIX"
