@@ -149,6 +149,9 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
+    Msg { key: "settings.audioDsp.disabledHint", text: row("开启上方语音增强开关后可调整，当前配置已保留。", "開啟上方語音增強開關後可調整，目前設定已保留。", "Enable speech enhancement above to adjust these settings. Your configuration is retained.", "上の音声強調を有効にすると調整できます。設定は保持されています。", "위에서 음성 향상을 켜면 조정할 수 있습니다. 설정은 유지됩니다.") },
+    Msg { key: "settings.audioDsp.moveUp", text: row("上移处理阶段", "上移處理階段", "Move stage up", "処理を上へ移動", "처리 단계 위로 이동") },
+    Msg { key: "settings.audioDsp.moveDown", text: row("下移处理阶段", "下移處理階段", "Move stage down", "処理を下へ移動", "처리 단계 아래로 이동") },
     Msg { key: "settings.audioDsp.noiseStage", text: row("降噪", "降噪", "Noise reduction", "ノイズ低減", "잡음 감소") },
     Msg { key: "settings.audioDsp.combStage", text: row("梳状滤波", "梳狀濾波", "Comb filter", "コムフィルター", "콤 필터") },
     Msg { key: "settings.audioDsp.Speech_enhancement_settings", text: row("语音增强设置", "語音增強設置", "Speech enhancement settings", "音声強調設定", "음성 향상 설정") },
