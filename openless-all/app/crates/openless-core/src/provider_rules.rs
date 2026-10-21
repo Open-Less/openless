@@ -64,6 +64,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("openai", "openai"),
     ("gemini", "gemini"),
     (crate::polish::CODEX_OAUTH_PROVIDER_ID, "codexOAuth"),
+    (crate::siwc::PROVIDER_ID, "chatgptSiwc"),
     ("mimo", "mimo"),
     ("cometapi", "cometapi"),
     ("openrouterFree", "openrouterFree"),
@@ -122,6 +123,7 @@ const GEMINI_MODELS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthRequirement {
+    Siwc,
     None,
     ApiKey,
     EndpointModelOptionalApiKey,
@@ -271,6 +273,7 @@ fn provider_descriptor_with_label(
             default_llm_model(&id),
             match id.as_str() {
                 crate::polish::CODEX_OAUTH_PROVIDER_ID => AuthRequirement::OAuth,
+                crate::siwc::PROVIDER_ID => AuthRequirement::Siwc,
                 "gemini" => AuthRequirement::ApiKey,
                 "lmstudio" => AuthRequirement::EndpointModelOptionalApiKey,
                 _ => AuthRequirement::ApiKeyUnlessCustomEndpoint,
@@ -520,6 +523,7 @@ pub fn auth_requirement_satisfied(
                 && configuration.tencent_cloud_secret_key
         }
         AuthRequirement::OAuth => configuration.codex_oauth && model,
+        AuthRequirement::Siwc => false, // Backend combines the local-only SIWC session with the selected model.
     }
 }
 
@@ -535,6 +539,7 @@ pub fn api_key_required(
         AuthRequirement::None
         | AuthRequirement::EndpointModelOptionalApiKey
         | AuthRequirement::OAuth
+        | AuthRequirement::Siwc
         | AuthRequirement::TencentCloud => false,
         AuthRequirement::ApiKeyUnlessCustomEndpoint => {
             let Some(endpoint) = configured_endpoint.filter(|value| !value.trim().is_empty())
@@ -616,6 +621,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
 
 pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
+        crate::siwc::PROVIDER_ID => Some(crate::siwc::API_BASE),
         "opencode" => Some("https://opencode.ai/zen/v1"),
         "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
         "deepseek" => Some("https://api.deepseek.com/v1"),

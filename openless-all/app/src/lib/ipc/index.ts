@@ -48,6 +48,7 @@ export {
 
 export type { AuthRequirement, ProviderDescriptor, ProviderKind } from './providers';
 export { listProviderDescriptors } from './providers';
+export * from './siwc';
 
 // channels (channel cards)
 export type { Channel, ChannelKind, ChannelTestResult } from './channels';

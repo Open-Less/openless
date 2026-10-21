@@ -47,6 +47,11 @@ mod linux_app {
     use window::*;
 
     enum UiResult {
+        Siwc {
+            channel_id: String,
+            request: u64,
+            state: Result<frontend::view_model::SettingsSiwcState, String>,
+        },
         Message(String),
         /// 选区助手动作的异步结果：`generation` 是发起时面板进程的代次，
         /// 换过窗口后的迟到结果不得回写到新面板。
@@ -442,6 +447,8 @@ mod linux_app {
     /// mirror writes it out each frame, so re-reading the channel list never
     /// clobbers what the user is typing.
     struct ProviderEditorForm {
+        siwc: Option<frontend::view_model::SettingsSiwcState>,
+        siwc_request: u64,
         channel_id: String,
         /// 渠道种类（LLM / ASR）：弹窗副标题「文字处理渠道 / 语音识别渠道」用它。
         kind: openless_core::ChannelKind,
@@ -471,6 +478,8 @@ mod linux_app {
     impl ProviderEditorForm {
         fn from_editor(editor: &ProviderEditor, lang: Lang) -> Self {
             Self {
+                siwc: None,
+                siwc_request: 0,
                 channel_id: editor.channel.id.clone(),
                 kind: editor.kind,
                 provider_type: editor.descriptor.provider_type.as_str().to_string(),
@@ -3475,6 +3484,161 @@ mod linux_app {
             self.editor_requested = false;
         }
 
+        fn request_siwc(&mut self, action: String, registration_id: Option<String>) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let Some(form) = self
+                .provider_editor_form
+                .as_mut()
+                .filter(|f| f.provider_type == openless_core::siwc::PROVIDER_ID)
+            else {
+                return;
+            };
+            static SIWC_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            form.siwc_request = SIWC_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let request = form.siwc_request;
+            let channel = form.channel_id.clone();
+            let tx = self.tx.clone();
+            let wake = std::thread::current();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let service = backend
+                        .siwc_for_channel(&channel)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let mut message = None;
+                    if matches!(action.as_str(), "sign_in" | "add_account" | "enable_usage" | "select" | "disconnect") {
+                        backend.invalidate_channel_test(openless_core::ChannelKind::Llm, channel.clone()).await.map_err(|e| e.to_string())?;
+                    }
+                    match action.as_str() {
+                        "sign_in" | "add_account" | "enable_usage" => {
+                            let launch = backend
+                                .begin_siwc_sign_in(
+                                    channel.clone(),
+                                    action == "add_account",
+                                    action == "enable_usage",
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if open_external(launch.authorization_url()).is_err() {
+                                let _ = service.cancel_sign_in(&channel).await;
+                                return Err(
+                                    openless_core::siwc::error("browser_failed").to_string()
+                                );
+                            }
+                        }
+                        "cancel" => service
+                            .cancel_sign_in(&channel)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "select" => service
+                            .select_account(
+                                channel.clone(),
+                                registration_id.ok_or("account required")?,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "disconnect" => {
+                            if !service
+                                .disconnect(&channel)
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .remote_revoked
+                            {
+                                message = Some("siwc.remoteUnconfirmed".into());
+                            }
+                        }
+                        "acknowledge" => service
+                            .acknowledge_welcome(channel.clone())
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "retry" => service
+                            .retry_usage(channel.clone())
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "test" => {
+                            let started = std::time::Instant::now();
+                            let result = backend
+                                .services()
+                                .provider
+                                .validate(openless_core::ProviderRequest {
+                                    kind: openless_core::ProviderKind::Llm,
+                                    channel_id: Some(channel.clone()),
+                                    thinking_enabled: false,
+                                })
+                                .await;
+                            backend
+                                .record_channel_test(
+                                    openless_core::ChannelKind::Llm,
+                                    channel.clone(),
+                                    result.is_ok(),
+                                    result
+                                        .as_ref()
+                                        .ok()
+                                        .map(|_| started.elapsed().as_millis() as u32),
+                                    result.as_ref().err().map(|e| e.to_string()),
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            message = Some(match result {
+                                Ok(_) => "siwc.testSuccess".into(),
+                                Err(e) => e.to_string(),
+                            });
+                        }
+                        "refresh" => {}
+                        _ => return Err("unknown SIWC action".into()),
+                    }
+                    loop {
+                        let status = service.status(&channel).await.map_err(|e| e.to_string())?;
+                        let authorizing = status.state == "authorizing";
+                        let models = if status.state == "connected" {
+                            match service.list_models(&channel).await {
+                                Ok(models) => models,
+                                Err(e) => {
+                                    message = Some(e.to_string());
+                                    Vec::new()
+                                }
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        let state = frontend::view_model::SettingsSiwcState {
+                            status,
+                            models,
+                            message: message.clone(),
+                        };
+                        let _ = backend.refresh_and_publish_credentials().await;
+                        if tx
+                            .send(UiResult::Siwc {
+                                channel_id: channel.clone(),
+                                request,
+                                state: Ok(state),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        wake.unpark();
+                        if !authorizing {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Ok::<(), String>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    let _ = tx.send(UiResult::Siwc {
+                        channel_id: channel,
+                        request,
+                        state: Err(error),
+                    });
+                    wake.unpark();
+                }
+            });
+        }
+
         /// Core owns the model catalog; the host only forwards the request.
         fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
             if self.provider_switch_pending {
@@ -4869,6 +5033,22 @@ mod linux_app {
                         };
                         self.load_service_configured();
                     }
+                    UiResult::Siwc {
+                        channel_id,
+                        request,
+                        state,
+                    } => {
+                        if let Some(form) = self.provider_editor_form.as_mut().filter(|f| {
+                            f.channel_id == channel_id
+                                && f.provider_type == openless_core::siwc::PROVIDER_ID
+                                && f.siwc_request == request
+                        }) {
+                            match state {
+                                Ok(state) => form.siwc = Some(state),
+                                Err(error) => self.frontend_vm.settings_notice = Some(error),
+                            }
+                        }
+                    }
                     UiResult::ProviderEditor {
                         kind,
                         channel_id,
@@ -4889,6 +5069,7 @@ mod linux_app {
                                     Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                 self.provider_editor =
                                     ProviderEditorState::Loaded(Box::new(editor));
+                                self.request_siwc("refresh".into(), None);
                                 // Tauri `CatalogModelField` 在挂载时就拉一次目录（只有
                                 // OrcaRouter 这种没有固定清单的服务商才需要），否则用户
                                 // 得自己找到「拉取模型」才知道可选什么。
@@ -5221,6 +5402,7 @@ mod linux_app {
                                         Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                     self.provider_editor =
                                         ProviderEditorState::Loaded(Box::new(editor));
+                                    self.request_siwc("refresh".into(), None);
                                     if self
                                         .provider_editor_form
                                         .as_ref()
@@ -5824,6 +6006,7 @@ mod linux_app {
             // stays a pure renderer; Core still owns the credential schema.
             vm.provider_editor = self.provider_editor_form.as_ref().map(|form| {
                 frontend::view_model::SettingsProviderEditor {
+                    siwc: form.siwc.clone(),
                     channel_id: form.channel_id.clone(),
                     is_asr: matches!(form.kind, openless_core::ChannelKind::Asr),
                     is_draft: self.editor_draft,
@@ -7601,6 +7784,16 @@ mod linux_app {
                             }
                         }
                     }
+                    frontend::view_model::FrontendAction::SettingsSiwc {
+                        action,
+                        registration_id,
+                    } => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
+                        self.draft_touched = true;
+                        self.request_siwc(action, registration_id);
+                    }
                     frontend::view_model::FrontendAction::SettingsProviderSave => {
                         self.queue_provider_save();
                     }
@@ -8070,6 +8263,7 @@ mod linux_app {
             Core::Volcengine => Ui::Volcengine,
             Core::Xfyun => Ui::Xfyun,
             Core::OAuth => Ui::OAuth,
+            Core::Siwc => Ui::Siwc,
             Core::TencentCloud => Ui::TencentCloud,
             Core::ApiKey | Core::EndpointModelOptionalApiKey | Core::ApiKeyUnlessCustomEndpoint => {
                 Ui::ApiKey
@@ -8185,7 +8379,9 @@ mod linux_app {
             .rename_channel(editor.kind, channel_id.to_string(), editor.name)
             .await?;
         match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {}
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => {}
             openless_core::AuthRequirement::Volcengine => {
                 write_or_remove_provider_value(
                     &backend,
@@ -8362,7 +8558,9 @@ mod linux_app {
         editor: &ProviderEditor,
     ) -> Result<(), BackendError> {
         let accounts: &[&str] = match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => &[],
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => &[],
             openless_core::AuthRequirement::Volcengine => &[
                 openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
                 openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
@@ -8572,9 +8770,9 @@ mod linux_app {
         // 用户能看到「这里有东西」。之前这里写死成空串，编辑已有渠道时密钥框永远空白，
         // 看起来像没保存。
         let (primary_account, secondary_account) = match descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {
-                (None, None)
-            }
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => (None, None),
             openless_core::AuthRequirement::Volcengine => {
                 if auth_mode == "api_key" {
                     (

@@ -69,6 +69,7 @@ mod selection_voice_service;
 pub mod settings;
 pub mod shared_types;
 pub mod silence_auto_stop;
+pub mod siwc;
 pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;

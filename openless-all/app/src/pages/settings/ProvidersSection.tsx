@@ -31,6 +31,7 @@ import { BailianProtocolField } from './BailianProtocolField';
 import type { BailianProtocol } from '../../lib/bailianProtocol';
 import { LlmProtocolFields } from './LlmProtocolFields';
 import { ProviderFormContext } from './ProviderForm';
+import { SiwcChannelFields } from './SiwcChannelFields';
 import { LocalModelPicker } from './models/LocalModelPicker';
 import { emitSaved } from '../../lib/savedEvent';
 import { useContentMotion } from '../../lib/motion';
@@ -148,6 +149,7 @@ export const LLM_LABELS = [
   ['openai', 'openai'],
   ['gemini', 'gemini'],
   ['codex_oauth', 'codexOAuth'],
+  ['chatgpt_siwc', 'chatgptSiwc'],
   ['mimo', 'mimo'],
   ['cometapi', 'cometapi'],
   ['openrouterFree', 'openrouterFree'],
@@ -316,6 +318,16 @@ export function ChannelCredentialFields({
     return <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>;
   }
 
+  if (kind === 'llm' && providerType === 'chatgpt_siwc') {
+    return (
+      <SiwcChannelFields
+        key={channelId}
+        channelId={channelId}
+        onUserMutation={onUserMutation}
+        onTested={onTested}
+      />
+    );
+  }
   if (kind === 'llm') {
     const defaultEndpoint = descriptor?.defaultEndpoint;
     const defaultModel = descriptor?.defaultModel;

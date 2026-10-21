@@ -3942,8 +3942,8 @@ impl OpenLessBackend {
             *self
                 .voice_activation_session
                 .lock()
-                .expect("voice activation session lock poisoned") = Some(
-                crate::voice_activation::VoiceActivationSession {
+                .expect("voice activation session lock poisoned") =
+                Some(crate::voice_activation::VoiceActivationSession {
                     generation: crate::voice_activation::VoiceActivationGeneration(generation),
                     session_id,
                     timeout: activation_config.timeout(),
@@ -4941,7 +4941,8 @@ impl OpenLessBackend {
 
     pub async fn start(&self) -> Result<StartupSnapshot, BackendError> {
         let _lifecycle_gate = self.backend_lifecycle_gate.lock().await;
-        self.backend_shutdown_requested.store(false, Ordering::Release);
+        self.backend_shutdown_requested
+            .store(false, Ordering::Release);
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
@@ -5029,7 +5030,8 @@ impl OpenLessBackend {
 
     pub async fn shutdown(&self) -> Result<(), BackendError> {
         let _lifecycle_gate = self.backend_lifecycle_gate.lock().await;
-        self.backend_shutdown_requested.store(true, Ordering::Release);
+        self.backend_shutdown_requested
+            .store(true, Ordering::Release);
         let _ = self
             .stop_voice_activation(crate::voice_activation::VoiceActivationStopReason::Disabled)
             .await;
@@ -5637,12 +5639,82 @@ impl OpenLessBackend {
         Ok(())
     }
 
+    pub fn siwc_service(&self) -> Result<Arc<crate::siwc::SiwcService>, BackendError> {
+        self.deps
+            .credential_store
+            .siwc()
+            .ok_or_else(|| crate::siwc::error("unavailable").into_backend())
+    }
+
+    pub async fn siwc_for_channel(
+        &self,
+        channel: &str,
+    ) -> Result<Arc<crate::siwc::SiwcService>, BackendError> {
+        if !self
+            .list_channels(ChannelKind::Llm)
+            .await?
+            .iter()
+            .any(|c| c.id == channel && c.provider_type == crate::siwc::PROVIDER_ID)
+        {
+            return Err(crate::siwc::error("channel_missing").into_backend());
+        }
+        self.siwc_service()
+    }
+
+    pub async fn begin_siwc_sign_in(&self, channel: String, new_account: bool, enable_usage: bool) -> Result<crate::siwc::SiwcLaunch, BackendError> {
+        let service = self.siwc_for_channel(&channel).await?;
+        let launch = service.begin_sign_in(channel.clone(), new_account, enable_usage).await.map_err(crate::siwc::SiwcError::into_backend)?;
+        // Storage/browser preparation can race channel deletion or a provider switch.
+        let current = self.siwc_for_channel(&channel).await;
+        if current.is_ok() && service.authorizing(&channel, &launch.attempt_id) { return Ok(launch); }
+        service.cancel_attempt(&channel, &launch.attempt_id).await.map_err(crate::siwc::SiwcError::into_backend)?;
+        current?;
+        Err(crate::siwc::error("cancelled").into_backend())
+    }
+
+    async fn with_siwc_status(
+        &self,
+        mut status: CredentialsStatus,
+    ) -> Result<CredentialsStatus, BackendError> {
+        if let Some(service) = self.deps.credential_store.siwc() {
+            let channel_id = self
+                .deps
+                .credential_store
+                .active_provider(crate::ProviderSlot::Llm)
+                .await?;
+            let channel = &channel_id;
+            if self
+                .list_channels(ChannelKind::Llm)
+                .await?
+                .iter()
+                .any(|c| &c.id == channel && c.provider_type == crate::siwc::PROVIDER_ID)
+            {
+                let session = service.status(channel).await.map_err(crate::siwc::SiwcError::into_backend)?;
+                let model = self
+                    .deps
+                    .credential_store
+                    .read(CredentialKey::new(
+                        crate::CredentialNamespace::Llm,
+                        Some(channel.clone()),
+                        crate::credentials::LLM_MODEL_ACCOUNT,
+                    )?)
+                    .await?;
+                status.llm_configured =
+                    matches!(session.state.as_str(), "connected" | "usage_limited")
+                        && model.is_some_and(|m| !m.expose_secret().trim().is_empty());
+                status.ark_configured = status.llm_configured;
+            }
+        }
+        Ok(status)
+    }
+
     pub async fn get_credentials_status(&self) -> Result<CredentialsStatus, BackendError> {
         let status = self
             .deps
             .credential_store
             .status(self.get_preferences())
             .await?;
+        let status = self.with_siwc_status(status).await?;
         self.state
             .write()
             .expect("backend state lock poisoned")
@@ -5777,6 +5849,15 @@ impl OpenLessBackend {
             Some(id.clone()),
             crate::llm_protocol::SERVICE_TIER_ACCOUNT,
         )?;
+        let leaving_siwc = previous.provider_type == crate::siwc::PROVIDER_ID
+            && previous.provider_type != provider_type;
+        if leaving_siwc {
+            self.siwc_service()?
+                .cancel_sign_in(&id)
+                .await
+                .map_err(crate::siwc::SiwcError::into_backend)?;
+        }
+        let siwc_channel = id.clone();
         let reset = kind == ChannelKind::Llm && previous.provider_type != provider_type;
         let (old_format, old_service_tier) = if reset {
             let old_format = self.deps.credential_store.read(key.clone()).await?;
@@ -5823,6 +5904,12 @@ impl OpenLessBackend {
             }
         }
         result?;
+        if leaving_siwc {
+            self.siwc_service()?
+                .detach(siwc_channel)
+                .await
+                .map_err(crate::siwc::SiwcError::into_backend)?;
+        }
         self.refresh_and_publish_credentials().await.map(|_| ())
     }
 
@@ -5831,6 +5918,19 @@ impl OpenLessBackend {
         kind: ChannelKind,
         id: String,
     ) -> Result<bool, BackendError> {
+        if kind == ChannelKind::Llm
+            && self
+                .list_channels(kind)
+                .await?
+                .iter()
+                .any(|c| c.id == id && c.provider_type == crate::siwc::PROVIDER_ID)
+        {
+            if let Some(service) = self.deps.credential_store.siwc() {
+                if service.has_binding(&id).await.map_err(crate::siwc::SiwcError::into_backend)? {
+                    return Ok(false);
+                }
+            }
+        }
         match self
             .apply_channel_mutation(ChannelMutation::DeleteIfBlank { kind, id })
             .await?
@@ -5855,9 +5955,28 @@ impl OpenLessBackend {
     }
 
     pub async fn delete_channel(&self, kind: ChannelKind, id: String) -> Result<(), BackendError> {
-        self.apply_channel_mutation(ChannelMutation::Delete { kind, id })
-            .await
-            .map(|_| ())
+        let is_siwc = kind == ChannelKind::Llm
+            && self
+                .list_channels(kind)
+                .await?
+                .iter()
+                .any(|c| c.id == id && c.provider_type == crate::siwc::PROVIDER_ID);
+        let service = self.deps.credential_store.siwc().filter(|_| is_siwc);
+        if let Some(service) = &service {
+            service
+                .cancel_sign_in(&id)
+                .await
+                .map_err(crate::siwc::SiwcError::into_backend)?;
+        }
+        self.apply_channel_mutation(ChannelMutation::Delete {
+            kind,
+            id: id.clone(),
+        })
+        .await?;
+        if let Some(service) = service {
+            service.detach(id).await.map_err(crate::siwc::SiwcError::into_backend)?;
+        }
+        Ok(())
     }
 
     pub async fn set_channel_enabled(
@@ -5903,6 +6022,10 @@ impl OpenLessBackend {
         })
         .await
         .map(|_| ())
+    }
+
+    pub async fn invalidate_channel_test(&self, kind: ChannelKind, id: String) -> Result<(), BackendError> {
+        self.apply_channel_mutation(ChannelMutation::InvalidateTest { kind, id }).await.map(|_| ())
     }
 
     pub async fn invalidate_channel_tests(&self, kind: ChannelKind) -> Result<(), BackendError> {
@@ -6196,13 +6319,7 @@ impl OpenLessBackend {
                     // native model receipt is missing or a download/storage
                     // operation requires a process restart. Do not advertise a
                     // route that the next prepare call will reject.
-                    let status = match self
-                        .deps
-                        .services
-                        .local_asr
-                        .runtime_status(runtime)
-                        .await
-                    {
+                    let status = match self.deps.services.local_asr.runtime_status(runtime).await {
                         Ok(status) => status,
                         Err(_) => return AsrRoute::Unavailable,
                     };
@@ -6283,7 +6400,10 @@ impl OpenLessBackend {
             } else {
                 usage.cloud += 1;
             }
-            if latest.as_ref().is_none_or(|(created_at, _)| entry.created_at > *created_at) {
+            if latest
+                .as_ref()
+                .is_none_or(|(created_at, _)| entry.created_at > *created_at)
+            {
                 latest = Some((entry.created_at, local));
             }
         }
@@ -6326,6 +6446,7 @@ impl OpenLessBackend {
             .credential_store
             .status(self.get_preferences())
             .await?;
+        let status = self.with_siwc_status(status).await?;
         self.state
             .write()
             .expect("backend state lock poisoned")
@@ -11574,7 +11695,11 @@ mod tests {
 
         assert_eq!(
             backend.asr_usage().unwrap(),
-            AsrUsage { local: 2, cloud: 2, last_local: Some(true) }
+            AsrUsage {
+                local: 2,
+                cloud: 2,
+                last_local: Some(true)
+            }
         );
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -11647,7 +11772,11 @@ mod tests {
 
         assert_eq!(
             backend.asr_usage().unwrap(),
-            AsrUsage { local: 2, cloud: 1, last_local: Some(true) }
+            AsrUsage {
+                local: 2,
+                cloud: 1,
+                last_local: Some(true)
+            }
         );
         let _ = std::fs::remove_dir_all(data_dir);
     }

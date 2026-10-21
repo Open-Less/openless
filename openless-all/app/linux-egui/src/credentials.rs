@@ -40,6 +40,7 @@ struct PersistedCredentialMetadata {
 /// data directory.  Secret values are never serialized to the metadata file.
 #[derive(Clone)]
 pub struct LinuxCredentialStore {
+    siwc: Arc<openless_core::siwc::SiwcService>,
     metadata_path: PathBuf,
     state: Arc<Mutex<PersistedCredentialMetadata>>,
 }
@@ -55,6 +56,7 @@ impl LinuxCredentialStore {
         let metadata_path = data_dir.join("credential-metadata.json");
         let state = read_metadata(&metadata_path)?;
         Ok(Self {
+            siwc: crate::siwc::service(data_dir.to_path_buf()),
             metadata_path,
             state: Arc::new(Mutex::new(state)),
         })
@@ -263,6 +265,10 @@ impl LinuxCredentialStore {
 }
 
 impl CredentialStore for LinuxCredentialStore {
+    fn siwc(&self) -> Option<Arc<openless_core::siwc::SiwcService>> {
+        Some(self.siwc.clone())
+    }
+
     fn status(
         &self,
         preferences: UserPreferences,

@@ -359,6 +359,10 @@ impl fmt::Debug for SecretValue {
 }
 
 pub trait CredentialStore: Send + Sync {
+    fn siwc(&self) -> Option<std::sync::Arc<crate::siwc::SiwcService>> {
+        None
+    }
+
     fn bind_sync_gate(&self, _gate: std::sync::Arc<SyncWriteGate>) -> Result<(), BackendError> {
         Ok(())
     }

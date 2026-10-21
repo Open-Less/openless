@@ -34,6 +34,7 @@ mod dictionary;
 mod history;
 mod paths;
 mod preferences;
+pub(crate) mod siwc;
 mod style_pack;
 
 pub use activity::*;
