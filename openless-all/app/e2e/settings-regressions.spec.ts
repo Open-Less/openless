@@ -227,3 +227,61 @@ test('conditional notices animate actual layout downward and retain content duri
   await expect(page.getByTestId('notice')).toHaveText('Working status');
   await expect(page.getByTestId('notice')).toBeHidden();
 });
+
+test('voice activation opens model setup without leaving the multimodal pipeline', async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' });
+  });
+  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const categories = dialog.getByRole('navigation', { name: '设置分类' });
+  await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
+  const models = dialog
+    .locator('.ol-service-views')
+    .getByRole('button', { name: /^本地模型/ });
+  await expect(models).toBeDisabled();
+  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
+  const download = dialog.getByRole('button', {
+    name: '前往 AI 服务与模型下载 Zipformer',
+    exact: true,
+  });
+  await expect(download).toBeVisible();
+  const providerState = () =>
+    page.evaluate(async () => {
+      const { mockSettings } = await import('/src/lib/ipc/mock-data.ts');
+      return [
+        mockSettings.pipelineMode,
+        mockSettings.activeAsrProvider,
+        mockSettings.activeOmniProvider,
+      ];
+    });
+  const before = await providerState();
+  await download.focus();
+  await page.keyboard.press('Enter');
+  await expect(models).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('button', { name: '多模态模式', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(
+    dialog.getByText('此处准备语音唤醒模型，听写仍使用当前多模态服务。', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.locator('.ol-service-views').getByRole('button', { name: /^语言模型/ }),
+  ).toBeDisabled();
+  await expect(
+    dialog.locator('.ol-service-views').getByRole('button', { name: /^语音识别/ }),
+  ).toBeDisabled();
+  expect(await providerState()).toEqual(before);
+  await page.screenshot({ path: testInfo.outputPath('voice-activation-model-setup.png') });
+  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
+  await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await expect(models).toBeDisabled();
+});

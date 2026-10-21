@@ -81,6 +81,7 @@ mod selection_voice;
 mod settings;
 #[cfg(any(not(mobile), local_asr_sherpa))]
 mod sherpa_asr;
+mod siwc;
 mod style_packs;
 mod voice_edit;
 
@@ -112,12 +113,14 @@ pub use selection_polish::*;
 pub use selection_polish_preview::*;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub use selection_voice::*;
+pub(crate) use settings::sync_low_latency_capture_preferences;
 pub use settings::*;
 #[cfg(any(not(mobile), local_asr_sherpa))]
 // Sherpa commands are registered on Windows and arm64 Android; other desktop
 // targets keep an empty re-export.
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
+pub use siwc::*;
 pub use style_packs::*;
 pub use voice_edit::*;
 

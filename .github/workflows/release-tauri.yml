@@ -324,6 +324,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # [DEBUG-VOICE-1003] Matching Windows symbols for native crash diagnosis.
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
         run: |
           set +e
           # WiX/MSI only accepts a numeric prerelease identifier.  Manual
@@ -449,15 +452,23 @@ jobs:
       # Tests are tooling, not application payload. A targeted repair checks out
       # immutable app source above, but uses the reviewed workflow commit's smoke
       # script so fixes to test semantics do not require moving a release tag.
-      - name: Checkout installer smoke tooling
+      - name: Fetch installer smoke tooling
         if: matrix.platform == 'windows-latest'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: release-tooling
-          sparse-checkout: openless-all/app/scripts/windows-ime-install-smoke.ps1
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLING_SHA: ${{ github.workflow_sha }}
+        run: |
+          # Fetch only the pinned script: a sparse checkout still visits unrelated
+          # gitlinks during auth cleanup, including optional vendor runtimes.
+          $scriptPath = 'openless-all/app/scripts/windows-ime-install-smoke.ps1'
+          $encoded = gh api "repos/$env:GITHUB_REPOSITORY/contents/$scriptPath" --method GET -f "ref=$env:TOOLING_SHA" --jq '.content'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch pinned installer smoke tooling.' }
+          $bytes = [Convert]::FromBase64String(($encoded -join ''))
+          if ($bytes.Length -eq 0) { throw 'Pinned installer smoke tooling is empty.' }
+          $destination = Join-Path $env:GITHUB_WORKSPACE "release-tooling/$scriptPath"
+          New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+          [System.IO.File]::WriteAllBytes($destination, $bytes)
 
       - name: Verify Windows installers register TSF IME
         if: matrix.platform == 'windows-latest'
@@ -608,6 +619,17 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}*.json
           if-no-files-found: error
 
+      # [DEBUG-VOICE-1003] Verify both matching files exist before publishing diagnostics.
+      - name: Verify Windows diagnostic symbols
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $files = @('openless-all/app/src-tauri/target/release/openless.exe', 'openless-all/app/src-tauri/target/release/openless.pdb')
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw 'Missing Windows diagnostic binary or symbols' }
+            Get-FileHash -Algorithm SHA256 $file
+          }
+
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
@@ -616,6 +638,8 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/openless.exe
+            openless-all/app/src-tauri/target/release/openless.pdb
             openless-all/app/src-tauri/target/release/bundle/provenance/openless-provenance.json
           if-no-files-found: error
 

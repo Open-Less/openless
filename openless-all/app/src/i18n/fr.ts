@@ -1,9 +1,11 @@
+import { siwcFr as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const fr: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -1676,7 +1678,31 @@ export const fr: typeof zhCN = {
       audioRecordingMaxEntriesLabel: 'Nombre maximal d’enregistrements bruts',
       audioRecordingMaxEntriesDesc:
         'Nombre maximal de fichiers WAV conservés localement. Vide = 200.',
+      voiceActivationLabel: 'Activation vocale',
+      voiceActivationDesc: 'Écouter localement une phrase d’activation pour démarrer la dictée.',
+      voiceActivationLocalOnly:
+        'La reconnaissance reste sur cet appareil ; l’audio en veille n’est ni envoyé ni archivé.',
+      voiceActivationMultimodalModels:
+        'Préparez ici le modèle d’activation vocale. La dictée utilise toujours votre service multimodal actuel.',
+      voiceActivationModelMissing: 'Le modèle local Zipformer n’est pas installé.',
+      voiceActivationDownloadZipformer: 'Télécharger Zipformer',
+      voiceActivationWakeEnabled: 'Phrase d’activation',
+      voiceActivationWakePhrase: 'Phrase d’activation',
+      voiceActivationFinishEnabled: 'Phrase de fin',
+      voiceActivationFinishPhrase: 'Phrase de fin',
+      voiceActivationTimeoutEnabled: 'Arrêter après expiration',
+      voiceActivationTimeoutSeconds: 'Délai (secondes)',
       startupGroupTitle: 'Démarrage',
+      lowMemoryBackgroundLabel: 'Mode arrière-plan économe en mémoire',
+      lowMemoryBackgroundDesc:
+        'Après redémarrage : libère la fenêtre principale à sa fermeture et affiche la capsule native à la demande. Désactive le préchauffage du microphone au repos. Conserve les réglages de libération des modèles locaux.',
+      lowMemoryRestartLabel: 'Appliqué après redémarrage',
+      lowMemoryRestartDesc:
+        "Le commutateur du mode arrière à faible mémoire est enregistré ; le mode actif ne change qu'après le redémarrage de l'application.",
+      lowMemoryRestartNow: 'Redémarrer maintenant',
+      lowMemoryCapsuleErrorLabel: 'Capsule native indisponible',
+      lowMemoryCapsuleErrorDesc:
+        "La dictée fonctionne toujours, mais la capsule flottante ne s'affichera pas. Le programme auxiliaire est peut-être manquant ou bloqué ; réinstallez l'application.",
       startMinimizedLabel: 'Démarrer réduit (sans fenêtre principale)',
       startMinimizedDesc:
         'Au lancement, seule la barre des menus ou la zone de notification est affichée, jamais la fenêtre principale.',
@@ -1805,6 +1831,7 @@ export const fr: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (modèles gratuits)',

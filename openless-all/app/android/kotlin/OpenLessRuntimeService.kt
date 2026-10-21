@@ -111,7 +111,7 @@ class OpenLessRuntimeService : Service() {
         // old WebView, can create an empty black Activity. UI warmup remains
         // explicitly initiated by the launcher/settings or the IME path when
         // an input interaction actually requires it.
-        return START_STICKY
+        return if (authorizationActive() && !imeRequested) START_NOT_STICKY else START_STICKY
     }
 
     private fun buildNotification(): Notification {
@@ -133,16 +133,16 @@ class OpenLessRuntimeService : Service() {
         }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
-                .setContentTitle("OpenLess 输入法")
-                .setContentText("输入法面板已就绪")
+                .setContentTitle(if (imeRequested) "OpenLess 输入法" else "OpenLess")
+                .setContentText(if (imeRequested) "输入法面板已就绪" else "等待 ChatGPT 授权")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .build()
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("OpenLess 输入法")
-                .setContentText("输入法面板已就绪")
+                .setContentTitle(if (imeRequested) "OpenLess 输入法" else "OpenLess")
+                .setContentText(if (imeRequested) "输入法面板已就绪" else "等待 ChatGPT 授权")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .build()
@@ -150,6 +150,29 @@ class OpenLessRuntimeService : Service() {
     }
 
     companion object {
+        @Volatile var imeRequested = false
+        private val authorizationUsers = java.util.concurrent.atomic.AtomicInteger(0)
+        fun authorizationActive(): Boolean = authorizationUsers.get() > 0
+
+        @androidx.annotation.Keep
+        @JvmStatic fun acquireAuthorization(context: android.content.Context) {
+            authorizationUsers.incrementAndGet()
+            try {
+                val intent = Intent(context, OpenLessRuntimeService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                else context.startService(intent)
+            } catch (error: Throwable) {
+                authorizationUsers.decrementAndGet()
+                throw error
+            }
+        }
+
+        @androidx.annotation.Keep
+        @JvmStatic fun releaseAuthorization(context: android.content.Context) {
+            val remaining = authorizationUsers.updateAndGet { maxOf(0, it - 1) }
+            if (remaining == 0 && !imeRequested) context.stopService(Intent(context, OpenLessRuntimeService::class.java))
+        }
+
         private const val NOTIFICATION_ID = 42002
         private const val TAG = "OpenLessRuntimeService"
         private const val ACTION_RUNTIME_ACTIVITY_DESTROYED = "com.openless.app.action.RUNTIME_ACTIVITY_DESTROYED"

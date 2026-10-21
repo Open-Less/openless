@@ -488,6 +488,10 @@ jobs:
       - name: Build frontend and run frontend/contract tests
         run: npm test
 
+      # Direct Cargo checks do not execute Tauri beforeBuildCommand.
+      - name: Build native capsule for Tauri checks
+        run: npm run build:native-capsule:dev
+
       - name: Install pinned Codex CLI for sandbox contract
         if: runner.os == 'macOS'
         run: npm install --global @openai/codex@0.146.0
@@ -626,6 +630,8 @@ jobs:
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
+      - name: Build native capsule for Tauri checks
+        run: npm run build:native-capsule:dev
       - name: Check Tauri backend with Rust 1.99 MSRV
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Compile backend tests with Rust 1.99 MSRV

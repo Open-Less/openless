@@ -133,14 +133,26 @@ pub async fn start_microphone_level_monitor(
     device_name: String,
 ) -> Result<(), String> {
     let warm_hub = crate::recorder::warm_capture_hub();
+    if !warm_hub.begin_preview() {
+        return Err("dictation is using the microphone".into());
+    }
+    if let Some(backend) = app.try_state::<Arc<openless_core::OpenLessBackend>>() {
+        if let Err(error) = backend
+            .stop_voice_activation(openless_core::VoiceActivationStopReason::Disabled)
+            .await
+        {
+            warm_hub.end_preview();
+            return Err(error.to_string());
+        }
+    }
     let warm_hub_for_error = Arc::clone(&warm_hub);
     let app_for_error = app.clone();
+    let backend_for_resume = app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .map(|state| Arc::clone(&*state));
     let result = match tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<MicrophoneMonitorState>();
         let _operation = state.operation.lock();
-        if !warm_hub.begin_preview() {
-            return Err("dictation is using the microphone".into());
-        }
         if let Some(existing) = state.recorder.lock().take() {
             existing.stop();
         }
@@ -176,9 +188,14 @@ pub async fn start_microphone_level_monitor(
             if state.recorder.lock().is_none() {
                 warm_hub_for_error.end_preview();
             }
-            return Err(format!("start microphone monitor task failed: {error}"));
+            Err(format!("start microphone monitor task failed: {error}"))
         }
     };
+    if result.is_err() {
+        if let Some(backend) = backend_for_resume {
+            let _ = backend.configure_voice_activation().await;
+        }
+    }
     result
 }
 
@@ -195,6 +212,10 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
     let warm_hub_for_error = Arc::clone(&warm_hub);
     #[cfg(not(mobile))]
     let app_for_error = app.clone();
+    #[cfg(not(mobile))]
+    let backend_for_resume = app
+        .try_state::<Arc<openless_core::OpenLessBackend>>()
+        .map(|state| Arc::clone(&*state));
     #[cfg(not(mobile))]
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<MicrophoneMonitorState>();
@@ -216,6 +237,10 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
     }
     #[cfg(not(mobile))]
     let _ = result;
+    #[cfg(not(mobile))]
+    if let Some(backend) = backend_for_resume {
+        let _ = backend.configure_voice_activation().await;
+    }
 }
 
 /// Copy the current session's openless.log to a user-chosen location (the frontend obtains

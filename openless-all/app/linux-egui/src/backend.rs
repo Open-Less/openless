@@ -298,6 +298,7 @@ impl LinuxBackendBuilder {
                 dictation_engine,
                 task_spawner,
                 credential_store,
+                voice_activation_runtime: None,
                 services,
                 // Linux ships no local inference runtime. Leaving this unset
                 // makes every local-ASR call resolve to Core's unsupported

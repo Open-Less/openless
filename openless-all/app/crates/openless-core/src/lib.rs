@@ -71,6 +71,7 @@ mod selection_voice_service;
 pub mod settings;
 pub mod shared_types;
 pub mod silence_auto_stop;
+pub mod siwc;
 pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
@@ -78,6 +79,7 @@ pub mod style_packs;
 pub mod testing;
 pub mod types;
 pub mod vocabulary;
+pub mod voice_activation;
 pub mod voice_edit_session;
 mod voice_session;
 
@@ -305,7 +307,9 @@ pub use ports::{
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
     TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, VoiceCapture,
+    UnsupportedTextInserter, UnsupportedVoiceActivationRuntime, VoiceActivationError,
+    VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink, VoiceCapture,
+    VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -378,6 +382,15 @@ pub use types::{
 pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
+};
+pub use voice_activation::{
+    normalize_phrase, validate_phrase, PhraseValidationError, VoiceActivationCommand,
+    VoiceActivationConfig, VoiceActivationDecision, VoiceActivationGeneration,
+    VoiceActivationPhase, VoiceActivationSession, VoiceActivationSignal,
+    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceActivationTextPolicy,
+    VoiceCommandMatch, VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE,
+    DEFAULT_TIMEOUT_SECONDS, DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
 };
 pub use voice_edit_session::{
     TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,

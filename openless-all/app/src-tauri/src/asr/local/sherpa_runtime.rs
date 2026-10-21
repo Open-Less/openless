@@ -26,6 +26,13 @@ use crate::asr::local::sherpa::{
 };
 
 const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
+#[derive(Clone, Debug)]
+pub struct SherpaTokenEmission {
+    pub text: String,
+    pub is_delta: bool,
+    pub is_new_segment: bool,
+}
+
 const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
 
 #[cfg(local_asr_sherpa)]
@@ -49,6 +56,9 @@ struct LoadedOfflineModel {
 /// Online model load state. Each dictation session creates its own `OnlineStream` from the recognizer.
 #[derive(Clone)]
 struct LoadedOnlineModel {
+    // [DEBUG-VOICE-1003] Observe overlap without serializing native calls.
+    #[cfg(local_asr_sherpa)]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
     #[cfg(local_asr_sherpa)]
     recognizer: Arc<OnlineRecognizer>,
@@ -326,6 +336,13 @@ impl SherpaOnnxRuntime {
         let _lifecycle = self.lifecycle.lock().await;
         let mut state = self.state.lock();
         state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(local_asr_sherpa)]
+            crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}),
+            );
+        }
         state.online_loaded = None;
         Ok(())
     }
@@ -344,6 +361,13 @@ impl SherpaOnnxRuntime {
         }
         let mut state = self.state.lock();
         state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(local_asr_sherpa)]
+            crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}),
+            );
+        }
         state.online_loaded = None;
         Ok(true)
     }
@@ -474,6 +498,7 @@ async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
             Some(openless_core::LocalAsrExecutionMode::Online) => {
                 let recognizer = create_online_recognizer(&alias, &dir)?;
                 Ok(LoadedModel::Online(LoadedOnlineModel {
+                    diagnostic_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                     alias,
                     recognizer: Arc::new(recognizer),
                 }))
@@ -641,6 +666,8 @@ async fn transcribe_loaded_model(
 }
 
 pub struct SherpaOnlineSession {
+    #[cfg(local_asr_sherpa)]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
     #[cfg(local_asr_sherpa)]
     recognizer: Arc<OnlineRecognizer>,
@@ -649,6 +676,55 @@ pub struct SherpaOnlineSession {
     committed_text: String,
     last_partial_text: String,
     last_emitted_text: String,
+    pending_new_segment: bool,
+}
+
+// [DEBUG-VOICE-1003] P3 / H2,H4,H6: native entry/return and per-recognizer overlap.
+#[cfg(local_asr_sherpa)]
+struct VoiceNativeProbe<'a> {
+    active: &'a std::sync::atomic::AtomicUsize,
+    stage: &'static str,
+}
+
+#[cfg(local_asr_sherpa)]
+impl<'a> VoiceNativeProbe<'a> {
+    fn enter(active: &'a std::sync::atomic::AtomicUsize, stage: &'static str) -> Self {
+        let count = active.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::recorder::voice_diagnostic(
+            "P3",
+            &["H2", "H4", "H6"],
+            "native",
+            "entered",
+            serde_json::json!({"stage": stage, "count": count}),
+        );
+        Self { active, stage }
+    }
+}
+
+#[cfg(local_asr_sherpa)]
+impl Drop for VoiceNativeProbe<'_> {
+    fn drop(&mut self) {
+        let count = self.active.fetch_sub(1, Ordering::Relaxed) - 1;
+        crate::recorder::voice_diagnostic(
+            "P3",
+            &["H2", "H4", "H6"],
+            "native",
+            "returned",
+            serde_json::json!({"stage": self.stage, "count": count}),
+        );
+    }
+}
+
+// [DEBUG-VOICE-1003] P5 / H4: observe ownership before existing field destruction.
+// No fields are moved, reordered or manually dropped here.
+#[cfg(local_asr_sherpa)]
+impl Drop for SherpaOnlineSession {
+    fn drop(&mut self) {
+        crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "dropping",
+            serde_json::json!({"count": Arc::strong_count(&self.recognizer),
+                "active": self.diagnostic_active.load(Ordering::Relaxed)}),
+        );
+    }
 }
 
 impl SherpaOnlineSession {
@@ -658,7 +734,7 @@ impl SherpaOnlineSession {
 
     pub fn accept_pcm_chunk<F>(&mut self, pcm: &[u8], on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         if pcm.is_empty() {
             return Ok(());
@@ -669,17 +745,29 @@ impl SherpaOnlineSession {
 
     pub fn finish<F>(&mut self, on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         self.finish_inner(on_token)
+    }
+
+    /// Flush the current VAD segment while keeping this online session alive for
+    /// the next speech segment.
+    pub fn flush_segment<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        self.flush_segment_inner(on_token)
     }
 
     #[cfg(local_asr_sherpa)]
     fn accept_samples<F>(&mut self, samples: &[f32], on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
-        self.stream.accept_waveform(16_000, samples);
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "accept");
+            self.stream.accept_waveform(16_000, samples);
+        }
         self.drain_ready(on_token);
         Ok(())
     }
@@ -687,7 +775,7 @@ impl SherpaOnlineSession {
     #[cfg(not(local_asr_sherpa))]
     fn accept_samples<F>(&mut self, _samples: &[f32], _on_token: &F) -> Result<()>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         Ok(())
     }
@@ -695,9 +783,18 @@ impl SherpaOnlineSession {
     #[cfg(local_asr_sherpa)]
     fn finish_inner<F>(&mut self, on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
-        self.stream.input_finished();
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
         self.drain_ready(on_token);
         self.capture_result(on_token, false);
         Ok(self.final_text())
@@ -706,28 +803,93 @@ impl SherpaOnlineSession {
     #[cfg(not(local_asr_sherpa))]
     fn finish_inner<F>(&mut self, _on_token: &F) -> Result<String>
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         Ok(self.final_text())
     }
 
     #[cfg(local_asr_sherpa)]
+    fn flush_segment_inner<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
+        self.drain_ready_without_endpoint_reset(on_token);
+        self.capture_result(on_token, false);
+        if !self.last_partial_text.is_empty() {
+            append_segment(&mut self.committed_text, &self.last_partial_text);
+        }
+        self.last_partial_text.clear();
+        self.last_emitted_text.clear();
+        self.pending_new_segment = true;
+        {
+            // EOF also closes feature extraction; recognizer reset only resets decoding.
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "new_stream");
+            self.stream = self.recognizer.create_stream();
+        }
+        Ok(())
+    }
+
+    #[cfg(not(local_asr_sherpa))]
+    fn flush_segment_inner<F>(&mut self, _on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        Ok(())
+    }
+
+    #[cfg(local_asr_sherpa)]
     fn drain_ready<F>(&mut self, on_token: &F)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         while self.recognizer.is_ready(&self.stream) {
-            self.recognizer.decode(&self.stream);
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
             self.capture_result(on_token, true);
+        }
+    }
+
+    #[cfg(local_asr_sherpa)]
+    fn drain_ready_without_endpoint_reset<F>(&mut self, on_token: &F)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        while self.recognizer.is_ready(&self.stream) {
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
+            self.capture_result(on_token, false);
         }
     }
 
     #[cfg(local_asr_sherpa)]
     fn capture_result<F>(&mut self, on_token: &F, allow_endpoint_reset: bool)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
-        let Some(result) = self.recognizer.get_result(&self.stream) else {
+        let result = {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "result");
+            self.recognizer.get_result(&self.stream)
+        };
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4", "H6"], "native_result", "observed",
+            serde_json::json!({"present": result.is_some(),
+                "count": result.as_ref().map(|result| result.text.chars().count()).unwrap_or(0),
+                "stage": if allow_endpoint_reset { "streaming" } else { "flush" }}),
+        );
+        let Some(result) = result else {
             return;
         };
         let text = result.text.trim().to_string();
@@ -740,24 +902,38 @@ impl SherpaOnlineSession {
             append_segment(&mut self.committed_text, &text);
             self.last_partial_text.clear();
             self.last_emitted_text.clear();
-            self.recognizer.reset(&self.stream);
+            self.pending_new_segment = true;
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "reset");
+                self.recognizer.reset(&self.stream);
+            }
         }
     }
 
     fn emit_delta<F>(&mut self, text: &str, on_token: &F)
     where
-        F: Fn(&str),
+        F: Fn(&SherpaTokenEmission),
     {
         if text == self.last_emitted_text {
             return;
         }
+        let is_new_segment = self.pending_new_segment;
         if let Some(delta) = text.strip_prefix(&self.last_emitted_text) {
             if !delta.is_empty() {
-                on_token(delta);
+                on_token(&SherpaTokenEmission {
+                    text: delta.to_string(),
+                    is_delta: true,
+                    is_new_segment,
+                });
             }
         } else {
-            on_token(text);
+            on_token(&SherpaTokenEmission {
+                text: text.to_string(),
+                is_delta: false,
+                is_new_segment,
+            });
         }
+        self.pending_new_segment = false;
         self.last_emitted_text = text.to_string();
     }
 
@@ -768,6 +944,15 @@ impl SherpaOnlineSession {
         }
         text.trim().to_string()
     }
+}
+
+// Sherpa 1.13.2's online-decode-files.py supplies 0.66 s of zero samples before
+// input_finished(): marking EOF alone does not provide the model's trailing context.
+// This is bounded model input, not a wall-clock wait or continuous idle inference.
+fn finish_online_segment_input(accept_tail: impl FnOnce(&[f32]), input_finished: impl FnOnce()) {
+    const TAIL: [f32; 16_000 * 66 / 100] = [0.0; 16_000 * 66 / 100];
+    accept_tail(&TAIL);
+    input_finished();
 }
 
 fn append_segment(text: &mut String, segment: &str) {
@@ -784,13 +969,22 @@ fn append_segment(text: &mut String, segment: &str) {
 #[cfg(local_asr_sherpa)]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
     let stream = loaded.recognizer.create_stream();
+    crate::recorder::voice_diagnostic(
+        "P5",
+        &["H4"],
+        "session_owner",
+        "created",
+        serde_json::json!({"count": Arc::strong_count(&loaded.recognizer)}),
+    );
     Ok(SherpaOnlineSession {
+        diagnostic_active: loaded.diagnostic_active,
         alias: loaded.alias,
         recognizer: loaded.recognizer,
         stream,
         committed_text: String::new(),
         last_partial_text: String::new(),
         last_emitted_text: String::new(),
+        pending_new_segment: false,
     })
 }
 
@@ -801,6 +995,7 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
         committed_text: String::new(),
         last_partial_text: String::new(),
         last_emitted_text: String::new(),
+        pending_new_segment: false,
     })
 }
 
@@ -1017,6 +1212,71 @@ mod tests {
     #[test]
     fn pcm_s16le_to_f32_rejects_odd_length() {
         assert!(pcm_s16le_to_f32(&[0]).is_err());
+    }
+
+    #[test]
+    fn segment_input_supplies_bounded_silent_context_before_eof() {
+        let events = std::cell::RefCell::new(Vec::new());
+        finish_online_segment_input(
+            |tail| {
+                assert_eq!(tail.len(), 10_560);
+                assert!(tail.iter().all(|sample| *sample == 0.0));
+                events.borrow_mut().push(("tail", tail.len()));
+            },
+            || events.borrow_mut().push(("finished", 0)),
+        );
+        assert_eq!(*events.borrow(), vec![("tail", 10_560), ("finished", 0)]);
+    }
+
+    #[test]
+    fn repeated_segment_boundaries_do_not_accumulate_tail_context() {
+        let samples = std::cell::Cell::new(0);
+        let boundaries = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            finish_online_segment_input(
+                |tail| samples.set(samples.get() + tail.len()),
+                || boundaries.set(boundaries.get() + 1),
+            );
+        }
+        assert_eq!(samples.get(), 21_120);
+        assert_eq!(boundaries.get(), 2);
+    }
+
+    #[cfg(local_asr_sherpa)]
+    #[tokio::test]
+    #[ignore = "requires explicit OPENLESS_SHERPA_TEST_MODEL_DIR and OPENLESS_SHERPA_TEST_WAV; never downloads"]
+    async fn voice_activation_decodes_a_second_segment_after_eof() {
+        let model_dir = std::env::var_os("OPENLESS_SHERPA_TEST_MODEL_DIR")
+            .expect("explicit Zipformer test model directory");
+        let wav_path = std::env::var_os("OPENLESS_SHERPA_TEST_WAV")
+            .expect("explicit 16 kHz mono speech fixture");
+        let wav = std::fs::read(wav_path).unwrap();
+        let pcm = openless_core::audio::decode_dictation_wav(&wav).unwrap();
+        assert!(!pcm.is_empty());
+        let runtime = SherpaOnnxRuntime::new();
+        let mut session = runtime
+            .create_online_session("zipformer-bilingual-zh-en-streaming", Path::new(&model_dir))
+            .await
+            .unwrap();
+        session.stream.set_option("openless-test-segment", "first");
+        for chunk in pcm.chunks(640) {
+            session.accept_pcm_chunk(chunk, &|_| {}).unwrap();
+        }
+        session.flush_segment(&|_| {}).unwrap();
+        let first = session.final_text();
+        assert!(
+            !first.is_empty(),
+            "the fixture must contain recognizable speech"
+        );
+        assert!(
+            !session.stream.has_option("openless-test-segment"),
+            "EOF must replace the feature stream"
+        );
+        for chunk in pcm.chunks(640) {
+            session.accept_pcm_chunk(chunk, &|_| {}).unwrap();
+        }
+        let result = session.finish(&|_| {}).unwrap();
+        assert_eq!(result, format!("{first} {first}"));
     }
 
     #[test]

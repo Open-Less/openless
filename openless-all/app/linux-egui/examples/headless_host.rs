@@ -74,6 +74,7 @@ async fn main() -> Result<(), BackendError> {
             )),
             task_spawner: Arc::new(TokioTaskSpawner),
             credential_store: Arc::new(InMemoryCredentialStore::default()),
+            voice_activation_runtime: None,
             services: BackendServices::unsupported(),
             local_asr_runtime: None,
             marketplace_config: None,

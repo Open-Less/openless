@@ -77,6 +77,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "openai",
     "gemini",
     crate::polish::CODEX_OAUTH_PROVIDER_ID,
+    crate::siwc::PROVIDER_ID,
     "mimo",
     "cometapi",
     "openrouterFree",
@@ -1405,7 +1406,10 @@ pub(crate) async fn llm_channel_configured(
     if !has_model {
         return false;
     }
-    if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
+    if matches!(
+        provider_type,
+        crate::polish::CODEX_OAUTH_PROVIDER_ID | crate::siwc::PROVIDER_ID
+    ) {
         return true;
     }
     let Ok(api_key) = read_channel_credential(
@@ -1465,6 +1469,28 @@ async fn build_cloud_polisher_provider(
         .ok_or_else(|| {
             BackendError::new(BackendErrorCode::Provider, "LLM model is not configured")
         })?;
+    if provider_type == crate::siwc::PROVIDER_ID {
+        let service = credentials
+            .siwc()
+            .ok_or_else(|| crate::siwc::error("unavailable").into_backend())?;
+        let access = service
+            .access(channel_id)
+            .await
+            .map_err(crate::siwc::SiwcError::into_backend)?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            crate::siwc::PROVIDER_ID,
+            "ChatGPT Plan",
+            crate::siwc::API_BASE,
+            "",
+            model,
+        )
+        .with_temperature(None);
+        let provider =
+            crate::polish::OpenAICompatibleLLMProvider::new(config).with_siwc_access(access);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(provider),
+        ));
+    }
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
         let provider = crate::polish::CodexOAuthLLMProvider::new(
             crate::polish::CodexOAuthConfig::new(model)
@@ -1595,6 +1621,9 @@ fn map_llm_error(error: impl std::fmt::Display) -> BackendError {
 /// malformed reply. The dictation pipeline uses it to tell "offline" apart
 /// when the transcript came from a local model.
 fn map_polish_error(error: crate::polish::LLMError) -> BackendError {
+    if let crate::polish::LLMError::Siwc(error) = error {
+        return error.into_backend();
+    }
     let transient = matches!(
         error,
         crate::polish::LLMError::Network(_) | crate::polish::LLMError::Timeout

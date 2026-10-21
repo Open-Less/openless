@@ -107,7 +107,13 @@ export function availableServiceViews(localModels: boolean, os?: OS): ServiceVie
   ];
 }
 
-export function isServiceViewInactive(view: ServiceViewId, multimodal: boolean, os?: OS): boolean {
+export function isServiceViewInactive(
+  view: ServiceViewId,
+  multimodal: boolean,
+  os?: OS,
+  voiceActivationModels = false,
+): boolean {
+  if (view === 'models' && os === 'win' && voiceActivationModels) return false;
   if (view === 'models' && os === 'mac') return true;
   return multimodal ? view !== 'omni' && view !== 'connections' : view === 'omni';
 }
@@ -117,7 +123,10 @@ export function resolveServiceView(
   available: ServiceViewId[],
   multimodal: boolean,
   os?: OS,
+  voiceActivationModels = false,
 ): ServiceViewId {
-  const enabled = available.filter((view) => !isServiceViewInactive(view, multimodal, os));
+  const enabled = available.filter(
+    (view) => !isServiceViewInactive(view, multimodal, os, voiceActivationModels),
+  );
   return enabled.includes(requested) ? requested : enabled[0];
 }

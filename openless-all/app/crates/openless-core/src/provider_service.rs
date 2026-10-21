@@ -337,6 +337,16 @@ impl ProviderService {
     ) -> Result<ProviderModelsResult, BackendError> {
         let resolved = self.resolve(request).await?;
         ensure_supported_kind(&resolved)?;
+        if resolved.provider_type == crate::siwc::PROVIDER_ID {
+            let service = self
+                .credentials
+                .siwc()
+                .ok_or_else(|| crate::siwc::error("unavailable").into_backend())?;
+            return tokio::select! {
+                _ = wait_for_cancellation(cancellation) => Err(cancelled_request()),
+                result = service.list_models(&resolved.provider_id) => result.map(|models| ProviderModelsResult { models: models.into_iter().map(|m| m.slug).collect() }).map_err(crate::siwc::SiwcError::into_backend),
+            };
+        }
         if let Some(models) = static_models(&resolved) {
             if cancellation.is_cancelled() {
                 return Err(cancelled_request());
@@ -514,7 +524,10 @@ fn validate_configuration(
     {
         return Err(invalid_request("provider model is not configured"));
     }
-    if !matches!(descriptor.auth_requirement, AuthRequirement::OAuth) {
+    if !matches!(
+        descriptor.auth_requirement,
+        AuthRequirement::OAuth | AuthRequirement::Siwc
+    ) {
         let endpoint = resolved
             .endpoint
             .as_deref()
@@ -676,7 +689,7 @@ fn provider_no_final_is_valid(error: &BackendError) -> bool {
 }
 
 fn sanitize_validation_error(error: BackendError) -> BackendError {
-    if error.code != BackendErrorCode::Provider {
+    if error.code != BackendErrorCode::Provider || error.details.as_ref().is_some_and(|d| d.get("siwc").is_some()) {
         return error;
     }
     let message = error.message.as_str();

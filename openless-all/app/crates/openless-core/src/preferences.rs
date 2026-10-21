@@ -125,6 +125,7 @@ fn strip_local_only_preferences(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(object) = value {
         object.remove("lowLatencyDictationEnabled");
         object.remove("audioDsp");
+        object.remove("lowMemoryBackgroundEnabled");
     }
 }
 

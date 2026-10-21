@@ -83,6 +83,7 @@ tauri-plugin-fs = "2.7.1"
 
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+openless-capsule = { path = "../crates/openless-capsule", features = ["host"] }
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 tauri = { version = "=2.12.4", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-updater = "=2.14.0"
@@ -142,7 +143,9 @@ dispatch2 = "0.3"
 coreaudio-sys = "0.2"
 objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
-objc2-app-kit = "0.2"
+# 0.2.2 的 NSPanel feature 定义缺少结构体 cfg 所需的 NSResponder/NSWindow
+# （app workspace 靠 winit 的 feature union 掩盖了它，src-tauri 无 winit）。
+objc2-app-kit = { version = "0.2", features = ["NSPanel", "NSResponder", "NSWindow"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -359,6 +359,15 @@ export interface AudioDspConfig {
   processingOrder: AudioDspStage[];
 }
 
+/** Runtime health of the disposable native capsule sidecar (desktop only). */
+export interface NativeCapsuleStatus {
+  /** Whether the launch-time low-memory background switch is active. */
+  active: boolean;
+  /** False when the sidecar helper is missing or failed to initialize. */
+  available: boolean;
+  error: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -384,6 +393,16 @@ export interface UserPreferences {
   /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
   audioDsp?: AudioDspConfig;
+  /** Desktop resource policy, applied after restarting the application. */
+  lowMemoryBackgroundEnabled: boolean;
+  /** Enable local-only voice activation while idle (Windows desktop only). */
+  voiceActivationEnabled: boolean;
+  voiceActivationWakeEnabled: boolean;
+  voiceActivationFinishEnabled: boolean;
+  voiceActivationWakePhrase: string;
+  voiceActivationFinishPhrase: string;
+  voiceActivationTimeoutEnabled: boolean;
+  voiceActivationTimeoutSeconds: number;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;

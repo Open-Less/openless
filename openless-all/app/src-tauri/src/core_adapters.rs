@@ -15,12 +15,16 @@ use openless_core::{
     RecordingArchive, RecordingProgressSink, SessionId, TextInserter as CoreTextInserter,
     TextInsertionSession, TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput,
     TranscriptionEngine, TranscriptionSession,
+    VoiceActivationCommand, VoiceActivationConfig, VoiceActivationError, VoiceActivationPhase,
+    VoiceActivationSignal, VoiceActivationStopReason, VoiceCommandRecognizer,
+    VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::recorder::{
-    warm_capture_hub, AudioConsumer as LegacyAudioConsumer, Recorder, RecorderError,
+    warm_capture_hub, AudioConsumer as LegacyAudioConsumer, AudioConsumerFanout, Recorder,
+    RecorderError,
     StagedRecorder, WarmActiveCapture, WarmCaptureHub, WarmStagedRecorder,
     STAGED_CAPTURE_MAX_BYTES,
 };
@@ -125,10 +129,23 @@ pub(crate) fn backend_dependencies(
     );
     let warm_hub = warm_capture_hub();
     #[cfg(target_os = "windows")]
+    let voice_activation_runtime = Arc::new(TauriVoiceActivationRuntime::new(
+        Arc::clone(&app),
+        Arc::clone(&backend),
+        Arc::clone(&native_asr_dependencies.sherpa),
+        model_store.clone(),
+        Arc::clone(&warm_hub),
+        Arc::clone(&preferences),
+    ));
+    #[cfg(target_os = "windows")]
     {
         let prefs = preferences.get();
         warm_hub.configure(
-            prefs.low_latency_dictation_enabled,
+            crate::recorder::warm_capture_enabled(
+                prefs.low_latency_dictation_enabled,
+                prefs.low_memory_background_enabled || crate::desktop_resources::active(),
+                false,
+            ),
             (!prefs.microphone_device_name.trim().is_empty())
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
@@ -286,8 +303,13 @@ pub(crate) fn backend_dependencies(
             .expect("built-in Omni provider ids are non-empty");
     }
     let mut dependencies = openless_core::BackendDependencies::unsupported();
-    if let Some(model_store) = model_store {
+    if let Some(model_store) = model_store.clone() {
         dependencies.services.configure_model_store(model_store);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        dependencies.voice_activation_runtime =
+            Some(voice_activation_runtime as Arc<dyn openless_core::VoiceActivationRuntime>);
     }
     dependencies
         .services
@@ -1677,6 +1699,582 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     }
 }
 
+#[cfg(target_os = "windows")]
+const VOICE_ACTIVATION_MODEL_ALIAS: &str = "zipformer-bilingual-zh-en-streaming";
+
+#[cfg(target_os = "windows")]
+const MAX_VOICE_RECOGNIZER_CONTEXT_CHARS: usize = 256;
+
+#[cfg(target_os = "windows")]
+fn map_voice_activation_recorder_error(error: RecorderError) -> VoiceActivationError {
+    match error {
+        RecorderError::PermissionDenied => VoiceActivationError::PermissionDenied,
+        RecorderError::NoInputDevice => {
+            VoiceActivationError::Runtime("no microphone input device detected".into())
+        }
+        RecorderError::EngineFailed(message)
+            if message.to_ascii_lowercase().contains("busy") => VoiceActivationError::MicBusy,
+        RecorderError::EngineFailed(message) => VoiceActivationError::Runtime(message),
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct VoiceActivationEmitter {
+    backend: BackendSlot,
+    sink: Arc<dyn openless_core::VoiceActivationSink>,
+    generation: u64,
+    command: VoiceActivationCommand,
+    session_id: Arc<Mutex<Option<SessionId>>>,
+    binding_gate: Mutex<()>,
+    state: Mutex<VoiceActivationEmitterState>,
+}
+
+#[cfg(target_os = "windows")]
+struct VoiceActivationEmitterState {
+    recognizer: VoiceCommandRecognizer,
+    text: String,
+    segment_text: String,
+    pending_finish: bool,
+    pending_finish_match: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl VoiceActivationEmitter {
+    fn new(
+        backend: BackendSlot,
+        sink: Arc<dyn openless_core::VoiceActivationSink>,
+        generation: u64,
+        command: VoiceActivationCommand,
+        config: &VoiceActivationConfig,
+        session_id: Arc<Mutex<Option<SessionId>>>,
+    ) -> Result<Self, VoiceActivationError> {
+        let recognizer = VoiceCommandRecognizer::new(config)
+            .map_err(|error| VoiceActivationError::InvalidConfig(error.to_string()))?;
+        Ok(Self {
+            backend,
+            sink,
+            generation,
+            command,
+            session_id,
+            binding_gate: Mutex::new(()),
+            state: Mutex::new(VoiceActivationEmitterState {
+                recognizer,
+                text: String::new(),
+                segment_text: String::new(),
+                pending_finish: false,
+                pending_finish_match: false,
+            }),
+        })
+    }
+
+    fn observe(&self, piece: String, is_delta: bool, is_new_segment: bool) {
+        if piece.trim().is_empty() {
+            return;
+        }
+        let _binding = self.binding_gate.lock();
+        let bound_session_id = if self.command == VoiceActivationCommand::Finish {
+            *self.session_id.lock()
+        } else {
+            None
+        };
+        let signal = {
+            let mut state = self.state.lock();
+            if is_new_segment {
+                state.text.push_str(&piece);
+                state.segment_text = piece;
+            } else if is_delta {
+                state.text.push_str(&piece);
+                state.segment_text.push_str(&piece);
+            } else {
+                let prefix_len = state
+                    .text
+                    .chars()
+                    .count()
+                    .saturating_sub(state.segment_text.chars().count());
+                state.text = state.text.chars().take(prefix_len).collect();
+                state.text.push_str(&piece);
+                state.segment_text = piece;
+            }
+            if state.text.chars().count() > MAX_VOICE_RECOGNIZER_CONTEXT_CHARS {
+                state.text = state
+                    .text
+                    .chars()
+                    .rev()
+                    .take(MAX_VOICE_RECOGNIZER_CONTEXT_CHARS)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                state.segment_text = state.text.clone();
+                state.recognizer.reset();
+            }
+            let text = state.text.clone();
+            let matched = state.recognizer.observe(&text, self.command);
+            // [DEBUG-VOICE-1003] P4 / H2,H3: no transcript content or phrases.
+            crate::recorder::voice_diagnostic("P4", &["H2", "H3"], "command_match", "observed",
+                serde_json::json!({"matched": matched.is_some(), "bound": bound_session_id.is_some(),
+                    "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" },
+                    "count": text.chars().count(), "new_segment": is_new_segment, "delta": is_delta}));
+            if self.command == VoiceActivationCommand::Finish && bound_session_id.is_none() {
+                state.pending_finish = true;
+                state.pending_finish_match |= matched.is_some();
+                return;
+            }
+            let Some(_) = matched else {
+                state.pending_finish = false;
+                return;
+            };
+            state.pending_finish = false;
+            state.pending_finish_match = false;
+            match self.command {
+                VoiceActivationCommand::Wake => {
+                    VoiceActivationSignal::WakeDetected {
+                        activation_generation: self.generation,
+                    }
+                }
+                VoiceActivationCommand::Finish => VoiceActivationSignal::FinishDetected {
+                    activation_generation: self.generation,
+                    session_id: bound_session_id.expect("finish session was checked above"),
+                },
+            }
+        };
+        let _ = self.sink.publish(signal.clone());
+        if let Some(backend) = self.backend.lock().as_ref().and_then(std::sync::Weak::upgrade) {
+            // [DEBUG-VOICE-1003] P6 / H3: dispatch guard facts, without identifiers.
+            crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "entered",
+                serde_json::json!({"current": backend.voice_activation_generation_is_current(self.generation),
+                    "present": backend.snapshot().dictation.session_id.is_some(),
+                    "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" }}));
+            backend.handle_voice_activation_signal(signal);
+            crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "returned", serde_json::json!({}));
+        }
+    }
+
+    fn bind_session(&self, session_id: SessionId) {
+        {
+            let _binding = self.binding_gate.lock();
+            *self.session_id.lock() = Some(session_id);
+        }
+        self.retry_pending();
+    }
+
+    fn retry_pending(&self) {
+        let (text, pending_match) = {
+            let _binding = self.binding_gate.lock();
+            let mut state = self.state.lock();
+            if !state.pending_finish {
+                return;
+            }
+            let pending_match = state.pending_finish_match;
+            state.pending_finish = false;
+            state.pending_finish_match = false;
+            (state.text.clone(), pending_match)
+        };
+        if pending_match {
+            let Some(session_id) = *self.session_id.lock() else {
+                return;
+            };
+            let signal = VoiceActivationSignal::FinishDetected {
+                activation_generation: self.generation,
+                session_id,
+            };
+            let _ = self.sink.publish(signal.clone());
+            if let Some(backend) = self.backend.lock().as_ref().and_then(std::sync::Weak::upgrade) {
+                // [DEBUG-VOICE-1003] P6 / H3: dispatch guard facts, without identifiers.
+                crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "entered",
+                    serde_json::json!({"current": backend.voice_activation_generation_is_current(self.generation),
+                        "present": backend.snapshot().dictation.session_id.is_some(),
+                        "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" }}));
+                backend.handle_voice_activation_signal(signal);
+                crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "returned", serde_json::json!({}));
+            }
+        } else if !text.is_empty() {
+            self.observe(text, false, false);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct TauriVoiceActivationRuntime {
+    app: AppHandleSlot,
+    backend: BackendSlot,
+    sherpa: Arc<crate::asr::local::SherpaOnnxRuntime>,
+    model_store: Option<Arc<openless_core::ModelStore>>,
+    warm_hub: Arc<WarmCaptureHub>,
+    preferences: Arc<openless_core::PreferencesStore>,
+}
+
+#[cfg(target_os = "windows")]
+impl TauriVoiceActivationRuntime {
+    fn new(
+        app: AppHandleSlot,
+        backend: BackendSlot,
+        sherpa: Arc<crate::asr::local::SherpaOnnxRuntime>,
+        model_store: Option<Arc<openless_core::ModelStore>>,
+        warm_hub: Arc<WarmCaptureHub>,
+        preferences: Arc<openless_core::PreferencesStore>,
+    ) -> Self {
+        Self {
+            app,
+            backend,
+            sherpa,
+            model_store,
+            warm_hub,
+            preferences,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
+    fn configure(
+        &self,
+        config: VoiceActivationConfig,
+        sink: Arc<dyn openless_core::VoiceActivationSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn openless_core::VoiceActivationHandle>, VoiceActivationError>> {
+        let app = Arc::clone(&self.app);
+        let backend = Arc::clone(&self.backend);
+        let sherpa = Arc::clone(&self.sherpa);
+        let model_store = self.model_store.clone();
+        let warm_hub = Arc::clone(&self.warm_hub);
+        let preferences = Arc::clone(&self.preferences);
+        Box::pin(async move {
+            let config = config
+                .normalized()
+                .map_err(|error| VoiceActivationError::InvalidConfig(error.to_string()))?;
+            let target = openless_core::LocalAsrTarget::parse(
+                openless_core::LocalAsrRuntime::SherpaOnnx,
+                VOICE_ACTIVATION_MODEL_ALIAS,
+            )
+            .map_err(|error| VoiceActivationError::InvalidConfig(error.to_string()))?;
+            let Some(model_store) = model_store else {
+                return Err(VoiceActivationError::ModelMissing);
+            };
+            if !model_store
+                .is_installed(&target)
+                .map_err(|error| VoiceActivationError::Runtime(error.to_string()))?
+            {
+                return Err(VoiceActivationError::ModelMissing);
+            }
+            let model_dir = model_store
+                .runtime_model_dir(&target)
+                .map_err(|error| VoiceActivationError::Runtime(error.to_string()))?;
+            let session_id = Arc::new(Mutex::new(None));
+            let emitter = Arc::new(VoiceActivationEmitter::new(
+                Arc::clone(&backend),
+                Arc::clone(&sink),
+                config.activation_generation,
+                VoiceActivationCommand::Wake,
+                &config,
+                Arc::clone(&session_id),
+            )?);
+            let wake_asr = if config.wake_enabled {
+                let emitter_for_handler = Arc::clone(&emitter);
+                let token_handler = Arc::new(
+                    move |emission: crate::asr::local::sherpa_runtime::SherpaTokenEmission| {
+                        emitter_for_handler.observe(
+                            emission.text,
+                            emission.is_delta,
+                            emission.is_new_segment,
+                        )
+                    },
+                );
+                Some(Arc::new(
+                    crate::asr::local::SherpaOnnxAsr::new_for_model(
+                        Arc::clone(&sherpa),
+                        VOICE_ACTIVATION_MODEL_ALIAS.to_string(),
+                        model_dir.clone(),
+                        Some("zh".into()),
+                        Some(token_handler),
+                    )
+                    .await
+                    .map_err(|error| VoiceActivationError::Runtime(error.to_string()))?,
+                ))
+            } else {
+                None
+            };
+            let preferences_snapshot = preferences.get();
+            let fallback_warm_capture_enabled = crate::recorder::warm_capture_enabled(
+                preferences_snapshot.low_latency_dictation_enabled,
+                crate::desktop_resources::active(),
+                false,
+            );
+            let audio_processing = openless_core::AudioProcessingConfig {
+                enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
+                dsp: preferences_snapshot.audio_dsp,
+            };
+            if let Some(wake_asr) = wake_asr.as_ref() {
+                warm_hub.set_activation_generation(config.activation_generation);
+                if !warm_hub.set_activation_consumer_for_generation(
+                    config.activation_generation,
+                    Some(Arc::clone(wake_asr) as Arc<dyn LegacyAudioConsumer>),
+                    false,
+                ) {
+                    return Err(VoiceActivationError::Runtime(
+                        "voice activation generation became stale".into(),
+                    ));
+                }
+                let fault_backend = Arc::clone(&backend);
+                let fault_sink = Arc::clone(&sink);
+                let fault_generation = config.activation_generation;
+                warm_hub.set_activation_fault_handler(
+                    fault_generation,
+                    Some(Arc::new(move |error| {
+                        log::warn!("[voice-activation] warm microphone restart failed: {error}");
+                        let signal = VoiceActivationSignal::RuntimeStateChanged {
+                            activation_generation: fault_generation,
+                            phase: VoiceActivationPhase::Failed,
+                        };
+                        let _ = fault_sink.publish(signal.clone());
+                        if let Some(backend) = fault_backend
+                            .lock()
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                        {
+                            backend.handle_voice_activation_signal(signal);
+                        }
+                    })),
+                );
+            }
+            warm_hub.configure(
+                wake_asr.is_some() || fallback_warm_capture_enabled,
+                config.microphone_device_name.clone(),
+                audio_processing,
+            );
+            if wake_asr.is_some() && !warm_hub.is_cold_capture_active() {
+                let probe = match warm_hub.arm_without_preroll(
+                    config.activation_generation,
+                    config.microphone_device_name.clone(),
+                ) {
+                    Ok(probe) => probe,
+                    Err(error) => {
+                        warm_hub.clear_activation_fault_handler_if(config.activation_generation);
+                        warm_hub.clear_activation_generation_if(config.activation_generation);
+                        warm_hub.set_activation_consumer(None);
+                        warm_hub.configure(
+                            fallback_warm_capture_enabled,
+                            config.microphone_device_name.clone(),
+                            audio_processing,
+                        );
+                        return Err(map_voice_activation_recorder_error(error));
+                    }
+                };
+                drop(probe);
+            }
+            let handle = TauriVoiceActivationHandle {
+                app,
+                backend,
+                sherpa,
+                model_dir,
+                model_alias: VOICE_ACTIVATION_MODEL_ALIAS.to_string(),
+                warm_hub,
+                session_id,
+                sink: Arc::clone(&sink),
+                preferences,
+                config: config.clone(),
+                wake_asr: Arc::new(Mutex::new(wake_asr)),
+                finish_asr: Arc::new(Mutex::new(None)),
+                finish_emitter: Arc::new(Mutex::new(None)),
+            };
+            let _ = sink.publish(VoiceActivationSignal::RuntimeStateChanged {
+                activation_generation: config.activation_generation,
+                phase: VoiceActivationPhase::ListeningForWake,
+            });
+            Ok(Box::new(handle) as Box<dyn openless_core::VoiceActivationHandle>)
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct TauriVoiceActivationHandle {
+    app: AppHandleSlot,
+    backend: BackendSlot,
+    sherpa: Arc<crate::asr::local::SherpaOnnxRuntime>,
+    model_dir: PathBuf,
+    model_alias: String,
+    warm_hub: Arc<WarmCaptureHub>,
+    session_id: Arc<Mutex<Option<SessionId>>>,
+    sink: Arc<dyn openless_core::VoiceActivationSink>,
+    preferences: Arc<openless_core::PreferencesStore>,
+    config: VoiceActivationConfig,
+    wake_asr: Arc<Mutex<Option<Arc<crate::asr::local::SherpaOnnxAsr>>>>,
+    finish_asr: Arc<Mutex<Option<Arc<crate::asr::local::SherpaOnnxAsr>>>>,
+    finish_emitter: Arc<Mutex<Option<Arc<VoiceActivationEmitter>>>>,
+}
+
+#[cfg(target_os = "windows")]
+impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
+    fn bind_dictation_session(&self, session_id: SessionId) {
+        if let Some(emitter) = self.finish_emitter.lock().clone() {
+            emitter.bind_session(session_id);
+        } else {
+            *self.session_id.lock() = Some(session_id);
+        }
+    }
+
+    fn handoff_to_dictation(
+        &self,
+        request: VoiceDictationHandoffRequest,
+    ) -> BoxFuture<'static, Result<VoiceDictationHandoff, VoiceActivationError>> {
+        let app = Arc::clone(&self.app);
+        let backend = Arc::clone(&self.backend);
+        let backend_for_generation = Arc::clone(&backend);
+        let requested_generation = request.activation_generation;
+        let sherpa = Arc::clone(&self.sherpa);
+        let model_dir = self.model_dir.clone();
+        let model_alias = self.model_alias.clone();
+        let warm_hub = Arc::clone(&self.warm_hub);
+        let session_id = Arc::clone(&self.session_id);
+        let sink = Arc::clone(&self.sink);
+        let config = self.config.clone();
+        let wake_asr = Arc::clone(&self.wake_asr);
+        let finish_asr = Arc::clone(&self.finish_asr);
+        let finish_emitter_slot = Arc::clone(&self.finish_emitter);
+        Box::pin(async move {
+            let generation_is_current = || {
+                backend_for_generation
+                    .lock()
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_some_and(|backend| {
+                        backend.voice_activation_generation_is_current(requested_generation)
+                    })
+            };
+            if !generation_is_current() {
+                return Err(VoiceActivationError::Runtime(
+                    "voice activation generation is stale".into(),
+                ));
+            }
+            let staged = warm_hub
+                .arm_with_preroll(
+                    config.activation_generation,
+                    config.microphone_device_name.clone(),
+                )
+                .map_err(map_voice_activation_recorder_error)?;
+            if !generation_is_current() {
+                drop(staged);
+                return Err(VoiceActivationError::Runtime(
+                    "voice activation generation is stale".into(),
+                ));
+            }
+            if !warm_hub.set_activation_consumer_for_generation(
+                requested_generation,
+                None,
+                false,
+            ) {
+                drop(staged);
+                return Err(VoiceActivationError::Runtime(
+                    "voice activation generation is stale".into(),
+                ));
+            }
+            if let Some(wake_asr) = wake_asr.lock().take() {
+                wake_asr.cancel();
+            }
+            if config.finish_enabled {
+                let emitter = Arc::new(VoiceActivationEmitter::new(
+                    Arc::clone(&backend),
+                    sink,
+                    config.activation_generation,
+                    VoiceActivationCommand::Finish,
+                    &config,
+                    Arc::clone(&session_id),
+                )?);
+                let emitter_for_handler = Arc::clone(&emitter);
+                let token_handler = Arc::new(
+                    move |emission: crate::asr::local::sherpa_runtime::SherpaTokenEmission| {
+                        emitter_for_handler.observe(
+                            emission.text,
+                            emission.is_delta,
+                            emission.is_new_segment,
+                        )
+                    },
+                );
+                let asr = Arc::new(
+                    crate::asr::local::SherpaOnnxAsr::new_for_model(
+                        Arc::clone(&sherpa),
+                        model_alias,
+                        model_dir,
+                        Some("zh".into()),
+                        Some(token_handler),
+                    )
+                    .await
+                    .map_err(|error| VoiceActivationError::Runtime(error.to_string()))?,
+                );
+                if !generation_is_current() {
+                    asr.cancel();
+                    drop(staged);
+                    return Err(VoiceActivationError::Runtime(
+                        "voice activation generation is stale".into(),
+                    ));
+                }
+                if !warm_hub.set_activation_consumer_for_generation(
+                    requested_generation,
+                    Some(Arc::clone(&asr) as Arc<dyn LegacyAudioConsumer>),
+                    true,
+                ) {
+                    asr.cancel();
+                    drop(staged);
+                    return Err(VoiceActivationError::Runtime(
+                        "voice activation generation is stale".into(),
+                    ));
+                }
+                *finish_asr.lock() = Some(asr);
+                *finish_emitter_slot.lock() = Some(emitter);
+            }
+            Ok(VoiceDictationHandoff {
+                capture: Box::new(TauriPendingAudioCapture {
+                    app,
+                    backend,
+                    warm_hub,
+                    staged: Some(TauriStagedCapture::Warm(staged)),
+                    cold_capture_reservation: None,
+                }),
+            })
+        })
+    }
+
+    fn stop(
+        &self,
+        _reason: VoiceActivationStopReason,
+    ) -> BoxFuture<'static, Result<(), VoiceActivationError>> {
+        let warm_hub = Arc::clone(&self.warm_hub);
+        let wake_asr = Arc::clone(&self.wake_asr);
+        let finish_asr = Arc::clone(&self.finish_asr);
+        let preferences = Arc::clone(&self.preferences);
+        let activation_generation = self.config.activation_generation;
+        Box::pin(async move {
+            let owns_activation = warm_hub.clear_activation_generation_if(activation_generation);
+            if owns_activation {
+                warm_hub.clear_activation_fault_handler_if(activation_generation);
+                warm_hub.set_activation_consumer(None);
+            }
+            if let Some(asr) = wake_asr.lock().take() {
+                asr.cancel();
+            }
+            if let Some(asr) = finish_asr.lock().take() {
+                asr.cancel();
+            }
+            if owns_activation {
+                let prefs = preferences.get();
+                warm_hub.configure(
+                    crate::recorder::warm_capture_enabled(
+                        prefs.low_latency_dictation_enabled,
+                        crate::desktop_resources::active(),
+                        false,
+                    ),
+                    (!prefs.microphone_device_name.trim().is_empty())
+                        .then(|| prefs.microphone_device_name.clone()),
+                    openless_core::AudioProcessingConfig {
+                        enhancement_enabled: prefs.audio_enhancement_enabled,
+                        dsp: prefs.audio_dsp,
+                    },
+                );
+            }
+            Ok(())
+        })
+    }
+}
+
 #[cfg(local_asr_sherpa)]
 struct TauriNativeTranscriptionEngine {
     dependencies: TauriNativeAsrDependencies,
@@ -1902,17 +2500,31 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                     });
                 let token_sink = Arc::clone(&partials);
                 let token_offset = Arc::new(AtomicU64::new(0));
+                let segment_start = Arc::new(AtomicU64::new(0));
                 let handler_offset = Arc::clone(&token_offset);
-                let token_handler = Arc::new(move |piece: String| {
-                    let offset =
-                        handler_offset.fetch_add(piece.chars().count() as u64, Ordering::AcqRel);
-                    if let Err(error) = token_sink.publish(TextStreamChunk {
-                        text: piece,
-                        offset,
-                    }) {
-                        log::warn!("[core-adapter] publish sherpa partial failed: {error}");
-                    }
-                });
+                let handler_segment_start = Arc::clone(&segment_start);
+                let token_handler = Arc::new(
+                    move |emission: crate::asr::local::sherpa_runtime::SherpaTokenEmission| {
+                        let text_len = emission.text.chars().count() as u64;
+                        let offset = if emission.is_new_segment {
+                            let offset = handler_offset.load(Ordering::Acquire);
+                            handler_segment_start.store(offset, Ordering::Release);
+                            handler_offset.fetch_add(text_len, Ordering::AcqRel)
+                        } else if emission.is_delta {
+                            handler_offset.fetch_add(text_len, Ordering::AcqRel)
+                        } else {
+                            let offset = handler_segment_start.load(Ordering::Acquire);
+                            handler_offset.store(offset + text_len, Ordering::Release);
+                            offset
+                        };
+                        if let Err(error) = token_sink.publish(TextStreamChunk {
+                            text: emission.text,
+                            offset,
+                        }) {
+                            log::warn!("[core-adapter] publish sherpa partial failed: {error}");
+                        }
+                    },
+                );
                 let target = openless_core::LocalAsrTarget::parse(
                     openless_core::LocalAsrRuntime::SherpaOnnx,
                     model.clone(),
@@ -2285,11 +2897,54 @@ impl TauriStagedCapture {
     }
 }
 
+fn release_cold_capture_and_resume(warm_hub: &WarmCaptureHub) {
+    warm_hub.end_cold_capture();
+    warm_hub.resume_after_cold_capture();
+}
+
+struct ColdCaptureReservation {
+    warm_hub: Arc<WarmCaptureHub>,
+    resume_warm_hub: bool,
+    active: bool,
+}
+
+impl ColdCaptureReservation {
+    fn new(warm_hub: Arc<WarmCaptureHub>, resume_warm_hub: bool) -> Self {
+        Self {
+            warm_hub,
+            resume_warm_hub,
+            active: true,
+        }
+    }
+
+    fn release(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        self.warm_hub.end_cold_capture();
+        if self.resume_warm_hub {
+            self.warm_hub.resume_after_cold_capture();
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for ColdCaptureReservation {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 enum TauriCommittedCapture {
     Cold {
         recorder: Recorder,
         runtime_errors: std::sync::mpsc::Receiver<RecorderError>,
         archive_active: bool,
+        reconfigure_voice_activation: bool,
     },
     Warm {
         capture: WarmActiveCapture,
@@ -2314,6 +2969,7 @@ impl TauriStagedCapture {
                     recorder,
                     runtime_errors,
                     archive_active,
+                    reconfigure_voice_activation: false,
                 })
             }
             Self::Warm(staged) => {
@@ -2337,8 +2993,8 @@ impl TauriStagedCapture {
                                 if message == "warm provisional capture was not armed"
                         ) =>
                     {
-                        fallback_hub.begin_cold_capture()?;
-                        fallback_hub.suspend_for_cold_capture();
+                        let finish_consumer = fallback_hub.activation_consumer_for_capture();
+                        fallback_hub.begin_cold_capture_and_suspend()?;
                         let cold = match Recorder::start_staged_with_processing(
                             fallback_device,
                             STAGED_CAPTURE_MAX_BYTES,
@@ -2346,18 +3002,25 @@ impl TauriStagedCapture {
                         ) {
                             Ok(cold) => cold,
                             Err(error) => {
-                                fallback_hub.end_cold_capture();
+                                release_cold_capture_and_resume(&fallback_hub);
                                 return Err(error);
                             }
                         };
                         let (recorder, runtime_errors, archive_active) = match cold.commit(
-                            fallback_consumer,
+                            finish_consumer
+                                .map(|finish| {
+                                    AudioConsumerFanout::new(vec![
+                                        Arc::clone(&fallback_consumer),
+                                        finish,
+                                    ]) as Arc<dyn LegacyAudioConsumer>
+                                })
+                                .unwrap_or(fallback_consumer),
                             fallback_level_handler,
                             fallback_archive_path,
                         ) {
                             Ok(committed) => committed,
                             Err(error) => {
-                                fallback_hub.end_cold_capture();
+                                release_cold_capture_and_resume(&fallback_hub);
                                 return Err(error);
                             }
                         };
@@ -2365,6 +3028,7 @@ impl TauriStagedCapture {
                             recorder,
                             runtime_errors,
                             archive_active,
+                            reconfigure_voice_activation: true,
                         })
                     }
                     Err(error) => Err(error),
@@ -2386,6 +3050,7 @@ struct TauriPendingAudioCapture {
     backend: BackendSlot,
     warm_hub: Arc<WarmCaptureHub>,
     staged: Option<TauriStagedCapture>,
+    cold_capture_reservation: Option<ColdCaptureReservation>,
 }
 
 struct TauriActiveRecording {
@@ -2393,6 +3058,8 @@ struct TauriActiveRecording {
     warm_capture: Option<WarmActiveCapture>,
     cold_capture_hub: Option<Arc<WarmCaptureHub>>,
     resume_warm_hub: Option<Arc<WarmCaptureHub>>,
+    backend: BackendSlot,
+    reconfigure_voice_activation: bool,
     archive: Option<Arc<TauriRecordingArchive>>,
     _mute: Option<crate::audio_mute::AudioMuteGuard>,
 }
@@ -2410,6 +3077,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
             backend,
             warm_hub,
             staged,
+            cold_capture_reservation,
         } = *self;
         let Some(staged) = staged else {
             return Box::pin(async {
@@ -2419,6 +3087,8 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                 ))
             });
         };
+        let cold_capture = staged.is_cold();
+        let has_cold_capture_reservation = cold_capture_reservation.is_some();
         Box::pin(async move {
             let permanent_archive = matches!(
                 context.output_target,
@@ -2443,7 +3113,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
             #[cfg(not(mobile))]
             let monitor_app = app.lock().clone();
             let warm_hub_for_join = Arc::clone(&warm_hub);
+            let backend_for_recording = Arc::clone(&backend);
             let joined = tauri::async_runtime::spawn_blocking(move || {
+                let mut cold_capture_reservation = cold_capture_reservation;
                 let archive_path = archive_path
                     .map_err(|error| {
                         log::warn!("[recordings] archive unavailable; capture continues: {error}")
@@ -2504,7 +3176,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     Ok(committed) => committed,
                     Err(error) => {
                         drop(mute);
-                        warm_hub.end_cold_capture();
+                        if let Some(reservation) = cold_capture_reservation.as_mut() {
+                            reservation.release();
+                        }
                         return Err(error);
                     }
                 };
@@ -2515,11 +3189,13 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     runtime_errors,
                     archive_active,
                     resume_warm_hub,
+                    reconfigure_voice_activation,
                 ) = match committed {
                     TauriCommittedCapture::Cold {
                         recorder,
                         runtime_errors,
                         archive_active,
+                        reconfigure_voice_activation,
                     } => (
                         Some(recorder),
                         None,
@@ -2527,6 +3203,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         Some(runtime_errors),
                         archive_active,
                         Some(Arc::clone(&warm_hub)),
+                        reconfigure_voice_activation,
                     ),
                     TauriCommittedCapture::Warm {
                         capture,
@@ -2539,21 +3216,21 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         Some(runtime_errors),
                         archive_active,
                         None,
+                        false,
                     ),
                 };
                 if recording_plan.archive_required && !archive_active {
-                    let has_warm_capture = warm_capture.is_some();
                     if let Some(recorder) = recorder {
                         recorder.stop();
                     }
                     if let Some(capture) = warm_capture {
                         capture.stop();
                     }
-                    if let Some(cold_capture_hub) = cold_capture_hub.as_ref() {
+                    if let Some(reservation) = cold_capture_reservation.as_mut() {
+                        reservation.release();
+                    } else if let Some(cold_capture_hub) = cold_capture_hub.as_ref() {
                         cold_capture_hub.end_cold_capture();
-                    }
-                    if !has_warm_capture {
-                        if let Some(warm_hub) = resume_warm_hub {
+                        if let Some(warm_hub) = resume_warm_hub.as_ref() {
                             warm_hub.resume_after_cold_capture();
                         }
                     }
@@ -2564,6 +3241,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         BackendErrorCode::Persistence,
                         "速记录音文件无法创建，已阻止开始录音以避免丢失内容",
                     ));
+                }
+                if let Some(reservation) = cold_capture_reservation.as_mut() {
+                    reservation.disarm();
                 }
                 if recording_plan.archive_enabled {
                     if let Err(error) = crate::persistence::prune_recordings(
@@ -2578,6 +3258,8 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     warm_capture,
                     cold_capture_hub,
                     resume_warm_hub,
+                    backend: Arc::clone(&backend_for_recording),
+                    reconfigure_voice_activation,
                     archive: archive_path
                         .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
                     _mute: mute,
@@ -2588,7 +3270,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                 Ok(Ok(result)) => result,
                 Ok(Err(error)) => return Err(error),
                 Err(error) => {
-                    warm_hub_for_join.end_cold_capture();
+                    if cold_capture && !has_cold_capture_reservation {
+                        release_cold_capture_and_resume(&warm_hub_for_join);
+                    }
                     return Err(BackendError::new(
                         BackendErrorCode::Internal,
                         format!("join promoted Tauri recorder task: {error}"),
@@ -2626,26 +3310,32 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
 
     fn discard(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
         let TauriPendingAudioCapture {
-            warm_hub, staged, ..
+            staged,
+            cold_capture_reservation,
+            ..
         } = *self;
         Box::pin(async move {
             let Some(staged) = staged else {
+                if let Some(reservation) = cold_capture_reservation {
+                    drop(reservation);
+                }
                 return Ok(());
             };
-            let cold_capture = staged.is_cold();
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                staged.discard().map_err(map_recorder_error)
+            let result = match tauri::async_runtime::spawn_blocking(move || {
+                let result = staged.discard().map_err(map_recorder_error);
+                if let Some(mut reservation) = cold_capture_reservation {
+                    reservation.release();
+                }
+                result
             })
             .await
-            .map_err(|error| {
-                BackendError::new(
+            {
+                Ok(result) => result,
+                Err(error) => Err(BackendError::new(
                     BackendErrorCode::Internal,
                     format!("join provisional Tauri recorder discard task: {error}"),
-                )
-            })?;
-            if cold_capture {
-                warm_hub.end_cold_capture();
-            }
+                )),
+            };
             result
         })
     }
@@ -2799,13 +3489,15 @@ impl ActiveRecording for TauriActiveRecording {
             let warm_capture = self.warm_capture.take();
             let cold_capture_hub = self.cold_capture_hub.take();
             let resume_warm_hub = self.resume_warm_hub.take();
+            let backend = Arc::clone(&self.backend);
+            let reconfigure_voice_activation = self.reconfigure_voice_activation;
             if recorder.is_none() && warm_capture.is_none() {
                 return Err(BackendError::new(
                     BackendErrorCode::InvalidState,
                     "Tauri recorder was already stopped",
                 ));
             }
-            tauri::async_runtime::spawn_blocking(move || {
+            let stop_result = tauri::async_runtime::spawn_blocking(move || {
                 if let Some(recorder) = recorder {
                     recorder.stop();
                 }
@@ -2829,7 +3521,21 @@ impl ActiveRecording for TauriActiveRecording {
                     BackendErrorCode::Internal,
                     format!("join Tauri recorder stop task: {error}"),
                 )
-            })?
+            })?;
+            if reconfigure_voice_activation {
+                let backend = {
+                    let slot = backend.lock();
+                    slot.as_ref().and_then(std::sync::Weak::upgrade)
+                };
+                if let Some(backend) = backend {
+                    if let Err(error) = backend.configure_voice_activation().await {
+                        log::warn!(
+                            "[voice-activation] reconfigure after warm fallback release failed: {error}"
+                        );
+                    }
+                }
+            }
+            stop_result
         })
     }
 }
@@ -2880,19 +3586,23 @@ impl TauriAudioRecorder {
                     backend: Arc::clone(&self.backend),
                     warm_hub: Arc::clone(&self.warm_hub),
                     staged: Some(TauriStagedCapture::Warm(staged)),
+                    cold_capture_reservation: None,
                 }));
             }
             log::warn!("[recorder] warm capture unavailable; falling back to press-time staging");
         }
         if !request.low_latency {
-            self.warm_hub.stop();
+            self.warm_hub
+                .begin_cold_capture_and_suspend()
+                .map_err(map_recorder_error)?;
+        } else {
+            self.warm_hub
+                .begin_cold_capture()
+                .map_err(map_recorder_error)?;
         }
         let max_buffer_bytes = (request.pre_roll_ms as usize)
             .saturating_mul(32)
             .clamp(2, 16_000);
-        self.warm_hub
-            .begin_cold_capture()
-            .map_err(map_recorder_error)?;
         let staged = match Recorder::start_staged_with_processing(
             request.microphone_device_name,
             max_buffer_bytes,
@@ -2900,7 +3610,7 @@ impl TauriAudioRecorder {
         ) {
             Ok(staged) => staged,
             Err(error) => {
-                self.warm_hub.end_cold_capture();
+                release_cold_capture_and_resume(&self.warm_hub);
                 return Err(map_recorder_error(error));
             }
         };
@@ -2915,6 +3625,10 @@ impl TauriAudioRecorder {
             backend: Arc::clone(&self.backend),
             warm_hub: Arc::clone(&self.warm_hub),
             staged: Some(TauriStagedCapture::Cold(staged)),
+            cold_capture_reservation: Some(ColdCaptureReservation::new(
+                Arc::clone(&self.warm_hub),
+                !request.low_latency,
+            )),
         }))
     }
 }
@@ -3001,6 +3715,7 @@ impl AudioRecorder for TauriAudioRecorder {
                     || context.output_target == openless_core::DictationOutputTarget::Undecided);
             let fault_progress = Arc::clone(&progress);
             let worker_resume_warm_hub = Arc::clone(&resume_warm_hub);
+            let backend_for_recording = Arc::clone(&backend);
             let joined = tauri::async_runtime::spawn_blocking(move || {
                 if prune_recordings_before_capture {
                     if let Err(error) = crate::persistence::prune_recordings(
@@ -3062,6 +3777,8 @@ impl AudioRecorder for TauriAudioRecorder {
                     warm_capture: None,
                     cold_capture_hub: Some(Arc::clone(&warm_hub)),
                     resume_warm_hub: Some(worker_resume_warm_hub),
+                    backend: Arc::clone(&backend_for_recording),
+                    reconfigure_voice_activation: true,
                     archive: archive_path
                         .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
                     _mute: mute,

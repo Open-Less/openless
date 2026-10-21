@@ -5190,6 +5190,130 @@ mod tests {
         );
     }
 
+    // 已渠道化的凭据也要修复误写为供应商类型的指针，不能依赖元数据迁移触发。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into(); // 供应商类型，不是渠道 id
+        root.providers.asr.insert(
+            "volcengine".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("volcengine".into()),
+                    order: Some(1),
+                    enabled: true,
+                    lastTest: None,
+                },
+                volcengineApiKey: Some("vk-empty".into()),
+                ..Default::default()
+            },
+        );
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                model: Some("fun-asr-realtime".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        // 指针回落到排序第一的已配置卡片，凭据一个字节都没动。
+        assert_eq!(root.active.asr, "volcengine-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert_eq!(
+            root.providers
+                .asr
+                .get("volcengine-2")
+                .unwrap()
+                .apiKey
+                .as_deref(),
+            Some("bk")
+        );
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::AsrApiKey).as_deref(),
+            Some("bk")
+        );
+        // 第二遍必须是幂等的：指针已经指向真实卡片，不再报改动。
+        assert!(!super::migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "volcengine-2");
+    }
+
+    /// LLM 侧同样需要这份校正：渠道 id 与供应商类型不同名时（`ark-2` vs `deepseek`），
+    /// 悬空指针会让润色整条链路取不到 key。
+    #[test]
+    fn channelized_vault_repairs_a_dangling_active_llm_pointer() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.llm = "deepseek".into(); // 供应商类型，不是渠道 id
+        root.providers.llm.insert(
+            "ark-2".into(),
+            CredsLlmEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("deepseek".into()),
+                    order: Some(0),
+                    enabled: true,
+                    lastTest: None,
+                },
+                apiKey: Some("sk".into()),
+                model: Some("deepseek-v4-flash".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        assert_eq!(root.active.llm, "ark-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
+            Some("sk")
+        );
+        assert!(!super::migrate_channels(&mut root));
+    }
+
+    // 已配置渠道但全部停用时，不得回退到旧偏好或读取停用渠道的凭据。
+    #[test]
+    fn channelized_vault_clears_a_dangling_active_pointer_when_all_channels_are_disabled() {
+        let mut root = CredsRoot::default();
+        root.version = super::CHANNELS_SCHEMA_VERSION;
+        root.active.asr = "bailian".into();
+        root.providers.asr.insert(
+            "volcengine-2".into(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("bailian".into()),
+                    order: Some(0),
+                    enabled: false,
+                    lastTest: None,
+                },
+                apiKey: Some("bk".into()),
+                ..Default::default()
+            },
+        );
+
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
+
+        assert!(root.active.asr.is_empty());
+        assert_eq!(root.metadata_revision, 1);
+        assert!(lookup_account(&root, CredentialAccount::AsrApiKey).is_none());
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert!(!super::migrate_channels(&mut root));
+    }
+
     #[test]
     fn freshly_added_channel_survives_clean_credentials() {
         let mut root = CredsRoot::default();

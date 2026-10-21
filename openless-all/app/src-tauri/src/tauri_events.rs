@@ -186,6 +186,9 @@ async fn forward_legacy_event(
             }
             emit_dictation_state(app, backend, snapshot)
         }
+        BackendEventKind::VoiceActivationStateChanged(state) => {
+            let _ = app.emit("voice-activation:state-changed", state);
+        }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
             capsule_owners.transcription_notice = None;
@@ -807,6 +810,9 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
     }
     let _ = app.emit("credentials:changed", snapshot.credentials);
     let _ = app.emit("vocab:updated", ());
+    if let Some(state) = backend.latest_voice_activation_state() {
+        let _ = app.emit("voice-activation:state-changed", state);
+    }
 
     let qa = match backend.services().qa.snapshot().await {
         Ok(snapshot) => Some(snapshot),

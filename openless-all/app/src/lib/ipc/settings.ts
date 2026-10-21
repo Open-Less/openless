@@ -1,4 +1,4 @@
-import type { StyleSystemPrompts, UserPreferences } from '../types';
+import type { NativeCapsuleStatus, StyleSystemPrompts, UserPreferences } from '../types';
 export type { UpdateChannel } from '../types';
 import {
   BACKEND_CONTRACT_VERSION,
@@ -63,4 +63,13 @@ export function updateSettingFields(edits: Record<string, unknown>): Promise<Set
     if (thinkingChanged) invalidateMockChannelTests('llm');
     return { preferences: prefs, revision: ++mockRevision };
   });
+}
+
+/** Runtime mode + sidecar health for the low-memory background switch (desktop). */
+export function getNativeCapsuleStatus(): Promise<NativeCapsuleStatus> {
+  return invokeOrMock('native_capsule_status', undefined, () => ({
+    active: false,
+    available: true,
+    error: null,
+  }));
 }

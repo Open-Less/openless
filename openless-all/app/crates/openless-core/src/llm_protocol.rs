@@ -35,7 +35,7 @@ impl LlmRequestFormat {
 
     pub fn default_for(provider: &str) -> Self {
         match provider {
-            "custom_responses" => Self::Responses,
+            "custom_responses" | crate::siwc::PROVIDER_ID => Self::Responses,
             "custom_messages" => Self::Messages,
             _ => Self::ChatCompletions,
         }
@@ -44,7 +44,7 @@ impl LlmRequestFormat {
     pub fn selectable(provider: &str) -> bool {
         !matches!(
             provider,
-            "gemini" | "codex_oauth" | "tencentTokenHub" | "lmstudio"
+            "gemini" | "codex_oauth" | crate::siwc::PROVIDER_ID | "tencentTokenHub" | "lmstudio"
         )
     }
 
@@ -252,6 +252,9 @@ pub(crate) fn request_body(
     stream: bool,
     messages: Vec<Value>,
 ) -> Value {
+    if config.provider_id == crate::siwc::PROVIDER_ID {
+        return crate::siwc::inference::request_body(&config.model, messages);
+    }
     let mut body = match config.protocol.format {
         LlmRequestFormat::ChatCompletions => {
             unreachable!("Chat Completions retains its provider rules")
@@ -405,6 +408,8 @@ pub(crate) struct TextEventStream {
     pending: Vec<u8>,
     messages_complete: bool,
     pub done: bool,
+    siwc: bool,
+    request_id: Option<String>,
 }
 
 impl TextEventStream {
@@ -415,7 +420,15 @@ impl TextEventStream {
             pending: Vec::new(),
             messages_complete: false,
             done: false,
+            siwc: false,
+            request_id: None,
         }
+    }
+
+    pub(crate) fn for_siwc(mut self, request_id: Option<String>) -> Self {
+        self.siwc = true;
+        self.request_id = request_id;
+        self
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), LLMError> {
@@ -458,6 +471,19 @@ impl TextEventStream {
                     .find_map(|line| line.strip_prefix("event:").map(str::trim))
             })
             .unwrap_or("");
+        if self.siwc && (kind == "error" || kind == "response.failed" || !value["error"].is_null())
+        {
+            let body = if kind == "response.failed" {
+                &value["response"]
+            } else {
+                &value
+            };
+            return Err(LLMError::Siwc(crate::siwc::response_error(
+                200,
+                body,
+                self.request_id.as_deref(),
+            )));
+        }
         if kind == "error" || !value["error"].is_null() {
             return Err(response_error("llmStreamError"));
         }
@@ -476,6 +502,7 @@ impl TextEventStream {
                     None
                 }
                 "response.failed" | "response.incomplete" => {
+                    if self.siwc { return Err(LLMError::Siwc(crate::siwc::error("response_incomplete"))); }
                     return Err(response_error("llmResponseIncomplete"))
                 }
                 _ => None,

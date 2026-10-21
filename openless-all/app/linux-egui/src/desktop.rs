@@ -284,7 +284,9 @@ fn validate_external_url(url: &str) -> Result<(), DesktopError> {
 fn open_external_with(url: &str, launchers: &[(&str, &[&str])]) -> Result<(), DesktopError> {
     let mut unavailable = Vec::new();
     for (program, prefix) in launchers {
-        match Command::new(program).args(*prefix).arg(url).status() {
+        // Desktop launchers may echo a failed OAuth URL, including id_token_hint.
+        match Command::new(program).args(*prefix).arg(url)
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status() {
             Ok(status) if status.success() => return Ok(()),
             Ok(status) => {
                 return Err(DesktopError::LauncherFailed {

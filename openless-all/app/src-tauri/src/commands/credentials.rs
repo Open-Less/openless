@@ -16,6 +16,7 @@ const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str =
 pub(crate) struct SystemCredentialStore {
     model_store: Option<std::sync::Arc<openless_core::ModelStore>>,
     directory: openless_core::credentials::CredentialDirectory,
+    siwc: std::sync::Arc<openless_core::siwc::SiwcService>,
 }
 
 impl SystemCredentialStore {
@@ -25,6 +26,7 @@ impl SystemCredentialStore {
         > = std::sync::Arc::new(SystemCredentialMetadataStore);
         Self {
             model_store,
+            siwc: crate::persistence::siwc::siwc_service(),
             directory: openless_core::credentials::CredentialDirectory::new(metadata_store),
         }
     }
@@ -65,7 +67,9 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
 pub(crate) fn sync_active_asr_provider_to_vault(provider: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if openless_core::credentials::is_retired_macos_asr_provider(provider) {
-        return Err("Legacy macOS local ASR is retired; use Experimental local speech models".into());
+        return Err(
+            "Legacy macOS local ASR is retired; use Experimental local speech models".into(),
+        );
     }
     if CredentialsVault::get_active_asr() == provider {
         return Ok(());
@@ -90,6 +94,10 @@ pub(crate) fn active_sherpa_asr_is_supported(provider: &str) -> bool {
 }
 
 impl openless_core::CredentialStore for SystemCredentialStore {
+    fn siwc(&self) -> Option<std::sync::Arc<openless_core::siwc::SiwcService>> {
+        Some(self.siwc.clone())
+    }
+
     fn bind_sync_gate(
         &self,
         gate: std::sync::Arc<openless_core::credentials::SyncWriteGate>,
@@ -232,17 +240,39 @@ impl openless_core::CredentialStore for SystemCredentialStore {
             {
                 use openless_core::{ChannelKind, ChannelMutation};
                 let provider = match &mutation {
-                    ChannelMutation::Create { kind: ChannelKind::Asr, provider_type, .. }
-                    | ChannelMutation::SetProviderType { kind: ChannelKind::Asr, provider_type, .. }
-                    | ChannelMutation::ActivateLocalAsr { provider_type, .. } => Some(provider_type.clone()),
-                    ChannelMutation::SetEnabled { kind: ChannelKind::Asr, id, enabled: true } =>
-                        directory.list_channels(ChannelKind::Asr).await?.into_iter()
-                            .find(|c| &c.id == id).map(|c| c.provider_type),
+                    ChannelMutation::Create {
+                        kind: ChannelKind::Asr,
+                        provider_type,
+                        ..
+                    }
+                    | ChannelMutation::SetProviderType {
+                        kind: ChannelKind::Asr,
+                        provider_type,
+                        ..
+                    }
+                    | ChannelMutation::ActivateLocalAsr { provider_type, .. } => {
+                        Some(provider_type.clone())
+                    }
+                    ChannelMutation::SetEnabled {
+                        kind: ChannelKind::Asr,
+                        id,
+                        enabled: true,
+                    } => directory
+                        .list_channels(ChannelKind::Asr)
+                        .await?
+                        .into_iter()
+                        .find(|c| &c.id == id)
+                        .map(|c| c.provider_type),
                     _ => None,
                 };
-                if provider.as_deref().is_some_and(openless_core::credentials::is_retired_macos_asr_provider) {
-                    return Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Unsupported,
-                        "Legacy macOS local ASR is retired; use Experimental local speech models"));
+                if provider
+                    .as_deref()
+                    .is_some_and(openless_core::credentials::is_retired_macos_asr_provider)
+                {
+                    return Err(openless_core::BackendError::new(
+                        openless_core::BackendErrorCode::Unsupported,
+                        "Legacy macOS local ASR is retired; use Experimental local speech models",
+                    ));
                 }
             }
             directory.mutate_channel(mutation).await
@@ -266,12 +296,18 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Box::pin(async move {
             #[cfg(target_os = "macos")]
             if slot == openless_core::ProviderSlot::Asr {
-                let provider = directory.list_channels(openless_core::ChannelKind::Asr).await?
-                    .into_iter().find(|c| c.id == provider_id)
-                    .map(|c| c.provider_type).unwrap_or_else(|| provider_id.clone());
+                let provider = directory
+                    .list_channels(openless_core::ChannelKind::Asr)
+                    .await?
+                    .into_iter()
+                    .find(|c| c.id == provider_id)
+                    .map(|c| c.provider_type)
+                    .unwrap_or_else(|| provider_id.clone());
                 if openless_core::credentials::is_retired_macos_asr_provider(&provider) {
-                    return Err(openless_core::BackendError::new(openless_core::BackendErrorCode::Unsupported,
-                        "Legacy macOS local ASR is retired; use Experimental local speech models"));
+                    return Err(openless_core::BackendError::new(
+                        openless_core::BackendErrorCode::Unsupported,
+                        "Legacy macOS local ASR is retired; use Experimental local speech models",
+                    ));
                 }
             }
             directory.set_active_provider(slot, provider_id).await
@@ -312,7 +348,8 @@ fn credentials_status(
     let configuration = credential_configuration(
         &snap,
         &active_llm_provider,
-        CodexOAuthCredentials::load_default().is_ok(),
+        active_llm_provider == openless_core::polish::CODEX_OAUTH_PROVIDER_ID
+            && CodexOAuthCredentials::load_default().is_ok(),
     );
     let volcengine_configured =
         openless_core::provider_rules::volcengine_configured(&configuration);
@@ -599,7 +636,9 @@ fn local_asr_configured(
     if provider == "apple-speech" {
         return Some(cfg!(target_os = "macos"));
     }
-    if openless_core::credentials::is_retired_macos_asr_provider(provider) { return Some(false); }
+    if openless_core::credentials::is_retired_macos_asr_provider(provider) {
+        return Some(false);
+    }
     if let Some(model) =
         openless_core::experimental_asr::ExperimentalAsrModel::from_provider(provider)
     {
@@ -632,7 +671,8 @@ pub(crate) fn llm_configured_for_provider(provider: &str, snap: &CredentialsSnap
         &credential_configuration(
             snap,
             provider,
-            CodexOAuthCredentials::load_default().is_ok(),
+            provider == openless_core::polish::CODEX_OAUTH_PROVIDER_ID
+                && CodexOAuthCredentials::load_default().is_ok(),
         ),
     )
 }
@@ -1058,11 +1098,9 @@ mod tests {
             local_asr_configured(provider, Some(&store), Some(model)),
             Some(false)
         );
-        let target = openless_core::LocalAsrTarget::parse(
-            openless_core::LocalAsrRuntime::SherpaOnnx,
-            model,
-        )
-        .unwrap();
+        let target =
+            openless_core::LocalAsrTarget::parse(openless_core::LocalAsrRuntime::SherpaOnnx, model)
+                .unwrap();
         let model_dir = store.model_dir(&target).unwrap();
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(
