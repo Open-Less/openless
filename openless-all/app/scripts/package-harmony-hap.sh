@@ -101,6 +101,8 @@ HVIGOR_JS="$HVIGOR_BIN" \
 OPENLESS_CACHE_ROOT="$CACHE_ROOT" \
 OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
 OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
+OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
+OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
   bash "$APP_ROOT/scripts/build-harmony-frontend.sh"
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
@@ -112,8 +114,23 @@ SIGNED=""
 if [ -n "$SIGN_PREFIX" ]; then
   python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
     "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --prefix "$SIGN_PREFIX"
+  # The App Pack is signed the same way; `hap-sign-tool sign-app` accepts `.app`.
+  if [ -d "$CACHE_ROOT/harmony/openless-project/build/outputs/default" ]; then
+    python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
+      "$TOOLCHAIN" "$SIGNING_DIR" "$CACHE_ROOT/harmony/openless-project/build/outputs/default" \
+      --prefix "$SIGN_PREFIX" --skip-hap
+  fi
   SIGNED="$OUT_DIR/entry-default-signed.hap"
   [ -f "$SIGNED" ] || { echo "expected a signed HAP at $SIGNED" >&2; exit 1; }
+
+  # AppGallery rejects a bare HAP ("The suffix name of the software package is
+  # incorrect", code 204144641), so the store channels ship the signed App Pack.
+  APP_OUT="$BUILD_PROJECT/build/outputs/default"
+  APP_PACK=$(ls "$APP_OUT"/*-signed.app 2>/dev/null | head -1 || true)
+  [ -n "$APP_PACK" ] || {
+    echo "store channel produced no signed .app App Pack in $APP_OUT (AppGallery requirement)" >&2
+    exit 1
+  }
 else
   echo "no store signing: packaging the unsigned HAP only"
 fi
@@ -124,6 +141,11 @@ mkdir -p "$OUTPUT"
 # download never carries someone else's signing identity.
 cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony_arm64.hap"
 cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony.hap"
+if [ -n "$APP_PACK" ]; then
+  # Store-only artifact: AppGallery takes the App Pack, and it never enters the
+  # GitHub Release.
+  cp "$APP_PACK" "$OUTPUT/OpenLess_harmony_arm64-signed.app"
+fi
 if [ -n "$SIGNED" ]; then
   # Store-only artifact: the workflow uploads it to AppGallery and keeps it out
   # of the Release.

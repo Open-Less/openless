@@ -239,8 +239,10 @@ jobs:
           bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
             "$toolchain" "$version_name" "$version_code" --allow-unsigned
           if [ "${{ inputs.channel }}" != "none" ]; then
+            # AppGallery takes the App Pack; a bare HAP is rejected with
+            # 204144641 "The suffix name of the software package is incorrect".
             bash scripts/verify-harmony-hap.sh \
-              "$output/OpenLess_harmony_arm64-signed.hap" "$toolchain"
+              "$output/OpenLess_harmony_arm64-signed.app" "$toolchain"
           else
             echo "channel=none: unsigned package only, no signature to verify"
           fi
@@ -291,5 +293,5 @@ jobs:
           # GitHub Release distributes.
           node scripts/upload-appgallery.mjs \
             --channel "${{ inputs.channel }}" \
-            --file target/harmony-packages/OpenLess_harmony_arm64-signed.hap \
+            --file target/harmony-packages/OpenLess_harmony_arm64-signed.app \
             --skip-if-unconfigured

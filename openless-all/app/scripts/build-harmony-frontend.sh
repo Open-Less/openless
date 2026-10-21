@@ -103,8 +103,19 @@ if [ -n "${HVIGOR_JS:-}" ]; then
 else
   HVIGOR=(hvigorw)
 fi
+# AppGallery only accepts an App Pack (`.app`), never a bare `.hap`. hvigor
+# cannot write a signingConfig from CI: `storePassword`/`keyPassword` must be the
+# IDE-encrypted material (>= 32 chars), so the pack stays unsigned here and
+# `scripts/sign-harmony-hap.py` signs it afterwards with `hap-sign-tool`.
 "${HVIGOR[@]}" --mode module -p product=default -p module=entry@default -p buildMode=debug assembleHap --no-daemon
 printf '\nHAP output: %s/entry/build/default/outputs/default/\n' "$BUILD_PROJECT"
+
+if [ -n "${OPENLESS_HARMONY_STORE_SIGNING:-}" ]; then
+  # `--mode project`: `assembleApp` is a project-level task and is invisible in
+  # module mode ("Task [ 'assembleApp' ] was not found in the project").
+  "${HVIGOR[@]}" --mode project -p product=default -p buildMode=release assembleApp --no-daemon
+  printf 'App Pack output: %s/build/outputs/default/\n' "$BUILD_PROJECT"
+fi
 
 if [[ -f "$SIGNING_DIR/debug.cer" && -f "$SIGNING_DIR/debug.p7b" ]]; then
   python3 "$APP_ROOT/scripts/sign-harmony-hap.py" "$HARMONY_TOOLCHAIN" "$SIGNING_DIR" "$BUILD_PROJECT/entry/build/default/outputs/default"
