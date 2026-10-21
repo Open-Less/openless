@@ -1,3 +1,4 @@
+import { siwcEn as siwc } from './siwc';
 // English resources — translated from zh-CN.ts. Keep keys in sync.
 
 import type { zhCN } from './zh-CN';
@@ -7,6 +8,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const en: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -1603,7 +1605,31 @@ export const en: typeof zhCN = {
         'Save raw microphone audio as wav for diagnosing recognition issues.',
       audioRecordingMaxEntriesLabel: 'Max raw recordings',
       audioRecordingMaxEntriesDesc: 'Max wav files retained locally. Blank = 200.',
+      voiceActivationLabel: 'Voice activation',
+      voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
+      voiceActivationLocalOnly:
+        'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationMultimodalModels:
+        'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
+      voiceActivationModelMissing: 'The local Zipformer model is not installed.',
+      voiceActivationDownloadZipformer: 'Download Zipformer',
+      voiceActivationWakeEnabled: 'Wake phrase',
+      voiceActivationWakePhrase: 'Wake phrase',
+      voiceActivationFinishEnabled: 'Finish phrase',
+      voiceActivationFinishPhrase: 'Finish phrase',
+      voiceActivationTimeoutEnabled: 'Stop after timeout',
+      voiceActivationTimeoutSeconds: 'Timeout (seconds)',
       startupGroupTitle: 'Startup',
+      lowMemoryBackgroundLabel: 'Low-memory background mode',
+      lowMemoryBackgroundDesc:
+        'Applies after restart. Release the main window on close and show a native capsule on demand. Disable microphone prewarming while idle. Local models keep their existing release settings.',
+      lowMemoryRestartLabel: 'Applies after restart',
+      lowMemoryRestartDesc:
+        'The low-memory background switch is saved; the running mode changes after the app restarts.',
+      lowMemoryRestartNow: 'Restart now',
+      lowMemoryCapsuleErrorLabel: 'Native capsule unavailable',
+      lowMemoryCapsuleErrorDesc:
+        'Dictation still works, but the floating capsule will not appear. The helper may be missing or blocked; reinstall the app.',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
       autoUpdateCheckLabel: 'Auto-check for updates',
@@ -1719,6 +1745,7 @@ export const en: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (free models)',

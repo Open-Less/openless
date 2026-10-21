@@ -767,6 +767,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     const unlisteners: (() => void)[] = [];
     let cancelled = false;
     let stateRevision = 0;
+    let suggestionsRevision = 0;
+    let fallbackRevision = 0;
     const cleanupListeners = () => {
       for (const unlisten of unlisteners.splice(0)) unlisten();
     };
@@ -844,16 +846,35 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         return;
       if (
         !(await subscribe<PendingCorrection[]>('vocab:suggested', (payload) => {
+          suggestionsRevision += 1;
           setSuggestions(payload ?? []);
         }))
       )
         return;
       if (
         !(await subscribe<InsertFallbackCardPayload | null>('insert:fallback', (payload) => {
+          fallbackRevision += 1;
           setInsertFallback(payload ?? null);
         }))
       )
         return;
+
+      // Disposable cards can miss their first event while the WebView is mounting.
+      const suggestionsAtRead = suggestionsRevision;
+      const fallbackAtRead = fallbackRevision;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (cancelled) return;
+        const snapshot = await invoke<{
+          suggestions: PendingCorrection[];
+          fallback: InsertFallbackCardPayload | null;
+        }>('get_capsule_auxiliary_snapshot');
+        if (cancelled) return;
+        if (suggestionsRevision === suggestionsAtRead) setSuggestions(snapshot.suggestions);
+        if (fallbackRevision === fallbackAtRead) setInsertFallback(snapshot.fallback);
+      } catch {
+        // Mobile hosts do not expose desktop card snapshots.
+      }
 
       // Lazy mirrors can miss the session start. Subscribe first, then replay a coherent
       // frame only if no newer state arrived while the native request was in flight.

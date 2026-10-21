@@ -1,3 +1,4 @@
+import { siwcZhCN as siwc } from './siwc';
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
 
@@ -5,6 +6,7 @@ import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
 
 export const zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -1450,6 +1452,20 @@ export const zhCN = {
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       audioEnhancementLabel: '轻量麦克风增强',
       audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
+      voiceActivationLabel: '语音唤醒听写',
+      voiceActivationDesc:
+        '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
+      voiceActivationLocalOnly:
+        '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationMultimodalModels: '此处准备语音唤醒模型，听写仍使用当前多模态服务。',
+      voiceActivationModelMissing: '请先在“AI 服务与模型”的本地模型页准备 Zipformer。',
+      voiceActivationDownloadZipformer: '前往 AI 服务与模型下载 Zipformer',
+      voiceActivationWakeEnabled: '启用开始命令',
+      voiceActivationWakePhrase: '开始命令',
+      voiceActivationFinishEnabled: '启用完成命令',
+      voiceActivationFinishPhrase: '完成命令',
+      voiceActivationTimeoutEnabled: '超时自动结束',
+      voiceActivationTimeoutSeconds: '超时秒数',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
@@ -1522,6 +1538,15 @@ export const zhCN = {
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
       audioRecordingMaxEntriesDesc: '本地保留 wav 文件数上限，留空 = 200。',
       startupGroupTitle: '启动',
+      lowMemoryBackgroundLabel: '低内存后台模式',
+      lowMemoryBackgroundDesc:
+        '重启后生效。关闭主界面时释放窗口，录音时按需显示原生胶囊；空闲时关闭麦克风预热。本地模型仍按原有设置释放。',
+      lowMemoryRestartLabel: '重启后生效',
+      lowMemoryRestartDesc: '低内存后台模式的开关已保存，重启应用后才会切换运行模式。',
+      lowMemoryRestartNow: '立即重启',
+      lowMemoryCapsuleErrorLabel: '原生胶囊不可用',
+      lowMemoryCapsuleErrorDesc:
+        '听写仍可进行，但不会显示悬浮胶囊。辅助程序可能缺失或被系统拦截，请重新安装应用。',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
       autoUpdateCheckLabel: '自动检查更新',
@@ -1630,6 +1655,7 @@ export const zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: '小米 MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免费模型）',

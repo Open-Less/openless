@@ -236,6 +236,10 @@ pub enum FrontendAction {
     SettingsProviderField(SettingsProviderField, String),
     /// Save the editor: rename + endpoint/model + credentials through Core.
     SettingsProviderSave,
+    SettingsSiwc {
+        action: String,
+        registration_id: Option<String>,
+    },
     SettingsOmni(openless_linux_egui::omni_settings::OmniAction),
     /// Encrypted cloud sync card (enable/unlock/restore/delete/custom server).
     SettingsCloudSync(openless_linux_egui::cloud_sync_ui::CloudSyncAction),
@@ -436,6 +440,7 @@ pub enum SettingsProviderAuth {
     None,
     /// OAuth is driven by Core; the editor only explains it.
     OAuth,
+    Siwc,
     /// Volcengine: APP ID + Access Token, or API Key + Resource ID.
     Volcengine,
     /// Xfyun: AppID + API Key.
@@ -448,10 +453,19 @@ pub enum SettingsProviderAuth {
     ApiKey,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct SettingsSiwcState {
+    pub status: openless_core::siwc::SiwcStatus,
+    pub models: Vec<openless_core::siwc::SiwcModel>,
+    pub message: Option<String>,
+}
+
 /// The open channel editor. Hydrated once per load from Core, then driven by
 /// the host-side draft so typing is never clobbered by a re-read.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
+    #[serde(default)]
+    pub siwc: Option<SettingsSiwcState>,
     pub channel_id: String,
     /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
     pub is_asr: bool,

@@ -27,3 +27,29 @@ Restart reconciliation checks local selection metadata. It does not send a
 provider validation request or automatically choose another enabled provider
 after a network failure. An ongoing recording retains the channel identity,
 protocol and model selected at the start of that recording.
+
+
+## Use your ChatGPT plan for text polishing
+
+Add a **ChatGPT Plan** LLM channel and choose **Continue with ChatGPT**. Complete
+sign-in and plan-usage consent in the system browser, return to OpenLess, and
+select a model from the account's catalog. Enable the channel and move it first
+to use it for polishing and translation. Codex and an OpenAI API key are not
+required. Speech recognition keeps its existing ASR provider.
+
+Model discovery does not run inference. **Test connection** consumes a small
+amount of ChatGPT plan usage. **Manage usage** opens ChatGPT's usage settings;
+limits may apply to the plan or this app. OpenLess never switches a failed
+ChatGPT Plan request to an API-key billing path automatically.
+
+Each channel selects a saved account registration or creates a new one. Matching
+email addresses do not merge registrations or workspaces. **Disconnect** stops
+that registration's requests, attempts remote session revocation, and removes
+its local tokens without changing channel order. If remote revocation cannot be
+confirmed, disconnect the app in ChatGPT settings. Reauthorization reuses the
+saved registration. OAuth tokens and host identifiers are local-only and are
+excluded from provider synchronization, backup, and migration; a channel copied
+to another device requires a new local sign-in.
+
+On mobile, keep the authorization within the system's background-execution
+window. If the process is terminated or the attempt expires, start sign-in again.

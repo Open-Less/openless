@@ -208,12 +208,24 @@ pub async fn sherpa_onnx_asr_download_model(
     model_alias: String,
     mirror: Option<String>,
 ) -> Result<(), String> {
+    let target = sherpa_target(model_alias)?;
+    #[cfg(target_os = "windows")]
+    let voice_activation_model = target.model_id() == "zipformer-bilingual-zh-en-streaming";
     backend
         .services()
         .local_asr
-        .start_download(sherpa_target(model_alias)?, parse_mirror(mirror))
+        .start_download(target, parse_mirror(mirror))
         .await
-        .map_err(core_error)
+        .map_err(core_error)?;
+    #[cfg(target_os = "windows")]
+    if voice_activation_model && backend.get_preferences().voice_activation_enabled {
+        if let Err(error) = backend.configure_voice_activation().await {
+            log::warn!(
+                "[voice-activation] Sherpa model download completed but runtime refresh failed: {error}"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

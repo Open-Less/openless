@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/openless-core",
     "linux-egui",
+    "crates/openless-capsule",
+    "native-capsule",
     "harmony/rust",
 ]
 exclude = [

@@ -57,7 +57,11 @@ fn platform_open_external_url(url: &str) -> Result<(), String> {
             "(Landroid/content/Intent;)V",
             &[JValue::Object(&intent)],
         )
-        .map_err(|error| format!("start Android URL activity: {error}"))?;
+        .map_err(|error| {
+            // A failed browser Intent must not poison the pooled JNI thread or log its URL.
+            let _ = env.exception_clear();
+            format!("start Android URL activity: {error}")
+        })?;
 
         Ok(())
     })

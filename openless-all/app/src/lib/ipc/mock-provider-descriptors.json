@@ -122,6 +122,18 @@
   },
   {
     "kind": "llm",
+    "providerType": "chatgpt_siwc",
+    "labelKey": "chatgptSiwc",
+    "defaultEndpoint": "https://api.openai.com/v1",
+    "defaultModel": null,
+    "authRequirement": "siwc",
+    "validationProbe": "llm_text",
+    "staticModels": [],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "llm",
     "providerType": "mimo",
     "labelKey": "mimo",
     "defaultEndpoint": "https://api.xiaomimimo.com/v1",

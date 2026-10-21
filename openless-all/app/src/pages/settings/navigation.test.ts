@@ -207,8 +207,16 @@ assert.deepEqual(
 );
 console.log('settings service view tests passed');
 
-assert.equal(visibleSettingsSections(false, 'harmony').some((item) => item.id === 'inputMethod'), false, 'Harmony wiring does not add an Android input-method navigation entry');
-assert.deepEqual(visibleAdvancedPages('harmony', 'harmony').map((item) => item.id), ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'], 'Harmony retains shared utility settings without desktop coding-agent controls');
+assert.equal(
+  visibleSettingsSections(false, 'harmony').some((item) => item.id === 'inputMethod'),
+  false,
+  'Harmony wiring does not add an Android input-method navigation entry',
+);
+assert.deepEqual(
+  visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
+  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
+  'Harmony retains shared utility settings without desktop coding-agent controls',
+);
 for (const os of ['mac', 'win', 'android'] as const) {
   assert.equal(
     visibleAdvancedPages('desktop', os).some((item) =>
@@ -230,3 +238,23 @@ assert.deepEqual(
   ['lessComputer', 'claudeConsole'],
   'macOS exposes both testing features after opt-in',
 );
+
+assert.equal(
+  resolveServiceView('models', serviceViews, true, 'win', true),
+  'models',
+  'voice activation can prepare models without changing the multimodal pipeline',
+);
+assert.equal(
+  isServiceViewInactive('models', true, 'win', true),
+  false,
+  'the model button and resolved view agree for voice activation',
+);
+for (const os of ['mac', 'harmony', 'android'] as const) {
+  assert.equal(
+    isServiceViewInactive('models', true, os, true),
+    true,
+    'voice activation does not unlock models on other platforms',
+  );
+}
+assert.equal(isServiceViewInactive('llm', true, 'win', true), true, 'LLM settings remain inactive');
+assert.equal(isServiceViewInactive('asr', true, 'win', true), true, 'ASR settings remain inactive');

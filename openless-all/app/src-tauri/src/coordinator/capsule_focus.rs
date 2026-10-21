@@ -308,6 +308,14 @@ fn emit_capsule_payload_locked(
         log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
         return event_epoch;
     }
+    #[cfg(not(mobile))]
+    if inner
+        .host
+        .present_native_capsule(&payload, event_epoch, prev_state)
+    {
+        inner.host.emit_capsule_state_to_main(&payload);
+        return event_epoch;
+    }
     let Some(capsule) = inner.host.capsule_window() else {
         return event_epoch;
     };

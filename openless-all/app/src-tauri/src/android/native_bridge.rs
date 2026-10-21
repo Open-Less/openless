@@ -1867,6 +1867,7 @@ mod tests {
                 credential_store: Arc::new(InMemoryCredentialStore::default()),
                 services: BackendServices::unsupported(),
                 local_asr_runtime: None,
+                voice_activation_runtime: None,
                 selection_runtime: None,
                 selection_polisher: None,
                 qa_runtime: None,

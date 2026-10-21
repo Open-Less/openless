@@ -126,7 +126,9 @@ export async function setLocalePreference(
   } else {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, pref);
   }
-  window.dispatchEvent(new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'locale' } }));
+  window.dispatchEvent(
+    new CustomEvent('openless:ui-preferences-changed', { detail: { source, key: 'locale' } }),
+  );
   await applyLocale(resolved);
   return resolved;
 }
@@ -136,6 +138,11 @@ export async function setLocalePreference(
 // requests its index). Non-Tauri (browser dev) hits a mock no-op; failures are silent.
 function syncRemoteLocale(resolved: SupportedLocale): void {
   void setRemoteLocale(resolved).catch(() => {});
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('native_capsule_set_locale', { locale: resolved }))
+      .catch(() => {});
+  }
 }
 
 export const FOLLOW_SYSTEM = FOLLOW_SYSTEM_VALUE;

@@ -14,6 +14,7 @@ use crate::types::{
     InsertFallbackPayload, NotificationPayload, PermissionSnapshot, PolishDelta, PreferencesChange,
     SessionId, StylePackChange, TranscriptDelta, VocabularyChange,
 };
+use crate::voice_activation::VoiceActivationStateSnapshot;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -407,6 +408,7 @@ pub enum BackendEventKind {
     BackendStarted,
     BackendStopping,
     DictationStateChanged(DictationStateSnapshot),
+    VoiceActivationStateChanged(crate::voice_activation::VoiceActivationStateSnapshot),
     TranscriptDelta(TranscriptDelta),
     PolishDelta(PolishDelta),
     DictationCompleted(DictationResult),
@@ -458,6 +460,9 @@ pub struct EventBus {
     sequence: AtomicU64,
     sender: broadcast::Sender<BackendEvent>,
     backlog: Mutex<VecDeque<BackendEvent>>,
+    // Retain the latest activation state independently of the bounded replay so a host can
+    // recover the microphone listener after a subscription lag.
+    latest_voice_activation: Mutex<Option<VoiceActivationStateSnapshot>>,
     // Retain one presentation snapshot independently of the bounded replay so
     // a reopened host can recover a long-running transcription.
     latest_less_voice: Mutex<Option<LessComputerEvent>>,
@@ -470,6 +475,7 @@ impl EventBus {
             sequence: AtomicU64::new(0),
             sender,
             backlog: Mutex::new(VecDeque::with_capacity(EVENT_REPLAY_CAPACITY)),
+            latest_voice_activation: Mutex::new(None),
             latest_less_voice: Mutex::new(None),
         }
     }
@@ -490,6 +496,18 @@ impl EventBus {
             session_id,
             kind,
         };
+        if let BackendEventKind::VoiceActivationStateChanged(state) = &event.kind {
+            let mut latest = self
+                .latest_voice_activation
+                .lock()
+                .expect("voice activation projection lock poisoned");
+            if latest
+                .as_ref()
+                .is_none_or(|previous| state.activation_generation >= previous.activation_generation)
+            {
+                *latest = Some(state.clone());
+            }
+        }
         if let BackendEventKind::LessComputerEvent(voice) = &event.kind {
             if let LessComputerEventKind::VoiceState {
                 session_id, phase, ..
@@ -556,6 +574,13 @@ impl EventBus {
         }
     }
 
+    pub fn latest_voice_activation_state(&self) -> Option<VoiceActivationStateSnapshot> {
+        self.latest_voice_activation
+            .lock()
+            .expect("voice activation projection lock poisoned")
+            .clone()
+    }
+
     pub fn latest_less_computer_voice_state(&self) -> Option<LessComputerEvent> {
         self.latest_less_voice
             .lock()
@@ -586,6 +611,10 @@ impl BackendEventPublisher {
 
     pub fn replay_after(&self, sequence: u64) -> EventReplay {
         self.bus.replay_after(sequence)
+    }
+
+    pub fn latest_voice_activation_state(&self) -> Option<VoiceActivationStateSnapshot> {
+        self.bus.latest_voice_activation_state()
     }
 
     pub fn latest_less_computer_voice_state(&self) -> Option<LessComputerEvent> {
@@ -663,6 +692,42 @@ mod tests {
         assert_eq!(subscription.recv().await, Err(EventRecvError::Lagged(1)));
         let event = subscription.recv().await;
         assert_eq!(event.unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn latest_voice_activation_state_ignores_stale_generations() {
+        let bus = EventBus::new(4);
+        bus.publish(
+            None,
+            BackendEventKind::VoiceActivationStateChanged(VoiceActivationStateSnapshot {
+                phase: crate::voice_activation::VoiceActivationPhase::ListeningForWake,
+                activation_generation: 2,
+                session_id: None,
+                message: None,
+            }),
+        );
+        bus.publish(
+            None,
+            BackendEventKind::VoiceActivationStateChanged(VoiceActivationStateSnapshot {
+                phase: crate::voice_activation::VoiceActivationPhase::Failed,
+                activation_generation: 1,
+                session_id: None,
+                message: Some("stale".into()),
+            }),
+        );
+        assert_eq!(
+            bus.latest_voice_activation_state()
+                .expect("latest activation state")
+                .activation_generation,
+            2
+        );
+        assert_eq!(
+            BackendEventPublisher::new(Arc::new(bus))
+                .latest_voice_activation_state()
+                .expect("publisher activation state")
+                .activation_generation,
+            2
+        );
     }
 
     #[test]

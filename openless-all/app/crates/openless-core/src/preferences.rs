@@ -124,6 +124,7 @@ fn preferences_json_preserving_unknown(
 fn strip_local_only_preferences(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(object) = value {
         object.remove("lowLatencyDictationEnabled");
+        object.remove("lowMemoryBackgroundEnabled");
     }
 }
 

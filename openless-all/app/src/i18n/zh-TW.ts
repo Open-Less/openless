@@ -1,3 +1,4 @@
+import { siwcZhTW as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
@@ -5,6 +6,7 @@ import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
 
 export const zhTW: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -1523,7 +1525,28 @@ export const zhTW: typeof zhCN = {
       recordAudioForDebugDesc: '儲存原始麥克風音訊為 wav，便於排查識別問題。',
       audioRecordingMaxEntriesLabel: '原始錄音保留條數',
       audioRecordingMaxEntriesDesc: '本地保留 wav 檔案數上限，留空 = 200。',
+      voiceActivationLabel: '語音啟用',
+      voiceActivationDesc: '在本機等待喚醒詞以開始聽寫。',
+      voiceActivationLocalOnly: '辨識只在此裝置上進行；待機音訊不會上傳或封存。',
+      voiceActivationMultimodalModels: '在此準備語音喚醒模型，聽寫仍使用目前的多模態服務。',
+      voiceActivationModelMissing: '請先在「AI 服務與模型」的本機模型頁準備 Zipformer。',
+      voiceActivationDownloadZipformer: '前往 AI 服務與模型下載 Zipformer',
+      voiceActivationWakeEnabled: '喚醒詞',
+      voiceActivationWakePhrase: '喚醒詞',
+      voiceActivationFinishEnabled: '完成詞',
+      voiceActivationFinishPhrase: '完成詞',
+      voiceActivationTimeoutEnabled: '逾時後停止',
+      voiceActivationTimeoutSeconds: '逾時（秒）',
       startupGroupTitle: '啟動',
+      lowMemoryBackgroundLabel: '低記憶體背景模式',
+      lowMemoryBackgroundDesc:
+        '重新啟動後生效。關閉主介面時釋放視窗，錄音時按需顯示原生膠囊；閒置時關閉麥克風預熱。本機模型仍依原有設定釋放。',
+      lowMemoryRestartLabel: '重啟後生效',
+      lowMemoryRestartDesc: '低記憶體背景模式開關已儲存，重新啟動應用後才會切換執行模式。',
+      lowMemoryRestartNow: '立即重啟',
+      lowMemoryCapsuleErrorLabel: '原生膠囊不可用',
+      lowMemoryCapsuleErrorDesc:
+        '聽寫仍可進行，但不會顯示懸浮膠囊。輔助程式可能缺失或被系統攔截，請重新安裝應用。',
       startMinimizedLabel: '啟動時靜默執行',
       startMinimizedDesc: '所有啟動路徑都不彈主視窗，僅選單欄 / 託盤執行。',
       autoUpdateCheckLabel: '自動檢查更新',
@@ -1632,6 +1655,7 @@ export const zhTW: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: '小米 MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免費模型）',

@@ -4629,6 +4629,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun startRuntimeService() {
+        OpenLessRuntimeService.imeRequested = true
         try {
             val intent = android.content.Intent(this, OpenLessRuntimeService::class.java)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -4695,6 +4696,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun ensureBackendReady() = OpenLessBackendWarmupActivity.ensureBackendReady(this)
 
     private fun stopRuntimeService() {
+        OpenLessRuntimeService.imeRequested = false
+        if (OpenLessRuntimeService.authorizationActive()) return
         runCatching { stopService(android.content.Intent(this, OpenLessRuntimeService::class.java)) }
     }
 

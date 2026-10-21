@@ -219,9 +219,14 @@ pub(crate) fn persist_strict_settings(
 }
 
 #[cfg(target_os = "windows")]
-fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
-    crate::recorder::warm_capture_hub().configure(
-        prefs.low_latency_dictation_enabled,
+pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
+    let warm_hub = crate::recorder::warm_capture_hub();
+    warm_hub.configure(
+        crate::recorder::warm_capture_enabled(
+            prefs.low_latency_dictation_enabled,
+            crate::desktop_resources::active(),
+            warm_hub.activation_is_active(),
+        ),
         (!prefs.microphone_device_name.trim().is_empty())
             .then(|| prefs.microphone_device_name.clone()),
         openless_core::AudioProcessingConfig {
@@ -231,7 +236,38 @@ fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
+pub(crate) fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
+
+fn voice_activation_preferences_changed(previous: &UserPreferences, next: &UserPreferences) -> bool {
+    previous.voice_activation_enabled != next.voice_activation_enabled
+        || previous.voice_activation_wake_enabled != next.voice_activation_wake_enabled
+        || previous.voice_activation_finish_enabled != next.voice_activation_finish_enabled
+        || previous.voice_activation_wake_phrase != next.voice_activation_wake_phrase
+        || previous.voice_activation_finish_phrase != next.voice_activation_finish_phrase
+        || previous.voice_activation_timeout_enabled != next.voice_activation_timeout_enabled
+        || previous.voice_activation_timeout_seconds != next.voice_activation_timeout_seconds
+        || previous.microphone_device_name != next.microphone_device_name
+}
+
+fn validate_voice_activation_preferences(
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    openless_core::VoiceActivationConfig {
+        enabled: prefs.voice_activation_enabled,
+        wake_enabled: prefs.voice_activation_wake_enabled,
+        finish_enabled: prefs.voice_activation_finish_enabled,
+        wake_phrase: prefs.voice_activation_wake_phrase.clone(),
+        finish_phrase: prefs.voice_activation_finish_phrase.clone(),
+        timeout_enabled: prefs.voice_activation_timeout_enabled,
+        timeout_seconds: prefs.voice_activation_timeout_seconds,
+        microphone_device_name: (!prefs.microphone_device_name.trim().is_empty())
+            .then(|| prefs.microphone_device_name.clone()),
+        activation_generation: 0,
+    }
+    .normalized()
+    .map(|_| ())
+    .map_err(|error| format!("invalid voice activation settings: {error}"))
+}
 
 async fn invalidate_llm_tests_if_thinking_changed(
     coord: &Coordinator,
@@ -269,6 +305,7 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    validate_voice_activation_preferences(&prefs)?;
     invalidate_llm_tests_if_thinking_changed(&coord, &remote_prev, &prefs).await?;
     // Persist changed fields and notify every WebView through the shared settings path.
     if let Some(edits) = edits {
@@ -278,6 +315,11 @@ pub async fn set_settings(
     }
     let prefs = coord.backend().get_preferences();
     sync_low_latency_capture_preferences(&prefs);
+    if voice_activation_preferences_changed(&remote_prev, &prefs) {
+        if let Err(error) = coord.backend().configure_voice_activation().await {
+            log::warn!("[voice-activation] settings reconfiguration failed: {error}");
+        }
+    }
     // Sync the capsule-style atom on save: the next recording's entrance frame carries the
     // new style instead of depending on emit_capsule's ~30Hz main-thread closure sync (a
     // congested Windows main thread delays the closure → the whole session shows the old
@@ -345,6 +387,7 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    validate_voice_activation_preferences(&prefs)?;
     invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
     if let Some(edits) = edits {
         persist_setting_fields(&coord, &edits)?;
@@ -353,8 +396,12 @@ pub async fn set_settings(
     }
     let prefs = coord.backend().get_preferences();
     sync_low_latency_capture_preferences(&prefs);
-    // Sync the capsule-style atom on save (same source as the Android notification capsule
-    // payload; see emit_capsule).
+    if voice_activation_preferences_changed(&previous, &prefs) {
+        if let Err(error) = coord.backend().configure_voice_activation().await {
+            log::warn!("[voice-activation] settings reconfiguration failed: {error}");
+        }
+    }
+    // Sync the capsule-style atom on save (same source as the Android notification capsule payload; see emit_capsule).
     coord.sync_capsule_style_from_preferences();
     // Rebuild the client connection pool immediately when the system-proxy switch changes (issue #869).
     if previous.use_system_proxy != prefs.use_system_proxy {

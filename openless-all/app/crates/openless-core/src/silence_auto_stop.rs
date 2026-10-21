@@ -31,6 +31,15 @@ impl SilenceAutoStop {
         }
     }
 
+    /// A wake command already established speech before formal capture began.
+    pub fn after_speech(silence_after_speech: Duration, started_at: Instant) -> Self {
+        Self {
+            speech_detected: true,
+            last_speech_at: Some(started_at),
+            ..Self::new(silence_after_speech, started_at)
+        }
+    }
+
     pub fn on_level(&mut self, level: f32, now: Instant) -> Option<SilenceDecision> {
         if self.decided {
             return None;
@@ -70,6 +79,35 @@ mod tests {
         frames
             .iter()
             .find_map(|(level, offset)| detector.on_level(*level, base + *offset))
+    }
+
+    #[test]
+    fn voice_activation_timeout_tracks_speech_instead_of_total_duration() {
+        let base = Instant::now();
+        let mut detector = SilenceAutoStop::after_speech(Duration::from_secs(15), base);
+        for seconds in 0..=30 {
+            assert_eq!(
+                detector.on_level(0.1, base + Duration::from_secs(seconds)),
+                None
+            );
+        }
+        assert_eq!(detector.on_level(0.0, base + Duration::from_secs(44)), None);
+        assert_eq!(
+            detector.on_level(0.0, base + Duration::from_secs(45)),
+            Some(SilenceDecision::Stop)
+        );
+        assert_eq!(detector.on_level(0.0, base + Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn voice_activation_without_body_uses_configured_silence_timeout() {
+        let base = Instant::now();
+        let mut detector = SilenceAutoStop::after_speech(Duration::from_secs(15), base);
+        assert_eq!(detector.on_level(0.0, base + Duration::from_secs(10)), None);
+        assert_eq!(
+            detector.on_level(0.0, base + Duration::from_secs(15)),
+            Some(SilenceDecision::Stop)
+        );
     }
 
     #[test]

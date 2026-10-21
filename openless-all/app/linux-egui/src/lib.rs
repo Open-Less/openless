@@ -38,6 +38,7 @@ mod runtime;
 mod selection;
 mod settings;
 mod single_instance;
+mod siwc;
 mod tray;
 pub mod typography;
 mod ui_state;

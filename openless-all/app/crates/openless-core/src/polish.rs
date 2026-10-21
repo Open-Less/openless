@@ -212,6 +212,8 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
 
 #[derive(Debug, Error)]
 pub enum LLMError {
+    #[error("{0}")]
+    Siwc(crate::siwc::SiwcError),
     #[error("missing credentials")]
     MissingCredentials,
     #[error("network error: {0}")]
@@ -518,6 +520,7 @@ impl ActiveLLMProvider {
 
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
+    siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
     dictation_session_id: Option<crate::types::SessionId>,
     /// Polish-dedicated client: no input-length-dependent whole-request timeout, only a
     /// connection-leak hard cap. The real criteria live at call sites (streaming two
@@ -548,8 +551,14 @@ impl OpenAICompatibleLLMProvider {
         Self {
             config,
             dictation_session_id: None,
+            siwc_access: None,
             polish_client,
         }
+    }
+
+    pub(crate) fn with_siwc_access(mut self, access: crate::siwc::SiwcAccess) -> Self {
+        self.siwc_access = Some(std::sync::Arc::new(access));
+        self
     }
 
     pub(crate) fn set_dictation_session(&mut self, session_id: crate::types::SessionId) {
@@ -859,6 +868,23 @@ impl OpenAICompatibleLLMProvider {
         body: &serde_json::Value,
         budget: Duration,
     ) -> Result<String, LLMError> {
+        if let Some(access) = &self.siwc_access {
+            return tokio::time::timeout(
+                budget,
+                access.infer(
+                    body,
+                    StreamingTimeouts {
+                        first_token: budget,
+                        idle: budget,
+                    },
+                    |_| {},
+                    || false,
+                ),
+            )
+            .await
+            .map_err(|_| LLMError::Timeout)?
+            .map(|text| clean_polish_output(&text));
+        }
         let request_id = uuid::Uuid::new_v4();
         log::info!(
             "[llm] request_id={} session_id={} stream=false",
@@ -982,6 +1008,16 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
+        if let Some(access) = &self.siwc_access {
+            return access
+                .infer(
+                    &self.chat_body(true, messages),
+                    timeouts,
+                    on_delta,
+                    should_cancel,
+                )
+                .await;
+        }
         if should_cancel() {
             return Err(LLMError::Network("cancelled".into()));
         }

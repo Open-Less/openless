@@ -644,7 +644,9 @@ impl DictationEngine for PipelineDictationEngine {
                     )
                 });
             let race = match standby {
-                Some(standby) => race_cloud_with_local_standby(transcription.finish(), standby).await,
+                Some(standby) => {
+                    race_cloud_with_local_standby(transcription.finish(), standby).await
+                }
                 None => AsrRace::Cloud {
                     result: transcription.finish().await,
                     standby: None,
@@ -825,6 +827,9 @@ impl DictationEngine for PipelineDictationEngine {
                 )
                 .into());
             }
+            if let Some(commands) = context.voice_activation.as_ref() {
+                transcript.text = commands.clean(&transcript.text);
+            }
             let original_asr_text = transcript.text.clone();
             transcript.text = crate::correction::apply_correction_rules(
                 &transcript.text,
@@ -869,6 +874,7 @@ impl DictationEngine for PipelineDictationEngine {
             // Optional polish may be skipped after fallback; an explicit translation is still required.
             let translation_active = context.polish.translation_active;
             let uses_polisher = context.uses_llm_polisher()
+                && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
                 && !skips_polish_for_short_text
                 && (!local_fallback_used || translation_active);
             log::info!(
@@ -1230,7 +1236,10 @@ struct ReplayPlan {
     backoff: bool,
 }
 
-const CLOUD_RETRY: ReplayPlan = ReplayPlan { attempts: 2, backoff: true };
+const CLOUD_RETRY: ReplayPlan = ReplayPlan {
+    attempts: 2,
+    backoff: true,
+};
 
 type AsrAttempt = (
     crate::ports::TranscriptOutput,
@@ -3465,6 +3474,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
+        use crate::testing::{
+            FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
+        };
+        for (input, voice, finish, expected, original) in [
+            (
+                "开始，文字录入。 错字 完成，文字录入。",
+                true,
+                true,
+                "正文",
+                Some("错字"),
+            ),
+            (
+                "开始文字录入 正文完成文字录入之前 完成文字录入",
+                true,
+                true,
+                "正文完成文字录入之前",
+                None,
+            ),
+            (
+                "开始文字录入 正文完成文字录入",
+                true,
+                false,
+                "正文完成文字录入",
+                None,
+            ),
+            ("开始文字录入 完成文字录入", true, true, "", None),
+            (
+                "开始文字录入 正文 完成文字录入",
+                false,
+                true,
+                "开始文字录入 正文 完成文字录入",
+                None,
+            ),
+        ] {
+            let polisher = Arc::new(FixtureTextPolisher::successful("润色结果"));
+            let engine = PipelineDictationEngine::new(
+                Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
+                Arc::new(FixtureTranscriptionEngine::successful(input, 1_000)),
+                polisher.clone(),
+            );
+            let mut context = DictationContext::default();
+            context.polish.polish_skip_max_chars = 0;
+            context.voice_activation =
+                voice.then(|| crate::voice_activation::VoiceActivationTextPolicy {
+                    wake_phrase: "开始文字录入".into(),
+                    finish_phrase: finish.then(|| "完成文字录入".into()),
+                });
+            context.correction_rules.push(crate::types::CorrectionRule {
+                id: "voice-cleanup".into(),
+                pattern: "错字".into(),
+                replacement: "正文".into(),
+                enabled: true,
+                created_at: String::new(),
+                source: Default::default(),
+            });
+            let session_id = SessionId::new();
+            let progress = Arc::new(RecordingProgress::default());
+            engine
+                .start(session_id, Arc::new(context), progress.clone())
+                .await
+                .unwrap();
+            let result = engine.finish(session_id, progress.clone()).await.unwrap();
+            assert_eq!(result.raw_text, expected);
+            assert_eq!(result.asr_transcript.as_deref(), original);
+            if expected.is_empty() {
+                assert!(polisher.inputs().is_empty());
+                assert!(result.polished_text.is_empty());
+            } else {
+                assert_eq!(polisher.inputs(), vec![expected]);
+                assert_eq!(result.polished_text, "润色结果");
+            }
+            assert!(progress.events.lock().unwrap().iter().any(|event| matches!(event,
+                EngineProgress::TranscriptDelta(delta) if delta.is_final && delta.text == expected)));
+        }
+    }
+
+    #[tokio::test]
+    async fn voice_activation_polish_failure_retains_only_spoken_body() {
+        use crate::testing::{
+            FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
+        };
+        for policy in [PolishFailurePolicy::Fail, PolishFailurePolicy::UseRawText] {
+            let polisher = Arc::new(FixtureTextPolisher::failing(BackendError::new(
+                BackendErrorCode::Provider,
+                "fixture",
+            )));
+            let engine = PipelineDictationEngine::new(
+                Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
+                Arc::new(FixtureTranscriptionEngine::successful(
+                    "开始语音录入 正文 完成语音录入",
+                    1000,
+                )),
+                polisher.clone(),
+            )
+            .with_polish_failure_policy(policy);
+            let context = DictationContext {
+                voice_activation: Some(crate::voice_activation::VoiceActivationTextPolicy {
+                    wake_phrase: "开始语音录入".into(),
+                    finish_phrase: Some("完成语音录入".into()),
+                }),
+                ..Default::default()
+            };
+            let id = SessionId::new();
+            let progress = Arc::new(RecordingProgress::default());
+            engine
+                .start(id, Arc::new(context), progress.clone())
+                .await
+                .unwrap();
+            let result = engine.finish(id, progress).await;
+            assert_eq!(polisher.inputs(), vec!["正文"]);
+            match result {
+                Ok(output) => {
+                    assert_eq!(output.raw_text, "正文");
+                    assert_eq!(output.polished_text, "正文");
+                }
+                Err(failure) => assert_eq!(failure.raw_text.as_deref(), Some("正文")),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn short_transcript_under_threshold_skips_polish() {
         // Issue #1032: "raw text" has 7 non-whitespace characters, within a limit of 8.
         let fixture = fixture_engine(
@@ -3755,7 +3886,9 @@ mod tests {
     /// started with, and records that provider — so a test can tell the cloud
     /// call, its retries and the local fallback apart.
     struct RoutedTranscriber {
-        outputs: Mutex<std::collections::HashMap<String, VecDeque<Result<TranscriptOutput, BackendError>>>>,
+        outputs: Mutex<
+            std::collections::HashMap<String, VecDeque<Result<TranscriptOutput, BackendError>>>,
+        >,
         started: Arc<Mutex<Vec<String>>>,
         /// How long each provider's finish takes; providers not listed answer at once.
         delays: std::collections::HashMap<String, std::time::Duration>,
@@ -3828,7 +3961,11 @@ mod tests {
     fn fallback_test_engine(
         cloud: Vec<Result<TranscriptOutput, BackendError>>,
         local: Vec<Result<TranscriptOutput, BackendError>>,
-    ) -> (PipelineDictationEngine, Arc<RecordingProgress>, Arc<Mutex<Vec<String>>>) {
+    ) -> (
+        PipelineDictationEngine,
+        Arc<RecordingProgress>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
         let (engine, progress, started, _) = fallback_polish_test_engine(
             cloud,
             local,
@@ -3896,14 +4033,21 @@ mod tests {
                 contexts: Arc::new(Mutex::new(Vec::new())),
             }),
         );
-        (engine, Arc::new(RecordingProgress::default()), started, polish_calls)
+        (
+            engine,
+            Arc::new(RecordingProgress::default()),
+            started,
+            polish_calls,
+        )
     }
 
     /// A polishing session (not raw mode) on CLOUD with the LOCAL fallback.
     fn polishing_fallback_context() -> Arc<DictationContext> {
         let mut context = DictationContext {
             asr: crate::dictation_context::ProviderInvocation::new(CLOUD, CLOUD),
-            asr_fallback: Some(crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL)),
+            asr_fallback: Some(crate::dictation_context::ProviderInvocation::new(
+                LOCAL, LOCAL,
+            )),
             ..DictationContext::default()
         };
         assert!(context.uses_llm_polisher(), "fixture must exercise the polisher");
@@ -4008,7 +4152,11 @@ mod tests {
     #[tokio::test]
     async fn a_local_fallback_skips_polish_and_reports_no_failure() {
         let (engine, progress, started, polish_calls) = fallback_polish_test_engine(
-            vec![Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true))],
+            vec![Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "offline",
+            )
+            .retryable(true))],
             vec![transcript("本地识别")],
             Err(BackendError::new(BackendErrorCode::Provider, "offline")),
         );
@@ -4037,7 +4185,10 @@ mod tests {
         let (engine, progress, _, polish_calls) = fallback_polish_test_engine(
             vec![],
             vec![transcript("本地识别")],
-            Err(BackendError::new(BackendErrorCode::Provider, "invalid api key")),
+            Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "invalid api key",
+            )),
         );
         let session_id = SessionId::new();
         engine.start(session_id, local_polishing_context(), progress.clone()).await.unwrap();
@@ -4090,18 +4241,27 @@ mod tests {
     fn fallback_context() -> Arc<DictationContext> {
         let mut context = (*raw_dictation_context()).clone();
         context.asr = crate::dictation_context::ProviderInvocation::new(CLOUD, CLOUD);
-        context.asr_fallback = Some(crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL));
+        context.asr_fallback = Some(crate::dictation_context::ProviderInvocation::new(
+            LOCAL, LOCAL,
+        ));
         Arc::new(context)
     }
 
     fn transcript(text: &str) -> Result<TranscriptOutput, BackendError> {
-        Ok(TranscriptOutput { text: text.into(), duration_ms: 25 })
+        Ok(TranscriptOutput {
+            text: text.into(),
+            duration_ms: 25,
+        })
     }
 
     #[tokio::test]
     async fn failed_cloud_asr_goes_straight_to_the_local_fallback() {
         let (engine, progress, started) = fallback_test_engine(
-            vec![Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true))],
+            vec![Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "offline",
+            )
+            .retryable(true))],
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
@@ -4117,7 +4277,10 @@ mod tests {
     #[tokio::test]
     async fn a_non_retryable_cloud_error_also_falls_back() {
         let (engine, progress, started) = fallback_test_engine(
-            vec![Err(BackendError::new(BackendErrorCode::Provider, "quota exhausted"))],
+            vec![Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "quota exhausted",
+            ))],
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
@@ -4135,7 +4298,10 @@ mod tests {
             || Err(BackendError::new(BackendErrorCode::Provider, "offline").retryable(true));
         let (engine, progress, started) = fallback_test_engine(
             vec![temporary(), temporary(), temporary()],
-            vec![Err(BackendError::new(BackendErrorCode::Unsupported, "model not downloaded"))],
+            vec![Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "model not downloaded",
+            ))],
         );
         let session_id = SessionId::new();
         engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
@@ -4206,7 +4372,10 @@ mod tests {
         let (engine, progress, _, _) = racing_test_engine(
             &[(CLOUD, 200)],
             vec![transcript("云端识别")],
-            vec![Err(BackendError::new(BackendErrorCode::Unsupported, "model not downloaded"))],
+            vec![Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "model not downloaded",
+            ))],
             Ok(crate::ports::PolishOutput::text("unused")),
         );
         let session_id = SessionId::new();

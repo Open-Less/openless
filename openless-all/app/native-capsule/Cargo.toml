@@ -1,0 +1,22 @@
+[package]
+name = "openless-native-capsule"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+openless-capsule = { path = "../crates/openless-capsule", features = ["ui"] }
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+raw-window-handle = "0.6"
+# The macOS initializer adapter relies on WinitWindow's ivar-free layout.
+winit = { version = "=0.30.13", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSPanel"] }
+objc2-foundation = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell"] }

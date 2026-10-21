@@ -198,6 +198,8 @@ pub struct DictationContext {
     pub recording: RecordingPlan,
     pub pipeline_mode: PipelineMode,
     pub correction_rules: Vec<crate::types::CorrectionRule>,
+    /// Runtime-only commands, captured only for voice-started dictation.
+    pub voice_activation: Option<crate::voice_activation::VoiceActivationTextPolicy>,
     pub asr: ProviderInvocation,
     /// Local model a failed cloud ASR call is retried with, frozen at session
     /// start (see local_asr_fallback()); None when the fallback doesn't apply.
@@ -340,6 +342,7 @@ impl DictationContext {
                 preferences.pipeline_mode,
             ),
             correction_rules: Vec::new(),
+            voice_activation: None,
             asr,
             asr_fallback,
             llm,

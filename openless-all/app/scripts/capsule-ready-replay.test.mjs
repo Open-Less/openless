@@ -54,7 +54,13 @@ const frame = (overrides = {}) => ({
 });
 
 // Run the component's real effect with controlled native events and delayed IPC replies.
-function mount({ snapshot = () => null, beforeListen = async () => {} } = {}) {
+function mount({
+  snapshot = () => null,
+  beforeListen = async () => {},
+  auxiliary = () => {
+    throw new Error('unsupported');
+  },
+} = {}) {
   const listeners = new Map();
   const stopped = [];
   const delays = [];
@@ -85,6 +91,14 @@ function mount({ snapshot = () => null, beforeListen = async () => {} } = {}) {
       return snapshot(requests);
     },
     require: (name) => {
+      if (name === '@tauri-apps/api/core')
+        return {
+          invoke: async (command) => {
+            assert.equal(command, 'get_capsule_auxiliary_snapshot');
+            assert.equal(listeners.size, 4);
+            return auxiliary();
+          },
+        };
       assert.equal(name, '@tauri-apps/api/event');
       return {
         listen: async (name, callback) => {
@@ -305,4 +319,40 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
   release(view);
 }
 
-console.log('capsule ready replay: session, ordering, bounded retries and cleanup passed');
+// Each card stream has its own revision: a vocabulary event must not lose a fallback replay.
+{
+  const pending = deferred();
+  const view = mount({ auxiliary: () => pending.promise });
+  await until(() => view.listeners.size === 4);
+  await tick();
+  const live = [{ id: 'live', pattern: 'old', replacement: 'new' }];
+  const fallback = { text: 'not inserted', reason: 'missing target' };
+  view.emit('vocab:suggested', live);
+  pending.resolve({ suggestions: [], fallback });
+  await until(() => view.values.setInsertFallback === fallback);
+  assert.equal(view.values.setSuggestions, live);
+  release(view);
+}
+{
+  const pending = deferred();
+  const view = mount({ auxiliary: () => pending.promise });
+  await until(() => view.listeners.size === 4);
+  await tick();
+  view.emit('insert:fallback', null);
+  const suggestions = [{ id: 'pending', pattern: 'a', replacement: 'b' }];
+  pending.resolve({ suggestions, fallback: { text: 'stale' } });
+  await until(() => view.values.setSuggestions === suggestions);
+  assert.equal(view.values.setInsertFallback, null);
+  release(view);
+}
+{
+  const pending = deferred();
+  const view = mount({ auxiliary: () => pending.promise });
+  await until(() => view.listeners.size === 4);
+  release(view);
+  const writes = view.writes.length;
+  pending.resolve({ suggestions: [], fallback: null });
+  await tick();
+  assert.equal(view.writes.length, writes);
+}
+console.log('capsule ready replay: session, card ordering, bounded retries and cleanup passed');

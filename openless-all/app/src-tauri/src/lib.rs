@@ -40,10 +40,15 @@ mod coordinator;
 mod coordinator_state;
 mod core_adapters;
 mod correction;
+mod desktop_resources;
 #[cfg(target_os = "macos")]
 mod macos_dictation_key;
 #[cfg(target_os = "macos")]
 mod macos_streaming_input;
+#[cfg(not(mobile))]
+mod native_audio_cue;
+#[cfg(not(mobile))]
+mod native_capsule;
 mod qa_adapter;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
@@ -201,22 +206,33 @@ pub fn run() {
     // system credential vault, but exercises the actual shared/native engines.
     // This entry point does not exist in production release builds.
     #[cfg(all(debug_assertions, target_os = "macos", target_arch = "aarch64"))]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-local-asr-check")) {
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--openless-local-asr-check"))
+    {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         if !(args.len() == 2 || (args.len() == 3 && args[2] == "--download")) {
             eprintln!("usage: openless --openless-local-asr-check <isolated openless-asr-acceptance* directory> <16kHz mono WAV> [--download]");
             std::process::exit(2);
         }
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("acceptance runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("acceptance runtime");
         match runtime.block_on(crate::asr::local::experimental::acceptance::run(
-            args[0].clone().into(), args[1].clone().into(), args.len() == 3,
+            args[0].clone().into(),
+            args[1].clone().into(),
+            args.len() == 3,
         )) {
             Ok(()) => return,
-            Err(error) => { eprintln!("local ASR acceptance failed: {error:#}"); std::process::exit(1); }
+            Err(error) => {
+                eprintln!("local ASR acceptance failed: {error:#}");
+                std::process::exit(1);
+            }
         }
     }
     // Old installations/launchers must not revive the retired native worker.
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-mlx-worker")) {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--openless-mlx-worker"))
+    {
         eprintln!("Legacy local ASR worker has been retired");
         return;
     }
@@ -234,6 +250,10 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
+            desktop_resources::desktop_low_memory_active,
+            native_capsule::native_capsule_set_locale,
+            get_capsule_auxiliary_snapshot,
+            native_capsule_status,
             commands::get_capsule_snapshot,
             commands::get_settings,
             commands::get_settings_snapshot,
@@ -441,6 +461,9 @@ macro_rules! app_invoke_handler_desktop {
             commands::list_provider_descriptors,
             commands::validate_provider_credentials,
             commands::list_provider_models,
+            commands::siwc_status,
+            commands::siwc_models,
+            commands::siwc_action,
             commands::experimental_asr_status,
             commands::experimental_asr_set_enabled,
             commands::experimental_asr_delete,
@@ -571,6 +594,9 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::list_provider_descriptors,
             $crate::commands::validate_provider_credentials,
             $crate::commands::list_provider_models,
+            $crate::commands::siwc_status,
+            $crate::commands::siwc_models,
+            $crate::commands::siwc_action,
             $crate::commands::list_history,
             $crate::commands::delete_history_entry,
             $crate::commands::clear_history,
@@ -798,6 +824,11 @@ fn run_desktop() {
     let core_backend = coordinator.backend();
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
+    let mut context = tauri::generate_context!();
+    desktop_resources::configure(
+        &mut context,
+        core_backend.get_preferences().low_memory_background_enabled,
+    );
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -818,6 +849,7 @@ fn run_desktop() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .manage(desktop_resources::MainWindowLifecycle::default())
         .manage(coordinator.clone())
         .manage(core_backend.clone())
         .manage(foundry_local_runtime.clone())
@@ -886,39 +918,7 @@ fn run_desktop() {
             // system traffic lights; Windows disables native chrome so the React
             // WinTitleBar takes over.
             if let Some(main) = app.get_webview_window("main") {
-                #[cfg(target_os = "macos")]
-                {
-                    use window_vibrancy::{
-                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-                    };
-                    if let Err(e) = main.set_decorations(true) {
-                        log::warn!("[main] enable native decorations failed: {e}");
-                    }
-                    if let Err(e) = apply_vibrancy(
-                        &main,
-                        NSVisualEffectMaterial::HudWindow,
-                        Some(NSVisualEffectState::Active),
-                        Some(20.0),
-                    ) {
-                        log::warn!("[main] vibrancy failed: {e}");
-                    }
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    use window_vibrancy::apply_mica;
-                    // Windows uses Tauri decorations:true for the native Win11 title bar /
-                    // close button / dragging / rounded corners / resize border. Keep
-                    // apply_mica to give the native chrome a frosted material; combined
-                    // with WindowChrome's translucent background it lets the sidebar show
-                    // through with a glassy feel.
-                    if let Err(e) = apply_mica(&main, None) {
-                        log::warn!("[main] mica failed: {e}");
-                    }
-                    // Win11 22H2+: sync the native title bar theme; the frontend calls
-                    // set_windows_caption_theme again once ready. Silently no-ops on
-                    // older Windows.
-                    apply_windows_caption_theme(&main, false);
-                }
+                desktop_resources::initialize_main(&main);
                 // Silent-start switch: prefs.start_minimized = true → don't pop the main
                 // window; the user reaches it from the menu bar / tray. Especially useful
                 // with autostart to avoid the main window on every login.
@@ -934,6 +934,13 @@ fn run_desktop() {
                     if let Err(e) = main.show() {
                         log::warn!("[main] initial show failed: {e}");
                     }
+                }
+            }
+
+            if desktop_resources::active() {
+                let force_show = std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
+                if force_show || coordinator.startup_error().is_some() || !coordinator.backend().get_preferences().start_minimized {
+                    show_main_window(app.handle());
                 }
             }
 
@@ -996,6 +1003,7 @@ fn run_desktop() {
                 start_tray_microphone_watcher(app.handle().clone());
             } else {
                 log::warn!("[startup] default window icon missing; tray icon disabled");
+                show_main_window(app.handle());
             }
 
             // Bind recovery effects before Core startup; the Ready handler
@@ -1025,7 +1033,7 @@ fn run_desktop() {
             Ok(())
         })
         .invoke_handler(app_invoke_handler_desktop!())
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| match event {
             RunEvent::Ready => {
@@ -1034,11 +1042,14 @@ fn run_desktop() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
+            RunEvent::ExitRequested { code: None, api, .. } if desktop_resources::active() => api.prevent_exit(),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
                     if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
                         api.prevent_close();
                         hide_main_window(app);
+                    } else if matches!(event, tauri::WindowEvent::Destroyed) {
+                        desktop_resources::main_destroyed(app);
                     }
                 }
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1060,6 +1071,7 @@ fn run_desktop() {
                 TRAY_MICROPHONE_WATCHER_STOPPING.store(true, Ordering::Relaxed);
                 crate::recorder::warm_capture_hub().stop();
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
+                coordinator.tauri_host().stop_native_capsule();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
@@ -1596,13 +1608,21 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     };
 
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    if let Err(err) = coord
-        .backend()
-        .select_microphone_device(selected.device_name.clone())
-    {
+    let backend = coord.backend();
+    if let Err(err) = backend.select_microphone_device(selected.device_name.clone()) {
         log::warn!("[tray] save microphone preference failed: {err}");
         return;
     }
+    commands::sync_low_latency_capture_preferences(&backend.get_preferences());
+    let selected_device_name = selected.device_name.clone();
+    let backend_for_reconfigure = Arc::clone(&backend);
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = backend_for_reconfigure.configure_voice_activation().await {
+            log::warn!(
+                "[tray] reconfigure microphone-dependent voice runtime for {selected_device_name:?} failed: {err}"
+            );
+        }
+    });
 
     commands::sync_tray_microphone_selection(&items, &selected.device_name);
 }
@@ -1721,10 +1741,26 @@ fn set_windows_caption_theme(app: AppHandle, dark: bool) {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    // The main-thread restart path skips the RunEvent::Exit handlers; stop the
+    // disposable capsule explicitly. The child also self-closes when the
+    // inherited pipe hits EOF, so an exit here can never orphan it.
+    #[cfg(not(mobile))]
+    if let Some(coordinator) = app.try_state::<Arc<coordinator::Coordinator>>() {
+        coordinator.tauri_host().stop_native_capsule();
+    }
     prepare_for_restart();
     #[cfg(target_os = "macos")]
     reset_tcc_for_beta_restart();
-    app.restart();
+    restart_on_main_thread(app);
+}
+
+/// `AppHandle::restart` from a command thread routes through
+/// `ExitRequested { code: None }`, which the low-memory background policy
+/// deliberately prevents; hopping to the main thread takes tauri's direct
+/// spawn-and-exit path instead.
+fn restart_on_main_thread(app: AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || handle.restart());
 }
 
 #[tauri::command]
@@ -1921,7 +1957,17 @@ pub fn log_dir_path() -> std::path::PathBuf {
 
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
-    if let Some(w) = app.get_webview_window("main") {
+    #[cfg(not(mobile))]
+    let main = match desktop_resources::ensure_main(app) {
+        Ok(window) => window,
+        Err(error) => {
+            log::error!("[main] recreate failed: {error}");
+            None
+        }
+    };
+    #[cfg(mobile)]
+    let main = app.get_webview_window("main");
+    if let Some(w) = main {
         let _ = w.show();
         #[cfg(not(mobile))]
         let _ = w.unminimize();
@@ -2001,6 +2047,24 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 }
 
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(not(mobile))]
+    if desktop_resources::active() {
+        // Hide now, destroy after a short grace so accidental close/reopen
+        // cycles keep the WebView (and its form state) alive.
+        desktop_resources::hide_main_with_grace(app);
+        let app_for_preview = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(state) = app_for_preview.try_state::<commands::MicrophoneMonitorState>() {
+                let _operation = state.operation.lock();
+                if let Some(recorder) = state.recorder.lock().take() {
+                    recorder.stop();
+                }
+                crate::recorder::warm_capture_hub().end_preview();
+            }
+        });
+        activate_menu_bar_mode(app);
+        return;
+    }
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
@@ -3396,7 +3460,11 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         let result = app_for_show
             .try_state::<Arc<openless_core::OpenLessBackend>>()
             .ok_or_else(|| "Backend is not initialized".to_string())
-            .and_then(|backend| backend.ensure_testing_features_enabled().map_err(|error| error.message))
+            .and_then(|backend| {
+                backend
+                    .ensure_testing_features_enabled()
+                    .map_err(|error| error.message)
+            })
             .and_then(|()| {
                 window.show().map_err(|error| {
                     log::warn!("[less-computer] show failed: {error}");
@@ -3405,7 +3473,8 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
             });
         if result.is_ok() {
             LESS_COMPUTER_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-            let _ = app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
+            let _ =
+                app_for_show.emit_to("less-computer", "chat-panel:shown", serde_json::json!({}));
         }
         let _ = result_tx.send(result);
     })
@@ -4238,4 +4307,33 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Cards can be created after their first event was emitted. Replay their state
+/// after the frontend subscribes, rather than losing a passage on cold start.
+#[cfg(not(mobile))]
+#[tauri::command]
+fn get_capsule_auxiliary_snapshot(
+    coord: tauri::State<'_, Arc<coordinator::Coordinator>>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "suggestions": coord.backend().pending_corrections(),
+        "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
+    })
+}
+
+/// Runtime health of the disposable native capsule, for the settings page:
+/// `active` mirrors the launch-time low-memory switch, `available` is false
+/// when the sidecar helper is missing or failed to initialize.
+#[cfg(not(mobile))]
+#[tauri::command]
+fn native_capsule_status(
+    coord: tauri::State<'_, Arc<coordinator::Coordinator>>,
+) -> serde_json::Value {
+    let (available, error) = coord.tauri_host().native_capsule_status();
+    serde_json::json!({
+        "active": crate::desktop_resources::active(),
+        "available": available,
+        "error": error,
+    })
 }

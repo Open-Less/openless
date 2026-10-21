@@ -48,10 +48,29 @@ const tauriEventsRs = await readFile(
   new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
   'utf-8',
 );
+const captureForegroundMonitor =
+  coordinatorRs.match(/fn capture_foreground_monitor\b[\s\S]*?\n    }/)?.[0] ?? '';
 assertMatch(
-  coordinatorRs,
-  /fn prepare_display_target[\s\S]*?\.then\(\|\| self\.qa_context\.external_focus_target\(\)\)[\s\S]*?\.or_else\(crate::coordinator::capture_focus_target\)/,
+  captureForegroundMonitor,
+  /\.is_panel_visible\(\)[\s\S]*?\.then\(\|\| self\.qa_context\.external_focus_target\(\)\)[\s\S]*?\.or_else\(crate::coordinator::capture_focus_target\)[\s\S]*?monitor_rect_for_hwnd/,
   'foreground display targeting must retain QA provenance and accept OpenLess foreground windows',
+);
+const prepareDisplayTarget =
+  coordinatorRs.match(/fn prepare_display_target\b[\s\S]*?\n    }/)?.[0] ?? '';
+assertMatch(
+  prepareDisplayTarget,
+  /CapsuleState::Recording[\s\S]*?CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!self\.state\.foreground_target_matches_session\(session_id\)[\s\S]*?self\.capture_foreground_monitor\(\)[\s\S]*?begin_foreground_target_capture\(session_id, monitor\)/,
+  'WebView capsules must capture the shared foreground target once per recording session',
+);
+const nativeCapsuleRs = await readFile(
+  new URL('../src-tauri/src/native_capsule.rs', import.meta.url),
+  'utf-8',
+);
+const nativeRefreshLayout = nativeCapsuleRs.match(/fn refresh_layout\b[\s\S]*?\n    }/)?.[0] ?? '';
+assertMatch(
+  nativeRefreshLayout,
+  /CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!latest\.foreground_captured[\s\S]*?frame\.state\.phase == "recording"[\s\S]*?capsule\.capture_foreground_monitor\(\)[\s\S]*?latest\.foreground_captured = true/,
+  'low-memory capsules must capture the same foreground target once per recording session',
 );
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
@@ -172,7 +191,9 @@ assertMatch(
 
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
-if (!/os === 'win' \|\| os === 'android'(?: \|\| os === 'harmony')? \? 0 : 14/.test(windowChromeTsx)) {
+if (
+  !/os === 'win' \|\| os === 'android'(?: \|\| os === 'harmony')? \? 0 : 14/.test(windowChromeTsx)
+) {
   throw new Error(
     'windows main shell should rely on native decorations instead of a frameless chrome shell',
   );

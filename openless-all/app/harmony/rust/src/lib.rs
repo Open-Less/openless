@@ -1,6 +1,7 @@
 mod credentials;
 mod history;
 mod self_test;
+mod siwc;
 mod voice_configuration;
 use openless_core::{BackendConfig, BackendDependencies, OpenLessBackend};
 use serde_json::{json, Value};
@@ -356,6 +357,86 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
                 Err(_) => json!({"online":false,"latencyMs":null}),
             }
         }),
+        "siwc_status" | "siwc_models" | "siwc_action" | "__siwc_begin" => {
+            host.runtime.block_on(async {
+                let channel = required(&args, "channelId")?.to_string();
+                let service = b
+                    .siwc_for_channel(&channel)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if command == "__siwc_begin"
+                    || (command == "siwc_action"
+                        && matches!(args["action"].as_str(), Some("select" | "disconnect")))
+                {
+                    b.invalidate_channel_test(openless_core::ChannelKind::Llm, channel.clone())
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                let result = match command {
+                    "siwc_status" => {
+                        json!(service.status(&channel).await.map_err(|e| e.to_string())?)
+                    }
+                    "siwc_models" => json!(service
+                        .list_models(&channel)
+                        .await
+                        .map_err(|e| e.to_string())?),
+                    "__siwc_begin" => {
+                        let action = required(&args, "action")?;
+                        let launch = b
+                            .begin_siwc_sign_in(
+                                channel,
+                                action == "add_account",
+                                action == "enable_usage",
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        json!({"attemptId": launch.attempt_id, "url": launch.authorization_url()})
+                    }
+                    _ => match required(&args, "action")? {
+                        "cancel" => {
+                            service
+                                .cancel_sign_in(&channel)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            Value::Null
+                        }
+                        "select" => {
+                            service
+                                .select_account(
+                                    channel,
+                                    required(&args, "registrationId")?.to_string(),
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            Value::Null
+                        }
+                        "disconnect" => json!(service
+                            .disconnect(&channel)
+                            .await
+                            .map_err(|e| e.to_string())?),
+                        "acknowledge" => {
+                            service
+                                .acknowledge_welcome(channel)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            Value::Null
+                        }
+                        "retry" => {
+                            service
+                                .retry_usage(channel)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            Value::Null
+                        }
+                        _ => return Err("unsupported SIWC action".into()),
+                    },
+                };
+                b.refresh_and_publish_credentials()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(result)
+            })?
+        }
         "get_settings" => json!(b.get_preferences()),
         "get_credentials" => json!(host
             .runtime

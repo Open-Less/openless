@@ -3,7 +3,7 @@
 // Web Audio 输出会被某些桌面音频栈当作 sink-input，启动/退出时触发音量 OSD；
 // Android 也可能因 Web Audio 输出切换录音输入路由，因此这两个平台禁用。
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isAndroid, isTauri } from '../lib/ipc';
 import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
@@ -19,7 +19,26 @@ interface CapsulePayload {
 export function AudioCueListener() {
   const audioCueEnabledRef = useRef<boolean>(true);
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
-  const audioCueRuntimeEnabled = !isAndroid();
+  const [nativeCueOwner, setNativeCueOwner] = useState<boolean | null>(isTauri ? null : false);
+  useEffect(() => {
+    if (!isTauri || isAndroid()) {
+      setNativeCueOwner(false);
+      return;
+    }
+    let cancelled = false;
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke<boolean>('desktop_low_memory_active'))
+      .then((active) => {
+        if (!cancelled) setNativeCueOwner(active);
+      })
+      .catch(() => {
+        if (!cancelled) setNativeCueOwner(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const audioCueRuntimeEnabled = !isAndroid() && nativeCueOwner === false;
 
   // Read settings (enabled by default)
   useEffect(() => {

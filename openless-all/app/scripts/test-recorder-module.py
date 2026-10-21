@@ -22,6 +22,7 @@ edition = "2021"
 cpal = "=0.15.3"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
 log = "0.4"
 """)

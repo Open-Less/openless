@@ -340,6 +340,15 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+/** Runtime health of the disposable native capsule sidecar (desktop only). */
+export interface NativeCapsuleStatus {
+  /** Whether the launch-time low-memory background switch is active. */
+  active: boolean;
+  /** False when the sidecar helper is missing or failed to initialize. */
+  available: boolean;
+  error: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -362,8 +371,18 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
+  /** Desktop resource policy, applied after restarting the application. */
+  lowMemoryBackgroundEnabled: boolean;
   /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Enable local-only voice activation while idle (Windows desktop only). */
+  voiceActivationEnabled: boolean;
+  voiceActivationWakeEnabled: boolean;
+  voiceActivationFinishEnabled: boolean;
+  voiceActivationWakePhrase: string;
+  voiceActivationFinishPhrase: string;
+  voiceActivationTimeoutEnabled: boolean;
+  voiceActivationTimeoutSeconds: number;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
