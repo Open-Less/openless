@@ -161,7 +161,9 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         if let Some(update) = self.during_validation.lock().unwrap().take() {
             update();
         }
-        let installed = !self.missing_native.load(std::sync::atomic::Ordering::SeqCst);
+        let installed = !self
+            .missing_native
+            .load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             Ok(targets
                 .into_iter()
@@ -176,7 +178,8 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
     }
 
     fn restart_required(&self, _: LocalAsrRuntime) -> bool {
-        self.restart_needed.load(std::sync::atomic::Ordering::SeqCst)
+        self.restart_needed
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn download_native_model(
@@ -185,8 +188,12 @@ impl ModelRuntimeAdapter for RecordingLocalAsrRuntime {
         _: FoundryRuntimeSource,
         _: openless_core::ModelPrepareProgressSink,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
-        self.operations.lock().unwrap().push(format!("download:{}", target.model_id()));
-        self.restart_needed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.operations
+            .lock()
+            .unwrap()
+            .push(format!("download:{}", target.model_id()));
+        self.restart_needed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.release(target.runtime)
     }
 
@@ -843,8 +850,12 @@ async fn local_asr_activation_owns_channel_creation_and_enabling() {
 
             // Even an unavailable/broken native loader must not be called just
             // because a downloaded model is enabled.
-            runtime.fail_prepare.store(true, std::sync::atomic::Ordering::SeqCst);
-            runtime.fail_preload.store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_prepare
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime
+                .fail_preload
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             runtime.operations.lock().unwrap().clear();
             let result = backend.activate_local_asr(request).await.unwrap();
             assert!(runtime.operations.lock().unwrap().is_empty());
@@ -1258,6 +1269,77 @@ async fn activation_commit_failure_does_not_load_or_restore_a_runtime() {
 }
 
 #[tokio::test]
+async fn failed_activation_restores_the_channel_selected_during_native_preparation() {
+    use futures_util::FutureExt;
+    let credentials = Arc::new(InMemoryCredentialStore::default());
+    let (data_dir, runtime, backend) =
+        local_asr_backend_with_credentials(credentials.clone(), Some("local-qwen3"));
+    let qwen = LocalAsrTarget::parse(LocalAsrRuntime::Generic, "qwen3-asr-0.6b").unwrap();
+    let qwen_dir = data_dir.join("models").join(qwen.model_id());
+    std::fs::create_dir_all(&qwen_dir).unwrap();
+    std::fs::write(qwen_dir.join(openless_core::MODEL_READY_SENTINEL), b"ready").unwrap();
+    backend
+        .activate_local_asr(LocalAsrActivationRequest {
+            target: qwen,
+            provider_id: "local-qwen3".into(),
+        })
+        .await
+        .unwrap();
+    let ChannelMutationResult::Created(cloud_id) = credentials
+        .mutate_channel(ChannelMutation::Create {
+            kind: ChannelKind::Asr,
+            provider_type: "openai-compatible".into(),
+            name: "Cloud channel selected during preparation".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected cloud channel")
+    };
+    let expected_cloud_id = cloud_id.clone();
+    let backend = Arc::new(backend);
+    let weak = Arc::downgrade(&backend);
+    *runtime.during_validation.lock().unwrap() = Some(Box::new(move || {
+        // The in-memory store completes synchronously. This models the user
+        // choosing C while validation for B is still awaiting native work.
+        credentials
+            .set_active_provider(ProviderSlot::Asr, cloud_id.clone())
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        let backend = weak.upgrade().unwrap();
+        let mut next = backend.get_preferences();
+        next.active_asr_provider = cloud_id.clone();
+        backend
+            .update_settings(
+                next,
+                openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                &openless_core::NoopSettingsRuntime,
+            )
+            .unwrap();
+    }));
+    runtime
+        .fail_release
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(backend
+        .activate_local_asr(LocalAsrActivationRequest {
+            target: LocalAsrTarget::parse(LocalAsrRuntime::Foundry, "whisper-medium").unwrap(),
+            provider_id: "foundry-local-whisper".into(),
+        })
+        .await
+        .is_err());
+    assert_eq!(
+        backend.get_preferences().active_asr_provider,
+        expected_cloud_id
+    );
+    assert_eq!(
+        backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+        expected_cloud_id
+    );
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn switching_models_releases_old_inference_but_does_not_load_the_selection() {
     let (data_dir, runtime, backend) = local_asr_backend();
     for (model, provider) in [
@@ -1367,7 +1449,10 @@ async fn failed_old_runtime_release_preserves_selection_without_loading_any_repl
         backend.get_preferences().active_asr_provider,
         "local-qwen3-mlx"
     );
-    assert_eq!(*runtime.operations.lock().unwrap(), ["release-lease:qwen3-asr-0.6b:2"]);
+    assert_eq!(
+        *runtime.operations.lock().unwrap(),
+        ["release-lease:qwen3-asr-0.6b:2"]
+    );
     std::fs::remove_dir_all(data_dir).unwrap();
 }
 
@@ -1536,7 +1621,10 @@ async fn committed_channel_changes_are_published_even_when_runtime_release_fails
         .await
         .unwrap_err();
     assert_eq!(error.code, BackendErrorCode::Platform);
-    assert_eq!(backend.active_provider(ProviderSlot::Asr).await.unwrap(), cloud);
+    assert_eq!(
+        backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+        cloud
+    );
     assert!(matches!(
         events.try_recv().unwrap().kind,
         BackendEventKind::CredentialsChanged(_)

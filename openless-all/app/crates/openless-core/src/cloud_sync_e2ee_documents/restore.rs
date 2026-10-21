@@ -19,6 +19,13 @@ use super::validate::{uuid_v4, validate_scope, validate_sync_documents};
 pub struct RestorePlan {
     desired: ValidatedSyncDocuments,
     context: RestoreContext,
+    android_revision: Option<String>,
+}
+impl RestorePlan {
+    pub(crate) fn with_android_revision(mut self, revision: Option<String>) -> Self {
+        self.android_revision = revision;
+        self
+    }
 }
 impl fmt::Debug for RestorePlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -151,7 +158,11 @@ pub fn prepare_sync_restore(
     {
         return Err(DocumentError::StalePreview);
     }
-    Ok(RestorePlan { desired, context })
+    Ok(RestorePlan {
+        desired,
+        context,
+        android_revision: None,
+    })
 }
 
 /// No caller cancellation branch is allowed after the durable journal exists.
@@ -171,6 +182,7 @@ pub async fn apply_sync_restore(
             Some(plan.context.local_generation),
         )
         .await?;
+    lease.prepare_target(&plan.desired, plan.android_revision.as_deref())?;
     let before = export_snapshot(lease.capture().await?)?;
     if before.generation != plan.context.local_generation {
         return Err(DocumentError::StalePreview);
@@ -433,6 +445,8 @@ pub async fn recover_sync_restore(
         .map_err(|_| DocumentError::RecoveryRequired)?;
     if let Some(mut receipt) = lease.completed_restore(&journal.operation_id)? {
         // New user mutations may exist after this receipt. Never replay an obsolete image.
+        lease.prepare_target(if receipt.committed { &after } else { &before }, None)?;
+        lease.finish_local_state()?;
         receipt.journal_cleanup_pending = storage.clear(scope).await.is_err();
         return Ok(if receipt.committed {
             RecoveryOutcome::Committed(receipt)
@@ -443,6 +457,7 @@ pub async fn recover_sync_restore(
     lease.mark_recovery_pending(&journal.operation_id)?;
     lease.mark_journal_ready(&journal.operation_id)?;
     let committed = journal.phase == Phase::Committed;
+    lease.prepare_target(if committed { &after } else { &before }, None)?;
     replace_and_verify(lease.as_mut(), if committed { after } else { before })
         .await
         .map_err(|_| DocumentError::RecoveryRequired)?;
@@ -522,6 +537,7 @@ async fn finish(
 ) -> DocumentResult<RestoreReceipt> {
     let mut receipt =
         lease.finish_restore(&journal.operation_id, journal.phase == Phase::Committed)?;
+    lease.finish_local_state()?;
     receipt.journal_cleanup_pending = storage.clear(journal.scope.clone()).await.is_err();
     Ok(receipt)
 }

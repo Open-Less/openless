@@ -139,6 +139,16 @@ impl Coordinator {
         if !self.inner.host.is_bound() {
             return Err(failure("restore_host_not_bound"));
         }
+        #[cfg(target_os = "android")]
+        {
+            let host = crate::android::local_migration::AndroidMigrationHost::new(
+                self.inner.backend.ensure_runtime_ready().is_err(),
+            )
+            .map_err(|_| failure("restore_android_state_unavailable"))?;
+            self.inner
+                .backend
+                .bind_android_migration_state(Arc::new(host))?;
+        }
         self.inner
             .backend
             .bind_restore_runtime_effects(Arc::new(RestoreHost {

@@ -32,16 +32,6 @@ import androidx.core.view.WindowInsetsCompat
 class OpenLessKeyboardSettingsActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("openless_ime_ui", Context.MODE_PRIVATE) }
 
-    // Export/import (see OpenLessSettingsExport): plain Activity, so this
-    // uses the classic startActivityForResult()/onActivityResult() pair
-    // rather than androidx.activity's ActivityResultContracts, which needs
-    // ComponentActivity. pendingExportJson bridges the gap between building
-    // the export JSON (at the moment the user picks categories) and
-    // actually having somewhere to write it (only known once
-    // ACTION_CREATE_DOCUMENT's picker returns a Uri, an async round trip).
-    private var pendingExportJson: String? = null
-    private val requestCodeExportSave = 4201
-    private val requestCodeImportOpen = 4202
     private val englishUi by lazy {
         val locale = prefs.getString("locale", null) ?: resources.configuration.locales[0].toLanguageTag()
         !locale.startsWith("zh", ignoreCase = true)
@@ -74,6 +64,13 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         // just created as the standard companion call to
         // setDecorFitsSystemWindows(false) above.
         WindowCompat.getInsetsController(window, window.decorView)
+    }
+
+    private fun saveMigrationSetting(write: () -> Unit) {
+        if (!OpenLessMigrationState.settings(write)) {
+            Toast.makeText(this, ui("正在恢复配置，请稍后重试", "Configuration restore is in progress; try again shortly"), Toast.LENGTH_SHORT).show()
+            setContentView(buildContent())
+        }
     }
 
     private fun buildContent(): View {
@@ -212,7 +209,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             Switch(this).apply {
                 isChecked = debugFeaturesEnabled
                 setOnCheckedChangeListener { _, checked ->
-                    prefs.edit().putBoolean("key_debug_features_enabled", checked).apply()
+                    saveMigrationSetting { prefs.edit().putBoolean("key_debug_features_enabled", checked).apply() }
                     // The restart-stats section's own visibility is decided
                     // once, above, when this page was built — rebuild it so
                     // toggling here shows/hides it immediately instead of
@@ -242,7 +239,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         enabledRow.addView(
             Switch(this).apply {
                 isChecked = prefs.getBoolean("key_haptic_enabled", true)
-                setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("key_haptic_enabled", checked).apply() }
+                setOnCheckedChangeListener { _, checked -> saveMigrationSetting { prefs.edit().putBoolean("key_haptic_enabled", checked).apply() } }
             },
         )
         content.addView(
@@ -276,7 +273,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         englishSuggestionsRow.addView(
             Switch(this).apply {
                 isChecked = prefs.getBoolean("english_suggestions_enabled", true)
-                setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("english_suggestions_enabled", checked).apply() }
+                setOnCheckedChangeListener { _, checked -> saveMigrationSetting { prefs.edit().putBoolean("english_suggestions_enabled", checked).apply() } }
             },
         )
         content.addView(
@@ -305,7 +302,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 current = currentAmplitude,
                 onChange = { value ->
                     currentAmplitude = value
-                    prefs.edit().putInt("key_haptic_amplitude", value).apply()
+                    saveMigrationSetting { prefs.edit().putInt("key_haptic_amplitude", value).apply() }
                 },
                 onRelease = { fireTestVibration(currentAmplitude, currentDurationMs) },
             ),
@@ -318,7 +315,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 current = currentDurationMs,
                 onChange = { value ->
                     currentDurationMs = value
-                    prefs.edit().putLong("key_haptic_duration_ms", value.toLong()).apply()
+                    saveMigrationSetting { prefs.edit().putLong("key_haptic_duration_ms", value.toLong()).apply() }
                 },
                 onRelease = { fireTestVibration(currentAmplitude, currentDurationMs) },
             ),
@@ -528,56 +525,6 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             ),
         )
 
-        // "导出/导入配置": bundles everything OpenLessSettingsExport knows how
-        // to read (see that object's own Category enum) into one JSON file,
-        // or restores one — for moving personal settings to another device
-        // without retyping everything. Plain JSON, no encryption, by
-        // explicit product decision — the warning text below is the only
-        // protection against an accidentally-shared file containing a
-        // Cloud notes token or (if that category is checked) a raw ASR/LLM
-        // API key.
-        content.addView(sectionLabel(ui("导出 / 导入配置", "Export / Import settings")))
-        content.addView(
-            TextView(this).apply {
-                text = ui(
-                    "把云笔记地址、震动参数、笔画调频、简拼优选、ASR/LLM/风格包的选择（以及可选的 API Key）打包成一个文件，方便迁移到另一台设备。文件是明文 JSON——如果勾选了 API Key，文件里会有裸的密钥，请妥善保管。",
-                    "Bundles the Cloud notes address, haptic settings, stroke ranking, pinyin combo learning, and ASR/LLM/style pack selection (plus optional API keys) into one file for moving to another device. The file is plain JSON — including API keys leaves them in the file in plaintext, so keep it safe.",
-                )
-                textSize = 12f
-                setTextColor(tone(Color.rgb(150, 150, 150), Color.rgb(110, 110, 115)))
-                setPadding(0, 0, 0, dp(10))
-            },
-        )
-        val exportImportRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        exportImportRow.addView(
-            TextView(this).apply {
-                text = ui("导出配置 →", "Export settings →")
-                textSize = 15f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setTextColor(tone(Color.rgb(94, 234, 212), Color.rgb(15, 118, 110)))
-                isClickable = true
-                setOnClickListener { showExportCategoryDialog() }
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        exportImportRow.addView(
-            TextView(this).apply {
-                text = ui("导入配置 →", "Import settings →")
-                textSize = 15f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setTextColor(tone(Color.rgb(94, 234, 212), Color.rgb(15, 118, 110)))
-                isClickable = true
-                setOnClickListener { launchImportPicker() }
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        content.addView(
-            exportImportRow,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(16)
-            },
-        )
-
         // "语音识别来源": how many dictations in history the cloud and the local
         // model each recognized (with the local standby racing the cloud
         // either can win), the latest one's kind highlighted.
@@ -618,127 +565,6 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         )
 
         return root
-    }
-
-    private fun showExportCategoryDialog() {
-        val categories = OpenLessSettingsExport.Category.entries.toTypedArray()
-        val labels = categories.map { ui(it.labelZh, it.labelEn) }.toTypedArray()
-        val checked = BooleanArray(categories.size) { true }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(ui("选择要导出的内容", "Choose what to export"))
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
-            .setPositiveButton(ui("导出", "Export")) { _, _ ->
-                val selected = categories.filterIndexed { index, _ -> checked[index] }.toSet()
-                if (selected.isEmpty()) {
-                    Toast.makeText(this, ui("没有选择任何内容", "Nothing selected"), Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                Thread {
-                    val exported = runCatching { OpenLessSettingsExport.export(this, selected) }
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        exported.onSuccess { json ->
-                            pendingExportJson = json
-                            val timestamp = android.text.format.DateFormat.format("yyyyMMdd-HHmm", System.currentTimeMillis())
-                            val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
-                                addCategory(android.content.Intent.CATEGORY_OPENABLE)
-                                type = "application/json"
-                                putExtra(android.content.Intent.EXTRA_TITLE, "openless-settings-$timestamp.json")
-                            }
-                            runCatching { startActivityForResult(intent, requestCodeExportSave) }.onFailure {
-                                pendingExportJson = null
-                                Toast.makeText(this, ui("找不到文件管理器", "No file manager available"), Toast.LENGTH_LONG).show()
-                            }
-                        }.onFailure {
-                            Toast.makeText(this, ui("导出失败，请检查服务和凭据存储", "Export failed; check the service and credential store"), Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }.start()
-            }
-            .setNegativeButton(ui("取消", "Cancel"), null)
-            .show()
-    }
-
-    private fun launchImportPicker() {
-        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(android.content.Intent.CATEGORY_OPENABLE)
-            type = "application/json"
-        }
-        runCatching { startActivityForResult(intent, requestCodeImportOpen) }
-            .onFailure { Toast.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK || data == null) return
-        when (requestCode) {
-            requestCodeExportSave -> {
-                val uri = data.data
-                val json = pendingExportJson
-                pendingExportJson = null
-                if (uri == null || json == null) return
-                val wrote = runCatching {
-                    checkNotNull(contentResolver.openOutputStream(uri)).use { it.write(json.toByteArray(Charsets.UTF_8)) }
-                }.isSuccess
-                Toast.makeText(
-                    this,
-                    if (wrote) ui("已导出", "Exported") else ui("导出失败", "Export failed"),
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-            requestCodeImportOpen -> {
-                val uri = data.data ?: return
-                Thread {
-                    val json = OpenLessContentReader.readBytes(this, uri.toString(), 4 * 1024 * 1024)?.toString(Charsets.UTF_8)
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (json.isNullOrBlank()) {
-                            Toast.makeText(this, ui("读取文件失败或文件超过 4 MiB", "Read failed or file exceeds 4 MiB"), Toast.LENGTH_SHORT).show()
-                        } else showImportCategoryDialog(json)
-                    }
-                }.start()
-            }
-        }
-    }
-
-    private fun showImportCategoryDialog(json: String) {
-        val present = OpenLessSettingsExport.categoriesPresent(json)
-        if (present.isEmpty()) {
-            Toast.makeText(this, ui("这不是一个有效的配置文件", "Not a valid settings file"), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val categories = present.toList()
-        val labels = categories.map { ui(it.labelZh, it.labelEn) }.toTypedArray()
-        val checked = BooleanArray(categories.size) { true }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(ui("选择要导入的内容", "Choose what to import"))
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
-            .setPositiveButton(ui("导入", "Import")) { _, _ ->
-                val selected = categories.filterIndexed { index, _ -> checked[index] }.toSet()
-                if (selected.isEmpty()) {
-                    Toast.makeText(this, ui("没有选择任何内容", "Nothing selected"), Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                Thread {
-                    val imported = runCatching { OpenLessSettingsExport.import(this, json, selected) }
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        val result = imported.getOrNull()
-                        val message = if (result == null) ui("配置文件无效，导入失败", "Invalid settings file; import failed")
-                        else buildString {
-                            append(ui("已导入 ${result.applied.size} 项", "Imported ${result.applied.size} categories"))
-                            for ((category, reason) in result.errors) {
-                                append('\n').append(ui(category.labelZh, category.labelEn)).append(": ").append(reason)
-                            }
-                        }
-                        android.app.AlertDialog.Builder(this).setMessage(message)
-                            .setPositiveButton(android.R.string.ok, null).show()
-                        setContentView(buildContent())
-                    }
-                }.start()
-            }
-            .setNegativeButton(ui("取消", "Cancel"), null)
-            .show()
     }
 
     /** Fires a one-shot vibration with the sliders' current (already-saved) values, so a change is felt immediately. */

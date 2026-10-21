@@ -917,7 +917,7 @@ async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), Volceng
             "websocket not open".into(),
         ));
     };
-    sink.send(Message::Binary(data))
+    sink.send(Message::Binary(data.into()))
         .await
         .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))
 }
@@ -1250,7 +1250,7 @@ mod tests {
             .status(status)
             .body(None)
             .expect("build test http response");
-        tokio_tungstenite::tungstenite::Error::Http(resp)
+        tokio_tungstenite::tungstenite::Error::Http(Box::new(resp))
     }
 
     #[test]

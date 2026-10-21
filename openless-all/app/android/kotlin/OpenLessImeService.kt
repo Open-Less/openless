@@ -3856,8 +3856,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         recording = false
         processing = false
         if (url.isEmpty() || token.isEmpty()) {
-            setState("error", "请先在设置中填写云笔记的地址/Token")
-            onFinished?.invoke(false, "请先在设置中填写云笔记的地址/Token")
+            val message = reportCloudNoteFailure(requestId, text, CloudNoteFailure.MissingDestination)
+            onFinished?.invoke(false, message)
             return
         }
         cloudNoteSubmitting = true
@@ -3882,20 +3882,52 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 val code = connection.responseCode
                 mainHandler.post {
                     val success = code in 200..299
-                    val message = if (success) "已提交云笔记" else "云笔记提交失败（$code）"
-                    if (requestId == imeRequestId) {
-                        if (success) setState("done", message, QUICK_NOTE_CONFIRMATION_DELAY_MS) else setState("error", message)
+                    val message = if (success) {
+                        if (requestId == imeRequestId) {
+                            setState("done", "已提交云笔记", QUICK_NOTE_CONFIRMATION_DELAY_MS)
+                        }
+                        "已提交云笔记"
+                    } else {
+                        reportCloudNoteFailure(requestId, text, CloudNoteFailure.Http, code)
                     }
                     onFinished?.invoke(success, message)
                 }
             } catch (error: Throwable) {
                 android.util.Log.w("OpenLessImeService", "cloud note webhook submit failed: ${error.javaClass.simpleName}")
                 mainHandler.post {
-                    if (requestId == imeRequestId) setState("error", "云笔记提交失败，请检查网络")
-                    onFinished?.invoke(false, "云笔记提交失败，请检查网络")
+                    val message = reportCloudNoteFailure(requestId, text, CloudNoteFailure.Network)
+                    onFinished?.invoke(false, message)
                 }
             } finally { connection?.disconnect() }
         }.start()
+    }
+
+    /**
+     * Keeps a transcript the webhook did not accept. Core already removed the
+     * recording and history, so the completion text is the only remaining copy.
+     * A newer recording may own the status line; the clipboard entry still has
+     * to be written, and a toast reports it without touching that session.
+     */
+    private fun reportCloudNoteFailure(
+        requestId: Long,
+        text: String,
+        failure: CloudNoteFailure,
+        httpCode: Int = 0,
+    ): String {
+        val retained = cloudNoteShouldRetain(text)
+        val persisted = retained && OpenLessClipboardHistory.recordCopy(this, text)
+        val (messageZh, messageEn) = cloudNoteFailureMessage(
+            cloudNoteFailureDetail(failure, httpCode),
+            retained,
+            persisted,
+        )
+        val message = ui(messageZh, messageEn)
+        if (requestId == imeRequestId) {
+            setState("error", message)
+        } else {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+        return message
     }
 
     /** What Confirm does with the text in the draft bar. */

@@ -588,7 +588,7 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
             }
             _ = keepalive.tick() => {
                 if last_received.elapsed() > Duration::from_secs(IDLE_TIMEOUT_SECS)
-                    || socket.send(Message::Ping(Vec::new())).await.is_err()
+                    || socket.send(Message::Ping(Vec::new().into())).await.is_err()
                 {
                     break;
                 }
@@ -634,7 +634,7 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
 
 #[cfg(target_os = "linux")]
 fn json_message(value: serde_json::Value) -> Message {
-    Message::Text(value.to_string())
+    Message::Text(value.to_string().into())
 }
 
 #[cfg(target_os = "linux")]

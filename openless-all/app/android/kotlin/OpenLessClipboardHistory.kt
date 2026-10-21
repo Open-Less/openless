@@ -4,6 +4,9 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** One remembered clipboard entry. */
 data class ClipboardEntry(val text: String, val timestamp: Long, val favorite: Boolean = false)
@@ -18,6 +21,8 @@ data class ClipboardEntry(val text: String, val timestamp: Long, val favorite: B
 object OpenLessClipboardHistory {
     private const val FILE_NAME = "openless_clipboard_history.json"
     private const val MAX_ENTRIES = 200
+    // A failed disk write must leave the text available in the clipboard panel until retry or process exit.
+    private var unsavedEntries: List<ClipboardEntry>? = null
 
     enum class Category { ALL, RECENT, TEXT, NUMBER, LINK }
 
@@ -43,6 +48,7 @@ object OpenLessClipboardHistory {
 
     @Synchronized
     fun load(context: Context): List<ClipboardEntry> {
+        unsavedEntries?.let { return it }
         return try {
             val target = file(context)
             if (!target.exists()) return emptyList()
@@ -58,8 +64,10 @@ object OpenLessClipboardHistory {
     }
 
     @Synchronized
-    private fun save(context: Context, entries: List<ClipboardEntry>) {
-        try {
+    private fun save(context: Context, entries: List<ClipboardEntry>): Boolean {
+        val target = file(context)
+        val temporary = File(target.parentFile, "$FILE_NAME.tmp")
+        return try {
             val array = JSONArray()
             entries.forEach { entry ->
                 array.put(
@@ -70,9 +78,19 @@ object OpenLessClipboardHistory {
                     },
                 )
             }
-            file(context).writeText(array.toString())
+            FileOutputStream(temporary).use { output ->
+                output.write(array.toString().toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            unsavedEntries = null
+            true
         } catch (error: Exception) {
+            unsavedEntries = entries
             android.util.Log.w("OpenLessClipboardHistory", "failed to save history", error)
+            false
+        } finally {
+            temporary.delete()
         }
     }
 
@@ -82,11 +100,12 @@ object OpenLessClipboardHistory {
      * instead of creating a second row). Also used to bump an existing
      * history entry to the front when the user pastes it from the history
      * browser, per the "after a selected clip is committed, move it to the front of the
-     * clipboard history" requirement.
+     * clipboard history" requirement. Returns true only after the entry is persisted;
+     * on failure, load() still exposes the in-memory copy.
      */
     @Synchronized
-    fun recordCopy(context: Context, text: String) {
-        if (text.isBlank()) return
+    fun recordCopy(context: Context, text: String): Boolean {
+        if (text.isBlank()) return false
         val current = load(context).toMutableList()
         // Preserve an existing favorite flag rather than silently clearing
         // it just because the same text got copied again.
@@ -94,7 +113,7 @@ object OpenLessClipboardHistory {
         current.removeAll { it.text == text }
         current.add(0, ClipboardEntry(text, System.currentTimeMillis(), wasFavorite))
         while (current.size > MAX_ENTRIES) current.removeAt(current.lastIndex)
-        save(context, current)
+        return save(context, current)
     }
 
     /** Flips one entry's favorite flag by text — swipe-right on a clipboard history row. Preserves list order. */

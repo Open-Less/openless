@@ -88,6 +88,11 @@ const SERVICE_SNIPPETS = [
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.openless" />`,
+  `<activity
+            android:name=".OpenLessLocalMigrationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.openless" />`,
 ];
 
 function printHelp() {

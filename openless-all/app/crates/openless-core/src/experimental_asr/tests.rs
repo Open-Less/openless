@@ -132,7 +132,7 @@ impl Fixture {
                 path: "model.bin".into(),
                 url: "https://example.com/pinned/model.bin".into(),
                 size_bytes: 4,
-                sha256: Some(format!("{:x}", Sha256::digest(b"test"))),
+                sha256: Some(hex::encode(Sha256::digest(b"test"))),
             }]);
         }
         let store = Arc::new(

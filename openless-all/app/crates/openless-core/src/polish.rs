@@ -1994,6 +1994,16 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 body["reasoning"] = json!({ "type": "disabled" });
             }
         }
+        // Volcengine Ark (Doubao Seed) Chat Completions accepts the official `thinking`
+        // field: `disabled` turns thinking off, `enabled` turns it on (omitting it keeps
+        // the model default; Seed 2.x models default to thinking on, which adds seconds
+        // of TTFT to dictation polish). Same schema and literals as DeepSeekThinking —
+        // a separate variant keeps channel defaults independent.
+        Some(ThinkingControl::VolcengineThinking) => {
+            body["thinking"] = json!({
+                "type": if thinking_enabled { "enabled" } else { "disabled" },
+            });
+        }
         None => {}
     }
 }
@@ -2031,12 +2041,15 @@ pub(crate) enum ThinkingControl {
     DeepSeekThinking,
     MiniMaxThinking,
     LmStudioThinking,
+    VolcengineThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
     match provider_id.trim() {
         "lmstudio" => Some(ThinkingControl::LmStudioThinking),
         "deepseek" => Some(ThinkingControl::DeepSeekThinking),
+        // Volcengine Ark (Doubao Seed) — preset id is `ark` (ProvidersSection.tsx).
+        "ark" | "volcengine" => Some(ThinkingControl::VolcengineThinking),
         // provider_id preset (see ProvidersSection.tsx::LLM_PRESETS).
         "minimax" => Some(ThinkingControl::MiniMaxThinking),
         "openrouterFree" => Some(ThinkingControl::OpenRouterReasoning),
@@ -2079,6 +2092,11 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     }
     if host.contains("deepseek") {
         return Some(ThinkingControl::DeepSeekThinking);
+    }
+    // Ark (ark.cn-beijing.volces.com) and BytePlus ModelArk (bytepluses.com) run the
+    // same Doubao Seed API with the same `thinking` field.
+    if host.contains("volces") || host.contains("bytepluses") {
+        return Some(ThinkingControl::VolcengineThinking);
     }
     if host.contains("openrouter") {
         return Some(ThinkingControl::OpenRouterReasoning);
@@ -3589,6 +3607,49 @@ mod tests {
             let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
             assert_eq!(body["reasoning_effort"], expected);
+        }
+    }
+
+    #[test]
+    fn ark_chat_body_maps_thinking_toggle_to_thinking_type() {
+        for (enabled, expected) in [(false, "disabled"), (true, "enabled")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "ark",
+                    "Volcengine Ark",
+                    "https://ark.cn-beijing.volces.com/api/v3",
+                    "k",
+                    "doubao-seed-2-1-lite-260915",
+                )
+                .with_thinking_enabled(enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], expected);
+        }
+    }
+
+    #[test]
+    fn custom_provider_on_volcengine_host_gets_thinking_control() {
+        for base_url in [
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "custom",
+                    "Custom",
+                    base_url,
+                    "k",
+                    "doubao-seed-2-0-mini-260428",
+                )
+                .with_thinking_enabled(false),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], "disabled", "{base_url}");
         }
     }
 

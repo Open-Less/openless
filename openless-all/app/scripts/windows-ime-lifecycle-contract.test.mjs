@@ -10,6 +10,16 @@ const editSession = readFileSync(join(imeRoot, 'edit_session.cpp'), 'utf8');
 const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'utf8');
 const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
+
+// The TSF DLL is a standalone vcxproj that the Tauri build never touches, so the
+// only thing that can catch a compile error before a maintainer opens Visual
+// Studio is an explicit CI step.
+const ciWorkflow = readFileSync(join(appRoot, '../../.github/workflows/ci.yml'), 'utf8');
+assert.match(
+  ciWorkflow,
+  /msbuild OpenLessIme\.sln \/p:Configuration=Release \/p:Platform=x64/,
+  'CI must compile the Windows TSF IME',
+);
 const ipc = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_ipc.rs'), 'utf8');
 const tauriLib = readFileSync(join(appRoot, 'src-tauri', 'src', 'lib.rs'), 'utf8');
 

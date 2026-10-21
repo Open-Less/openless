@@ -137,4 +137,27 @@ object OpenLessNative {
     /** Explicit, user-selected plaintext transfer; result envelopes carry failures. */
     @JvmStatic external fun nativeExportProviderSettings(includeCredentials: Boolean): String
     @JvmStatic external fun nativeImportProviderSettings(json: String, selection: Boolean, credentials: Boolean): String
+
+    /** Versioned, bounded local migration bundle facade. Payloads are base64 only at the JNI boundary. */
+    @JvmStatic external fun nativeExportLocalMigrationBundle(
+        mode: String,
+        includeCredentials: Boolean,
+        password: String,
+    ): String
+
+    @JvmStatic external fun nativeInspectLocalMigrationBundle(bundleBase64: String): String
+    @JvmStatic external fun nativePreviewLocalMigrationBundle(
+        bundleBase64: String,
+        password: String,
+        mode: String,
+    ): String
+
+    @JvmStatic external fun nativeImportLocalMigrationBundle(
+        bundleBase64: String,
+        password: String,
+        mode: String,
+        choicesJson: String,
+        expectedGeneration: String,
+        expectedAndroidRevision: String,
+    ): String
 }

@@ -37,6 +37,10 @@ jobs:
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
       linux: ${{ steps.detect.outputs.linux }}
+      harmony: ${{ steps.detect.outputs.harmony }}
+      # Only worth a macOS runner when the declared MSRV is actually older than
+      # the stable toolchain the other jobs already build with.
+      msrv_needed: ${{ steps.msrv.outputs.needed }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,11 +54,28 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux; do
+          for area in tauri msrv linux harmony; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
           done
+      - name: Is the declared MSRV older than stable?
+        id: msrv
+        # `rust-version` is the promise; a dedicated compile only proves something
+        # while it is behind the toolchain the other jobs use. When they coincide
+        # (today: 1.99 vs stable 1.99.x) the macOS MSRV job is pure duplication.
+        run: |
+          set -euo pipefail
+          # The workspace manifest carries no `rust-version`; every member declares
+          # its own. `openless-core` is the shared one, so read it there.
+          declared=$(grep -m1 '^rust-version' openless-all/app/crates/openless-core/Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
+          stable=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+)\.[0-9]+.*/\1/')
+          echo "declared MSRV: ${declared:-none}, stable: $stable"
+          if [ -z "$declared" ] || [ "$declared" = "$stable" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
 
   ui-motion:
     name: UI motion (Chromium + WebKit)
@@ -69,11 +90,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Resolve Playwright browser version
+        id: playwright_version
+        run: |
+          version=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browsers
+        id: playwright_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # Browser revisions follow Playwright, not unrelated npm lock changes.
+          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium webkit
+      - name: Install Playwright browsers on cache miss
+        if: steps.playwright_cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium webkit
+      - name: Save Playwright browsers on beta builds
+        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - run: npm run test:ui-motion
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -132,8 +175,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: actions/setup-java@v4
         with:
@@ -146,13 +189,14 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
+          shared-key: tauri-android
           workspaces: 'openless-all/app/src-tauri -> target'
-          # 仓库缓存上限 10 GB，超出后按 LRU 淘汰。过去每个 PR 都会各存一份
-          # ~1.6 GB 的依赖树，把其他 job 的缓存挤掉，导致每次运行都从零编译。
-          # 现在 PR 只从基线分支恢复，只有分支推送和 tag 才写入缓存。
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Only beta maintains the shared dependency tree; PRs restore it.
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch') }}
 
       - name: Install Linux check dependencies
         run: |
@@ -246,6 +290,91 @@ jobs:
             -x :app:rustBuildX86_64Debug
             --no-daemon
 
+  # HarmonyOS covers three layers, in three places:
+  #   * the Rust host is compiled and tested by the Linux job
+  #     (`cargo test --locked -p openless-harmony-host`);
+  #   * ArkTS cannot be compiled without the Huawei SDK, so this job checks what
+  #     is reproducible on a hosted runner: the committed IPC audit still matches
+  #     the code, the ArkTS contract tests pass, and the ArkWeb bundle builds;
+  #   * when `HARMONY_SDK_URL` is configured, the last step additionally builds a
+  #     real HAP, which is what actually type-checks the ArkTS sources.
+  harmony-check:
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
+    name: Harmony (ArkTS contracts + ArkWeb bundle, HAP when the SDK is set)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - run: npm ci
+      - name: Shared IPC audit matches the code
+        # The report is committed so the ArkTS coverage is reviewable; a stale
+        # report hides commands that the Harmony host does not implement yet.
+        run: |
+          node scripts/audit-harmony-ipc.mjs
+          git diff --exit-code harmony/ipc-audit.json
+      - name: Harmony ArkTS contracts
+        run: |
+          node scripts/harmony-entry-startup.test.mjs
+          node scripts/harmony-app-dictation.test.mjs
+          node scripts/harmony-voice-configuration.test.mjs
+          node scripts/harmony-panel-layout.test.mjs
+          node scripts/harmony-editor-compat.test.mjs
+          node scripts/harmony-clipboard-history.test.mjs
+          node scripts/harmony-symbol-gesture.test.mjs
+          node scripts/harmony-rime-startup.test.mjs
+      - name: Build the ArkWeb bundle
+        env:
+          VITE_OPENLESS_PLATFORM: harmony
+        # The frontend half of the HAP: same sources, harmony platform flag,
+        # relative base for the rawfile origin.
+        run: npm run build -- --base=./ --outDir=dist-harmony
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Tier-2 OHOS target; `rustup target list` above lists it for stable.
+          targets: aarch64-unknown-linux-ohos
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          # The HAP embeds a release cdylib; keep its own key so the debug trees
+          # of the other jobs do not evict it.
+          key: harmony-host
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
+      - name: Cache the HarmonyOS toolchain
+        # The official command-line tools, downloaded from the public mirror that
+        # `prepare-harmony-sdk.sh` pins by checksum. No Huawei account is involved,
+        # so this runs on every pull request.
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/harmony/current
+          key: harmony-tools-6.0.1.251-${{ runner.os }}
+      - name: Build the HAP (compiles ArkTS and the Rust host)
+        env:
+          OPENLESS_HARMONY_CHANNEL: none
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-harmony-sdk.sh
+          bash scripts/package-harmony-hap.sh
+          # AppGallery needs a numeric versionName, so the packaging script keeps
+          # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
+          version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
+          version_code=$(cat linux-egui/package-revision)
+          bash scripts/verify-harmony-hap.sh \
+            target/harmony-packages/OpenLess_harmony_arm64.hap \
+            "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
+            "$version_name" "$version_code" --allow-unsigned
+
   # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
   # plus the Linux host, fcitx5 and package contracts.
@@ -290,8 +419,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: actions/setup-python@v5
         if: runner.os == 'Windows'
@@ -299,7 +428,7 @@ jobs:
           python-version: "3.x"
 
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: runner.os == 'Windows'
 
       - uses: dtolnay/rust-toolchain@stable
@@ -311,15 +440,21 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: runner.os == 'Windows'
         with:
+          # `shared-key` replaces the job name in the cache prefix, so the release
+          # workflow restoring the same key can reuse this tree. Keep the two in
+          # sync (scripts/ci-cache-sharing.test.mjs enforces it).
+          shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Cache macOS stable dependencies
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
-          key: macos-stable-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Same prefix as `release-tauri.yml`, which is what lets a tag build
+          # restore the baseline branch's dependency tree instead of a cold one.
+          shared-key: tauri-macos
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
@@ -403,13 +538,26 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
-      - name: Check Tauri backend with Rust 1.88 MSRV
+      - name: Check Tauri backend with Rust 1.99 MSRV
         if: runner.os == 'Windows'
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml
+        run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml
 
-      - name: Compile backend tests with Rust 1.88 MSRV
+      - name: Compile backend tests with Rust 1.99 MSRV
         if: runner.os == 'Windows'
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
+        run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
+
+      - name: Build the Windows TSF input method
+        # The TSF DLL has its own vcxproj and is not part of the Tauri build, so
+        # nothing else in CI ever compiles it. A compile error here would
+        # otherwise only surface on a Windows machine with Visual Studio.
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-version: '17.x'
+      - name: Compile the TSF IME (x64, Release)
+        if: runner.os == 'Windows'
+        working-directory: openless-all/app/windows-ime
+        run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
 
       - name: Verify version sync across all 5 files
         # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
@@ -443,9 +591,12 @@ jobs:
 
   macos-msrv:
     needs: [changes]
-    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
-    if: needs.changes.outputs.msrv != 'false'
-    name: macOS Rust 1.88 MSRV
+    # Two conditions, both fail-open in the direction that matters: the change set
+    # must be able to reach Rust sources, and the declared MSRV must be older than
+    # the stable toolchain (otherwise `cross-platform` already compiles that code
+    # with stable, which is a superset of the MSRV promise).
+    if: needs.changes.outputs.msrv != 'false' && needs.changes.outputs.msrv_needed == 'true'
+    name: macOS Rust 1.99 MSRV
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -463,19 +614,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
-      - name: Check Tauri backend with Rust 1.88 MSRV
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
-      - name: Compile backend tests with Rust 1.88 MSRV
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings
+      - name: Check Tauri backend with Rust 1.99 MSRV
+        run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Compile backend tests with Rust 1.99 MSRV
+        run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings

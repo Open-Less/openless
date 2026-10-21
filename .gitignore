@@ -135,4 +135,3 @@ CapsWriter
 
 # Local Linux toolchains, build logs and packaging workspaces.
 openless-all/app/.cache/
-openless-all/scripts/linux-desktop/kde/build/

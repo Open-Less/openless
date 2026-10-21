@@ -195,6 +195,7 @@ enum CloudTranscriptionSessionKind {
     DashScope(Arc<DashScopeMultimodalASR>),
     ElevenLabs(Arc<ElevenLabsBatchASR>),
     Gemini(Arc<GeminiBatchASR>),
+    GeminiLive(Arc<crate::asr::gemini_live::GeminiLiveASR>),
     Bailian(Arc<BailianRealtimeASR>),
     QwenRealtime(Arc<Qwen3RealtimeASR>),
     StepfunRealtime(Arc<StepfunRealtimeASR>),
@@ -249,6 +250,7 @@ impl AudioConsumer for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::DashScope(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::ElevenLabs(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::Gemini(provider) => provider.consume_pcm_chunk(pcm),
+            CloudTranscriptionSessionKind::GeminiLive(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::Bailian(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::QwenRealtime(provider) => {
                 provider.consume_pcm_chunk(pcm)
@@ -329,6 +331,9 @@ impl TranscriptionSession for CloudTranscriptionSession {
                         })?
                         .map_err(map_asr_error)?
                 }
+                CloudTranscriptionSessionKind::GeminiLive(provider) => {
+                    provider.finish().await.map_err(map_asr_error)?
+                }
                 CloudTranscriptionSessionKind::Bailian(provider) => {
                     let _ = provider.send_last_frame().await;
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
@@ -381,6 +386,7 @@ impl TranscriptionSession for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::Mimo(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::DashScope(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::ElevenLabs(provider) => provider.cancel(),
+            CloudTranscriptionSessionKind::GeminiLive(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::Bailian(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::QwenRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::StepfunRealtime(provider) => provider.cancel(),
@@ -762,16 +768,30 @@ async fn build_cloud_transcription_session(
             let endpoint = non_blank_owned(endpoint)
                 .unwrap_or_else(|| crate::asr::gemini::DEFAULT_ENDPOINT.to_string());
             let hotwords = context.polish.hotwords.clone();
-            (
+            let kind = if effective_model == crate::asr::gemini_live::MODEL {
+                let config = crate::asr::gemini_live::GeminiLiveConfig {
+                    api_key,
+                    base_url: endpoint,
+                    languages: context.asr.language.clone().into_iter().collect(),
+                    hotwords,
+                    mode: crate::asr::gemini::TranscriptionMode::Verbatim,
+                    extra_headers: HashMap::new(),
+                };
+                CloudTranscriptionSessionKind::GeminiLive(
+                    crate::asr::gemini_live::GeminiLiveASR::connect(config, partials, task_spawner)
+                        .await
+                        .map_err(map_asr_error)?,
+                )
+            } else {
                 CloudTranscriptionSessionKind::Gemini(Arc::new(GeminiBatchASR::new(
                     api_key,
                     endpoint,
                     effective_model.clone(),
                     context.asr.language.clone(),
                     hotwords,
-                ))),
-                Some(effective_model),
-            )
+                )))
+            };
+            (kind, Some(effective_model))
         }
         ActiveAsrProviderKind::WhisperCompatible => {
             let default_endpoint = default_asr_endpoint(provider_type).unwrap_or("");
@@ -1539,7 +1559,7 @@ async fn build_cloud_polisher_provider(
     ))
 }
 
-fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
+pub fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
@@ -1783,6 +1803,15 @@ async fn build_omni_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<crate::omni::OmniProvider, BackendError> {
+    build_omni_provider_with_task_spawner(credentials, context, Arc::new(TokioTaskSpawner)).await
+}
+
+/// Audio entry points pass the host scheduler through to worker and drop cleanup.
+async fn build_omni_provider_with_task_spawner(
+    credentials: &dyn CredentialStore,
+    context: &DictationContext,
+    task_spawner: Arc<dyn TaskSpawner>,
+) -> Result<crate::omni::OmniProvider, BackendError> {
     let provider_id = context.omni.provider_id.trim();
     let provider_type = context.omni.provider_type.trim();
     if provider_id.is_empty() || provider_type.is_empty() {
@@ -1832,8 +1861,12 @@ async fn build_omni_provider(
             "Omni endpoint is not configured",
         )
     })?;
-    crate::endpoint_security::validate_http_endpoint(&base_url)
-        .map_err(|error| map_omni_error(error.to_string()))?;
+    if provider_type == "gemini" && model.trim() == crate::asr::gemini_live::MODEL {
+        crate::asr::gemini_live::transport::endpoint(&base_url).map_err(map_omni_error)?;
+    } else {
+        crate::endpoint_security::validate_http_endpoint(&base_url)
+            .map_err(|error| map_omni_error(error.to_string()))?;
+    }
     let extra_headers = read_channel_credential(
         credentials,
         CredentialNamespace::Omni,
@@ -1868,7 +1901,7 @@ async fn build_omni_provider(
         ),
         thinking_enabled: context.polish.llm_thinking_enabled,
     };
-    let provider = crate::omni::OmniProvider::new(config)
+    let provider = crate::omni::OmniProvider::with_task_spawner(config, task_spawner)
         .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
     validate_omni_context(&provider, context)?;
     Ok(provider)
@@ -1894,8 +1927,11 @@ fn validate_omni_context(
 pub async fn validate_shared_omni_provider(
     credentials: Arc<dyn CredentialStore>,
     context: Arc<DictationContext>,
+    task_spawner: Arc<dyn TaskSpawner>,
 ) -> Result<(), BackendError> {
-    let provider = build_omni_provider(credentials.as_ref(), context.as_ref()).await?;
+    let provider =
+        build_omni_provider_with_task_spawner(credentials.as_ref(), context.as_ref(), task_spawner)
+            .await?;
     if provider.is_transcription_only() {
         let wav = crate::asr::wav::encode_wav_16k_mono(&vec![0; 8_000]);
         provider
@@ -1932,8 +1968,10 @@ pub(crate) async fn complete_omni_instruction_from_wav(
     context: &DictationContext,
     wav_bytes: &[u8],
     system_prompt: &str,
+    task_spawner: Arc<dyn TaskSpawner>,
 ) -> Result<String, BackendError> {
-    let provider = build_omni_provider(credentials, context).await?;
+    let provider =
+        build_omni_provider_with_task_spawner(credentials, context, task_spawner).await?;
     let result = provider
         .complete(system_prompt, "", Some(wav_bytes))
         .await
@@ -1955,15 +1993,26 @@ fn map_omni_error(error: impl std::fmt::Display) -> BackendError {
 pub struct SharedOmniDictationEngine {
     credentials: Arc<dyn CredentialStore>,
     recorder: Arc<dyn AudioRecorder>,
+    task_spawner: Arc<dyn TaskSpawner>,
     sessions: Arc<Mutex<HashMap<SessionId, Arc<OmniSession>>>>,
     pending_captures: Arc<Mutex<HashMap<SessionId, Box<dyn PendingAudioCapture>>>>,
 }
 
 impl SharedOmniDictationEngine {
     pub fn new(credentials: Arc<dyn CredentialStore>, recorder: Arc<dyn AudioRecorder>) -> Self {
+        Self::with_task_spawner(credentials, recorder, Arc::new(TokioTaskSpawner))
+    }
+
+    /// Reuse the host runtime for transcription tasks, including cleanup after caller drop.
+    pub fn with_task_spawner(
+        credentials: Arc<dyn CredentialStore>,
+        recorder: Arc<dyn AudioRecorder>,
+        task_spawner: Arc<dyn TaskSpawner>,
+    ) -> Self {
         Self {
             credentials,
             recorder,
+            task_spawner,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             pending_captures: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -1983,6 +2032,8 @@ struct OmniSession {
 #[derive(Default)]
 struct OmniPcm {
     bytes: Mutex<Vec<u8>>,
+    received_bytes: AtomicU64,
+    live: Mutex<Option<Arc<crate::asr::gemini_live::GeminiLiveASR>>>,
 }
 
 impl OmniPcm {
@@ -1991,13 +2042,106 @@ impl OmniPcm {
     }
 
     fn duration_ms(&self) -> u64 {
-        (self.bytes.lock().len() as u64).saturating_mul(1_000) / 32_000
+        crate::asr::pcm::pcm_duration_ms_from_bytes(self.received_bytes.load(Ordering::Acquire))
+    }
+
+    /// Live owns its bounded audio queue; only batch models need a second complete PCM copy.
+    fn append(&self, bytes: &mut Vec<u8>, pcm: &[u8]) {
+        self.received_bytes
+            .fetch_add(pcm.len() as u64, Ordering::AcqRel);
+        if let Some(live) = self.live.lock().as_ref() {
+            live.consume_pcm_chunk(pcm);
+        } else {
+            bytes.extend_from_slice(pcm);
+        }
     }
 }
 
 impl AudioConsumer for OmniPcm {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        self.bytes.lock().extend_from_slice(pcm);
+        let mut bytes = self.bytes.lock();
+        self.append(&mut bytes, pcm);
+    }
+}
+
+impl OmniSession {
+    /// Session registration precedes setup so cancel can interrupt a pending Live handshake.
+    async fn start_live(&self, session_id: SessionId) -> Result<(), BackendError> {
+        if self.context.read().recording.transcribe_after_stop {
+            return Ok(());
+        }
+        let partials = Arc::new(OmniLivePreview {
+            session_id,
+            progress: Arc::clone(&self.progress),
+            cancellation: Arc::clone(&self.cancellation),
+        });
+        let live = tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => return Err(cancelled_omni_error()),
+            result = self.provider.start_live_transcription(partials) => result.map_err(map_omni_error)?,
+        };
+        *self.pcm.live.lock() = live;
+        if self.cancellation.is_cancelled() {
+            if let Some(live) = self.pcm.live.lock().as_ref() {
+                live.cancel();
+            }
+            return Err(cancelled_omni_error());
+        }
+        Ok(())
+    }
+}
+
+struct OmniLivePreview {
+    session_id: SessionId,
+    progress: Arc<dyn EngineProgressSink>,
+    cancellation: Arc<ProviderCancellation>,
+}
+
+/// Remove a registered Live session even when its caller drops a start/finish future.
+struct OmniSessionGuard {
+    sessions: Arc<Mutex<HashMap<SessionId, Arc<OmniSession>>>>,
+    session_id: SessionId,
+    session: Arc<OmniSession>,
+    armed: bool,
+}
+
+impl OmniSessionGuard {
+    fn new(
+        sessions: &Arc<Mutex<HashMap<SessionId, Arc<OmniSession>>>>,
+        session_id: SessionId,
+        session: &Arc<OmniSession>,
+    ) -> Self {
+        Self {
+            sessions: Arc::clone(sessions),
+            session_id,
+            session: Arc::clone(session),
+            armed: true,
+        }
+    }
+}
+
+impl Drop for OmniSessionGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.session.cancellation.cancel();
+            remove_omni_session(&self.sessions, self.session_id, &self.session);
+        }
+    }
+}
+
+impl TextStreamSink for OmniLivePreview {
+    fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
+        if self.cancellation.is_cancelled() {
+            return Err(cancelled_omni_error());
+        }
+        self.progress.publish(
+            self.session_id,
+            EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                text: chunk.text,
+                offset: chunk.offset,
+                is_final: false,
+            }),
+        )
     }
 }
 
@@ -2036,6 +2180,7 @@ impl DictationEngine for SharedOmniDictationEngine {
         let credentials = Arc::clone(&self.credentials);
         let sessions = Arc::clone(&self.sessions);
         let pending_captures = Arc::clone(&self.pending_captures);
+        let task_spawner = Arc::clone(&self.task_spawner);
         Box::pin(async move {
             let mut capture = Some(capture);
             let duplicate_pending = {
@@ -2059,7 +2204,13 @@ impl DictationEngine for SharedOmniDictationEngine {
                     "Omni provisional capture already exists",
                 ));
             }
-            let provider = match build_omni_provider(credentials.as_ref(), &context).await {
+            let provider = match build_omni_provider_with_task_spawner(
+                credentials.as_ref(),
+                &context,
+                task_spawner,
+            )
+            .await
+            {
                 Ok(provider) => Arc::new(provider),
                 Err(error) => {
                     let pending_capture = pending_captures.lock().remove(&session_id);
@@ -2100,8 +2251,18 @@ impl DictationEngine for SharedOmniDictationEngine {
                     "Omni dictation session already exists",
                 ));
             }
+            let mut cleanup = OmniSessionGuard::new(&sessions, session_id, &session);
+            if let Err(error) = session.start_live(session_id).await {
+                let _ = capture.discard().await;
+                remove_omni_session(&sessions, session_id, &session);
+                return Err(error);
+            }
             if context.audio_source == DictationAudioSource::External {
                 let _ = capture.discard().await;
+                if session.cancellation.is_cancelled() {
+                    return Err(cancelled_omni_error());
+                }
+                cleanup.armed = false;
                 return Ok(());
             }
             if session.cancellation.is_cancelled() {
@@ -2138,6 +2299,7 @@ impl DictationEngine for SharedOmniDictationEngine {
                 remove_omni_session(&sessions, session_id, &session);
                 return Err(cancelled_omni_error());
             }
+            cleanup.armed = false;
             Ok(())
         })
     }
@@ -2151,8 +2313,12 @@ impl DictationEngine for SharedOmniDictationEngine {
         let credentials = Arc::clone(&self.credentials);
         let recorder = Arc::clone(&self.recorder);
         let sessions = Arc::clone(&self.sessions);
+        let task_spawner = Arc::clone(&self.task_spawner);
         Box::pin(async move {
-            let provider = Arc::new(build_omni_provider(credentials.as_ref(), &context).await?);
+            let provider = Arc::new(
+                build_omni_provider_with_task_spawner(credentials.as_ref(), &context, task_spawner)
+                    .await?,
+            );
             let pcm = Arc::new(OmniPcm::default());
             let cancellation = Arc::new(ProviderCancellation::default());
             let session = Arc::new(OmniSession {
@@ -2178,11 +2344,17 @@ impl DictationEngine for SharedOmniDictationEngine {
                     }
                 }
             }
+            let mut cleanup = OmniSessionGuard::new(&sessions, session_id, &session);
+            if let Err(error) = session.start_live(session_id).await {
+                remove_omni_session(&sessions, session_id, &session);
+                return Err(error);
+            }
             if context.audio_source == DictationAudioSource::External {
                 if session.cancellation.is_cancelled() {
                     remove_omni_session(&sessions, session_id, &session);
                     return Err(cancelled_omni_error());
                 }
+                cleanup.armed = false;
                 return Ok(());
             }
             let consumer: Arc<dyn AudioConsumer> = pcm;
@@ -2214,6 +2386,7 @@ impl DictationEngine for SharedOmniDictationEngine {
                 remove_omni_session(&sessions, session_id, &session);
                 return Err(cancelled_omni_error());
             }
+            cleanup.armed = false;
             Ok(())
         })
     }
@@ -2238,6 +2411,7 @@ impl DictationEngine for SharedOmniDictationEngine {
                     "Omni dictation session is already finishing",
                 )));
             }
+            let _cleanup = OmniSessionGuard::new(&sessions, session_id, &session);
             let context = Arc::clone(&session.context.read());
             let recording = session.recording.lock().take();
             if context.audio_source == DictationAudioSource::Microphone && recording.is_none() {
@@ -2257,23 +2431,36 @@ impl DictationEngine for SharedOmniDictationEngine {
                     return Err(failure);
                 }
             }
+            let duration_ms = session.pcm.duration_ms();
             if session.cancellation.is_cancelled() {
                 remove_omni_session(&sessions, session_id, &session);
                 return Err(EngineFailure::from(cancelled_omni_error()));
             }
+            let live = session.pcm.live.lock().clone();
+            let is_live = live.is_some();
+            // Live can revise the transcript until finalization has drained the worker.
+            let stage = if is_live {
+                EngineStage::Transcribing
+            } else {
+                EngineStage::Polishing
+            };
             progress
-                .publish(session_id, EngineProgress::Stage(EngineStage::Polishing))
+                .publish(session_id, EngineProgress::Stage(stage))
                 .map_err(EngineFailure::from)?;
-            let wav = crate::asr::wav::encode_wav_16k_mono(
-                &session
-                    .pcm
-                    .snapshot()
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
-                    .collect::<Vec<_>>(),
-            );
+            let wav = if live.is_some() {
+                Vec::new()
+            } else {
+                crate::asr::wav::encode_wav_16k_mono(
+                    &session
+                        .pcm
+                        .snapshot()
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+                        .collect::<Vec<_>>(),
+                )
+            };
             let system_prompt = build_omni_prompt(&context);
             let offset = Arc::new(AtomicU64::new(0));
             let publish_error: Arc<Mutex<Option<BackendError>>> = Arc::new(Mutex::new(None));
@@ -2306,14 +2493,17 @@ impl DictationEngine for SharedOmniDictationEngine {
             let cancellation = Arc::clone(&session.cancellation);
             let started = Instant::now();
             let result = tokio::select! {
+                biased;
                 _ = cancellation.cancelled() => Err(cancelled_omni_error()),
-                result = provider.complete_streaming(
-                    &system_prompt,
-                    "",
-                    Some(&wav),
-                    on_delta,
-                    should_cancel,
-                ) => result.map_err(map_omni_error),
+                result = async {
+                    if let Some(live) = live {
+                        live.finish().await.map(|transcript| transcript.text).map_err(map_asr_error)
+                    } else {
+                        provider.complete_streaming(
+                            &system_prompt, "", Some(&wav), on_delta, should_cancel,
+                        ).await.map_err(map_omni_error)
+                    }
+                } => result,
             };
             let polish_ms = Some(started.elapsed().as_millis() as u64);
             if let Some(error) = publish_error.lock().take() {
@@ -2347,12 +2537,23 @@ impl DictationEngine for SharedOmniDictationEngine {
                     return Err(failure);
                 }
             };
+            if session.cancellation.is_cancelled() {
+                return Err(EngineFailure::from(cancelled_omni_error()));
+            }
+            if is_live {
+                progress
+                    .publish(session_id, EngineProgress::Stage(EngineStage::Polishing))
+                    .map_err(EngineFailure::from)?;
+            }
             if !context.recording.archive_successful_recording {
                 if let Some(archive) = archive.as_ref() {
                     if archive.is_available() {
                         let _ = archive.discard().await;
                     }
                 }
+            }
+            if session.cancellation.is_cancelled() {
+                return Err(EngineFailure::from(cancelled_omni_error()));
             }
             progress
                 .publish(
@@ -2439,9 +2640,9 @@ impl DictationEngine for SharedOmniDictationEngine {
                     "Omni dictation session no longer accepts external audio",
                 ));
             }
-            bytes.extend_from_slice(pcm);
+            session.pcm.append(&mut bytes, pcm);
             (
-                (bytes.len() as u64).saturating_mul(1_000) / 32_000,
+                session.pcm.duration_ms(),
                 crate::external_audio::pcm_i16_le_rms(pcm),
             )
         };
@@ -2462,7 +2663,11 @@ impl DictationEngine for SharedOmniDictationEngine {
             let Some(session) = session else {
                 return Ok(());
             };
+            let _cleanup = OmniSessionGuard::new(&sessions, session_id, &session);
             session.cancellation.cancel();
+            if let Some(live) = session.pcm.live.lock().as_ref() {
+                live.cancel();
+            }
             let recording = session.recording.lock().take();
             if let Some(recording) = recording {
                 recording.stop().await?;
@@ -2478,6 +2683,9 @@ fn remove_omni_session(
     session_id: SessionId,
     expected: &Arc<OmniSession>,
 ) {
+    if let Some(live) = expected.pcm.live.lock().as_ref() {
+        live.cancel();
+    }
     let mut sessions = sessions.lock();
     if sessions
         .get(&session_id)

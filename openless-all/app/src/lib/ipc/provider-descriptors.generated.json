@@ -254,7 +254,8 @@
       "labelKey": "asrGemini",
       "providerType": "gemini",
       "staticModels": [
-        "gemini-3.5-transcribe"
+        "gemini-3.5-transcribe",
+        "gemini-3.5-transcribe-live"
       ],
       "supportedRequestFormats": [],
       "validationProbe": "asr_silence"

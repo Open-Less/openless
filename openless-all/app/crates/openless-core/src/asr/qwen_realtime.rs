@@ -719,7 +719,7 @@ async fn send_text(writer: &SharedWriter, text: String) -> Result<(), Qwen3ASREr
                 "websocket writer not available".to_string(),
             ));
         };
-        ws.send(Message::Text(text))
+        ws.send(Message::Text(text.into()))
             .await
             .map_err(|e| Qwen3ASRError::SendFailed(e.to_string()))
     })

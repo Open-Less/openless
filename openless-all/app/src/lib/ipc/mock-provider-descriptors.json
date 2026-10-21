@@ -621,7 +621,8 @@
     "authRequirement": "api_key",
     "validationProbe": "asr_silence",
     "staticModels": [
-      "gemini-3.5-transcribe"
+      "gemini-3.5-transcribe",
+      "gemini-3.5-transcribe-live"
     ],
     "defaultRequestFormat": null,
     "supportedRequestFormats": []

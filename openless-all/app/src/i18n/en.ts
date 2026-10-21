@@ -1334,6 +1334,16 @@ export const en: typeof zhCN = {
       cursorContextDesc:
         'Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.',
     },
+    localMigration: {
+      title: 'Local configuration migration',
+      description:
+        'Export all portable local configuration to a versioned bundle, or restore it on another Android device. Share mode is redacted by default; personal migration can carry credentials only with password protection. The native flow previews the source, version, categories, and changes before Merge or Replace.',
+      safetyNote:
+        'System permissions, OAuth sessions, device paths, and runtime state never migrate. A local backup is created before import.',
+      open: 'Open local migration',
+      opening: 'Opening…',
+      openFailed: 'Could not open the local migration flow. Try again from Settings.',
+    },
     codingConsole: {
       title: 'Claude Console',
       desc: 'Detect your local Claude Code and MCP (computer use) status, then run Claude headlessly behind guardrails and watch the streamed output and cost.',
@@ -1759,9 +1769,9 @@ export const en: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe uses verbatim transcription here, followed by your configured LLM. For built-in Smart transcription, select this model in Multimodal mode. Audio is uploaded after recording stops; live transcription is not supported. Base URL: https://generativelanguage.googleapis.com/v1beta (also accepts /v1beta/interactions).',
+        'Both models return verbatim text here, with optional processing by your configured LLM. gemini-3.5-transcribe uploads audio after recording stops. gemini-3.5-transcribe-live shows results while you speak, for up to 10 minutes per recording. For Smart transcription, use Multimodal mode. Base URL: https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'Use gemini-3.5-transcribe for Smart transcription: removes fillers, applies spoken corrections and formats the transcript after recording stops. Working languages and dictionary terms are supported. This model does not use style prompts or support translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
+        'Use gemini-3.5-transcribe or gemini-3.5-transcribe-live for Smart transcription. Live shows a draft while you speak, for up to 10 minutes per recording. Smart removes fillers, applies spoken corrections and formats the final transcript after recording stops. Both models support working languages and dictionary terms, but not style prompts, translation, text polishing or Q&A; use Traditional mode with an LLM for those tasks.',
       validateSuccessAudio:
         'Audio connectivity passed using a short silence sample. Confirm transcription quality with a short recording.',
       elevenLabsUploadNotice:

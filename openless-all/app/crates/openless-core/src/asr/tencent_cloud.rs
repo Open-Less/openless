@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::Value;
 use sha1::Sha1;
@@ -553,7 +553,7 @@ async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), Tencent
     let Some(ws) = guard.as_mut() else {
         return Err(TencentCloudASRError::ConnectionFailed);
     };
-    tokio::time::timeout(FRAME_SEND_TIMEOUT, ws.send(Message::Binary(data)))
+    tokio::time::timeout(FRAME_SEND_TIMEOUT, ws.send(Message::Binary(data.into())))
         .await
         .map_err(|_| TencentCloudASRError::ConnectionFailed)?
         .map_err(|_| TencentCloudASRError::ConnectionFailed)
@@ -564,10 +564,13 @@ async fn send_text(writer: &SharedWriter, data: &str) -> Result<(), TencentCloud
     let Some(ws) = guard.as_mut() else {
         return Err(TencentCloudASRError::ConnectionFailed);
     };
-    tokio::time::timeout(FRAME_SEND_TIMEOUT, ws.send(Message::Text(data.to_string())))
-        .await
-        .map_err(|_| TencentCloudASRError::ConnectionFailed)?
-        .map_err(|_| TencentCloudASRError::ConnectionFailed)
+    tokio::time::timeout(
+        FRAME_SEND_TIMEOUT,
+        ws.send(Message::Text(data.to_string().into())),
+    )
+    .await
+    .map_err(|_| TencentCloudASRError::ConnectionFailed)?
+    .map_err(|_| TencentCloudASRError::ConnectionFailed)
 }
 
 fn connect_url_at(
@@ -794,7 +797,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success" }).to_string(),
             ))
             .await
@@ -805,9 +808,9 @@ mod tests {
             let end = ws.next().await.unwrap().unwrap();
             assert!(matches!(first, Message::Binary(bytes) if bytes.len() == 6_400));
             assert!(matches!(second, Message::Binary(bytes) if bytes.len() == 100));
-            assert_eq!(end, Message::Text(r#"{"type":"end"}"#.to_string()));
+            assert_eq!(end, Message::text(r#"{"type":"end"}"#.to_string()));
 
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({
                     "code": 0,
                     "message": "success",
@@ -817,7 +820,7 @@ mod tests {
             ))
             .await
             .unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
             ))
             .await
@@ -847,7 +850,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success" }).to_string(),
             ))
             .await
@@ -859,9 +862,9 @@ mod tests {
             ));
             assert_eq!(
                 ws.next().await.unwrap().unwrap(),
-                Message::Text(r#"{"type":"end"}"#.to_string())
+                Message::text(r#"{"type":"end"}"#.to_string())
             );
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
             ))
             .await
@@ -910,7 +913,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success" }).to_string(),
             ))
             .await
@@ -925,12 +928,12 @@ mod tests {
             }
             assert_eq!(
                 ws.next().await.unwrap().unwrap(),
-                Message::Text(r#"{"type":"end"}"#.to_string())
+                Message::text(r#"{"type":"end"}"#.to_string())
             );
             elapsed_tx
                 .send(received_at[2].duration_since(received_at[0]))
                 .unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
             ))
             .await
@@ -961,7 +964,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({
                     "code": 4002,
                     "message": "SENSITIVE_SERVER_RESPONSE"
@@ -992,7 +995,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(
+            ws.send(Message::text(
                 serde_json::json!({ "code": 0, "message": "success" }).to_string(),
             ))
             .await

@@ -6,7 +6,15 @@
 // deleted, that open pull requests are kept, and that an unreadable pull
 // request state is treated as "keep".
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,33 +30,63 @@ const fixtures = [
     ref: 'refs/heads/beta',
     key: 'v0-rust-cross-platform-Windows_NT-x64-3619e479-a77d3f83',
     size: 1_622_000_000,
+    created: '2026-10-19T02:00:00Z',
   },
   {
     ref: 'refs/pull/101/merge',
     key: 'v0-rust-cross-platform-Windows_NT-x64-3619e479-aaaaaaaa',
     size: 1_600_000_000,
+    created: '2026-10-02T02:00:00Z',
   },
   {
     ref: 'refs/pull/102/merge',
     key: 'v0-rust-build-linux-egui-Linux-x64-32c982f2-6e438e89',
     size: 1_338_000_000,
+    created: '2026-10-03T02:00:00Z',
   },
   {
     ref: 'refs/pull/103/head',
     key: 'v0-rust-macos-msrv-v1-macos-msrv-Darwin-arm64-832c8724-bbbb',
     size: 715_000_000,
+    created: '2026-10-04T02:00:00Z',
   },
   {
     ref: 'refs/tags/v2.0.0-Beta.3-tauri',
     key: 'v0-rust-macos-release-v1-build-Darwin-x64-ab76de4a-c48940d0',
     size: 759_000_000,
+    created: '2026-10-05T02:00:00Z',
+  },
+  // Three generations of one key family inside the beta scope: the two newest are
+  // still useful as `restore-keys` fallbacks, the oldest one is not.
+  {
+    ref: 'refs/heads/beta',
+    key: 'v0-rust-android-check-Linux-x64-f2847a1e-aa0001',
+    size: 100_000_000,
+    created: '2026-09-01T02:00:00Z',
+  },
+  {
+    ref: 'refs/heads/beta',
+    key: 'v0-rust-android-check-Linux-x64-f2847a1e-aa0002',
+    size: 100_000_000,
+    created: '2026-09-15T02:00:00Z',
+  },
+  {
+    ref: 'refs/heads/beta',
+    key: 'v0-rust-android-check-Linux-x64-f2847a1e-aa0003',
+    size: 100_000_000,
+    created: '2026-10-01T02:00:00Z',
   },
 ];
 writeFileSync(
   join(scratch, 'caches.json'),
   JSON.stringify({
     total_count: fixtures.length,
-    actions_caches: fixtures.map(({ ref, key, size }) => ({ ref, key, size_in_bytes: size })),
+    actions_caches: fixtures.map(({ ref, key, size, created }) => ({
+      ref,
+      key,
+      size_in_bytes: size,
+      created_at: created,
+    })),
   }),
 );
 
@@ -72,7 +110,7 @@ case "$args" in
 import json, sys
 data = json.load(open(sys.argv[1]))
 for entry in data["actions_caches"]:
-    print(f"{entry['ref']}\\t{entry['key']}\\t{entry['size_in_bytes']}")
+    print(f"{entry['ref']}\\t{entry['key']}\\t{entry['size_in_bytes']}\\t{entry['created_at']}")
 PY
     ;;
   *repos/*/pulls/*)
@@ -125,40 +163,67 @@ try {
   // Over budget without --prune: reported, nothing deleted, exit 1.
   const report = run(['--repo', 'example/openless', '--limit-gb', '5']);
   check('over budget exits 1', report.code, 1);
-  check('over budget reports total', /6\.03 GB used/.test(report.stdout), true);
+  check('over budget reports total', /6\.33 GB used/.test(report.stdout), true);
   check('over budget mentions the limit', /exceeds the 5 GB budget/.test(report.stdout), true);
+  check('report deletes nothing', existsSync(deleteLog), false);
 
-  // Prune: closed and merged pull requests go, open ones stay.
+  // Prune closed and merged pull requests. The endpoint requires both key and
+  // ref since GitHub's 2026-10 API change; refs are percent-encoded because
+  // they contain slashes.
   const prune = run(['--prune', '--repo', 'example/openless', '--limit-gb', '5']);
   check('prune exits 1 while still over budget', prune.code, 1);
   const deleted = readFileSync(deleteLog, 'utf8').trim().split('\n').filter(Boolean);
-  check('prune deleted exactly two scopes', deleted.length, 2);
+  check('prune without --keep-family deleted two scopes', deleted.length, 2);
   check(
     'prune deleted the closed pull request',
-    deleted.some((line) => line.includes('ref=refs/pull/102/merge')),
+    deleted.some((line) => line.includes('ref=refs%2Fpull%2F102%2Fmerge')),
     true,
   );
   check(
     'prune deleted the merged pull request',
-    deleted.some((line) => line.includes('ref=refs/pull/103/head')),
+    deleted.some((line) => line.includes('ref=refs%2Fpull%2F103%2Fhead')),
+    true,
+  );
+  check(
+    'prune sends the cache key as well',
+    deleted.every((line) => /[?&]key=[^&]+/.test(line)),
     true,
   );
   check(
     'prune kept the open pull request',
-    deleted.some((line) => line.includes('ref=refs/pull/101/merge')),
+    deleted.some((line) => line.includes('refs%2Fpull%2F101') || line.includes('refs/pull/101')),
     false,
   );
   check(
-    'prune kept the branch scope',
-    deleted.some((line) => line.includes('refs/heads/beta')),
+    'prune kept the branch scope beyond the pull requests',
+    deleted.some((line) => line.includes('key=v0-rust-cross-platform-Windows_NT-x64-3619e479-a77d3f83')),
     false,
   );
   check(
     'prune kept the tag scope',
-    deleted.some((line) => line.includes('refs/tags/')),
+    deleted.some((line) => line.includes('refs%2Ftags') || line.includes('refs/tags')),
     false,
   );
   check('prune announces the kept scope', /keep\s+refs\/pull\/101\/merge/.test(prune.stdout), true);
+
+  // Family pruning: keep the two newest entries of one (branch, family) pair.
+  rmSync(deleteLog, { force: true });
+  const family = run(['--prune', '--keep-family', '2', '--repo', 'example/openless', '--limit-gb', '99']);
+  check('family prune exits 0 inside budget', family.code, 0);
+  const familyDeleted = readFileSync(deleteLog, 'utf8').trim().split('\n').filter(Boolean);
+  // Two closed/merged pull request scopes go as well; exactly one branch
+  // sibling of the android family is beyond the keep window.
+  check('family prune deleted the two dead pull request scopes plus one sibling', familyDeleted.length, 3);
+  check(
+    'family prune deleted the 2026-09-01 generation',
+    familyDeleted.some((line) => line.includes('aa0001')),
+    true,
+  );
+  check(
+    'family prune kept a newer sibling',
+    familyDeleted.some((line) => line.includes('aa0002') || line.includes('aa0003')),
+    false,
+  );
 
   // Inside the budget: exit 0.
   const healthy = run(['--repo', 'example/openless', '--limit-gb', '10']);
@@ -168,6 +233,8 @@ try {
   // Usage errors keep the exit code distinct from the budget signal.
   const badFlag = run(['--nonsense']);
   check('unknown flag exits 2', badFlag.code, 2);
+  const badKeep = run(['--prune', '--keep-family', 'two']);
+  check('non-numeric --keep-family exits 2', badKeep.code, 2);
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -8,7 +8,21 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 
-/** Reads a bounded document selected through Android's Storage Access Framework. */
+@Keep
+sealed class OpenLessReadResult {
+    data class Success(val bytes: ByteArray) : OpenLessReadResult()
+    data class Failure(val reason: Reason) : OpenLessReadResult()
+
+    enum class Reason {
+        INVALID_URI,
+        ACCESS_DENIED,
+        TOO_LARGE,
+        READ_FAILED,
+        CANCELLED,
+    }
+}
+
+/** Reads a bounded document and preserves failure classes for migration UI. */
 @Keep
 object OpenLessContentReader {
     private const val TAG = "OpenLessContentReader"
@@ -16,21 +30,41 @@ object OpenLessContentReader {
 
     @Keep
     @JvmStatic
-    fun readBytes(context: Context, uriString: String, maxBytes: Int): ByteArray? {
+    fun readStrict(context: Context, uriString: String, maxBytes: Int): OpenLessReadResult {
+        if (maxBytes < 0) return OpenLessReadResult.Failure(OpenLessReadResult.Reason.TOO_LARGE)
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+            ?: return OpenLessReadResult.Failure(OpenLessReadResult.Reason.INVALID_URI)
+        if (uri.scheme != "content") {
+            return OpenLessReadResult.Failure(OpenLessReadResult.Reason.INVALID_URI)
+        }
         return try {
-            val uri = Uri.parse(uriString)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                readBounded(input, maxBytes)
+            val bytes = context.contentResolver.openInputStream(uri)?.use { input -> readBounded(input, maxBytes) }
+                ?: return OpenLessReadResult.Failure(OpenLessReadResult.Reason.READ_FAILED)
+            OpenLessReadResult.Success(bytes)
+        } catch (_: SecurityException) {
+            OpenLessReadResult.Failure(OpenLessReadResult.Reason.ACCESS_DENIED)
+        } catch (_: java.util.concurrent.CancellationException) {
+            OpenLessReadResult.Failure(OpenLessReadResult.Reason.CANCELLED)
+        } catch (error: IOException) {
+            if (error.message?.contains("exceeds", ignoreCase = true) == true) {
+                OpenLessReadResult.Failure(OpenLessReadResult.Reason.TOO_LARGE)
+            } else {
+                Log.e(TAG, "failed to read selected document", error)
+                OpenLessReadResult.Failure(OpenLessReadResult.Reason.READ_FAILED)
             }
-                ?: run {
-                    Log.w(TAG, "openInputStream returned null for selected document")
-                    null
-                }
         } catch (error: Throwable) {
             Log.e(TAG, "failed to read selected document", error)
-            null
+            OpenLessReadResult.Failure(OpenLessReadResult.Reason.READ_FAILED)
         }
     }
+
+    @Keep
+    @JvmStatic
+    fun readBytes(context: Context, uriString: String, maxBytes: Int): ByteArray? =
+        when (val result = readStrict(context, uriString, maxBytes)) {
+            is OpenLessReadResult.Success -> result.bytes
+            is OpenLessReadResult.Failure -> null
+        }
 
     internal fun readBounded(input: InputStream, maxBytes: Int): ByteArray {
         require(maxBytes >= 0) { "maxBytes must not be negative" }

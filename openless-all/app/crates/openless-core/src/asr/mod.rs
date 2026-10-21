@@ -5,6 +5,7 @@ pub mod dashscope_multimodal;
 pub mod elevenlabs;
 mod frame;
 pub mod gemini;
+pub mod gemini_live;
 pub mod mimo;
 pub mod pcm;
 pub mod qwen_realtime;

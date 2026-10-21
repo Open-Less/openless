@@ -2221,7 +2221,8 @@ export function OmniChannelSection() {
 
   const omniPreset = omniPresets.find((p) => p.id === committedOmniProvider);
   const geminiTranscribe =
-    committedOmniProvider === 'gemini' && omniModel.trim() === 'gemini-3.5-transcribe';
+    committedOmniProvider === 'gemini' &&
+    ['gemini-3.5-transcribe', 'gemini-3.5-transcribe-live'].includes(omniModel.trim());
 
   return (
     <Card className="ol-omni-settings" padding={16}>
@@ -2292,7 +2293,7 @@ export function OmniChannelSection() {
           </div>
         )}
         <ProviderTools
-          key={`omni:${committedOmniProvider}:${geminiTranscribe}`}
+          key={`omni:${committedOmniProvider}:${geminiTranscribe ? omniModel.trim() : ''}`}
           kind="omni"
           modelAccount="omni.model"
           onModelSelected={() => setOmniModelRevision((v) => v + 1)}

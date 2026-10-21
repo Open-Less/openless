@@ -4,7 +4,7 @@ import { en } from './en';
 // 한국어 (Beta) — AI 기계 번역 기반. 원어민 검토를 권장합니다.
 // 구조는 zh-CN.ts 를 따릅니다. 새 key 를 추가할 때 ja.ts / ko.ts 도 동시에
 // 갱신해 주세요(갱신되지 않은 key 는 ...en 으로 영어로 fallback 됩니다).
-import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { uiRefinementKo as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ko: typeof zhCN = {
@@ -159,7 +159,7 @@ export const ko: typeof zhCN = {
       '동기화 범위의 로컬 데이터를 교체합니다. 로컬 변경을 유지하려면 병합을 선택하세요.',
     restoreCheck: '복원 방식과 충돌 선택을 확인했습니다.',
     applyRestore: '복원 확인',
-    conflictProgress: '충돌 {{total}}개 중 {{selected}}개 해결',
+    conflictProgress: '충돌 {{selected}} / {{total}}개 해결',
     conflictItem: '충돌 {{index}} · {{category}}',
     conflictLocal: '로컬 유지',
     conflictCloud: '클라우드 사용',
@@ -1312,6 +1312,16 @@ export const ko: typeof zhCN = {
       cursorContextDesc:
         '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
     },
+    localMigration: {
+      title: '로컬 구성 마이그레이션',
+      description:
+        '이식 가능한 모든 로컬 구성을 버전이 지정된 번들로 내보내거나 다른 Android 기기에 복원합니다. 공유 모드는 기본적으로 비식별화되며, 개인 마이그레이션에 자격 증명을 포함하려면 비밀번호 보호가 필요합니다. 병합 또는 교체 전에 네이티브 화면에서 출처, 버전, 범주와 변경 내용을 확인할 수 있습니다.',
+      safetyNote:
+        '시스템 권한, OAuth 세션, 기기 경로와 실행 상태는 마이그레이션되지 않습니다. 가져오기 전에 로컬 백업을 만듭니다.',
+      open: '로컬 마이그레이션 열기',
+      opening: '여는 중…',
+      openFailed: '로컬 마이그레이션을 열 수 없습니다. 설정에서 다시 시도하세요.',
+    },
     codingConsole: {
       title: 'Claude 콘솔',
       desc: '로컬 Claude Code 와 MCP(computer use) 상태를 감지하고, 가드레일 아래에서 Claude 를 헤드리스로 실행하여 출력과 비용을 스트리밍으로 확인합니다.',
@@ -1734,9 +1744,9 @@ export const ko: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        '여기서는 gemini-3.5-transcribe로 그대로 전사한 뒤 설정된 LLM으로 처리합니다. 스마트 전사를 사용하려면 멀티모달 모드에서 이 모델을 선택하세요. 녹음이 끝나면 오디오를 업로드하며 실시간 전사는 지원하지 않습니다. 기본 URL: https://generativelanguage.googleapis.com/v1beta (/v1beta/interactions도 사용 가능).',
+        '두 모델 모두 여기서는 말한 그대로 전사하며, 필요하면 설정된 LLM으로 추가 처리할 수 있습니다. gemini-3.5-transcribe는 녹음이 끝나면 오디오를 업로드합니다. gemini-3.5-transcribe-live는 말하는 동안 결과를 표시하며, 녹음은 한 번에 최대 10분까지 가능합니다. 스마트 전사에는 멀티모달 모드를 사용하세요. 기본 URL: https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe는 스마트 전사를 제공합니다. 녹음 후 군더더기 표현을 제거하고 말로 한 정정을 반영하며 문장을 정리합니다. 작업 언어와 사전 용어를 지원합니다. 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
+        'gemini-3.5-transcribe와 gemini-3.5-transcribe-live는 스마트 전사를 지원합니다. Live는 말하는 동안 초안을 표시하며, 녹음은 한 번에 최대 10분까지 가능합니다. 녹음이 끝나면 군더더기 표현을 제거하고 말로 한 정정을 반영하며 최종 텍스트를 정리합니다. 두 모델 모두 작업 언어와 사전 용어를 지원하지만 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
       validateSuccessAudio:
         '짧은 무음 샘플로 오디오 연결을 확인했습니다. 짧은 녹음으로 전사 품질도 확인하세요.',
       elevenLabsUploadNotice:

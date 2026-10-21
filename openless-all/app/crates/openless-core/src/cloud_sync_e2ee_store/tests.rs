@@ -352,6 +352,7 @@ impl Fixture {
             effects,
         } = self;
         let device = store.device();
+        let android = store.inner.android_migration.get().cloned();
         drop(store);
         drop(repo);
         // Stand-in for reopening the persistent OS vault, not retaining the old process gate.
@@ -370,6 +371,9 @@ impl Fixture {
         .unwrap();
         store.bind_runtime_idle_probe(Arc::new(|| true)).unwrap();
         *effects.gate.lock().unwrap() = Some(Arc::downgrade(&store.inner.gate));
+        if let Some(android) = android {
+            store.bind_android_migration_state(android).unwrap();
+        }
         store
             .bind_runtime_effects(Arc::new(effects.clone()))
             .unwrap();
@@ -415,9 +419,79 @@ fn validate(set: DocumentSet) -> ValidatedSyncDocuments {
 }
 
 #[tokio::test]
+async fn personal_bundle_keeps_receiver_device_profile() {
+    let fixture = Fixture::new();
+    let captured = fixture
+        .store
+        .export_scope(fixture.scope.clone())
+        .await
+        .unwrap();
+    let current = captured.documents;
+    let artifact = export_validated_bundle(
+        &current,
+        BundleExportOptions {
+            mode: crate::local_migration_bundle::BundleMode::PersonalMigration,
+            credential_policy: crate::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+            password: Some(BundlePassword::new("test-password").unwrap()),
+            app_version: "test".into(),
+            portable_android_preferences: None,
+        },
+    )
+    .unwrap();
+    let decoded = decode_bundle(
+        &artifact.bytes,
+        Some(&BundlePassword::new("test-password").unwrap()),
+        captured.generation,
+    )
+    .unwrap();
+    let prepared = fixture
+        .store
+        .prepare_bundle_documents(&current, decoded)
+        .unwrap();
+    assert!(prepared
+        .documents()
+        .documents
+        .iter()
+        .any(|document| document.kind == DocumentKind::DeviceProfile
+            && document.id == current.documents().source_device.id));
+}
+
+#[tokio::test]
+async fn local_bundle_restore_uses_document_revision_not_gate_generation() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .set_ui_preferences(SecretJson::new(json!({
+            "locale": "zh-CN",
+            "fontScale": "medium",
+        })))
+        .await
+        .unwrap();
+    let artifact = fixture
+        .store
+        .export_local_bundle(BundleExportOptions::default())
+        .await
+        .unwrap();
+    let generation = fixture.store.generation().unwrap();
+    assert!(generation > Revision::new(0));
+
+    fixture
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            None,
+            RestoreMode::Replace,
+            &[],
+            Some(generation),
+            None,
+        )
+        .await
+        .expect("a local bundle captured at the current generation should restore");
+}
+
+#[tokio::test]
 async fn disabled_fresh_start_never_requests_local_key() {
     let fixture = Fixture::new();
-    fixture.store.recover_registered().await.unwrap();
     assert!(!fixture.extensions.key_requested.load(Ordering::Acquire));
 }
 
@@ -1814,3 +1888,150 @@ fn setup_prompt_store_probe_requires_idle_runtime_and_no_active_writer() {
         .store(false, Ordering::Release);
     assert!(fixture.store.setup_prompt_state().unwrap().is_some());
 }
+
+#[tokio::test]
+async fn review_redacted_import_new_channel_with_public_settings() {
+    let source = Fixture::new();
+    *source.credentials.value.lock().unwrap() = SyncCredentials {
+        channels: vec![serde_json::from_value(json!({"id":"custom","namespace":"llm","providerType":"requesty","name":"Custom","enabled":true,"order":0,"active":true})).unwrap()],
+        credentials: vec![serde_json::from_value(json!({"channelId":"custom","namespace":"llm","accounts":{"ark.api_key":"sender-secret","ark.endpoint":"https://example.test/v1","ark.model_id":"model"}})).unwrap()],
+    };
+    let artifact = source
+        .store
+        .export_local_bundle(BundleExportOptions::default())
+        .await
+        .unwrap();
+    let target = Fixture::new();
+    let preview = target
+        .store
+        .preview_local_bundle(&artifact.bytes, None, RestoreMode::Replace)
+        .await
+        .unwrap();
+    let choices: Vec<_> = preview
+        .conflicts
+        .iter()
+        .map(|conflict| ConflictChoice {
+            conflict_id: conflict.conflict_id.clone(),
+            side: ConflictSide::Remote,
+        })
+        .collect();
+    let result = target
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            None,
+            RestoreMode::Replace,
+            &choices,
+            Some(preview.observed_generation),
+            None,
+        )
+        .await;
+    assert!(
+        result.is_ok(),
+        "redacted new channel restore failed: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn review_replace_honors_keep_local_credentials() {
+    let source = Fixture::new();
+    let target = Fixture::new();
+    for (fixture, secret) in [(&source, "sender-secret"), (&target, "receiver-secret")] {
+        *fixture.credentials.value.lock().unwrap() = SyncCredentials {
+            channels: vec![serde_json::from_value(json!({"id":"custom","namespace":"llm","providerType":"requesty","name":"Custom","enabled":true,"order":0,"active":true})).unwrap()],
+            credentials: vec![serde_json::from_value(json!({"channelId":"custom","namespace":"llm","accounts":{"ark.api_key":secret}})).unwrap()],
+        };
+    }
+    let artifact = source
+        .store
+        .export_local_bundle(BundleExportOptions {
+            mode: crate::local_migration_bundle::BundleMode::PersonalMigration,
+            credential_policy: crate::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+            password: Some(BundlePassword::new("password").unwrap()),
+            ..BundleExportOptions::default()
+        })
+        .await
+        .unwrap();
+    let preview = target
+        .store
+        .preview_local_bundle(
+            &artifact.bytes,
+            Some(BundlePassword::new("password").unwrap()),
+            RestoreMode::Replace,
+        )
+        .await
+        .unwrap();
+    let choices: Vec<_> = preview
+        .conflicts
+        .iter()
+        .map(|conflict| ConflictChoice {
+            conflict_id: conflict.conflict_id.clone(),
+            side: crate::cloud_sync_e2ee_documents::ConflictSide::Local,
+        })
+        .collect();
+    assert!(!choices.is_empty());
+    target
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            Some(BundlePassword::new("password").unwrap()),
+            RestoreMode::Replace,
+            &choices,
+            Some(preview.observed_generation),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        target.credentials.value.lock().unwrap().credentials[0].accounts["ark.api_key"],
+        "receiver-secret",
+        "keep-local choice was ignored"
+    );
+}
+
+#[tokio::test]
+async fn review_rejects_invalid_android_preferences_before_core_commit() {
+    let source = Fixture::new();
+    let captured = source
+        .store
+        .export_scope(source.scope.clone())
+        .await
+        .unwrap();
+    let mut set = captured.documents.documents().clone();
+    set_doc(
+        &mut set,
+        DocumentKind::Preferences,
+        "themeMode",
+        json!("dark"),
+    );
+    set_doc(
+        &mut set,
+        DocumentKind::UiPreferences,
+        "androidPortableSettings",
+        json!({
+            "schemaVersion":1,"learningPrivacyVersion":1,"preferences":{"themeMode":"INVALID_THEME"},"strokeFrequency":{},"pinyinLearnedPhrases":{}
+        }),
+    );
+    let artifact = export_validated_bundle(&validate(set), BundleExportOptions::default()).unwrap();
+    let target = Fixture::new();
+    let result = target
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            None,
+            RestoreMode::Replace,
+            &[],
+            Some(target.store.generation().unwrap()),
+            None,
+        )
+        .await;
+    let committed_theme = target.repo.preferences.get().theme_mode;
+    assert!(
+        result.is_err(),
+        "invalid Android preference accepted and core theme committed as {:?}",
+        committed_theme
+    );
+}
+
+mod local_migration;

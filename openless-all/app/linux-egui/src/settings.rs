@@ -9,7 +9,8 @@ use openless_core::{
 
 use crate::LinuxCredentialStore;
 
-/// Render legacy modifier names as the keys registered on Linux.
+/// Linux 上实际注册的是 X11 keysym，而不是 macOS 的「Option」命名：界面上显示
+/// `RightOption` 会与「按下右 Alt」对不上，所以把旧名换成实际按键名。
 pub fn shortcut_display_label(binding: &ShortcutBinding) -> String {
     let primary = match legacy_modifier_trigger(binding) {
         Some(HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt) => "Right Alt",

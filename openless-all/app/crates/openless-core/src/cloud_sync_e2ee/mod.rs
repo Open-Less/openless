@@ -8,7 +8,7 @@ mod service;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use adapter::build;
+pub(crate) use adapter::{build, build_local_store};
 pub use dto::*;
 pub(crate) use service::{EncryptedSyncService, SyncServiceConfig};
 

@@ -1212,6 +1212,7 @@ impl LessComputerVoiceSession {
             .expect("voice resource lock poisoned")
             .clone();
         let task_spawner = Arc::clone(&control.task_spawner);
+        let omni_task_spawner = Arc::clone(&task_spawner);
         if let Some(feedback) = control
             .feedback
             .lock()
@@ -1294,6 +1295,7 @@ impl LessComputerVoiceSession {
                             omni.context.as_ref(),
                             &wav,
                             &omni.system_prompt,
+                            omni_task_spawner,
                         )
                         .await
                         {
@@ -1479,6 +1481,7 @@ impl VoiceTranscriptionSession {
         let partials = Arc::clone(&self.partials);
         let lifecycle = Arc::clone(&self.lifecycle);
         let resources = lifecycle.resources();
+        let omni_task_spawner = Arc::clone(&self.task_spawner);
         own_voice_effect(
             &self.task_spawner,
             Box::pin(async move {
@@ -1503,6 +1506,7 @@ impl VoiceTranscriptionSession {
                                 omni.context.as_ref(),
                                 &wav,
                                 &omni.system_prompt,
+                                omni_task_spawner,
                             )
                             .await?
                         }
@@ -2553,6 +2557,7 @@ pub struct OpenLessBackend {
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
+    local_migration_store: Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2729,9 +2734,10 @@ impl OpenLessBackend {
     /// its startup error instead of panicking before any window is visible.
     /// This path never opens the user's files or a credential store.
     pub fn blocked_startup(mut config: BackendConfig, error: BackendError) -> Self {
-        if config.data_dir.as_os_str().is_empty() {
-            config.data_dir = std::path::PathBuf::from("openless-startup-blocked");
-        }
+        // A blocked backend must never touch the caller's failed data path. Use
+        // an isolated temporary store solely to satisfy the normal constructor.
+        config.data_dir =
+            std::env::temp_dir().join(format!("openless-startup-blocked-{}", uuid::Uuid::new_v4()));
         let repositories = BackendRepositories {
             preferences: Arc::new(PreferencesStore::in_memory()),
             history: Arc::new(HistoryStore::at_path(std::path::PathBuf::new())),
@@ -2740,27 +2746,19 @@ impl OpenLessBackend {
             correction_rules: Arc::new(CorrectionRuleStore::at_path(std::path::PathBuf::new())),
             style_packs: Arc::new(StylePackStore::in_memory()),
         };
-        // All fallible external dependencies are absent and the only required
-        // config field was normalized above. A failure here is a code invariant.
-        let mut backend =
-            Self::new_with_repositories(config, BackendDependencies::unsupported(), repositories)
-                .expect("memory-only blocked backend is constructible");
         let denied = error.clone();
         let guard: crate::domains::RuntimeRestoreGuard = Arc::new(move || Err(denied.clone()));
-        backend
-            .voice_sessions
-            .bind_restore_guard(Arc::clone(&guard))
-            .expect("fresh voice guard");
-        backend
-            .runtime_start_work
-            .bind(Arc::clone(&guard), Arc::clone(&backend.deps.task_spawner))
-            .expect("fresh startup guard");
-        backend
-            .deps
-            .services
-            .selection_voice
-            .bind_runtime_restore_guard(guard, Arc::clone(&backend.deps.task_spawner))
-            .expect("fresh selection guard");
+        // The constructor binds the runtime guard for every runtime entry point.
+        // Supply the blocked guard during construction so it is not replaced after
+        // the OnceLock-based bindings have already been initialized.
+        let mut backend = Self::new_with_repositories_and_clock_and_restore_guard(
+            config,
+            BackendDependencies::unsupported(),
+            repositories,
+            Arc::new(SystemClock),
+            Some(Arc::clone(&guard)),
+        )
+        .expect("memory-only blocked backend is constructible");
         backend.startup_error = Some(error);
         backend
     }
@@ -2773,14 +2771,14 @@ impl OpenLessBackend {
         &self,
         effects: Arc<dyn crate::config::RestoreRuntimeEffects>,
     ) -> Result<(), BackendError> {
-        if let Some(store) = &self.encrypted_sync_store {
-            store.bind_runtime_effects(effects).map_err(|_| {
+        self.local_migration_store
+            .bind_runtime_effects(effects)
+            .map_err(|_| {
                 BackendError::new(
                     BackendErrorCode::InvalidState,
                     "restore runtime effects binding failed",
                 )
             })?;
-        }
         Ok(())
     }
 
@@ -2830,9 +2828,25 @@ impl OpenLessBackend {
 
     pub fn new_with_repositories_and_clock(
         config: BackendConfig,
+        deps: BackendDependencies,
+        repositories: BackendRepositories,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, BackendError> {
+        Self::new_with_repositories_and_clock_and_restore_guard(
+            config,
+            deps,
+            repositories,
+            clock,
+            None,
+        )
+    }
+
+    fn new_with_repositories_and_clock_and_restore_guard(
+        config: BackendConfig,
         mut deps: BackendDependencies,
         repositories: BackendRepositories,
         clock: Arc<dyn Clock>,
+        restore_guard: Option<crate::domains::RuntimeRestoreGuard>,
     ) -> Result<Self, BackendError> {
         if config.data_dir.as_os_str().is_empty() {
             return Err(BackendError::new(
@@ -2841,6 +2855,10 @@ impl OpenLessBackend {
             ));
         }
         let events = Arc::new(EventBus::new(256));
+        // 保留裁剪与「最近 N 分钟」必须跟着注入的时钟走：同一个后端里
+        // `created_at` 已经用 `clock` 生成，裁剪却偷读系统时钟的话，测试/
+        // 回放的固定时钟下刚写入的条目会在写入瞬间被判超期。
+        repositories.history.attach_clock(Arc::clone(&clock));
         let preferences_revision = Arc::new(AtomicU64::new(0));
         let style_pack_revision = Arc::new(AtomicU64::new(0));
         let history_revision = Arc::new(AtomicU64::new(0));
@@ -2988,9 +3006,21 @@ impl OpenLessBackend {
                 marketplace,
                 repositories.clone(),
                 Arc::clone(&settings_write_gate),
+                encrypted_sync.is_none(),
             ))
         } else {
             None
+        };
+        let local_migration_store = if let Some(store) = &encrypted_sync_store {
+            Arc::clone(store)
+        } else {
+            crate::cloud_sync_e2ee::build_local_store(
+                &config.data_dir,
+                repositories.clone(),
+                Arc::clone(&deps.credential_store),
+                env!("CARGO_PKG_VERSION").into(),
+                Arc::clone(&deps.task_spawner),
+            )?
         };
         match (
             deps.selection_runtime.take(),
@@ -3062,20 +3092,23 @@ impl OpenLessBackend {
         deps.services
             .remote_input
             .bind_event_publisher(BackendEventPublisher::new(Arc::clone(&events)));
-        if let Some(store) = &encrypted_sync_store {
-            let weak_store = Arc::downgrade(store);
-            let guard: crate::domains::RuntimeRestoreGuard = Arc::new(move || {
-                let store = weak_store.upgrade().ok_or_else(|| {
-                    BackendError::new(
-                        BackendErrorCode::InvalidState,
-                        "runtime restore source is unavailable",
-                    )
-                })?;
-                store.ensure_runtime_available().map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::Busy,
-                        "encrypted sync restore must finish before starting runtime work",
-                    )
+        {
+            let store = &local_migration_store;
+            let guard: crate::domains::RuntimeRestoreGuard = restore_guard.unwrap_or_else(|| {
+                let weak_store = Arc::downgrade(&local_migration_store);
+                Arc::new(move || {
+                    let store = weak_store.upgrade().ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::InvalidState,
+                            "runtime restore source is unavailable",
+                        )
+                    })?;
+                    store.ensure_runtime_available().map_err(|_| {
+                        BackendError::new(
+                            BackendErrorCode::Busy,
+                            "encrypted sync restore must finish before starting runtime work",
+                        )
+                    })
                 })
             });
             voice_sessions.bind_restore_guard(Arc::clone(&guard))?;
@@ -3159,6 +3192,7 @@ impl OpenLessBackend {
             cloud_sync,
             encrypted_sync,
             encrypted_sync_store,
+            local_migration_store,
             pending_corrections: Arc::new(Mutex::new(Vec::new())),
             edit_observation_generation: Arc::new(AtomicU64::new(0)),
             text_insertions: Arc::new(Mutex::new(HashMap::new())),
@@ -3175,14 +3209,14 @@ impl OpenLessBackend {
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
-        if let Some(store) = &self.encrypted_sync_store {
-            store.ensure_runtime_available().map_err(|_| {
+        self.local_migration_store
+            .ensure_runtime_available()
+            .map_err(|_| {
                 BackendError::new(
                     BackendErrorCode::Busy,
                     "encrypted sync restore must finish before starting runtime work",
                 )
             })?;
-        }
         Ok(())
     }
 
@@ -4110,6 +4144,10 @@ impl OpenLessBackend {
             // The service records its own retryable recovery/storage error;
             // runtime admission remains fenced until recovery is complete.
             let _ = sync.start(Arc::clone(&self.deps.task_spawner)).await;
+        } else {
+            // Local migration has the same crash journal as cloud sync, but it
+            // has no service startup hook when the user is signed out.
+            let _ = self.local_migration_store.recover_registered().await;
         }
         let preferences = self.get_preferences();
         let status = match warmed {
@@ -5188,11 +5226,14 @@ impl OpenLessBackend {
             .list_channels(ChannelKind::Asr)
             .await
         {
-            Ok(channels) => channels
-                .into_iter()
-                .find(|channel| channel.id == selected_id)
-                .map(|channel| channel.provider_type)
-                .unwrap_or(selected_id),
+            Ok(channels) => {
+                let provider = channels
+                    .iter()
+                    .find(|channel| channel.id == selected_id)
+                    .or_else(|| channels.first())
+                    .map(|channel| channel.provider_type.clone());
+                provider.unwrap_or(selected_id)
+            }
             Err(_) => selected_id,
         };
         crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&provider_type.as_str())
@@ -5447,6 +5488,12 @@ impl OpenLessBackend {
         self.events
             .publish(None, BackendEventKind::CredentialsChanged(status.clone()));
         Ok(status)
+    }
+
+    pub fn publish_local_migration_state_changed(&self) {
+        self.publish_preferences_changed();
+        self.publish_vocabulary_changed();
+        self.publish_style_packs_changed();
     }
 
     pub fn get_preferences(&self) -> UserPreferences {

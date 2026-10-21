@@ -1005,6 +1005,103 @@ pub fn credential_accounts(namespace: SyncNamespace) -> &'static [&'static str] 
     }
 }
 
+pub fn public_credential_account(namespace: SyncNamespace, account: &str) -> bool {
+    matches!(
+        (namespace, account),
+        (
+            SyncNamespace::Asr,
+            "asr.endpoint" | "asr.model" | "asr.vocabulary_id"
+        ) | (
+            SyncNamespace::Llm,
+            "ark.endpoint"
+                | "ark.model_id"
+                | "ark.temperature"
+                | "ark.request_format"
+                | "ark.messages_thinking"
+                | "ark.max_tokens"
+                | "ark.thinking_budget"
+                | "ark.service_tier"
+        ) | (
+            SyncNamespace::Omni,
+            "omni.endpoint" | "omni.model" | "omni.temperature"
+        )
+    )
+}
+
+pub fn public_credential_value_safe(account: &str, value: &str) -> bool {
+    if !account.ends_with(".endpoint") {
+        return true;
+    }
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host_is_safe = host.parse::<std::net::IpAddr>().is_ok()
+        || (host.len() <= 253
+            && host.split('.').all(|label| {
+                let label = label.to_ascii_lowercase();
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    })
+                    && ![
+                        "token",
+                        "secret",
+                        "bearer",
+                        "apikey",
+                        "api-key",
+                        "access",
+                        "refresh",
+                        "oauth",
+                        "credential",
+                        "password",
+                        "passwd",
+                        "jwt",
+                    ]
+                    .iter()
+                    .any(|marker| label.contains(marker))
+                    && !["sk-", "pk-", "rk-"]
+                        .iter()
+                        .any(|prefix| label.starts_with(prefix))
+            }));
+    if !host_is_safe {
+        return false;
+    }
+    let path_is_safe = url.path().len() <= 256
+        && url
+            .path()
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .all(|segment| {
+                segment.len() <= 32
+                    && segment.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || matches!(character, '-' | '.' | '~')
+                    })
+                    && !segment.contains("token")
+                    && !segment.contains("secret")
+                    && !segment.contains("bearer")
+                    && !segment.contains("key")
+            });
+    path_is_safe
+}
+
 pub fn is_device_channel(namespace: SyncNamespace, provider: &str) -> bool {
     namespace == SyncNamespace::Asr
         && matches!(

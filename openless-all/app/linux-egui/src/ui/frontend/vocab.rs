@@ -27,7 +27,7 @@ const NEW_WORD_FOCUS: &str = "openless-vocab-new-word-focus";
 /// to prepare the same live GPU backdrop as the other modal surfaces.
 pub fn new_word_overlay_open(ctx: &egui::Context) -> bool {
     ctx.data(|data| {
-        data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
+        data.get_temp::<bool>(egui::Id::unique(NEW_WORD_OPEN))
             .unwrap_or(false)
     })
 }
@@ -43,24 +43,24 @@ const SEARCH_WIDTH: f32 = 210.0;
 
 fn search_open(ctx: &egui::Context) -> bool {
     ctx.data(|data| {
-        data.get_temp::<bool>(egui::Id::new(SEARCH_ID))
+        data.get_temp::<bool>(egui::Id::unique(SEARCH_ID))
             .unwrap_or(false)
     })
 }
 
 fn set_search_open(ctx: &egui::Context, open: bool) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(SEARCH_ID), open));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(SEARCH_ID), open));
 }
 
 fn selection(ctx: &egui::Context) -> BTreeSet<usize> {
     ctx.data(|data| {
-        data.get_temp::<BTreeSet<usize>>(egui::Id::new(SELECTION_ID))
+        data.get_temp::<BTreeSet<usize>>(egui::Id::unique(SELECTION_ID))
             .unwrap_or_default()
     })
 }
 
 fn set_selection(ctx: &egui::Context, selection: BTreeSet<usize>) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(SELECTION_ID), selection));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(SELECTION_ID), selection));
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -97,8 +97,8 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     if primary_button(ui, new_word_rect, new_word, Some(IconName::Plus)).clicked() {
         opened_new_word_now = true;
         ui.ctx().data_mut(|data| {
-            data.insert_temp(egui::Id::new(NEW_WORD_OPEN), true);
-            data.insert_temp(egui::Id::new(NEW_WORD_FOCUS), true);
+            data.insert_temp(egui::Id::unique(NEW_WORD_OPEN), true);
+            data.insert_temp(egui::Id::unique(NEW_WORD_FOCUS), true);
         });
         vm.vocab_input.clear();
         vm.vocab_selected_presets.clear();
@@ -172,10 +172,10 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // 词条独立滚动。下方整块（阴影分隔线、输入、提示、场景预设）
     // 贴住窗口底缘；面板展开时向上生长，不随词条内容高度漂浮。
     let presets_expanded = ui.ctx().data(|data| {
-        data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
+        data.get_temp::<bool>(egui::Id::unique(PRESETS_OPEN))
             .unwrap_or(false)
     });
-    let panel_id = egui::Id::new(("openless-vocab-bottom-height", presets_expanded));
+    let panel_id = egui::Id::unique(("openless-vocab-bottom-height", presets_expanded));
     let measured = ui.ctx().data(|data| data.get_temp::<f32>(panel_id));
     let reserved = measured.unwrap_or(if presets_expanded { 290.0 } else { 190.0 });
     let viewport_bottom = ui.max_rect().bottom();
@@ -188,6 +188,14 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
         .auto_shrink([false, false])
         .show(ui, |ui| {
             // ── Word list ──────────────────────────────────────────────────────────
+            super::paging::load_more_footer(
+                ui,
+                lang,
+                super::paging::Collection::Vocabulary,
+                vm,
+                !vm.vocab_query.trim().is_empty(),
+                actions,
+            );
             if visible.is_empty() {
                 ui.add_space(6.0);
                 let message = if vm.vocab_query.trim().is_empty() {
@@ -264,17 +272,17 @@ pub fn page(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("openless-vocab-bottom-test-rect"),
+            egui::Id::unique("openless-vocab-bottom-test-rect"),
             egui::Rect::from_min_size(panel_rect.min, egui::vec2(width, actual_height)),
         );
         data.insert_temp(
-            egui::Id::new("openless-vocab-viewport-test-bottom"),
+            egui::Id::unique("openless-vocab-viewport-test-bottom"),
             viewport_bottom,
         );
     });
     if !opened_new_word_now
         && ui.ctx().data(|data| {
-            data.get_temp::<bool>(egui::Id::new(NEW_WORD_OPEN))
+            data.get_temp::<bool>(egui::Id::unique(NEW_WORD_OPEN))
                 .unwrap_or(false)
         })
     {
@@ -338,13 +346,13 @@ fn tool_row(
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("openless-vocab-tabs-test-rects"),
+            egui::Id::unique("openless-vocab-tabs-test-rects"),
             (tab_background, tab_rects.clone()),
         );
     });
     let active = vm.vocab_filter.min(2);
     let pill_x = ui.ctx().animate_value_with_time(
-        ui.id().with("vocab-active-pill-x"),
+        ui.scope_id().with("vocab-active-pill-x"),
         tab_rects[active].left(),
         0.18,
     );
@@ -361,7 +369,7 @@ fn tool_row(
         let active = active == index;
         let response = ui.interact(
             rect,
-            ui.id().with(("openless-vocab-tab", index)),
+            ui.scope_id().with(("openless-vocab-tab", index)),
             egui::Sense::click(),
         );
         let painter = ui.painter().with_clip_rect(rect);
@@ -405,7 +413,7 @@ fn tool_row(
     );
     let checkbox = ui.interact(
         checkbox_rect,
-        ui.id().with("openless-vocab-select-all"),
+        ui.scope_id().with("openless-vocab-select-all"),
         egui::Sense::click(),
     );
     draw_checkbox(ui, checkbox_rect, all_selected, partial);
@@ -430,7 +438,7 @@ fn tool_row(
     );
     let label_response = ui.interact(
         label_rect,
-        ui.id().with("openless-vocab-select-all-label"),
+        ui.scope_id().with("openless-vocab-select-all-label"),
         egui::Sense::click(),
     );
     if checkbox.clicked() || label_response.clicked() {
@@ -470,7 +478,7 @@ fn tool_row(
         let response = ui.put(
             inner,
             egui::TextEdit::singleline(&mut vm.vocab_query)
-                .id(egui::Id::new(SEARCH_INPUT_ID))
+                .id(egui::Id::unique(SEARCH_INPUT_ID))
                 .hint_text(tr_l10n(lang, "vocab.search_placeholder"))
                 .text_color(theme::INK)
                 .frame(egui::Frame::NONE),
@@ -481,7 +489,7 @@ fn tool_row(
     }
     let search_response = ui.interact(
         circle,
-        ui.id().with("openless-vocab-search-toggle"),
+        ui.scope_id().with("openless-vocab-search-toggle"),
         egui::Sense::click(),
     );
     ui.painter().rect_filled(
@@ -507,7 +515,7 @@ fn tool_row(
         } else {
             set_search_open(ui.ctx(), !open);
             if !open {
-                ui.memory_mut(|memory| memory.request_focus(egui::Id::new(SEARCH_ID)));
+                ui.memory_mut(|memory| memory.request_focus(egui::Id::unique(SEARCH_ID)));
             }
         }
     }
@@ -734,7 +742,7 @@ fn quick_add(
                 let response = ui.add_sized(
                     [content_width, 20.0],
                     egui::TextEdit::singleline(&mut vm.vocab_input)
-                        .id(egui::Id::new(INPUT_ID))
+                        .id(egui::Id::unique(INPUT_ID))
                         .desired_width(content_width)
                         .hint_text(tr_l10n(lang, "vocab.placeholder"))
                         .frame(egui::Frame::NONE),
@@ -780,7 +788,7 @@ fn presets(
 ) {
     let lang = vm.lang;
     let open = ui.ctx().data(|data| {
-        data.get_temp::<bool>(egui::Id::new(PRESETS_OPEN))
+        data.get_temp::<bool>(egui::Id::unique(PRESETS_OPEN))
             .unwrap_or(false)
     });
     card(ui, width, |ui| {
@@ -822,7 +830,7 @@ fn presets(
         }
         if response.clicked() {
             ui.ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), !open));
+                .data_mut(|data| data.insert_temp(egui::Id::unique(PRESETS_OPEN), !open));
         }
         if !open {
             return;
@@ -1009,7 +1017,7 @@ fn new_word_overlay(
     }) {
         close = true;
     }
-    egui::Area::new(egui::Id::new("openless-vocab-new-word-area"))
+    egui::Area::new(egui::Id::unique("openless-vocab-new-word-area"))
         .order(egui::Order::Foreground)
         .fixed_pos(region.min)
         .constrain(false)
@@ -1073,7 +1081,7 @@ fn new_word_overlay(
                         icons::draw_icon(ui, rect.center(), IconName::Close, theme::INK_4);
                         #[cfg(test)]
                         ui.ctx().data_mut(|data| {
-                            data.insert_temp(egui::Id::new("openless-new-word-close-rect"), rect)
+                            data.insert_temp(egui::Id::unique("openless-new-word-close-rect"), rect)
                         });
                         if response.clicked() {
                             close = true;
@@ -1099,7 +1107,7 @@ fn new_word_overlay(
                         if ui
                             .ctx()
                             .data_mut(|data| {
-                                data.remove_temp::<bool>(egui::Id::new(NEW_WORD_FOCUS))
+                                data.remove_temp::<bool>(egui::Id::unique(NEW_WORD_FOCUS))
                             })
                             .unwrap_or(false)
                         {
@@ -1248,7 +1256,7 @@ fn new_word_overlay(
             #[cfg(test)]
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("openless-new-word-card-rect"),
+                    egui::Id::unique("openless-new-word-card-rect"),
                     card.response.rect,
                 )
             });
@@ -1256,7 +1264,7 @@ fn new_word_overlay(
             let _ = card;
         });
     if close {
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new(NEW_WORD_OPEN), false));
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique(NEW_WORD_OPEN), false));
     }
 }
 
@@ -1290,7 +1298,7 @@ fn primary_button(
 ) -> egui::Response {
     let response = ui.interact(
         rect,
-        ui.id().with(("openless-vocab-primary", label)),
+        ui.scope_id().with(("openless-vocab-primary", label)),
         egui::Sense::click(),
     );
     let painter = ui.painter().with_clip_rect(rect);
@@ -1349,7 +1357,7 @@ mod tests {
         let mut actions = Vec::new();
         let mut collapsed_top = 0.0;
         for expanded in [false, true] {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new(PRESETS_OPEN), expanded));
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique(PRESETS_OPEN), expanded));
             // The first pass measures the panel; the next pass places it at the bottom.
             for _ in 0..3 {
                 ctx.begin_pass(egui::RawInput {
@@ -1363,11 +1371,11 @@ mod tests {
                 let _ = crate::ui::frontend::end_pass(&ctx);
             }
             let rect: egui::Rect = ctx.data(|data| {
-                data.get_temp(egui::Id::new("openless-vocab-bottom-test-rect"))
+                data.get_temp(egui::Id::unique("openless-vocab-bottom-test-rect"))
                     .unwrap()
             });
             let bottom: f32 = ctx.data(|data| {
-                data.get_temp(egui::Id::new("openless-vocab-viewport-test-bottom"))
+                data.get_temp(egui::Id::unique("openless-vocab-viewport-test-bottom"))
                     .unwrap()
             });
             assert!(
@@ -1401,7 +1409,7 @@ mod tests {
             |ui| tool_row(ui, 900.0, &mut vm, &[], &BTreeSet::new(), &mut Vec::new()),
         );
         let (outer, items): (egui::Rect, Vec<egui::Rect>) = ctx.data(|data| {
-            data.get_temp(egui::Id::new("openless-vocab-tabs-test-rects"))
+            data.get_temp(egui::Id::unique("openless-vocab-tabs-test-rects"))
                 .unwrap()
         });
         assert_eq!(outer.height(), 39.0);
@@ -1448,11 +1456,11 @@ mod tests {
                 |_ui| new_word_overlay(&ctx, &mut vm, &mut Vec::new()),
             );
             let card: egui::Rect = ctx.data(|data| {
-                data.get_temp(egui::Id::new("openless-new-word-card-rect"))
+                data.get_temp(egui::Id::unique("openless-new-word-card-rect"))
                     .unwrap()
             });
             let close: egui::Rect = ctx.data(|data| {
-                data.get_temp(egui::Id::new("openless-new-word-close-rect"))
+                data.get_temp(egui::Id::unique("openless-new-word-close-rect"))
                     .unwrap()
             });
             assert!(card.contains_rect(close), "close={close:?}, card={card:?}");

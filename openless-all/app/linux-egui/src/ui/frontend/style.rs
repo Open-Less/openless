@@ -161,7 +161,7 @@ fn list_header(
     );
     let raw_response = ui.interact(
         raw_rect,
-        ui.id().with("style-raw-tab"),
+        ui.scope_id().with("style-raw-tab"),
         egui::Sense::click(),
     );
     painter.rect_filled(
@@ -266,6 +266,14 @@ fn pack_grid(
                 };
                 let card_width =
                     ((grid_width - GAP * (columns - 1) as f32) / columns as f32).max(1.0);
+                super::paging::load_more_footer(
+                    ui,
+                    lang,
+                    super::paging::Collection::StylePacks,
+                    vm,
+                    false,
+                    actions,
+                );
                 let pack_indices: Vec<usize> = vm
                     .style_packs
                     .iter()
@@ -433,7 +441,7 @@ fn style_pack_card(
     };
     let response = ui.interact(
         rect,
-        ui.id().with(("style-pack-card", index)),
+        ui.scope_id().with(("style-pack-card", index)),
         egui::Sense::click(),
     );
     let painter = ui.painter().with_clip_rect(rect);
@@ -465,7 +473,7 @@ fn style_pack_card(
     );
     let icon_response = ui.interact(
         icon_rect,
-        ui.id().with(("style-icon", index)),
+        ui.scope_id().with(("style-icon", index)),
         egui::Sense::click(),
     );
     // `.ol-style-icon-button`: 40×40, 1px `--ol-line-strong`, radius 11, and a
@@ -523,7 +531,7 @@ fn style_pack_card(
     icons::draw_icon(ui, pencil_rect.center(), IconName::Pencil, theme::INK_2);
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
-        let key = egui::Id::new("openless-style-card-icon-rects");
+        let key = egui::Id::unique("openless-style-card-icon-rects");
         let mut published: Vec<(usize, egui::Rect, egui::Rect, String)> =
             data.get_temp(key).unwrap_or_default();
         published.retain(|(slot, ..)| *slot != index);
@@ -553,7 +561,7 @@ fn style_pack_card(
         if ui
             .interact(
                 reset_rect,
-                ui.id().with(("style-icon-reset", index)),
+                ui.scope_id().with(("style-icon-reset", index)),
                 egui::Sense::click(),
             )
             .on_hover_text(tr_l10n(lang, "style.pack.resetIcon"))
@@ -708,7 +716,7 @@ fn new_pack_tile(
 ) {
     let response = ui.interact(
         rect,
-        ui.id().with("style-new-pack-tile"),
+        ui.scope_id().with("style-new-pack-tile"),
         egui::Sense::click(),
     );
     let painter = ui.painter().with_clip_rect(rect);
@@ -794,7 +802,7 @@ fn notice(ui: &mut egui::Ui, width: f32, vm: &mut FrontendViewModel) {
     );
     let response = ui.interact(
         dismiss,
-        ui.id().with("style-notice-dismiss"),
+        ui.scope_id().with("style-notice-dismiss"),
         egui::Sense::click(),
     );
     if response.hovered() {
@@ -853,14 +861,14 @@ fn editor_overlay(
     );
     // 卡片实际落点写进 memory，供测试查询（Area 覆盖整个 body，面积已不等于卡片）.
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("openless-style-editor-card-rect"), card_rect)
+        data.insert_temp(egui::Id::unique("openless-style-editor-card-rect"), card_rect)
     });
     // 遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个 LayerId）：各自独立 Area 时，
     // egui 会在按下后把被点到的 Area 抬到同层最上（`move_to_top`），遮罩被抬起就会盖住
     // 卡片；同一图层里先画遮罩、再画卡片在结构上就不可能出现。这里用 `Foreground` 而不是
     // `Tooltip`：弹窗若占 Tooltip，会盖住同层弹出的下拉/菜单（跨 Order 是 Tooltip >
     // Foreground）。
-    egui::Area::new(egui::Id::new("openless-style-editor-modal"))
+    egui::Area::new(egui::Id::unique("openless-style-editor-modal"))
         .order(egui::Order::Foreground)
         .fixed_pos(body.min)
         .constrain(false)
@@ -957,7 +965,7 @@ fn drawer_header(
     if ui
         .interact(
             close,
-            ui.id().with("style-editor-close"),
+            ui.scope_id().with("style-editor-close"),
             egui::Sense::click(),
         )
         .on_hover_text(tr_l10n(lang, "style.pack.closeEditor"))
@@ -1083,14 +1091,14 @@ fn drawer_body(
         });
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
-        data.insert_temp(egui::Id::new("style-editor-scroll-rect"), scroll.inner_rect);
+        data.insert_temp(egui::Id::unique("style-editor-scroll-rect"), scroll.inner_rect);
         data.insert_temp(
-            egui::Id::new("style-editor-scroll-content-height"),
+            egui::Id::unique("style-editor-scroll-content-height"),
             scroll.content_size.y,
         );
         data.insert_temp(
-            egui::Id::new("style-editor-scroll-offset"),
-            scroll.state.offset.y,
+            egui::Id::unique("style-editor-scroll-offset"),
+            scroll.state.clamped_offset().y,
         );
     });
     #[cfg(not(test))]
@@ -1457,7 +1465,7 @@ fn pills_row(
 fn editor_input(text: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text)
         .font(egui::FontId::proportional(12.5))
-        .vertical_align(egui::Align::Center)
+        .align(egui::Align2::CENTER_CENTER)
         .margin(egui::Margin::symmetric(11, 9))
         .frame(
             egui::Frame::new()
@@ -1497,15 +1505,15 @@ fn editor_textarea(ui: &mut egui::Ui, text: &mut String, height: f32, id: &'stat
             #[cfg(test)]
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new(("style-editor-textarea-measure", id)),
+                    egui::Id::unique(("style-editor-textarea-measure", id)),
                     (
                         scroll.content_size.y,
                         scroll.inner_rect.height(),
-                        scroll.state.offset.y,
+                        scroll.state.clamped_offset().y,
                     ),
                 );
                 data.insert_temp(
-                    egui::Id::new(("style-editor-textarea-rect", id)),
+                    egui::Id::unique(("style-editor-textarea-rect", id)),
                     scroll.inner_rect,
                 )
             });

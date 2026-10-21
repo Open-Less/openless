@@ -19,10 +19,15 @@ name: Release Tauri (cross-platform)
 
 on:
   push:
-    branches:
-      - '**'
+    # Release bundles are only needed for tags. Feature-branch pushes used to run
+    # this workflow purely to warm the release caches, which cost ~25 minutes per
+    # push and stored ~2.3 GB of release trees in the shared `beta` cache scope.
+    # The weekly schedule keeps that warm on the default branch instead.
     tags:
       - 'v*-tauri'
+  schedule:
+    # Monday 04:17 UTC: validate the release path and refresh the release caches.
+    - cron: '17 4 * * 1'
   workflow_dispatch:
     inputs:
       platform:
@@ -139,6 +144,9 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: swatinem/rust-cache@v2
         with:
+          # Restores the tree the beta `cross-platform` job maintains, so a tag
+          # build starts warm instead of compiling every dependency from scratch.
+          shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           cache-on-failure: true
 
@@ -146,7 +154,9 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: swatinem/rust-cache@v2
         with:
-          key: macos-release-v1
+          # Same prefix as the beta macOS check. The weekly schedule run fills it
+          # with release-profile artifacts, so tag builds are warm.
+          shared-key: tauri-macos
           workspaces: 'openless-all/app/src-tauri -> target'
 
       - name: Prepare Windows Sherpa static libraries

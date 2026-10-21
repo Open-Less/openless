@@ -13,6 +13,7 @@
 mod gemini_transcribe;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use base64::Engine;
 use serde_json::{json, Value};
@@ -362,14 +363,28 @@ pub enum OmniProvider {
 
 impl OmniProvider {
     pub fn new(config: OmniConfig) -> Self {
+        Self::with_task_spawner(config, Arc::new(crate::config::TokioTaskSpawner))
+    }
+
+    /// Use the host scheduler for both transcription work and asynchronous cleanup.
+    pub fn with_task_spawner(
+        config: OmniConfig,
+        task_spawner: Arc<dyn crate::config::TaskSpawner>,
+    ) -> Self {
         if config.is_gemini() {
             let label = OmniCallLabel {
                 provider: config.provider_id.clone(),
                 model: config.model.clone(),
             };
-            if config.model.trim() == crate::asr::gemini::DEFAULT_MODEL {
+            if matches!(
+                config.model.trim(),
+                crate::asr::gemini::DEFAULT_MODEL | crate::asr::gemini_live::MODEL
+            ) {
                 return Self::GeminiTranscribe {
-                    provider: gemini_transcribe::GeminiTranscribeOmni::new(config),
+                    provider: gemini_transcribe::GeminiTranscribeOmni::with_task_spawner(
+                        config,
+                        task_spawner,
+                    ),
                     label,
                 };
             }
@@ -402,6 +417,17 @@ impl OmniProvider {
 
     pub fn is_transcription_only(&self) -> bool {
         matches!(self, Self::GeminiTranscribe { .. })
+    }
+
+    /// Open a real-time audio session when the selected dedicated model supports it.
+    pub(crate) async fn start_live_transcription(
+        &self,
+        partials: std::sync::Arc<dyn crate::ports::TextStreamSink>,
+    ) -> Result<Option<std::sync::Arc<crate::asr::gemini_live::GeminiLiveASR>>, LLMError> {
+        match self {
+            Self::GeminiTranscribe { provider, .. } => provider.start_live(partials).await,
+            _ => Ok(None),
+        }
     }
 
     pub fn call_label(&self) -> OmniCallLabel {

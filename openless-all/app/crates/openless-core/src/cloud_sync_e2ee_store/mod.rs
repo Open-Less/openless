@@ -15,10 +15,16 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 
 use crate::cloud_sync_e2ee_documents::{
-    DocumentError, DocumentResult, ExportedDocuments, RestoreBackend, RestoreContext, RestoreLease,
-    SecretJson, SyncScope, ValidatedSyncDocuments,
+    ConflictChoice, DocumentError, DocumentKind, DocumentResult, ExportedDocuments, RestoreBackend,
+    RestoreContext, RestoreLease, SecretJson, SyncScope, ValidatedSyncDocuments,
 };
-use crate::cloud_sync_e2ee_protocol::types::{DocumentSet, Revision, SourceDevice};
+use crate::cloud_sync_e2ee_protocol::types::{
+    DocumentSet, LogicalDocument, Revision, SourceDevice,
+};
+use crate::local_migration_bundle::{
+    decode_bundle, export_validated_bundle, BundleArtifact, BundleError, BundleExportOptions,
+    BundleInspection, BundleMergePreview, BundlePassword, RestoreMode,
+};
 use crate::{BackendRepositories, CredentialStore};
 
 pub use extensions::{DeviceExtensionKey, ProtectedExtensionStore};
@@ -41,6 +47,8 @@ struct Inner {
     metadata: tokio::sync::Mutex<()>,
     runtime_idle: std::sync::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     runtime_effects: std::sync::Mutex<Option<Arc<dyn crate::config::RestoreRuntimeEffects>>>,
+    android_migration:
+        std::sync::OnceLock<Arc<dyn crate::local_migration_bundle::AndroidMigrationState>>,
 }
 
 impl CoreSyncStore {
@@ -77,12 +85,23 @@ impl CoreSyncStore {
                 metadata: tokio::sync::Mutex::new(()),
                 runtime_idle: std::sync::Mutex::new(None),
                 runtime_effects: std::sync::Mutex::new(None),
+                android_migration: std::sync::OnceLock::new(),
             }),
         })
     }
 
     pub fn generation(&self) -> DocumentResult<Revision> {
         self.inner.gate.generation()
+    }
+
+    pub fn bind_android_migration_state(
+        &self,
+        state: Arc<dyn crate::local_migration_bundle::AndroidMigrationState>,
+    ) -> DocumentResult<()> {
+        self.inner
+            .android_migration
+            .set(state)
+            .map_err(|_| DocumentError::InvalidDocument)
     }
     pub fn device(&self) -> SourceDevice {
         self.inner.device.clone()
@@ -234,10 +253,21 @@ impl CoreSyncStore {
         desired: ValidatedSyncDocuments,
         context: RestoreContext,
     ) -> DocumentResult<ExportedDocuments> {
+        self.restore_scope_with_android_revision(desired, context, None)
+            .await
+    }
+
+    async fn restore_scope_with_android_revision(
+        &self,
+        desired: ValidatedSyncDocuments,
+        context: RestoreContext,
+        android_revision: Option<String>,
+    ) -> DocumentResult<ExportedDocuments> {
         self.validate_local_scope(&context.scope)?;
         let scope = context.scope.clone();
         let desired = native::canonicalize_native_documents(desired)?;
-        let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?;
+        let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?
+            .with_android_revision(android_revision);
         let store = self.clone();
         // Detach only the owned, journalled operation: dropping an IPC waiter cannot cancel it.
         self.spawn_owned(async move {
@@ -522,6 +552,14 @@ struct NativeLease {
     scope: SyncScope,
     scope_id: String,
     permit: ExclusivePermit,
+    android: Option<Box<dyn crate::local_migration_bundle::AndroidMigrationLease>>,
+}
+impl Drop for NativeLease {
+    fn drop(&mut self) {
+        if let Some(android) = &mut self.android {
+            let _ = android.finish(self.store.inner.gate.recovery_required().unwrap_or(true));
+        }
+    }
 }
 impl RestoreBackend for CoreSyncStore {
     fn acquire(
@@ -547,12 +585,49 @@ impl RestoreBackend for CoreSyncStore {
                 scope,
                 scope_id,
                 permit,
+                android: None,
             }) as Box<dyn RestoreLease>)
         })
     }
 }
 
 impl RestoreLease for NativeLease {
+    fn finish_local_state(&mut self) -> DocumentResult<()> {
+        if let Some(android) = &mut self.android {
+            android
+                .finish(false)
+                .map_err(|_| DocumentError::RecoveryRequired)?;
+            self.android = None;
+        }
+        Ok(())
+    }
+    fn prepare_target(
+        &mut self,
+        target: &ValidatedSyncDocuments,
+        revision: Option<&str>,
+    ) -> DocumentResult<()> {
+        if self.scope != self.store.local_bundle_scope() {
+            return if revision.is_none() {
+                Ok(())
+            } else {
+                Err(DocumentError::Unsupported)
+            };
+        }
+        if let Some(value) = android_settings(target) {
+            crate::local_migration_bundle::validate_portable_android_preferences(value)
+                .map_err(|_| DocumentError::InvalidDocument)?;
+            let state = self
+                .store
+                .inner
+                .android_migration
+                .get()
+                .ok_or(DocumentError::Unsupported)?;
+            self.android = Some(state.acquire(revision)?);
+        } else if revision.is_some() {
+            return Err(DocumentError::InvalidDocument);
+        }
+        Ok(())
+    }
     fn capture(
         &mut self,
     ) -> BoxFuture<'_, DocumentResult<crate::cloud_sync_e2ee_documents::ExportSnapshot>> {
@@ -565,9 +640,21 @@ impl RestoreLease for NativeLease {
                     .read_scope(self.scope.clone())
                     .await?,
             )?;
-            self.store
+            let mut snapshot = self
+                .store
                 .capture_native(&self.scope, &self.permit, &state)
-                .await
+                .await?;
+            if let Some(android) = &self.android {
+                let value = android.capture()?;
+                snapshot.retained_documents.retain(|doc| {
+                    !(doc.kind == DocumentKind::UiPreferences
+                        && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID)
+                });
+                snapshot
+                    .retained_documents
+                    .push(android_document(value.into_value()));
+            }
+            Ok(snapshot)
         })
     }
     fn capture_rollback_state(&mut self) -> BoxFuture<'_, DocumentResult<SecretJson>> {
@@ -600,7 +687,12 @@ impl RestoreLease for NativeLease {
             self.store.runtime_effects()?;
             self.store
                 .replace_native(&self.scope, &documents, &self.permit)
-                .await
+                .await?;
+            if let (Some(android), Some(value)) = (&mut self.android, android_settings(&documents))
+            {
+                android.replace(&SecretJson::new(value.clone()))?;
+            }
+            Ok(())
         })
     }
     fn reload(&mut self) -> BoxFuture<'_, DocumentResult<()>> {
@@ -640,6 +732,523 @@ fn receipt(value: gate::GateRestoreReceipt) -> crate::cloud_sync_e2ee_documents:
         generation: value.generation,
         committed: value.committed,
         journal_cleanup_pending: false,
+    }
+}
+
+fn android_settings(documents: &ValidatedSyncDocuments) -> Option<&serde_json::Value> {
+    documents
+        .documents()
+        .documents
+        .iter()
+        .find(|doc| {
+            doc.kind == DocumentKind::UiPreferences
+                && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID
+        })
+        .map(|doc| &doc.value)
+}
+
+fn android_document(value: serde_json::Value) -> LogicalDocument {
+    LogicalDocument {
+        id: crate::local_migration_bundle::ANDROID_SETTINGS_ID.into(),
+        kind: DocumentKind::UiPreferences,
+        schema_version: crate::cloud_sync_e2ee_documents::DOCUMENT_SCHEMA_VERSION,
+        value,
+    }
+}
+
+fn local_bundle_diff(
+    current: &ValidatedSyncDocuments,
+    incoming: &ValidatedSyncDocuments,
+    mode: RestoreMode,
+) -> DocumentResult<crate::cloud_sync_e2ee_documents::MergePreview> {
+    match mode {
+        RestoreMode::Merge => {
+            crate::cloud_sync_e2ee_documents::diff_sync_documents(None, current, incoming)
+        }
+        RestoreMode::Replace => {
+            crate::cloud_sync_e2ee_documents::diff_local_replace_documents(current, incoming)
+        }
+    }
+}
+
+fn merge_android_learning(
+    current: &ValidatedSyncDocuments,
+    desired: &mut ValidatedSyncDocuments,
+) -> Result<(), BundleError> {
+    let Some(local) = android_settings(current) else {
+        return Ok(());
+    };
+    let Some(target) = desired.set.documents.iter_mut().find(|doc| {
+        doc.kind == DocumentKind::UiPreferences
+            && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID
+    }) else {
+        return Ok(());
+    };
+    for key in ["strokeFrequency", "pinyinLearnedPhrases"] {
+        let incoming = target.value[key]
+            .as_object_mut()
+            .ok_or(BundleError::InvalidSchema)?;
+        for (id, value) in local[key].as_object().ok_or(BundleError::InvalidSchema)? {
+            if incoming.len() >= 20_000 {
+                break;
+            }
+            incoming.entry(id.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    crate::local_migration_bundle::validate_portable_android_preferences(&target.value)
+}
+
+impl CoreSyncStore {
+    /// Export the complete local state without binding the user file to a cloud account.
+    pub async fn export_local_bundle(
+        &self,
+        options: BundleExportOptions,
+    ) -> Result<BundleArtifact, BundleError> {
+        let (captured, _) = self.capture_local_bundle().await?;
+        let options = BundleExportOptions {
+            portable_android_preferences: android_settings(&captured.documents)
+                .cloned()
+                .or(options.portable_android_preferences),
+            ..options
+        };
+        export_validated_bundle(&captured.documents, options)
+    }
+
+    /// Inspecting a bundle is deliberately independent of the native stores.
+    pub fn inspect_local_bundle(bytes: &[u8]) -> Result<BundleInspection, BundleError> {
+        crate::local_migration_bundle::inspect_bundle(bytes)
+    }
+
+    async fn capture_local_bundle(
+        &self,
+    ) -> Result<(ExportedDocuments, Option<String>), BundleError> {
+        let platform = self.inner.android_migration.get();
+        let android = platform.map(|state| state.capture()).transpose()?;
+        let mut captured = self.export_scope(self.local_bundle_scope()).await?;
+        if let Some(snapshot) = &android {
+            crate::local_migration_bundle::validate_portable_android_preferences(
+                snapshot.value.expose(),
+            )?;
+            captured.documents.set.documents.retain(|doc| {
+                !(doc.kind == DocumentKind::UiPreferences
+                    && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID)
+            });
+            captured
+                .documents
+                .set
+                .documents
+                .push(android_document(snapshot.value.expose().clone()));
+            captured.documents = crate::cloud_sync_e2ee_documents::revalidate_sync_documents(
+                captured.documents.set.clone(),
+                captured.documents.observed_revision(),
+            )?;
+            if platform.expect("captured platform").capture()?.revision != snapshot.revision {
+                return Err(BundleError::StalePreview);
+            }
+        }
+        Ok((captured, android.map(|snapshot| snapshot.revision)))
+    }
+
+    pub async fn preview_local_bundle(
+        &self,
+        bytes: &[u8],
+        password: Option<BundlePassword>,
+        mode: RestoreMode,
+    ) -> Result<BundleMergePreview, BundleError> {
+        let (captured, observed_android_revision) = self.capture_local_bundle().await?;
+        let generation = captured.generation;
+        let current = captured.documents;
+        let decoded = decode_bundle(bytes, password.as_ref(), generation)?;
+        let inspection = decoded.inspection.clone();
+        let incoming = self.prepare_bundle_documents(&current, decoded)?;
+        let removed_documents = if mode == RestoreMode::Replace {
+            current
+                .documents()
+                .documents
+                .iter()
+                // The native restore materializes missing preferences and built-in styles.
+                .filter(|doc| {
+                    !matches!(
+                        doc.kind,
+                        DocumentKind::Preferences | DocumentKind::UiPreferences
+                    ) && !(doc.kind == DocumentKind::StylePacks
+                        && doc.value["pack"]["kind"] == "builtin")
+                })
+                .filter(|doc| {
+                    !incoming
+                        .documents()
+                        .documents
+                        .iter()
+                        .any(|other| other.kind == doc.kind && other.id == doc.id)
+                })
+                .map(|doc| crate::cloud_sync_e2ee_documents::DocumentKey {
+                    kind: doc.kind,
+                    id: doc.id.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let preview = local_bundle_diff(&current, &incoming, mode)?;
+        Ok(BundleMergePreview {
+            inspection,
+            observed_generation: generation,
+            observed_android_revision,
+            removed_documents,
+            conflicts: preview.conflicts().to_vec(),
+        })
+    }
+
+    /// Apply a previously inspected bundle under the same crash-safe gate used by sync.
+    /// The synthetic scope is internal state only; it never appears in the user bundle.
+    pub async fn import_local_bundle(
+        &self,
+        bytes: &[u8],
+        password: Option<BundlePassword>,
+        mode: RestoreMode,
+        choices: &[ConflictChoice],
+        expected_generation: Option<Revision>,
+        expected_android_revision: Option<String>,
+    ) -> Result<BundleInspection, BundleError> {
+        let scope = self.local_bundle_scope();
+        let (captured, android_revision) = self.capture_local_bundle().await?;
+        if android_revision != expected_android_revision {
+            return Err(BundleError::StalePreview);
+        }
+        let current = captured.documents.clone();
+        let generation = captured.generation;
+        if expected_generation.is_some_and(|expected| expected != generation) {
+            return Err(BundleError::StalePreview);
+        }
+        let decoded = decode_bundle(bytes, password.as_ref(), generation)?;
+        let inspection = decoded.inspection.clone();
+        let bundle_documents = self.prepare_bundle_documents(&current, decoded)?;
+        let mut desired = local_bundle_diff(&current, &bundle_documents, mode)?.resolve(choices)?;
+        if mode == RestoreMode::Merge {
+            merge_android_learning(&current, &mut desired)?;
+        }
+        let portable_android_preferences = android_settings(&current).cloned();
+        let backup_options = if inspection.credentials_present {
+            BundleExportOptions {
+                mode: crate::local_migration_bundle::BundleMode::PersonalMigration,
+                credential_policy:
+                    crate::local_migration_bundle::CredentialPolicy::PasswordEncrypted,
+                password: password.clone(),
+                portable_android_preferences,
+                ..BundleExportOptions::default()
+            }
+        } else {
+            BundleExportOptions {
+                portable_android_preferences,
+                ..BundleExportOptions::default()
+            }
+        };
+        let backup = export_validated_bundle(&captured.documents, backup_options)?;
+        self.write_local_bundle_backup(&backup)?;
+        let context = RestoreContext {
+            scope,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            observed_revision: current.observed_revision(),
+            local_generation: generation,
+            target_device: self.inner.device.clone(),
+        };
+        self.restore_scope_with_android_revision(desired, context, android_revision)
+            .await
+            .map_err(BundleError::from)?;
+        Ok(inspection)
+    }
+
+    fn prepare_bundle_documents(
+        &self,
+        current: &ValidatedSyncDocuments,
+        mut decoded: crate::local_migration_bundle::DecodedBundle,
+    ) -> Result<ValidatedSyncDocuments, BundleError> {
+        use crate::cloud_sync_e2ee_documents::DocumentKind;
+
+        decoded
+            .documents
+            .set
+            .documents
+            .retain(|doc| !matches!(doc.kind, DocumentKind::History | DocumentKind::Activity));
+        decoded
+            .documents
+            .set
+            .tombstones
+            .retain(|doc| !matches!(doc.kind, DocumentKind::History | DocumentKind::Activity));
+        decoded.documents.set.documents.extend(
+            current
+                .documents()
+                .documents
+                .iter()
+                .filter(|doc| matches!(doc.kind, DocumentKind::History | DocumentKind::Activity))
+                .cloned(),
+        );
+        decoded.documents.set.tombstones.extend(
+            current
+                .documents()
+                .tombstones
+                .iter()
+                .filter(|doc| matches!(doc.kind, DocumentKind::History | DocumentKind::Activity))
+                .cloned(),
+        );
+        if android_settings(&decoded.documents).is_none() {
+            if let Some(value) = android_settings(current) {
+                decoded
+                    .documents
+                    .set
+                    .documents
+                    .push(android_document(value.clone()));
+            }
+        }
+        if !matches!(
+            decoded.inspection.mode,
+            crate::local_migration_bundle::BundleMode::ShareRedacted
+        ) && decoded.inspection.credentials_present
+        {
+            let mut set = decoded.documents.documents().clone();
+            set.source_device = current.documents().source_device.clone();
+            set.tombstones
+                .retain(|tombstone| tombstone.kind != DocumentKind::DeviceProfile);
+            set.documents
+                .retain(|document| document.kind != DocumentKind::DeviceProfile);
+            set.documents.extend(
+                current
+                    .documents()
+                    .documents
+                    .iter()
+                    .filter(|document| document.kind == DocumentKind::DeviceProfile)
+                    .cloned(),
+            );
+            return crate::cloud_sync_e2ee_documents::revalidate_sync_documents(
+                set,
+                current.observed_revision(),
+            )
+            .map_err(BundleError::from);
+        }
+
+        use serde_json::json;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let mut set = decoded.documents.documents().clone();
+        set.source_device = current.documents().source_device.clone();
+        set.tombstones.retain(|tombstone| {
+            !matches!(
+                tombstone.kind,
+                DocumentKind::ProviderCredentials | DocumentKind::DeviceProfile
+            )
+        });
+        let imported_channels: BTreeSet<String> = set
+            .documents
+            .iter()
+            .filter(|document| document.kind == DocumentKind::Channels)
+            .map(|document| document.id.clone())
+            .collect();
+        let current_channels: BTreeMap<String, LogicalDocument> = current
+            .documents()
+            .documents
+            .iter()
+            .filter(|document| document.kind == DocumentKind::Channels)
+            .map(|document| (document.id.clone(), document.clone()))
+            .collect();
+        let imported_active_namespaces: BTreeSet<String> = set
+            .documents
+            .iter()
+            .filter(|document| {
+                document.kind == DocumentKind::Channels
+                    && document
+                        .value
+                        .get("active")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+            })
+            .filter_map(|document| {
+                document
+                    .value
+                    .get("namespace")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
+        let current_credentials: BTreeMap<String, LogicalDocument> = current
+            .documents()
+            .documents
+            .iter()
+            .filter(|document| document.kind == DocumentKind::ProviderCredentials)
+            .map(|document| (document.id.clone(), document.clone()))
+            .collect();
+        let mut additions = Vec::new();
+        set.tombstones.retain(|tombstone| {
+            !(tombstone.kind == DocumentKind::Channels
+                && current_channels.contains_key(&tombstone.id)
+                && !imported_channels.contains(&tombstone.id))
+        });
+
+        for channel in set
+            .documents
+            .iter_mut()
+            .filter(|document| document.kind == DocumentKind::Channels)
+        {
+            let existing_channel = current_channels.get(&channel.id);
+            let compatible_channel = existing_channel.is_some_and(|current| {
+                current.value.get("namespace") == channel.value.get("namespace")
+                    && current.value.get("providerType") == channel.value.get("providerType")
+            });
+            if let Some(credentials) = current_credentials.get(&channel.id) {
+                if compatible_channel {
+                    let record: crate::cloud_sync_e2ee_documents::ProviderCredentialRecord =
+                        serde_json::from_value(credentials.value.clone())
+                            .map_err(|_| BundleError::InvalidSchema)?;
+                    let has_secret = record.accounts.keys().any(|account| {
+                        !crate::cloud_sync_e2ee_documents::registry::public_credential_account(
+                            record.namespace,
+                            account,
+                        )
+                    });
+                    if has_secret {
+                        // Public configuration from a share is untrusted when it is
+                        // paired with a retained secret. Keep the existing provider
+                        // endpoint/model instead of sending that secret elsewhere.
+                        channel
+                            .value
+                            .as_object_mut()
+                            .ok_or(BundleError::InvalidSchema)?
+                            .remove("configuration");
+                    }
+                    let mut credential = credentials.clone();
+                    let credential_object = credential
+                        .value
+                        .as_object_mut()
+                        .ok_or(BundleError::InvalidSchema)?;
+                    let accounts = credential_object
+                        .get_mut("accounts")
+                        .and_then(serde_json::Value::as_object_mut)
+                        .ok_or(BundleError::InvalidSchema)?;
+                    if !has_secret {
+                        accounts.retain(|account, _| {
+                            !crate::cloud_sync_e2ee_documents::registry::public_credential_account(
+                                record.namespace,
+                                account,
+                            )
+                        });
+                        if let Some(configuration) = channel
+                            .value
+                            .get("configuration")
+                            .and_then(serde_json::Value::as_object)
+                        {
+                            for (account, value) in configuration {
+                                accounts.insert(account.clone(), value.clone());
+                            }
+                        }
+                    }
+                    additions.push(credential);
+                    continue;
+                }
+                // A changed provider identity must never inherit a receiver secret.
+                channel
+                    .value
+                    .as_object_mut()
+                    .ok_or(BundleError::InvalidSchema)?
+                    .insert("enabled".into(), serde_json::Value::Bool(false));
+                channel
+                    .value
+                    .as_object_mut()
+                    .ok_or(BundleError::InvalidSchema)?
+                    .insert("active".into(), serde_json::Value::Bool(false));
+            }
+            let channel_value = channel
+                .value
+                .as_object_mut()
+                .ok_or(BundleError::InvalidSchema)?;
+            let namespace = channel_value
+                .get("namespace")
+                .cloned()
+                .ok_or(BundleError::InvalidSchema)?;
+            let channel_id = channel_value
+                .get("id")
+                .cloned()
+                .ok_or(BundleError::InvalidSchema)?;
+            additions.push(LogicalDocument {
+                id: channel.id.clone(),
+                kind: DocumentKind::ProviderCredentials,
+                schema_version: channel.schema_version,
+                value: json!({
+                    "channelId": channel_id,
+                    "namespace": namespace,
+                    "accounts": channel_value.get("configuration").cloned().unwrap_or_else(|| json!({})),
+                }),
+            });
+        }
+
+        // Replace imports must not delete receiver-only channels or their
+        // credentials merely because a redacted share cannot carry them.
+        for (id, mut channel) in current_channels {
+            if !imported_channels.contains(&id) {
+                if imported_active_namespaces.contains(
+                    channel
+                        .value
+                        .get("namespace")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    channel
+                        .value
+                        .as_object_mut()
+                        .ok_or(BundleError::InvalidSchema)?
+                        .insert("active".into(), serde_json::Value::Bool(false));
+                }
+                if let Some(credentials) = current_credentials.get(&id) {
+                    set.documents.push(channel);
+                    set.documents.push(credentials.clone());
+                }
+            }
+        }
+        additions.extend(
+            current
+                .documents()
+                .documents
+                .iter()
+                .filter(|document| document.kind == DocumentKind::DeviceProfile)
+                .cloned(),
+        );
+        set.documents.extend(additions);
+        crate::cloud_sync_e2ee_documents::revalidate_sync_documents(
+            set,
+            current.observed_revision(),
+        )
+        .map_err(BundleError::from)
+    }
+
+    fn local_bundle_scope(&self) -> SyncScope {
+        SyncScope {
+            service_origin: "https://local.openless.invalid".into(),
+            owner_github_id: "1".into(),
+            vault_id: "00000000-0000-4000-8000-000000000001".into(),
+            key_id: "00000000-0000-4000-8000-000000000002".into(),
+            device_id: self.inner.device.id.clone(),
+        }
+    }
+
+    fn write_local_bundle_backup(&self, artifact: &BundleArtifact) -> Result<(), BundleError> {
+        let directory = self.inner.data_dir.join("local-migration-backups");
+        std::fs::create_dir_all(&directory).map_err(|_| BundleError::BackupFailed)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let temporary = directory.join(format!("{id}.tmp"));
+        let target = directory.join(format!("{id}.omb"));
+        let result = (|| -> Result<(), BundleError> {
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+                .map_err(|_| BundleError::BackupFailed)?;
+            std::io::Write::write_all(&mut file, &artifact.bytes)
+                .map_err(|_| BundleError::BackupFailed)?;
+            file.sync_all().map_err(|_| BundleError::BackupFailed)?;
+            std::fs::rename(&temporary, &target).map_err(|_| BundleError::BackupFailed)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
     }
 }
 

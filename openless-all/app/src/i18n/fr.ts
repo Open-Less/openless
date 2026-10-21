@@ -1371,6 +1371,16 @@ export const fr: typeof zhCN = {
       cursorContextDesc:
         'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
+    localMigration: {
+      title: 'Migration de la configuration locale',
+      description:
+        'Exportez toute la configuration locale portable dans un paquet versionné ou restaurez-la sur un autre appareil Android. Le mode partage est anonymisé par défaut ; une migration personnelle ne peut inclure des identifiants qu’avec une protection par mot de passe. Le flux natif affiche la source, la version, les catégories et les changements avant fusion ou remplacement.',
+      safetyNote:
+        'Les autorisations système, sessions OAuth, chemins de l’appareil et états d’exécution ne sont jamais migrés. Une sauvegarde locale est créée avant l’importation.',
+      open: 'Ouvrir la migration locale',
+      opening: 'Ouverture…',
+      openFailed: 'Impossible d’ouvrir la migration locale. Réessayez depuis les réglages.',
+    },
     codingConsole: {
       title: 'Console Claude',
       desc: 'Détectez Claude Code et le MCP de contrôle de l’ordinateur, puis exécutez Claude sans interface avec des protections. Consultez la sortie progressive et le coût.',
@@ -1811,9 +1821,9 @@ export const fr: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe effectue ici une transcription mot à mot, suivie du LLM configuré. Pour la transcription intelligente, sélectionnez ce modèle en mode multimodal. L’audio est envoyé à la fin de l’enregistrement ; le direct n’est pas pris en charge. URL de base : https://generativelanguage.googleapis.com/v1beta (ou /v1beta/interactions).',
+        'Les deux modèles transcrivent ici mot à mot, avec traitement facultatif par le LLM configuré. gemini-3.5-transcribe envoie l’audio à la fin de l’enregistrement. gemini-3.5-transcribe-live affiche les résultats pendant que vous parlez, jusqu’à 10 minutes par enregistrement. Pour la transcription intelligente, utilisez le mode multimodal. URL de base : https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe permet la transcription intelligente : suppression des hésitations, application des corrections orales et mise en forme après l’enregistrement. Les langues de travail et le dictionnaire sont pris en charge. Ce modèle n’utilise pas les consignes de style et ne permet pas la traduction, la révision de texte ou les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
+        'gemini-3.5-transcribe et gemini-3.5-transcribe-live permettent la transcription intelligente. Live affiche un brouillon pendant que vous parlez, jusqu’à 10 minutes par enregistrement. À la fin, la transcription intelligente supprime les hésitations, applique les corrections orales et met en forme le texte final. Les deux modèles prennent en charge les langues de travail et le dictionnaire, mais pas les consignes de style, la traduction, la révision de texte ni les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
       validateSuccessAudio:
         'Connexion audio vérifiée avec un court échantillon de silence. Confirmez la qualité de transcription avec un court enregistrement.',
       elevenLabsUploadNotice:

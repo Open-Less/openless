@@ -273,9 +273,12 @@ pub(crate) fn backend_dependencies(
         .with_local_startup_spawner(Arc::clone(&task_spawner)),
     );
     let dictation = Arc::new(openless_core::DictationEngineRouter::new(traditional));
-    let production_omni: Arc<dyn DictationEngine> = Arc::new(
-        openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), recorder),
-    );
+    let production_omni: Arc<dyn DictationEngine> =
+        Arc::new(openless_core::SharedOmniDictationEngine::with_task_spawner(
+            Arc::clone(&credential_store),
+            recorder,
+            Arc::clone(&task_spawner),
+        ));
     for provider_type in openless_core::SHARED_OMNI_PROVIDER_TYPES {
         dictation
             .register_omni(*provider_type, Arc::clone(&production_omni))

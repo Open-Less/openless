@@ -111,6 +111,54 @@ pub(crate) fn build(
     Ok((service, store))
 }
 
+/// Build the native document store without requiring a configured sync account.
+/// The local bundle uses the same repositories, credential store, gate and
+/// device identity as the rest of Core, but keeps its protected extensions in a
+/// separate namespace from the cloud-sync state.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_local_store(
+    data_dir: &Path,
+    repositories: crate::BackendRepositories,
+    credentials: Arc<dyn crate::CredentialStore>,
+    app_version: String,
+    tasks: Arc<dyn crate::TaskSpawner>,
+) -> SyncResult<Arc<CoreSyncStore>> {
+    let root = data_dir.join("encrypted-sync");
+    std::fs::create_dir_all(&root).map_err(|error| {
+        log::error!(
+            "[e2ee-adapter] create local migration root failed path={} err={error}",
+            root.display()
+        );
+        super::error("local_storage_unavailable")
+    })?;
+    let gate =
+        crate::cloud_sync_e2ee_store::gate::open_for_data_dir(data_dir).map_err(document_error)?;
+    let device_id = load_device_id(&root)?;
+    let device = SourceDevice {
+        id: device_id.clone(),
+        os: "android".into(),
+        arch: "unknown".into(),
+        app_version,
+    };
+    let local = LocalStorage::new(
+        root.join("local-migration-protected"),
+        "https://local.openless.invalid".into(),
+        device_id,
+        credentials.clone(),
+    );
+    CoreSyncStore::new(
+        repositories,
+        credentials,
+        data_dir.into(),
+        device,
+        gate,
+        Arc::new(local),
+        tasks,
+    )
+    .map(Arc::new)
+    .map_err(document_error)
+}
+
 pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
     let device_path = root.join("device-id");
     let device_id = match std::fs::read_to_string(&device_path) {
@@ -281,7 +329,7 @@ fn scope_bucket(scope: &SyncScope) -> DocumentResult<String> {
         &scope.device_id,
     ])
     .map_err(|_| DocumentError::InvalidDocument)?;
-    Ok(format!("scope:{:x}", Sha256::digest(bytes)))
+    Ok(format!("scope:{}", hex::encode(Sha256::digest(bytes))))
 }
 
 impl SyncServiceData for CoreSyncStore {

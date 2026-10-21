@@ -27,6 +27,7 @@ pub enum ConflictReason {
 #[serde(rename_all = "camelCase")]
 pub struct RedactedConflict {
     pub conflict_id: String,
+    pub document_id: String,
     pub kind: DocumentKind,
     pub reason: ConflictReason,
     pub is_credential_unit: bool,
@@ -64,6 +65,7 @@ pub struct MergePreview {
     active_choices: BTreeMap<SyncNamespace, Option<String>>,
     active_conflicts: BTreeMap<String, (SyncNamespace, Option<String>, Option<String>)>,
     agreed_tie_order: BTreeMap<DocumentKind, Option<BTreeMap<String, usize>>>,
+    replace_local_units: Option<UnitMap>,
 }
 
 impl fmt::Debug for MergePreview {
@@ -107,6 +109,17 @@ impl MergePreview {
             }
         }
         for (id, (namespace, local, remote)) in std::mem::take(&mut self.active_conflicts) {
+            if selected[&id] == ConflictSide::Local {
+                if let (Some(units), Some(channel_id)) = (&self.replace_local_units, &local) {
+                    let key = DocumentKey {
+                        kind: DocumentKind::Channels,
+                        id: format!("{}:{channel_id}", namespace.as_str()),
+                    };
+                    if let Some(unit) = units.get(&key) {
+                        self.accepted.entry(key).or_insert_with(|| unit.clone());
+                    }
+                }
+            }
             self.active_choices.insert(
                 namespace,
                 match selected[&id] {
@@ -136,13 +149,18 @@ impl MergePreview {
                 let mut channel: ChannelRecord = serde_json::from_value(doc.value.clone())
                     .map_err(|_| DocumentError::InvalidDocument)?;
                 if channel.namespace == *namespace {
-                    channel.active = choice.as_deref() == Some(channel.id.as_str());
-                    if channel.active {
-                        channel.enabled = true;
+                    let desired_active = choice.as_deref() == Some(channel.id.as_str());
+                    if desired_active {
                         found = true;
                     }
-                    doc.value = serde_json::to_value(channel)
-                        .map_err(|_| DocumentError::InvalidDocument)?;
+                    if channel.active != desired_active {
+                        channel.active = desired_active;
+                        if desired_active {
+                            channel.enabled = true;
+                        }
+                        doc.value = serde_json::to_value(channel)
+                            .map_err(|_| DocumentError::InvalidDocument)?;
+                    }
                 }
             }
             if !found {
@@ -187,6 +205,7 @@ pub fn diff_sync_documents(
         active_choices: BTreeMap::new(),
         active_conflicts: BTreeMap::new(),
         agreed_tie_order,
+        replace_local_units: None,
     };
     for key in keys {
         let ancestor = base.as_ref().and_then(|map| map.get(&key));
@@ -233,6 +252,7 @@ pub fn diff_sync_documents(
         };
         preview.conflicts.push(RedactedConflict {
             conflict_id: conflict_id.clone(),
+            document_id: key.id.clone(),
             kind: key.kind,
             reason,
             is_credential_unit: key.kind == DocumentKind::Channels,
@@ -275,10 +295,11 @@ pub fn diff_sync_documents(
             );
             let conflict_id = conflict_id(&DocumentKey {
                 kind: DocumentKind::Channels,
-                id,
+                id: id.clone(),
             });
             preview.conflicts.push(RedactedConflict {
                 conflict_id: conflict_id.clone(),
+                document_id: id,
                 kind: DocumentKind::Channels,
                 reason: if baseline.is_some() {
                     ConflictReason::BothModified
@@ -292,6 +313,25 @@ pub fn diff_sync_documents(
                 .insert(conflict_id, (namespace, local_active, remote_active));
         }
     }
+    Ok(preview)
+}
+
+/// Local Replace removes receiver-only units, but still honors every explicit choice.
+pub fn diff_local_replace_documents(
+    local: &ValidatedSyncDocuments,
+    incoming: &ValidatedSyncDocuments,
+) -> DocumentResult<MergePreview> {
+    let mut preview = diff_sync_documents(None, local, incoming)?;
+    let incoming_units = units(&incoming.set);
+    preview
+        .accepted
+        .retain(|key, _| incoming_units.contains_key(key));
+    for namespace in [SyncNamespace::Asr, SyncNamespace::Llm, SyncNamespace::Omni] {
+        if active_channel(&incoming.set, namespace)?.is_none() {
+            preview.active_choices.insert(namespace, None);
+        }
+    }
+    preview.replace_local_units = Some(units(&local.set));
     Ok(preview)
 }
 
@@ -527,7 +567,7 @@ fn has_live(unit: Option<&Unit>) -> bool {
 
 fn conflict_id(key: &DocumentKey) -> String {
     let identity = serde_json::to_vec(key).expect("fixed conflict identity serializes");
-    format!("{:x}", Sha256::digest(identity))
+    hex::encode(Sha256::digest(identity))
 }
 
 /// Materialize explicit local deletes relative to the last accepted baseline; keep all old marks.

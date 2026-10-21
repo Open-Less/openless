@@ -9,6 +9,8 @@
 #           shares the same dependency graph.
 #   msrv    The Rust 1.88 minimum-supported-toolchain compile.
 #   linux   The Linux host build, its tests and the deb/rpm package chain.
+#   harmony The HarmonyOS host: ArkTS contracts, the ArkWeb bundle and the HAP
+#           release path.
 #
 # Prints "true" when the check must run and "false" only when every changed file
 # is provably out of scope for that area. Anything unknown - no base revision
@@ -17,7 +19,7 @@
 # cannot reach it, never of a failure to read the change set.
 set -uo pipefail
 
-area=${1:?usage: ci-changed-areas.sh <tauri|msrv> [base-sha]}
+area=${1:?usage: ci-changed-areas.sh <tauri|msrv|linux|harmony> [base-sha]}
 base=${2:-}
 
 run() {
@@ -26,7 +28,7 @@ run() {
 }
 
 case "$area" in
-  tauri | msrv | linux) ;;
+  tauri | msrv | linux | harmony) ;;
   *)
     echo "unknown area: $area" >&2
     run
@@ -49,7 +51,7 @@ while IFS= read -r file; do
       case "$file" in
         openless-all/app/linux-egui/Cargo.toml) run ;;
         openless-all/app/linux-egui/*) ;;
-        openless-all/scripts/linux-fcitx5-plugin/*) ;;
+        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
         docs/* | *.md | LICENSE* | NOTICE*) ;;
         *) run ;;
       esac
@@ -66,6 +68,16 @@ while IFS= read -r file; do
       # Prose cannot change what the host builds, tests or packages.
       case "$file" in
         docs/* | *.md | LICENSE* | NOTICE*) ;;
+        *) run ;;
+      esac
+      ;;
+    harmony)
+      # The HarmonyOS job builds the shared frontend bundle and the Rust host, so
+      # only prose and the Linux-only trees are provably out of reach.
+      case "$file" in
+        docs/* | *.md | LICENSE* | NOTICE*) ;;
+        openless-all/app/linux-egui/*) ;;
+        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
         *) run ;;
       esac
       ;;

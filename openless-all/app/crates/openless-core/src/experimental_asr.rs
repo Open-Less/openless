@@ -613,7 +613,7 @@ pub fn verify_package(model: ExperimentalAsrModel, directory: &Path) -> Result<(
             }
             hash.update(&buffer[..n]);
         }
-        if Some(format!("{:x}", hash.finalize())) != file.sha256 {
+        if Some(hex::encode(hash.finalize())) != file.sha256 {
             return Err(error(format!("Invalid checksum: {}", file.path)));
         }
     }

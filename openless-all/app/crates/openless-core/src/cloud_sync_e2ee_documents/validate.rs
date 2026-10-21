@@ -13,7 +13,8 @@ use crate::cloud_sync_e2ee_protocol::types::{
 
 use super::registry::{
     credential_accounts, excluded_extension_key, is_device_channel, preference_field,
-    validate_preference_value, PreferenceClass,
+    public_credential_account, public_credential_value_safe, validate_preference_value,
+    PreferenceClass,
 };
 use super::types::*;
 
@@ -385,6 +386,13 @@ fn validate_channel(channel: &ChannelRecord) -> DocumentResult<()> {
     }
     if channel.namespace == SyncNamespace::Omni && channel.id != channel.provider_type {
         return Err(DocumentError::InvalidReference);
+    }
+    if channel.configuration.iter().any(|(account, value)| {
+        !public_credential_account(channel.namespace, account)
+            || !public_credential_value_safe(account, value)
+            || value.len() > 4096
+    }) {
+        return Err(DocumentError::ExcludedField);
     }
     Ok(())
 }

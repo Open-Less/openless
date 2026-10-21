@@ -117,9 +117,14 @@ try {
 // --- workflow contract (#1103) ---
 const workflow = readFileSync(workflowPath, 'utf8');
 const parsed = load(workflow);
-assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'workflow_dispatch']);
-assert.deepEqual(parsed.on.push.branches, ['**']);
+// Tags build the release APK; a weekly schedule keeps the Gradle/Rust cache
+// warm now that a per-branch push would cost 13-18 minutes and duplicate what
+// `android-check` already covers.
+assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
+assert.equal(parsed.on.push.branches, undefined);
 assert.deepEqual(parsed.on.push.tags, ['v*-tauri']);
+assert.equal(parsed.on.schedule.length, 1);
+assert.match(parsed.on.schedule[0].cron, /^\d+ \d+ \* \* [0-6]$/);
 assert.equal(typeof parsed.concurrency.group, 'string');
 assert.equal(parsed.jobs['build-android-apk'].steps[0].with.submodules, false);
 assert.equal(parsed.on.workflow_dispatch.inputs.signed_debug.type, 'boolean');

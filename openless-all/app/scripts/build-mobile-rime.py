@@ -24,11 +24,29 @@ SOURCES = {
     'prelude': ('rime/rime-prelude', '082425ea0684bca36474415d4a0e8db9b016487e'),
 }
 
+REQUIRED_FILES = {
+    'rime-1.17.0': ('CMakeLists.txt',),
+    'yaml-0.8.0': ('CMakeLists.txt',),
+    'leveldb-1.23': ('CMakeLists.txt',),
+    'opencc-ver.1.1.9': ('CMakeLists.txt',),
+    'pinyin-0c6861ef7420ee780270ca6d993d18d4101049d0': ('pinyin_simp.schema.yaml',),
+    'ice-da1fbe602e38f26db846fa10120ee64c2b0324c0': ('rime_ice.dict.yaml', 'rime_ice.schema.yaml'),
+    'essay-054920de4f54c9e5994276a96a4fc2a35cb51aa3': ('essay.txt', 'AUTHORS'),
+    'prelude-082425ea0684bca36474415d4a0e8db9b016487e': ('default.yaml',),
+    'boost-1.85.0': ('boost/core/detail/sp_thread_sleep.hpp',),
+}
+
 def fetch(name, url):
     dest = CACHE / 'sources' / name
-    if dest.exists():
-        return dest
     archive = CACHE / 'downloads' / (name + '.tar.gz')
+    required = tuple(dest / path for path in REQUIRED_FILES.get(name, ()))
+    complete = lambda: dest.exists() and all(path.is_file() for path in required)
+    if complete():
+        return dest
+    if dest.exists():
+        print('Repair incomplete ' + name, flush=True)
+        shutil.rmtree(dest)
+        archive.unlink(missing_ok=True)
     archive.parent.mkdir(parents=True, exist_ok=True)
     if not archive.exists():
         print('Download ' + name, flush=True)
@@ -37,6 +55,8 @@ def fetch(name, url):
             shutil.copyfileobj(response, output)
         temporary.rename(archive)
     unpack = CACHE / 'sources' / (name + '-unpack')
+    if unpack.exists():
+        shutil.rmtree(unpack)
     unpack.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as tar:
         if sys.version_info >= (3, 12):
@@ -57,6 +77,11 @@ def fetch(name, url):
         raise RuntimeError('Unexpected archive structure: ' + name)
     roots[0].rename(dest)
     unpack.rmdir()
+    if not complete():
+        print('Repair incomplete ' + name, flush=True)
+        shutil.rmtree(dest)
+        archive.unlink(missing_ok=True)
+        return fetch(name, url)
     return dest
 
 def run(*args):

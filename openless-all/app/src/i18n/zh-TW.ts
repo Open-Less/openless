@@ -1,7 +1,7 @@
 import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
-import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
+import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
 
 export const zhTW: typeof zhCN = {
@@ -1276,6 +1276,16 @@ export const zhTW: typeof zhCN = {
       cursorContextDesc:
         '潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
+    localMigration: {
+      title: '本機設定遷移',
+      description:
+        '將所有可遷移的本機設定匯出為帶版本的遷移檔案，或在另一部 Android 裝置上還原。分享模式預設會去識別化；個人遷移只有在密碼保護下才能攜帶憑證。原生流程會在合併或取代前顯示來源、版本、類別與變更摘要。',
+      safetyNote:
+        '系統權限、OAuth 工作階段、裝置路徑與執行狀態不會遷移。匯入前會自動建立本機備份。',
+      open: '開啟本機遷移',
+      opening: '正在開啟…',
+      openFailed: '無法開啟本機遷移流程，請從設定頁重試。',
+    },
     codingConsole: {
       title: 'Claude 主控臺',
       desc: '偵測本機 Claude Code 與 MCP（computer use）狀態，並以護欄方式無頭執行一次 Claude、串流檢視輸出與用量。',
@@ -1672,9 +1682,9 @@ export const zhTW: typeof zhCN = {
         omniDashscope: '阿里雲百煉 Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe 在此使用逐字轉寫，再交給已設定的 LLM 處理。如需內建智慧轉寫，請在多模態模式中選擇此模型。錄音結束後上傳音訊，暫不支援即時轉寫。接口地址：https://generativelanguage.googleapis.com/v1beta，也相容 /v1beta/interactions。',
+        '兩個模型在此均使用逐字轉寫，可選用已設定的 LLM 繼續處理。gemini-3.5-transcribe 在錄音結束後上傳音訊；gemini-3.5-transcribe-live 邊說邊顯示結果，每次錄音最長 10 分鐘。如需智慧轉寫，請使用多模態模式。接口地址：https://generativelanguage.googleapis.com/v1beta。',
       geminiTranscribeOmniNotice:
-        '使用 gemini-3.5-transcribe 可啟用智慧轉寫：錄音結束後去除口頭語、處理口述修正並整理排版。支援工作語言和詞典詞彙。此模型不使用風格提示詞，也不支援翻譯、純文字潤色或問答；這些任務請使用傳統模式搭配 LLM。',
+        'gemini-3.5-transcribe 和 gemini-3.5-transcribe-live 均支援智慧轉寫。Live 邊說邊顯示草稿，每次錄音最長 10 分鐘；錄音結束後，智慧轉寫會去除口頭語、處理口述修正並整理最終文字。兩個模型均支援工作語言和詞典詞彙，但不使用風格提示詞，也不支援翻譯、純文字潤色或問答；這些任務請使用傳統模式搭配 LLM。',
       validateSuccessAudio: '已通過短靜音音訊的連線驗證，請再用短錄音確認轉寫效果。',
       elevenLabsUploadNotice: 'ElevenLabs 會將錄音上傳至已設定的端點進行批次轉寫。',
       zenmuxVocabularyNote:

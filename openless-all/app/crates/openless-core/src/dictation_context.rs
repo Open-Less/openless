@@ -819,16 +819,23 @@ mod tests {
 
     #[test]
     fn textstream_stays_live_without_changing_the_users_batch_preference() {
-        let preferences = UserPreferences { stable_transcription_enabled: true, ..UserPreferences::default() };
+        let preferences = UserPreferences {
+            stable_transcription_enabled: true,
+            ..UserPreferences::default()
+        };
         let pack = builtin_style_pack_for_mode(PolishMode::Structured);
         for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
             let context = DictationContext::capture(
-                &preferences, &pack,
+                &preferences,
+                &pack,
                 DictationProviderInvocations::new(
                     ProviderInvocation::for_provider(provider),
                     ProviderInvocation::for_provider("openai"),
                     ProviderInvocation::for_provider("omni"),
-                ), Vec::new(), Vec::new(), &DictationStartOptions::default(),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
             );
             assert_eq!(context.recording.transcribe_after_stop, buffered);
         }

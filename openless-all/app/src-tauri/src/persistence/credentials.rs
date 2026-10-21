@@ -1076,21 +1076,6 @@ fn channel_provider_type<'a, V: HasChannelMeta>(key: &'a str, entry: &'a V) -> &
     entry.meta().providerType.as_deref().unwrap_or(key)
 }
 
-/// Only for the v1 -> v2 migration to repair a lost active; runtime active
-/// policy lives in Core.
-fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<String> {
-    map.iter()
-        .filter(|(_, entry)| entry.meta().enabled)
-        .min_by(|(left_key, left), (right_key, right)| {
-            let left_order = left.meta().order.unwrap_or(u32::MAX);
-            let right_order = right.meta().order.unwrap_or(u32::MAX);
-            left_order
-                .cmp(&right_order)
-                .then_with(|| left_key.as_str().cmp(right_key.as_str()))
-        })
-        .map(|(key, _)| key.clone())
-}
-
 /// v1 (one slot per preset) → v2 (channel cards).
 ///
 /// Two pillars of idempotency:
@@ -1219,37 +1204,20 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
         false
     };
 
-    let mut changed = asr_changed || llm_changed || seeded;
-    // 渠道指针修复不能挂在「这次映射迁移有没有改动」上：上一版写好的渠道卡片已经带
-    // `providerType`/`order`，`migrate_channel_map` 会返回“无变化”，于是 `if changed`
-    // 门槛让悬空指针永远停在不存在的渠道上——之后每一次渠道变更也不会覆盖它
-    // （`active_was_managed` 对未知 id 判定为 false）。所以每次读取都校正一次。
-    changed |= repair_active_channel(&mut root.active.asr, &root.providers.asr);
-    changed |= repair_active_channel(&mut root.active.llm, &root.providers.llm);
-    // Omni normalization must not trigger the separate ASR/LLM active fallback.
+    // Reconcile on every successful load, including already-channelized vaults
+    // restored from disk/sync. Status and credential lookups must use the same
+    // first-enabled selection as Core and the settings list. This only changes
+    // the loaded copy; the next gated mutation owns durable persistence.
+    let metadata = credential_metadata(root);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
+    let selection_changed = root.active.asr != active_asr || root.active.llm != active_llm;
+    if selection_changed {
+        root.metadata_revision = root.metadata_revision.saturating_add(1);
+    }
+    let changed = asr_changed || llm_changed || seeded || selection_changed;
+    // Omni uses its own explicit provider selection.
     migrate_legacy_omni_slot(&mut root.omni) || changed
-}
-
-/// 把指向不存在（或已停用）渠道的当前渠道指针回落到列表里第一张启用卡片。
-///
-/// 偏好文件里的 `activeAsrProvider`/`activeLlmProvider` 与凭据库里的 `active` 是两份会漂移的
-/// 数据，指针落在不存在的渠道上是真实发生过的情况（例如升级把供应商 **类型** 当成渠道 id
-/// 写了进来）。这里只移动指针，绝不触碰任何凭据；回落到“排序第一”与渠道列表
-/// 「排序即优先级」的规则一致。
-fn repair_active_channel<V: HasChannelMeta>(active: &mut String, map: &HashMap<String, V>) -> bool {
-    if map.get(active).is_some_and(|entry| entry.meta().enabled) {
-        return false;
-    }
-    // 没有任何启用渠道能接管时保持原值不动：Core 会用偏好里的值做回退，
-    // 这里不该把一个空选中态写进凭据库。
-    let Some(next) = current_channel_id(map) else {
-        return false;
-    };
-    if *active == next {
-        return false;
-    }
-    *active = next;
-    true
 }
 
 /// Platform presets for fresh installs.
@@ -3017,7 +2985,7 @@ fn channel_summaries<V: HasChannelMeta>(
             }
         })
         .collect();
-    // Same ordering as current_channel_id: ascending order, ties broken by id alphabetical order.
+    // Same ordering as Core channel selection: ascending order, ties broken by id alphabetical order.
     list.sort_by(|left, right| {
         left.order
             .cmp(&right.order)
@@ -3081,8 +3049,8 @@ fn apply_credential_metadata(
         metadata.list_channels(ChannelKind::Llm),
         |entry, name| entry.displayName = name,
     );
-    root.active.asr = metadata.active_provider(openless_core::ProviderSlot::Asr);
-    root.active.llm = metadata.active_provider(openless_core::ProviderSlot::Llm);
+    root.active.asr = metadata.selected_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.selected_provider(openless_core::ProviderSlot::Llm);
     root.omni.active = metadata.active_provider(openless_core::ProviderSlot::Omni);
     root.metadata_revision = metadata.revision();
     Ok(())
@@ -3128,6 +3096,7 @@ fn sync_channel(
         enabled: meta.enabled,
         order: meta.order.unwrap_or(u32::MAX),
         active: id == active,
+        configuration: BTreeMap::new(),
     }
 }
 
@@ -4126,15 +4095,15 @@ mod tests {
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
         android_credentials_root_for_update, android_persistable_credentials, chunk_json_payload,
-        credentials_cache, get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
-        lookup_account, lookup_marketplace_github_token, lookup_omni_account,
-        omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
-        parse_llm_temperature, reset_credentials_cache_for_tests,
+        configuration_snapshot_with, credentials_cache, get_android_marketplace_token_at,
+        load_android_credentials_from_path, load_android_credentials_from_path_with_crypto,
+        load_credentials_into_cache_with, lookup_account, lookup_marketplace_github_token,
+        lookup_omni_account, migrate_channels, omni_extra_headers_json, omni_temperature_string,
+        parse_extra_headers_json, parse_llm_temperature, reset_credentials_cache_for_tests,
         set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
-        write_account, write_marketplace_github_token, write_omni_account, CredentialAccount,
-        CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
-        KEYRING_CHUNK_MAX_UTF16_UNITS,
+        write_account, write_marketplace_github_token, write_omni_account, ChannelMeta,
+        CredentialAccount, CredentialsVault, CredsAsrEntry, CredsLlmEntry, CredsRoot,
+        MarketplaceGithubToken, CHANNELS_SCHEMA_VERSION, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
@@ -5040,6 +5009,88 @@ mod tests {
     }
 
     #[test]
+    fn loaded_channel_selection_repairs_stale_active_without_changing_credentials() {
+        for stale in ["local-qwen3-mlx", "local-account", "missing", ""] {
+            let mut root = CredsRoot::default();
+            root.version = CHANNELS_SCHEMA_VERSION;
+            root.active.asr = stale.into();
+            root.providers.asr.insert(
+                "local-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("local-qwen3-mlx".into()),
+                        order: Some(1),
+                        enabled: false,
+                        lastTest: None,
+                    },
+                    ..Default::default()
+                },
+            );
+            root.providers.asr.insert(
+                "cloud-account".into(),
+                CredsAsrEntry {
+                    channel: ChannelMeta {
+                        providerType: Some("tencent-cloud".into()),
+                        order: Some(0),
+                        enabled: true,
+                        lastTest: None,
+                    },
+                    model: Some("Hy-ASR-3.0-preview".into()),
+                    tencentCloudSecretKey: Some("fixture-secret".into()),
+                    ..Default::default()
+                },
+            );
+            let providers = serde_json::to_value(&root.providers).unwrap();
+            assert!(migrate_channels(&mut root));
+            assert_eq!(root.active.asr, "cloud-account");
+            assert_eq!(root.metadata_revision, 1);
+            assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+            let serialized = serde_json::to_string(&root).unwrap();
+            let mut restarted: CredsRoot = serde_json::from_str(&serialized).unwrap();
+            assert!(!migrate_channels(&mut restarted));
+            assert_eq!(
+                serde_json::to_value(&restarted).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&serialized).unwrap()
+            );
+            let status = configuration_snapshot_with(false, || Ok(restarted)).unwrap();
+            assert_eq!(status.active_asr_provider, "tencent-cloud");
+            assert_eq!(
+                status.credentials.asr_model.as_deref(),
+                Some("Hy-ASR-3.0-preview")
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_channel_selection_uses_order_even_when_old_active_is_enabled() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        root.providers.asr.get_mut("groq").unwrap().channel.order = Some(0);
+        root.providers
+            .asr
+            .get_mut("volcengine")
+            .unwrap()
+            .channel
+            .order = Some(1);
+        assert!(migrate_channels(&mut root));
+        assert_eq!(root.active.asr, "groq");
+        assert!(!migrate_channels(&mut root));
+    }
+
+    #[test]
+    fn loaded_channel_selection_does_not_reactivate_disabled_models() {
+        let mut root = v1_root_with_two_asr_providers();
+        migrate_channels(&mut root);
+        for entry in root.providers.asr.values_mut() {
+            entry.channel.enabled = false;
+        }
+        root.active.asr = "local-qwen3-mlx".into();
+        assert!(migrate_channels(&mut root));
+        assert!(root.active.asr.is_empty());
+        assert!(!migrate_channels(&mut root));
+    }
+
+    #[test]
     fn migrated_credentials_still_resolve_through_lookup_account() {
         let mut root = v1_root_with_two_asr_providers();
         super::migrate_channels(&mut root);
@@ -5139,10 +5190,7 @@ mod tests {
         );
     }
 
-    /// 已渠道化的数据（每张卡片都带 `providerType`/`order`，`version` 已是 2）不会触发任何映射
-    /// 迁移，因此 `migrate_channel_map` 返回 false。此时一个悬空的当前渠道指针（升级把供应商
-    /// 类型当成渠道 id 写进来）必须仍然被校正回真实卡片，否则读凭据永远取不到 key，界面一直
-    /// 显示未配置，且后续任何渠道变更都不会覆盖它。
+    // 已渠道化的凭据也要修复误写为供应商类型的指针，不能依赖元数据迁移触发。
     #[test]
     fn channelized_vault_repairs_a_dangling_active_pointer() {
         let mut root = CredsRoot::default();
@@ -5176,10 +5224,13 @@ mod tests {
             },
         );
 
+        let providers = serde_json::to_value(&root.providers).unwrap();
         assert!(super::migrate_channels(&mut root));
 
         // 指针回落到排序第一的已配置卡片，凭据一个字节都没动。
         assert_eq!(root.active.asr, "volcengine-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
         assert_eq!(
             root.providers
                 .asr
@@ -5220,18 +5271,22 @@ mod tests {
             },
         );
 
-        super::migrate_channels(&mut root);
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
 
         assert_eq!(root.active.llm, "ark-2");
+        assert_eq!(root.metadata_revision, 1);
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
         assert_eq!(
             lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
             Some("sk")
         );
+        assert!(!super::migrate_channels(&mut root));
     }
 
-    /// 没有任何启用渠道时保持原值不动，交给 Core 的偏好回退处理，避免把空选中态写进凭据库。
+    // 已配置渠道但全部停用时，不得回退到旧偏好或读取停用渠道的凭据。
     #[test]
-    fn active_pointer_is_left_alone_when_no_channel_can_take_over() {
+    fn channelized_vault_clears_a_dangling_active_pointer_when_all_channels_are_disabled() {
         let mut root = CredsRoot::default();
         root.version = super::CHANNELS_SCHEMA_VERSION;
         root.active.asr = "bailian".into();
@@ -5249,9 +5304,14 @@ mod tests {
             },
         );
 
-        super::migrate_channels(&mut root);
+        let providers = serde_json::to_value(&root.providers).unwrap();
+        assert!(super::migrate_channels(&mut root));
 
-        assert_eq!(root.active.asr, "bailian");
+        assert!(root.active.asr.is_empty());
+        assert_eq!(root.metadata_revision, 1);
+        assert!(lookup_account(&root, CredentialAccount::AsrApiKey).is_none());
+        assert_eq!(serde_json::to_value(&root.providers).unwrap(), providers);
+        assert!(!super::migrate_channels(&mut root));
     }
 
     #[test]

@@ -5,16 +5,16 @@ license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.99"
 
 [lib]
 name = "openless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-# Keep on the same train as `tauri = "=2.11.2"`. Floating `version = "2"` resolves
+# Keep on the same train as `tauri = "=2.12.4"`. Floating `version = "2"` resolves
 # to tauri-build 2.7 when CI regenerates the lockfile.
-tauri-build = { version = "=2.6.2", features = [] }
+tauri-build = { version = "=2.7.3", features = [] }
 # Windows manifest anchor and Apple compiler runtime discovery (not legacy ASR).
 cc = "1.1"
 
@@ -23,19 +23,19 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
-# Pin the whole 2.11.2 train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
+# Pin the whole 2.12.x train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
 # unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
 # Direct pins keep fresh lockfile resolution on the compatible train.
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
-tauri = { version = "=2.11.2", features = ["macos-private-api"] }
-tauri-runtime = "=2.11.2"
-tauri-runtime-wry = "=2.11.2"
-tauri-macros = "=2.6.2"
-tauri-utils = "=2.9.2"
+tauri = { version = "=2.12.4", features = ["macos-private-api"] }
+tauri-runtime = "=2.12.2"
+tauri-runtime-wry = "=2.12.2"
+tauri-macros = "=2.7.3"
+tauri-utils = "=2.10.2"
 # 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
-tauri-plugin-shell = "2.3.5"
-tauri-plugin-dialog = "2.7.2"
+tauri-plugin-shell = "2.5.0"
+tauri-plugin-dialog = "2.8.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
@@ -79,15 +79,15 @@ raw-window-handle = "0.6"
 cpal = "0.15"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-tauri-plugin-fs = "2.5.1"
+tauri-plugin-fs = "2.7.1"
 
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
-tauri = { version = "=2.11.2", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-updater = "=2.10.1"
-tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
+tauri = { version = "=2.12.4", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-updater = "=2.14.0"
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-autostart = "2.7.0"
 global-hotkey = "0.6"
 enigo = "0.3"
 arboard = "3"
@@ -127,10 +127,10 @@ tao = "0.35"
 # verified official libraries (scripts/sherpa-onnx-android.mjs) and ships them
 # in jniLibs. Other Android ABIs stay cloud-only.
 [target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["shared"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-sherpa-onnx = { version = "=1.13.2", default-features = false, features = ["static"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
 security-framework = "=3.7.0"
 block2 = "0.5"
 core-foundation = "0.10"

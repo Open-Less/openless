@@ -8,8 +8,11 @@ import yaml from 'js-yaml';
 const workflow = yaml.load(
   readFileSync(new URL('../../../.github/workflows/release-tauri.yml', import.meta.url), 'utf8'),
 );
-assert.deepEqual(workflow.on.push.branches, ['**']);
+// Releases are tag-only plus a weekly smoke build: a per-branch push wrote a
+// 2 GB+ cache entry every time and evicted the beta scope.
+assert.equal(workflow.on.push.branches, undefined);
 assert.deepEqual(workflow.on.push.tags, ['v*-tauri']);
+assert.equal(workflow.on.schedule.length, 1);
 assert.ok(workflow.on.workflow_dispatch.inputs.platform.options.includes('windows'));
 assert.equal(workflow.on.workflow_dispatch.inputs.release_tag.default, '');
 const job = workflow.jobs.build;

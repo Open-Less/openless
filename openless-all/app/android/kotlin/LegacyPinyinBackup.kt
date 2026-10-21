@@ -15,8 +15,10 @@ internal class LegacyPinyinBackup(context: Context) {
     }.toMap()
 
     fun importAll(entries: Map<String, String>) {
-        check(preferences.edit().clear().apply {
-            entries.forEach { (key, value) -> putString(key, value) }
-        }.commit()) { "Legacy pinyin backup save failed" }
+        check(OpenLessMigrationState.settings {
+            check(preferences.edit().clear().apply {
+                entries.forEach { (key, value) -> putString(key, value) }
+            }.commit()) { "Legacy pinyin backup save failed" }
+        }) { "migration_android_busy" }
     }
 }

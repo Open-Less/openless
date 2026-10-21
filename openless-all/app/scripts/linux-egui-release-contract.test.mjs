@@ -24,6 +24,9 @@ const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, bu
 // CI must execute the exact test/build/package/checksum path used for tags.
 assert.match(ci, /linux-egui-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
 assert.match(ci, /linux-egui-package:[\s\S]*?permissions:\s*contents: read/);
+// The release entry point needs write access to attach assets; the CI caller is
+// read-only and must not be able to publish.
+assert.match(release, /permissions:\n  contents: write/);
 assert.deepEqual(
   [...ci.matchAll(/^  (linux-[\w-]+):/gm)].map((match) => match[1]),
   ['linux-egui-package'],
@@ -35,7 +38,7 @@ assert.match(
   /^on:\n  workflow_call:/m,
   'the reusable check must not run as a duplicate standalone workflow',
 );
-assert.match(check, /contents: read/);
+assert.match(check, /contents: write/);
 assert.match(check, /runs-on: ubuntu-24\.04/);
 assert.match(check, /cargo test --locked -p openless-core/);
 for (const crate of ['openless-core', 'openless-linux-egui']) {
@@ -46,7 +49,9 @@ assert.match(
   /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/,
 );
 assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
-assert.match(check, /cargo check --locked -p openless-linux-egui --all-targets/);
+// `cargo test --all-targets` already compiles every target, so a following
+// `cargo check --all-targets` was a second full compile for no extra coverage.
+assert.doesNotMatch(check, /cargo check --locked -p openless-linux-egui/);
 assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
 assert.match(check, /ctest --test-dir build --output-on-failure/);
 assert.match(check, /cargo build --locked --release -p openless-linux-egui/);
@@ -64,7 +69,14 @@ assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 // Shared Tauri tags and PRs must never publish unaccepted Linux packages.
 assert.match(release, /^on:\n  workflow_dispatch:/m);
 assert.doesNotMatch(release, /^  (push|pull_request):/m);
-assert.doesNotMatch(release, /contents: write|action-gh-release|gh release/);
+// Linux now ships inside the same Release as the desktop and Android assets, so
+// the entry point attaches the verified packages itself. Publishing stays opt-in
+// per dispatch and requires the tag, which is what keeps an unaccepted package
+// out of a Tauri release.
+assert.match(check, /gh release upload/);
+assert.match(check, /inputs\.publish/);
+assert.match(check, /inputs\.release_tag != ''/);
+assert.match(check, /SHA256SUMS-linux/);
 assert.match(check, /github\.ref_type == 'tag'/);
 assert.match(check, /does not match package\.json version/);
 const revision = revisionFile.trim();
@@ -81,10 +93,16 @@ assert.match(verify, /OpenLess \$DEB_VERSION/);
 assert.match(pack, /linux-egui\/package-revision/);
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
-assert.ok(!release.includes('release_tag:'), 'the manual build cannot target a Release');
+assert.match(release, /release_tag: \$\{\{ inputs\.tag \}\}/);
+assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 // Keep deb/rpm only, including dynamically-loaded desktop libraries and the
 // fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
+//
+// Rendering is Vulkan-only: the GL/EGL paths were removed (`refactor: remove
+// Linux egui OpenGL rendering`), so the packages depend on the Vulkan loader
+// and nothing dlopens libEGL / libwayland-egl any more. If libegl1 or
+// libwayland-egl1 comes back, a GL renderer was reintroduced.
 assert.match(pack, /dpkg-deb --build/);
 assert.match(pack, /rpmbuild --define/);
 assert.match(pack, /x86_64-linux-gnu\/fcitx5\/libopenless\.so/);
@@ -101,13 +119,20 @@ assert.match(verify, /fcitx5\/libopenless\.so/);
 assert.ok(!existsSync(join(root, 'openless-all/app/linux-egui/src/updater.rs')));
 assert.doesNotMatch(manifest, /minisign-verify/);
 const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libegl1', 'liblzma5', 'libwayland-egl1']) {
+for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'libwayland-client0']) {
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
+for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
+  assert.ok(!debDeps.includes(removed), `deb must not require ${removed} after the Vulkan migration`);
+}
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
-for (const dep of ['fcitx5', 'pipewire-libs', 'libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+for (const dep of ['fcitx5', 'pipewire-libs', 'vulkan-loader', 'libwayland-client']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
+for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+  assert.ok(!rpmDeps.includes(removed), `rpm must not require ${removed} after the Vulkan migration`);
+}
+assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m, 'packages must recommend a Vulkan driver');
 for (const [file, size] of [
   ['32x32.png', '32x32'],
   ['64x64.png', '64x64'],

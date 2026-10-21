@@ -541,6 +541,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
             $crate::commands::show_android_overlay,
+            $crate::commands::open_android_local_migration,
             $crate::commands::hide_android_overlay,
             $crate::commands::get_android_accessibility_status,
             $crate::commands::request_android_accessibility_permission,

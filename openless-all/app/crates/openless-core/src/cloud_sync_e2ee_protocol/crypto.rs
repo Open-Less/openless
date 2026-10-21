@@ -5,7 +5,7 @@ use super::{types::*, Error, Result};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chacha20poly1305::{
-    aead::{AeadInPlace, KeyInit},
+    aead::{AeadInOut, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
 use std::fmt;
@@ -260,11 +260,7 @@ fn seal_frame(
     let cipher = XChaCha20Poly1305::new(key.expose_bytes().into());
     let associated = aad(&snapshot)?;
     cipher
-        .encrypt_in_place(
-            XNonce::from_slice(snapshot.nonce.bytes()),
-            &associated,
-            &mut *frame,
-        )
+        .encrypt_in_place(snapshot.nonce.bytes().into(), &associated, &mut *frame)
         .map_err(|_| Error::InvalidPasswordOrCiphertext)?;
     snapshot.ciphertext_sha256 = Sha256Digest::of(&frame);
     snapshot.ciphertext = URL_SAFE_NO_PAD.encode(&frame);
@@ -284,11 +280,7 @@ pub(crate) fn decrypt_snapshot(
     let mut frame = Zeroizing::new(snapshot.decoded_ciphertext()?);
     let cipher = XChaCha20Poly1305::new(key.expose_bytes().into());
     cipher
-        .decrypt_in_place(
-            XNonce::from_slice(snapshot.nonce.bytes()),
-            &aad(snapshot)?,
-            &mut *frame,
-        )
+        .decrypt_in_place(snapshot.nonce.bytes().into(), &aad(snapshot)?, &mut *frame)
         .map_err(|_| Error::InvalidPasswordOrCiphertext)?;
     decode_frame(&frame)
 }
@@ -359,7 +351,7 @@ pub(crate) fn seal_local(key: &DerivedKey, scope_aad: &[u8], plaintext: &[u8]) -
     let mut buffer = Zeroizing::new(Vec::with_capacity(plaintext.len() + 16));
     buffer.extend_from_slice(plaintext);
     XChaCha20Poly1305::new(key.expose_bytes().into())
-        .encrypt_in_place(XNonce::from_slice(nonce.bytes()), &associated, &mut *buffer)
+        .encrypt_in_place(nonce.bytes().into(), &associated, &mut *buffer)
         .map_err(|_| Error::InvalidPasswordOrCiphertext)?;
     let mut envelope = Vec::with_capacity(LOCAL_ENVELOPE_MAGIC.len() + 24 + buffer.len());
     envelope.extend_from_slice(LOCAL_ENVELOPE_MAGIC);
@@ -381,10 +373,12 @@ pub(crate) fn open_local(
         return Err(Error::InvalidPasswordOrCiphertext);
     }
     let associated = local_aad(scope_aad)?;
-    let nonce = &envelope[LOCAL_ENVELOPE_MAGIC.len()..prefix];
+    let nonce: &XNonce = envelope[LOCAL_ENVELOPE_MAGIC.len()..prefix]
+        .try_into()
+        .map_err(|_| Error::InvalidPasswordOrCiphertext)?;
     let mut buffer = Zeroizing::new(envelope[prefix..].to_vec());
     XChaCha20Poly1305::new(key.expose_bytes().into())
-        .decrypt_in_place(XNonce::from_slice(nonce), &associated, &mut *buffer)
+        .decrypt_in_place(nonce, &associated, &mut *buffer)
         .map_err(|_| Error::InvalidPasswordOrCiphertext)?;
     Ok(buffer)
 }
