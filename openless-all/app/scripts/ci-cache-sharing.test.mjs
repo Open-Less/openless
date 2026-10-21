@@ -22,6 +22,8 @@ const release = read('release-tauri.yml');
 const androidApk = read('android-apk.yml');
 const linux = read('check-linux-egui.yml');
 const linuxRelease = read('release-linux-egui.yml');
+const releaseHarmony = read('release-harmony.yml');
+const nativeCapsule = read('native-capsule.yml');
 
 const sharedKeys = (yaml) =>
   [...yaml.matchAll(/shared-key:\s*([^\s#]+)/g)].map((match) => match[1].trim());
@@ -61,3 +63,23 @@ assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 console.log('ci-cache-sharing contract test passed');
+
+// `native-capsule` used to run on pull requests only, with an ungated
+// `rust-cache` step: every PR saved a dependency tree under
+// `refs/pull/<n>/merge`, and beta never produced one to restore. It now runs on
+// beta pushes and writes only there.
+assert.match(
+  nativeCapsule,
+  /push:[\s\S]*?branches: \[main, beta\]/,
+  'native-capsule.yml must run on beta pushes so the PRs have a tree to restore',
+);
+assert.match(
+  nativeCapsule,
+  /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/,
+  'native-capsule.yml must only save its cache from beta',
+);
+assert.match(
+  nativeCapsule,
+  /shared-key: native-capsule/,
+  'native-capsule.yml must use a stable shared-key instead of the job name',
+);
