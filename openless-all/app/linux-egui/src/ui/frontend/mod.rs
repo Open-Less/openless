@@ -735,6 +735,7 @@ mod tests {
             settings_section: super::view_model::SettingsSection::Services,
             services_view: 1,
             provider_editor: Some(super::view_model::SettingsProviderEditor {
+                siwc: None,
                 channel_id: "channel".to_string(),
                 is_asr: false,
                 is_draft: true,
@@ -823,6 +824,7 @@ mod tests {
         let zh = openless_linux_egui::Lang::ZhCn;
         let editor = || {
             Some(super::view_model::SettingsProviderEditor {
+                siwc: None,
                 channel_id: "channel".to_string(),
                 is_asr: false,
                 is_draft: false,
@@ -1378,6 +1380,7 @@ mod tests {
         };
         let editor = |channel_id: &str, endpoint: &str, model: &str| {
             super::view_model::SettingsProviderEditor {
+                siwc: None,
                 channel_id: channel_id.to_string(),
                 is_asr: false,
                 is_draft: false,

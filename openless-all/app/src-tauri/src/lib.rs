@@ -3479,9 +3479,7 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         let _ = result_tx.send(result);
     })
     .map_err(|error| format!("Less Computer window show dispatch failed: {error}"))?;
-    result_rx
-        .recv()
-        .map_err(|error| format!("Less Computer window show task failed: {error}"))?
+    result_rx.recv().map_err(|error| format!("Less Computer window show task failed: {error}"))?
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
