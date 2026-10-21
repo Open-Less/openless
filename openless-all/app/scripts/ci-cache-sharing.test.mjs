@@ -10,7 +10,7 @@
 // Runs without `npm ci` (the Linux contract job has no node_modules), so the
 // workflows are read as text.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,3 +96,35 @@ assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 console.log('ci-cache-sharing contract test passed');
+
+// `actions/cache@v4` saves on every run it executes, including pull request
+// scopes (`refs/pull/<n>/merge`) that are never restored again. Restore
+// unconditionally; save only from beta.
+for (const [yaml, label] of [
+  [ci, 'ci.yml'],
+  [release, 'release-tauri.yml'],
+  [androidApk, 'android-apk.yml'],
+  [linux, 'check-linux-egui.yml'],
+  [linuxRelease, 'release-linux-egui.yml'],
+  [releaseHarmony, 'release-harmony.yml'],
+]) {
+  assert.ok(
+    !/uses: actions\/cache@v4/.test(yaml),
+    `${label} must not use actions/cache@v4 (auto-save); pair cache/restore@v4 with a beta-gated cache/save@v4`,
+  );
+}
+
+// The capsule crates used to run in their own pull-request-only workflow: it
+// wrote a dependency tree under `refs/pull/<n>/merge` (never restored again)
+// while beta produced nothing to restore. It now lives here, behind the same
+// `Changed areas` verdict, and saves only from beta.
+{
+  const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
+  assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
+  assert.match(capsuleJob, /shared-key: native-capsule/);
+  assert.match(capsuleJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/);
+  assert.ok(
+    !existsSync(join(root, '.github/workflows/native-capsule.yml')),
+    'native-capsule.yml must stay merged into ci.yml',
+  );
+}
