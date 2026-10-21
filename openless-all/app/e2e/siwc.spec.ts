@@ -59,3 +59,27 @@ test('SIWC account form fits a narrow screen and keyboard navigation', async ({ 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: 'test-results/siwc-mobile.png', fullPage: true });
 });
+
+test('SIWC account selection and quota retry refresh after native null results', async ({
+  page,
+}) => {
+  await page.goto(fixture);
+  await page.getByRole('button', { name: 'Continue with ChatGPT', exact: true }).waitFor();
+  await page.evaluate(() => (window as any).siwcFixture.complete());
+  await page.getByRole('button', { name: '知道了', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('combobox', { name: '润色模型', exact: true }).click();
+  await page.getByRole('option', { name: '账号可用模型', exact: true }).click();
+  const accountPicker = page.getByRole('combobox', { name: 'ChatGPT 账号', exact: true });
+  await accountPicker.click();
+  await page.getByRole('option', { name: 'other@example.test · 000002', exact: true }).click();
+  await expect(accountPicker).toContainText('other@example.test');
+  const testConnection = page.getByRole('button', { name: '测试连接', exact: true });
+  await expect(testConnection).toBeEnabled();
+  await page.evaluate(() => (window as any).siwcFixture.quota());
+  await testConnection.click();
+  await expect(page.getByText('已达到计划或此应用的用量限制', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '重试计划用量', exact: true }).click();
+  await expect(testConnection).toBeEnabled();
+  await expect(page.getByText('已达到计划或此应用的用量限制', { exact: true })).toHaveCount(0);
+});

@@ -11,6 +11,11 @@ const account = {
   label: 'tester@example.test · 000001',
   email: 'tester@example.test',
 };
+const otherAccount = {
+  id: 'fixture-other-account',
+  label: 'other@example.test · 000002',
+  email: 'other@example.test',
+};
 const state: SiwcStatus = {
   state: 'signed_out',
   account: null,
@@ -49,10 +54,14 @@ const invoke = async (command: string, args: Record<string, unknown> = {}) => {
       case 'enable_usage':
         state.state = 'authorizing';
         state.attemptId = 'fixture-attempt';
-        break;
+        return { attemptId: state.attemptId };
       case 'cancel':
         state.state = state.account ? 'connected' : 'signed_out';
         state.attemptId = null;
+        break;
+      case 'select':
+        state.account = state.accounts.find((saved) => saved.id === args.registrationId) ?? null;
+        state.state = state.account ? 'connected' : 'signed_out';
         break;
       case 'acknowledge':
         state.welcomePending = false;
@@ -66,7 +75,7 @@ const invoke = async (command: string, args: Record<string, unknown> = {}) => {
         state.state = 'reauthorization_required';
         return { remoteRevoked: false };
     }
-    return {};
+    return null;
   }
   throw Error('Unexpected command: ' + command);
 };
@@ -78,7 +87,7 @@ Object.assign(window, {
       Object.assign(state, {
         state: 'connected',
         account,
-        accounts: [account],
+        accounts: [account, otherAccount],
         attemptId: null,
         welcomePending: true,
       });

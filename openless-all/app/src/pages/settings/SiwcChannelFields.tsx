@@ -112,7 +112,7 @@ export function SiwcChannelFields({
     try {
       const result = await siwcAction(channelId, action, registrationId);
       if (!alive.current) return;
-      if (result.remoteRevoked === false) setNotice(t('siwc.remoteUnconfirmed'));
+      if (result?.remoteRevoked === false) setNotice(t('siwc.remoteUnconfirmed'));
       await refresh();
       onTested?.();
     } catch (error) {

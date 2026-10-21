@@ -1116,3 +1116,53 @@ async fn siwc_cancelling_an_old_attempt_preserves_its_successor() {
     );
     f.service.cancel_sign_in("channel").await.unwrap();
 }
+
+#[tokio::test]
+async fn siwc_refresh_discovery_failure_can_retry_after_network_recovers() {
+    let f = Fixture::new().await;
+    f.authorize().await;
+    f.expire().await;
+    let mut service = SiwcService::new(f.vault.clone());
+    Arc::get_mut(&mut service).unwrap().endpoints = f.service.endpoints.clone();
+    Arc::get_mut(&mut service).unwrap().endpoints.discovery =
+        "http://127.0.0.1:1/unreachable".into();
+    let access = service.access("channel").await.unwrap();
+    assert_eq!(access.token().await.unwrap_err().code, "network_failed");
+    assert_eq!(f.state.lock().unwrap().refreshes, 0);
+    drop(access);
+    Arc::get_mut(&mut service).unwrap().endpoints.discovery = f.service.endpoints.discovery.clone();
+    let access = service.access("channel").await.unwrap();
+    let token = tokio::time::timeout(Duration::from_secs(3), access.token())
+        .await
+        .expect("discovery recovery must not wait for an abandoned refresh")
+        .expect("discovery failed before sending a rotating-token request");
+    assert_eq!(token.expose_secret(), "access-1");
+    assert_eq!(f.state.lock().unwrap().refreshes, 1);
+}
+
+#[tokio::test]
+async fn siwc_interrupted_disconnect_preserves_remote_revocation_warning() {
+    let f = Fixture::new().await;
+    f.authorize().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut service = SiwcService::new(f.vault.clone());
+    Arc::get_mut(&mut service).unwrap().endpoints = f.service.endpoints.clone();
+    Arc::get_mut(&mut service).unwrap().endpoints.discovery =
+        format!("http://{}/discovery", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { service.disconnect("channel").await });
+    let (_blocked_request, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    // Local sign-out is committed, but the remote revocation has not started.
+    task.abort();
+    let _ = task.await;
+    assert_eq!(f.state.lock().unwrap().revocations, 0);
+    let restarted = SiwcService::new(f.vault.clone());
+    let status = restarted.status("channel").await.unwrap();
+    assert_eq!(status.state, "reauthorization_required");
+    assert_eq!(
+        status.error.as_ref().map(|e| e.code.as_str()),
+        Some("remote_revocation_unconfirmed")
+    );
+}

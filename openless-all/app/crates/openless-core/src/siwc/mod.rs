@@ -937,6 +937,8 @@ impl SiwcService {
         }
     }
     async fn perform_refresh(&self, id: String, epoch: u64) -> Result<(), SiwcError> {
+        // Discovery cannot rotate tokens; complete it before claiming the refresh transaction.
+        let discovery = self.discovery().await?;
         let operation = uuid::Uuid::new_v4().to_string();
         let key = id.clone();
         let op = operation.clone();
@@ -960,7 +962,7 @@ impl SiwcService {
         let Some(original) = original else {
             return Ok(());
         };
-        match self.refresh_tokens(&original).await {
+        match self.refresh_tokens(&original, &discovery).await {
             Ok(tokens) => {
                 self.change(move |data| {
                     let r = data
@@ -1006,12 +1008,15 @@ impl SiwcService {
             }
         }
     }
-    async fn refresh_tokens(&self, registration: &Registration) -> Result<Tokens, SiwcError> {
+    async fn refresh_tokens(
+        &self,
+        registration: &Registration,
+        discovery: &Discovery,
+    ) -> Result<Tokens, SiwcError> {
         let old = registration
             .tokens
             .as_ref()
             .ok_or_else(|| error("reauthorization_required"))?;
-        let discovery = self.discovery().await?;
         let value = json_response(
             self.client()
                 .post(&discovery.token_endpoint)
@@ -1028,7 +1033,7 @@ impl SiwcService {
         .await?;
         if let Some(token) = value["id_token"].as_str() {
             let claims = self
-                .verify_identity(token, &registration.client_id, None, &discovery)
+                .verify_identity(token, &registration.client_id, None, discovery)
                 .await?;
             if claims.sub != registration.subject
                 || claims.iss != registration.issuer
@@ -1091,6 +1096,7 @@ impl SiwcService {
                 r.tokens = None;
                 r.refreshing = None;
                 r.failure = None;
+                r.revocation_confirmed = Some(false);
                 let id = r.id.clone();
                 let channels: Vec<String> = data
                     .channels

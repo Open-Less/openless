@@ -60,7 +60,7 @@ export function siwcAction(
   channelId: string,
   action: SiwcAction,
   registrationId?: string,
-): Promise<{ remoteRevoked?: boolean }> {
+): Promise<{ attemptId?: string; remoteRevoked?: boolean } | null> {
   return invokeOrMock('siwc_action', { channelId, action, registrationId }, () => {
     const status = preview.get(channelId) ?? initial();
     if (action === 'sign_in' || action === 'add_account' || action === 'enable_usage') {
@@ -82,7 +82,10 @@ export function siwcAction(
       status.state = status.account ? 'connected' : 'signed_out';
     }
     preview.set(channelId, status);
-    return { remoteRevoked: true };
+    if (action === 'sign_in' || action === 'add_account' || action === 'enable_usage') {
+      return { attemptId: status.attemptId ?? undefined };
+    }
+    return action === 'disconnect' ? { remoteRevoked: true } : null;
   });
 }
 export function siwcErrorCode(value: unknown): string {
