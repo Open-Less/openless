@@ -1567,6 +1567,9 @@ export const fr: typeof zhCN = {
       audioEnhancementLabel: 'Amélioration légère du microphone',
       audioEnhancementDesc:
         'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
+      echoCancellationLabel: 'Annulation de l’écho de lecture',
+      echoCancellationDesc:
+        'Utilise la sortie audio du bureau comme référence tout en laissant la lecture audible. Cette fonction est expérimentale et peut être indisponible avec certains appareils, Bluetooth ou ALSA sous Linux.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',

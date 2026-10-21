@@ -1502,6 +1502,9 @@ export const ko: typeof zhCN = {
       audioEnhancementLabel: '가벼운 마이크 향상',
       audioEnhancementDesc:
         '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
+      echoCancellationLabel: '재생 에코 제거',
+      echoCancellationDesc:
+        '재생을 계속 들으면서 데스크톱 오디오 출력을 참조해 에코를 줄입니다. 최선의 노력으로 동작하며 일부 장치, Bluetooth 경로 또는 Linux ALSA에서는 사용할 수 없을 수 있습니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',

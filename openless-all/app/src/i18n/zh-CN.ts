@@ -1452,6 +1452,9 @@ export const zhCN = {
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       audioEnhancementLabel: '轻量麦克风增强',
       audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '在保持系统播放声音的同时，使用桌面音频输出作为参考抑制回声。此功能为尽力而为，部分设备、蓝牙路径或 Linux ALSA 环境可能不可用。',
       voiceActivationLabel: '语音唤醒听写',
       voiceActivationDesc:
         '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',

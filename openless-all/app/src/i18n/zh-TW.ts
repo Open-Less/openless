@@ -1454,6 +1454,9 @@ export const zhTW: typeof zhCN = {
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       audioEnhancementLabel: '輕量麥克風增強',
       audioEnhancementDesc: '對本機麥克風套用輕量降噪、增益與軟限幅，不包含回聲消除。預設關閉。',
+      echoCancellationLabel: '播放回聲抑制',
+      echoCancellationDesc:
+        '在保持系統播放聲音的同時，使用桌面音訊輸出作為參考抑制回聲。此功能為盡力而為，部分裝置、藍牙路徑或 Linux ALSA 環境可能不可用。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',

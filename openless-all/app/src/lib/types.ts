@@ -375,6 +375,8 @@ export interface UserPreferences {
   lowMemoryBackgroundEnabled: boolean;
   /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a desktop render/monitor reference for best-effort echo cancellation. Disabled by default. */
+  echoCancellationEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
   voiceActivationWakeEnabled: boolean;

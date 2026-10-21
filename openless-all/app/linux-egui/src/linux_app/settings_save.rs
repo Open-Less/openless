@@ -227,6 +227,9 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AudioEnhancement => {
                 preferences.audio_enhancement_enabled = !preferences.audio_enhancement_enabled;
             }
+            frontend::view_model::SettingsField::EchoCancellation => {
+                preferences.echo_cancellation_enabled = !preferences.echo_cancellation_enabled;
+            }
             frontend::view_model::SettingsField::RecordAudioForDebug => {
                 preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
             }

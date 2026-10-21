@@ -124,6 +124,7 @@ fn preferences_json_preserving_unknown(
 fn strip_local_only_preferences(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(object) = value {
         object.remove("lowLatencyDictationEnabled");
+        object.remove("echoCancellationEnabled");
         object.remove("lowMemoryBackgroundEnabled");
     }
 }
@@ -311,6 +312,10 @@ impl PreferencesStore {
                 "lowLatencyDictationEnabled".to_string(),
                 serde_json::Value::Bool(state.low_latency_dictation_enabled),
             );
+            object.insert(
+                "echoCancellationEnabled".to_string(),
+                serde_json::Value::Bool(state.echo_cancellation_enabled),
+            );
         }
         let parsed: UserPreferences = serde_json::from_value(value.clone())
             .map_err(|_| persistence_error("validate restored preferences"))?;
@@ -480,9 +485,11 @@ mod tests {
         let mut value = serde_json::json!({
             "lowLatencyDictationEnabled": true,
             "microphoneDeviceName": "Built-in Mic",
+            "echoCancellationEnabled": true,
         });
         strip_local_only_preferences(&mut value);
         assert!(value.get("lowLatencyDictationEnabled").is_none());
+        assert!(value.get("echoCancellationEnabled").is_none());
         assert_eq!(value["microphoneDeviceName"], "Built-in Mic");
     }
 
@@ -490,6 +497,7 @@ mod tests {
     fn missing_low_latency_preference_defaults_off() {
         let preferences: UserPreferences = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!preferences.low_latency_dictation_enabled);
+        assert!(!preferences.echo_cancellation_enabled);
     }
 
     #[test]

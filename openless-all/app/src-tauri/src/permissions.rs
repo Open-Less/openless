@@ -412,7 +412,7 @@ mod platform {
             ($t:ty) => {
                 device
                     .build_input_stream::<$t, _, _>(
-                        config,
+                        *config,
                         move |_data: &[$t], _info| {},
                         err_cb,
                         None,

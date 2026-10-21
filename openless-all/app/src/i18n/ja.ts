@@ -1514,6 +1514,9 @@ export const ja: typeof zhCN = {
       audioEnhancementLabel: '軽量マイク拡張',
       audioEnhancementDesc:
         'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+      echoCancellationLabel: '再生エコーキャンセル',
+      echoCancellationDesc:
+        '再生音を聞きながら、デスクトップの出力を参照してエコーを抑制します。ベストエフォートの機能で、デバイスや Bluetooth、Linux ALSA では利用できない場合があります。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',

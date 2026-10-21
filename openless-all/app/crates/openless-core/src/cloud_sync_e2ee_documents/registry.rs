@@ -194,6 +194,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "echo_cancellation_enabled",
+        key: "echoCancellationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "voice_activation_enabled",
         key: "voiceActivationEnabled",
         class: PreferenceClass::Excluded,

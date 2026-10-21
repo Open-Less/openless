@@ -5290,6 +5290,7 @@ impl OpenLessBackend {
             pre_roll_ms: 500,
             audio_processing: crate::audio::AudioProcessingConfig {
                 enhancement_enabled: preferences.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences.echo_cancellation_enabled,
             },
         };
         match self.deps.dictation_engine.arm_audio_capture(request) {

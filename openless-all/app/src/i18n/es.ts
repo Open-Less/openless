@@ -1547,6 +1547,9 @@ export const es: typeof zhCN = {
       audioEnhancementLabel: 'Mejora ligera del micrófono',
       audioEnhancementDesc:
         'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
+      echoCancellationLabel: 'Cancelación del eco de reproducción',
+      echoCancellationDesc:
+        'Usa la salida de audio del escritorio como referencia mientras mantiene el audio audible. Es una función de mejor esfuerzo y puede no estar disponible con ciertos dispositivos, rutas Bluetooth o ALSA en Linux.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',

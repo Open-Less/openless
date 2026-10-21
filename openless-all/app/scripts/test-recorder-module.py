@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run the native recorder tests without building Tauri/MLX or fetching ASR submodules.
+"""Run native recorder and audio cue tests without Tauri/MLX or ASR submodules.
 
 The bridge trait below matches the only core interface used by recorder.rs.
-This checks the production recorder module; it does not replace a desktop cargo check.
+This checks both production audio modules; it does not replace a desktop cargo check.
 """
 import json
 from pathlib import Path
@@ -19,7 +19,7 @@ name = "openless-recorder-tests"
 version = "0.1.0"
 edition = "2021"
 [dependencies]
-cpal = "=0.15.3"
+cpal = "=0.18.2"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,8 +32,9 @@ log = "0.4"
         "#[derive(Debug, Clone)] pub struct BackendError { pub code: BackendErrorCode, pub message: String }\n"
         "impl BackendError { pub fn new(code: BackendErrorCode, message: impl Into<String>) -> Self { Self { code, message: message.into() } } }\n"
         + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio.rs"), ensure_ascii=False) + "]\npub mod audio;\n"
-        "pub use audio::{AudioProcessingConfig, AudioProcessor};\n"
+        "pub use audio::{AudioProcessingConfig, AudioProcessor, ReferenceAudioBuffer};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
+        + "#[path = " + json.dumps(str(recorder.with_name("native_audio_cue.rs")), ensure_ascii=False) + "]\npub mod native_audio_cue;\n"
     )
     subprocess.run(["cargo", "test", "--manifest-path", str(root / "Cargo.toml"), *sys.argv[1:]], check=True)

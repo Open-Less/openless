@@ -78,6 +78,7 @@ export function RecordingInputSection({
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
     getCachedPlatformCapabilities,
   );
+  const supportsDesktopEchoCancellation = platformCaps?.platform === 'desktop';
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
@@ -292,6 +293,8 @@ export function RecordingInputSection({
     savePrefs({ ...prefs, lowLatencyDictationEnabled });
   const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
     savePrefs({ ...prefs, audioEnhancementEnabled });
+  const onEchoCancellationChange = (echoCancellationEnabled: boolean) =>
+    savePrefs({ ...prefs, echoCancellationEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -550,6 +553,17 @@ export function RecordingInputSection({
             desc={t('settings.recording.audioEnhancementDesc')}
           >
             <Toggle on={prefs.audioEnhancementEnabled} onToggle={onAudioEnhancementChange} />
+          </SettingRow>
+        )}
+        {supportsDesktopEchoCancellation && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={onEchoCancellationChange}
+            />
           </SettingRow>
         )}
         {!isAndroid && (

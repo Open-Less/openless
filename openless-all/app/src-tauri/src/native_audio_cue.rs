@@ -44,12 +44,12 @@ fn play(generation: u64) -> Result<(), String> {
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let channels = config.channels as usize;
-    let sample_rate = config.sample_rate.0 as f32;
+    let sample_rate = config.sample_rate as f32;
     macro_rules! stream {
         ($type:ty, $convert:expr) => {{
             let mut position = 0usize;
             device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [$type], _: &cpal::OutputCallbackInfo| {
                     for frame in data.chunks_mut(channels) {
                         let value = if GENERATION.load(Ordering::Relaxed) == generation {

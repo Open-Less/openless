@@ -1526,6 +1526,9 @@ export const en: typeof zhCN = {
       audioEnhancementLabel: 'Lightweight microphone enhancement',
       audioEnhancementDesc:
         'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
+      echoCancellationLabel: 'Playback echo cancellation',
+      echoCancellationDesc:
+        'Use the desktop audio output as a reference while keeping playback audible. This is best effort and may be unavailable for some devices, Bluetooth routes, or Linux ALSA setups.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',

@@ -1556,6 +1556,9 @@ export const de: typeof zhCN = {
       audioEnhancementLabel: 'Leichte Mikrofonverbesserung',
       audioEnhancementDesc:
         'Wendet eine leichte Verstärkung, weiche Begrenzung und konservative Rauschunterdrückung auf das lokale Mikrofon an. Keine Echounterdrückung. Standardmäßig aus.',
+      echoCancellationLabel: 'Wiedergabe-Echounterdrückung',
+      echoCancellationDesc:
+        'Verwendet die Desktop-Audioausgabe als Referenz, während die Wiedergabe hörbar bleibt. Die Funktion arbeitet best effort und kann bei bestimmten Geräten, Bluetooth-Routen oder Linux-ALSA nicht verfügbar sein.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',

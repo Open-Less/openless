@@ -549,6 +549,8 @@ pub enum SettingsField {
     MuteWhileRecording,
     /// 轻量本机麦克风增益与软限幅。
     AudioEnhancement,
+    /// 使用桌面播放参考进行尽力而为的回声抑制。
+    EchoCancellation,
     RecordAudioForDebug,
     ActivityHeatmap,
     SystemProxy,
@@ -1190,6 +1192,7 @@ pub struct SettingsFields {
     pub microphone_error: Option<String>,
     pub mute_while_recording: bool,
     pub audio_enhancement: bool,
+    pub echo_cancellation: bool,
     pub audio_cue: bool,
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
     pub show_capsule: bool,
@@ -1258,6 +1261,7 @@ impl Default for SettingsFields {
             microphone_error: None,
             mute_while_recording: false,
             audio_enhancement: false,
+            echo_cancellation: false,
             audio_cue: false,
             show_capsule: true,
             capsule_style: 0,

@@ -75,8 +75,9 @@ regex = "1"
 bytes = "1"
 url = "2"
 raw-window-handle = "0.6"
-# Audio capture — shared across desktop and mobile.
-cpal = "0.15"
+# Audio capture — cpal 0.18 provides the desktop render-loopback path and remains
+# available to mobile builds through the same cross-platform API.
+cpal = "0.18.2"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-fs = "2.7.1"
