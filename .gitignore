@@ -78,6 +78,10 @@ openless-all/app/windows-ime/obj/
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/
 
+# Local review attachments and build records are not repository inputs.
+/docs/reviews/
+/docs/local-builds/
+
 # Internal AI 协作 + 规划 + 审计文档：本地保留，绝不发布到公共仓库。
 # 之前误入库的整套已在 chore/remove-internal-docs 中 git rm --cached，
 # 这里加规则避免再次被 `git add` 拉回来。
