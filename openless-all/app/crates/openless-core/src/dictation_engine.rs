@@ -717,17 +717,12 @@ impl DictationEngine for PipelineDictationEngine {
             let archive = recording.archive();
             let mut has_audio_recording = archive.as_ref().map(|archive| archive.is_available());
             if let Err(error) = recording.stop().await {
-                demote_failed_archive(
-                    archive.as_ref(),
-                    context.output_target,
-                    &mut has_audio_recording,
-                )
-                .await;
-                let _ = cancel_transcription_once(&session, transcription).await;
-                remove_session(&sessions, session_id, &session);
-                let mut failure = EngineFailure::new(error, EngineFailureStage::Transcribing);
-                failure.has_audio_recording = has_audio_recording;
-                return Err(failure);
+                // 录音设备中途掉线（蓝牙麦欠载/节点被挂起时报 "Device disconnected"）
+                // 不应丢掉已经流进 ASR 的内容：这里降级为警告继续转写，
+                // 由后续「未收到有效音频」守卫决定是否真的没有可识别内容。
+                log::warn!(
+                    "[dictation] recorder stop failed; transcribing the captured audio anyway: {error}"
+                );
             }
             if context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote {
                 if let Some(archive) = archive.as_ref() {
