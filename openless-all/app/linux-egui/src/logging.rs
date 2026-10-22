@@ -492,11 +492,11 @@ mod tests {
 
         assert!(rotate_if_needed(&path).unwrap());
 
-        assert!(!path.exists(), "当前文件应被移走");
+        assert!(!path.exists(), "the current log must have been moved aside");
         assert_eq!(std::fs::read(root.join("openless.log.1")).unwrap().len(), (ROTATE_LIMIT_BYTES + 1) as usize);
         assert_eq!(std::fs::read(root.join("openless.log.2")).unwrap(), b"one");
         assert_eq!(std::fs::read(root.join("openless.log.3")).unwrap(), b"two");
-        assert!(!root.join("openless.log.4").exists(), "超出保留份数的文件应被删除");
+        assert!(!root.join("openless.log.4").exists(), "archives beyond ROTATE_KEEP must be dropped");
 
         // 小于上限时不轮转。
         std::fs::write(&path, b"small").unwrap();
