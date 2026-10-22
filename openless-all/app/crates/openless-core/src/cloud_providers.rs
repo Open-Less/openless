@@ -1056,7 +1056,89 @@ enum CloudPolisherProvider {
     Gemini(crate::llm_gemini::GeminiProvider),
 }
 
+// Read-only, selected-channel request credentials. SecretValue zeroizes on drop;
+// no vault reference, serialization, diagnostics or mutation survives preparation.
+struct FrozenPolishCredentials(Vec<(CredentialKey, crate::SecretValue)>);
+impl FrozenPolishCredentials {
+    fn denied<T>() -> BoxFuture<'static, Result<T, BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "immutable polish credentials",
+            ))
+        })
+    }
+}
+impl CredentialStore for FrozenPolishCredentials {
+    fn status(
+        &self,
+        _: crate::UserPreferences,
+    ) -> BoxFuture<'static, Result<crate::CredentialsStatus, BackendError>> {
+        Self::denied()
+    }
+    fn read(
+        &self,
+        key: CredentialKey,
+    ) -> BoxFuture<'static, Result<Option<crate::SecretValue>, BackendError>> {
+        let value = self
+            .0
+            .iter()
+            .find(|(stored, _)| stored == &key)
+            .map(|(_, value)| value.clone());
+        Box::pin(async move { Ok(value) })
+    }
+    fn write(
+        &self,
+        _: CredentialKey,
+        _: crate::SecretValue,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        Self::denied()
+    }
+    fn remove(&self, _: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
+        Self::denied()
+    }
+}
+
 impl TextPolisher for SharedCloudTextPolisher {
+    fn prepare(
+        &self,
+        context: Arc<DictationContext>,
+    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
+        let credentials = self.credentials.clone();
+        Box::pin(async move {
+            // OAuth resolves external runtime state and cannot promise an immutable
+            // delayed invocation through this credential-only seam.
+            if context.llm.provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "OAuth delayed compose is unsupported",
+                ));
+            }
+            let mut values = Vec::new();
+            for account in [
+                LLM_API_KEY_ACCOUNT,
+                LLM_ENDPOINT_ACCOUNT,
+                LLM_EXTRA_HEADERS_ACCOUNT,
+                LLM_TEMPERATURE_ACCOUNT,
+            ]
+            .into_iter()
+            .chain(crate::llm_protocol::CONFIG_ACCOUNTS)
+            {
+                let key = CredentialKey::new(
+                    CredentialNamespace::Llm,
+                    Some(context.llm.provider_id.clone()),
+                    account,
+                )?;
+                if let Some(value) = credentials.read(key.clone()).await? {
+                    values.push((key, value));
+                }
+            }
+            Ok(Some(Arc::new(SharedCloudTextPolisher::new(Arc::new(
+                FrozenPolishCredentials(values),
+            ))) as Arc<dyn TextPolisher>))
+        })
+    }
+
     fn polish(
         &self,
         session_id: SessionId,

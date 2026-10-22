@@ -1,4 +1,5 @@
-// Local signing is deliberately not committed.
+#include "Version.xcconfig"
+// Signing overrides stay local to each developer.
 OL_BUNDLE_ID = app.openless.ios
 OL_APP_GROUP = group.app.openless.ios
 #include? "Local.xcconfig"

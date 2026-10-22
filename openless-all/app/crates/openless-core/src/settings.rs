@@ -19,6 +19,116 @@ pub(crate) fn ensure_testing_features_enabled(
     }
 }
 
+/// Preserve historical custom names on load, while canonicalizing catalog aliases.
+pub(crate) fn canonical_translation_target(value: &str) -> String {
+    crate::language_catalog::native_language_name(value).unwrap_or_else(|| value.trim().to_string())
+}
+
+pub(crate) fn ordered_translation_targets(values: Vec<String>) -> Vec<String> {
+    let mut targets = Vec::new();
+    for value in values {
+        let value = canonical_translation_target(&value);
+        if !value.is_empty() && !targets.contains(&value) {
+            targets.push(value);
+        }
+    }
+    targets
+}
+
+pub(crate) fn migrate_translation_targets(
+    targets: Option<Vec<String>>,
+    selected: &str,
+) -> (Vec<String>, String) {
+    let selected = canonical_translation_target(selected);
+    let mut targets =
+        ordered_translation_targets(targets.unwrap_or_else(|| vec![selected.clone()]));
+    // A nonempty legacy selection remains authoritative when an older client
+    // round-trips a newly introduced list it does not know how to update.
+    if !targets.is_empty() && !selected.is_empty() && !targets.contains(&selected) {
+        targets.push(selected.clone());
+    }
+    let selected = if targets.is_empty() {
+        String::new()
+    } else {
+        selected
+    };
+    (targets, selected)
+}
+
+/// A missing list is a legacy scalar-only update, not permission to erase targets.
+/// Unknown names already stored by an older client remain usable, but cannot be newly added.
+pub(crate) fn reconcile_translation_settings(
+    previous: &UserPreferences,
+    next: &mut UserPreferences,
+) -> Result<(), BackendError> {
+    let (previous_targets, previous_selected) = migrate_translation_targets(
+        if previous.translation_target_languages.is_empty()
+            && !previous.translation_target_languages_present
+        {
+            None
+        } else {
+            Some(previous.translation_target_languages.clone())
+        },
+        &previous.translation_target_language,
+    );
+    let selected = canonical_translation_target(&next.translation_target_language);
+    let mut targets = if next.translation_target_languages_present {
+        ordered_translation_targets(next.translation_target_languages.clone())
+    } else {
+        previous_targets.clone()
+    };
+    // Scalar-only clients (including existing Rust callers editing a snapshot) select
+    // a target without replacing the ordered collection. Explicit [] always clears.
+    if (!next.translation_target_languages_present
+        || (!targets.is_empty() && targets == previous_targets && selected != previous_selected))
+        && !selected.is_empty()
+        && !targets.contains(&selected)
+    {
+        targets.push(selected.clone());
+    }
+    for target in &targets {
+        if crate::language_catalog::native_language_name(target).is_none()
+            && !previous_targets.contains(target)
+        {
+            return Err(BackendError::new(
+                crate::errors::BackendErrorCode::InvalidArgument,
+                format!("unknown translation target: {target}"),
+            ));
+        }
+    }
+    let selected = if !selected.is_empty() && !targets.contains(&selected) {
+        targets.first().cloned().unwrap_or_default()
+    } else {
+        selected
+    };
+    let (targets, selected) = migrate_translation_targets(Some(targets), &selected);
+    next.translation_target_languages = targets;
+    next.translation_target_language = selected;
+    next.translation_target_languages_present = true;
+    Ok(())
+}
+
+pub(crate) fn validate_session_translation_target(
+    preferences: &UserPreferences,
+    target: &str,
+) -> Result<String, BackendError> {
+    let target = canonical_translation_target(target);
+    let mut targets = ordered_translation_targets(preferences.translation_target_languages.clone());
+    if !preferences.translation_target_languages_present {
+        let legacy = canonical_translation_target(&preferences.translation_target_language);
+        if !legacy.is_empty() && !targets.contains(&legacy) {
+            targets.push(legacy);
+        }
+    }
+    if target.is_empty() || !targets.contains(&target) {
+        return Err(BackendError::new(
+            crate::errors::BackendErrorCode::InvalidArgument,
+            "session translation target must be a configured nonempty target",
+        ));
+    }
+    Ok(target)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingsCollisionPolicy {
@@ -290,5 +400,125 @@ mod tests {
         assert!(!change.previous.openless_language_profile_enabled);
         assert!(change.next.openless_language_profile_enabled);
         assert!(!tsf_with_hidden_pref.windows_show_openless_in_keyboard_list);
+    }
+}
+
+#[cfg(test)]
+mod translation_targets_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_selected_target_seeds_list_and_preserves_custom_names() {
+        for (input, expected) in [
+            (" en ", "English"),
+            (" My historical language ", "My historical language"),
+        ] {
+            let preferences: UserPreferences = serde_json::from_value(json!({
+                "translationTargetLanguage": input,
+            }))
+            .unwrap();
+            assert_eq!(preferences.translation_target_languages, vec![expected]);
+            assert_eq!(preferences.translation_target_language, expected);
+            assert!(!preferences.translation_target_languages_present);
+        }
+        let defaults: UserPreferences = serde_json::from_value(json!({})).unwrap();
+        assert!(defaults.translation_target_languages.is_empty());
+        assert!(defaults.translation_target_language.is_empty());
+    }
+
+    #[test]
+    fn explicit_targets_canonicalize_dedupe_keep_order_and_validate_selection() {
+        let preferences: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguages": ["ja", " en ", "English", "", "繁體中文", "zh-TW"],
+            "translationTargetLanguage": "en",
+        }))
+        .unwrap();
+        assert_eq!(
+            preferences.translation_target_languages,
+            vec!["日本語", "English", "繁体中文"]
+        );
+        assert_eq!(preferences.translation_target_language, "English");
+        assert!(preferences.translation_target_languages_present);
+        let invalid_selection: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguages": ["ja", "en"],
+            "translationTargetLanguage": "fr",
+        }))
+        .unwrap();
+        assert_eq!(invalid_selection.translation_target_language, "Français");
+        assert_eq!(
+            invalid_selection.translation_target_languages,
+            vec!["日本語", "English", "Français"]
+        );
+    }
+
+    #[test]
+    fn explicit_empty_list_clears_selected_target_and_marker_is_not_wire_data() {
+        let preferences: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguages": [],
+            "translationTargetLanguage": "en",
+            "translationTargetLanguagesPresent": false,
+        }))
+        .unwrap();
+        assert!(preferences.translation_target_languages_present);
+        assert!(preferences.translation_target_languages.is_empty());
+        assert!(preferences.translation_target_language.is_empty());
+        let value = serde_json::to_value(preferences).unwrap();
+        assert!(value.get("translationTargetLanguagesPresent").is_none());
+        let forged: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguage": "en",
+            "translationTargetLanguagesPresent": true,
+        }))
+        .unwrap();
+        assert!(!forged.translation_target_languages_present);
+    }
+
+    #[test]
+    fn unknown_new_additions_fail_but_historical_targets_survive() {
+        let previous: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguage": "Historical custom target",
+        }))
+        .unwrap();
+        let mut next = previous.clone();
+        reconcile_translation_settings(&previous, &mut next).unwrap();
+        assert_eq!(
+            next.translation_target_languages,
+            vec!["Historical custom target"]
+        );
+        assert_eq!(
+            validate_session_translation_target(&next, "Historical custom target").unwrap(),
+            "Historical custom target"
+        );
+        next.translation_target_languages
+            .push("Unknown new target".into());
+        assert_eq!(
+            reconcile_translation_settings(&previous, &mut next)
+                .unwrap_err()
+                .code,
+            crate::errors::BackendErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn old_client_scalar_updates_preserve_order_and_disabled_selection() {
+        let previous: UserPreferences = serde_json::from_value(json!({
+            "translationTargetLanguages": ["en", "ja"],
+            "translationTargetLanguage": "en",
+        }))
+        .unwrap();
+        for (scalar, selected, targets) in [
+            ("en", "English", vec!["English", "日本語"]),
+            ("ja", "日本語", vec!["English", "日本語"]),
+            ("fr", "Français", vec!["English", "日本語", "Français"]),
+            ("", "", vec!["English", "日本語"]),
+        ] {
+            let mut next: UserPreferences = serde_json::from_value(json!({
+                "translationTargetLanguage": scalar,
+            }))
+            .unwrap();
+            reconcile_translation_settings(&previous, &mut next).unwrap();
+            assert_eq!(next.translation_target_languages, targets);
+            assert_eq!(next.translation_target_language, selected);
+        }
     }
 }

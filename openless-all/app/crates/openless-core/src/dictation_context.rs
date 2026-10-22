@@ -43,6 +43,9 @@ pub enum DictationOutputTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationStartOptions {
     pub translation_requested: bool,
+    /// Configured target for this session only; None uses the legacy selected target.
+    /// Selecting a target does not request translation or enable any provider.
+    pub translation_target_language: Option<String>,
     pub audio_source: DictationAudioSource,
     pub insert_text: bool,
     pub output_target: DictationOutputTarget,
@@ -55,6 +58,7 @@ impl Default for DictationStartOptions {
     fn default() -> Self {
         Self {
             translation_requested: false,
+            translation_target_language: None,
             audio_source: DictationAudioSource::Microphone,
             insert_text: true,
             output_target: DictationOutputTarget::ForegroundApp,
@@ -128,6 +132,8 @@ pub struct DictationPolishContext {
     pub hotwords: Vec<String>,
     pub working_languages: Vec<String>,
     pub translation_target_language: String,
+    /// True when the start options explicitly selected the snapshotted target.
+    pub translation_target_explicit: bool,
     pub translation_active: bool,
     pub edit_plan_input: bool,
     /// Selected text uses its own prompt envelope, separate from voice transcripts.
@@ -252,8 +258,12 @@ impl DictationContext {
             omni,
         } = providers;
         let hotwords = normalize_hotwords(hotwords);
-        let translation_target_language =
-            preferences.translation_target_language.trim().to_string();
+        let translation_target_language = crate::settings::canonical_translation_target(
+            options
+                .translation_target_language
+                .as_deref()
+                .unwrap_or(&preferences.translation_target_language),
+        );
         let translation_active = translation_effective(
             options.translation_requested,
             &translation_target_language,
@@ -357,6 +367,7 @@ impl DictationContext {
                 hotwords,
                 working_languages: preferences.working_languages.clone(),
                 translation_target_language,
+                translation_target_explicit: options.translation_target_language.is_some(),
                 translation_active,
                 edit_plan_input: false,
                 selection_input: false,
@@ -811,6 +822,56 @@ mod tests {
         let mut no_model = preferences.clone();
         no_model.sherpa_onnx_model = "  ".into();
         assert_eq!(local_asr_fallback(&no_model, &cloud_asr(), true), None);
+    }
+
+    #[test]
+    fn explicit_translation_target_preserves_working_language_suppression_and_raw_mode() {
+        let preferences = UserPreferences {
+            default_mode: PolishMode::Raw,
+            working_languages: vec!["English".into()],
+            translation_target_language: "日本語".into(),
+            ..Default::default()
+        };
+        let capture = |requested, target| {
+            DictationContext::capture(
+                &preferences,
+                &builtin_style_pack_for_mode(PolishMode::Raw),
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider("local-qwen3"),
+                    ProviderInvocation::for_provider("original-llm"),
+                    ProviderInvocation::for_provider("original-omni"),
+                ),
+                vec![],
+                vec![],
+                &DictationStartOptions {
+                    translation_requested: requested,
+                    translation_target_language: target,
+                    ..Default::default()
+                },
+            )
+        };
+        let suppressed = capture(true, Some("en".into()));
+        assert_eq!(suppressed.polish.translation_target_language, "English");
+        assert!(suppressed.polish.translation_target_explicit);
+        assert!(!suppressed.polish.translation_active);
+        assert!(!suppressed.uses_llm_polisher());
+        assert!(
+            !suppressed
+                .with_translation_requested(true)
+                .polish
+                .translation_active
+        );
+        let selected_only = capture(false, Some("ja".into()));
+        assert!(!selected_only.uses_llm_polisher());
+        let translated = capture(true, Some("ja".into()));
+        assert!(translated.polish.translation_active);
+        assert!(translated.uses_llm_polisher());
+        assert_eq!(translated.asr.provider_id, "local-qwen3");
+        assert_eq!(translated.llm.provider_id, "original-llm");
+        let legacy = capture(true, None);
+        assert!(!legacy.polish.translation_target_explicit);
+        assert_eq!(legacy.polish.translation_target_language, "日本語");
+        assert!(legacy.polish.translation_active);
     }
 
     #[test]

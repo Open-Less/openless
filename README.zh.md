@@ -111,6 +111,8 @@
 
 OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
 
+原生 [iOS 应用与输入法](openless-all/ios/README.md) 位于 `openless-all/ios/`，支持中英文打字、语音优先与长按空格输入两种模式，以及语音翻译。源码构建和个人签名方式见 iOS 工程说明。
+
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 
 与只产出逐字转写稿的听写工具不同,OpenLess 的核心能力是 **AI Prompt 模式**:你自由地说,它来补充结构、整理你的约束条件,生成一段包含上下文的提示词,可直接粘贴进 ChatGPT、Claude 或 Cursor。

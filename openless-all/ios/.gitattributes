@@ -1,0 +1,2 @@
+# Preserve upstream license text, including its original whitespace.
+Resources/Licenses/**/*.txt -whitespace

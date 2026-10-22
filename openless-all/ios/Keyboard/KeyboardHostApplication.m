@@ -6,11 +6,8 @@
 NSString *OLKeyboardHostBundleIdentifier(UIInputViewController *controller) {
   if (!NSThread.isMainThread || !controller.isViewLoaded || !controller.view.window) return nil;
   @try {
-    // This legacy getter is absent on current UIKit's base controllers. Check
-    // the actual extension parent and its ABI instead of using KVC or a PID/XPC
-    // heuristic. Modern systems can return nil and use the main app's real
-    // source navigation action or the separate on-demand arbiter query below.
-    // Never retain a host ID from an earlier document/keyboard lifecycle.
+    // Probe the attached extension parent and validate the optional getter's
+    // ABI. A missing getter falls through to the request-scoped host query.
     SEL selector = NSSelectorFromString(@"_hostBundleID");
     UIViewController *candidate = controller;
     for (NSUInteger depth = 0; candidate && depth < 4; depth++, candidate = candidate.parentViewController) {
@@ -36,9 +33,8 @@ NSString *OLKeyboardHostBundleIdentifier(UIInputViewController *controller) {
   return nil;
 }
 
-// Selector evidence: KeyboardHostBundleID, commit f1106dd9f1f09e01c9c28e10e2882990bb14acdc.
-// This bridge is independently implemented. Runtime signatures are checked
-// before hooking/calling; no layout assumptions or historical identity cache.
+// Runtime hooks require matching signatures. Query generations prevent a
+// delayed callback from resolving a replacement keyboard's destination.
 static os_unfair_lock OLHostLock = OS_UNFAIR_LOCK_INIT;
 static uint64_t OLHostGeneration;
 static uint64_t OLHostActiveQueryID;

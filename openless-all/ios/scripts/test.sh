@@ -7,10 +7,10 @@ case "$SUITE" in
   *) echo 'Usage: scripts/test.sh unit|ui|all' >&2; exit 2;;
 esac
 if [ "$SUITE" = unit ] || [ "$SUITE" = all ]; then
-  export RUSTC="$(rustup which --toolchain 1.98.0 rustc)"
-  export RUSTDOC="$(rustup which --toolchain 1.98.0 rustdoc)"
+  export RUSTC="$(rustup which --toolchain 1.99.0 rustc)"
+  export RUSTDOC="$(rustup which --toolchain 1.99.0 rustdoc)"
   swift test --package-path "$ROOT/Packages/OpenLessShared"
-  rustup run 1.98.0 cargo test --manifest-path "$ROOT/CoreHost/Cargo.toml" --locked
+  rustup run 1.99.0 cargo test --manifest-path "$ROOT/CoreHost/Cargo.toml" --locked
   "$ROOT/scripts/test-rime.sh"
   bash "$ROOT/scripts/test-predictions.sh"
   "$ROOT/scripts/test-audio.sh"

@@ -106,6 +106,8 @@
 
 OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
 
+The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing.
+
 Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
 
 Unlike dictation tools that simply emit a word-for-word transcript, OpenLess's headline capability is its **AI-prompt mode**: you speak freely, and it adds structure, captures your constraints, and produces a context-rich prompt that you can paste directly into ChatGPT, Claude, or Cursor.

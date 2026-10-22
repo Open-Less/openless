@@ -530,6 +530,10 @@ fn create_with_marketplace(
             "absolute data directory required",
         ));
     }
+    // Register the durable write gate before opening stores or applying startup
+    // preferences. Reopened roots must not be mistaken for an unowned restore.
+    let _write_gate = openless_core::cloud_sync_e2ee_store::gate::open_for_data_dir(&config.data_dir)
+        .map_err(|failure| error(BackendErrorCode::InvalidState, &failure.to_string()))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

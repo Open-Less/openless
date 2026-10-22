@@ -219,7 +219,9 @@ fn account_sync_real_core_device_flow_keychain_adapter_reopen_and_signout_preser
         assert!(credentials.read(provider).await.unwrap().is_some());
         assert_eq!(before.0,serde_json::to_value(backend.list_vocabulary().unwrap()).unwrap());
         assert_eq!(before.1,serde_json::to_value(backend.list_history().unwrap()).unwrap());
-        assert!(!dir.path().join("encrypted-sync").exists());
+        // Core's local migration journal shares this root; remote sync stays absent.
+        assert!(!dir.path().join("encrypted-sync/protected").exists());
+        assert!(backend.cloud_sync_e2ee_status().is_err());
         assert_eq!(server.count.load(Ordering::Acquire),3); server.assert_complete();
     });
 }
@@ -266,7 +268,7 @@ fn account_sync_all_sync_controls_fail_closed_without_capture_credentials_or_net
         }
         assert_eq!(server.count.load(Ordering::Acquire), 0);
         assert!(backend.cloud_sync_e2ee_status().is_err());
-        assert!(!dir.path().join("encrypted-sync").exists());
+        assert!(!dir.path().join("encrypted-sync/protected").exists());
     });
 }
 

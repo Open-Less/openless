@@ -551,12 +551,17 @@ pub struct UserPreferences {
     /// model knows which languages the user works in. See issue #4.
     #[serde(default = "default_working_languages")]
     pub working_languages: Vec<String>,
-    /// Translation output target language (single-select, native name).
-    /// Empty = translation mode off (Shift combos are inert). The frontend
-    /// picks from the built-in language list; the backend just splices the
-    /// native name into the prompt. See issue #4.
+    /// Legacy selected translation target (canonical native name, or a preserved custom name).
+    /// Empty disables legacy translation gestures without erasing configured choices.
     #[serde(default)]
     pub translation_target_language: String,
+    /// Ordered, duplicate-free translation choices, separate from working/ASR/UI languages.
+    #[serde(default)]
+    pub translation_target_languages: Vec<String>,
+    /// Wire presence distinguishes an old client's whole-document save from explicit deletion.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub translation_target_languages_present: bool,
     /// Chinese output script preference (not exposed as a UI switch):
     /// - Simplified: prefer simplified for Chinese output
     /// - Traditional: prefer traditional for Chinese output
@@ -1093,6 +1098,8 @@ struct UserPreferencesWire {
     windows_show_openless_in_keyboard_list: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
+    #[serde(default)]
+    translation_target_languages: Option<Vec<String>>,
     chinese_script_preference: ChineseScriptPreference,
     #[serde(default)]
     output_language_preference: OutputLanguagePreference,
@@ -1346,6 +1353,7 @@ impl Default for UserPreferencesWire {
             windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
+            translation_target_languages: None,
             chinese_script_preference: prefs.chinese_script_preference,
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
@@ -1470,6 +1478,12 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 selection_polish_hotkey = None;
             }
         }
+        let translation_target_languages_present = wire.translation_target_languages.is_some();
+        let (translation_target_languages, translation_target_language) =
+            crate::settings::migrate_translation_targets(
+                wire.translation_target_languages,
+                &wire.translation_target_language,
+            );
         let streaming_insert_default_migrated = wire.streaming_insert_default_migrated;
         let streaming_insert = if streaming_insert_default_migrated {
             wire.streaming_insert
@@ -1575,7 +1589,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             ),
             windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
             working_languages: wire.working_languages,
-            translation_target_language: wire.translation_target_language,
+            translation_target_language,
+            translation_target_languages,
+            translation_target_languages_present,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
@@ -1966,6 +1982,8 @@ impl Default for UserPreferences {
             windows_show_openless_in_keyboard_list: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
+            translation_target_languages: Vec::new(),
+            translation_target_languages_present: false,
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),

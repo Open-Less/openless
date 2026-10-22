@@ -3,14 +3,8 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-// iOS 27.0 (24A434), arm64 Simulator runtime probe, 2026-10-18:
-// UIApplication._systemNavigationAction: @16@0:8
-// UISystemNavigationAction.destinations: @16@0:8
-// bundleIdForDestination: @24@0:8Q16; sendResponseForDestination: B24@0:8Q16
-// LSApplicationWorkspace.defaultWorkspace: @16@0:8
-// openApplicationWithBundleID: B24@0:8@16
-// Check the complete ABI again before every call. No installation inventory,
-// URL-scheme guessing, process suspension, or private ivar offsets are used.
+// Validate each runtime method's complete ABI before invoking it. A return
+// destination belongs only to the current activation; never enumerate apps.
 static BOOL OLMethodMatches(id object, SEL selector, const char *result,
                             const char *argument) {
   if (!object) return NO;

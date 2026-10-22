@@ -1842,9 +1842,7 @@
       "translationSource": "Native iOS translation"
     },
     "模拟器（不是真机验收）": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:39"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation"
     },
     "正在保存翻译目标…": {
@@ -2049,9 +2047,7 @@
       "translationSource": "Native iOS translation"
     },
     "此构建不包含私有接口诊断。请使用 OpenLessPersonal Scheme。": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:72"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation"
     },
     "没有匹配的市场风格": {
@@ -2315,9 +2311,7 @@
       "translationSource": "Native iOS translation"
     },
     "真机": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:43"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation"
     },
     "离开页面或进入后台会暂停后续检查，不会中断已发出的 HTTP 请求。取消不会撤销已完成的登录；需要时请明确退出。": {
@@ -3217,9 +3211,7 @@
       "translationSource": "Native iOS translation"
     },
     "隐藏式免跳转尚未通过真机验证。不会用常驻麦克风、可见小窗或收边拉手替代。": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:16"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation"
     },
     "需要下载系统语音资源": {
@@ -6430,36 +6422,28 @@
     },
     "免跳转后台保活已关闭。": {
       "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:68"
+        "App/ExperimentalPiPKeepAlive.swift:61"
       ],
       "translationSource": "Native iOS translation",
       "sourceSnapshot": "2026-10-20 public PiP keep-alive"
     },
     "免跳转后台保活已激活；待机时不会采集麦克风。": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:69"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation",
       "sourceSnapshot": "2026-10-20 public PiP keep-alive"
     },
     "首次离开主应用时建立 PiP 保活；待机时不会采集麦克风。": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:71"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation",
       "sourceSnapshot": "2026-10-20 public PiP keep-alive"
     },
     "\nPiP 使用公开 AVSampleBufferDisplayLayer/ContentSource；未调用私有接口。": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:133"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation",
       "sourceSnapshot": "2026-10-20 public PiP keep-alive"
     },
     "系统尚未允许 PiP": {
-      "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:159"
-      ],
+      "callsites": [],
       "translationSource": "Native iOS translation",
       "sourceSnapshot": "2026-10-20 public PiP keep-alive"
     },
@@ -6546,7 +6530,7 @@
     },
     "画中画已结束；返回主应用可恢复免跳转": {
       "callsites": [
-        "App/ExperimentalPiPKeepAlive.swift:336"
+        "App/ExperimentalPiPKeepAlive.swift:334"
       ],
       "translationSource": "Native iOS translation (Build 11 resource audit)"
     },

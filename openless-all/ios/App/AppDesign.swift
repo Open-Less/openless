@@ -7,7 +7,7 @@ enum AppTheme: String, CaseIterable {
   var scheme: ColorScheme? { switch self { case .system: nil; case .light: .light; case .dark: .dark } }
 }
 
-/// One palette for the product screens; no gray-on-gray diagnostic panels.
+/// Shared colors for product screens and controls.
 enum AppDesign {
   static let canvas = Color(uiColor: UIColor { traits in
     traits.userInterfaceStyle == .dark

@@ -64,7 +64,106 @@ impl RetranscriptionFailure {
     }
 }
 
+/// A one-shot compose operation prepared before recording starts. The instruction
+/// is supplied only after real ASR completes; no editor selection is accepted.
+/// This auxiliary operation does not hold the global voice-session gate. Hosts
+/// must retain admission across their capture and this operation, including
+/// runtime restore/management probes, until completion or cancellation cleanup.
+pub struct PreparedVoiceCompose {
+    session_id: SessionId,
+    context: Arc<DictationContext>,
+    polisher: Arc<dyn TextPolisher>,
+    task_spawner: Arc<dyn TaskSpawner>,
+    abort: futures_util::future::AbortHandle,
+    registration: std::sync::Mutex<Option<futures_util::future::AbortRegistration>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceComposePreview {
+    pub text: String,
+    pub provider_type: String,
+    pub model: Option<String>,
+    pub prompt_kind: &'static str,
+}
+
+impl PreparedVoiceCompose {
+    pub fn cancel(&self) {
+        self.abort.abort();
+        let polisher = self.polisher.clone();
+        let session = self.session_id;
+        self.task_spawner.spawn(Box::pin(async move {
+            let _ = polisher.cancel(session).await;
+        }));
+    }
+
+    pub async fn compose(&self, instruction: String) -> Result<VoiceComposePreview, BackendError> {
+        if self.abort.is_aborted() {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "compose cancelled",
+            ));
+        }
+        let registration = self.registration.lock().unwrap().take().ok_or_else(|| {
+            BackendError::new(BackendErrorCode::InvalidState, "compose is one-shot")
+        })?;
+        if instruction.trim().is_empty() || instruction.len() > 128 * 1024 {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "invalid spoken instruction",
+            ));
+        }
+        let input = crate::prompts::voice_compose_user_prompt(&instruction, None);
+        let operation = self.polisher.polish(
+            self.session_id,
+            self.context.clone(),
+            input,
+            Arc::new(DiscardTextStream),
+        );
+        let output = futures_util::future::Abortable::new(operation, registration)
+            .await
+            .map_err(|_| BackendError::new(BackendErrorCode::Cancelled, "compose cancelled"))??;
+        if self.abort.is_aborted() {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "compose cancelled",
+            ));
+        }
+        let text =
+            crate::selection_voice_intent::clean_selection_voice_compose_output(&output.text);
+        if text.is_empty() || text.len() > 128 * 1024 {
+            return Err(BackendError::new(
+                BackendErrorCode::Provider,
+                "invalid compose output",
+            ));
+        }
+        Ok(VoiceComposePreview {
+            text,
+            provider_type: self.context.llm.provider_type.clone(),
+            model: self.context.llm.model.clone(),
+            prompt_kind: "voice_compose",
+        })
+    }
+}
+
+impl Drop for PreparedVoiceCompose {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 pub trait AuxiliaryApi: Send + Sync {
+    fn prepare_voice_compose(
+        &self,
+    ) -> BoxFuture<'static, Result<Arc<PreparedVoiceCompose>, BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "voice compose is not configured",
+            ))
+        })
+    }
+
     fn repolish(
         &self,
         request: RepolishRequest,
@@ -212,6 +311,62 @@ impl AuxiliaryService {
 }
 
 impl AuxiliaryApi for AuxiliaryService {
+    fn prepare_voice_compose(
+        &self,
+    ) -> BoxFuture<'static, Result<Arc<PreparedVoiceCompose>, BackendError>> {
+        let service = self.clone_for_future();
+        Box::pin(async move {
+            let preferences = service.preferences.get();
+            let llm = crate::provider_resolution::resolve_session_provider(
+                &service.credential_store,
+                ProviderSlot::Llm,
+                &preferences.active_llm_provider,
+            )
+            .await?;
+            let style =
+                crate::style_packs::builtin_style_pack_for_mode(crate::types::PolishMode::Light);
+            let mut context = DictationContext::capture(
+                &preferences,
+                &style,
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider("compose-unused-asr"),
+                    llm,
+                    ProviderInvocation::for_provider("compose-unused-omni"),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions {
+                    insert_text: false,
+                    ..Default::default()
+                },
+            );
+            context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
+            context.polish.style_system_prompt = crate::prompts::voice_compose_system_prompt();
+            context.polish.translation_active = false;
+            context.polish.translation_target_language.clear();
+            context.polish.hotwords.clear();
+            context.polish.cursor_context = None;
+            context.polish.front_app = None;
+            context.polish.context_window_minutes = 0;
+            context.polish.prior_turns.clear();
+            let context = Arc::new(context);
+            let polisher = service
+                .polisher
+                .prepare(context.clone())
+                .await?
+                .unwrap_or(service.polisher);
+            let (abort, registration) = futures_util::future::AbortHandle::new_pair();
+            Ok(Arc::new(PreparedVoiceCompose {
+                session_id: SessionId::new(),
+                context,
+                polisher,
+                task_spawner: service.task_spawner,
+                abort,
+                registration: std::sync::Mutex::new(Some(registration)),
+            }))
+        })
+    }
+
     fn repolish(
         &self,
         request: RepolishRequest,
@@ -472,6 +627,50 @@ mod tests {
             );
             Self::unsupported()
         }
+    }
+
+    #[tokio::test]
+    async fn voice_compose_is_lazy_one_shot_and_cancellation_prevents_provider_start() {
+        let polisher = Arc::new(FixtureTextPolisher::successful("draft"));
+        let (service, path) = service(
+            polisher.clone(),
+            Arc::new(FixtureTranscriptionEngine::successful("unused", 0)),
+        );
+        let prepared = service.prepare_voice_compose().await.unwrap();
+        assert!(polisher.inputs().is_empty());
+        let preview = prepared
+            .compose("Write an invitation".into())
+            .await
+            .unwrap();
+        assert_eq!(preview.text, "draft");
+        assert_eq!(preview.prompt_kind, "voice_compose");
+        assert_eq!(
+            polisher.inputs(),
+            vec![crate::prompts::voice_compose_user_prompt(
+                "Write an invitation",
+                None
+            )]
+        );
+        assert_eq!(
+            prepared
+                .compose("second instruction".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::InvalidState
+        );
+        let cancelled = service.prepare_voice_compose().await.unwrap();
+        cancelled.cancel();
+        assert_eq!(
+            cancelled
+                .compose("never sent".into())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Cancelled
+        );
+        assert_eq!(polisher.inputs().len(), 1);
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
