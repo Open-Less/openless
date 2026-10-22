@@ -309,36 +309,10 @@ jobs:
             return 1
           }
           validate_image() { [ -s "$image/system.img" ] && [ -s "$image/package.xml" ]; }
-          if [ "$EMULATOR_CACHE_HIT" != 'true' ]; then
-            work=$(mktemp -d "$RUNNER_TEMP/openless-emulator.XXXXXX")
-            trap 'rm -rf "$work"' EXIT
-            for attempt in 1 2 3; do
-              echo "Install emulator build 16555280 and API 35 image (attempt $attempt)"
-              if curl -fL --connect-timeout 30 --max-time 180 \
-                  -o "$work/emulator.zip" https://dl.google.com/android/repository/emulator-linux_x64-16555280.zip \
-                  && unzip -tq "$work/emulator.zip" \
-                  && unzip -oq "$work/emulator.zip" -d "$work" \
-                  && validate_emulator "$work/emulator/emulator" \
-                  && sdkmanager 'system-images;android-35;google_apis;x86_64' \
-                  && validate_image; then
-                rm -rf "$ANDROID_HOME/emulator"
-                mv "$work/emulator" "$ANDROID_HOME/emulator"
-                break
-              fi
-              rm -rf "$work/emulator" "$image"
-              if [ "$attempt" -eq 3 ]; then
-                echo '::error::could not install the pinned emulator and system image after 3 attempts'
-                exit 1
-              fi
-              sleep 15
-            done
-          fi
-          validate_emulator "$ANDROID_HOME/emulator/emulator" \
-            || { echo '::error::cached emulator does not match build 16555280'; exit 1; }
-          validate_image || { echo '::error::Android API 35 system image is incomplete'; exit 1; }
-          # Raw emulator archives need local-package metadata for avdmanager.
-          if [ ! -s "$ANDROID_HOME/emulator/package.xml" ]; then
-            python3 - "$ANDROID_HOME/emulator" <<'PY'
+          # Register the pinned package before sdkmanager resolves image dependencies.
+          register_emulator() {
+            if [ ! -s "$ANDROID_HOME/emulator/package.xml" ]; then
+              python3 - "$ANDROID_HOME/emulator" <<'PY'
           from pathlib import Path
           import sys
           import xml.etree.ElementTree as ET
@@ -355,7 +329,38 @@ jobs:
           ET.SubElement(package, 'display-name').text = 'Android Emulator'
           ET.ElementTree(root).write(emulator / 'package.xml', encoding='utf-8', xml_declaration=True)
           PY
+            fi
+          }
+          if [ "$EMULATOR_CACHE_HIT" != 'true' ]; then
+            work=$(mktemp -d "$RUNNER_TEMP/openless-emulator.XXXXXX")
+            trap 'rm -rf "$work"' EXIT
+            for attempt in 1 2 3; do
+              echo "Install emulator build 16555280 and API 35 image (attempt $attempt)"
+              if curl -fL --connect-timeout 30 --max-time 180 \
+                  -o "$work/emulator.zip" https://dl.google.com/android/repository/emulator-linux_x64-16555280.zip \
+                  && unzip -tq "$work/emulator.zip" \
+                  && unzip -oq "$work/emulator.zip" -d "$work" \
+                  && validate_emulator "$work/emulator/emulator"; then
+                rm -rf "$ANDROID_HOME/emulator"
+                mv "$work/emulator" "$ANDROID_HOME/emulator"
+                register_emulator
+                if sdkmanager 'system-images;android-35;google_apis;x86_64' && validate_image; then
+                  break
+                fi
+                rm -rf "$ANDROID_HOME/emulator"
+              fi
+              rm -rf "$work/emulator" "$image"
+              if [ "$attempt" -eq 3 ]; then
+                echo '::error::could not install the pinned emulator and system image after 3 attempts'
+                exit 1
+              fi
+              sleep 15
+            done
           fi
+          validate_emulator "$ANDROID_HOME/emulator/emulator" \
+            || { echo '::error::cached emulator does not match build 16555280'; exit 1; }
+          validate_image || { echo '::error::Android API 35 system image is incomplete'; exit 1; }
+          register_emulator
 
       - name: Save the Android emulator on beta builds
         if: steps.emulator_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

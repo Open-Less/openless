@@ -105,6 +105,7 @@ case "$name" in
     fi
     ;;
   sdkmanager)
+    [ -s "$ANDROID_HOME/emulator/package.xml" ] || { echo 'SDK would download an unregistered emulator dependency' >&2; exit 1; }
     count=0; [ ! -f "$RUNNER_TEMP/sdk-count" ] || count=$(cat "$RUNNER_TEMP/sdk-count")
     count=$((count + 1)); echo "$count" > "$RUNNER_TEMP/sdk-count"
     [ "$count" -gt "\${FAKE_SDK_FAILURES:-0}" ] || exit 1
