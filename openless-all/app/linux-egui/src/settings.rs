@@ -467,10 +467,15 @@ fn binding_to_fcitx_key(binding: &ShortcutBinding) -> String {
 
 fn normalize_fcitx_primary(primary: &str) -> String {
     let trimmed = primary.trim();
-    if let Some(stripped) = trimmed.strip_prefix("Key") {
-        stripped.to_ascii_lowercase()
-    } else {
-        trimmed.to_ascii_lowercase()
+    let stripped = trimmed.strip_prefix("Key").unwrap_or(trimmed);
+    let lower = stripped.to_ascii_lowercase();
+    // fcitx5 的 Key::parse 按 X11 keysym 名做**大小写敏感**查表：实测
+    // `SetCustomDictationTrigger("Menu")` → sym=0xff67 有效，`("menu")` →
+    // invalid key（2026-10-22）。这里只把查表中确实首字母大写的名字还原，
+    // 其余继续交给小写（space / f5 / 单字符都已验证可用）。
+    match lower.as_str() {
+        "menu" => "Menu".to_string(),
+        _ => lower,
     }
 }
 
@@ -601,6 +606,28 @@ mod tests {
             modifiers: vec!["ctrl".into()],
         })
         .is_err());
+    }
+
+    #[test]
+    fn menu_primary_keeps_the_case_fcitx_expects() {
+        // fcitx5 的 Key::parse 用 X11 keysym 名做大小写敏感查表：'Menu' 有效、
+        // 'menu' 被拒（2026-10-22 实测 SetCustomDictationTrigger 返回
+        // "invalid key"）。主键名统一小写的旧逻辑会让 Menu 键永远注不上。
+        let binding = ShortcutBinding {
+            primary: "Menu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&binding), "Menu");
+        let key_cased = ShortcutBinding {
+            primary: "KeyMenu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&key_cased), "Menu");
+        let space = ShortcutBinding {
+            primary: "Space".into(),
+            modifiers: vec!["ctrl".into(), "alt".into()],
+        };
+        assert_eq!(binding_to_fcitx_key(&space), "Control+Alt+space");
     }
 
     #[test]
