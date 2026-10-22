@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, Shared};
+use futures_util::FutureExt;
 
 use crate::dictation_context::{DictationContext, DictationOutputTarget};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -91,9 +92,49 @@ struct PipelineSession {
     resources: Mutex<PipelineResources>,
 }
 
+type RecordingStop = Shared<BoxFuture<'static, Result<(), BackendError>>>;
+
+// Early stop, finalization and cancellation must join the same native close.
+struct PipelineRecording {
+    recording: Option<Box<dyn ActiveRecording>>,
+    archive: Option<Arc<dyn RecordingArchive>>,
+    stopped: Option<RecordingStop>,
+}
+
+impl PipelineRecording {
+    fn new(recording: Box<dyn ActiveRecording>) -> Self {
+        Self {
+            archive: recording.archive(),
+            recording: Some(recording),
+            stopped: None,
+        }
+    }
+
+    fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+        self.archive.clone()
+    }
+
+    fn stop_recording(&mut self) -> RecordingStop {
+        self.stopped
+            .get_or_insert_with(|| {
+                self.recording
+                    .take()
+                    .expect("pipeline recording is available until stop begins")
+                    .stop()
+                    .shared()
+            })
+            .clone()
+    }
+
+    fn stop(mut self) -> RecordingStop {
+        self.stop_recording()
+    }
+}
+
 #[derive(Default)]
 struct PipelineResources {
-    recording: Option<Box<dyn ActiveRecording>>,
+    recording: Option<PipelineRecording>,
+    stop_recording_requested: bool,
     transcription: Option<Arc<dyn TranscriptionSession>>,
     buffered: Option<Arc<BufferedTranscriptionSession>>,
     prepared: Option<Arc<dyn PreparedTranscription>>,
@@ -346,8 +387,8 @@ impl DictationEngine for PipelineDictationEngine {
                 }
             };
 
-            let mut recording = Some(recording);
-            {
+            let mut recording = Some(PipelineRecording::new(recording));
+            let stopping = {
                 let mut resources = session
                     .resources
                     .lock()
@@ -355,7 +396,15 @@ impl DictationEngine for PipelineDictationEngine {
                 if !session.cancelled.load(Ordering::Acquire) {
                     resources.recording = recording.take();
                 }
-            }
+                if resources.stop_recording_requested {
+                    resources
+                        .recording
+                        .as_mut()
+                        .map(PipelineRecording::stop_recording)
+                } else {
+                    None
+                }
+            };
             if let Some(recording) = recording {
                 let stop_result = recording.stop().await;
                 let cancel_result =
@@ -370,7 +419,15 @@ impl DictationEngine for PipelineDictationEngine {
             // No provider preparation, configuration I/O or network work may
             // delay opening/promoting the microphone. The existing bounded
             // transcription buffer retains the captured prefix during prepare.
-            let preparation_result = preparation.prepare().await;
+            let preparation_result = async {
+                progress.publish(session_id, EngineProgress::CaptureReady)?;
+                if let Some(stopping) = stopping {
+                    // finish() retains the archive and reports any native stop failure.
+                    let _ = stopping.await;
+                }
+                preparation.prepare().await
+            }
+            .await;
             if preparation_result.is_err() || session.cancelled.load(Ordering::Acquire) {
                 let recording = session
                     .resources
@@ -440,6 +497,35 @@ impl DictationEngine for PipelineDictationEngine {
                 return Err(cancelled_error("dictation cancelled while starting"));
             }
             Ok(())
+        })
+    }
+
+    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("pipeline session lock poisoned")
+            .get(&session_id)
+            .cloned();
+        let Some(session) = session else {
+            return Box::pin(async { Ok(false) });
+        };
+        let stopping = {
+            let mut resources = session
+                .resources
+                .lock()
+                .expect("pipeline resource lock poisoned");
+            resources.stop_recording_requested = true;
+            resources
+                .recording
+                .as_mut()
+                .map(PipelineRecording::stop_recording)
+        };
+        Box::pin(async move {
+            if let Some(stopping) = stopping {
+                stopping.await?;
+            }
+            Ok(true)
         })
     }
 
@@ -2146,6 +2232,55 @@ mod tests {
         fn publish_level(&self, _elapsed_ms: u64, _level: f32) -> Result<(), BackendError> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn early_recording_stop_shares_cleanup_failure_and_preserves_the_archive() {
+        struct BlockingStop {
+            stops: Arc<AtomicUsize>,
+            release: Arc<tokio::sync::Notify>,
+            archive: Arc<FixtureArchive>,
+        }
+        impl ActiveRecording for BlockingStop {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                Some(self.archive.clone())
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                self.stops.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async move {
+                    self.release.notified().await;
+                    Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "fixture stop failure",
+                    ))
+                })
+            }
+        }
+        let stops = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let archive = Arc::new(FixtureArchive {
+            available: AtomicBool::new(true),
+            discards: Arc::new(AtomicUsize::new(0)),
+            pcm: vec![1, 0],
+        });
+        let mut recording = PipelineRecording::new(Box::new(BlockingStop {
+            stops: stops.clone(),
+            release: release.clone(),
+            archive: archive.clone(),
+        }));
+        let retained = recording.archive().unwrap();
+        let mut early_stop = Box::pin(recording.stop_recording());
+        let mut terminal_stop = Box::pin(recording.stop());
+        assert!(futures_util::poll!(early_stop.as_mut()).is_pending());
+        assert!(futures_util::poll!(terminal_stop.as_mut()).is_pending());
+        assert_eq!(stops.load(Ordering::Acquire), 1);
+        release.notify_one();
+        let (early, terminal) = tokio::join!(early_stop, terminal_stop);
+        assert_eq!(early.unwrap_err().message, "fixture stop failure");
+        assert_eq!(terminal.unwrap_err().message, "fixture stop failure");
+        assert!(retained.is_available());
+        assert_eq!(retained.read_pcm().await.unwrap(), vec![1, 0]);
+        assert_eq!(archive.discards.load(Ordering::Acquire), 0);
     }
 
     #[derive(Default)]

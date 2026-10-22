@@ -282,6 +282,8 @@ pub enum EngineStage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineProgress {
+    /// The recorder is registered; provider preparation may still be pending.
+    CaptureReady,
     RecordingLevel { elapsed_ms: u64, level: f32 },
     RecordingLimitReached,
     RecordingFault(BackendError),
@@ -341,6 +343,12 @@ pub trait DictationEngine: Send + Sync + 'static {
         session_id: SessionId,
         progress: std::sync::Arc<dyn EngineProgressSink>,
     ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>>;
+
+    /// Retain an early stop request, preserving PCM and stop errors for finish().
+    /// Returns false until the session is registered, or for legacy engines.
+    fn stop_recording(&self, _session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        Box::pin(async { Ok(false) })
+    }
 
     /// Replace the immutable session snapshot before finalization when a host
     /// action (currently Android's finish-and-translate gesture) is only known
