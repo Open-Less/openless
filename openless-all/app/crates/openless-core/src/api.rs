@@ -18137,18 +18137,19 @@ mod tests {
                         Some(stopping) => stopping.await,
                         None => backend.stop_dictation().await,
                     };
-                    if stop_fails {
-                        assert_eq!(result.unwrap_err().code, BackendErrorCode::Platform);
-                        assert_eq!(
-                            backend.list_history().unwrap()[0].error_code.as_deref(),
-                            Some("transcribeFailed")
-                        );
-                    } else {
-                        let result = result.unwrap();
-                        assert_eq!(result.session_id, session_id);
-                        assert_eq!(result.polished_text, "captured prefix");
-                        assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
-                    }
+                    // 录音流的 `stop()` 失败（蓝牙麦掉线、PipeWire 节点被挂起）不再
+                    // 中止这次听写：已经流进 ASR 的音频要照常转写并插入。断言因此
+                    // 与成功路径一致 —— 差别只剩「有没有打过那条 warn」，行为对
+                    // 用户不该有区别。
+                    let result = result.unwrap();
+                    assert_eq!(result.session_id, session_id);
+                    assert_eq!(result.polished_text, "captured prefix");
+                    assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
+                    assert_eq!(
+                        backend.list_history().unwrap()[0].error_code.as_deref(),
+                        None,
+                        "a dropped capture stream must not be recorded as a transcription failure",
+                    );
                     assert_eq!(recorder.stop_count(), 1);
                     assert!(archive.lock().unwrap().as_ref().unwrap().is_available());
                     assert_eq!(
