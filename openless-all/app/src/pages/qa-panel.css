@@ -1,14 +1,15 @@
 /* QA keeps its own compact/expanded layout. LC and shared chat styles are untouched. */
 .qa-capsule-shell {
-  --qa-bg: #fdfdfc;
+  color-scheme: light;
+  --qa-bg: #fafafa;
   --qa-paper: #fff;
-  --qa-wash: #f3f4f0;
-  --qa-ink: #252821;
-  --qa-muted: #7b8074;
-  --qa-line: #e0e3d9;
-  --qa-strong: #c5cbbd;
-  --qa-green: #617b52;
-  --qa-error: #b55747;
+  --qa-wash: #f4f4f5;
+  --qa-ink: #18181b;
+  --qa-muted: #71717a;
+  --qa-line: #e4e4e7;
+  --qa-strong: #d4d4d8;
+  --qa-accent: #2563eb;
+  --qa-error: #dc2626;
   --color-foreground: var(--qa-ink);
   --color-background: var(--qa-paper);
   --color-muted: var(--qa-wash);
@@ -30,19 +31,6 @@
   overflow: hidden;
   color: var(--qa-ink);
   font: 13px/1.6 var(--ol-font-sans, system-ui, -apple-system, sans-serif);
-  animation: qa-prompt-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-[data-ol-theme='dark'] .qa-capsule-shell {
-  color-scheme: dark;
-  --qa-bg: #1b1e18;
-  --qa-paper: #23261e;
-  --qa-wash: #2c3026;
-  --qa-ink: #edf0e5;
-  --qa-muted: #a4ac96;
-  --qa-line: #373d2e;
-  --qa-strong: #525c46;
-  --qa-green: #a5bc8c;
-  --qa-error: #ed9b8d;
 }
 .qa-capsule-shell,
 .qa-capsule-shell * {
@@ -57,7 +45,7 @@
   color: inherit;
 }
 .qa-capsule-shell button:focus-visible {
-  outline: 2px solid var(--qa-green);
+  outline: 2px solid var(--qa-accent);
   outline-offset: 2px;
 }
 .qa-capsule-shell button:disabled {
@@ -68,7 +56,6 @@
   flex-shrink: 0;
 }
 .qa-capsule-shell.is-closing {
-  animation: qa-prompt-out 210ms ease both;
   pointer-events: none;
 }
 .qa-prompt {
@@ -86,7 +73,7 @@
     inset 0 1px 0 rgb(255 255 255 / 12%);
 }
 .qa-prompt:focus-within {
-  border-color: var(--qa-green);
+  border-color: var(--qa-accent);
 }
 .qa-prompt button {
   display: grid;
@@ -161,7 +148,7 @@
   height: 14px;
 }
 .qa-mode.is-on {
-  color: var(--qa-green) !important;
+  color: var(--qa-accent) !important;
   background: var(--qa-wash);
 }
 .qa-mode:disabled {
@@ -204,11 +191,11 @@
   stroke-width: 1.8;
 }
 .qa-mic.is-recording {
-  background: var(--qa-ink);
+  background: var(--qa-accent);
   color: var(--qa-paper);
 }
 .qa-mic.is-recording:not(:disabled):hover {
-  background: var(--qa-green);
+  background: var(--qa-accent);
 }
 .qa-mic.is-recording svg {
   width: 12px;
@@ -221,7 +208,7 @@
 .qa-send {
   width: 29px;
   height: 29px;
-  background: var(--qa-ink);
+  background: var(--qa-accent);
   color: var(--qa-paper) !important;
 }
 .qa-send svg {
@@ -230,7 +217,7 @@
   stroke-width: 1.9;
 }
 .qa-send:not(:disabled):hover {
-  background: var(--qa-green) !important;
+  background: var(--qa-accent) !important;
 }
 .qa-send:disabled {
   opacity: 0.22;
@@ -282,7 +269,7 @@
 .qa-capsule-shell .voice-waveform-bars span {
   width: 3px;
   border-radius: 5px;
-  background: var(--qa-green);
+  background: var(--qa-accent);
   transition: height 90ms linear;
 }
 .qa-capsule-shell .voice-waveform-label {
@@ -321,8 +308,7 @@
   border-radius: 20px;
   background: var(--qa-bg);
   box-shadow: 0 4px 20px rgb(20 30 10 / 5%);
-  transform-origin: top center;
-  animation: qa-answer-reveal 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transform-origin: center bottom;
 }
 .qa-answer-header {
   display: flex;
@@ -342,7 +328,7 @@
   font-size: 10px;
 }
 .qa-symbol {
-  color: var(--qa-green);
+  color: var(--qa-accent);
   font-size: 19px;
   line-height: 1;
 }
@@ -440,7 +426,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--qa-green);
+  background: var(--qa-accent);
   animation: qa-processing-pulse 1.3s ease-in-out infinite;
 }
 .qa-empty-answer {
@@ -500,9 +486,9 @@
   opacity: 0.4;
 }
 .qa-edit-actions .qa-apply {
-  background: var(--qa-ink);
+  background: var(--qa-accent);
   color: var(--qa-paper);
-  border-color: var(--qa-ink);
+  border-color: var(--qa-accent);
 }
 .qa-edit-actions svg {
   width: 13px;
@@ -519,32 +505,6 @@
 }
 .qa-capsule-shell.is-embedded .qa-prompt {
   border-radius: 18px;
-}
-@keyframes qa-prompt-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes qa-prompt-out {
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.992);
-  }
-}
-@keyframes qa-answer-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scaleY(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 @keyframes qa-processing-pulse {
   0%,
@@ -625,7 +585,7 @@
 }
 
 .qa-polish-text:focus-visible {
-  outline: 2px solid var(--qa-green);
+  outline: 2px solid var(--qa-accent);
   outline-offset: 1px;
 }
 
@@ -642,4 +602,188 @@
 
 .qa-answer-header .qa-close {
   margin-left: 4px;
+}
+
+/* The result enters as one wide paper window; its content does not scale separately. */
+.qa-capsule-shell:not(.is-expanded) {
+  justify-content: flex-end;
+}
+.qa-capsule-shell.is-capsule {
+  align-items: center;
+  padding-bottom: 8px;
+}
+.qa-composer-dock {
+  flex: 0 0 auto;
+  width: 100%;
+}
+.qa-composer-dock[hidden] {
+  display: none;
+}
+.qa-capsule-shell.is-expanded .qa-composer-dock {
+  order: 2;
+}
+.qa-capsule-shell.is-expanded .qa-prompt {
+  height: 48px;
+  border-radius: 12px;
+}
+.qa-answer-panel {
+  border-radius: 16px;
+  background: #f3f2f0;
+  border: 1px solid #deddda;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 12%);
+}
+.qa-answer-header {
+  position: relative;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 14px;
+  gap: 5px;
+  border: 0;
+}
+.qa-answer-header h1 {
+  font-size: 13px;
+  font-weight: 650;
+}
+.qa-answer-header > .qa-symbol {
+  font-size: 16px;
+}
+.qa-window-actions {
+  position: absolute;
+  right: 12px;
+  top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qa-window-actions button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: #71717a;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.qa-window-actions button:hover {
+  background: #e4e4e7;
+}
+.qa-window-actions svg {
+  width: 13px;
+  height: 13px;
+}
+.qa-follow-up {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.qa-answer-panel:hover .qa-follow-up,
+.qa-follow-up:focus-visible,
+.qa-follow-up[aria-pressed='true'] {
+  opacity: 1;
+}
+.qa-messages {
+  padding: 0 16px 16px;
+  gap: 12px;
+}
+.qa-user-message {
+  flex-direction: row;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+}
+.qa-user-avatar {
+  width: 14px;
+  height: 20px;
+  background: transparent;
+}
+.qa-user-message > div {
+  max-width: none;
+  flex: 1;
+  align-items: flex-start;
+  gap: 4px;
+}
+.qa-user-message p {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.qa-assistant-message {
+  min-height: 268px;
+  gap: 0;
+  padding: 0 16px 18px;
+  border-radius: 12px;
+  background: #fff;
+}
+.qa-answer-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 43px;
+  margin-bottom: 8px;
+}
+.qa-assistant-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: #3f3f46;
+  min-height: 43px;
+}
+.qa-assistant-label .qa-symbol {
+  font-size: 16px;
+}
+.qa-assistant-message .olchat-answer {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.qa-copy {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #71717a !important;
+  cursor: pointer;
+}
+.qa-copy:hover {
+  background: #e4e4e7;
+}
+.qa-copy svg {
+  width: 12px;
+  height: 12px;
+}
+.qa-capsule-shell.is-embedded .qa-assistant-message {
+  min-height: 120px;
+}
+
+.qa-messages > [data-message-id]:has(.qa-assistant-message) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.qa-messages > [data-message-id] > .qa-assistant-message {
+  flex: 1;
+}
+
+.qa-voice-hint {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: #fff;
+  color: #52525b;
+  font-size: 10px;
+  line-height: 16px;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 10%);
+  pointer-events: none;
+}
+.qa-capsule-shell.is-capsule {
+  gap: 5px;
 }

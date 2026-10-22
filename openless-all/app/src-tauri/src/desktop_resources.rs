@@ -43,19 +43,10 @@ pub(crate) type MainWindowLifecycle = parking_lot::Mutex<MainWindowState>;
 
 #[cfg(not(mobile))]
 pub(crate) fn initialize_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    #[cfg(target_os = "macos")]
-    {
-        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
-        let _ = window.set_decorations(true);
-        if let Err(error) = apply_vibrancy(
-            window,
-            NSVisualEffectMaterial::HudWindow,
-            Some(NSVisualEffectState::Active),
-            Some(20.0),
-        ) {
-            log::warn!("[main] vibrancy failed: {error}");
-        }
-    }
+    // macOS deliberately applies no NSVisualEffectView: the React shell paints an opaque
+    // surface over the whole content view, so a behind-window blur would be invisible yet
+    // keep compositing every frame. Decorations and the Overlay title bar come from
+    // tauri.conf.json, which also covers windows recreated by `ensure_main`.
     #[cfg(target_os = "windows")]
     {
         if let Err(error) = window_vibrancy::apply_mica(window, None) {
@@ -63,7 +54,7 @@ pub(crate) fn initialize_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         }
         crate::apply_windows_caption_theme(window, false);
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     let _ = window;
 }
 

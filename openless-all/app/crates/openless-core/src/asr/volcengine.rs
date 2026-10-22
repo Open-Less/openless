@@ -173,7 +173,9 @@ pub enum VolcengineASRError {
     /// the account; the latter means network down / firewall / DNS. The message is
     /// short; the reasons are documented rather than piling long guidance into the
     /// capsule.
-    #[error("凭据被拒（{0}）")]
+    // Keep an explicit HTTP marker so provider validation can retain the status
+    // when it removes untrusted provider response details.
+    #[error("凭据被拒（HTTP {0}）")]
     AuthRejected(u16),
     /// WebSocket handshake returned 429: too many requests / account throttled.
     /// Classified separately instead of falling into `ConnectionFailed` — the latter
@@ -181,7 +183,7 @@ pub enum VolcengineASRError {
     /// worsening the throttle and showing a vague "network failure" message. Like
     /// `AuthRejected`, this short-circuits without retry and returns a clear message
     /// so the user knows it is throttling, not a disconnect.
-    #[error("请求过多，账号被限流（{0}）")]
+    #[error("请求过多，账号被限流（HTTP {0}）")]
     RateLimited(u16),
     #[error("no final result")]
     NoFinalResult,
@@ -482,6 +484,21 @@ impl VolcengineStreamingASR {
                     return Ok(ws);
                 }
                 Ok(Err(e)) => {
+                    if let tokio_tungstenite::tungstenite::Error::Http(response) = &e {
+                        // Failed handshakes also carry a provider trace ID. Log
+                        // only status and trace IDs, never auth headers or bodies.
+                        log::warn!(
+                            "[asr] Volcengine handshake rejected status={} connect_id={} request_id={} log_id={}",
+                            response.status().as_u16(),
+                            connect_id,
+                            request_id,
+                            response
+                                .headers()
+                                .get("X-Tt-Logid")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("-")
+                        );
+                    }
                     let classified = classify_connect_error(e);
                     if is_non_retryable(&classified) || attempt >= CONNECT_MAX_ATTEMPTS {
                         return Err(classified);

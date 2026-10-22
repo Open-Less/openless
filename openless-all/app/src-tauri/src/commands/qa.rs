@@ -2,29 +2,33 @@ use super::*;
 
 #[tauri::command]
 pub fn get_qa_hotkey_label(core: CoreState<'_>) -> String {
-    core.get_preferences()
-        .qa_hotkey
-        .as_ref()
-        .map(|binding| binding.display_label())
-        .unwrap_or_default()
+    let prefs = core.get_preferences();
+    if prefs.qa_companion_key.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{} + {}",
+        prefs.dictation_hotkey.display_label(),
+        prefs.qa_companion_key
+    )
 }
 
-/// Sets the QA hotkey and hot-updates the monitor.
-/// `None`-form fields are not supported here — when the frontend passes
-/// `binding == null`, it calls the "disable" form below (writing
-/// prefs.qa_hotkey = None).
+/// Sets the auxiliary key for recording-key + Ask. Null disables this chord;
+/// the retired independent follow-up shortcut is never registered.
 #[tauri::command]
 pub fn set_qa_hotkey(
     coord: CoordinatorState<'_>,
     binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
-    if let Some(binding) = binding.as_ref() {
-        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
-        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
-        reject_bare_shift_dictation_shortcut(binding)?;
+    if binding
+        .as_ref()
+        .is_some_and(|binding| !binding.modifiers.is_empty())
+    {
+        return Err("只需设置提问附加键，录音主键会自动跟随当前选择".into());
     }
     let mut prefs = coord.backend().get_preferences();
-    prefs.qa_hotkey = binding;
+    prefs.qa_hotkey = None;
+    prefs.qa_companion_key = binding.map(|binding| binding.primary).unwrap_or_default();
     reject_hotkey_collisions(&prefs)?;
     super::settings::persist_strict_settings(&coord, prefs)
 }

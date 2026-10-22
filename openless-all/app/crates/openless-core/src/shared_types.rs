@@ -577,6 +577,9 @@ pub struct UserPreferences {
     /// Ctrl+Shift+; (Windows). See issue #118.
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
+    /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
+    #[serde(default = "default_qa_companion_key")]
+    pub qa_companion_key: String,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -1094,6 +1097,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     output_language_preference: OutputLanguagePreference,
     qa_hotkey: Option<ShortcutBinding>,
+    #[serde(default = "default_qa_companion_key")]
+    qa_companion_key: String,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1344,6 +1349,7 @@ impl Default for UserPreferencesWire {
             chinese_script_preference: prefs.chinese_script_preference,
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
+            qa_companion_key: prefs.qa_companion_key,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1572,7 +1578,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
-            qa_hotkey: wire.qa_hotkey,
+            qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
+            qa_companion_key: wire.qa_companion_key,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1791,8 +1798,10 @@ fn salvage_without_incomplete_legacy_hotkey(
 }
 
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
-    Some(ShortcutBinding::default_qa())
+    if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
+
+fn default_qa_companion_key() -> String { "Space".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
@@ -1918,7 +1927,7 @@ impl Default for UserPreferences {
             custom_style_prompts: CustomStylePrompts::default(),
             launch_at_login: false,
             show_capsule: true,
-            capsule_style: CapsuleStyle::Siri,
+            capsule_style: CapsuleStyle::Classic,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_display_mode_v2: None,
             capsule_transcript_enabled: true,
@@ -1960,6 +1969,7 @@ impl Default for UserPreferences {
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
+            qa_companion_key: default_qa_companion_key(),
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
@@ -2772,14 +2782,16 @@ impl CapsuleDisplayMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum CapsuleStyle {
-    /// SiriGL light-effect stage style (default).
-    #[default]
+    /// Optional spectral light-effect stage.
     Siri,
-    /// Openless default style: classic frosted-glass pill (volume bar +
-    /// cancel/confirm buttons).
+    /// OpenLess default: white pill, blue waveform and compact processing label.
+    /// Legacy style preferences migrate before native bounds are computed.
+    #[default]
+    #[serde(alias = "typeless")]
     Classic,
-    /// Classic dark capsule: blue waveform that narrows into a status hint
-    /// while processing.
+    /// Legacy wire variant retained for old native geometry contracts only.
+    /// It is no longer accepted as a distinct preference or exposed in the UI.
+    #[serde(skip_deserializing)]
     Typeless,
 }
 
@@ -3038,6 +3050,21 @@ mod translation_effective_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_companion_migrates_legacy_shortcuts_and_round_trips_custom_or_disabled_keys() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value.as_object_mut().unwrap().remove("qaCompanionKey");
+        value["qaHotkey"] = serde_json::json!({"primary":";", "modifiers":["cmd","shift"]});
+        let migrated: UserPreferences = serde_json::from_value(value).unwrap();
+        assert_eq!(migrated.qa_companion_key, "Space");
+        if !cfg!(target_os = "linux") { assert!(migrated.qa_hotkey.is_none()); }
+        for key in ["F9", ""] {
+            let mut prefs = migrated.clone(); prefs.qa_companion_key = key.into();
+            let restored: UserPreferences = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+            assert_eq!(restored.qa_companion_key, key);
+        }
+    }
 
     #[test]
     fn legacy_less_computer_settings_remain_sealed_until_device_opt_in() {
@@ -3413,15 +3440,16 @@ mod tests {
     }
 
     #[test]
-    fn capsule_style_pref_defaults_to_siri_and_round_trips_wire_key() {
-        // Old preferences.json has no capsuleStyle field -> falls back to the default Siri.
+    fn capsule_style_pref_defaults_to_openless_and_migrates_typeless() {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
-        assert_eq!(prefs.capsule_style, CapsuleStyle::Siri);
+        assert_eq!(prefs.capsule_style, CapsuleStyle::Classic);
+        let legacy: UserPreferences = serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
+        assert_eq!(legacy.capsule_style, CapsuleStyle::Classic);
+        assert_eq!(serde_json::to_value(legacy).unwrap()["capsuleStyle"], "classic");
 
         for (style, wire_name) in [
             (CapsuleStyle::Siri, "siri"),
             (CapsuleStyle::Classic, "classic"),
-            (CapsuleStyle::Typeless, "typeless"),
         ] {
             let preferences = UserPreferences {
                 capsule_style: style,

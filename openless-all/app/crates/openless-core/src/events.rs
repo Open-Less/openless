@@ -212,6 +212,7 @@ pub struct LessComputerEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QaStateKind {
+    Activity,
     Idle,
     Loading,
     Thinking,
@@ -231,6 +232,8 @@ pub enum QaStateKind {
 #[serde(rename_all = "camelCase")]
 pub struct QaStateEvent {
     pub kind: QaStateKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<crate::domains::QaActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +258,7 @@ impl QaStateEvent {
     pub fn simple(kind: QaStateKind) -> Self {
         Self {
             kind,
+            activity: None,
             session_id: None,
             messages: None,
             selection_preview: None,
@@ -330,6 +334,7 @@ impl QaStateEvent {
                     || snapshot.edit_revert_available));
         Self {
             kind,
+            activity: snapshot.activity.clone(),
             session_id: snapshot.session_id.map(|session_id| session_id.to_string()),
             messages: carries_messages.then_some(messages),
             selection_preview: carries_selection
@@ -904,6 +909,7 @@ mod tests {
     #[test]
     fn migration_events_are_typed_and_keep_legacy_payload_fields() {
         let qa = QaStateEvent {
+            activity: None,
             kind: QaStateKind::AnswerDelta,
             session_id: Some("qa-session".into()),
             messages: None,

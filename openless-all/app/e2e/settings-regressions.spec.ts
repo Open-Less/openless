@@ -8,11 +8,11 @@ async function openSettings(page: Page) {
   return page.getByRole('dialog', { name: '设置', exact: true });
 }
 
-test('100% is the fresh default; explicit 110% survives reload and the settings titlebar stays draggable', async ({
+test('110% is the fresh default; explicit 100% survives reload and the settings titlebar stays draggable', async ({
   page,
 }) => {
   const dialog = await openSettings(page);
-  await expect(page.locator('html')).toHaveCSS('zoom', '1');
+  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
   await expect(dialog.getByRole('button', { name: '返回应用', exact: true })).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0);
   expect(
@@ -21,10 +21,13 @@ test('100% is the fresh default; explicit 110% survives reload and the settings 
     ),
   ).toBe(true);
   await dialog.getByRole('button', { name: '外观与语言', exact: true }).click();
-  await page.getByRole('combobox', { name: '界面大小', exact: true }).click();
-  await page.getByRole('option', { name: '110%', exact: true }).click();
+  const interfaceSize = page.getByRole('combobox', { name: '界面大小', exact: true });
+  await expect(interfaceSize).toContainText('110%');
+  await interfaceSize.click();
+  await page.getByRole('option', { name: '100%', exact: true }).click();
+  await expect(page.locator('html')).toHaveCSS('zoom', '1');
   await page.reload();
-  await expect(page.locator('html')).toHaveCSS('zoom', '1.1');
+  await expect(page.locator('html')).toHaveCSS('zoom', '1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   expect(
     await page.evaluate(

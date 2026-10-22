@@ -9,6 +9,7 @@ const read = (relativePath) => readFileSync(join(appRoot, relativePath), 'utf8')
 const css = read('src/styles/global.css');
 const stackedLayout = read('src/lib/stackedLayout.ts');
 const shared = read('src/pages/settings/shared.tsx');
+const refinements = read('src/styles/refinements.css');
 const pageAtoms = read('src/pages/_atoms.tsx');
 const row = read('src/components/ui/Row.tsx');
 const channelList = read('src/pages/settings/ChannelList.tsx');
@@ -26,12 +27,16 @@ assert.match(css, /\.ol-conservative-stack/);
 
 assert.match(stackedLayout, /stackedRowLayout\?: boolean/);
 assert.doesNotMatch(stackedLayout, /mobile\s*\|\|/);
-// Toggle size contract: width 36 is locked by width/minWidth/maxWidth; flex only declares no grow/shrink.
-// flex-basis must be auto to avoid stretching the toggle's height to 36px in a column-direction container.
-assert.match(shared, /flex:\s*['"]0 0 auto['"]/);
-assert.match(shared, /width:\s*36/);
-assert.match(shared, /minWidth:\s*36/);
-assert.match(shared, /maxWidth:\s*36/);
+// Toggle size contract: the shared .ol-switch locks width 36 with width/min-width/max-width; flex only
+// declares no grow/shrink. flex-basis must be auto to avoid stretching the toggle's height to 36px in a
+// column-direction container.
+const switchRule = refinements.match(/\.ol-switch\s*\{[^}]*\}/)?.[0] ?? '';
+assert.match(shared, /className="ol-switch"/);
+assert.match(switchRule, /--ol-switch-width:\s*36px/);
+assert.match(switchRule, /flex:\s*0 0 auto/);
+assert.match(switchRule, /\swidth:\s*var\(--ol-switch-width\)/);
+assert.match(switchRule, /min-width:\s*var\(--ol-switch-width\)/);
+assert.match(switchRule, /max-width:\s*var\(--ol-switch-width\)/);
 assert.match(pageAtoms, /preferenceStack\s*\?/);
 assert.match(row, /stackLayout\s*\?\s*'minmax\(0, 1fr\)'/);
 

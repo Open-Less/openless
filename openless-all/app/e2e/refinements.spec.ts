@@ -38,6 +38,8 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
 test('native scrolling has no JS wheel interception and is stable when stopped', async ({
   page,
 }) => {
+  // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
   const content = page.locator('.ol-settings-scroll');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
@@ -162,7 +164,7 @@ test('every main destination and settings category stays readable on desktop and
     await expect(page.locator('main h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['翻译', '划词追问', '速记', '纠正规则']) {
+  for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
     await page.getByRole('button', { name, exact: true }).click();
     await expect(page.locator('main h1')).toBeVisible();
   }

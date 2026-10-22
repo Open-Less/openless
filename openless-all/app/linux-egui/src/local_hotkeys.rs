@@ -336,6 +336,7 @@ mod tests {
             dictation: binding("A", &["alt"]),
             dictation_mode: HotkeyMode::Toggle,
             qa: Some(binding(";", &["ctrl", "shift"])),
+            qa_companion_key: "Space".into(),
             quick_note: None,
             translation: binding("Z", &["alt"]),
             switch_style: Some(binding("S", &["ctrl", "shift"])),

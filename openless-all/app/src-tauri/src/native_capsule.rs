@@ -1,6 +1,6 @@
 //! Adapter from the existing coherent capsule snapshot to a disposable egui UI.
 use crate::capsule_mirrors::{self, MonitorRect};
-use crate::types::{CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle};
+use crate::types::{CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, ThemeMode};
 use openless_capsule::{
     supervisor::CapsuleSupervisor, Action, CapsuleLabels, CapsulePopupState, Frame,
 };
@@ -29,7 +29,17 @@ pub(crate) struct NativeCapsule {
     latest: parking_lot::Mutex<Presentation>,
     position_pending: AtomicBool,
     layout_epoch: AtomicU64,
+    /// Bumped by every presentation and stop; a pending exit only reaps the
+    /// helpers if nothing was shown after it started.
+    exit_epoch: AtomicU64,
+    /// (native target name, UI locale) -> localized target name.
+    translation_name: parking_lot::Mutex<Option<(String, String, String)>>,
 }
+
+/// `DEFAULT_CAPSULE_EXIT_MS` (180) plus a frame: the default capsule's exit
+/// motion plays on the helper before the host reaps it.
+const EXIT_MS: u64 = 200;
+
 impl NativeCapsule {
     pub(crate) fn new(app: tauri::AppHandle) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -108,20 +118,19 @@ impl NativeCapsule {
             latest: parking_lot::Mutex::new(Presentation::default()),
             position_pending: AtomicBool::new(false),
             layout_epoch: AtomicU64::new(0),
+            exit_epoch: AtomicU64::new(0),
+            translation_name: parking_lot::Mutex::new(None),
         })
     }
     pub(crate) fn set_locale(&self, locale: String) {
         *self.locale.lock() = locale;
     }
+    /// The text also feeds the "transcribing" label, so it is sent even when
+    /// the transcript rail is turned off (`Frame::show_transcript`).
     pub(crate) fn update_transcript(&self, session_id: &str, text: String) {
-        let coordinator = self.app.state::<Arc<crate::coordinator::Coordinator>>();
-        let enabled = coordinator
-            .backend()
-            .get_preferences()
-            .capsule_transcript_enabled;
         let mut latest = self.latest.lock();
         if let Some(frame) = latest.frame.as_mut() {
-            if frame.update_transcript(session_id, if enabled { text } else { String::new() }) {
+            if frame.update_transcript(session_id, text) {
                 self.send_frames(&latest);
             }
         }
@@ -133,11 +142,71 @@ impl NativeCapsule {
             .find_map(CapsuleSupervisor::last_error)
     }
     pub(crate) fn stop(&self) {
-        *self.latest.lock() = Presentation::default();
+        let mut latest = self.latest.lock();
+        self.stop_locked(&mut latest);
+    }
+    fn stop_locked(&self, latest: &mut Presentation) {
+        *latest = Presentation::default();
+        self.exit_epoch.fetch_add(1, Ordering::SeqCst);
         self.layout_epoch.fetch_add(1, Ordering::Relaxed);
         for supervisor in self.supervisors.lock().iter() {
             supervisor.stop();
         }
+    }
+    /// Replays the last frame as its exit and reaps the helpers once the
+    /// motion is over. The spectral style dismisses immediately.
+    fn leave(self: &Arc<Self>, sequence: u64) {
+        let mut latest = self.latest.lock();
+        let exiting = latest.frame.as_ref().is_some_and(|frame| frame.leaving);
+        let animated = latest
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.state.style != "siri")
+            && !latest.bounds.is_empty();
+        if exiting {
+            return;
+        }
+        if !animated {
+            self.stop_locked(&mut latest);
+            return;
+        }
+        latest.frame = latest.frame.take().map(|frame| frame.into_leaving(sequence));
+        self.send_frames(&latest);
+        let epoch = self.exit_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        drop(latest);
+        let native = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(EXIT_MS)).await;
+            let mut latest = native.latest.lock();
+            if native.exit_epoch.load(Ordering::SeqCst) == epoch {
+                native.stop_locked(&mut latest);
+            }
+        });
+    }
+    /// The session's target language, named in the UI language as the
+    /// WebView badge does with `Intl.DisplayNames`.
+    fn translation_target(&self, saved: &str) -> String {
+        let coordinator = self.app.state::<Arc<crate::coordinator::Coordinator>>();
+        let target = coordinator
+            .backend()
+            .dictation_translation_target()
+            .map(|target| target.target_language)
+            .filter(|target| !target.trim().is_empty())
+            .unwrap_or_else(|| saved.to_owned());
+        let native =
+            openless_core::language_catalog::native_language_name(&target).unwrap_or(target);
+        let locale = self.locale.lock().clone();
+        let mut cache = self.translation_name.lock();
+        if let Some((cached, cached_locale, name)) = cache.as_ref() {
+            if *cached == native && *cached_locale == locale {
+                return name.clone();
+            }
+        }
+        let name = openless_core::language_catalog::language_code(&native)
+            .and_then(|code| localized_language_name(&code, &locale))
+            .unwrap_or_else(|| native.clone());
+        *cache = Some((native, locale, name.clone()));
+        name
     }
     pub(crate) fn present(
         self: &Arc<Self>,
@@ -174,11 +243,10 @@ impl NativeCapsule {
             CapsuleStyle::Classic => "classic",
             CapsuleStyle::Typeless => "typeless",
         };
-        let transcript = if preferences.capsule_transcript_enabled
-            && matches!(
-                payload.state,
-                CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-            ) {
+        let transcript = if matches!(
+            payload.state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        ) {
             transcript
         } else {
             String::new()
@@ -192,21 +260,37 @@ impl NativeCapsule {
                 audio_level: (!payload.warming).then_some(payload.level),
                 translation_active: payload.translation,
                 style: style.into(),
+                warming: payload.warming && payload.state == CapsuleState::Recording,
+                operating: payload.operating,
+                inserted_chars: payload.inserted_chars,
+                selection_polish: payload.selection_polish,
+                translation_target: payload
+                    .translation
+                    .then(|| self.translation_target(&preferences.translation_target_language)),
             },
             transcript,
+            show_transcript: preferences.capsule_transcript_enabled,
             transcript_font_size: preferences.capsule_transcript_font_size as f32,
             labels: CapsuleLabels::for_locale(&self.locale.lock()),
+            theme: match preferences.theme_mode {
+                ThemeMode::System => openless_capsule::ThemeMode::System,
+                ThemeMode::Light => openless_capsule::ThemeMode::Light,
+                ThemeMode::Dark => openless_capsule::ThemeMode::Dark,
+            },
+            leaving: false,
             bounds: None,
             interactive,
         };
         if !frame.visible() {
-            self.stop();
+            self.leave(sequence);
             return;
         }
         let mode = crate::tauri_coordinator_host::normalized_display_mode(
             preferences.capsule_display_mode,
         );
         let mut latest = self.latest.lock();
+        // A new presentation reverses a running exit on the same helpers.
+        self.exit_epoch.fetch_add(1, Ordering::SeqCst);
         let was_idle = latest.frame.is_none();
         let needs_position = latest.mode != mode
             || latest.frame.as_ref().is_none_or(|previous| {
@@ -349,6 +433,34 @@ impl NativeCapsule {
             supervisor.present(frame);
         }
     }
+}
+
+/// `[[NSLocale localeWithLocaleIdentifier:locale] localizedStringForLocaleIdentifier:code]`,
+/// the same CLDR "standard" name `Intl.DisplayNames` gives the WebView.
+#[cfg(target_os = "macos")]
+fn localized_language_name(code: &str, locale: &str) -> Option<String> {
+    use objc2::{msg_send, runtime::AnyClass, runtime::AnyObject};
+    use objc2_foundation::NSString;
+    let class = AnyClass::get("NSLocale")?;
+    let (identifier, code) = (NSString::from_str(locale), NSString::from_str(code));
+    objc2::rc::autoreleasepool(|_| unsafe {
+        // SAFETY: both selectors take an NSString and return autoreleased
+        // objects that are copied out before the pool drains.
+        let ns_locale: *mut AnyObject = msg_send![class, localeWithLocaleIdentifier: &*identifier];
+        if ns_locale.is_null() {
+            return None;
+        }
+        let name: *mut NSString = msg_send![ns_locale, localizedStringForLocaleIdentifier: &*code];
+        name.as_ref()
+            .map(|name| name.to_string())
+            .filter(|name| !name.is_empty())
+    })
+}
+
+/// Windows has no per-call display locale; the native name is shown instead.
+#[cfg(not(target_os = "macos"))]
+fn localized_language_name(_code: &str, _locale: &str) -> Option<String> {
+    None
 }
 
 #[tauri::command]

@@ -695,6 +695,7 @@ mod tests {
     #[test]
     fn registration_summary_shows_modifier_triggers() {
         let target = HotkeyRuntimeTarget {
+            qa_companion_key: "Space".into(),
             dictation: ShortcutBinding {
                 primary: "A".into(),
                 modifiers: vec!["alt".into()],

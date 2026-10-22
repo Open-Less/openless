@@ -23,6 +23,7 @@ compile_error!(
      打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
 );
 
+mod recording_companion;
 mod android;
 mod asr;
 mod audio_mute;
@@ -108,6 +109,7 @@ mod side_aware_combo;
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
 mod tauri_events;
+mod tls_crypto;
 mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
@@ -202,6 +204,7 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
     // system credential vault, but exercises the actual shared/native engines.
     // This entry point does not exist in production release builds.
@@ -255,6 +258,9 @@ macro_rules! app_invoke_handler_desktop {
             get_capsule_auxiliary_snapshot,
             native_capsule_status,
             commands::get_capsule_snapshot,
+            commands::get_dictation_translation_target,
+            commands::select_dictation_translation_target,
+            commands::set_capsule_language_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::update_setting_fields,
@@ -910,13 +916,24 @@ fn run_desktop() {
             // — saving 3 resident webviews. Positioning and the QA drag fix are applied in
             // the creation/show paths.
 
-            // Main-window frosted material: NSVisualEffectView on macOS, Mica on Windows.
-            // Without this layer, transparent: true makes the window see-through to
-            // nothing instead of frosted glass.
+            // Main-window material: Mica on Windows. macOS deliberately applies no
+            // NSVisualEffectView: the React shell (WindowChrome, --ol-window-bg) paints a fully
+            // opaque surface over the whole content view, so a HudWindow/Active effect view would
+            // be invisible yet keep a live behind-window blur compositing on every frame. The
+            // native title bar style (Overlay + traffic lights) comes from tauri.conf.json at
+            // window creation; do not call set_decorations here (tao no-ops it when unchanged).
             //
             // decorations is decided per-platform at runtime: macOS keeps true for the
             // system traffic lights; Windows disables native chrome so the React
             // WinTitleBar takes over.
+            // Set the native appearance before showing any window, including
+            // low-memory launches where the main WebView does not exist yet.
+            #[cfg(target_os = "macos")]
+            app.set_theme(match coordinator.backend().get_preferences().theme_mode {
+                types::ThemeMode::System => None,
+                types::ThemeMode::Light => Some(tauri::Theme::Light),
+                types::ThemeMode::Dark => Some(tauri::Theme::Dark),
+            });
             if let Some(main) = app.get_webview_window("main") {
                 desktop_resources::initialize_main(&main);
                 // Silent-start switch: prefs.start_minimized = true → don't pop the main
@@ -2174,12 +2191,14 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
-/// QA starts as a small composer and grows downwards after a question.
+/// QA records in a compact bottom-anchored capsule, then reveals a wide result card.
 const QA_WINDOW_WIDTH: f64 = 480.0;
 const QA_WINDOW_HEIGHT: f64 = 80.0;
-const QA_WINDOW_EXPANDED_HEIGHT: f64 = 560.0;
+const QA_WINDOW_EXPANDED_WIDTH: f64 = 760.0;
+const QA_WINDOW_EXPANDED_HEIGHT: f64 = 416.0;
 /// Gap between the capsule and the QA window; matches the design spec.
-const QA_WINDOW_GAP_TO_CAPSULE: f64 = 8.0;
+const QA_WINDOW_BOTTOM_INSET: f64 = 8.0;
+const QA_RESULT_BOTTOM_LIFT: f64 = 40.0;
 /// Bottom margin reserved for the macOS Dock (same source as the capsule).
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2707,12 +2726,11 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let Some((frame, scale)) = chat_window_work_area(window, true)? else {
         return Ok(());
     };
-    let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
         QA_WINDOW_WIDTH,
-        QA_WINDOW_EXPANDED_HEIGHT,
-        capsule_height + QA_WINDOW_GAP_TO_CAPSULE,
+        QA_WINDOW_HEIGHT,
+        QA_WINDOW_BOTTOM_INSET,
     );
     window.set_position(tauri::PhysicalPosition::new(
         (x * scale).round() as i32,
@@ -2723,6 +2741,14 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
         (QA_WINDOW_HEIGHT * scale).round() as u32,
     ))?;
     Ok(())
+}
+
+// Preserve a dragged window's centre and baseline; repeated result events must not drift.
+fn qa_resize_origin(x: f64, y: f64, old_width: f64, old_height: f64,
+    width: f64, height: f64, was_expanded: bool, expanded: bool) -> (f64, f64) {
+    let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
+        - if was_expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 };
+    (x + (old_width - width) / 2.0, y + old_height - height - lift)
 }
 
 /// Called on the native main thread by the restricted QA command. The compact
@@ -2744,23 +2770,31 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .inner_position()
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
-    let mut width = QA_WINDOW_WIDTH;
+    let current_size = window.inner_size()
+        .map_err(|_| "qa_geometry_unavailable")?.to_logical::<f64>(scale);
+    let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
+    let mut width = if expanded { QA_WINDOW_EXPANDED_WIDTH } else { QA_WINDOW_WIDTH };
     let mut height = if expanded {
         QA_WINDOW_EXPANDED_HEIGHT
     } else {
         QA_WINDOW_HEIGHT
     };
-    let (mut x, mut y) = (position.x, position.y);
     if let Some((frame, _)) = area {
         width = width.min((frame.width - 32.0).max(240.0));
         height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
+    }
+    let (mut x, mut y) = qa_resize_origin(
+        position.x, position.y, current_size.width, current_size.height,
+        width, height, was_expanded, expanded,
+    );
+    if let Some((frame, _)) = area {
         x = x.clamp(
             frame.x + 16.0,
             (frame.x + frame.width - width - 16.0).max(frame.x + 16.0),
         );
         y = y.clamp(
             frame.y + 32.0,
-            (frame.y + frame.height - height - 16.0).max(frame.y + 32.0),
+            (frame.y + frame.height - height - QA_WINDOW_BOTTOM_INSET).max(frame.y + 32.0),
         );
     }
     window
@@ -3780,14 +3814,11 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
     140.0
 }
 
-fn capsule_height_for_qa() -> f64 {
-    capsule_visual_height(false)
-}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_position, capsule_height_for_qa, capsule_visual_height,
+        bottom_center_position, capsule_visual_height,
         capsule_window_bounds, capsule_window_bounds_for_style,
         capsule_window_bounds_for_style_with_transcript,
         capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
@@ -4066,8 +4097,11 @@ mod tests {
     }
 
     #[test]
-    fn qa_anchor_uses_normal_capsule_height_source() {
-        assert_eq!(capsule_height_for_qa(), 140.0);
+    fn qa_resize_preserves_centre_baseline_and_user_position() {
+        let expanded = super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
+        assert_eq!(expanded, (-840.0, 324.0));
+        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true), expanded);
+        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false), (-700.0, 700.0));
     }
 
     #[test]

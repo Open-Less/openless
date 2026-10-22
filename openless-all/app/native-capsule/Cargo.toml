@@ -9,7 +9,10 @@ publish = false
 [dependencies]
 openless-capsule = { path = "../crates/openless-capsule", features = ["ui"] }
 eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+memmap2 = "0.9"
 raw-window-handle = "0.6"
+# Font metrics only; already part of egui's text stack.
+skrifa = "0.44"
 # The macOS initializer adapter relies on WinitWindow's ivar-free layout.
 winit = { version = "=0.30.13", default-features = false }
 

@@ -319,6 +319,8 @@ export const es: typeof zhCN = {
     cancelled: 'Cancelado',
     error: 'Se ha producido un error',
     inserted: '{{count}} insertados',
+    translateTo: 'Traducir al',
+    translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
     selectionPolish: {
       polishing: 'Mejorando el texto…',
@@ -349,6 +351,12 @@ export const es: typeof zhCN = {
     cancel: 'Cancelar',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Buscando en la Web',
+      readingWeb: 'Leyendo páginas web',
+      usingTool: 'Usando {{tool}}',
+      tool: 'herramienta',
+    },
     compact: {
       closeError: 'No se pudo cerrar. Inténtalo de nuevo.',
       sendError: 'No se pudo enviar. Tu texto se conserva. Inténtalo de nuevo.',
@@ -1218,8 +1226,22 @@ export const es: typeof zhCN = {
       fallbackDesc: 'Si la traducción falla, se inserta la transcripción original.',
     },
   },
+  askAnything: {
+    dictation: 'Dictar',
+    translation: 'Traducir',
+    question: 'Pregunta lo que quieras',
+    dictationHint: 'Habla para introducir texto',
+    translationHint: 'Elige el idioma durante la grabación',
+    questionHint: 'Selecciona texto o pregunta directamente',
+    description:
+      'Pulsa la combinación para preguntar y otra vez para enviar. La respuesta aparece en la parte inferior.',
+    auxiliaryKey: 'Tecla adicional para preguntar',
+    auxiliaryHint: 'Púlsala junto con {{key}}. Sigue los cambios de la tecla de grabación.',
+    selectionHint:
+      'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
+  },
   selectionAsk: {
-    title: 'Preguntar sobre una selección',
+    title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',
     guide: {
@@ -1520,7 +1542,6 @@ export const es: typeof zhCN = {
       microphoneMonitorError: 'No se pudo supervisar el nivel de entrada: {{message}}',
       capsuleLabel: 'Cápsula de grabación',
       capsuleDesc: 'Muestra una cápsula en la parte inferior de la pantalla mientras grabas.',
-      capsuleStyleTypeless: 'Estilo compacto Typeless',
       capsuleTranscriptLabel: 'Mostrar transcripción en directo',
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
@@ -1886,8 +1907,9 @@ export const es: typeof zhCN = {
       volcengineAuthModeApiKey: 'Clave API (consola nueva)',
       volcengineMappingNote:
         'Actualmente no se necesita Secret Key. El Resource ID predeterminado es volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Usa una clave API creada en la nueva consola de voz; no necesitas APP ID. Créala en Gestión de claves API: console.volcengine.com/speech/new/setting/apikeys. El Resource ID predeterminado es volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · Claves API',
+      volcengineApiKeyNote: 'Crea aquí una clave API de voz; las claves de Ark no son válidas.',
+      volcengineResourceIdNote: 'El Resource ID predeterminado es {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'Clave API',
       xfyunNote:

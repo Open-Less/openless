@@ -319,6 +319,8 @@ export const en: typeof zhCN = {
     cancelled: 'Cancelled',
     error: 'Something went wrong',
     inserted: 'Inserted {{count}}',
+    translateTo: 'Translate to',
+    translationChangeFailed: 'Could not change language. Please select it again.',
     translating: 'Translating',
     selectionPolish: {
       polishing: 'Polishing…',
@@ -348,6 +350,12 @@ export const en: typeof zhCN = {
     cancel: 'Cancel',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Searching the web',
+      readingWeb: 'Reading web pages',
+      usingTool: 'Using {{tool}}',
+      tool: 'tool',
+    },
     compact: {
       closeError: 'Could not close. Try again.',
       sendError: 'Could not send. Your draft is kept here; try again.',
@@ -1203,8 +1211,22 @@ export const en: typeof zhCN = {
       fallbackDesc: 'If translation fails, the raw transcript is inserted instead.',
     },
   },
+  askAnything: {
+    dictation: 'Dictate',
+    translation: 'Translate',
+    question: 'Ask anything',
+    dictationHint: 'Speak your thoughts into text',
+    translationHint: 'Choose a language while recording',
+    questionHint: 'Select text or simply ask a question',
+    description:
+      'Press the chord to ask, then again to submit. The answer appears at the bottom of your screen.',
+    auxiliaryKey: 'Ask companion key',
+    auxiliaryHint: 'Press with {{key}}. This follows changes to your recording key.',
+    selectionHint:
+      'Selected text becomes context. A selection is optional. Each shortcut starts a fresh question.',
+  },
   selectionAsk: {
-    title: 'Selection Ask',
+    title: 'Ask anything',
     desc: 'Select text and ask questions by voice, with multi-turn follow-ups.',
     shortcutSettings: 'Shortcut settings',
     guide: {
@@ -1499,7 +1521,6 @@ export const en: typeof zhCN = {
       microphoneMonitorError: 'Failed to monitor input level: {{message}}',
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording.',
-      capsuleStyleTypeless: 'Typeless compact style',
       capsuleTranscriptLabel: 'Show live transcript',
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
@@ -1859,8 +1880,9 @@ export const en: typeof zhCN = {
       volcengineAuthModeApiKey: 'API Key (new console)',
       volcengineMappingNote:
         'Secret Key is not required right now. Resource ID defaults to volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Authenticate with an API Key created in the new speech console — no APP ID needed. Create it under API Keys management: console.volcengine.com/speech/new/setting/apikeys. Resource ID defaults to volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · API Keys',
+      volcengineApiKeyNote: 'Create a Speech API key here; Ark keys cannot be used.',
+      volcengineResourceIdNote: 'Resource ID defaults to {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

@@ -173,22 +173,20 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false'"),
   true,
 );
-// A macOS runner is only spent on MSRV while the declared MSRV is behind the
-// stable toolchain; otherwise `cross-platform` already compiles that code.
+// Native changes must exercise the pinned minimum compiler on every platform.
 check(
-  'msrv job is skipped when MSRV equals stable',
-  workflow.includes("needs.changes.outputs.msrv_needed == 'true'"),
-  true,
+  'macos msrv is not skipped when stable has the same version',
+  workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
+  false,
 );
 check(
-  'changes job publishes the msrv comparison',
-  workflow.includes('msrv_needed: ${{ steps.msrv.outputs.needed }}'),
+  'changes job publishes the native-source gate for pinned toolchains',
+  workflow.includes('msrv_needed: ${{ steps.detect.outputs.msrv }}'),
   true,
 );
-// Windows spends ~10 minutes on its own MSRV pass; it must follow the same rule
-// as the macOS job instead of running unconditionally.
+// The secondary platform uses the same native-source gate.
 check(
-  'windows msrv steps follow the comparison',
+  'windows msrv steps follow the source gate',
   workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
   true,
 );

@@ -64,7 +64,7 @@ export function SettingsModal({
   initialSettingsSection,
   closing = false,
 }: SettingsModalProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // The provider form's writes settle before close/section switch (async saves don't
   // lose drafts); the revision counter excludes credential content.
   const providerForm = useProviderForm();
@@ -148,36 +148,6 @@ export function SettingsModal({
     : activeAdvancedPage
       ? t(`modal.advancedPages.${activeAdvancedPage.id}`)
       : t(`modal.descriptions.${section}`);
-
-  // The indicator thumb moves to the selected nav row's layout position; hidden
-  // while searching or in mobile layout.
-  const railNavRef = useRef<HTMLElement>(null);
-  const railBtnRefs = useRef(new Map<SettingsSectionId, HTMLButtonElement>());
-  const [railThumb, setRailThumb] = useState<{ top: number; height: number } | null>(null);
-  useLayoutEffect(() => {
-    if (mobile || searching) {
-      setRailThumb(null);
-      return;
-    }
-    const nav = railNavRef.current;
-    const btn = railBtnRefs.current.get(section);
-    if (!nav || !btn) {
-      setRailThumb(null);
-      return;
-    }
-    const measure = () => {
-      const next = { top: btn.offsetTop, height: btn.offsetHeight };
-      setRailThumb((current) =>
-        current?.top === next.top && current.height === next.height ? current : next,
-      );
-    };
-    measure();
-    // Translated labels may wrap when the language, font scale or window width changes.
-    const observer = new ResizeObserver(measure);
-    observer.observe(nav);
-    observer.observe(btn);
-    return () => observer.disconnect();
-  }, [section, searching, mobile, sections.length, i18n.resolvedLanguage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -446,7 +416,7 @@ export function SettingsModal({
                 <button
                   ref={closeRef}
                   type="button"
-                  className="ol-settings-return"
+                  className="ol-settings-return ol-settings-rail-link"
                   onClick={closeSettings}
                 >
                   <Icon name="chevLeft" size={16} />
@@ -455,35 +425,17 @@ export function SettingsModal({
               )}
               {!mobile && searchBox}
               <nav
-                ref={railNavRef}
                 aria-label={t('modal.categoriesLabel')}
                 className="ol-thinscroll"
                 style={{
-                  position: 'relative',
                   display: 'flex',
                   flexDirection: mobile ? 'row' : 'column',
                   gap: 4,
                   overflowX: mobile ? 'auto' : undefined,
                 }}
               >
-                {/* Sliding blue thumb: top/height follow the active category button, spring-eased. */}
-                {!mobile && railThumb && (
-                  <div
-                    aria-hidden="true"
-                    className="ol-settings-rail-thumb"
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: 0,
-                      transform: `translate3d(0, ${railThumb.top}px, 0)`,
-                      height: railThumb.height,
-                      borderRadius: 8,
-                      background: 'var(--ol-blue-soft)',
-                      pointerEvents: 'none',
-                    }}
-                  />
-                )}
+                {/* States (idle / hover / selected) come from .ol-settings-rail-btn, the
+                    same selection language as the main sidebar. */}
                 {sections.map((item) => {
                   const active = !searching && requestedSection === item.id;
                   return (
@@ -491,38 +443,13 @@ export function SettingsModal({
                       key={item.id}
                       type="button"
                       aria-current={active ? 'page' : undefined}
-                      ref={(el) => {
-                        if (el) railBtnRefs.current.set(item.id, el);
-                        else railBtnRefs.current.delete(item.id);
-                      }}
                       onClick={() => selectSection(item.id)}
-                      className={
-                        mobile
-                          ? active
-                            ? 'ol-nav-btn ol-nav-btn-active'
-                            : 'ol-nav-btn'
-                          : 'ol-settings-rail-btn'
-                      }
-                      style={
-                        mobile
-                          ? {
-                              ...navButtonStyle,
-                              flexShrink: 0,
-                              padding: '8px 10px',
-                              whiteSpace: 'nowrap',
-                              background: active ? 'var(--ol-blue-soft)' : 'transparent',
-                              color: active ? 'var(--ol-blue)' : 'var(--ol-ink-2)',
-                              fontWeight: active ? 'var(--ol-font-weight-semibold)' : 400,
-                            }
-                          : {
-                              ...navButtonStyle,
-                              position: 'relative',
-                              zIndex: 1,
-                              flexShrink: 0,
-                              padding: '10px',
-                              whiteSpace: 'normal',
-                            }
-                      }
+                      className="ol-settings-rail-btn"
+                      style={{
+                        ...railButtonStyle,
+                        padding: mobile ? '8px 10px' : '10px',
+                        whiteSpace: mobile ? 'nowrap' : 'normal',
+                      }}
                     >
                       {!mobile && <Icon name={item.icon} size={16} />}
                       <span style={{ minWidth: 0, overflowWrap: mobile ? undefined : 'anywhere' }}>
@@ -808,8 +735,8 @@ function HelpLinks() {
           key={link.id}
           type="button"
           onClick={() => void openExternal(link.href)}
-          className="ol-nav-btn"
-          style={navButtonStyle}
+          className="ol-settings-rail-link"
+          style={{ ...railButtonStyle, padding: '8px 10px' }}
         >
           <Icon name={link.icon} size={14} />
           <span style={{ flex: 1 }}>{t(`modal.sections.${link.id}`)}</span>
@@ -846,5 +773,18 @@ const navButtonStyle: CSSProperties = {
   font: 'inherit',
   fontSize: 14,
   cursor: 'pointer',
+  textAlign: 'left',
+};
+/** Rail rows: layout only. Colour, weight and background belong to the state classes;
+ * a `font` shorthand here would pin the weight and hide the selected state. */
+const railButtonStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexShrink: 0,
+  border: 0,
+  borderRadius: 8,
+  fontFamily: 'inherit',
+  fontSize: 14,
   textAlign: 'left',
 };

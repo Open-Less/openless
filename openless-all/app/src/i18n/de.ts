@@ -321,6 +321,8 @@ export const de: typeof zhCN = {
     cancelled: 'Abgebrochen',
     error: 'Ein Fehler ist aufgetreten',
     inserted: '{{count}} eingefügt',
+    translateTo: 'Übersetzen in',
+    translationChangeFailed: 'Sprache konnte nicht geändert werden. Bitte erneut auswählen.',
     translating: 'Wird übersetzt',
     selectionPolish: {
       polishing: 'Wird überarbeitet…',
@@ -351,6 +353,12 @@ export const de: typeof zhCN = {
     cancel: 'Abbrechen',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Web wird durchsucht',
+      readingWeb: 'Webseiten werden gelesen',
+      usingTool: '{{tool}} wird verwendet',
+      tool: 'Werkzeug',
+    },
     compact: {
       closeError: 'Schließen fehlgeschlagen. Erneut versuchen.',
       sendError: 'Senden fehlgeschlagen. Deine Eingabe bleibt erhalten. Erneut versuchen.',
@@ -1225,8 +1233,22 @@ export const de: typeof zhCN = {
         'Schlägt die Übersetzung fehl, wird stattdessen das ursprüngliche Transkript eingefügt.',
     },
   },
+  askAnything: {
+    dictation: 'Diktieren',
+    translation: 'Übersetzen',
+    question: 'Alles fragen',
+    dictationHint: 'Gedanken als Text eingeben',
+    translationHint: 'Sprache während der Aufnahme wählen',
+    questionHint: 'Text auswählen oder direkt fragen',
+    description:
+      'Kombination drücken, Frage sprechen und erneut drücken. Die Antwort erscheint unten auf dem Bildschirm.',
+    auxiliaryKey: 'Zusatztaste für Fragen',
+    auxiliaryHint: 'Zusammen mit {{key}} drücken. Änderungen der Aufnahmetaste werden übernommen.',
+    selectionHint:
+      'Ausgewählter Text dient als Kontext. Eine Auswahl ist optional. Jede Kombination beginnt eine neue Frage.',
+  },
   selectionAsk: {
-    title: 'Zum ausgewählten Text fragen',
+    title: 'Alles fragen',
     desc: 'Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.',
     shortcutSettings: 'Kurzbefehlseinstellungen',
     guide: {
@@ -1529,7 +1551,6 @@ export const de: typeof zhCN = {
       capsuleLabel: 'Aufnahmekapsel',
       capsuleDesc:
         'Zeigt während der Aufnahme eine halbtransparente Kapsel am unteren Bildschirmrand.',
-      capsuleStyleTypeless: 'Kompakter Typeless-Stil',
       capsuleTranscriptLabel: 'Live-Transkript anzeigen',
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
@@ -1898,8 +1919,10 @@ export const de: typeof zhCN = {
       volcengineAuthModeApiKey: 'API-Schlüssel (neue Konsole)',
       volcengineMappingNote:
         'Ein Secret Key wird derzeit nicht benötigt. Standard-Ressourcen-ID: volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · API-Schlüssel',
       volcengineApiKeyNote:
-        'Verwendet einen API-Schlüssel aus der neuen Sprachkonsole. Eine APP ID ist nicht erforderlich. Erstelle ihn in der API-Schlüsselverwaltung: console.volcengine.com/speech/new/setting/apikeys. Standard-Ressourcen-ID: volc.seedasr.sauc.duration.',
+        'Hier einen Sprach-API-Schlüssel erstellen; Ark-Schlüssel sind nicht gültig.',
+      volcengineResourceIdNote: 'Standard-Ressourcen-ID: {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API-Schlüssel',
       xfyunNote:

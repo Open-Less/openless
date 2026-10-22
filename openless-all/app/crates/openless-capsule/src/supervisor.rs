@@ -272,6 +272,9 @@ mod tests {
             transcript: String::new(),
             transcript_font_size: 15.0,
             labels: Default::default(),
+            show_transcript: false,
+            theme: Default::default(),
+            leaving: false,
             bounds: None,
             interactive: true,
         }
@@ -289,13 +292,13 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::write(&script, r#"#!/bin/sh
-printf '%s\n' '{"type":"ready","version":1}'
+printf '%s\n' '{"type":"ready","version":2}'
 while IFS= read -r frame; do
   case "$frame" in
     *'"shutdown"'*) exit 0;;
     *'"frame"'*)
-      printf '%s\n' '{"type":"action","version":1,"session_id":"old","sequence":7,"action":"cancel"}'
-      printf '%s\n' '{"type":"action","version":1,"session_id":"current","sequence":7,"action":"confirm"}'
+      printf '%s\n' '{"type":"action","version":2,"session_id":"old","sequence":7,"action":"cancel"}'
+      printf '%s\n' '{"type":"action","version":2,"session_id":"current","sequence":7,"action":"confirm"}'
       ;;
   esac
 done
@@ -348,6 +351,9 @@ done
             transcript: String::new(),
             transcript_font_size: 15.0,
             labels: Default::default(),
+            show_transcript: false,
+            theme: Default::default(),
+            leaving: false,
             bounds: None,
             interactive: false,
         }));
@@ -387,6 +393,9 @@ mod health_tests {
             transcript: String::new(),
             transcript_font_size: 14.0,
             labels: Default::default(),
+            show_transcript: false,
+            theme: Default::default(),
+            leaving: false,
             bounds: None,
             interactive: true,
         }
@@ -422,7 +431,7 @@ mod health_tests {
         {
             let mut command = Command::new("powershell.exe");
             let script = if ready {
-                r#"[Console]::WriteLine('{"type":"ready","version":1}'); while ($null -ne ($line = [Console]::ReadLine())) { if ($line.Contains('"type":"shutdown"')) { break } }"#
+                r#"[Console]::WriteLine('{"type":"ready","version":2}'); while ($null -ne ($line = [Console]::ReadLine())) { if ($line.Contains('"type":"shutdown"')) { break } }"#
             } else {
                 "while ($null -ne [Console]::ReadLine()) {}"
             };
@@ -433,7 +442,7 @@ mod health_tests {
         {
             let mut command = Command::new("/bin/sh");
             let script = if ready {
-                r#"printf '%s\n' '{"type":"ready","version":1}'; while IFS= read -r line; do case "$line" in *'"shutdown"'*) exit 0;; esac; done"#
+                r#"printf '%s\n' '{"type":"ready","version":2}'; while IFS= read -r line; do case "$line" in *'"shutdown"'*) exit 0;; esac; done"#
             } else {
                 "cat >/dev/null"
             };
@@ -500,7 +509,7 @@ mod health_tests {
         )
         .await
         .is_err());
-        writer.write_all(b"\"version\":1}\n").await.unwrap();
+        writer.write_all(b"\"version\":2}\n").await.unwrap();
         assert!(matches!(
             read_ui(&mut reader, &mut pending).await.unwrap(),
             Some(UiMessage::Ready {

@@ -60,6 +60,8 @@ pub struct HotkeyRuntimeTarget {
     pub dictation: ShortcutBinding,
     pub dictation_mode: HotkeyMode,
     pub qa: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub qa_companion_key: String,
     pub quick_note: Option<ShortcutBinding>,
     pub translation: ShortcutBinding,
     pub switch_style: Option<ShortcutBinding>,
@@ -79,7 +81,8 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
         Self {
             dictation: preferences.dictation_hotkey.clone(),
             dictation_mode: preferences.hotkey.mode,
-            qa: preferences.qa_hotkey.clone(),
+            qa: if cfg!(target_os = "linux") { preferences.qa_hotkey.clone() } else { None },
+            qa_companion_key: preferences.qa_companion_key.clone(),
             quick_note: preferences.quick_note_hotkey.clone(),
             translation: preferences.translation_hotkey.clone(),
             switch_style: preferences.switch_style_hotkey.clone(),

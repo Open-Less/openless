@@ -15,7 +15,6 @@ use tauri::State;
 
 // Submodules access the shared Host state, DTOs, and dependency types via use super::*.
 pub(crate) use serde::Serialize;
-pub(crate) use serde_json::Value;
 pub(crate) use tauri::{AppHandle, Emitter, Window};
 
 #[cfg(not(mobile))]

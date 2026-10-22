@@ -452,6 +452,7 @@ export interface UserPreferences {
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
+  qaCompanionKey: string;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -665,6 +666,7 @@ export interface MicrophoneDevice {
  *  v2 (issue #118 v2): multi-turn support; the backend sends the whole messages array each time (single source of truth).
  *  v2.1: enables `stream:true`, pushing LLM answer chunks to the frontend via `answer_delta` events for streaming render. */
 export type QaStateKind =
+  | 'activity'
   | 'idle'
   | 'recording'
   | 'loading'
@@ -682,7 +684,13 @@ export interface QaChatMessage {
   selectionText?: string;
 }
 
+export interface QaActivity {
+  kind: 'thinking' | 'searching_web' | 'reading_web' | 'using_tool';
+  toolName?: string;
+}
+
 export interface QaStatePayload {
+  activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
   sessionId?: string;

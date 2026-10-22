@@ -310,6 +310,8 @@ export const ja: typeof zhCN = {
     cancelled: 'キャンセルしました',
     error: 'エラーが発生しました',
     inserted: '{{count}} 文字を入力しました',
+    translateTo: '翻訳先',
+    translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
     selectionPolish: {
       polishing: '推敲中...',
@@ -339,6 +341,12 @@ export const ja: typeof zhCN = {
     cancel: 'キャンセル',
   },
   qa: {
+    activity: {
+      searchingWeb: 'ウェブを検索中',
+      readingWeb: 'ウェブページを読込中',
+      usingTool: '{{tool}} を使用中',
+      tool: 'ツール',
+    },
     compact: {
       closeError: '閉じられませんでした。再試行してください。',
       sendError: '送信できませんでした。入力は保持されています。再試行してください。',
@@ -492,7 +500,7 @@ export const ja: typeof zhCN = {
     style: 'スタイル',
     marketplace: 'マーケット',
     translation: '翻訳',
-    selectionAsk: '選択追問',
+    selectionAsk: '何でも質問',
     quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
@@ -1192,8 +1200,22 @@ export const ja: typeof zhCN = {
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
   },
+  askAnything: {
+    dictation: '音声入力',
+    translation: '翻訳',
+    question: '何でも質問',
+    dictationHint: '話した内容を文字にする',
+    translationHint: '録音中に翻訳先を選択',
+    questionHint: '文字を選択するか、そのまま質問',
+    description:
+      '組み合わせを押して質問し、もう一度押すと送信します。回答は画面下部に表示されます。',
+    auxiliaryKey: '質問の追加キー',
+    auxiliaryHint: '{{key}} と一緒に押します。録音キーの変更に追従します。',
+    selectionHint:
+      '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
+  },
   selectionAsk: {
-    title: '選択追問',
+    title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',
     guide: {
@@ -1487,7 +1509,6 @@ export const ja: typeof zhCN = {
       microphoneMonitorError: '入力レベルの監視に失敗：{{message}}',
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
-      capsuleStyleTypeless: 'Typeless コンパクトスタイル',
       capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
@@ -1504,7 +1525,7 @@ export const ja: typeof zhCN = {
         'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'Openless デフォルトスタイル',
+      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
@@ -1846,8 +1867,9 @@ export const ja: typeof zhCN = {
       volcengineAuthModeApiKey: '新版コンソール API Key',
       volcengineMappingNote:
         'Secret Key は現在不要。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '新版スピーチコンソールで作成した API Key で認証します（APP ID 不要）。API Key はスピーチコンソールの「API Key 管理」で作成：console.volcengine.com/speech/new/setting/apikeys。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 管理',
+      volcengineApiKeyNote: 'ここで作成した音声用 API Key で認証。Ark のキーは使えません。',
+      volcengineResourceIdNote: 'Resource ID のデフォルトは {{resourceId}} です。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

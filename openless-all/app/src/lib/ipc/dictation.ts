@@ -42,3 +42,28 @@ export function handleWindowHotkeyEvent(
     );
   });
 }
+
+export interface DictationTranslationTarget {
+  sessionId: string;
+  targetLanguage: string;
+  workingLanguages: string[];
+  mutable: boolean;
+}
+
+export function getDictationTranslationTarget(): Promise<DictationTranslationTarget | null> {
+  return invokeOrMock('get_dictation_translation_target', undefined, () => null);
+}
+
+export function selectDictationTranslationTarget(
+  sessionId: string,
+  targetLanguage: string,
+): Promise<DictationTranslationTarget> {
+  return invokeOrMock('select_dictation_translation_target', { sessionId, targetLanguage }, () => {
+    throw new Error('No active native recording');
+  });
+}
+
+/** Reserve native headroom for the shared Base UI popup; close is session-bound. */
+export function setCapsuleLanguageMenu(open: boolean, sessionId: string): Promise<void> {
+  return invokeOrMock('set_capsule_language_menu', { open, sessionId }, () => undefined);
+}

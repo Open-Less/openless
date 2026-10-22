@@ -775,6 +775,19 @@ pub fn reconcile_hotkey_collisions(
 }
 
 pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), String> {
+    let companion = preferences.qa_companion_key.trim();
+    if !companion.is_empty() {
+        let binding = ShortcutBinding { primary: companion.into(), modifiers: Vec::new() };
+        validate_shortcut_binding(&binding).map_err(|error| error.to_string())?;
+        if legacy_modifier_trigger(&binding).is_some()
+            || companion.eq_ignore_ascii_case("Shift")
+            || companion.eq_ignore_ascii_case("Escape")
+            || companion.starts_with("Mouse")
+            || companion.eq_ignore_ascii_case(&preferences.dictation_hotkey.primary)
+        {
+            return Err("提问附加键需选择一个与录音主键不同的普通键，例如 Space".into());
+        }
+    }
     reject_non_dictation_side_specific_shortcuts(preferences)?;
     let switch_style = preferences.switch_style_hotkey.as_ref();
     let open_app = preferences.open_app_hotkey.as_ref();

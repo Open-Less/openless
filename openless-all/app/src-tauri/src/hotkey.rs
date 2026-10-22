@@ -27,6 +27,16 @@ use parking_lot::RwLock;
 use crate::types::HotkeyTrigger;
 use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyInstallError};
 
+static CAPSULE_MENU_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_capsule_menu_open(open: bool) {
+    CAPSULE_MENU_OPEN.store(open, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn capsule_menu_open() -> bool {
+    CAPSULE_MENU_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Pressed {
@@ -756,6 +766,7 @@ mod platform {
 
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                crate::recording_companion::reset_held();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
@@ -763,9 +774,15 @@ mod platform {
             }
             FLAGS_CHANGED => handle_flags_changed(ctx, event),
             KEY_DOWN => {
-                handle_key_down(ctx, event);
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true);
+                if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
+                if !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
+                    crate::side_aware_combo::handle_companion_key_down();
+                    note_companion_key_down(ctx);
+                    return std::ptr::null_mut();
+                }
+                handle_key_down(ctx, event);
                 // While a session is active, consume Esc exclusively: returning null deletes the
                 // event (active tap) so the host app never sees it, avoiding double effect between
                 // "cancel session" and the host's Esc semantics. See esc_exclusive docs.
@@ -775,7 +792,9 @@ mod platform {
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
+                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false) {
+                    return std::ptr::null_mut();
+                }
             }
             // Fn+brightness / volume / keyboard backlight and similar do not produce KEY_DOWN but
             // systemDefined. While the Fn trigger is held, treat these as function-layer combos —
@@ -1681,6 +1700,7 @@ mod platform {
             return false;
         }
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        if vk_code == VK_ESCAPE && super::capsule_menu_open() { return false; }
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
@@ -1691,7 +1711,13 @@ mod platform {
             return esc_exclusive();
         }
 
-        crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
+        if crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed) {
+            if pressed {
+                crate::side_aware_combo::handle_companion_key_down();
+                note_companion_key_down(ctx);
+            }
+            return true;
+        }
 
         if pressed && !is_modifier_vk(vk_code) {
             crate::side_aware_combo::handle_companion_key_down();

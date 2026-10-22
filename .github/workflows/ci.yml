@@ -38,9 +38,8 @@ jobs:
       msrv: ${{ steps.detect.outputs.msrv }}
       linux: ${{ steps.detect.outputs.linux }}
       harmony: ${{ steps.detect.outputs.harmony }}
-      # Only worth a macOS runner when the declared MSRV is actually older than
-      # the stable toolchain the other jobs already build with.
-      msrv_needed: ${{ steps.msrv.outputs.needed }}
+      # Validate the pinned minimum compiler whenever native sources can change.
+      msrv_needed: ${{ steps.detect.outputs.msrv }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,23 +58,6 @@ jobs:
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
           done
-      - name: Is the declared MSRV older than stable?
-        id: msrv
-        # `rust-version` is the promise; a dedicated compile only proves something
-        # while it is behind the toolchain the other jobs use. When they coincide
-        # (today: 1.99 vs stable 1.99.x) the macOS MSRV job is pure duplication.
-        run: |
-          set -euo pipefail
-          # The workspace manifest carries no `rust-version`; every member declares
-          # its own. `openless-core` is the shared one, so read it there.
-          declared=$(grep -m1 '^rust-version' openless-all/app/crates/openless-core/Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
-          stable=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+)\.[0-9]+.*/\1/')
-          echo "declared MSRV: ${declared:-none}, stable: $stable"
-          if [ -z "$declared" ] || [ "$declared" = "$stable" ]; then
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-          fi
 
   ui-motion:
     name: UI motion (Chromium + WebKit)
@@ -820,11 +802,8 @@ jobs:
 
   macos-msrv:
     needs: [changes]
-    # Two conditions, both fail-open in the direction that matters: the change set
-    # must be able to reach Rust sources, and the declared MSRV must be older than
-    # the stable toolchain (otherwise `cross-platform` already compiles that code
-    # with stable, which is a superset of the MSRV promise).
-    if: needs.changes.outputs.msrv != 'false' && needs.changes.outputs.msrv_needed == 'true'
+    # Run the declared minimum toolchain even when stable has the same version.
+    if: needs.changes.outputs.msrv != 'false'
     name: macOS Rust 1.99 MSRV
     runs-on: macos-latest
     timeout-minutes: 60

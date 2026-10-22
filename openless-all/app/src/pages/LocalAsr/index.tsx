@@ -674,12 +674,19 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   // restarts automatically when the dialog closes (the effect keyed on downloadDialogOpen rebuilds the interval).
   useEffect(() => {
     if (downloadDialogOpen) return;
+    // Skip ticks while the window is hidden; catch up immediately once it becomes visible again.
     const pollTimer = window.setInterval(() => {
+      if (document.hidden) return;
       void refresh();
     }, 3000);
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       refreshGenerationRef.current += 1;
       window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadDialogOpen]);

@@ -856,10 +856,25 @@ pub struct QaMessage {
     pub selection_text: Option<String>,
 }
 
+/// Status reported by a real provider/tool execution, never inferred from answer text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QaActivityKind { Thinking, SearchingWeb, ReadingWeb, UsingTool }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaActivity {
+    pub kind: QaActivityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaSnapshot {
     pub phase: QaPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<QaActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     /// Stable owner for resources that span multiple successful turns, such as
@@ -885,6 +900,7 @@ impl Default for QaSnapshot {
     fn default() -> Self {
         Self {
             phase: QaPhase::Idle,
+            activity: None,
             session_id: None,
             conversation_id: None,
             messages: Vec::new(),
@@ -940,6 +956,7 @@ pub struct QaRuntimeCompletion {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum QaProgress {
+    Activity(QaActivity),
     RecordingLevel(f32),
     SelectionCaptured(Option<String>),
     AnswerDelta(String),
@@ -1043,6 +1060,10 @@ pub trait QaApi: Send + Sync {
     fn show(&self) -> BoxFuture<'static, Result<(), BackendError>>;
     fn snapshot(&self) -> BoxFuture<'static, Result<QaSnapshot, BackendError>>;
     fn toggle_recording(&self) -> BoxFuture<'static, Result<(), BackendError>>;
+    /// Start an independent, single-question voice session without a composer.
+    fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.toggle_recording()
+    }
     /// Stop only this recording generation. Deferred device/silence callbacks
     /// must never use the UI toggle: it could start or stop a newer turn.
     fn stop_recording(
