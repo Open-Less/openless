@@ -299,7 +299,15 @@ jobs:
         run: |
           set -euo pipefail
           image="$ANDROID_HOME/system-images/android-35/google_apis/x86_64"
-          validate_emulator() { "$1" -version 2>&1 | grep -Fq 'build_id 16555280'; }
+          validate_emulator() {
+            local version
+            # Drain the launcher output before grep: an early reader exit causes SIGPIPE.
+            if version=$("$1" -version 2>&1) && grep -Fq 'build_id 16555280' <<< "$version"; then
+              return 0
+            fi
+            printf '%s\n' "$version" >&2
+            return 1
+          }
           validate_image() { [ -s "$image/system.img" ] && [ -s "$image/package.xml" ]; }
           if [ "$EMULATOR_CACHE_HIT" != 'true' ]; then
             work=$(mktemp -d "$RUNNER_TEMP/openless-emulator.XXXXXX")
@@ -345,7 +353,8 @@ jobs:
           avd="$RUNNER_TEMP/openless-ci.avd"
           printf 'no\n' | avdmanager create avd --force --name openless-ci \
             --package 'system-images;android-35;google_apis;x86_64' --path "$avd"
-          sed -i '/^hw.keyboard[ =]/d' "$avd/config.ini"
+          sed '/^hw[.]keyboard[ =]/d' "$avd/config.ini" > "$avd/config.ini.tmp"
+          mv "$avd/config.ini.tmp" "$avd/config.ini"
           echo 'hw.keyboard=no' >> "$avd/config.ini"
           log="$RUNNER_TEMP/openless-android-emulator.log"
           emulator_pid=''

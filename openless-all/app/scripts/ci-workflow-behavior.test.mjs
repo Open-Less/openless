@@ -59,7 +59,11 @@ const executable = (path, source) => {
 const emulatorSource = `
 if [ "\${1:-}" = '-version' ]; then
   echo "Android emulator version 37.3.4.0 (build_id \${FAKE_EMULATOR_BUILD:-16555280})"
-  exit 0
+  if [ "\${FAKE_VERSION_DETAILS:-0}" = 1 ]; then
+    /usr/bin/sleep 0.02
+    printf '%8192s\n' 'emulator license details'
+  fi
+  exit "\${FAKE_VERSION_EXIT:-0}"
 fi
 echo "$$" > "$RUNNER_TEMP/emulator.pid"
 echo 'emulator started'
@@ -94,6 +98,10 @@ case "$name" in
     image="$ANDROID_HOME/system-images/android-35/google_apis/x86_64"
     mkdir -p "$image"; echo package > "$image/package.xml"
     if [ "\${FAKE_INCOMPLETE_IMAGE:-0}" != 1 ]; then echo system > "$image/system.img"; fi
+    ;;
+  sed)
+    if [ "$1" = '-i' ]; then echo 'BSD sed requires a backup suffix for -i' >&2; exit 1; fi
+    exec /usr/bin/sed "$@"
     ;;
   sleep) ;;
   avdmanager)
@@ -133,6 +141,7 @@ function fixture(name) {
     'unzip',
     'sdkmanager',
     'sleep',
+    'sed',
     'avdmanager',
     'timeout',
     'adb',
@@ -188,6 +197,7 @@ function fixture(name) {
 try {
   for (const [name, env, expected, curls, sdkCalls] of [
     ['cold', {}, 0, 1, 1],
+    ['verbose-version', { FAKE_VERSION_DETAILS: '1' }, 0, 1, 1],
     ['download-retry', { FAKE_CURL_FAILURES: '2' }, 0, 3, 1],
     ['bad-zip-retry', { FAKE_BAD_ZIPS: '2' }, 0, 3, 1],
     ['sdk-retry', { FAKE_SDK_FAILURES: '2' }, 0, 3, 3],
@@ -204,6 +214,7 @@ try {
   for (const [name, env, removeImage, expected] of [
     ['warm', {}, false, 0],
     ['wrong-build', { FAKE_EMULATOR_BUILD: 'wrong' }, false, 1],
+    ['version-command-failure', { FAKE_VERSION_EXIT: '3' }, false, 1],
     ['missing-image', {}, true, 1],
   ]) {
     const test = fixture(name);
