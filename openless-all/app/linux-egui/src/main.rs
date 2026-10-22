@@ -7,13 +7,17 @@ mod style_icon;
 #[cfg(target_os = "linux")]
 mod ui;
 
-#[cfg(target_os = "linux")]
 mod linux_app {
     mod history;
     use history::HistoryCache;
     mod settings_save;
     mod window;
     use settings_save::SettingsSave;
+    /// 泵心跳的采样间隔：热键消费停没停，十秒内一定看得出来。
+    const PUMP_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    /// 状态没有变化时，`info` 级心跳的最低频率（存活证明，不为排查细节服务）。
+    const PUMP_HEARTBEAT_INFO_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -667,8 +671,13 @@ mod linux_app {
         vocab_suggestions_checked: std::time::Instant,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
-        /// 上次打「泵心跳」日志的时间。
+        /// 上次采样「泵心跳」的时间（每 10 秒一次，与日志级别无关）。
         last_pump_heartbeat: std::time::Instant,
+        /// 上次把心跳写进 `info` 的时间。心跳是每 10 秒一次的存在性证明，
+        /// 全写 `info` 会在一天内吃满日志配额，把真正的错误挤出去。
+        last_pump_heartbeat_info: std::time::Instant,
+        /// 上次写 `info` 时的状态快照；状态一变就立刻记一条。
+        last_pump_heartbeat_snapshot: [bool; 4],
         window: WindowState,
         /// 本帧从 UI 收到、待宿主执行的动作（按到达顺序）。
         pending_ui_actions: Vec<frontend::view_model::FrontendAction>,
@@ -903,6 +912,8 @@ mod linux_app {
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
+                        last_pump_heartbeat_info: std::time::Instant::now(),
+                        last_pump_heartbeat_snapshot: [false; 4],
                         window: WindowState::new(window_should_be_open),
                         pending_ui_actions: Vec::new(),
                         pending_local_hotkeys: Vec::new(),
@@ -1022,6 +1033,8 @@ mod linux_app {
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
+                    last_pump_heartbeat_info: std::time::Instant::now(),
+                    last_pump_heartbeat_snapshot: [false; 4],
                     window: WindowState::new(window_should_be_open),
                     pending_ui_actions: Vec::new(),
                     pending_local_hotkeys: Vec::new(),
@@ -4190,25 +4203,42 @@ mod linux_app {
         /// current-thread 运行时，`spawn` 的任务只在别处 `block_on` 时才被推进，
         /// 当作后台泵用就是「写完看着对、最小化后照样死」（实测心跳会在窗口
         /// 收走的那一刻停）。线程只做一件事：`request_repaint()` 把事件循环戳醒。
-        /// 泵心跳：宿主循环每 10s 一条。窗口关掉之后这条心跳**不能**停 ——
+        /// 泵心跳：宿主循环每 10s 采样一次。窗口关掉之后这条心跳**不能**停 ——
         /// 停了就说明热键消费与弹窗拉起也没在跑（这正是当初「关窗后热键失效」
-        /// 的判据），用户/支持可以直接看日志确认。
+        /// 的判据）。
+        ///
+        /// 采样归采样，写日志要节流：每 10 秒一条 `info` 是 8640 行/天，轮转后
+        /// 整份日志九成以上都是它，真正的错误反而被挤出去。所以**状态变化立刻
+        /// 记一条 `info`**（这才是判据），状态没变时只每
+        /// [`PUMP_HEARTBEAT_INFO_INTERVAL`] 留一条存活证明，其余走 `debug`。
         fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
             self.tick_vocab_suggestions();
-            if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
+            if self.last_pump_heartbeat.elapsed() < PUMP_HEARTBEAT_INTERVAL {
                 return;
             }
             self.last_pump_heartbeat = std::time::Instant::now();
             // 宿主没有窗口，所以心跳只看「窗口进程还在不在」——
             // 这正是关窗后必须继续为 true 的那一项能力。
             let _ = ctx;
-            log::info!(
-                "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
+            let snapshot = [
                 self.window.child.is_some(),
                 self.window.should_be_open,
                 self.tray.is_some(),
                 self.recording_phase_active,
+            ];
+            let changed = snapshot != self.last_pump_heartbeat_snapshot;
+            let due = self.last_pump_heartbeat_info.elapsed() >= PUMP_HEARTBEAT_INFO_INTERVAL;
+            let message = format!(
+                "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
+                snapshot[0], snapshot[1], snapshot[2], snapshot[3],
             );
+            if changed || due {
+                self.last_pump_heartbeat_info = std::time::Instant::now();
+                self.last_pump_heartbeat_snapshot = snapshot;
+                log::info!("{message}");
+            } else {
+                log::debug!("{message}");
+            }
         }
 
         /// 当前生效的热键配置（本地匹配与去重都用它）。

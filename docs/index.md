@@ -15,6 +15,7 @@
 - [交接总览](linux-egui-handoff/README.md)：阅读顺序、责任与复用起点。
 - [01 Core 合同](linux-egui-handoff/01-core-contract.md)、[02 缺口登记](linux-egui-handoff/02-gap-register.md)（L01–L12）、[03 热键与窗口](linux-egui-handoff/03-hotkeys-and-windows.md)、[04 页面与领域](linux-egui-handoff/04-ui-domains.md)、[05 原生宿主与数据](linux-egui-handoff/05-native-host-and-data.md)、[06 事件与会话](linux-egui-handoff/06-events-and-sessions.md)、[07 验收](linux-egui-handoff/07-acceptance.md)。
 
+- [Linux egui 日志约定](linux-egui-logging.md)：级别语义、`OPENLESS_LOG` 开关、轮转策略与不记录的内容。
 - [Linux 已知缺口](linux-egui-known-gaps.md)：当前仍未闭环的行为与复现路径（如 G01 纠错卡）。
 
 ## 接口契约

@@ -584,7 +584,8 @@ impl UiClientApp {
                             let count = self.latency_samples.len();
                             let max = self.latency_samples.iter().copied().max().unwrap_or(0);
                             let sum: u128 = self.latency_samples.iter().sum();
-                            log::info!(
+                            // 每 20 次探针一条；它是仪表，不是事件，走 debug。
+                            log::debug!(
                                     "[ui-client] ipc round-trip avg={}ms max={max}ms over {count} probes (last #{sequence})",
                                     sum / count as u128
                                 );
