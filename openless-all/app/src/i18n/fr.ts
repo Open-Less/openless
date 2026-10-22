@@ -1564,9 +1564,37 @@ export const fr: typeof zhCN = {
       lowLatencyDictationLabel: 'Capture à faible latence',
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
-      audioEnhancementLabel: 'Amélioration légère du microphone',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: 'Amélioration de la voix',
       audioEnhancementDesc:
-        'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
+        'Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',

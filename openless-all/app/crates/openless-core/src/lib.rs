@@ -9,6 +9,8 @@ pub mod android_types;
 pub mod api;
 pub mod asr;
 pub mod audio;
+pub mod audio_dsp;
+pub use audio_dsp::{AudioDspConfig, AudioDspStage, NoiseReduction};
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
@@ -224,7 +226,7 @@ pub use api::{
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
-    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
+    encode_dictation_wav, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
     PcmNormalizer, DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{

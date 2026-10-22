@@ -1511,9 +1511,37 @@ export const ja: typeof zhCN = {
       lowLatencyDictationLabel: '低遅延キャプチャ',
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
-      audioEnhancementLabel: '軽量マイク拡張',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
-        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+        'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',

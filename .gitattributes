@@ -8,3 +8,9 @@
 *.xml text eol=lf
 openless-all/app/linux-egui/packaging/AppRun text eol=lf
 openless-all/app/linux-egui/packaging/openless-desktop-integration text eol=lf
+# Keep imported model bytes and unified-diff context markers intact.
+*.mcy binary
+openless-all/app/scripts/micyou-dsp.patch text eol=lf whitespace=-blank-at-eol
+# These two notices retain upstream's exact final blank line.
+openless-all/app/crates/micyou-dsp/LICENSE text eol=lf whitespace=-blank-at-eof
+openless-all/app/crates/micyou-infer/LICENSE text eol=lf whitespace=-blank-at-eof

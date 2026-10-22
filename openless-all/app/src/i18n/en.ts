@@ -1523,9 +1523,37 @@ export const en: typeof zhCN = {
       lowLatencyDictationLabel: 'Low-latency capture',
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
-      audioEnhancementLabel: 'Lightweight microphone enhancement',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: 'Speech enhancement',
       audioEnhancementDesc:
-        'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
+        'Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',

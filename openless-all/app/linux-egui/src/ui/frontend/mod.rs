@@ -1,3 +1,4 @@
+mod audio_dsp;
 pub mod capsule_motion;
 pub mod cloud_sync;
 pub mod corrections;

@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, Shared};
+use futures_util::FutureExt;
 
 use crate::dictation_context::{DictationContext, DictationOutputTarget};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -44,6 +45,41 @@ pub struct PipelineDictationEngine {
     pending_captures: Arc<Mutex<HashMap<u64, Box<dyn PendingAudioCapture>>>>,
 }
 
+/// Reuses the existing PCM buffer while capture starts ahead of provider
+/// preparation. Preparation still completes before start() reports success,
+/// including stable mode; concurrent finish/attach shares the same result.
+struct CaptureFirstPreparation {
+    engine: Arc<dyn TranscriptionEngine>,
+    session_id: SessionId,
+    context: Arc<DictationContext>,
+    result: Arc<tokio::sync::OnceCell<Result<Arc<dyn PreparedTranscription>, BackendError>>>,
+}
+
+impl CaptureFirstPreparation {
+    fn prepare(&self) -> BoxFuture<'static, Result<Arc<dyn PreparedTranscription>, BackendError>> {
+        let engine = Arc::clone(&self.engine);
+        let session_id = self.session_id;
+        let context = Arc::clone(&self.context);
+        let result = Arc::clone(&self.result);
+        Box::pin(async move {
+            result
+                .get_or_init(|| engine.prepare(session_id, context))
+                .await
+                .clone()
+        })
+    }
+}
+
+impl PreparedTranscription for CaptureFirstPreparation {
+    fn start(
+        &self,
+        partials: Arc<dyn TextStreamSink>,
+    ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+        let ready = self.prepare();
+        Box::pin(async move { ready.await?.start(partials).await })
+    }
+}
+
 struct PipelineSession {
     context: RwLock<Arc<DictationContext>>,
     cancelled: AtomicBool,
@@ -56,9 +92,49 @@ struct PipelineSession {
     resources: Mutex<PipelineResources>,
 }
 
+type RecordingStop = Shared<BoxFuture<'static, Result<(), BackendError>>>;
+
+// Early stop, finalization and cancellation must join the same native close.
+struct PipelineRecording {
+    recording: Option<Box<dyn ActiveRecording>>,
+    archive: Option<Arc<dyn RecordingArchive>>,
+    stopped: Option<RecordingStop>,
+}
+
+impl PipelineRecording {
+    fn new(recording: Box<dyn ActiveRecording>) -> Self {
+        Self {
+            archive: recording.archive(),
+            recording: Some(recording),
+            stopped: None,
+        }
+    }
+
+    fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+        self.archive.clone()
+    }
+
+    fn stop_recording(&mut self) -> RecordingStop {
+        self.stopped
+            .get_or_insert_with(|| {
+                self.recording
+                    .take()
+                    .expect("pipeline recording is available until stop begins")
+                    .stop()
+                    .shared()
+            })
+            .clone()
+    }
+
+    fn stop(mut self) -> RecordingStop {
+        self.stop_recording()
+    }
+}
+
 #[derive(Default)]
 struct PipelineResources {
-    recording: Option<Box<dyn ActiveRecording>>,
+    recording: Option<PipelineRecording>,
+    stop_recording_requested: bool,
     transcription: Option<Arc<dyn TranscriptionSession>>,
     buffered: Option<Arc<BufferedTranscriptionSession>>,
     prepared: Option<Arc<dyn PreparedTranscription>>,
@@ -211,20 +287,13 @@ impl DictationEngine for PipelineDictationEngine {
                 }
             }
 
-            let prepared = match transcription_engine
-                .prepare(session_id, Arc::clone(&context))
-                .await
-            {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    remove_session(&sessions, session_id, &session);
-                    return Err(if session.cancelled.load(Ordering::Acquire) {
-                        cancelled_error("dictation cancelled while preparing the provider")
-                    } else {
-                        error
-                    });
-                }
-            };
+            let preparation = Arc::new(CaptureFirstPreparation {
+                engine: transcription_engine,
+                session_id,
+                context: Arc::clone(&context),
+                result: Arc::new(tokio::sync::OnceCell::new()),
+            });
+            let prepared: Arc<dyn PreparedTranscription> = preparation.clone();
             if session.cancelled.load(Ordering::Acquire) {
                 remove_session(&sessions, session_id, &session);
                 return Err(cancelled_error(
@@ -318,8 +387,8 @@ impl DictationEngine for PipelineDictationEngine {
                 }
             };
 
-            let mut recording = Some(recording);
-            {
+            let mut recording = Some(PipelineRecording::new(recording));
+            let stopping = {
                 let mut resources = session
                     .resources
                     .lock()
@@ -327,7 +396,15 @@ impl DictationEngine for PipelineDictationEngine {
                 if !session.cancelled.load(Ordering::Acquire) {
                     resources.recording = recording.take();
                 }
-            }
+                if resources.stop_recording_requested {
+                    resources
+                        .recording
+                        .as_mut()
+                        .map(PipelineRecording::stop_recording)
+                } else {
+                    None
+                }
+            };
             if let Some(recording) = recording {
                 let stop_result = recording.stop().await;
                 let cancel_result =
@@ -338,6 +415,36 @@ impl DictationEngine for PipelineDictationEngine {
                 return Err(cancelled_error(
                     "dictation cancelled while the recorder was starting",
                 ));
+            }
+            // No provider preparation, configuration I/O or network work may
+            // delay opening/promoting the microphone. The existing bounded
+            // transcription buffer retains the captured prefix during prepare.
+            let preparation_result = async {
+                progress.publish(session_id, EngineProgress::CaptureReady)?;
+                if let Some(stopping) = stopping {
+                    // finish() retains the archive and reports any native stop failure.
+                    let _ = stopping.await;
+                }
+                preparation.prepare().await
+            }
+            .await;
+            if preparation_result.is_err() || session.cancelled.load(Ordering::Acquire) {
+                let recording = session
+                    .resources
+                    .lock()
+                    .expect("pipeline resource lock poisoned")
+                    .recording
+                    .take();
+                if let Some(recording) = recording {
+                    let _ = recording.stop().await;
+                }
+                let _ = cancel_transcription_once(&session, Arc::clone(&buffered)).await;
+                remove_session(&sessions, session_id, &session);
+                return Err(if session.cancelled.load(Ordering::Acquire) {
+                    cancelled_error("dictation cancelled while preparing the provider")
+                } else {
+                    preparation_result.err().expect("preparation failed")
+                });
             }
             if let Some(spawner) = local_startup_spawner.filter(|_| !stable) {
                 let attaching = buffered.attach();
@@ -390,6 +497,35 @@ impl DictationEngine for PipelineDictationEngine {
                 return Err(cancelled_error("dictation cancelled while starting"));
             }
             Ok(())
+        })
+    }
+
+    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("pipeline session lock poisoned")
+            .get(&session_id)
+            .cloned();
+        let Some(session) = session else {
+            return Box::pin(async { Ok(false) });
+        };
+        let stopping = {
+            let mut resources = session
+                .resources
+                .lock()
+                .expect("pipeline resource lock poisoned");
+            resources.stop_recording_requested = true;
+            resources
+                .recording
+                .as_mut()
+                .map(PipelineRecording::stop_recording)
+        };
+        Box::pin(async move {
+            if let Some(stopping) = stopping {
+                stopping.await?;
+            }
+            Ok(true)
         })
     }
 
@@ -2098,6 +2234,55 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn early_recording_stop_shares_cleanup_failure_and_preserves_the_archive() {
+        struct BlockingStop {
+            stops: Arc<AtomicUsize>,
+            release: Arc<tokio::sync::Notify>,
+            archive: Arc<FixtureArchive>,
+        }
+        impl ActiveRecording for BlockingStop {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                Some(self.archive.clone())
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                self.stops.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async move {
+                    self.release.notified().await;
+                    Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "fixture stop failure",
+                    ))
+                })
+            }
+        }
+        let stops = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let archive = Arc::new(FixtureArchive {
+            available: AtomicBool::new(true),
+            discards: Arc::new(AtomicUsize::new(0)),
+            pcm: vec![1, 0],
+        });
+        let mut recording = PipelineRecording::new(Box::new(BlockingStop {
+            stops: stops.clone(),
+            release: release.clone(),
+            archive: archive.clone(),
+        }));
+        let retained = recording.archive().unwrap();
+        let mut early_stop = Box::pin(recording.stop_recording());
+        let mut terminal_stop = Box::pin(recording.stop());
+        assert!(futures_util::poll!(early_stop.as_mut()).is_pending());
+        assert!(futures_util::poll!(terminal_stop.as_mut()).is_pending());
+        assert_eq!(stops.load(Ordering::Acquire), 1);
+        release.notify_one();
+        let (early, terminal) = tokio::join!(early_stop, terminal_stop);
+        assert_eq!(early.unwrap_err().message, "fixture stop failure");
+        assert_eq!(terminal.unwrap_err().message, "fixture stop failure");
+        assert!(retained.is_available());
+        assert_eq!(retained.read_pcm().await.unwrap(), vec![1, 0]);
+        assert_eq!(archive.discards.load(Ordering::Acquire), 0);
+    }
+
     #[derive(Default)]
     struct LimitRecordingProgress {
         limits: AtomicUsize,
@@ -3209,7 +3394,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_preparation_failure_does_not_start_the_recorder() {
+    async fn provider_preparation_failure_stops_capture_and_removes_the_session() {
         let stops = Arc::new(AtomicUsize::new(0));
         let engine = PipelineDictationEngine::new(
             Arc::new(ExposedRecorder {
@@ -3229,8 +3414,127 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, BackendErrorCode::Provider);
-        assert_eq!(stops.load(Ordering::Acquire), 0);
+        assert_eq!(stops.load(Ordering::Acquire), 1);
         assert!(engine.sessions.lock().unwrap().is_empty());
+    }
+
+    struct ReadyFixturePreparation(Arc<FixtureTranscriptionSession>);
+
+    impl PreparedTranscription for ReadyFixturePreparation {
+        fn start(
+            &self,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            let session = self.0.clone();
+            Box::pin(async move { Ok(session as Arc<dyn TranscriptionSession>) })
+        }
+    }
+
+    struct BlockedPreparationTranscriber {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        calls: Arc<AtomicUsize>,
+        session: Arc<FixtureTranscriptionSession>,
+    }
+
+    impl TranscriptionEngine for BlockedPreparationTranscriber {
+        fn prepare(
+            self: Arc<Self>,
+            _id: SessionId,
+            _context: Arc<DictationContext>,
+        ) -> BoxFuture<'static, Result<Arc<dyn PreparedTranscription>, BackendError>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::AcqRel);
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(Arc::new(ReadyFixturePreparation(self.session.clone()))
+                    as Arc<dyn PreparedTranscription>)
+            })
+        }
+
+        fn start(
+            &self,
+            _id: SessionId,
+            _context: Arc<DictationContext>,
+            _partials: Arc<dyn TextStreamSink>,
+        ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
+            Box::pin(async { unreachable!("must use the prepared provider") })
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_starts_before_slow_preparation_and_cancellation_releases_it_promptly() {
+        for cancel in [false, true] {
+            let consumer = Arc::new(Mutex::new(None));
+            let stops = Arc::new(AtomicUsize::new(0));
+            let pcm = Arc::new(Mutex::new(Vec::new()));
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let calls = Arc::new(AtomicUsize::new(0));
+            let engine = Arc::new(PipelineDictationEngine::new(
+                Arc::new(ExposedRecorder {
+                    consumer: consumer.clone(),
+                    stops: stops.clone(),
+                }),
+                Arc::new(BlockedPreparationTranscriber {
+                    entered: entered.clone(),
+                    release: release.clone(),
+                    calls: calls.clone(),
+                    session: Arc::new(FixtureTranscriptionSession {
+                        pcm: pcm.clone(),
+                        cancels: Arc::new(AtomicUsize::new(0)),
+                        finish_entered: None,
+                        finish_release: None,
+                    }),
+                }),
+                noop_polisher(),
+            ));
+            let id = SessionId::new();
+            let progress = Arc::new(RecordingProgress::default());
+            let starting = tokio::spawn({
+                let engine = engine.clone();
+                let progress = progress.clone();
+                async move { engine.start(id, raw_dictation_context(), progress).await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+                .await
+                .unwrap();
+            assert!(
+                consumer.lock().unwrap().is_some(),
+                "microphone must precede prepare"
+            );
+            assert!(pcm.lock().unwrap().is_empty());
+            consumer
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .consume_pcm_chunk(&[2, 0]);
+            if cancel {
+                tokio::time::timeout(std::time::Duration::from_secs(2), engine.cancel(id))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    stops.load(Ordering::Acquire),
+                    1,
+                    "cancel waited for provider preparation"
+                );
+            }
+            release.notify_one();
+            let result = starting.await.unwrap();
+            if cancel {
+                assert_eq!(result.unwrap_err().code, BackendErrorCode::Cancelled);
+                assert!(pcm.lock().unwrap().is_empty());
+            } else {
+                result.unwrap();
+                engine.finish(id, progress).await.unwrap();
+                assert_eq!(&*pcm.lock().unwrap(), &[1, 0, 2, 0]);
+            }
+            assert_eq!(calls.load(Ordering::Acquire), 1);
+            assert_eq!(stops.load(Ordering::Acquire), 1);
+            assert!(engine.sessions.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

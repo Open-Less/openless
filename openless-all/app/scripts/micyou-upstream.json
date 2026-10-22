@@ -1,0 +1,43 @@
+{
+  "repository": "MicYou-Dev/MicYou",
+  "revision": "d821da032e2b72330ced09678dd127acd2714bef",
+  "patchSha256": "7f204189f5ce7bb9f0250093bf6f5823e81e9c97777936d5f9bed54c210dd5ee",
+  "files": {
+    "crates/micyou-dsp/src/lib.rs": {
+      "upstreamSha256": "9e3cb90b48c843554d75704188d4490d197f0134f57cf2fbc2f4a2aad1753d24",
+      "localSha256": "33174dfb93c42d4fd45dd36b721def47393bdce780324e8c58694f66f9585fa4"
+    },
+    "crates/micyou-infer/src/lib.rs": {
+      "upstreamSha256": "a2d412f007ee15148e9a3684db8f59559e1057f62109f6ed5a1ca5fe951f5883",
+      "localSha256": "34385b6d707059937f8cfd6f4366b94fc3e38adedf4682435282c99d5f521264"
+    },
+    "crates/micyou-infer/src/ops.rs": {
+      "upstreamSha256": "718c52a97d87a18043822f55f876ee03231429d5989361938f7e5b8d6dd459e9",
+      "localSha256": "718c52a97d87a18043822f55f876ee03231429d5989361938f7e5b8d6dd459e9"
+    },
+    "crates/micyou-dsp/src/assets/purevox6.mcy": {
+      "upstreamSha256": "88fe0a1f44b93942770c97c576eab84ff193370b96cb311671900c07ef213147",
+      "localSha256": "88fe0a1f44b93942770c97c576eab84ff193370b96cb311671900c07ef213147"
+    },
+    "crates/micyou-dsp/src/assets/aec7.mcy": {
+      "upstreamSha256": "a199b0210227775a16ce092c3c66046b8a0d2a663a6a02d8cb7d60f9e56e66a5",
+      "localSha256": "a199b0210227775a16ce092c3c66046b8a0d2a663a6a02d8cb7d60f9e56e66a5"
+    },
+    "crates/micyou-dsp/LICENSE": {
+      "upstreamSha256": "9638e134977de4ee0c9745cf94e3a2c64c2252f88057fd5092731b9d74e75816",
+      "localSha256": "9638e134977de4ee0c9745cf94e3a2c64c2252f88057fd5092731b9d74e75816"
+    },
+    "crates/micyou-infer/LICENSE": {
+      "upstreamSha256": "9638e134977de4ee0c9745cf94e3a2c64c2252f88057fd5092731b9d74e75816",
+      "localSha256": "9638e134977de4ee0c9745cf94e3a2c64c2252f88057fd5092731b9d74e75816"
+    },
+    "crates/micyou-dsp/LICENSE-PureVox.txt": {
+      "upstreamSha256": "06c669821b66a2d5cb87a0eb24794e21950534bc2b1fc87f0d4b81d72999a09d",
+      "localSha256": "06c669821b66a2d5cb87a0eb24794e21950534bc2b1fc87f0d4b81d72999a09d"
+    },
+    "crates/micyou-dsp/LICENSE-AEC7.txt": {
+      "upstreamSha256": "c41ed2d1fe4ff8660f2b7250343f078316aad743a4871ce205482236ca5f8df6",
+      "localSha256": "c41ed2d1fe4ff8660f2b7250343f078316aad743a4871ce205482236ca5f8df6"
+    }
+  }
+}

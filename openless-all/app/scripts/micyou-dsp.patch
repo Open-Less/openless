@@ -1,0 +1,356 @@
+--- a/crates/micyou-dsp/src/lib.rs
++++ b/crates/micyou-dsp/src/lib.rs
+@@ -13,7 +13,12 @@
+  * GNU General Public License for more details.
+  */
+ 
+-#[cfg(feature = "noise-suppression")]
++// Keep upstream FFT indexing and error conversion intact in the import patch.
++#![allow(
++    clippy::needless_range_loop,
++    clippy::needless_return_with_question_mark
++)]
++
+ use std::collections::VecDeque;
+ use std::path::PathBuf;
+ use std::sync::{Arc, RwLock};
+@@ -25,8 +30,12 @@
+ #[cfg(feature = "noise-suppression")]
+ use rustfft::num_complex::Complex;
+ 
+-#[cfg(feature = "noise-suppression")]
+-use crate::AecFailure;
++// OpenLess adaptation: DSP-only crate; no device, playback or plugin host.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum AecFailure {
++    ModelLoadFailed,
++    InferenceFailed,
++}
+ 
+ /// Host-provided DSP stage invoked at plugin chain nodes. The first argument
+ /// is the chain node name: either the legacy synthetic [`PLUGIN_CHAIN_NODE`]
+@@ -35,7 +44,7 @@
+ pub type ExternalDspHook = Box<dyn FnMut(&str, &mut Vec<f32>, usize, f64) + Send>;
+ 
+ #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+-#[serde(rename_all = "camelCase")]
++#[serde(default, rename_all = "camelCase")]
+ pub struct EqualizerConfig {
+     pub enabled: bool,
+     pub pre_amp: f32,
+@@ -54,7 +63,7 @@
+ 
+ /// Audio DSP settings, synced from the frontend.
+ #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+-#[serde(rename_all = "camelCase")]
++#[serde(default, rename_all = "camelCase")]
+ pub struct AudioDspSettings {
+     pub gain: f32, // dB, -50 to +50
+     pub ns_enabled: bool,
+@@ -874,76 +883,13 @@
+     }
+ }
+ 
+-// ─── Buffer Level Manager (replaces adaptive resampler) ─────────────────────
+-
+-/// Manages playback timing by monitoring the output buffer level.
+-/// Instead of continuous resampling (which introduces interpolation artifacts),
+-/// this uses simple sample duplication/dropping only when the buffer drifts
+-/// significantly from the target level.
+-struct BufferLevelManager {
+-    underrun_count: u32,
+-    overrun_count: u32,
+-}
+-
+-impl BufferLevelManager {
+-    fn new() -> Self {
+-        Self {
+-            underrun_count: 0,
+-            overrun_count: 0,
+-        }
+-    }
+-
+-    fn process(&mut self, input: &[f32], channels: usize, queued_ms: f64, output: &mut Vec<f32>) {
+-        output.clear();
+-        if channels == 0 || input.is_empty() {
+-            output.extend_from_slice(input);
+-            return;
+-        }
+-
+-        let frames = input.len() / channels;
+-
+-        // Buffer critically low (< 15ms): duplicate last frame to prevent underrun
+-        if queued_ms < 15.0 {
+-            self.underrun_count += 1;
+-            self.overrun_count = 0;
+-            // Duplicate the last frame
+-            if frames >= 1 && self.underrun_count <= 3 {
+-                output.reserve(input.len() + channels);
+-                output.extend_from_slice(input);
+-                let last_frame_start = (frames - 1) * channels;
+-                for c in 0..channels {
+-                    output.push(input[last_frame_start + c]);
+-                }
+-                return;
+-            }
+-            output.extend_from_slice(input);
+-            return;
+-        }
+-
+-        // Buffer critically high (> 300ms): drop first frame to prevent overflow
+-        if queued_ms > 300.0 {
+-            self.overrun_count += 1;
+-            self.underrun_count = 0;
+-            if frames > 2 && self.overrun_count <= 3 {
+-                output.extend_from_slice(&input[channels..]);
+-                return;
+-            }
+-            output.extend_from_slice(input);
+-            return;
+-        }
+-
+-        // Normal range: pass through unchanged
+-        self.underrun_count = 0;
+-        self.overrun_count = 0;
+-        output.extend_from_slice(input);
+-    }
+-}
+-
+ // ─── Main DSP Processor ─────────────────────────────────────────────────────
+ 
+ /// The main DSP processor. Operates on f32 PCM samples at 48kHz.
+ pub struct DspProcessor {
+     settings: Arc<RwLock<AudioDspSettings>>,
++    dry_delay: VecDeque<f32>,
++    noise_speech_probability: f32,
+     // RNNoise states - separate per channel to avoid RNN state cross-contamination
+     #[cfg(feature = "dsp")]
+     denoiser_left: Box<DenoiseState<'static>>,
+@@ -983,9 +929,6 @@
+     speex_ns: SpeexStyleNS,
+     // Equalizer
+     equalizer: EqualizerEffect,
+-    // Adaptive Resampler
+-    // Buffer level manager (replaces adaptive resampler)
+-    buffer_manager: BufferLevelManager,
+     // Dereverb state
+     dereverb_buffer_left: Vec<f32>,
+     dereverb_buffer_right: Vec<f32>,
+@@ -1042,6 +985,8 @@
+     pub fn new(settings: Arc<RwLock<AudioDspSettings>>, _model_dir: Option<PathBuf>) -> Self {
+         Self {
+             settings: settings.clone(),
++            dry_delay: VecDeque::new(),
++            noise_speech_probability: 0.0,
+             #[cfg(feature = "dsp")]
+             denoiser_left: DenoiseState::new(),
+             #[cfg(feature = "dsp")]
+@@ -1069,7 +1014,6 @@
+             #[cfg(feature = "dsp")]
+             speex_ns: SpeexStyleNS::new(),
+             equalizer: EqualizerEffect::new(),
+-            buffer_manager: BufferLevelManager::new(),
+             dereverb_buffer_left: vec![0.0; 480],
+             dereverb_buffer_right: vec![0.0; 480],
+             dereverb_index: 0,
+@@ -1176,6 +1120,14 @@
+                             settings.agc_target,
+                             attack_rate,
+                             decay_rate,
++                            if !settings.ns_enabled
++                                || settings.ns_type == "Speexdsp"
++                                || self.noise_speech_probability >= 0.5
++                            {
++                                5.0
++                            } else {
++                                1.0
++                            },
+                         );
+                     }
+                 }
+@@ -1186,7 +1138,12 @@
+                     // Legacy synthetic plugin stage (may be absent): runs
+                     // every registered plugin at this chain position.
+                     if let Some(hook) = &mut self.external_hook {
+-                        hook(PLUGIN_CHAIN_NODE, &mut to_process, channels.max(1), queued_ms);
++                        hook(
++                            PLUGIN_CHAIN_NODE,
++                            &mut to_process,
++                            channels.max(1),
++                            queued_ms,
++                        );
+                     }
+                 }
+                 node if node.starts_with(PLUGIN_NODE_PREFIX) => {
+@@ -1200,8 +1157,8 @@
+             }
+         }
+ 
+-        self.buffer_manager
+-            .process(&to_process, channels, queued_ms, &mut self.output_buffer);
++        self.output_buffer.clear();
++        self.output_buffer.extend_from_slice(&to_process);
+ 
+         // Soft clip — avoids harsh hard-clipping artifacts (crackling/pops)
+         for sample in self.output_buffer.iter_mut() {
+@@ -1368,14 +1325,45 @@
+         channels: usize,
+         settings: &AudioDspSettings,
+     ) {
++        let original = data.clone();
+         match settings.ns_type.as_str() {
+             #[cfg(feature = "dsp")]
+-            "RNNoise" => self.apply_rnnoise(data, channels, settings.ns_intensity),
++            "RNNoise" => self.apply_rnnoise(data, channels, 100.0),
+             #[cfg(feature = "noise-suppression")]
+-            "PureVox" => self.apply_purevox(data, channels, settings.ns_intensity),
++            "PureVox" => self.apply_purevox(data, channels, 100.0),
+             #[cfg(feature = "dsp")]
+-            "Speexdsp" => self.apply_speex(data, channels, settings.ns_intensity),
+-            _ => {}
++            "Speexdsp" => {
++                self.apply_speex(data, channels, settings.ns_intensity);
++                return;
++            }
++            _ => return,
++        }
++        // OpenLess: mix against the previous hop, matching model latency.
++        if self.dry_delay.is_empty() {
++            self.dry_delay.resize(RNNOISE_FRAME_SIZE * channels, 0.0);
++        }
++        self.dry_delay.extend(original);
++        if settings.ns_type == "PureVox" {
++            // PureVox has no VAD output. Avoid boosting strongly rejected
++            // stationary noise by comparing wet energy with aligned dry audio.
++            let dry_power = self
++                .dry_delay
++                .iter()
++                .take(data.len())
++                .map(|s| s * s)
++                .sum::<f32>()
++                / data.len().max(1) as f32;
++            let wet_rms = compute_rms(data);
++            self.noise_speech_probability = if wet_rms > dry_power.sqrt() * 0.2 {
++                1.0
++            } else {
++                0.0
++            };
++        }
++        let mix = (settings.ns_intensity / 100.0).clamp(0.0, 1.0);
++        for sample in data {
++            let dry = self.dry_delay.pop_front().unwrap_or(0.0);
++            *sample = dry * (1.0 - mix) + *sample * mix;
+         }
+     }
+ 
+@@ -1397,18 +1385,19 @@
+             }
+ 
+             // Process each channel with its own denoiser (no RNN state cross-contamination)
+-            Self::process_rnnoise_single_channel(
++            let left_probability = Self::process_rnnoise_single_channel(
+                 &mut left,
+                 &mut self.ns_buffer_left,
+                 &mut self.denoiser_left,
+                 intensity,
+             );
+-            Self::process_rnnoise_single_channel(
++            let right_probability = Self::process_rnnoise_single_channel(
+                 &mut right,
+                 &mut self.ns_buffer_right,
+                 &mut self.denoiser_right,
+                 intensity,
+             );
++            self.noise_speech_probability = left_probability.max(right_probability);
+ 
+             data.clear();
+             for i in 0..frames {
+@@ -1416,7 +1405,7 @@
+                 data.push(right[i]);
+             }
+         } else {
+-            Self::process_rnnoise_single_channel(
++            self.noise_speech_probability = Self::process_rnnoise_single_channel(
+                 data,
+                 &mut self.ns_buffer_left,
+                 &mut self.denoiser_left,
+@@ -1431,12 +1420,13 @@
+         ns_buffer: &mut Vec<f32>,
+         denoiser: &mut DenoiseState<'static>,
+         intensity: f32,
+-    ) {
++    ) -> f32 {
+         let mix = (intensity / 100.0).clamp(0.0, 1.0);
+         let input_len = data.len();
+         ns_buffer.extend_from_slice(data);
+ 
+         let mut output = Vec::with_capacity(input_len);
++        let mut speech_probability = 0.0_f32;
+ 
+         while ns_buffer.len() >= RNNOISE_FRAME_SIZE {
+             let frame: Vec<f32> = ns_buffer.drain(..RNNOISE_FRAME_SIZE).collect();
+@@ -1444,7 +1434,8 @@
+             let input_frame: Vec<f32> = frame.iter().map(|s| s * 32767.0).collect();
+             let mut output_frame = vec![0.0f32; RNNOISE_FRAME_SIZE];
+ 
+-            let _vad_prob = denoiser.process_frame(&mut output_frame, &input_frame);
++            let vad_prob = denoiser.process_frame(&mut output_frame, &input_frame);
++            speech_probability = speech_probability.max(vad_prob);
+ 
+             for i in 0..RNNOISE_FRAME_SIZE {
+                 let clean = output_frame[i] / 32767.0;
+@@ -1463,6 +1454,7 @@
+         }
+ 
+         data.copy_from_slice(&output);
++        speech_probability
+     }
+ 
+     #[cfg(feature = "noise-suppression")]
+@@ -1618,7 +1610,14 @@
+ 
+     // ── AGC ─────────────────────────────────────────────────────────────────
+ 
+-    fn apply_agc(&mut self, data: &mut [f32], target: f32, attack: f32, decay: f32) {
++    fn apply_agc(
++        &mut self,
++        data: &mut [f32],
++        target: f32,
++        attack: f32,
++        decay: f32,
++        maximum_gain: f32,
++    ) {
+         let target_linear = target / 32767.0;
+         // Noise gate threshold: below this level, don't apply AGC gain
+         // (prevents amplifying hiss/noise floor during speech pauses)
+@@ -1633,7 +1632,7 @@
+             }
+             if self.agc_envelope > gate_threshold {
+                 let desired_gain = target_linear / self.agc_envelope;
+-                let clamped_gain = desired_gain.clamp(0.1, 5.0);
++                let clamped_gain = desired_gain.clamp(0.1, maximum_gain);
+                 // Smooth gain transition to avoid pops (exponential moving average)
+                 let smooth_factor = 0.005_f32;
+                 self.agc_smoothed_gain += smooth_factor * (clamped_gain - self.agc_smoothed_gain);
+--- a/crates/micyou-infer/src/lib.rs
++++ b/crates/micyou-infer/src/lib.rs
+@@ -48,6 +48,19 @@
+ //! packing and re-checked in debug builds ([`Graph::validate_layout`]):
+ //! at every op, the output region never overlaps any input region.
+ 
++// Preserve upstream numerical kernels and operation signatures for reproducible imports.
++#![allow(
++    clippy::needless_range_loop,
++    clippy::excessive_precision,
++    clippy::approx_constant,
++    clippy::manual_checked_ops,
++    clippy::manual_range_contains,
++    clippy::unnecessary_fold,
++    clippy::too_many_arguments,
++    clippy::chunks_exact_to_as_chunks,
++    clippy::type_complexity
++)]
++
+ use std::fmt;
+ 
+ mod ops;

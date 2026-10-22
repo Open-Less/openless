@@ -340,6 +340,25 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+export type AudioDspStage =
+  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+export interface AudioDspConfig {
+  noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
+  noiseStrength: number;
+  gainDb: number;
+  agcEnabled: boolean;
+  agcTarget: number;
+  agcAttack: number;
+  agcDecay: number;
+  vadEnabled: boolean;
+  vadThresholdDb: number;
+  dereverbLevel: number;
+  equalizerEnabled: boolean;
+  equalizerPreampDb: number;
+  equalizerBandsDb: number[];
+  processingOrder: AudioDspStage[];
+}
+
 /** Runtime health of the disposable native capsule sidecar (desktop only). */
 export interface NativeCapsuleStatus {
   /** Whether the launch-time low-memory background switch is active. */
@@ -371,10 +390,11 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
+  /** Enable the session-frozen speech enhancement chain. Disabled by default. */
+  audioEnhancementEnabled: boolean;
+  audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
   lowMemoryBackgroundEnabled: boolean;
-  /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
-  audioEnhancementEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
   voiceActivationWakeEnabled: boolean;

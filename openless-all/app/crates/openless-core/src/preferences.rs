@@ -124,6 +124,7 @@ fn preferences_json_preserving_unknown(
 fn strip_local_only_preferences(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(object) = value {
         object.remove("lowLatencyDictationEnabled");
+        object.remove("audioDsp");
         object.remove("lowMemoryBackgroundEnabled");
     }
 }
@@ -479,10 +480,12 @@ mod tests {
     fn cloud_snapshot_omits_local_microphone_warm_capture_preference() {
         let mut value = serde_json::json!({
             "lowLatencyDictationEnabled": true,
+            "audioDsp": {"noiseReduction": "purevox"},
             "microphoneDeviceName": "Built-in Mic",
         });
         strip_local_only_preferences(&mut value);
         assert!(value.get("lowLatencyDictationEnabled").is_none());
+        assert!(value.get("audioDsp").is_none());
         assert_eq!(value["microphoneDeviceName"], "Built-in Mic");
     }
 

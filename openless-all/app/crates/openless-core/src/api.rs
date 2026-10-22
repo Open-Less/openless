@@ -2320,6 +2320,11 @@ struct BackendEngineProgress {
 impl EngineProgressSink for BackendEngineProgress {
     fn publish(&self, session_id: SessionId, progress: EngineProgress) -> Result<(), BackendError> {
         match progress {
+            EngineProgress::CaptureReady => {
+                let state = self.state.read().expect("backend state lock poisoned");
+                ensure_active_session(&state, session_id)?;
+                self.phase_changed.notify_waiters();
+            }
             EngineProgress::RecordingLevel { elapsed_ms, level } => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
@@ -5290,6 +5295,7 @@ impl OpenLessBackend {
             pre_roll_ms: 500,
             audio_processing: crate::audio::AudioProcessingConfig {
                 enhancement_enabled: preferences.audio_enhancement_enabled,
+                dsp: preferences.audio_dsp,
             },
         };
         match self.deps.dictation_engine.arm_audio_capture(request) {
@@ -8003,6 +8009,38 @@ impl OpenLessBackend {
             if let Some(session) = ready {
                 break session;
             }
+            let session_id = expected_session_id.expect("stop is bound to an active session");
+            let resources = self.voice_sessions.hold_resources(session_id)?;
+            let engine = Arc::clone(&self.deps.dictation_engine);
+            let state = Arc::clone(&self.state);
+            let phase_changed = Arc::clone(&self.phase_changed);
+            own_voice_effect(
+                &self.deps.task_spawner,
+                Box::pin(async move {
+                    let _resources = resources;
+                    loop {
+                        let changed = phase_changed.notified();
+                        match engine.stop_recording(session_id).await {
+                            Ok(false) => {}
+                            // finish() reports cached stop errors without discarding recovery audio.
+                            Ok(true) | Err(_) => return Ok(()),
+                        }
+                        {
+                            let state = state.read().expect("backend state lock poisoned");
+                            if state.dictation.session_id != Some(session_id)
+                                || state.dictation.phase != DictationPhase::Starting
+                            {
+                                return Ok(());
+                            }
+                        }
+                        tokio::select! {
+                            _ = changed => {}
+                            _ = _resources.cancel.cancelled() => return Ok(()),
+                        }
+                    }
+                }),
+            )
+            .await?;
             changed.await;
         };
 
@@ -17894,6 +17932,227 @@ mod tests {
         assert_eq!(result.session_id, expected_session);
         assert_eq!(result.polished_text, "polished");
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+    }
+
+    #[tokio::test]
+    async fn stop_during_provider_preparation_releases_capture_before_finalization() {
+        use crate::ports::{
+            ActiveRecording, AudioConsumer, AudioRecorder, PreparedTranscription, RecordingArchive,
+            RecordingProgressSink, TextStreamSink, TranscriptionEngine, TranscriptionSession,
+        };
+        use crate::testing::{
+            FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
+        };
+
+        struct BlockedPreparation {
+            entered: Arc<tokio::sync::Notify>,
+            release: Arc<tokio::sync::Notify>,
+            transcriber: FixtureTranscriptionEngine,
+        }
+        impl TranscriptionEngine for BlockedPreparation {
+            fn prepare(
+                self: Arc<Self>,
+                session_id: SessionId,
+                context: Arc<DictationContext>,
+            ) -> BoxFuture<'static, Result<Arc<dyn PreparedTranscription>, BackendError>>
+            {
+                Box::pin(async move {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                    Arc::new(self.transcriber.clone())
+                        .prepare(session_id, context)
+                        .await
+                })
+            }
+            fn start(
+                &self,
+                session_id: SessionId,
+                context: Arc<DictationContext>,
+                partials: Arc<dyn TextStreamSink>,
+            ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>>
+            {
+                self.transcriber.start(session_id, context, partials)
+            }
+        }
+
+        struct Recorder {
+            inner: FixtureAudioRecorder,
+            stop_fails: bool,
+            archive: Arc<Mutex<Option<Arc<dyn RecordingArchive>>>>,
+        }
+        struct Recording {
+            inner: Box<dyn ActiveRecording>,
+            stop_fails: bool,
+        }
+        impl ActiveRecording for Recording {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                self.inner.archive()
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                let Recording { inner, stop_fails } = *self;
+                let stopping = inner.stop();
+                Box::pin(async move {
+                    stopping.await?;
+                    if stop_fails {
+                        Err(BackendError::new(
+                            BackendErrorCode::Platform,
+                            "fixture stop failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+        }
+        impl AudioRecorder for Recorder {
+            fn start(
+                &self,
+                session_id: SessionId,
+                context: Arc<DictationContext>,
+                consumer: Arc<dyn AudioConsumer>,
+                progress: Arc<dyn RecordingProgressSink>,
+            ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+                let starting = self.inner.start(session_id, context, consumer, progress);
+                let archive = self.archive.clone();
+                let stop_fails = self.stop_fails;
+                Box::pin(async move {
+                    let recording = starting.await?;
+                    *archive.lock().unwrap() = recording.archive();
+                    Ok(Box::new(Recording {
+                        inner: recording,
+                        stop_fails,
+                    }) as Box<dyn ActiveRecording>)
+                })
+            }
+        }
+
+        for stable in [false, true] {
+            for publish_level in [false, true] {
+                for (stop_before_start, drop_stop, stop_fails) in [
+                    (false, false, false),
+                    (true, false, false),
+                    (true, true, false),
+                    (false, false, true),
+                    (true, false, true),
+                ] {
+                    let entered = Arc::new(tokio::sync::Notify::new());
+                    let release = Arc::new(tokio::sync::Notify::new());
+                    let recorder = FixtureAudioRecorder::new(
+                        vec![vec![1, 0, 2, 0]],
+                        if publish_level {
+                            vec![(1, 0.1)]
+                        } else {
+                            vec![]
+                        },
+                    )
+                    .with_archived_recording(true);
+                    let archive = Arc::new(Mutex::new(None));
+                    let transcriber = FixtureTranscriptionEngine::successful("captured prefix", 1);
+                    let mut deps = BackendDependencies::unsupported();
+                    deps.credential_store =
+                        Arc::new(crate::credentials::InMemoryCredentialStore::default());
+                    deps.dictation_engine = Arc::new(crate::DictationEngineRouter::new(Arc::new(
+                        crate::PipelineDictationEngine::new(
+                            Arc::new(Recorder {
+                                inner: recorder.clone(),
+                                stop_fails,
+                                archive: archive.clone(),
+                            }),
+                            Arc::new(BlockedPreparation {
+                                entered: entered.clone(),
+                                release: release.clone(),
+                                transcriber: transcriber.clone(),
+                            }),
+                            Arc::new(FixtureTextPolisher::successful("unused")),
+                        ),
+                    )));
+                    let data_dir = TestDataDir::new("stop-during-provider-preparation");
+                    let backend = Arc::new(
+                        OpenLessBackend::new(
+                            BackendConfig {
+                                data_dir: data_dir.path().to_path_buf(),
+                                ..Default::default()
+                            },
+                            deps,
+                        )
+                        .unwrap(),
+                    );
+                    backend.start().await.unwrap();
+                    let mut prefs = backend.get_preferences();
+                    prefs.stable_transcription_enabled = stable;
+                    prefs.record_audio_for_debug = true;
+                    backend.set_preferences(prefs).unwrap();
+                    let options = DictationStartOptions {
+                        insert_text: false,
+                        ..Default::default()
+                    };
+                    let reservation = backend
+                        .reserve_dictation_session(false, options.output_target, None)
+                        .unwrap();
+                    let session_id = reservation.session_id;
+                    let mut stopping = Some(Box::pin(backend.stop_dictation()));
+                    if stop_before_start {
+                        assert!(
+                            futures_util::poll!(stopping.as_mut().unwrap().as_mut()).is_pending()
+                        );
+                        tokio::task::yield_now().await;
+                        assert!(
+                            futures_util::poll!(stopping.as_mut().unwrap().as_mut()).is_pending()
+                        );
+                    }
+                    if drop_stop {
+                        drop(stopping.take());
+                    }
+                    let starting = tokio::spawn({
+                        let backend = backend.clone();
+                        async move { backend.start_reserved_dictation(reservation, options).await }
+                    });
+                    entered.notified().await;
+                    let wait_for_stop = async {
+                        while recorder.stop_count() == 0 {
+                            if let Some(stopping) = stopping.as_mut() {
+                                tokio::select! {
+                                    result = stopping => panic!("finalized before provider preparation: {result:?}"),
+                                    _ = tokio::task::yield_now() => {}
+                                }
+                            } else {
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    };
+                    let stopped_before_prepare =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), wait_for_stop)
+                            .await;
+                    assert!(transcriber.pcm().is_empty());
+                    release.notify_one();
+                    assert_eq!(starting.await.unwrap().unwrap(), session_id);
+                    let result = match stopping {
+                        Some(stopping) => stopping.await,
+                        None => backend.stop_dictation().await,
+                    };
+                    if stop_fails {
+                        assert_eq!(result.unwrap_err().code, BackendErrorCode::Platform);
+                        assert_eq!(
+                            backend.list_history().unwrap()[0].error_code.as_deref(),
+                            Some("transcribeFailed")
+                        );
+                    } else {
+                        let result = result.unwrap();
+                        assert_eq!(result.session_id, session_id);
+                        assert_eq!(result.polished_text, "captured prefix");
+                        assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
+                    }
+                    assert_eq!(recorder.stop_count(), 1);
+                    assert!(archive.lock().unwrap().as_ref().unwrap().is_available());
+                    assert_eq!(
+                        backend.list_history().unwrap()[0].has_audio_recording,
+                        Some(true)
+                    );
+                    assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+                    assert!(stopped_before_prepare.is_ok(), "Stop kept capture open: stable={stable}, level={publish_level}, early={stop_before_start}, dropped={drop_stop}, failed={stop_fails}");
+                }
+            }
+        }
     }
 
     async fn assert_pending_insertion_cleanup(drop_start: bool) {

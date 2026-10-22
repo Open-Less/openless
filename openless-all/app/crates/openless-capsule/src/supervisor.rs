@@ -107,6 +107,23 @@ async fn run_instance(
     on_action: &Arc<dyn Fn(String, Action) + Send + Sync>,
     on_health: &HealthCallback,
 ) -> io::Result<()> {
+    run_instance_with_handshake_timeout(
+        command,
+        frames,
+        on_action,
+        on_health,
+        Duration::from_secs(5),
+    )
+    .await
+}
+
+async fn run_instance_with_handshake_timeout(
+    command: &mut Command,
+    frames: &mut watch::Receiver<Option<Frame>>,
+    on_action: &Arc<dyn Fn(String, Action) + Send + Sync>,
+    on_health: &HealthCallback,
+    handshake_timeout: Duration,
+) -> io::Result<()> {
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -127,7 +144,7 @@ async fn run_instance(
     );
     let mut ready = false;
     let mut message_bytes = Vec::new();
-    let deadline = tokio::time::sleep(Duration::from_secs(5));
+    let deadline = tokio::time::sleep(handshake_timeout);
     tokio::pin!(deadline);
     let result = async {
         loop {
@@ -434,13 +451,24 @@ mod health_tests {
         });
         let action: Arc<dyn Fn(String, Action) + Send + Sync> =
             Arc::new(|_, _| panic!("unexpected action"));
-        let task = tokio::spawn(async move {
-            run_instance(&mut helper(true), &mut receiver, &action, &notify).await
-        });
-        tokio::time::timeout(Duration::from_secs(5), health.changed())
+        let mut task = tokio::spawn(async move {
+            // The Windows test fixture cold-starts PowerShell, unlike the
+            // production native helper. Do not make its startup speed part
+            // of the protocol/lifecycle contract. Production retains 5 s.
+            run_instance_with_handshake_timeout(
+                &mut helper(true),
+                &mut receiver,
+                &action,
+                &notify,
+                Duration::from_secs(15),
+            )
             .await
-            .unwrap()
-            .unwrap();
+        });
+        tokio::select! {
+            changed = health.changed() => changed.expect("helper health channel closed before Ready"),
+            result = &mut task => panic!("helper exited before Ready: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(20)) => panic!("test helper did not report Ready within its startup budget"),
+        }
         assert!(health.borrow().is_none());
         frames.send_replace(None);
         assert!(tokio::time::timeout(Duration::from_secs(2), task)

@@ -1499,9 +1499,37 @@ export const ko: typeof zhCN = {
       lowLatencyDictationLabel: '저지연 캡처',
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
-      audioEnhancementLabel: '가벼운 마이크 향상',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
-        '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
+        'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',

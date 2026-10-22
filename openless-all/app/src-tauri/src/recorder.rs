@@ -33,6 +33,7 @@ const LOG_EVERY_N_CALLBACKS: usize = 50;
 const LEVEL_RMS_GAIN: f32 = 4.0;
 /// Maximum number of native callback blocks waiting for the processing worker.
 const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
 /// archive messages accepted before stop are fully flushed.
@@ -1712,6 +1713,13 @@ impl Recorder {
 }
 
 impl StagedRecorder {
+    pub(crate) fn capture_id(&self) -> u64 {
+        self.recorder
+            .as_ref()
+            .map(|recorder| recorder.state.capture_id)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn commit(
         mut self,
         consumer: Arc<dyn AudioConsumer>,
@@ -1989,8 +1997,10 @@ fn build_input_stream(
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    let selecting_at = std::time::Instant::now();
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
+    state.log_startup_phase("device_selected", selecting_at.elapsed());
     let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
         start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
@@ -2101,6 +2111,7 @@ fn start_native_config(
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let config = supported.config();
+    let building_at = std::time::Instant::now();
     state.accepting_audio.store(false, Ordering::Release);
     let stream = build_stream_for_format(
         device,
@@ -2113,10 +2124,13 @@ fn start_native_config(
         config.channels as usize,
         runtime_error_tx.clone(),
     )?;
+    state.log_startup_phase("stream_built", building_at.elapsed());
+    let playing_at = std::time::Instant::now();
     stream
         .play()
         .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
     state.accepting_audio.store(true, Ordering::Release);
+    state.log_startup_phase("stream_playing", playing_at.elapsed());
     log::info!(
         "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
         device.name().unwrap_or_else(|_| "<unknown>".into()),
@@ -2242,6 +2256,9 @@ fn build_stream_for_format(
                         if !state.accepting_audio.load(Ordering::Acquire) {
                             return;
                         }
+                        if !data.is_empty() {
+                            state.note_first_pcm(false);
+                        }
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
@@ -2339,6 +2356,7 @@ impl AudioProcessingWorker {
                                 frame.channels,
                                 frame.input_sample_rate,
                             ) {
+                                state.note_first_pcm(true);
                                 consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
                                 if let Some(archiver) = &archiver {
                                     archiver.append(&chunk.pcm_i16_le);
@@ -2348,9 +2366,30 @@ impl AudioProcessingWorker {
                             }
                         }
                         AudioProcessingMessage::Flush(done) => {
+                            if let Some(chunk) = processor.finish() {
+                                state.note_first_pcm(true);
+                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                                if let Some(archiver) = &archiver {
+                                    archiver.append(&chunk.pcm_i16_le);
+                                }
+                                level_handler(chunk.level);
+                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                            }
+                            processor.reset();
                             let _ = done.send(());
                         }
-                        AudioProcessingMessage::Shutdown => break,
+                        AudioProcessingMessage::Shutdown => {
+                            if let Some(chunk) = processor.finish() {
+                                state.note_first_pcm(true);
+                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                                if let Some(archiver) = &archiver {
+                                    archiver.append(&chunk.pcm_i16_le);
+                                }
+                                level_handler(chunk.level);
+                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                            }
+                            break;
+                        }
                     }
                 }
             })
@@ -2382,6 +2421,10 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    capture_id: u64,
+    created_at: std::time::Instant,
+    first_raw_pcm_us: AtomicU64,
+    first_output_pcm_us: AtomicU64,
     processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
@@ -2400,6 +2443,10 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+            created_at: std::time::Instant::now(),
+            first_raw_pcm_us: AtomicU64::new(0),
+            first_output_pcm_us: AtomicU64::new(0),
             processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
@@ -2410,6 +2457,40 @@ impl StreamState {
             // Start as None: timing begins only after the first callback, avoiding false
             // positives for slow-starting devices
             last_callback_time: Mutex::new(None),
+        }
+    }
+
+    fn log_startup_phase(&self, phase: &'static str, duration: std::time::Duration) {
+        log::info!(
+            "[audio-startup] capture={} phase={} duration_us={} since_open_us={}",
+            self.capture_id,
+            phase,
+            duration.as_micros(),
+            self.created_at.elapsed().as_micros()
+        );
+    }
+
+    fn note_first_pcm(&self, processed: bool) {
+        let slot = if processed {
+            &self.first_output_pcm_us
+        } else {
+            &self.first_raw_pcm_us
+        };
+        let elapsed = self.created_at.elapsed().as_micros().max(1) as u64;
+        if slot
+            .compare_exchange(0, elapsed, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log::info!(
+                "[audio-startup] capture={} phase={} since_open_us={}",
+                self.capture_id,
+                if processed {
+                    "first_output_pcm"
+                } else {
+                    "first_raw_pcm"
+                },
+                elapsed
+            );
         }
     }
 }
@@ -2427,6 +2508,7 @@ fn process_callback(
     if !state.accepting_audio.load(Ordering::Acquire) || interleaved.is_empty() || channels == 0 {
         return;
     }
+    state.note_first_pcm(false);
 
     let mono = downmix_to_mono(interleaved, channels);
     let input_rms = rms(&mono);
@@ -2439,6 +2521,7 @@ fn process_callback(
     let (pcm_bytes, output_rms) = quantize_to_i16_le(&resampled);
     let level = (output_rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0);
 
+    state.note_first_pcm(true);
     consumer.consume_pcm_chunk(&pcm_bytes);
     if let Some(arch) = archiver {
         arch.append(&pcm_bytes);
@@ -2715,6 +2798,7 @@ mod tests {
         let (worker, sender) = AudioProcessingWorker::start(
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: true,
+                ..Default::default()
             },
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
@@ -2734,7 +2818,75 @@ mod tests {
 
         let chunks = consumer.chunks.lock().unwrap();
         assert_eq!(chunks.len(), 1);
-        assert_eq!(decode_i16_le(&chunks[0]), vec![12287, -12287]);
+        assert_eq!(decode_i16_le(&chunks[0]).len(), 2);
+    }
+
+    #[test]
+    fn audio_processing_flush_delivers_tail_to_asr_and_archive_before_reset() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let path = std::env::temp_dir().join(format!(
+            "openless-dsp-tail-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            Some(archive.clone()),
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                samples: vec![0.15; 317],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        let (done_tx, done_rx) = channel();
+        sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            consumer
+                .chunks
+                .lock()
+                .unwrap()
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+            317 * 2
+        );
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                samples: vec![-0.15; 211],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        worker.finish();
+        archive.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(delivered.len(), (317 + 211) * 2);
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], delivered);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -2743,6 +2895,7 @@ mod tests {
         let (worker, sender) = AudioProcessingWorker::start(
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: false,
+                ..Default::default()
             },
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),

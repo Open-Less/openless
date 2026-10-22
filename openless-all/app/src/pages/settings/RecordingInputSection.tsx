@@ -45,6 +45,7 @@ import { Card, Collapsible, Btn } from '../_atoms';
 import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
+import { AudioDspSettings } from './AudioDspSettings';
 import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
@@ -544,14 +545,20 @@ export function RecordingInputSection({
             )}
           </div>
         </SettingRow>
-        {!isAndroid && (
+        <>
           <SettingRow
             label={t('settings.recording.audioEnhancementLabel')}
             desc={t('settings.recording.audioEnhancementDesc')}
           >
             <Toggle on={prefs.audioEnhancementEnabled} onToggle={onAudioEnhancementChange} />
           </SettingRow>
-        )}
+          {prefs.audioEnhancementEnabled && (
+            <AudioDspSettings
+              value={prefs.audioDsp}
+              onChange={(audioDsp) => void savePrefs({ ...prefs, audioDsp })}
+            />
+          )}
+        </>
         {!isAndroid && (
           <SettingRow
             label={t('settings.recording.capsuleLabel')}

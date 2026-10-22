@@ -423,10 +423,12 @@ pub struct UserPreferences {
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
-    /// Apply conservative noise suppression, lightweight gain, and a soft limiter to native microphone input.
+    /// Apply the session-frozen speech enhancement chain to microphone input.
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,
+    #[serde(default)]
+    pub audio_dsp: crate::audio_dsp::AudioDspConfig,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
@@ -1023,6 +1025,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_enhancement_enabled: bool,
     #[serde(default)]
+    audio_dsp: crate::audio_dsp::AudioDspConfig,
+    #[serde(default)]
     stable_transcription_enabled: bool,
     #[serde(default)]
     low_latency_dictation_enabled: bool,
@@ -1305,6 +1309,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
+            audio_dsp: prefs.audio_dsp.normalized(),
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             low_memory_background_enabled: prefs.low_memory_background_enabled,
@@ -1524,6 +1529,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
+            audio_dsp: wire.audio_dsp.normalized(),
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             low_memory_background_enabled: wire.low_memory_background_enabled,
@@ -1919,6 +1925,7 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
+            audio_dsp: Default::default(),
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
             low_memory_background_enabled: false,

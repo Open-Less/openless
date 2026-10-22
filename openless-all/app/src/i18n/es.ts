@@ -1544,9 +1544,37 @@ export const es: typeof zhCN = {
       lowLatencyDictationLabel: 'Captura de baja latencia',
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
-      audioEnhancementLabel: 'Mejora ligera del micrófono',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: 'Mejora de voz',
       audioEnhancementDesc:
-        'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
+        'Reducción de ruido RNNoise o PureVox, ganancia automática y limitación. Desactivada por defecto; los cambios se aplican a la próxima grabación.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',

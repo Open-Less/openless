@@ -231,6 +231,7 @@ pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
             .then(|| prefs.microphone_device_name.clone()),
         openless_core::AudioProcessingConfig {
             enhancement_enabled: prefs.audio_enhancement_enabled,
+            dsp: prefs.audio_dsp,
         },
     );
 }

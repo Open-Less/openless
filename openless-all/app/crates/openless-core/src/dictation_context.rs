@@ -335,6 +335,7 @@ impl DictationContext {
                     .then(|| (preferences.silence_auto_stop_seconds * 1_000.0).round() as u64),
                 audio_processing: AudioProcessingConfig {
                     enhancement_enabled: preferences.audio_enhancement_enabled,
+                    dsp: preferences.audio_dsp,
                 },
             },
             pipeline_mode: crate::shared_types::effective_pipeline_mode(
@@ -703,7 +704,8 @@ pub(crate) fn local_asr_fallback(
 ) -> Option<ProviderInvocation> {
     if !preferences.local_asr_fallback_enabled
         || !local_asr_supported
-        || !crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES.contains(&asr.provider_type.as_str())
+        || !crate::cloud_providers::SHARED_CLOUD_ASR_PROVIDER_TYPES
+            .contains(&asr.provider_type.as_str())
     {
         return None;
     }
@@ -854,6 +856,11 @@ mod tests {
             local_asr_active_model: "qwen3-asr-1.7b".to_string(),
             stable_transcription_enabled: true,
             audio_enhancement_enabled: true,
+            audio_dsp: crate::AudioDspConfig {
+                noise_reduction: crate::NoiseReduction::Purevox,
+                noise_strength: 33,
+                ..Default::default()
+            },
             history_max_entries: Some(100),
             audio_recording_max_entries: Some(7),
             working_languages: vec!["简体中文".to_string(), "English".to_string()],
@@ -881,6 +888,7 @@ mod tests {
         preferences.microphone_device_name = "changed".to_string();
         preferences.active_asr_provider = "changed".to_string();
         preferences.stable_transcription_enabled = false;
+        preferences.audio_dsp.noise_strength = 99;
         assert_eq!(
             context.recording.microphone_device_name.as_deref(),
             Some("USB microphone")
@@ -888,6 +896,11 @@ mod tests {
         assert_eq!(context.asr.provider_id, "local-qwen3");
         assert!(context.recording.transcribe_after_stop);
         assert!(context.recording.audio_processing.enhancement_enabled);
+        assert_eq!(
+            context.recording.audio_processing.dsp.noise_reduction,
+            crate::NoiseReduction::Purevox
+        );
+        assert_eq!(context.recording.audio_processing.dsp.noise_strength, 33);
         assert_eq!(context.asr.model.as_deref(), Some("qwen3-asr-1.7b"));
         // Audio archives have their own user-visible limit. History retention
         // may be much larger and must not silently override the recording cap.

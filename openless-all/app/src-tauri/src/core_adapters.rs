@@ -150,6 +150,7 @@ pub(crate) fn backend_dependencies(
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
+                dsp: prefs.audio_dsp,
             },
         );
     }
@@ -2000,6 +2001,7 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
             );
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
+                dsp: preferences_snapshot.audio_dsp,
             };
             if let Some(wake_asr) = wake_asr.as_ref() {
                 warm_hub.set_activation_generation(config.activation_generation);
@@ -2264,6 +2266,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                         .then(|| prefs.microphone_device_name.clone()),
                     openless_core::AudioProcessingConfig {
                         enhancement_enabled: prefs.audio_enhancement_enabled,
+                        dsp: prefs.audio_dsp,
                     },
                 );
             }
@@ -3573,6 +3576,11 @@ impl TauriAudioRecorder {
                 request.microphone_device_name.clone(),
                 request.audio_processing,
             ) {
+                log::info!(
+                    "[audio-startup] press={} mode=warm_hub arm_done_us={}",
+                    request.press_id,
+                    request.pressed_at.elapsed().as_micros()
+                );
                 return Ok(Box::new(TauriPendingAudioCapture {
                     app: Arc::clone(&self.app),
                     backend: Arc::clone(&self.backend),
@@ -3606,6 +3614,12 @@ impl TauriAudioRecorder {
                 return Err(map_recorder_error(error));
             }
         };
+        log::info!(
+            "[audio-startup] press={} capture={} mode=cold arm_done_us={}",
+            request.press_id,
+            staged.capture_id(),
+            request.pressed_at.elapsed().as_micros()
+        );
         Ok(Box::new(TauriPendingAudioCapture {
             app: Arc::clone(&self.app),
             backend: Arc::clone(&self.backend),

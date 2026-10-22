@@ -25,12 +25,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 log = "0.4"
-""")
+""" + "micyou-dsp = { path = " + json.dumps((recorder.parents[2] / "crates/micyou-dsp").as_posix()) + " }\n")
     (root / "src/lib.rs").write_text(
         "extern crate self as openless_core;\n"
         "#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum BackendErrorCode { InvalidArgument }\n"
         "#[derive(Debug, Clone)] pub struct BackendError { pub code: BackendErrorCode, pub message: String }\n"
         "impl BackendError { pub fn new(code: BackendErrorCode, message: impl Into<String>) -> Self { Self { code, message: message.into() } } }\n"
+        + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio_dsp.rs"), ensure_ascii=False) + "]\npub mod audio_dsp;\n"
+        "pub use audio_dsp::{AudioDspConfig, AudioDspStage, NoiseReduction};\n"
         + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio.rs"), ensure_ascii=False) + "]\npub mod audio;\n"
         "pub use audio::{AudioProcessingConfig, AudioProcessor};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"

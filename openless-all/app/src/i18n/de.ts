@@ -1553,9 +1553,37 @@ export const de: typeof zhCN = {
       lowLatencyDictationLabel: 'Aufnahme mit niedriger Latenz',
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
-      audioEnhancementLabel: 'Leichte Mikrofonverbesserung',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: 'Sprachverbesserung',
       audioEnhancementDesc:
-        'Wendet eine leichte Verstärkung, weiche Begrenzung und konservative Rauschunterdrückung auf das lokale Mikrofon an. Keine Echounterdrückung. Standardmäßig aus.',
+        'RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',

@@ -530,6 +530,21 @@ impl DictationEngine for DictationEngineRouter {
         })
     }
 
+    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        let routed = self
+            .active
+            .read()
+            .expect("active dictation provider lock poisoned")
+            .get(&session_id)
+            .cloned();
+        Box::pin(async move {
+            match routed {
+                Some(routed) => routed.engine.stop_recording(session_id).await,
+                None => Ok(false),
+            }
+        })
+    }
+
     fn feed_audio(&self, session_id: SessionId, pcm: &[u8]) -> Result<(), BackendError> {
         let routed = self
             .active
