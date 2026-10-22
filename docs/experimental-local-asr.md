@@ -76,5 +76,3 @@ src-tauri/target/debug/bundle/macos/OpenLess.app/Contents/MacOS/openless \
 目录必须是显式指定的 `openless-asr-acceptance*` 隔离目录，不能是符号链接。验收使用真实权重/原生引擎和包含 hello、test、system 的固定 WAV，不用麦克风，不访问系统凭据库。覆盖三模型推理、TextStream SSE/最终文本一致性、取消不提交、停用保留文件、禁用后重启不加载、已启用重启/设置查询不加载，以及隔离旧模型的升级清理。通过后写入该目录的 `passed.json`。
 
 浏览器回归使用 IPC mock，只证明界面行为，不能替代真实原生推理或签名发布验收。debug bundle 也不能替代 notarization 或真实 Windows 设备测试。
-
-本次已完成的真实模型、进程生命周期、Release 打包与验证边界见 [验收记录](local-asr-verification.md)。

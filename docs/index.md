@@ -35,9 +35,6 @@
 - [Tauri CSP 边界](tauri-csp.md)
 - [macOS 实验性本地语音模型](experimental-local-asr.md)：三模型、旧版下架、升级清理和隔离验收。
 - [本地 ASR 生命周期](local-asr-lifecycle.md)：下载、选择和推理状态的边界。
-- [本地 ASR 验收记录](local-asr-verification.md)：整合前的真实三模型与生命周期验证。
-- [桌面 beta.5 整合验收](desktop-beta5-integration.md)：合并来源、指定版本、本地测试及最终安装包。
-- [旧 qwen-asr 子模块说明（已下架）](qwen-asr-submodule-upgrade-checklist.md)
 
 ## 验证入口（在 `openless-all/app` 执行）
 
@@ -46,11 +43,3 @@
 - `cargo fmt --all --check`：根 workspace 的 openless-core、linux-egui；Tauri 单独执行 `cargo fmt --manifest-path src-tauri/Cargo.toml --check`。
 - `cargo test -p openless-core --locked`、`cargo test -p openless-linux-egui --locked`。
 - `src-tauri` 及 `backend-tests` 被 workspace exclude，按平台独立构建。源码构建 Tauri 前初始化子模块：`git submodule update --init --recursive`；Core/Linux 独立检查不依赖 Tauri 子模块。
-
-## 本地集成记录
-
-- [2026-09-25 Beta 3 集成](local-builds/2026-09-25-beta3.md)：最新 PR 整合、审查修复、CI 加速与平台范围。
-
-- [2026-09-23 2.0 PR 审查与构建](local-builds/2026-09-23-2.0.md)：PR 取舍、客户端修复及平台验证范围。
-
-- [2026-09-23 模型与云同步界面检查](local-builds/2026-09-23-models-and-sync.md)：运行时平台隔离、Qwen 中英文真实推理和新云同步文档边界。
