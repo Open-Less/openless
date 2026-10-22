@@ -562,6 +562,10 @@ pub struct UserPreferences {
     #[doc(hidden)]
     #[serde(skip)]
     pub translation_target_languages_present: bool,
+    /// Retains the submitted scalar until an empty list can be reconciled with stored choices.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub translation_target_language_input: Option<String>,
     /// Chinese output script preference (not exposed as a UI switch):
     /// - Simplified: prefer simplified for Chinese output
     /// - Traditional: prefer traditional for Chinese output
@@ -1479,6 +1483,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             }
         }
         let translation_target_languages_present = wire.translation_target_languages.is_some();
+        let translation_target_language_input = wire.translation_target_languages.as_ref()
+            .filter(|targets| targets.is_empty())
+            .map(|_| wire.translation_target_language.clone());
         let (translation_target_languages, translation_target_language) =
             crate::settings::migrate_translation_targets(
                 wire.translation_target_languages,
@@ -1592,6 +1599,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_target_language,
             translation_target_languages,
             translation_target_languages_present,
+            translation_target_language_input,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
@@ -1984,6 +1992,7 @@ impl Default for UserPreferences {
             translation_target_language: String::new(),
             translation_target_languages: Vec::new(),
             translation_target_languages_present: false,
+            translation_target_language_input: None,
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),

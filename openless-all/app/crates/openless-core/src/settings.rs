@@ -71,7 +71,15 @@ pub(crate) fn reconcile_translation_settings(
         },
         &previous.translation_target_language,
     );
-    let selected = canonical_translation_target(&next.translation_target_language);
+    // A legacy client can echo the initially empty list while selecting its first language.
+    // An empty list replacing stored choices remains an explicit deletion.
+    let input = if previous_targets.is_empty() && next.translation_target_languages.is_empty() {
+        next.translation_target_language_input.as_deref()
+            .unwrap_or(&next.translation_target_language)
+    } else {
+        &next.translation_target_language
+    };
+    let selected = canonical_translation_target(input);
     let mut targets = if next.translation_target_languages_present {
         ordered_translation_targets(next.translation_target_languages.clone())
     } else {
@@ -80,7 +88,7 @@ pub(crate) fn reconcile_translation_settings(
     // Scalar-only clients (including existing Rust callers editing a snapshot) select
     // a target without replacing the ordered collection. Explicit [] always clears.
     if (!next.translation_target_languages_present
-        || (!targets.is_empty() && targets == previous_targets && selected != previous_selected))
+        || (targets == previous_targets && selected != previous_selected))
         && !selected.is_empty()
         && !targets.contains(&selected)
     {
@@ -105,6 +113,7 @@ pub(crate) fn reconcile_translation_settings(
     next.translation_target_languages = targets;
     next.translation_target_language = selected;
     next.translation_target_languages_present = true;
+    next.translation_target_language_input = None;
     Ok(())
 }
 
@@ -407,6 +416,24 @@ mod tests {
 mod translation_targets_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn empty_list_roundtrip_allows_the_first_legacy_selection_but_explicit_clear_still_wins() {
+        let previous = UserPreferences::default();
+        let mut document = serde_json::to_value(&previous).unwrap();
+        document["translationTargetLanguage"] = json!("ko");
+        let mut next: UserPreferences = serde_json::from_value(document).unwrap();
+        reconcile_translation_settings(&previous, &mut next).unwrap();
+        assert_eq!(next.translation_target_language, "한국어");
+        assert_eq!(next.translation_target_languages, vec!["한국어"]);
+        let previous = next;
+        let mut document = serde_json::to_value(&previous).unwrap();
+        document["translationTargetLanguages"] = json!([]);
+        let mut cleared: UserPreferences = serde_json::from_value(document).unwrap();
+        reconcile_translation_settings(&previous, &mut cleared).unwrap();
+        assert!(cleared.translation_target_language.is_empty());
+        assert!(cleared.translation_target_languages.is_empty());
+    }
 
     #[test]
     fn legacy_selected_target_seeds_list_and_preserves_custom_names() {

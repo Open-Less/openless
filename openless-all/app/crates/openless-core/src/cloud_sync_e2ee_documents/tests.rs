@@ -110,17 +110,19 @@ fn all_current_preference_fields_have_an_explicit_registration() {
         .collect();
     // Wire-presence metadata is not persisted or synced. Verify the explicit
     // exception against actual serialization rather than exempting new fields.
-    let metadata = "translation_target_languages_present";
+    let metadata = ["translation_target_languages_present", "translation_target_language_input"];
     let prefs = crate::shared_types::UserPreferences {
         translation_target_languages_present: true,
+        translation_target_language_input: Some("en".into()),
         ..Default::default()
     };
     let serialized = serde_json::to_value(prefs).unwrap();
     assert!(serialized.get("translationTargetLanguagesPresent").is_none());
-    assert!(serialized.get(metadata).is_none());
+    assert!(serialized.get("translationTargetLanguageInput").is_none());
+    assert!(metadata.iter().all(|name| serialized.get(*name).is_none()));
     let names: std::collections::BTreeSet<_> = names
         .into_iter()
-        .filter(|name| *name != metadata)
+        .filter(|name| !metadata.contains(name))
         .collect();
     let registered: std::collections::BTreeSet<_> = registry::PREFERENCE_FIELDS
         .iter()

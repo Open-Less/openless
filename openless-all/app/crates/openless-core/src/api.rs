@@ -5753,7 +5753,13 @@ impl OpenLessBackend {
         };
         // Keep finalization outside this critical section. A failed save changes neither
         // the active target nor the remembered choice, and no other preference is overwritten.
-        self.preferences.update(|preferences| preferences.translation_target_language = target)?;
+        self.preferences.update(|preferences| {
+            if !preferences.translation_target_languages.contains(&target) {
+                preferences.translation_target_languages.push(target.clone());
+            }
+            preferences.translation_target_language = target;
+            preferences.translation_target_languages_present = true;
+        })?;
         state.dictation_context = Some(Arc::new(updated));
         // The common stop boundary must also send the changed context to a streaming engine.
         state.dictation_translation_requested = Some(true);
@@ -14368,6 +14374,10 @@ mod tests {
         let selected = backend.select_dictation_translation_target(session, "ja".into()).unwrap();
         assert_eq!(selected.target_language, "日本語");
         assert_eq!(backend.get_preferences().translation_target_language, "日本語");
+        assert_eq!(
+            backend.get_preferences().translation_target_languages,
+            vec!["English", "日本語"]
+        );
         assert_eq!(backend.get_preferences().microphone_device_name, "next microphone");
         backend.stop_dictation().await.unwrap();
         let contexts = engine.contexts();
@@ -14375,6 +14385,35 @@ mod tests {
         assert_eq!(last.polish.translation_target_language, "日本語");
         assert_eq!(last.recording.microphone_device_name.as_deref(), Some("captured microphone"));
         assert!(last.polish.translation_active);
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn translation_picker_remembers_target_after_configured_choices_are_cleared() {
+        let data_dir = TestDataDir::new("translation-picker-cleared-choices");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
+        let backend = backend_with_dictation_engine(
+            data_dir.path().to_path_buf(),
+            Arc::new(engine),
+        );
+        backend.start().await.unwrap();
+        backend.add_translation_target("en".into()).unwrap();
+        let session = backend
+            .start_dictation_with_options(DictationStartOptions {
+                translation_requested: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        backend.set_translation_targets(vec![]).unwrap();
+        backend.select_dictation_translation_target(session, "ja".into()).unwrap();
+        let saved = crate::preferences::PreferencesStore::open(
+            data_dir.path().join("preferences.json"),
+        ).unwrap().get();
+        assert_eq!(saved.translation_target_language, "日本語");
+        assert_eq!(saved.translation_target_languages, vec!["日本語"]);
+        assert_eq!(backend.get_preferences().translation_target_languages, vec!["日本語"]);
+        backend.cancel_dictation(Some(session)).await.unwrap();
         backend.shutdown().await.unwrap();
     }
 
