@@ -1819,6 +1819,9 @@ export const zhTW: typeof zhCN = {
       thinkingBudgetLabel: '思考預算 tokens',
       serviceTierLabel: '方舟低延遲推理（fast）',
       serviceTierHint: '僅適用於支援低延遲的方舟模型；不支援的模型可能回傳 400。',
+      openaiServiceTierLabel: 'OpenAI Fast 模式',
+      openaiServiceTierHint:
+        'Fast 模式費用更高，詳見 https://developers.openai.com/api/docs/pricing。不支援的模型或地區會回傳錯誤。',
       responsesThinkingHint: '部分模型只能降低思考，無法完全關閉。推理請求不傳送溫度引數。',
       messagesThinkingHint:
         '舊模型或相容閘道可能需要固定預算；思考預算必須小於最大輸出。開啟思考時不傳送溫度引數。',

@@ -1953,6 +1953,9 @@ export const de: typeof zhCN = {
       serviceTierLabel: 'Ark-Inferenz mit niedriger Latenz (fast)',
       serviceTierHint:
         'Nur unterstützte Ark-Modelle können diese Option verwenden; andere Modelle geben möglicherweise 400 zurück.',
+      openaiServiceTierLabel: 'OpenAI Fast-Modus',
+      openaiServiceTierHint:
+        'Der Fast-Modus kostet mehr. Siehe https://developers.openai.com/api/docs/pricing. Nicht unterstützte Modelle oder Regionen geben einen Fehler zurück.',
       responsesThinkingHint:
         'Bei einigen Modellen lässt sich das Denken nur reduzieren, nicht abschalten. Anfragen mit Denken senden keinen Temperaturparameter.',
       messagesThinkingHint:
