@@ -370,6 +370,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # SDK tools and the pinned emulator must share the same AVD registry.
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/openless-ci-avds"
+          mkdir -p "$ANDROID_AVD_HOME"
           avd="$RUNNER_TEMP/openless-ci.avd"
           printf 'no\n' | avdmanager create avd --force --name openless-ci \
             --package 'system-images;android-35;google_apis;x86_64' --path "$avd"

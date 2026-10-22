@@ -76,6 +76,7 @@ if [ "\${1:-}" = '-version' ]; then
   fi
   exit "\${FAKE_VERSION_EXIT:-0}"
 fi
+[ -s "$ANDROID_AVD_HOME/openless-ci.ini" ] || { echo 'Unknown AVD name [openless-ci]' >&2; exit 1; }
 echo "$$" > "$RUNNER_TEMP/emulator.pid"
 echo 'emulator started'
 trap 'echo stopped >> "$RUNNER_TEMP/trace"; exit 0' TERM
@@ -118,9 +119,11 @@ case "$name" in
   python3) exec "$TEST_PYTHON" "$@" ;;
   sleep) ;;
   avdmanager)
+    [ -n "$ANDROID_AVD_HOME" ] || { echo 'SDK tools and emulator require an explicit shared AVD registry' >&2; exit 1; }
     [ -s "$ANDROID_HOME/emulator/package.xml" ] || { echo 'Error: "emulator" package must be installed!' >&2; exit 1; }
     while [ "$1" != '--path' ]; do shift; done
     mkdir -p "$2"; echo hw.keyboard=yes > "$2/config.ini"
+    printf 'path=%s\n' "$2" > "$ANDROID_AVD_HOME/openless-ci.ini"
     ;;
   timeout)
     if [ "$1" = 10s ]; then shift; exec "$@"; fi
@@ -177,6 +180,7 @@ function fixture(name) {
     TEST_PYTHON_COMMAND: python,
     RUNNER_TEMP: shellPath(dir),
     ANDROID_HOME: shellPath(sdk),
+    ANDROID_AVD_HOME: '',
     FAKE_EMULATOR_SOURCE: shellPath(join(dir, 'emulator-source')),
     EMULATOR_CACHE_HIT: 'false',
     GH_REPO: 'example/openless',
@@ -262,6 +266,8 @@ try {
     assert.match(test.trace(), /adb -s emulator-5554 emu kill/, name);
     assert.match(test.trace(), /stopped/, name + ': owned emulator must exit');
     assert.equal(test.count('gradle'), name === 'boot-timeout' ? 0 : 1, name);
+    const registry = readFileSync(join(test.dir, 'openless-ci-avds/openless-ci.ini'), 'utf8');
+    assert.ok(registry.includes('path=' + shellPath(join(test.dir, 'openless-ci.avd'))));
     const config = readFileSync(join(test.dir, 'openless-ci.avd/config.ini'), 'utf8');
     assert.match(config, /^hw.keyboard=no$/m);
     assert.doesNotMatch(config, /hw.keyboard=yes/);
