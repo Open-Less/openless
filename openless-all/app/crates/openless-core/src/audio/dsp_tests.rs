@@ -154,7 +154,7 @@ fn partial_preferences_migrate_and_invalid_controls_are_bounded() {
     config.noise_strength = 255;
     config.processing_order.fill(crate::AudioDspStage::Agc);
     let normalized = config.normalized();
-    assert_eq!(normalized.gain_db, 30);
+    assert_eq!(normalized.gain_db, 50);
     assert_eq!(normalized.noise_strength, 100);
     assert_eq!(
         normalized.processing_order,
@@ -193,5 +193,23 @@ fn default_agc_does_not_amplify_denoised_room_noise_back_to_original_level() {
             "{algorithm:?}: output/input power {}",
             output_power / input_power
         );
+    }
+}
+
+#[test]
+fn native_48k_capture_preserves_input_filter_for_every_denoiser() {
+    for algorithm in [
+        NoiseReduction::Off,
+        NoiseReduction::Rnnoise,
+        NoiseReduction::Spectral,
+        NoiseReduction::Purevox,
+    ] {
+        let mut processor = AudioProcessor::new(config(algorithm));
+        processor.process(&signal(960), 1, 48_000);
+        let stream = processor.enhanced.as_ref().expect("enhanced stream");
+        assert_eq!(stream.work_rate, 48_000);
+        assert_eq!(stream.hop, 480);
+        assert!(stream.input_resampler.is_some());
+        assert!(stream.output_resampler.is_some());
     }
 }

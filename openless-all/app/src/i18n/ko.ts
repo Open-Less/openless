@@ -1520,6 +1520,27 @@ export const ko: typeof zhCN = {
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',

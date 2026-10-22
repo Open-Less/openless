@@ -1545,6 +1545,27 @@ export const en: typeof zhCN = {
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',

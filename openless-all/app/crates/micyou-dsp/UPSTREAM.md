@@ -5,8 +5,9 @@ Source: [MicYou-Dev/MicYou](https://github.com/MicYou-Dev/MicYou), commit
 
 `src/lib.rs` comes from `tauri-app/crates/micyou-audio/src/dsp.rs`.
 `../micyou-infer/src/{lib,ops}.rs` and the two `src/assets/*.mcy` blobs
-come from the corresponding upstream paths. The inference runtime and model
-blobs are imported without algorithm changes. Original copyright notices are
+come from the corresponding upstream paths. The model blobs are imported unchanged. The inference runtime retains the
+upstream algorithms, with baseline x86-64 SSE and ARM64 NEON row projections using separate
+multiply/add operations and the original accumulation order. Original copyright notices are
 retained in all source files. See `LICENSE` for MicYou's complete license and
 plugin exception; `LICENSE-PureVox.txt` and `LICENSE-AEC7.txt` are the upstream
 MIT model notices. The inference crate also carries MicYou's license.
@@ -24,6 +25,9 @@ OpenLess changes:
   PureVox wet/dry energy ratio. This prevents AGC from undoing suppression
   when a conservative amount of dry signal is mixed back in.
 - Add serde defaults for DSP settings.
+- Make the true FFT spectrum analyzer opt-in and throttle snapshots to 10 Hz.
+  Closing monitoring releases its FFT resources.
+- Use reusable host buffers and cached rational-phase resampling kernels.
 - Define the small AEC failure enum locally instead of depending on MicYou's
   audio host.
 
@@ -32,9 +36,17 @@ resampling, fixed 480-sample hops, model-delay compensation, end-of-stream
 flush and exact output-duration accounting in `openless-core/src/audio.rs`
 and `audio_dsp.rs`. The main microphone path does not install plugin hooks.
 
+Android capture requests 48 kHz directly, and all enhancement algorithms keep
+that processing rate. The original input filter is preserved even at 48 kHz,
+using cached coefficients; ASR output is downsampled to 16 kHz. CPAL retains a device-native fallback if
+48 kHz cannot be opened. Capture queues are not enlarged for playback or
+monitoring.
+
 AEC7 and its aligned-reference API are retained and tested here. OpenLess's
 microphone hosts do not yet provide synchronized speaker-reference capture,
-so the application does not expose or claim active acoustic echo cancellation.
+so the application does not expose AEC7 as an active microphone effect.
+Android may instead use its session-bound platform AcousticEchoCanceler when
+the device supports it; availability and activation are reported separately.
 The optional comb filter follows upstream's simple delay subtraction; it is
 not a learned room dereverberation model.
 
@@ -81,3 +93,23 @@ do not automatically trigger separate PR workflows.
 Most upstream implementation/model fixes can follow this route without manual
 copying. Upstream API/dependency/format changes that break the adapter or tests
 still require review and a deliberate patch/dependency update.
+
+## Shared performance changes (2026-10-22)
+
+All hosts that use `AudioProcessor` (including desktop Tauri and Linux egui)
+reuse mono, frame and resampled output scratch buffers. Rational resampling
+phases are precomputed once per stream, capped at 1024 phases; unusual clocks
+fall back to the original kernel calculation. The output duration and filter
+formula are unchanged, including the original filter at native 48 kHz.
+
+Contiguous matrix and GRU projection rows use separate SIMD multiply and add:
+SSE on baseline x86-64, NEON on ARM64 targets with NEON enabled. Other targets
+keep the scalar fallback. No additional inference runtime or worker pool is
+loaded. This does not change OS-specific capture APIs or require AVX support.
+
+The synthetic full-chain probe defaults to 48 kHz and checks exact output
+length. Run on the target device before drawing battery or latency conclusions:
+
+```sh
+cargo run --release --manifest-path openless-all/app/Cargo.toml -p openless-core --example audio_performance -- rnnoise 48000
+```

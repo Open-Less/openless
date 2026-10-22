@@ -149,6 +149,13 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
+    Msg { key: "settings.audioDsp.eqPresets", text: row("均衡器预设", "均衡器預設", "Equalizer presets", "イコライザープリセット", "이퀄라이저 프리셋") },
+    Msg { key: "settings.audioDsp.eqNormal", text: row("平直", "平直", "Flat", "フラット", "플랫") },
+    Msg { key: "settings.audioDsp.eqBright", text: row("明亮人声", "明亮人聲", "Bright vocal", "明るい声", "밝은 음성") },
+    Msg { key: "settings.audioDsp.eqDeep", text: row("低沉人声", "低沉人聲", "Deep voice", "低い声", "낮은 음성") },
+    Msg { key: "settings.audioDsp.eqPodcast", text: row("播客", "播客", "Podcast", "ポッドキャスト", "팟캐스트") },
+    Msg { key: "settings.audioDsp.eqClarity", text: row("清晰人声", "清晰人聲", "Vocal clarity", "明瞭な声", "선명한 음성") },
+    Msg { key: "settings.audioDsp.eqWarm", text: row("温暖人声", "溫暖人聲", "Warm vocal", "温かい声", "따뜻한 음성") },
     Msg { key: "settings.audioDsp.disabledHint", text: row("开启上方语音增强开关后可调整，当前配置已保留。", "開啟上方語音增強開關後可調整，目前設定已保留。", "Enable speech enhancement above to adjust these settings. Your configuration is retained.", "上の音声強調を有効にすると調整できます。設定は保持されています。", "위에서 음성 향상을 켜면 조정할 수 있습니다. 설정은 유지됩니다.") },
     Msg { key: "settings.audioDsp.moveUp", text: row("上移处理阶段", "上移處理階段", "Move stage up", "処理を上へ移動", "처리 단계 위로 이동") },
     Msg { key: "settings.audioDsp.moveDown", text: row("下移处理阶段", "下移處理階段", "Move stage down", "処理を下へ移動", "처리 단계 아래로 이동") },

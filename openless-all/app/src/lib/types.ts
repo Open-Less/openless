@@ -343,6 +343,9 @@ export interface StylePackRuntimeDiagnostics {
 export type AudioDspStage =
   'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
 export interface AudioDspConfig {
+  androidAecEnabled?: boolean;
+  androidNoiseSuppressionEnabled?: boolean;
+  androidAgcEnabled?: boolean;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
   noiseStrength: number;
   gainDb: number;
