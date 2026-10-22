@@ -9220,6 +9220,13 @@ impl OpenLessBackend {
     }
 
     fn mark_dictation_failed(&self, session_id: SessionId, error: &BackendError) {
+        // 诊断：失败只写 errorCode 时无法定位是录音停止、转写还是插入哪一步出的错。
+        log::warn!(
+            "[dictation] session {} failed: code={:?} message={}",
+            session_id,
+            error.code,
+            error.message
+        );
         let mut state = self.state.write().expect("backend state lock poisoned");
         if state.dictation.session_id != Some(session_id) {
             return;

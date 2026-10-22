@@ -620,21 +620,27 @@ fn select_input_device(
         let devices = host
             .input_devices()
             .map_err(|error| classify_audio_error("enumerate input devices", error.to_string()))?;
+        let mut available: Vec<String> = Vec::new();
         for device in devices {
-            if device.to_string() == preferred {
+            let name = device.to_string();
+            if name == preferred {
                 return Ok(device);
             }
+            available.push(name);
         }
+        // 设备名是精确匹配：把候选项一并打出来，省得再猜。
         log::warn!(
-            "preferred Linux microphone was not found; using the default device: {preferred}"
+            "preferred Linux microphone was not found; using the default device: {preferred}; available: {available:?}"
         );
     }
-    host.default_input_device().ok_or_else(|| {
+    let device = host.default_input_device().ok_or_else(|| {
         BackendError::new(
             BackendErrorCode::Platform,
             "no Linux microphone input device is available",
         )
-    })
+    })?;
+    log::info!("[audio] using input device: {}", device);
+    Ok(device)
 }
 
 #[cfg(target_os = "linux")]
