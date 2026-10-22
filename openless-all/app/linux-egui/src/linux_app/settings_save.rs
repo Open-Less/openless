@@ -915,6 +915,9 @@ mod tests {
         external.microphone_device_name = "external microphone".into();
         let merged = openless_linux_egui::patch_preferences(&external, &edits).unwrap();
         draft.microphone_device_name = external.microphone_device_name;
+        // Core normalizes the selection and its target list before rebasing the UI draft.
+        draft.translation_target_language = "한국어".into();
+        draft.translation_target_languages = vec!["한국어".into()];
         assert_eq!(
             serde_json::to_value(merged).unwrap(),
             serde_json::to_value(draft).unwrap()
