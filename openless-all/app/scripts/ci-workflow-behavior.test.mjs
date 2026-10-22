@@ -21,6 +21,16 @@ const ci = workflow('ci.yml');
 const linux = workflow('check-linux-egui.yml');
 const harmony = workflow('release-harmony.yml');
 const androidSteps = ci.jobs['android-check'].steps;
+const runtimeDependencies = androidSteps.find(
+  (step) => step.name === 'Install Linux check dependencies',
+);
+assert.match(runtimeDependencies.run, /\blibpulse0\b/, 'the emulator requires libpulse.so.0');
+assert.ok(
+  androidSteps.indexOf(runtimeDependencies) <
+    androidSteps.findIndex(
+      (step) => step.name === 'Prepare the pinned Android emulator and system image',
+    ),
+);
 const install = androidSteps.find(
   (step) => step.name === 'Prepare the pinned Android emulator and system image',
 ).run;
@@ -60,7 +70,7 @@ const emulatorSource = `
 if [ "\${1:-}" = '-version' ]; then
   echo "Android emulator version 37.3.4.0 (build_id \${FAKE_EMULATOR_BUILD:-16555280})"
   if [ "\${FAKE_VERSION_DETAILS:-0}" = 1 ]; then
-    /usr/bin/sleep 0.02
+    "$TEST_SLEEP" 0.02
     printf '%8192s\n' 'emulator license details'
   fi
   exit "\${FAKE_VERSION_EXIT:-0}"
@@ -68,7 +78,7 @@ fi
 echo "$$" > "$RUNNER_TEMP/emulator.pid"
 echo 'emulator started'
 trap 'echo stopped >> "$RUNNER_TEMP/trace"; exit 0' TERM
-while :; do /usr/bin/sleep 0.02; done
+while :; do "$TEST_SLEEP" 0.02; done
 `;
 const stubs = `
 name=$(basename "$0")
@@ -101,7 +111,7 @@ case "$name" in
     ;;
   sed)
     if [ "$1" = '-i' ]; then echo 'BSD sed requires a backup suffix for -i' >&2; exit 1; fi
-    exec /usr/bin/sed "$@"
+    exec "$TEST_SED" "$@"
     ;;
   sleep) ;;
   avdmanager)
@@ -111,7 +121,7 @@ case "$name" in
   timeout)
     if [ "$1" = 10s ]; then shift; exec "$@"; fi
     [ "$1" = 600s ] || exit 99
-    until [ -s "$RUNNER_TEMP/emulator.pid" ]; do /usr/bin/sleep 0.01; done
+    until [ -s "$RUNNER_TEMP/emulator.pid" ]; do "$TEST_SLEEP" 0.01; done
     if [ "\${FAKE_BOOT_TIMEOUT:-0}" = 1 ]; then exit 124; fi
     shift; exec "$@"
     ;;
@@ -168,6 +178,7 @@ function fixture(name) {
   };
   const run = (script, extra = {}) => {
     const guarded =
+      'export TEST_SLEEP="$(command -v sleep)" TEST_SED="$(command -v sed)"\n' +
       'export PATH="$TEST_BIN:$PATH"\n[ "$(command -v curl)" = "$TEST_BIN/curl" ] || exit 99\n' +
       script;
     const result = spawnSync('bash', ['-c', guarded], {
