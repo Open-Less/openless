@@ -119,15 +119,6 @@ mod tests {
         }];
         let initial = serde_json::to_value(initial).unwrap();
         let changed = serde_json::to_value(changed).unwrap();
-        let expected = |key: &str, value: &Value| {
-            if key == "translationTargetLanguage" {
-                Value::String(openless_core::language_catalog::native_language_name(
-                    value.as_str().unwrap(),
-                ).unwrap())
-            } else {
-                value.clone()
-            }
-        };
         for (key, value) in changed.as_object().unwrap() {
             if initial[key] == *value {
                 continue;
@@ -159,7 +150,7 @@ mod tests {
                 "{key} must retry exactly the revision conflict"
             );
             let saved = serde_json::to_value(backend.get_preferences()).unwrap();
-            assert_eq!(saved[key], expected(key, value), "{key}");
+            assert_eq!(saved[key], *value, "{key}");
             assert_eq!(saved["microphoneDeviceName"], key.as_str());
         }
         drop(host);
@@ -175,7 +166,7 @@ mod tests {
         let saved = serde_json::to_value(reopened.get_preferences()).unwrap();
         for (key, value) in changed.as_object().unwrap() {
             if initial[key] != *value {
-                assert_eq!(saved[key], expected(key, value), "persisted {key}");
+                assert_eq!(saved[key], *value, "persisted {key}");
             }
         }
         drop(reopened);

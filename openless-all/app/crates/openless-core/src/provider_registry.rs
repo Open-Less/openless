@@ -136,17 +136,6 @@ impl TextPolisherRouter {
 }
 
 impl TextPolisher for TextPolisherRouter {
-    fn prepare(
-        &self,
-        context: Arc<DictationContext>,
-    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
-        let provider = match self.resolve(&context.llm.provider_type) {
-            Ok(provider) => provider,
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
-        Box::pin(async move { Ok(Some(provider.prepare(context).await?.unwrap_or(provider))) })
-    }
-
     fn polish(
         &self,
         session_id: SessionId,

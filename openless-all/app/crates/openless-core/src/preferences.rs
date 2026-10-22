@@ -266,7 +266,6 @@ impl PreferencesStore {
     }
 
     pub fn set(&self, mut preferences: UserPreferences) -> Result<(), BackendError> {
-        crate::settings::reconcile_translation_settings(&self.get(), &mut preferences)?;
         self.update(|current| {
             // The sync transaction owns this field; stale whole-document saves cannot reroute its token.
             preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
@@ -371,7 +370,6 @@ impl PreferencesStore {
         &self,
         mut preferences: UserPreferences,
     ) -> Result<(), BackendError> {
-        crate::settings::reconcile_translation_settings(&self.get(), &mut preferences)?;
         self.update(|current| {
             preferences.preserve_style_preferences_from(current);
             preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();

@@ -33,6 +33,8 @@ Normal speech recognition uses bundled SenseVoice Small int8. Developer settings
 
 Requirements: an Apple silicon Mac, Xcode 27 with its command-line tools selected, Python 3, CMake, Git, and Rustup. Bootstrap installs Rust 1.99.0 and the two iOS targets, and pins native dependencies and XcodeGen. Downloaded speech artifacts and prediction sources are checksum-verified.
 
+Desktop sources under `openless-all/app/` follow `beta` unchanged. `scripts/prepare-core.py` copies the checked-in Core into the ignored `CoreHost/.build/core-source/` directory and applies `CoreHost/Patches/ios-input-contracts.patch` there. The iOS Rust workspace builds and tests that copy. The patch adds the mobile input contracts without changing the Core used by desktop, Android, or Linux. Bootstrap, tests, native builds, and license collection prepare the copy automatically; incompatible upstream changes fail patch validation.
+
 ```sh
 cd openless-all/ios
 ./scripts/bootstrap.sh
@@ -70,7 +72,7 @@ python3 scripts/validate-project.py
 IOS_SIMULATOR_ID=<dedicated-simulator-id> ./scripts/test.sh ui
 ```
 
-Unit checks cover shared contracts, preferences, delivery, Rust Host processing, real Rime composition, predictions, and audio conversion. UI tests exercise the installed extension and host app; use a dedicated simulator because they configure keyboard settings. `test.sh all` combines both suites. The GitHub iOS workflow checks shared Swift contracts, the Rust Host, and localization on iOS/Core changes. Runtime microphone, routing, and PiP behavior still require device testing.
+Unit checks cover shared contracts, preferences, delivery, the mobile Core and Rust Host, real Rime composition, predictions, and audio conversion. UI tests exercise the installed extension and host app; use a dedicated simulator because they configure keyboard settings. `test.sh all` combines both suites. The GitHub iOS workflow verifies that shared sources remain unchanged, runs mobile Swift/Rust/resource tests, builds the native dependencies and unsigned iPhone app, and validates the IPA. Runtime microphone, routing, and PiP behavior still require device testing.
 
 ## Source layout
 
@@ -82,7 +84,7 @@ Unit checks cover shared contracts, preferences, delivery, Rust Host processing,
 | `PlatformShared/` | Shared native controls and container access |
 | `Packages/OpenLessShared/` | Versioned mailbox, preferences, gestures, and delivery contracts |
 | `Packages/LocalSpeech/` | SenseVoice runtime adapter used by the app |
-| `CoreHost/` | Independent Rust workspace and C ABI over `app/crates/openless-core` |
+| `CoreHost/` | iOS Rust workspace, C ABI, and isolated Core source patch |
 | `RimeBridge/` | Objective-C++ composition and vocabulary bridge |
 | `Resources/` | Brand assets, localization, input schemas, privacy manifest, and licenses |
 | `AppTests/`, `UITests/`, `Tests/` | Native, extension, and runtime fixtures |

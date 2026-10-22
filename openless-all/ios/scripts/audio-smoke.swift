@@ -3,7 +3,11 @@ import Foundation
 
 @main struct AudioSmoke {
   static func main() async throws {
+    var combinations = 0
     for legacy in [false, true] {
+      if !legacy {
+        if #unavailable(macOS 27) { continue }
+      }
       for rate in [8_000.0, 16_000, 44_100, 48_000] {
         for channels: AVAudioChannelCount in [1, 2] {
           let worker = PCMWorker()
@@ -26,8 +30,10 @@ import Foundation
               for channel in 0..<Int(channels) {
                 buffer.floatChannelData![channel].update(repeating: 0, count: Int(frames))
               }
-            } else {
+            } else if #available(macOS 27, *) {
               packet = AudioPacket(buffer: AVReadOnlyAudioPCMBuffer(copying: buffer))
+            } else {
+              preconditionFailure("Immutable audio buffers require macOS 27")
             }
             pcm.append(try await worker.convert(packet))
           }
@@ -37,9 +43,10 @@ import Foundation
           let power = samples.map { pow(Double($0) / 32_768, 2) }.reduce(0, +) / Double(samples.count)
           precondition(power > 0.005 && power < 0.1, "invalid PCM amplitude")
           print("PCM \(legacy ? "legacy copy" : "immutable") \(Int(rate))Hz × \(channels) → 16kHz mono: \(samples.count) samples")
+          combinations += 1
         }
       }
     }
-    print("Audio conversion smoke passed: 16 combinations; no microphone was opened.")
+    print("Audio conversion smoke passed: \(combinations) combinations; no microphone was opened.")
   }
 }

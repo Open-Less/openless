@@ -18,9 +18,7 @@ pub fn patch_preferences(
     if let Some(mode) = edits.get("/capsuleDisplayMode") {
         document["capsuleDisplayModeV2"] = mode.clone();
     }
-    let mut patched = serde_json::from_value(document).map_err(invalid)?;
-    crate::settings::reconcile_translation_settings(current, &mut patched)?;
-    Ok(patched)
+    serde_json::from_value(document).map_err(invalid)
 }
 
 fn invalid(error: impl std::fmt::Display) -> BackendError {
@@ -54,24 +52,6 @@ pub fn update_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn translation_drafts_survive_rebasing_and_serialization_before_save() {
-        let current = UserPreferences::default();
-        let edits = BTreeMap::from([("/translationTargetLanguage".into(), Value::from("ko"))]);
-        let draft = patch_preferences(&current, &edits).unwrap();
-        assert_eq!(draft.translation_target_language, "한국어");
-        assert_eq!(draft.translation_target_languages, vec!["한국어"]);
-        let loaded: UserPreferences = serde_json::from_value(serde_json::to_value(&draft).unwrap()).unwrap();
-        assert_eq!(loaded.translation_target_language, draft.translation_target_language);
-        assert_eq!(loaded.translation_target_languages, draft.translation_target_languages);
-        let cleared = patch_preferences(&loaded, &BTreeMap::from([
-            ("/translationTargetLanguages".into(), serde_json::json!([])),
-        ])).unwrap();
-        assert!(cleared.translation_target_language.is_empty());
-        assert!(cleared.translation_target_languages.is_empty());
-    }
-
     #[test]
     fn capsule_display_edits_establish_v2_without_opt_in_from_unrelated_edits() {
         let mut current = UserPreferences::default();

@@ -22,4 +22,5 @@ echo "7009fe1faa1697476bdc7027703a2badb84e849b7b0baad5086b087b971f8617  $BOOST" 
 swift build --package-path "$ROOT/.build-tools/XcodeGen" -c release
 rustup toolchain install 1.99.0 --profile minimal
 rustup target add --toolchain 1.99.0 aarch64-apple-ios aarch64-apple-ios-sim
+python3 "$ROOT/scripts/prepare-core.py"
 echo "Dependencies ready. Run scripts/build-rime.sh, then scripts/build-core.sh."

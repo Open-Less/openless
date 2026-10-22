@@ -1011,13 +1011,6 @@ impl DictationEngine for PipelineDictationEngine {
             let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
             // Optional polish may be skipped after fallback; an explicit translation is still required.
             let translation_active = context.polish.translation_active;
-            // Explicit per-session translation must not succeed with untransformed text.
-            let require_translation = translation_active && context.polish.translation_target_explicit;
-            let policy = if require_translation {
-                PolishFailurePolicy::Fail
-            } else {
-                policy
-            };
             let uses_polisher = context.uses_llm_polisher()
                 && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
                 && !skips_polish_for_short_text
@@ -1070,16 +1063,6 @@ impl DictationEngine for PipelineDictationEngine {
                         )
                         .await
                 };
-                let output = output.and_then(|value| {
-                    if require_translation && value.text.trim().is_empty() {
-                        Err(BackendError::new(
-                            BackendErrorCode::Provider,
-                            "translation returned empty text",
-                        ))
-                    } else {
-                        Ok(value)
-                    }
-                });
                 let result = match output {
                     Ok(text) => (text, false),
                     // Offline after local recognition: the raw transcript is the
@@ -3825,37 +3808,6 @@ mod tests {
             .unwrap();
         assert_eq!(result.raw_text, "raw text");
         assert_eq!(result.polished_text, "raw text");
-    }
-
-    #[tokio::test]
-    async fn requested_translation_failure_never_becomes_successful_source_text() {
-        for output in [
-            Err(BackendError::new(
-                BackendErrorCode::Provider,
-                "fixture HTTP 500",
-            )),
-            Ok(crate::ports::PolishOutput::text("   ")),
-        ] {
-            let fixture = fixture_engine(false, output, None, None);
-            let id = SessionId::new();
-            let mut context = DictationContext::default();
-            context.polish.translation_active = true;
-            context.polish.translation_target_language = "English".into();
-            context.polish.translation_target_explicit = true;
-            fixture
-                .engine
-                .start(id, Arc::new(context), fixture.progress.clone())
-                .await
-                .unwrap();
-            let failure = fixture
-                .engine
-                .finish(id, fixture.progress.clone())
-                .await
-                .unwrap_err();
-            assert_eq!(failure.error.code, BackendErrorCode::Provider);
-            assert_eq!(failure.raw_text.as_deref(), Some("raw text"));
-            assert!(fixture.engine.sessions.lock().unwrap().is_empty());
-        }
     }
 
     #[tokio::test]

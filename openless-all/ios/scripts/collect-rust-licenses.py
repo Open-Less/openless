@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
+subprocess.run(["python3", str(root / "scripts/prepare-core.py")], check=True)
 metadata = json.loads(subprocess.check_output([
     "rustup", "run", "1.99.0", "cargo", "metadata", "--format-version", "1",
     "--manifest-path", str(root / "CoreHost/Cargo.toml"), "--locked",

@@ -5753,13 +5753,7 @@ impl OpenLessBackend {
         };
         // Keep finalization outside this critical section. A failed save changes neither
         // the active target nor the remembered choice, and no other preference is overwritten.
-        self.preferences.update(|preferences| {
-            if !preferences.translation_target_languages.contains(&target) {
-                preferences.translation_target_languages.push(target.clone());
-            }
-            preferences.translation_target_language = target;
-            preferences.translation_target_languages_present = true;
-        })?;
+        self.preferences.update(|preferences| preferences.translation_target_language = target)?;
         state.dictation_context = Some(Arc::new(updated));
         // The common stop boundary must also send the changed context to a streaming engine.
         state.dictation_translation_requested = Some(true);
@@ -6595,146 +6589,6 @@ impl OpenLessBackend {
         self.preferences.get()
     }
 
-    /// Replace the ordered target choices. Removing the selection chooses the first
-    /// remaining target; an empty list clears/disables the legacy selected target.
-    pub fn set_translation_targets(
-        &self,
-        targets: Vec<String>,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.update_translation_targets(|preferences| {
-            preferences.translation_target_languages = targets;
-            let targets = crate::settings::ordered_translation_targets(
-                preferences.translation_target_languages.clone(),
-            );
-            if !targets.contains(&preferences.translation_target_language) {
-                preferences.translation_target_language =
-                    targets.first().cloned().unwrap_or_default();
-            }
-            Ok(())
-        })
-    }
-
-    /// Add a catalog target once, at the end. The first addition becomes selected.
-    pub fn add_translation_target(
-        &self,
-        target: String,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.update_translation_targets(|preferences| {
-            let target = crate::settings::canonical_translation_target(&target);
-            if target.is_empty() {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "empty translation target",
-                ));
-            }
-            if preferences.translation_target_languages.is_empty() {
-                preferences.translation_target_language = target.clone();
-            }
-            if !preferences.translation_target_languages.contains(&target) {
-                preferences.translation_target_languages.push(target);
-            }
-            Ok(())
-        })
-    }
-
-    /// Deletion is idempotent. Deleting the selection chooses the first remaining target.
-    pub fn delete_translation_target(
-        &self,
-        target: String,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.update_translation_targets(|preferences| {
-            let target = crate::settings::canonical_translation_target(&target);
-            preferences
-                .translation_target_languages
-                .retain(|value| value != &target);
-            if !target.is_empty() && preferences.translation_target_language == target {
-                preferences.translation_target_language = preferences
-                    .translation_target_languages
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-            }
-            Ok(())
-        })
-    }
-
-    /// Reorder only: omissions, additions and duplicates are rejected atomically.
-    pub fn reorder_translation_targets(
-        &self,
-        targets: Vec<String>,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.update_translation_targets(|preferences| {
-            let ordered = crate::settings::ordered_translation_targets(targets.clone());
-            if ordered.len() != targets.len()
-                || ordered.len() != preferences.translation_target_languages.len()
-                || ordered
-                    .iter()
-                    .any(|target| !preferences.translation_target_languages.contains(target))
-            {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "translation target reorder must be an exact permutation",
-                ));
-            }
-            preferences.translation_target_languages = ordered;
-            Ok(())
-        })
-    }
-
-    /// Select a configured target, or disable legacy translation without erasing choices.
-    pub fn select_translation_target(
-        &self,
-        target: Option<String>,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.update_translation_targets(|preferences| {
-            preferences.translation_target_language = match target {
-                Some(target) => {
-                    crate::settings::validate_session_translation_target(preferences, &target)?
-                }
-                None => String::new(),
-            };
-            Ok(())
-        })
-    }
-
-    fn update_translation_targets(
-        &self,
-        update: impl FnOnce(&mut UserPreferences) -> Result<(), BackendError>,
-    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
-        self.ensure_runtime_ready()?;
-        let _write_guard = self
-            .settings_write_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = self.preferences.get();
-        let mut preferences = previous.clone();
-        let (targets, selected) = crate::settings::migrate_translation_targets(
-            if preferences.translation_target_languages_present {
-                Some(preferences.translation_target_languages.clone())
-            } else {
-                None
-            },
-            &preferences.translation_target_language,
-        );
-        preferences.translation_target_languages = targets;
-        preferences.translation_target_language = selected;
-        preferences.translation_target_languages_present = true;
-        update(&mut preferences)?;
-        crate::settings::reconcile_translation_settings(&previous, &mut preferences)?;
-        // Own only these fields, not a potentially stale whole-document snapshot.
-        self.preferences.update(|current| {
-            current.translation_target_languages = preferences.translation_target_languages.clone();
-            current.translation_target_language = preferences.translation_target_language.clone();
-            current.translation_target_languages_present = true;
-        })?;
-        self.publish_preferences_changed();
-        Ok(crate::SettingsUpdateOutcome {
-            preferences: self.preferences.get(),
-            reconciled_hotkey_count: 0,
-            effects: crate::SettingsEffectPlan::default(),
-        })
-    }
-
     /// Consumes the "first launch of this major version" splash PV marker:
     /// returns false when the config's `splash_seen_version` matches the
     /// given current major (no replay); on mismatch it writes back the major
@@ -6862,7 +6716,6 @@ impl OpenLessBackend {
             };
         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
-        crate::settings::reconcile_translation_settings(&previous, &mut preferences)?;
         // The splash marker may only advance via take_splash_playback: when a
         // whole-document submit (old frontend, or a request that hasn't read
         // the marker back) omits the field, serde's default would write the
@@ -7847,42 +7700,10 @@ impl OpenLessBackend {
         self.start_reserved_dictation(reservation, options).await
     }
 
-    /// Capture using one explicitly registered native route and the unmodified
-    /// built-in Raw prompt. This never selects a cloud fallback or mutates styles.
-    pub async fn start_local_raw_dictation(
-        &self,
-        native_provider: &str,
-        insert_text: bool,
-    ) -> Result<SessionId, BackendError> {
-        let provider = crate::credentials::ProviderType::new(native_provider.to_string())?;
-        let options = DictationStartOptions {
-            insert_text,
-            ..Default::default()
-        };
-        let reservation =
-            self.reserve_dictation_session(insert_text, options.output_target, None)?;
-        self.start_reserved_dictation_with_raw_provider(
-            reservation,
-            options,
-            Some(provider.as_str()),
-        )
-        .await
-    }
-
     async fn start_reserved_dictation(
         &self,
         reservation: DictationReservation,
         options: DictationStartOptions,
-    ) -> Result<SessionId, BackendError> {
-        self.start_reserved_dictation_with_raw_provider(reservation, options, None)
-            .await
-    }
-
-    async fn start_reserved_dictation_with_raw_provider(
-        &self,
-        reservation: DictationReservation,
-        options: DictationStartOptions,
-        raw_provider: Option<&str>,
     ) -> Result<SessionId, BackendError> {
         let DictationReservation {
             session_id,
@@ -7899,25 +7720,14 @@ impl OpenLessBackend {
                 return Err(error);
             }
         }
-        let captured = match raw_provider {
-            Some(provider) => async {
-                let context = self.capture_local_raw_context(&options, provider)?;
-                // Resolve the explicit adapter before capture; this route has no fallback.
-                Arc::clone(&self.deps.dictation_engine)
-                    .prepare_transcription(session_id, Arc::new(context.clone()))
-                    .await?;
-                Ok(context)
-            }.await,
-            None => {
-                self.capture_dictation_context_with_host(
-                    &options,
-                    DictationContextPurpose::Dictation,
-                    host_context.as_ref(),
-                )
-                .await
-            }
-        };
-        let context = match captured {
+        let context = match self
+            .capture_dictation_context_with_host(
+                &options,
+                DictationContextPurpose::Dictation,
+                host_context.as_ref(),
+            )
+            .await
+        {
             Ok(context) => Arc::new(context),
             Err(error) => {
                 self.schedule_pending_audio_capture_discard(pending_capture.take());
@@ -9367,36 +9177,6 @@ impl OpenLessBackend {
         }
     }
 
-    fn capture_local_raw_context(
-        &self,
-        options: &DictationStartOptions,
-        provider: &str,
-    ) -> Result<DictationContext, BackendError> {
-        let preferences = self.get_preferences();
-        let hotwords = self
-            .vocabulary
-            .list()?
-            .into_iter()
-            .filter(|entry| entry.enabled)
-            .map(|entry| entry.phrase)
-            .collect();
-        let style = crate::style_packs::builtin_style_pack_for_mode(crate::types::PolishMode::Raw);
-        let mut context = DictationContext::capture(
-            &preferences,
-            &style,
-            DictationProviderInvocations::new(
-                crate::dictation_context::ProviderInvocation::for_provider(provider),
-                crate::dictation_context::ProviderInvocation::for_provider("raw-unused-llm"),
-                crate::dictation_context::ProviderInvocation::for_provider("raw-unused-omni"),
-            ),
-            hotwords,
-            Vec::new(),
-            options,
-        );
-        context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
-        Ok(context)
-    }
-
     async fn capture_dictation_context(
         &self,
         options: &DictationStartOptions,
@@ -9418,11 +9198,6 @@ impl OpenLessBackend {
     ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
-        if let Some(target) = &options.translation_target_language {
-            captured_options.translation_target_language = Some(
-                crate::settings::validate_session_translation_target(&preferences, target)?,
-            );
-        }
         if !preferences.cursor_context_enabled {
             // This switch controls document text, including text supplied by
             // callers. Front-application metadata is still needed for history,
@@ -12415,285 +12190,6 @@ mod tests {
     }
 
     #[test]
-    fn translation_targets_business_apis_persist_order_selection_and_events() {
-        let (backend, _) = backend();
-        let mut events = backend.subscribe();
-        let original = backend.get_preferences();
-        let outcome = backend
-            .set_translation_targets(vec![
-                "ja".into(),
-                "en".into(),
-                "EN".into(),
-                "fr".into(),
-                "de".into(),
-            ])
-            .unwrap();
-        assert_eq!(
-            outcome.preferences.translation_target_languages,
-            vec!["日本語", "English", "Français", "Deutsch"]
-        );
-        assert_eq!(outcome.preferences.translation_target_language, "日本語");
-        assert!(outcome.effects.is_empty());
-        assert_eq!(backend.snapshot().preferences_revision, 1);
-        assert!(matches!(
-            events.try_recv().unwrap().kind,
-            BackendEventKind::PreferencesChanged(PreferencesChange { revision: 1 })
-        ));
-        assert_eq!(events.try_recv(), Err(crate::events::EventRecvError::Empty));
-        backend.add_translation_target("en".into()).unwrap();
-        backend
-            .reorder_translation_targets(vec!["de".into(), "en".into(), "fr".into(), "ja".into()])
-            .unwrap();
-        backend
-            .select_translation_target(Some("fr".into()))
-            .unwrap();
-        backend.delete_translation_target("fr".into()).unwrap();
-        let preferences = backend.get_preferences();
-        assert_eq!(
-            preferences.translation_target_languages,
-            vec!["Deutsch", "English", "日本語"]
-        );
-        assert_eq!(preferences.translation_target_language, "Deutsch");
-        assert_eq!(
-            preferences.active_llm_provider,
-            original.active_llm_provider
-        );
-        assert_eq!(preferences.working_languages, original.working_languages);
-        let reloaded = crate::preferences::PreferencesStore::open(
-            backend._data_dir.path().join("preferences.json"),
-        )
-        .unwrap()
-        .get();
-        assert_eq!(
-            reloaded.translation_target_languages,
-            preferences.translation_target_languages
-        );
-        assert_eq!(reloaded.translation_target_language, "Deutsch");
-        backend.select_translation_target(None).unwrap();
-        backend.delete_translation_target("".into()).unwrap();
-        assert!(backend
-            .get_preferences()
-            .translation_target_language
-            .is_empty());
-        assert_eq!(
-            backend.get_preferences().translation_target_languages.len(),
-            3
-        );
-        backend.set_translation_targets(vec![]).unwrap();
-        assert!(backend
-            .get_preferences()
-            .translation_target_languages
-            .is_empty());
-        assert!(backend
-            .get_preferences()
-            .translation_target_language
-            .is_empty());
-    }
-
-    #[test]
-    fn translation_targets_invalid_mutations_are_atomic() {
-        let (backend, _) = backend();
-        backend
-            .set_translation_targets(vec!["en".into(), "ja".into()])
-            .unwrap();
-        let before = serde_json::to_value(backend.get_preferences()).unwrap();
-        let revision = backend.snapshot().preferences_revision;
-        for result in [
-            backend.add_translation_target("Unknown new language".into()),
-            backend.add_translation_target("  ".into()),
-            backend.set_translation_targets(vec!["fr".into(), "Unknown new language".into()]),
-            backend.reorder_translation_targets(vec!["en".into()]),
-            backend.reorder_translation_targets(vec!["en".into(), "EN".into()]),
-            backend.select_translation_target(Some("fr".into())),
-        ] {
-            assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidArgument);
-            assert_eq!(
-                serde_json::to_value(backend.get_preferences()).unwrap(),
-                before
-            );
-            assert_eq!(backend.snapshot().preferences_revision, revision);
-        }
-    }
-
-    #[test]
-    fn translation_targets_old_client_whole_settings_saves_preserve_choices() {
-        let (backend, _) = backend();
-        backend
-            .set_translation_targets(vec!["en".into(), "ja".into()])
-            .unwrap();
-        for (selected, expected, targets) in [
-            ("en", "English", vec!["English", "日本語"]),
-            ("ja", "日本語", vec!["English", "日本語"]),
-            ("fr", "Français", vec!["English", "日本語", "Français"]),
-            ("", "", vec!["English", "日本語", "Français"]),
-        ] {
-            let mut value = serde_json::to_value(backend.get_preferences()).unwrap();
-            value
-                .as_object_mut()
-                .unwrap()
-                .remove("translationTargetLanguages");
-            value["translationTargetLanguage"] = serde_json::json!(selected);
-            let legacy = serde_json::from_value(value).unwrap();
-            let outcome = backend
-                .update_settings(
-                    legacy,
-                    crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-                    &crate::NoopSettingsRuntime,
-                )
-                .unwrap();
-            assert_eq!(outcome.preferences.translation_target_language, expected);
-            assert_eq!(outcome.preferences.translation_target_languages, targets);
-        }
-        let mut explicit = serde_json::to_value(backend.get_preferences()).unwrap();
-        explicit["translationTargetLanguages"] = serde_json::json!([]);
-        explicit["translationTargetLanguage"] = serde_json::json!("en");
-        let cleared = backend
-            .update_settings(
-                serde_json::from_value(explicit).unwrap(),
-                crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-                &crate::NoopSettingsRuntime,
-            )
-            .unwrap();
-        assert!(cleared.preferences.translation_target_languages.is_empty());
-        assert!(cleared.preferences.translation_target_language.is_empty());
-    }
-
-    #[test]
-    fn translation_targets_legacy_scalar_edits_survive_roundtripping_the_new_list() {
-        let (backend, _) = backend();
-        backend
-            .set_translation_targets(vec!["en".into(), "ja".into()])
-            .unwrap();
-        // Older frontends may spread a preferences object including fields they do not edit.
-        let mut value = serde_json::to_value(backend.get_preferences()).unwrap();
-        value["translationTargetLanguage"] = serde_json::json!("fr");
-        let outcome = backend
-            .update_settings(
-                serde_json::from_value(value).unwrap(),
-                crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-                &crate::NoopSettingsRuntime,
-            )
-            .unwrap();
-        assert_eq!(outcome.preferences.translation_target_language, "Français");
-        assert_eq!(
-            outcome.preferences.translation_target_languages,
-            vec!["English", "日本語", "Français"]
-        );
-    }
-
-    #[test]
-    fn translation_targets_historical_custom_name_can_be_retained_selected_and_removed() {
-        let data_dir = TestDataDir::new("translation-target-historical");
-        std::fs::create_dir_all(data_dir.path()).unwrap();
-        // A historical file is migration input, not a new addition via the business API.
-        std::fs::write(
-            data_dir.path().join("preferences.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "translationTargetLanguage": "Historical custom language",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let migrated = backend_with_dictation_engine(
-            data_dir.path().to_path_buf(),
-            Arc::new(crate::testing::FixtureDictationEngine::successful(
-                "raw", "final",
-            )),
-        );
-        migrated.add_translation_target("en".into()).unwrap();
-        migrated
-            .reorder_translation_targets(vec!["en".into(), "Historical custom language".into()])
-            .unwrap();
-        migrated
-            .select_translation_target(Some("Historical custom language".into()))
-            .unwrap();
-        assert_eq!(
-            migrated.get_preferences().translation_target_language,
-            "Historical custom language"
-        );
-        migrated
-            .delete_translation_target("Historical custom language".into())
-            .unwrap();
-        assert_eq!(
-            migrated.get_preferences().translation_target_language,
-            "English"
-        );
-        assert_eq!(
-            migrated
-                .add_translation_target("Historical custom language".into())
-                .unwrap_err()
-                .code,
-            BackendErrorCode::InvalidArgument
-        );
-    }
-
-    #[tokio::test]
-    async fn translation_target_start_option_is_session_local_and_survives_settings_changes() {
-        let data_dir = TestDataDir::new("translation-target-session");
-        let engine = crate::testing::FixtureDictationEngine::successful("raw", "final");
-        let backend =
-            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
-        backend.start().await.unwrap();
-        backend
-            .set_translation_targets(vec!["en".into(), "ja".into()])
-            .unwrap();
-        let mut preferences = backend.get_preferences();
-        preferences.working_languages = vec!["简体中文".into()];
-        backend.set_preferences(preferences).unwrap();
-        let revision = backend.snapshot().preferences_revision;
-        backend
-            .start_external_dictation_with_options(DictationStartOptions {
-                translation_requested: true,
-                translation_target_language: Some("ja".into()),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            backend.get_preferences().translation_target_language,
-            "English"
-        );
-        assert_eq!(backend.snapshot().preferences_revision, revision);
-        backend.set_translation_targets(vec!["fr".into()]).unwrap();
-        backend.stop_dictation().await.unwrap();
-        let contexts = engine.contexts();
-        let context = contexts.last().unwrap();
-        assert_eq!(context.polish.translation_target_language, "日本語");
-        assert!(context.polish.translation_target_explicit);
-        assert!(context.polish.translation_active);
-        assert!(context.effective_polish_system_prompt().contains("日本語"));
-        assert_eq!(
-            backend.get_preferences().translation_target_language,
-            "Français"
-        );
-        backend.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn translation_target_start_option_rejects_unconfigured_or_empty_without_starting_engine()
-    {
-        let data_dir = TestDataDir::new("translation-target-invalid");
-        let engine = crate::testing::FixtureDictationEngine::successful("raw", "final");
-        let backend =
-            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
-        backend.start().await.unwrap();
-        backend.add_translation_target("en".into()).unwrap();
-        for target in ["", "  ", "ja", "Unknown target"] {
-            let error = backend
-                .start_external_dictation_with_options(DictationStartOptions {
-                    translation_requested: true,
-                    translation_target_language: Some(target.into()),
-                    ..Default::default()
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
-            assert!(engine.contexts().is_empty());
-        }
-        backend.shutdown().await.unwrap();
-    }
-
-    #[test]
     fn focused_microphone_selection_persists_and_publishes_once() {
         let (backend, _) = backend();
         let mut events = backend.subscribe();
@@ -14374,10 +13870,6 @@ mod tests {
         let selected = backend.select_dictation_translation_target(session, "ja".into()).unwrap();
         assert_eq!(selected.target_language, "日本語");
         assert_eq!(backend.get_preferences().translation_target_language, "日本語");
-        assert_eq!(
-            backend.get_preferences().translation_target_languages,
-            vec!["English", "日本語"]
-        );
         assert_eq!(backend.get_preferences().microphone_device_name, "next microphone");
         backend.stop_dictation().await.unwrap();
         let contexts = engine.contexts();
@@ -14385,35 +13877,6 @@ mod tests {
         assert_eq!(last.polish.translation_target_language, "日本語");
         assert_eq!(last.recording.microphone_device_name.as_deref(), Some("captured microphone"));
         assert!(last.polish.translation_active);
-        backend.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn translation_picker_remembers_target_after_configured_choices_are_cleared() {
-        let data_dir = TestDataDir::new("translation-picker-cleared-choices");
-        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
-        let backend = backend_with_dictation_engine(
-            data_dir.path().to_path_buf(),
-            Arc::new(engine),
-        );
-        backend.start().await.unwrap();
-        backend.add_translation_target("en".into()).unwrap();
-        let session = backend
-            .start_dictation_with_options(DictationStartOptions {
-                translation_requested: true,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        backend.set_translation_targets(vec![]).unwrap();
-        backend.select_dictation_translation_target(session, "ja".into()).unwrap();
-        let saved = crate::preferences::PreferencesStore::open(
-            data_dir.path().join("preferences.json"),
-        ).unwrap().get();
-        assert_eq!(saved.translation_target_language, "日本語");
-        assert_eq!(saved.translation_target_languages, vec!["日本語"]);
-        assert_eq!(backend.get_preferences().translation_target_languages, vec!["日本語"]);
-        backend.cancel_dictation(Some(session)).await.unwrap();
         backend.shutdown().await.unwrap();
     }
 

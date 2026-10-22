@@ -369,13 +369,6 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
-        rust_name: "translation_target_languages",
-        key: "translationTargetLanguages",
-        class: PreferenceClass::Portable,
-        shape: PreferenceShape::TextList,
-        reason: "portable_setting",
-    },
-    PreferenceField {
         rust_name: "translation_target_language",
         key: "translationTargetLanguage",
         class: PreferenceClass::Portable,

@@ -43,14 +43,6 @@ pub fn language_code(value: &str) -> Option<String> {
     language(value).map(|language| language.code.clone())
 }
 
-/// Ordered catalog choices; provider support is checked separately.
-pub fn translation_language_names() -> Vec<String> {
-    LANGUAGES
-        .iter()
-        .map(|language| language.native_name.clone())
-        .collect()
-}
-
 pub fn asr_language_code(native_name: &str) -> Option<String> {
     language(native_name).map(|language| language.asr_code.clone())
 }
@@ -62,22 +54,6 @@ pub fn apple_speech_locale(native_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn translation_names_and_aliases_share_the_existing_catalog() {
-        let names = translation_language_names();
-        assert!(names.len() > 3);
-        for (index, name) in names.iter().enumerate() {
-            assert!(!names[..index].contains(name));
-            assert_eq!(native_language_name(name).as_ref(), Some(name));
-        }
-        assert_eq!(native_language_name(" EN ").as_deref(), Some("English"));
-        assert_eq!(
-            native_language_name("繁體中文").as_deref(),
-            Some("繁体中文")
-        );
-        assert_eq!(native_language_name("unknown"), None);
-    }
 
     #[test]
     fn extended_names_route_to_iso_and_apple_identifiers() {

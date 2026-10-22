@@ -780,15 +780,6 @@ impl<T: DictationEngine + ?Sized> PreparedTranscription for DeferredDictationPre
 }
 
 pub trait TextPolisher: Send + Sync {
-    /// Freeze request credentials/options for a delayed operation without provider network I/O.
-    /// Adapters with no mutable request configuration may keep their runtime.
-    fn prepare(
-        &self,
-        _context: Arc<DictationContext>,
-    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
-        Box::pin(async { Ok(None) })
-    }
-
     fn polish(
         &self,
         session_id: SessionId,
