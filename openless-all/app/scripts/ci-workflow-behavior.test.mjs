@@ -17,6 +17,7 @@ import { load } from 'js-yaml';
 
 const workflow = (name) =>
   load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
+const python = process.platform === 'win32' ? 'python' : 'python3';
 const ci = workflow('ci.yml');
 const linux = workflow('check-linux-egui.yml');
 const harmony = workflow('release-harmony.yml');
@@ -99,6 +100,7 @@ case "$name" in
     else
       mkdir -p "$4/emulator"
       cp "$FAKE_EMULATOR_SOURCE" "$4/emulator/emulator"
+      echo Pkg.Revision=37.3.4 > "$4/emulator/source.properties"
     fi
     ;;
   sdkmanager)
@@ -113,8 +115,10 @@ case "$name" in
     if [ "$1" = '-i' ]; then echo 'BSD sed requires a backup suffix for -i' >&2; exit 1; fi
     exec "$TEST_SED" "$@"
     ;;
+  python3) exec "$TEST_PYTHON" "$@" ;;
   sleep) ;;
   avdmanager)
+    [ -s "$ANDROID_HOME/emulator/package.xml" ] || { echo 'Error: "emulator" package must be installed!' >&2; exit 1; }
     while [ "$1" != '--path' ]; do shift; done
     mkdir -p "$2"; echo hw.keyboard=yes > "$2/config.ini"
     ;;
@@ -151,6 +155,7 @@ function fixture(name) {
     'unzip',
     'sdkmanager',
     'sleep',
+    'python3',
     'sed',
     'avdmanager',
     'timeout',
@@ -169,6 +174,7 @@ function fixture(name) {
   const env = {
     ...process.env,
     TEST_BIN: shellPath(bin),
+    TEST_PYTHON_COMMAND: python,
     RUNNER_TEMP: shellPath(dir),
     ANDROID_HOME: shellPath(sdk),
     FAKE_EMULATOR_SOURCE: shellPath(join(dir, 'emulator-source')),
@@ -178,7 +184,7 @@ function fixture(name) {
   };
   const run = (script, extra = {}) => {
     const guarded =
-      'export TEST_SLEEP="$(command -v sleep)" TEST_SED="$(command -v sed)"\n' +
+      'export TEST_SLEEP="$(command -v sleep)" TEST_SED="$(command -v sed)" TEST_PYTHON="$(command -v "$TEST_PYTHON_COMMAND")"\n' +
       'export PATH="$TEST_BIN:$PATH"\n[ "$(command -v curl)" = "$TEST_BIN/curl" ] || exit 99\n' +
       script;
     const result = spawnSync('bash', ['-c', guarded], {
@@ -198,6 +204,7 @@ function fixture(name) {
       .filter((line) => line.startsWith(command + ' ')).length;
   const seed = () => {
     executable(join(sdk, 'emulator/emulator'), emulatorSource);
+    writeFileSync(join(sdk, 'emulator/source.properties'), 'Pkg.Revision=37.3.4\n');
     const image = join(sdk, 'system-images/android-35/google_apis/x86_64');
     mkdirSync(image, { recursive: true });
     writeFileSync(join(image, 'system.img'), 'system');
@@ -221,6 +228,11 @@ try {
     assert.equal(test.count('curl'), curls, name);
     assert.equal(test.count('sdkmanager'), sdkCalls, name);
     assert.equal(existsSync(join(test.sdk, 'emulator/emulator')), expected === 0, name);
+    assert.equal(
+      existsSync(join(test.sdk, 'emulator/package.xml')),
+      expected === 0,
+      name + ': emulator must be registered in the SDK',
+    );
   }
   for (const [name, env, removeImage, expected] of [
     ['warm', {}, false, 0],
@@ -244,6 +256,7 @@ try {
   ]) {
     const test = fixture(name);
     test.seed();
+    assert.equal(test.run(install, { EMULATOR_CACHE_HIT: 'true' }).status, 0);
     const result = test.run(boot, env);
     assert.equal(result.status, expected, name + ': ' + result.stdout + result.stderr);
     assert.match(test.trace(), /adb -s emulator-5554 emu kill/, name);
@@ -325,7 +338,6 @@ try {
     mkdirSync(dirname(jar), { recursive: true });
     writeFileSync(jar, 'fake');
     const script = fileURLToPath(new URL('./sign-harmony-hap.py', import.meta.url));
-    const python = process.platform === 'win32' ? 'python' : 'python3';
     const source = `
 import contextlib, io, json, os, runpy, sys
 from types import SimpleNamespace

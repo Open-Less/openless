@@ -336,6 +336,26 @@ jobs:
           validate_emulator "$ANDROID_HOME/emulator/emulator" \
             || { echo '::error::cached emulator does not match build 16555280'; exit 1; }
           validate_image || { echo '::error::Android API 35 system image is incomplete'; exit 1; }
+          # Raw emulator archives need local-package metadata for avdmanager.
+          if [ ! -s "$ANDROID_HOME/emulator/package.xml" ]; then
+            python3 - "$ANDROID_HOME/emulator" <<'PY'
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+          emulator = Path(sys.argv[1])
+          props = dict(line.split('=', 1) for line in (emulator / 'source.properties').read_text().splitlines() if '=' in line)
+          ET.register_namespace('common', 'http://schemas.android.com/repository/android/common/02')
+          ET.register_namespace('xsi', 'http://www.w3.org/2001/XMLSchema-instance')
+          root = ET.Element('{http://schemas.android.com/repository/android/common/02}repository', {'xmlns:generic': 'http://schemas.android.com/repository/android/generic/02'})
+          package = ET.SubElement(root, 'localPackage', {'path': 'emulator', 'obsolete': 'false'})
+          ET.SubElement(package, 'type-details', {'{http://www.w3.org/2001/XMLSchema-instance}type': 'generic:genericDetailsType'})
+          revision = ET.SubElement(package, 'revision')
+          for tag, value in zip(('major', 'minor', 'micro'), props['Pkg.Revision'].strip().split('.')[:3]):
+              ET.SubElement(revision, tag).text = str(int(value))
+          ET.SubElement(package, 'display-name').text = 'Android Emulator'
+          ET.ElementTree(root).write(emulator / 'package.xml', encoding='utf-8', xml_declaration=True)
+          PY
+          fi
 
       - name: Save the Android emulator on beta builds
         if: steps.emulator_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
