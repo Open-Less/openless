@@ -245,6 +245,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/openless-cache/mobile-rime
           key: mobile-rime-ndk26-x86_64-${{ hashFiles('openless-all/app/scripts/build-mobile-rime.py', 'openless-all/app/mobile-ime/**') }}
+      - name: Build and stage Rime for Android instrumentation tests
+        env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
+        run: python3 scripts/build-mobile-rime.py android --abi x86_64 --stage
+
       - name: Save Android Rime dependencies on beta builds
         # 400 MB per entry: pull request scopes are never restored again, so only
         # the beta branch may write this cache.
@@ -253,11 +258,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/openless-cache/mobile-rime
           key: ${{ steps.rime_cache.outputs.cache-primary-key }}
-
-      - name: Build and stage Rime for Android instrumentation tests
-        env:
-          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
-        run: python3 scripts/build-mobile-rime.py android --abi x86_64 --stage
 
       - name: Merge Shizuku manifest
         run: node scripts/merge-android-shizuku-manifest.mjs
@@ -283,71 +283,111 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Restore the Android emulator and AVD
-        # ~400 MB of SDK packages plus the created AVD. Restoring them shortens
-        # the job and, more importantly, keeps the flaky download out of the
-        # critical path. The build is pinned, so the key is stable: once one run
-        # has saved the tree, later runs restore it and skip the save.
+      - name: Restore the pinned Android emulator and system image
         id: emulator_cache
         uses: actions/cache/restore@v4
         with:
           path: |
             ${{ env.ANDROID_HOME }}/emulator
-            ${{ env.ANDROID_HOME }}/system-images
-            ~/.android/avd
-          key: android-emulator-37.2.12-${{ runner.os }}-${{ runner.arch }}
+            ${{ env.ANDROID_HOME }}/system-images/android-35/google_apis/x86_64
+          key: android-emulator-v2-16555280-api35-google_apis-x86_64-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Prepare the pinned Android emulator and system image
+        env:
+          EMULATOR_CACHE_HIT: ${{ steps.emulator_cache.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$ANDROID_HOME/system-images/android-35/google_apis/x86_64"
+          validate_emulator() { "$1" -version 2>&1 | grep -Fq 'build_id 16555280'; }
+          validate_image() { [ -s "$image/system.img" ] && [ -s "$image/package.xml" ]; }
+          if [ "$EMULATOR_CACHE_HIT" != 'true' ]; then
+            work=$(mktemp -d "$RUNNER_TEMP/openless-emulator.XXXXXX")
+            trap 'rm -rf "$work"' EXIT
+            for attempt in 1 2 3; do
+              echo "Install emulator build 16555280 and API 35 image (attempt $attempt)"
+              if curl -fL --connect-timeout 30 --max-time 180 \
+                  -o "$work/emulator.zip" https://dl.google.com/android/repository/emulator-linux_x64-16555280.zip \
+                  && unzip -tq "$work/emulator.zip" \
+                  && unzip -oq "$work/emulator.zip" -d "$work" \
+                  && validate_emulator "$work/emulator/emulator" \
+                  && sdkmanager 'system-images;android-35;google_apis;x86_64' \
+                  && validate_image; then
+                rm -rf "$ANDROID_HOME/emulator"
+                mv "$work/emulator" "$ANDROID_HOME/emulator"
+                break
+              fi
+              rm -rf "$work/emulator" "$image"
+              if [ "$attempt" -eq 3 ]; then
+                echo '::error::could not install the pinned emulator and system image after 3 attempts'
+                exit 1
+              fi
+              sleep 15
+            done
+          fi
+          validate_emulator "$ANDROID_HOME/emulator/emulator" \
+            || { echo '::error::cached emulator does not match build 16555280'; exit 1; }
+          validate_image || { echo '::error::Android API 35 system image is incomplete'; exit 1; }
+
       - name: Save the Android emulator on beta builds
         if: steps.emulator_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: |
             ${{ env.ANDROID_HOME }}/emulator
-            ${{ env.ANDROID_HOME }}/system-images
-            ~/.android/avd
-          key: android-emulator-37.2.12-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install the Android emulator with retries
-        # `sdkmanager --install emulator` regularly returns a truncated archive on
-        # this image ("Error on ZipFile unknown archive"), which used to fail the
-        # whole job and force a rerun - that is why Android was the last job to
-        # finish even though it is one of the shortest. Pin the build and retry.
-        shell: bash
-        run: |
-          set -uo pipefail
-          installed="$ANDROID_HOME/emulator/package.xml"
-          if [ -f "$installed" ] && grep -q '<major>37</major>' "$installed"; then
-            echo "emulator 37.x already present"
-            exit 0
-          fi
-          for attempt in 1 2 3; do
-            echo "sdkmanager --install emulator (attempt $attempt)"
-            if sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"; then
-              exit 0
-            fi
-            rm -rf "$ANDROID_HOME/emulator"
-            sleep 15
-          done
-          echo "::error::could not install the Android emulator after 3 attempts"
-          exit 1
+            ${{ env.ANDROID_HOME }}/system-images/android-35/google_apis/x86_64
+          key: ${{ steps.emulator_cache.outputs.cache-primary-key }}
 
       - name: Run Android Keystore instrumentation tests
-        uses: reactivecircus/android-emulator-runner@v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          avd="$RUNNER_TEMP/openless-ci.avd"
+          printf 'no\n' | avdmanager create avd --force --name openless-ci \
+            --package 'system-images;android-35;google_apis;x86_64' --path "$avd"
+          sed -i '/^hw.keyboard[ =]/d' "$avd/config.ini"
+          echo 'hw.keyboard=no' >> "$avd/config.ini"
+          log="$RUNNER_TEMP/openless-android-emulator.log"
+          emulator_pid=''
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if [ -n "$emulator_pid" ]; then
+              if kill -0 "$emulator_pid" 2>/dev/null; then
+                timeout 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+                kill "$emulator_pid" 2>/dev/null || true
+              fi
+              wait "$emulator_pid" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ]; then cat "$log" >&2 || true; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          "$ANDROID_HOME/emulator/emulator" -avd openless-ci -port 5554 -no-window \
+            -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim > "$log" 2>&1 &
+          emulator_pid=$!
+          export ANDROID_SERIAL=emulator-5554
+          timeout 600s bash -c '
+            until [ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = 1 ]; do
+              kill -0 "$1" 2>/dev/null || exit 1
+              sleep 2
+            done
+          ' bash "$emulator_pid"
+          adb -s emulator-5554 shell input keyevent 82
+          for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
+            adb -s emulator-5554 shell settings put global "$setting" 0
+          done
+          # Rime is staged for this emulator ABI; do not launch the Tauri Rust build.
+          src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
+            :app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon
+
+      - name: Upload Android emulator failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          # Pinned instead of "latest": the resolved build is the one cached
-          # above, so the action does not re-download 400 MB per run.
-          emulator-build: 16555280
-          # The suite exercises AndroidKeyStore and the real packaged Rime JNI
-          # without launching Tauri. Rime is staged for this emulator ABI above.
-          script: >-
-            cd openless-all/app &&
-            src-tauri/gen/android/gradlew
-            --project-dir src-tauri/gen/android
-            :app:connectedX86_64DebugAndroidTest
-            -x :app:rustBuildX86_64Debug
-            --no-daemon
+          name: android-instrumentation-failure
+          path: ${{ runner.temp }}/openless-android-emulator.log
+          if-no-files-found: ignore
 
   # HarmonyOS covers three layers, in three places:
   #   * the Rust host is compiled and tested by the Linux job
@@ -448,7 +488,7 @@ jobs:
     # the Windows runner is the slowest of the three. Running them in parallel
     # costs one extra setup but removes ~6 minutes from the critical path.
     needs: [changes]
-    if: needs.changes.outputs.tauri != 'false'
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
     name: Windows frontend and contracts
     runs-on: windows-latest
     timeout-minutes: 40
@@ -503,7 +543,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || '["macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     defaults:

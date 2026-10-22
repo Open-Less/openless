@@ -43,7 +43,7 @@ concurrency:
 
 jobs:
   test-linux-egui:
-    # Same runner and cache as the packaging job, run in parallel: the tests used
+    # Run in parallel with packaging: the tests used
     # to serialise ~8 minutes in front of the ~7 minute release build, making this
     # workflow the critical path of the whole CI run.
     runs-on: ubuntu-24.04
@@ -84,11 +84,8 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: inputs.scope != 'none'
         with:
-          # `shared-key` replaces the job name in the cache key, so this job and
-          # the packaging job (and the tag release, which calls the same workflow
-          # as `build-linux-egui`) all share one tree. Without it the key would be
-          # `…-test-linux-egui-…` and every test run would start cold.
-          shared-key: build-linux-egui
+          # Test and release profiles are produced independently; each needs its own cache.
+          shared-key: test-linux-egui
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri/backend-tests -> ../../target
@@ -109,13 +106,17 @@ jobs:
         if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: |
+          set -euo pipefail
           cargo test --locked -p openless-core
           # Named re-run of the hotkey edge gate that used to be a standalone
           # script spawning its own `cargo test`: the binary is already built by
           # the line above, so this is free, and a rename now fails loudly here
           # instead of silently dropping the gate.
-          cargo test --locked -p openless-core \
-            shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact
+          cargo test --locked -p openless-core --lib \
+            api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact \
+            | tee "$RUNNER_TEMP/openless-hotkey-edge.log"
+          grep -Fq 'test api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics ... ok' \
+            "$RUNNER_TEMP/openless-hotkey-edge.log"
           cargo test --locked -p openless-harmony-host
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --all-targets
@@ -207,8 +208,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: inputs.scope != 'none'
         with:
-          # Identical to the job name, so the key is unchanged; declaring it keeps
-          # the parallel test job on the same tree (see `test-linux-egui`).
+          # Keep the release cache shared with tag builds, separate from test profiles.
           shared-key: build-linux-egui
           workspaces: |
             openless-all/app -> target
@@ -289,18 +289,45 @@ jobs:
           path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
 
+      - name: Upload direct download aliases
+        if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
+        uses: actions/upload-artifact@v7
+        with:
+          name: openless-linux-egui-direct-download
+          path: ${{ runner.temp }}/openless-linux-egui-direct-download/*
+          if-no-files-found: error
+
+  publish-linux-egui:
+    needs: [test-linux-egui, build-linux-egui]
+    if: inputs.scope != 'none' && inputs.publish && inputs.release_tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Download verified Linux packages
+        uses: actions/download-artifact@v8
+        with:
+          name: openless-linux-egui-x86_64
+          path: ${{ runner.temp }}/openless-linux-egui-packages
+      - name: Download direct download aliases
+        uses: actions/download-artifact@v8
+        with:
+          name: openless-linux-egui-direct-download
+          path: ${{ runner.temp }}/openless-linux-egui-direct-download
       - name: Attach Linux packages to the GitHub Release
-        # Runs only for the release entry point, which pins the tag; PR and push
-        # builds never publish.
-        if: inputs.scope != 'none' && inputs.publish && inputs.release_tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        working-directory: openless-all/app
         run: |
           set -euo pipefail
-          # The desktop workflow creates the Release for this tag; wait for it
-          # instead of racing it, and fail loudly if it never appears.
+          output="$RUNNER_TEMP/openless-linux-egui-packages"
+          alias_dir="$RUNNER_TEMP/openless-linux-egui-direct-download"
+          for file in "$output"/OpenLess-Linux-egui-*.deb "$output"/OpenLess-Linux-egui-*.rpm \
+              "$output/SHA256SUMS-linux" "$alias_dir/OpenLess_linux_x86_64.deb" \
+              "$alias_dir/OpenLess_linux_x86_64.rpm"; do
+            [ -s "$file" ] || { echo "::error::missing Linux release asset $file"; exit 1; }
+          done
+          # The desktop workflow creates the Release; wait without racing its creation.
           for attempt in $(seq 1 40); do
             if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
               break
@@ -311,21 +338,11 @@ jobs:
             fi
             sleep 15
           done
-          output=target/linux-egui-packages
-          alias_dir="$RUNNER_TEMP/openless-linux-egui-direct-download"
           gh release upload "$RELEASE_TAG" \
             "$output"/OpenLess-Linux-egui-*.deb \
             "$output"/OpenLess-Linux-egui-*.rpm \
-            "$output"/SHA256SUMS-linux \
-            "$alias_dir"/OpenLess_linux_x86_64.deb \
-            "$alias_dir"/OpenLess_linux_x86_64.rpm \
+            "$output/SHA256SUMS-linux" \
+            "$alias_dir/OpenLess_linux_x86_64.deb" \
+            "$alias_dir/OpenLess_linux_x86_64.rpm" \
             --clobber
           echo "attached Linux assets to $RELEASE_TAG"
-
-      - name: Upload direct download aliases
-        if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
-        uses: actions/upload-artifact@v7
-        with:
-          name: openless-linux-egui-direct-download
-          path: ${{ runner.temp }}/openless-linux-egui-direct-download/*
-          if-no-files-found: error

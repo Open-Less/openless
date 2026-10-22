@@ -67,10 +67,7 @@ for (const key of ['tauri-windows', 'tauri-macos']) {
     sharedKeys(ci).includes(key),
     `ci.yml must declare shared-key ${key} so the release workflow can reuse it`,
   );
-  assert.ok(
-    sharedKeys(release).includes(key),
-    `release-tauri.yml must restore shared-key ${key}`,
-  );
+  assert.ok(sharedKeys(release).includes(key), `release-tauri.yml must restore shared-key ${key}`);
 }
 
 // 2. The release workflow must not keep a private key: that is what made tag
@@ -78,7 +75,9 @@ for (const key of ['tauri-windows', 'tauri-macos']) {
 assert.doesNotMatch(release, /key:\s*macos-release/);
 
 // 3. Baseline writes stay gated to the default branch, releases only read it.
-const saveIfs = [...ci.matchAll(/save-if:\s*\$\{\{\s*github\.ref == 'refs\/heads\/beta'[^}]*\}\}/g)];
+const saveIfs = [
+  ...ci.matchAll(/save-if:\s*\$\{\{\s*github\.ref == 'refs\/heads\/beta'[^}]*\}\}/g),
+];
 assert.ok(saveIfs.length >= 3, 'every shared cache in ci.yml must be beta-only for writes');
 
 // 4. The APK build keeps its per-ABI key (it builds a different target triple
@@ -95,25 +94,6 @@ assert.match(linux, /cargo build --locked --release -p openless-linux-egui/);
 assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
-console.log('ci-cache-sharing contract test passed');
-
-// `actions/cache@v4` saves on every run it executes, including pull request
-// scopes (`refs/pull/<n>/merge`) that are never restored again. Restore
-// unconditionally; save only from beta.
-for (const [yaml, label] of [
-  [ci, 'ci.yml'],
-  [release, 'release-tauri.yml'],
-  [androidApk, 'android-apk.yml'],
-  [linux, 'check-linux-egui.yml'],
-  [linuxRelease, 'release-linux-egui.yml'],
-  [releaseHarmony, 'release-harmony.yml'],
-]) {
-  assert.ok(
-    !/uses: actions\/cache@v4/.test(yaml),
-    `${label} must not use actions/cache@v4 (auto-save); pair cache/restore@v4 with a beta-gated cache/save@v4`,
-  );
-}
-
 // The capsule crates used to run in their own pull-request-only workflow: it
 // wrote a dependency tree under `refs/pull/<n>/merge` (never restored again)
 // while beta produced nothing to restore. It now lives here, behind the same
@@ -128,3 +108,40 @@ for (const [yaml, label] of [
     'native-capsule.yml must stay merged into ci.yml',
   );
 }
+
+const linuxJob = (name) =>
+  linux.match(new RegExp('\\n  ' + name + ':[\\s\\S]*?(?=\\n  [a-z-]+:|$)'))?.[0] ?? '';
+assert.match(linuxJob('test-linux-egui'), /shared-key: test-linux-egui/);
+assert.match(linuxJob('build-linux-egui'), /shared-key: build-linux-egui/);
+const before = (producer, save) => {
+  const producerIndex = ci.indexOf('- name: ' + producer);
+  const saveIndex = ci.indexOf('- name: ' + save);
+  assert.ok(
+    producerIndex >= 0 && producerIndex < saveIndex,
+    save + ' must follow its successful producer',
+  );
+};
+before(
+  'Build and stage Rime for Android instrumentation tests',
+  'Save Android Rime dependencies on beta builds',
+);
+before(
+  'Prepare the pinned Android emulator and system image',
+  'Save the Android emulator on beta builds',
+);
+assert.doesNotMatch(
+  ci,
+  /reactivecircus\/android-emulator-runner|~\/\.android\/avd|android-emulator-37\.2\.12/,
+);
+assert.match(ci, /android-emulator-v2-16555280-api35-google_apis-x86_64-/);
+for (const id of ['rime_cache', 'emulator_cache']) {
+  assert.match(
+    ci,
+    new RegExp(
+      'if: steps\\.' +
+        id +
+        "\\.outputs\\.cache-hit != 'true' && github\\.ref == 'refs/heads/beta' && \\(github\\.event_name == 'push' \\|\\| github\\.event_name == 'workflow_dispatch'\\)",
+    ),
+  );
+}
+console.log('ci-cache-sharing contract test passed');

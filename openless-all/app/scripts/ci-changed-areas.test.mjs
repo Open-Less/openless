@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'ci-changed-areas.sh');
 const git = (cwd, args) =>
@@ -73,7 +74,10 @@ try {
 
   // HarmonyOS work touches the shared bundle and the Rust host, never the Linux
   // package chain or the Tauri desktop build.
-  commit({ 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' }, 'arkts');
+  commit(
+    { 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' },
+    'arkts',
+  );
   check('arkts source: harmony', decide('harmony'), 'true');
   check('arkts source: tauri', decide('tauri'), 'true');
   reset();
@@ -197,7 +201,9 @@ check(
 );
 check(
   'windows codegen pass covers lib and bins',
-  workflow.includes('cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run'),
+  workflow.includes(
+    'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run',
+  ),
   true,
 );
 check(
@@ -226,8 +232,7 @@ check(
   true,
 );
 
-if (failures > 0) {
-  console.error(`// Wall-clock guards: the Windows runner is the slowest one, so the frontend
+// Wall-clock guards: the Windows runner is the slowest one, so the frontend
 // suite must not serialise behind the Rust compile, and the Linux tests must not
 // serialise in front of the deb/rpm build.
 check(
@@ -246,11 +251,6 @@ check(
   true,
 );
 
-ci-changed-areas contract test failed (${failures})`);
-  process.exit(1);
-}
-console.log('ci-changed-areas contract test passed');
-
 // `tauri::generate_context!()` embeds ../dist at compile time, so any job that
 // compiles the Tauri lib must build the frontend first — including the matrix
 // job on Windows, where the contract suite moved to its own job.
@@ -259,3 +259,83 @@ check(
   /if: runner\.os == 'Windows'\n\s+run: npm run build/.test(workflow),
   true,
 );
+
+const windowsJob = workflow.match(/\n  windows-frontend:[\s\S]*?(?=\n  [a-z-]+:)/)?.[0] ?? '';
+const capsuleJob = workflow.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:)/)?.[0] ?? '';
+const windowsGate = windowsJob.match(/\n    if: (.+)/)?.[1];
+const capsuleMatrix = capsuleJob.match(/\n        os: \$\{\{ (.+) \}\}/)?.[1];
+for (const [event, platform, tauri, expectedWindows, expectedPlatforms] of [
+  ['workflow_dispatch', 'macos', 'true', false, ['macos-latest']],
+  ['workflow_dispatch', 'all', 'true', true, ['macos-latest', 'windows-latest']],
+  ['pull_request', '', 'true', true, ['macos-latest', 'windows-latest']],
+  ['push', '', undefined, true, ['macos-latest', 'windows-latest']],
+  ['pull_request', '', 'false', false, ['macos-latest', 'windows-latest']],
+]) {
+  const context = {
+    github: { event_name: event },
+    inputs: { platform },
+    needs: { changes: { outputs: { tauri } } },
+    fromJSON: JSON.parse,
+  };
+  check(
+    event + '/' + platform + ': Windows frontend gate',
+    Boolean(vm.runInNewContext(windowsGate ?? 'false', context)),
+    expectedWindows,
+  );
+  check(
+    event + '/' + platform + ': capsule platforms',
+    JSON.stringify(vm.runInNewContext(capsuleMatrix ?? '[]', context)),
+    JSON.stringify(expectedPlatforms),
+  );
+}
+
+// Execute the real wiring checks with changed text, without spawning Git again.
+const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+const wiringStart = source.indexOf('const areas =');
+const wiringEnd = source.indexOf('// Execute the real wiring checks');
+const failureStart = source.lastIndexOf('\nif (failures > 0) {');
+const wiring = source.slice(wiringStart, wiringEnd) + source.slice(failureStart);
+for (const [label, changed] of [
+  [
+    'missing Windows frontend build',
+    workflow.replace(
+      /if: runner\.os == 'Windows'\n\s+run: npm run build/,
+      "if: runner.os == 'Never'\n        run: npm run build",
+    ),
+  ],
+  [
+    'missing separate frontend job',
+    workflow.replace('\n  windows-frontend:', '\n  removed-frontend:'),
+  ],
+]) {
+  check(label + ': mutation applied', changed !== workflow, true);
+  let exitCode = 0;
+  try {
+    vm.runInNewContext(
+      'let failures = 0; const check = (label, actual, expected) => { if (actual !== expected) failures++; }; ' +
+        wiring,
+      {
+        workflow: changed,
+        reusable,
+        vm,
+        check: undefined,
+        console: { log() {}, error() {} },
+        process: {
+          exit(code) {
+            exitCode = code;
+            throw new Error('expected contract failure');
+          },
+        },
+      },
+    );
+  } catch (error) {
+    if (!exitCode) throw error;
+  }
+  check(label + ': contract rejects the mutation', exitCode, 1);
+}
+
+if (failures > 0) {
+  console.error(`ci-changed-areas contract test failed (${failures})`);
+  process.exit(1);
+}
+console.log('ci-changed-areas contract test passed');
