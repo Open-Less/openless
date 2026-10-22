@@ -22,6 +22,9 @@ const ROTATE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 const ROTATE_KEEP: usize = 3;
 /// 无法解析 `OPENLESS_LOG` 时的默认级别。
 const DEFAULT_LEVEL: log::LevelFilter = log::LevelFilter::Info;
+/// 设置页写入的级别文件名，位于 `<data_dir>/logs/level`。
+/// 环境变量仍然优先：临时排查不该被上一次的界面设置挡住。
+const LEVEL_FILE_NAME: &str = "level";
 
 pub fn log_path(data_dir: &Path) -> PathBuf {
     data_dir.join("logs").join("openless.log")
@@ -49,7 +52,7 @@ pub fn init_file_logger(data_dir: &Path) -> Result<PathBuf, String> {
         .open(&path)
         .map_err(|error| error.to_string())?;
 
-    let filter = FilterSpec::from_env();
+    let filter = FilterSpec::resolve(data_dir);
     let config = base_config();
     let sinks: Vec<Box<dyn SharedLogger>> = vec![
         // 终端上也用同一份过滤结果，级别再放宽到 Trace 交给 FilterSpec 决定。
@@ -104,13 +107,20 @@ struct FilterSpec {
 }
 
 impl FilterSpec {
-    fn from_env() -> Self {
+    /// 优先级：`OPENLESS_LOG`/`RUST_LOG` → 设置里存的级别 → `info`。
+    fn resolve(data_dir: &Path) -> Self {
         for key in ENV_KEYS {
             if let Ok(value) = std::env::var(key) {
                 if let Some(spec) = Self::parse(&value) {
                     return spec;
                 }
             }
+        }
+        if let Some(level) = read_log_level(data_dir) {
+            return Self {
+                default: level,
+                overrides: Vec::new(),
+            };
         }
         Self {
             default: DEFAULT_LEVEL,
@@ -195,6 +205,33 @@ fn parse_level(value: &str) -> Option<log::LevelFilter> {
     }
 }
 
+/// 设置页保存的日志级别；文件不存在或内容无法识别时返回 `None`。
+pub fn read_log_level(data_dir: &Path) -> Option<log::LevelFilter> {
+    let path = data_dir.join("logs").join(LEVEL_FILE_NAME);
+    let raw = std::fs::read_to_string(path).ok()?;
+    parse_level(raw.trim())
+}
+
+/// 把级别写进 `<data_dir>/logs/level`，下次启动生效。
+pub fn write_log_level(data_dir: &Path, level: &str) -> std::io::Result<log::LevelFilter> {
+    let Some(parsed) = parse_level(level) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unknown log level: {level}"),
+        ));
+    };
+    let dir = data_dir.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    crate::atomic_save(&dir.join(LEVEL_FILE_NAME), level_name(parsed).as_bytes())
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(parsed)
+}
+
+/// 级别的稳定名称：文件名、设置项与日志首行都用它，避免各自拼写。
+pub fn level_name(level: log::LevelFilter) -> &'static str {
+    level_label(level)
+}
+
 fn level_label(level: log::LevelFilter) -> &'static str {
     match level {
         log::LevelFilter::Off => "off",
@@ -266,6 +303,84 @@ fn rotate_if_needed(path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// 导出「当前日志 + 全部轮转历史」到单个文件。
+///
+/// 只导出 `openless.log` 时，用户报的问题几乎总是发生在轮转之后 —— 现场刚好被
+/// 切进 `.1` 而导出里没有。这里按 `.3` → `.2` → `.1` → 当前的顺序拼接（时间
+/// 正序），每段加分隔头，并在最前面写明版本、系统、生效级别与导出时间，
+/// 省掉「你用的哪个版本」这一轮往返。
+pub fn export_error_logs(data_dir: &Path, destination: &Path) -> Result<(), crate::DesktopError> {
+    let current = log_path(data_dir);
+    let mut out = String::new();
+    out.push_str("# OpenLess Linux diagnostics\n");
+    out.push_str(&format!("version: {}\n", env!("OPENLESS_APP_VERSION")));
+    out.push_str(&format!(
+        "os: {} {}\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+    out.push_str(&format!(
+        "level: {}\n",
+        level_name(
+            std::env::var("OPENLESS_LOG")
+                .ok()
+                .and_then(|value| FilterSpec::parse(&value))
+                .map_or_else(
+                    || read_log_level(data_dir).unwrap_or(DEFAULT_LEVEL),
+                    |spec| spec.default
+                )
+        )
+    ));
+    out.push_str(&format!(
+        "exported_at: {}\n\n",
+        time::OffsetDateTime::now_local()
+            .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default()
+    ));
+
+    let mut exported = 0usize;
+    for index in (1..=ROTATE_KEEP).rev() {
+        let path = current.with_file_name(format!("openless.log.{index}"));
+        if append_log_section(&mut out, &path, &format!("openless.log.{index}"))? {
+            exported += 1;
+        }
+    }
+    if append_log_section(&mut out, &current, "openless.log")? {
+        exported += 1;
+    }
+    if exported == 0 {
+        return Err(crate::DesktopError::Io {
+            operation: "read error log",
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no log file yet"),
+        });
+    }
+    crate::atomic_save(destination, out.as_bytes()).map(|_| ())
+}
+
+fn append_log_section(
+    out: &mut String,
+    path: &Path,
+    label: &str,
+) -> Result<bool, crate::DesktopError> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            out.push_str(&format!("===== {label} =====\n"));
+            out.push_str(&String::from_utf8_lossy(&bytes));
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(crate::DesktopError::Io {
+            operation: "read error log",
+            source,
+        }),
+    }
+}
+
 pub fn export_error_log(source: &Path, destination: &Path) -> Result<(), crate::DesktopError> {
     let bytes = std::fs::read(source).map_err(|source| crate::DesktopError::Io {
         operation: "read error log",
@@ -292,6 +407,50 @@ mod tests {
         export_error_log(&source, &destination).unwrap();
 
         assert_eq!(std::fs::read(destination).unwrap(), b"diagnostic\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exports_every_rotated_file_with_a_header() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-linux-log-export-all-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let logs = root.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("openless.log"), b"newest\n").unwrap();
+        std::fs::write(logs.join("openless.log.1"), b"older\n").unwrap();
+        std::fs::write(logs.join("openless.log.2"), b"oldest\n").unwrap();
+        let destination = root.join("diagnostics.log");
+
+        export_error_logs(&root, &destination).unwrap();
+        let text = std::fs::read_to_string(&destination).unwrap();
+
+        assert!(text.starts_with("# OpenLess Linux diagnostics\n"));
+        assert!(text.contains("version: "));
+        // 时间正序：`.2` 在 `.1` 之前，当前文件在最后。
+        let oldest = text.find("oldest").unwrap();
+        let older = text.find("older").unwrap();
+        let newest = text.find("newest").unwrap();
+        assert!(oldest < older && older < newest, "sections must be chronological");
+        assert!(text.contains("===== openless.log.2 ====="));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_the_level_for_the_next_start() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-linux-log-level-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        assert_eq!(read_log_level(&root), None);
+        assert_eq!(
+            write_log_level(&root, "debug").unwrap(),
+            log::LevelFilter::Debug
+        );
+        assert_eq!(read_log_level(&root), Some(log::LevelFilter::Debug));
+        assert!(write_log_level(&root, "loud").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

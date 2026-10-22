@@ -947,7 +947,17 @@ impl DictationEngine for PipelineDictationEngine {
                     }
                 }
             };
-            let asr_ms = Some(asr_started.elapsed().as_millis() as u64);
+            let asr_elapsed_ms = asr_started.elapsed().as_millis() as u64;
+            let asr_ms = Some(asr_elapsed_ms);
+            // 「听写很慢」时要能一句话看出慢在 ASR 还是慢在润色。
+            log::info!(
+                "[asr] session_id={} provider={} label={:?} elapsed_ms={} chars={}",
+                session_id,
+                context.asr.provider_type,
+                asr_call_label,
+                asr_elapsed_ms,
+                transcript.text.chars().count(),
+            );
             if session.cancelled.load(Ordering::Acquire) {
                 if !context.recording.archive_successful_recording {
                     discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
@@ -2162,7 +2172,9 @@ struct TranscriptProgressForwarder {
 
 impl TextStreamSink for TranscriptProgressForwarder {
     fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
-        log::info!(
+        // 流式转写每来一块就一条；它属于逐事件仪表，走 debug，
+        // 否则一次长听写就能把 info 层刷满。
+        log::debug!(
             "[transcript] partial emitted session={} offset={} chars={}",
             self.session_id,
             chunk.offset,

@@ -1468,6 +1468,7 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "status.channel_saved", text: row("渠道配置已保存", "管道設定已儲存", "Channel configuration saved", "チャネル設定を保存しました", "채널 설정 저장됨") },
     Msg { key: "status.secret_cleared", text: row("渠道 Secret 已清除", "管道 Secret 已清除", "Channel Secret cleared", "チャネルの Secret を消去しました", "채널 Secret 지워짐") },
     Msg { key: "status.provider_validated", text: row("Provider 验证通过（{} ms）", "Provider 驗證通過（{} ms）", "Provider validated ({} ms)", "Provider 検証成功（{} ms）", "Provider 검증 통과({}ms)") },
+    Msg { key: "status.log_level_saved", text: row("日志级别已保存，重启 OpenLess 后生效", "日誌等級已儲存，重新啟動 OpenLess 後生效", "Log level saved; restart OpenLess to apply", "ログレベルを保存しました。OpenLess の再起動で反映されます", "로그 레벨을 저장했습니다. OpenLess를 다시 시작하면 적용됩니다") },
     Msg { key: "status.export_log_done", text: row("错误日志已导出", "錯誤日誌已匯出", "Error log exported", "エラーログをエクスポートしました", "오류 로그 내보냄") },
     Msg { key: "status.hotkey_handled", text: row("已处理快捷键", "已處理快速鍵", "Hotkey handled", "ホットキーを処理しました", "단축키 처리됨") },
     Msg { key: "status.launch_handled", text: row("已处理启动请求", "已處理啟動請求", "Launch request handled", "起動要求を処理しました", "시작 요청 처리됨") },
@@ -3792,6 +3793,20 @@ pub const CATALOG: &[Msg] = &[
             "Shift+Insert (xterm / urxvt)",
             "Shift+Insert（xterm / urxvt）",
             "Shift+Insert (xterm / urxvt)",
+        ),
+    },
+    Msg {
+        key: "settings.debug.log_level_label",
+        text: row("日志级别", "日誌等級", "Log level", "ログレベル", "로그 레벨"),
+    },
+    Msg {
+        key: "settings.debug.log_level_desc",
+        text: row(
+            "debug 记录心跳与 IPC 细节，排查问题时更有用；选择后需重启 OpenLess 生效。",
+            "debug 記錄心跳與 IPC 細節，排查問題時更有用；選擇後需重新啟動 OpenLess 生效。",
+            "debug records heartbeats and IPC details, which is what support needs; restart OpenLess to apply.",
+            "debug はハートビートと IPC の詳細を記録します（調査向け）。OpenLess の再起動で反映されます。",
+            "debug는 하트비트와 IPC 세부 정보를 기록합니다(문제 해결용). OpenLess를 다시 시작해야 적용됩니다.",
         ),
     },
     Msg {

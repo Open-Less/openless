@@ -584,6 +584,9 @@ pub enum SettingsComboField {
     SelectionVoicePlanFormat,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
     CodingAgentPermission,
+    /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
+    /// 重启后生效；不是 Core 偏好，所以不上云、不影响 Tauri。
+    LogLevel,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -1201,6 +1204,8 @@ pub struct SettingsFields {
     #[serde(default)]
     pub llm_thinking_enabled: bool,
     pub record_audio_for_debug: bool,
+    /// 日志级别：0 = info，1 = debug，2 = trace。宿主本地设置，不进 Core 偏好。
+    pub log_level: usize,
     pub history_max_entries: String,
     /// 风格直达快捷键（可录制/停用/移除）。
     pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
@@ -1268,6 +1273,7 @@ impl Default for SettingsFields {
             capsule_transcript_font_size: 14,
             llm_thinking_enabled: false,
             record_audio_for_debug: false,
+            log_level: 0,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),

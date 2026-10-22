@@ -98,4 +98,65 @@ for (const [, body] of logCalls) {
   );
 }
 
+
+// 7. The level chosen in the UI has to outlive the process, and the export has to
+//    carry the rotated history - otherwise the file the user sends us is exactly
+//    the one that no longer contains the incident.
+const settingsSave = read('linux-egui/src/linux_app/settings_save.rs');
+assert.match(
+  logging,
+  /pub fn write_log_level/,
+  'logging.rs must persist the level chosen in the settings UI',
+);
+assert.match(
+  logging,
+  /pub fn read_log_level/,
+  'logging.rs must read the persisted level at startup',
+);
+assert.match(
+  settingsSave,
+  /write_log_level\(/,
+  'the settings handler must persist the log level',
+);
+assert.match(
+  settingsSave,
+  /export_error_logs\(/,
+  'the export action must include the rotated logs, not only the current file',
+);
+assert.match(
+  logging,
+  /pub fn export_error_logs/,
+  'logging.rs must provide the multi-file export',
+);
+
+// 8. The gaps that used to make a report unusable: no capture line on success, no
+//    dictation start, no single-instance outcome.
+assert.match(
+  read('linux-egui/src/audio.rs'),
+  /"\[audio\] capture started backend=/,
+  'capture start must name the backend, device and format that actually won',
+);
+assert.match(
+  read('crates/openless-core/src/api.rs'),
+  /"\[dictation\] start session_id=/,
+  'the dictation start boundary must be logged (hotkey pressed but nothing happened)',
+);
+assert.match(
+  main,
+  /"\[startup\] another instance owns the lock/,
+  'a forwarded second launch must leave a trace, otherwise "clicking the icon does nothing" is invisible',
+);
+
+// 9. Per-event chatter must not sit at info.
+assert.ok(
+  !/log::info!\("\[transcript\] partial emitted/.test(
+    read('crates/openless-core/src/dictation_engine.rs'),
+  ),
+  'each streaming partial must not be logged at info',
+);
+assert.ok(
+  !/log::info!\("\[hotkey\] local edge/.test(main),
+  'per-keystroke hotkey edges must stay at debug',
+);
+
 console.log('egui-logging contract test passed');

@@ -7692,6 +7692,17 @@ impl OpenLessBackend {
             context
         };
 
+        // 一次听写的起点。日志从「按下热键」到第一条识别结果之间原本是空白，
+        // 于是「按了没反应」与「录上了但没识别」在日志里长得一样。
+        log::info!(
+            "[dictation] start session_id={} target={:?} asr={} insert={} translate={} silence_after_ms={:?}",
+            session_id,
+            context.output_target,
+            context.asr.provider_type,
+            context.insertion.enabled,
+            context.polish.translation_active,
+            context.recording.silence_after_ms,
+        );
         if let Err(error) = self
             .deps
             .host_actions

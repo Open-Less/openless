@@ -208,7 +208,7 @@ impl OpenLessEguiApp {
                     self.pending_ui_actions.push(*action);
                 }
                 WindowToHost::Hotkey { sequence, edge } => {
-                    log::info!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
+                    log::debug!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
                     self.pending_local_hotkeys
                         .push((std::time::Instant::now(), edge));
                 }
@@ -803,7 +803,7 @@ impl eframe::App for UiClientApp {
             }
         }
         if ui_debug_enabled() && !actions.is_empty() {
-            log::info!("[ui-client] actions from the renderer: {actions:?}");
+            log::debug!("[ui-client] actions from the renderer: {actions:?}");
         }
         self.dispatch(actions, &ctx);
         self.ping_if_due();

@@ -3210,6 +3210,19 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
+                combo_index_row(
+                    ui,
+                    tr_l10n(lang, "settings.debug.log_level_label"),
+                    tr_l10n(lang, "settings.debug.log_level_desc"),
+                    vm.settings.log_level.min(2),
+                    &["info", "debug", "trace"],
+                    |index| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::LogLevel,
+                            index,
+                        ));
+                    },
+                );
                 action_row(
                     ui,
                     tr_l10n(lang, "settings.debug.title"),

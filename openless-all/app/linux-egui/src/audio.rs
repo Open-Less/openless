@@ -485,6 +485,11 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
             stream
         }
         Err(error) => {
+            log::error!(
+                "[audio] no input backend could open a stream (tried {:?}): {}",
+                audio_backend_order(),
+                error.message
+            );
             drop(frame_tx);
             let _ = processor.finish();
             let _ = startup.send(Err(error));
@@ -540,6 +545,15 @@ fn try_start_audio_stream(
             .play()
             .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
         accepting.store(true, std::sync::atomic::Ordering::Release);
+        // 「录到的全是静音」这类问题，第一个要回答的就是：落到哪个后端、哪只
+        // 设备、什么采样格式。以前只有失败时才有日志，成功时什么都看不到。
+        log::info!(
+            "[audio] capture started backend={backend} device={} format={:?} rate={}Hz channels={}",
+            device,
+            supported.sample_format(),
+            supported.sample_rate(),
+            usize::from(supported.channels()),
+        );
         Ok(stream)
     };
     let initial_error = match device.default_input_config() {

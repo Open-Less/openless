@@ -2133,7 +2133,7 @@ mod linux_app {
                     }
                 },
                 PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
-                    log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
+                    log::debug!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
                     self.pending_local_hotkeys
                         .push((std::time::Instant::now(), edge));
                 }
@@ -5690,6 +5690,15 @@ mod linux_app {
             // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
             // 内容每帧弹回旧值。
             let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
+            // 日志级别是宿主本地文件（不在 Core 偏好里），要在借用 vm 之前读。
+            let log_level_index = self
+                .backend()
+                .and_then(|backend| openless_linux_egui::read_log_level(&backend.config().data_dir))
+                .map_or(0, |level| match level {
+                    log::LevelFilter::Debug => 1,
+                    log::LevelFilter::Trace => 2,
+                    _ => 0,
+                });
 
             let vm = &mut self.frontend_vm;
 
@@ -5870,6 +5879,8 @@ mod linux_app {
                 s.launch_at_login = prefs.launch_at_login;
                 s.streaming_save_clipboard = prefs.streaming_insert_save_clipboard;
                 s.record_audio_for_debug = prefs.record_audio_for_debug;
+                // 日志级别是宿主本地文件，不在 Core 偏好里；读不到就按 info 显示。
+                s.log_level = log_level_index;
                 if hydrate_text {
                     s.history_max_entries = prefs
                         .history_max_entries
@@ -8019,8 +8030,18 @@ mod linux_app {
         )
         .map_err(|error| error.to_string())?
         {
-            SingleInstanceRole::Primary(broker) => Ok(BrokerAcquisition::Primary(broker)),
-            SingleInstanceRole::Forwarded => Ok(BrokerAcquisition::Forwarded),
+            SingleInstanceRole::Primary(broker) => {
+                log::info!("[startup] single-instance lock acquired; running as primary");
+                Ok(BrokerAcquisition::Primary(broker))
+            }
+            SingleInstanceRole::Forwarded => {
+                // 「双击图标没反应」最常见的原因就是这一条：意图被已有实例接管，
+                // 本进程直接退出。没有这行日志时，用户和我们看到的都是「什么都没发生」。
+                log::info!(
+                    "[startup] another instance owns the lock; forwarded the launch intent to it and exiting"
+                );
+                Ok(BrokerAcquisition::Forwarded)
+            }
         }
     }
 

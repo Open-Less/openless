@@ -13,7 +13,8 @@
 | 历史份数 | `openless.log.1` … `openless.log.3`（合计 ≤ 8 MiB） |
 | 轮转时机 | 进程启动时；**只有宿主轮转**，UI 窗口进程不轮转（否则宿主手里的句柄会指向被改名的 inode） |
 | 终端 | 同时输出到 stderr，级别与文件一致 |
-| 导出 | 设置 → 关于 → 「导出错误日志」（`export_error_log`，原子写） |
+| 导出 | 设置 → 高级 → 调试 → 「导出错误日志」（`export_error_logs`，原子写） |
+| 导出内容 | 当前 `openless.log` **加全部轮转历史**（`.3`→`.2`→`.1`→当前，时间正序），文件头写明版本、系统架构、生效级别与导出时间 |
 
 两个进程（宿主 `openless`、界面 `openless --ui-client`）写同一个文件，排查「窗口进程怎么没了」时两端记录在同一处。
 
@@ -33,7 +34,15 @@
    - 参考实现：`log_pump_heartbeat`（`linux-egui/src/main.rs`）——状态变化立刻记 `info`，否则每 5 分钟一条，其余 `debug`。
 2. **`error` 只写失败，不写进度。** `log::error!("[x] stage=device_id_ok")` 这类 tracer 会让每次启动看起来都像崩了，必须降到 `debug`。
 
-## 3. 不用重新编译就能改级别
+## 3. 设置里也能改
+
+设置 → 高级 → 调试 → **日志级别**（`info` / `debug` / `trace`）：
+
+- 选完写进 `<data_dir>/logs/level`，**重启 OpenLess 生效**（界面会提示）。
+- 这是宿主本地设置，不进 Core 偏好，因此不上云、不影响 Tauri 与移动端。
+- 环境变量优先于这里的设置：临时排查不该被上一次的界面选择挡住。
+
+## 4. 不用重新编译也能改级别
 
 ```bash
 # 全开
@@ -64,7 +73,7 @@ systemctl --user edit openless
 2026-10-22T23:40:12.423+08:00 [INFO] openless_linux_egui::logging: Linux egui logger ready: level=debug rotated=false path=/home/x/.local/share/OpenLess/logs/openless.log
 ```
 
-## 4. 行格式
+## 5. 行格式
 
 ```
 <本地时区 RFC3339> [<LEVEL>] [<target>] [<thread>] <文件:行> <消息>
@@ -89,7 +98,20 @@ systemctl --user edit openless
 | `[remote-input]` | 手机/远程输入 |
 | `[capture]` | 截图与选区 |
 
-## 5. 定位一次听写
+## 6. 一次听写在日志里长什么样
+
+```
+[dictation] start session_id=… target=Dictation asr=dashscope insert=true translate=false silence_after_ms=None
+[audio] capture started backend=pipewire device=… format=F32 rate=48000Hz channels=1
+[transcript] partial emitted session=…                      ← 仅 debug
+[asr] session_id=… provider=dashscope label=… elapsed_ms=1840 chars=42
+[asr-diagnostics] session_id=… asr_chars=42 asr_hash=… corrected_chars=42 …
+[polish-diagnostics] session_id=… stage=decision uses_polisher=true …
+[insert-diagnostics] session_id=… attempt=1 operation=… chars=42 hash=…
+[dictation] session … failed: code=… message=…             ← 失败时（warn）
+```
+
+## 7. 定位一次听写
 
 同一次听写里的多行用 `session_id` 串起来（`[dictation]`、`[insert-diagnostics]` 都带）。排查顺序：
 
@@ -99,7 +121,7 @@ grep 'session_id=<id>' ~/.local/share/OpenLess/logs/openless.log*
 
 失败原因现在会同时给出 `code` 与 `message`（见 `mark_dictation_failed`）。历史版本只有 `code`，因此「录音停止 / 转写 / 润色」这一步光看日志分不出来。
 
-## 6. 不要记录的东西
+## 8. 不要记录的东西
 
 - 任何凭据：API key、token、password、私钥、keystore 内容。日志会被用户原样贴到 issue 里。
 - 用户听写的正文。需要时可记长度或哈希（`[insert-diagnostics]` 就是这么做的：`chars=` / `hash=`）。
@@ -107,7 +129,7 @@ grep 'session_id=<id>' ~/.local/share/OpenLess/logs/openless.log*
 
 `scripts/egui-logging-contract.test.mjs` 会拒绝形如 `api_key=` / `token=` / `password=` 的日志格式化参数，以及 `stage=` 级别的 `error`。
 
-## 7. 改动这份约定时
+## 9. 改动这份约定时
 
 - 新增周期日志 → 必须是 `debug`，或带节流。
 - 新增 `info` → 必须能回答「状态变了什么」。

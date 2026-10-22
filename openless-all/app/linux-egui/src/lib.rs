@@ -95,7 +95,10 @@ pub use local_hotkeys::{
     next_local_press_id, plugin_event_hotkey, style_pack_raw, translation_hotkey_event,
     HotkeyDeduplicator, LocalHotkey, LocalHotkeyEdge, LocalHotkeyEdgeKind, HOTKEY_DEDUPE_WINDOW,
 };
-pub use logging::{export_error_log, init_file_logger, log_path};
+pub use logging::{
+    export_error_log, export_error_logs, init_file_logger, level_name, log_path, read_log_level,
+    write_log_level,
+};
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
     ApplyOutcome as PopupApplyOutcome, CapsulePopupState, CapsuleSuggestion, HostToPopup,
