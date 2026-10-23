@@ -1927,6 +1927,9 @@ export const ja: typeof zhCN = {
       serviceTierLabel: 'Ark 低レイテンシ推論（fast）',
       serviceTierHint:
         '対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。',
+      openaiServiceTierLabel: 'OpenAI Fast モード',
+      openaiServiceTierHint:
+        'Fast モードは料金が高くなります。https://developers.openai.com/api/docs/pricing を参照してください。未対応のモデルまたはリージョンではエラーが返ります。',
       responsesThinkingHint:
         '一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。',
       messagesThinkingHint:

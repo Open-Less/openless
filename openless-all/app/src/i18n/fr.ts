@@ -1988,6 +1988,9 @@ export const fr: typeof zhCN = {
       serviceTierLabel: 'Inférence Ark à faible latence (fast)',
       serviceTierHint:
         'Seuls les modèles Ark compatibles peuvent utiliser cette option ; les autres peuvent renvoyer 400.',
+      openaiServiceTierLabel: 'Mode Fast OpenAI',
+      openaiServiceTierHint:
+        'Le mode Fast coûte plus cher. Voir https://developers.openai.com/api/docs/pricing. Les modèles ou régions non pris en charge renvoient une erreur.',
       responsesThinkingHint:
         'Certains modèles permettent seulement de réduire le raisonnement, pas de le désactiver. Les requêtes de raisonnement omettent la température.',
       messagesThinkingHint:
