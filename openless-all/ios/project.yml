@@ -1,0 +1,225 @@
+name: OpenLess
+options:
+  bundleIdPrefix: app.openless.ios
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Personal: debug
+  Release: release
+configFiles:
+  Debug: Config/Base.xcconfig
+  Personal: Config/Personal.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    SWIFT_EMIT_LOC_STRINGS: YES
+    ARCHS: arm64
+    "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(inherited) $(SRCROOT)/Frameworks/device"
+    "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(inherited) $(SRCROOT)/Frameworks/simulator"
+packages:
+  OpenLessShared:
+    path: Packages/OpenLessShared
+  KeyboardKit:
+    path: .vendor/KeyboardKit
+  LocalSpeech:
+    path: Packages/LocalSpeech
+targets:
+  OpenLess:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - path: Resources
+        includes: ["en.lproj/**", "zh-Hans.lproj/**"]
+        buildPhase: resources
+      - PlatformShared
+      - path: Resources/Assets.xcassets
+      - path: Resources/Brand.xcassets
+      - path: Resources/Licenses
+        type: folder
+      - path: Resources/KeepAliveCompatibility.json
+      - path: Resources/SenseVoice
+        type: folder
+      - path: Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OL_BUNDLE_ID)"
+        PRODUCT_NAME: OpenLess
+        SWIFT_OBJC_BRIDGING_HEADER: App/BridgingHeader.h
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) OPENLESS_HOST_APP"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        OTHER_LDFLAGS: "$(inherited) -lOpenLessCore -lc++ -lz -liconv -framework Security -framework SystemConfiguration"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Config/App-Info.plist
+      properties:
+        CFBundleDisplayName: OpenLess
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        OLAppGroupIdentifier: "$(OL_APP_GROUP)"
+        NSMicrophoneUsageDescription: "仅在你点按或按住录音时采集声音，结束后立即释放麦克风。"
+        NSSpeechRecognitionUsageDescription: "使用 Apple 语音识别将你主动录制的声音转换成文字。"
+        UIBackgroundModes: [audio]
+        NSSupportsLiveActivities: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CFBundleURLTypes:
+          - CFBundleURLName: app.openless.ios
+            CFBundleURLSchemes: [openless-ios]
+    entitlements:
+      path: Config/App.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(OL_APP_GROUP)"]
+    dependencies:
+      - package: OpenLessShared
+      - package: LocalSpeech
+      - target: OpenLessKeyboard
+        embed: true
+      - target: OpenLessRecordingWidget
+        embed: true
+  OpenLessRecordingWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - RecordingWidget
+      - PlatformShared/RecordingActivityIntent.swift
+      - PlatformShared/SharedContainer.swift
+      - path: Resources
+        includes: ["en.lproj/**", "zh-Hans.lproj/**"]
+        buildPhase: resources
+      - path: Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OL_BUNDLE_ID).recording"
+        PRODUCT_NAME: OpenLessRecordingWidget
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        SWIFT_OBJC_BRIDGING_HEADER: RecordingWidget/BridgingHeader.h
+    info:
+      path: Config/RecordingWidget-Info.plist
+      properties:
+        CFBundleDisplayName: OpenLess
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        OLAppGroupIdentifier: "$(OL_APP_GROUP)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Config/RecordingWidget.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(OL_APP_GROUP)"]
+    dependencies:
+      - package: OpenLessShared
+  OpenLessKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Keyboard
+      - path: Resources
+        includes: ["en.lproj/**", "zh-Hans.lproj/**"]
+        buildPhase: resources
+      - PlatformShared
+      - RimeBridge
+      - path: Resources/Brand.xcassets
+      - path: Resources/Rime
+        type: folder
+      - path: Resources/Prediction
+        type: folder
+      - path: Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OL_BUNDLE_ID).keyboard"
+        PRODUCT_NAME: OpenLessKeyboard
+        SWIFT_OBJC_BRIDGING_HEADER: Keyboard/BridgingHeader.h
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/.vendor/librime/src"
+        OTHER_LDFLAGS: "$(inherited) -lOpenLessRime -lc++ -lsqlite3"
+    info:
+      path: Config/Keyboard-Info.plist
+      properties:
+        CFBundleDisplayName: OpenLess
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        OLAppGroupIdentifier: "$(OL_APP_GROUP)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
+          NSExtensionAttributes:
+            IsASCIICapable: true
+            PrefersRightToLeft: false
+            PrimaryLanguage: zh-Hans
+            RequestsOpenAccess: true
+    entitlements:
+      path: Config/Keyboard.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(OL_APP_GROUP)"]
+    dependencies:
+      - package: OpenLessShared
+      - package: KeyboardKit
+  OpenLessAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - AppTests
+      - Keyboard/TranslationArcView.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OL_BUNDLE_ID).apptests"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    dependencies:
+      - target: OpenLess
+  OpenLessUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: UITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OL_BUNDLE_ID).uitests"
+    entitlements:
+      path: Config/UITests.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(OL_APP_GROUP)"]
+    dependencies:
+      - target: OpenLess
+      - package: OpenLessShared
+schemes:
+  OpenLess:
+    build:
+      targets:
+        OpenLess: all
+        OpenLessUITests: [test]
+        OpenLessAppTests: [test]
+    test:
+      targets: [OpenLessAppTests, OpenLessUITests]
+    run:
+      config: Debug
+  OpenLessPersonal:
+    build:
+      targets:
+        OpenLess: all
+    run:
+      config: Personal
+    archive:
+      config: Personal

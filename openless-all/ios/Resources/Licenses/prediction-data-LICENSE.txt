@@ -1,0 +1,36 @@
+OpenLess offline keyboard dictionary data
+
+Chinese source:
+https://github.com/iDvel/rime-ice
+Commit da1fbe602e38f26db846fa10120ee64c2b0324c0
+Files cn_dicts/8105.dict.yaml and cn_dicts/base.dict.yaml.
+GPL-3.0-only; full license is rime-ice-LICENSE.txt.
+The complete common-character list and the 200,000 highest-frequency base
+entries of 2-12 characters are retained. Chinese phrase continuations are
+derived from this subset. Upstream source comments document the contributing
+datasets and dictionary corrections. No proprietary keyboard assets are used.
+
+English source:
+https://github.com/wolfgarbe/SymSpell
+Commit c239062ae02961df18ab7da1671d01b4388204e0
+frequency_dictionary_en_82_765.txt and
+frequency_bigramdictionary_en_243_342.txt.
+MIT; full license is SymSpell-LICENSE.txt.
+SymSpell documents its frequency data as the intersection of Google Books
+Ngram frequencies and SCOWL word lists:
+https://github.com/wolfgarbe/SymSpell#frequency-dictionary
+https://storage.googleapis.com/books/ngrams/books/datasetsv3.html
+https://github.com/en-wl/wordlist
+Google Books Ngram data is distributed under CC BY 3.0:
+https://creativecommons.org/licenses/by/3.0/
+Google Books Ngram attribution: Google Books Ngram Viewer datasets.
+
+OpenLess modifications:
+- Reproducible selection and SQLite conversion by scripts/build-predictions.py.
+- ASCII English tokens are retained; up to 32 continuations per context.
+- Chinese phrase continuations contain up to 8 suffixes per context.
+- These are statistical dictionaries, not Apple's QuickType language model.
+- The bundled database is read-only. Queries stay on-device and do not store
+  the user's document text, typed words, or input history.
+
+Exact source URLs and SHA-256 checksums are in Prediction/manifest.json.

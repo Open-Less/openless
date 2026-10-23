@@ -582,6 +582,25 @@ export function ChannelCredentialFields({
             />
           </ChannelFormRow>
         )}
+        {!agentPlan && volcengineAuthMode === 'api_key' && (
+          <div className="ol-volcengine-auth-guide">
+            <a
+              href="https://console.volcengine.com/speech/new/setting/apikeys"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                event.preventDefault();
+                void openExternal(event.currentTarget.href);
+              }}
+            >
+              {t('settings.providers.volcengineApiKeyConsole')}
+              <Icon name="external" size={13} />
+            </a>
+            <p title={t('settings.providers.volcengineApiKeyNote')}>
+              {t('settings.providers.volcengineApiKeyNote')}
+            </p>
+          </div>
+        )}
         {/* The two modes use separate credential slots: the legacy Access Token
             (volcengine.access_key) and the ASR API Key (volcengine.api_key, used for regular
             service API key auth or Agent Plan) never prefill each other. */}
@@ -638,7 +657,9 @@ export function ChannelCredentialFields({
           {agentPlan
             ? t('settings.providers.volcengineAgentPlanNote')
             : volcengineAuthMode === 'api_key'
-              ? t('settings.providers.volcengineApiKeyNote')
+              ? t('settings.providers.volcengineResourceIdNote', {
+                  resourceId: ASR_DEFAULT_RESOURCE_ID,
+                })
               : t('settings.providers.volcengineMappingNote')}
         </div>
         <ProviderTools

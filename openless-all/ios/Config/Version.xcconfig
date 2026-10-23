@@ -1,0 +1,3 @@
+// Shared by the app, keyboard and recording widget.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 16

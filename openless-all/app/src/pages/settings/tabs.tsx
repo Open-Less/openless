@@ -39,7 +39,8 @@ import type { PlatformCapabilities } from '../../lib/types';
 import { type OS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
-import { SettingRow, Toggle, ExperimentalSectionTitle, segmentedTrackStyle } from './shared';
+import { SettingRow, Toggle, ExperimentalSectionTitle } from './shared';
+import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
 import { usePageTransition, useSelectionMotion } from '../../lib/motion';
 import {
@@ -148,11 +149,8 @@ export function ServicesTab({
   );
   const contentRef = useRef<HTMLDivElement>(null);
   const selectedView = usePageTransition(requestedView, contentRef, false);
-  const pipelineRef = useRef<HTMLDivElement>(null);
-  const pipelineIndicatorRef = useRef<HTMLSpanElement>(null);
   const navigationRef = useRef<HTMLDivElement>(null);
   const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
-  useSelectionMotion(pipelineRef, pipelineIndicatorRef, multimodal ? 'multimodal' : 'traditional');
   useSelectionMotion(
     navigationRef,
     navigationIndicatorRef,
@@ -210,33 +208,20 @@ export function ServicesTab({
             label={t('settings.providers.pipelineModeLabel')}
             desc={t('settings.providers.pipelineModeHint')}
           >
-            <div
-              ref={pipelineRef}
+            <Segmented
               className="ol-service-pipeline-track"
-              role="group"
-              aria-label={t('settings.providers.pipelineModeLabel')}
-              style={segmentedTrackStyle}
-            >
-              <span
-                ref={pipelineIndicatorRef}
-                aria-hidden
-                className="ol-service-pipeline-indicator"
-              />
-              {(['traditional', 'multimodal'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  disabled={!prefs}
-                  aria-pressed={(multimodal ? 'multimodal' : 'traditional') === mode}
-                  onClick={() => setPipelineMode(mode)}
-                  className="ol-service-pipeline-option"
-                >
-                  {t(
-                    `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : 'Multimodal'}`,
-                  )}
-                </button>
-              ))}
-            </div>
+              indicatorClassName="ol-service-pipeline-indicator"
+              label={t('settings.providers.pipelineModeLabel')}
+              disabled={!prefs}
+              value={multimodal ? 'multimodal' : 'traditional'}
+              onChange={setPipelineMode}
+              options={(['traditional', 'multimodal'] as const).map((mode) => ({
+                value: mode,
+                label: t(
+                  `settings.providers.pipelineMode${mode === 'traditional' ? 'Traditional' : 'Multimodal'}`,
+                ),
+              }))}
+            />
           </SettingRow>
           <p className="ol-service-pipeline-hint">
             {t('settings.providers.pipelineIsolationNotice')}

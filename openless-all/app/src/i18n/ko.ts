@@ -304,6 +304,8 @@ export const ko: typeof zhCN = {
     cancelled: '취소됨',
     error: '오류 발생',
     inserted: '{{count}}자 입력됨',
+    translateTo: '번역 언어',
+    translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
     selectionPolish: {
       polishing: '다듬는 중...',
@@ -333,6 +335,12 @@ export const ko: typeof zhCN = {
     cancel: '취소',
   },
   qa: {
+    activity: {
+      searchingWeb: '웹 검색 중',
+      readingWeb: '웹 페이지 읽는 중',
+      usingTool: '{{tool}} 사용 중',
+      tool: '도구',
+    },
     compact: {
       closeError: '닫지 못했습니다. 다시 시도하세요.',
       sendError: '전송하지 못했습니다. 입력 내용은 유지됩니다. 다시 시도하세요.',
@@ -486,7 +494,7 @@ export const ko: typeof zhCN = {
     style: '스타일',
     marketplace: '마켓',
     translation: '번역',
-    selectionAsk: '선택 질문',
+    selectionAsk: '무엇이든 질문',
     quickNote: '속기',
     corrections: '교정 규칙',
     polishMode: '다듬기 모드',
@@ -1186,8 +1194,21 @@ export const ko: typeof zhCN = {
       fallbackDesc: '번역 실패 시 원본 전사가 삽입됩니다.',
     },
   },
+  askAnything: {
+    dictation: '받아쓰기',
+    translation: '번역',
+    question: '무엇이든 질문',
+    dictationHint: '말한 내용을 텍스트로 입력',
+    translationHint: '녹음 중 번역 언어 선택',
+    questionHint: '텍스트를 선택하거나 바로 질문',
+    description: '조합 키를 눌러 질문하고 다시 눌러 전송하세요. 답변은 화면 아래에 표시됩니다.',
+    auxiliaryKey: '질문 추가 키',
+    auxiliaryHint: '{{key}} 키와 함께 누르세요. 녹음 키 변경이 자동 반영됩니다.',
+    selectionHint:
+      '선택한 텍스트를 문맥으로 사용합니다. 선택 없이도 질문할 수 있으며 매번 새 질문을 시작합니다.',
+  },
   selectionAsk: {
-    title: '선택 질문',
+    title: '무엇이든 질문',
     desc: '텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.',
     shortcutSettings: '단축키 설정',
     guide: {
@@ -1475,7 +1496,6 @@ export const ko: typeof zhCN = {
       microphoneMonitorError: '입력 레벨 모니터링 실패: {{message}}',
       capsuleLabel: '녹음 캡슐',
       capsuleDesc: '녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.',
-      capsuleStyleTypeless: 'Typeless 컴팩트 스타일',
       capsuleTranscriptLabel: '실시간 원문 표시',
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
@@ -1492,7 +1512,7 @@ export const ko: typeof zhCN = {
         '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
-      capsuleStyleClassic: 'Openless 기본 스타일',
+      capsuleStyleClassic: 'OpenLess 기본 스타일',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
@@ -1834,8 +1854,9 @@ export const ko: typeof zhCN = {
       volcengineAuthModeApiKey: '새 콘솔 API Key',
       volcengineMappingNote:
         'Secret Key 는 현재 입력 불필요. Resource ID 기본값은 volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        '새 음성 콘솔에서 만든 API Key로 인증하며 APP ID는 필요 없습니다. API Key는 음성 콘솔의 "API Key 관리"에서 생성합니다: console.volcengine.com/speech/new/setting/apikeys. Resource ID 기본값은 volc.seedasr.sauc.duration입니다.',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 관리',
+      volcengineApiKeyNote: '여기서 만든 음성 API Key로 인증하세요. Ark 키는 사용할 수 없습니다.',
+      volcengineResourceIdNote: 'Resource ID 기본값은 {{resourceId}}입니다.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

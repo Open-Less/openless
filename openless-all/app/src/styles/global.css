@@ -490,26 +490,31 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 
-/* 桌面端设置侧栏导航：选中底色由滑动 thumb 提供，按钮自身透明；
-   hover 给弱底色反馈；选中项文字蓝色加粗走 [aria-current]。 */
-.ol-settings-rail-btn {
-  color: var(--ol-ink-2);
+/* Settings rail: the main sidebar's selection language. Categories sit idle in light
+   gray, hover darkens the label over a faint wash, and the open category is black on a
+   static, darker wash. The return button and help links share the hover, never the
+   selected state. */
+.ol-settings-rail-btn,
+.ol-settings-rail-link {
+  color: var(--ol-choice-idle-ink);
   background: transparent;
-  font-weight: 400;
+  font-weight: var(--ol-font-weight-medium);
+  cursor: pointer;
   transition:
-    color 0.16s var(--ol-motion-quick),
-    background 0.16s var(--ol-motion-quick);
-}
-.ol-settings-rail-thumb {
-  transition: transform 240ms var(--ol-motion-spring);
-}
-.ol-settings-rail-btn:not([aria-current='page']):hover {
-  background: var(--ol-nav-hover-bg);
-  color: var(--ol-ink);
+    color var(--ol-choice-motion),
+    background-color var(--ol-choice-motion);
 }
 .ol-settings-rail-btn[aria-current='page'] {
-  color: var(--ol-blue);
+  color: var(--ol-choice-active-ink);
+  background: var(--ol-choice-active-bg);
   font-weight: var(--ol-font-weight-semibold);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ol-settings-rail-btn:not([aria-current='page']):hover,
+  .ol-settings-rail-link:hover {
+    color: var(--ol-choice-hover-ink);
+    background: var(--ol-choice-hover-bg);
+  }
 }
 
 /* 翻译页顶部两栏：左栏略宽让语言 chips 每行 4 个，
@@ -806,35 +811,22 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   line-height: 1.5;
 }
 
-.ol-service-pipeline-option {
-  padding: 5px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ol-ink-3);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    color 140ms var(--ol-motion-quick),
-    background 140ms var(--ol-motion-quick);
-}
-
-.ol-service-pipeline-option[aria-pressed='true'] {
-  background: transparent;
-  color: var(--ol-ink);
-  box-shadow: none;
-}
-
-.ol-service-pipeline-track {
+/* Segmented control (components/ui/Segmented), shared by every segmented choice in
+   Settings: a white track with the controls' hairline, a neutral chip that slides under
+   the selected option (useSelectionMotion), labels in the selection language. */
+.ol-segmented {
   position: relative;
   isolation: isolate;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px;
+  border: 0.5px solid var(--ol-line-strong);
+  border-radius: 8px;
+  background: var(--ol-surface);
 }
-.ol-service-pipeline-option {
-  position: relative;
-  z-index: 1;
-}
-.ol-service-pipeline-indicator,
+.ol-segmented-indicator,
 .ol-service-view-indicator {
   position: absolute;
   left: 0;
@@ -844,25 +836,67 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   visibility: hidden;
   pointer-events: none;
 }
-.ol-service-pipeline-indicator {
-  background: var(--ol-segmented-active-bg);
-  box-shadow: var(--ol-segmented-active-shadow);
-  border-radius: 6px;
+.ol-segmented-indicator {
   z-index: 0;
+  border-radius: 6px;
+  background: var(--ol-choice-active-bg);
 }
 .ol-service-view-indicator {
-  background: var(--ol-blue);
-  border-radius: 2px;
   z-index: 1;
+  border-radius: 2px;
+  background: var(--ol-choice-active-ink);
 }
-
-.ol-service-pipeline-option:disabled {
+.ol-segmented-option {
+  position: relative;
+  z-index: 1;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ol-choice-idle-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--ol-choice-motion),
+    background-color var(--ol-choice-motion);
+}
+.ol-segmented-option[aria-pressed='true'] {
+  color: var(--ol-choice-active-ink);
+  font-weight: var(--ol-font-weight-semibold);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ol-segmented-option:not([aria-pressed='true']):not(:disabled):hover {
+    color: var(--ol-choice-hover-ink);
+    background: var(--ol-choice-hover-bg);
+  }
+}
+.ol-segmented-option:disabled {
   opacity: 0.5;
-  cursor: default;
+  cursor: not-allowed;
 }
-
-.ol-service-pipeline-option:focus-visible {
+.ol-segmented-option:focus-visible {
   outline: 2px solid var(--ol-blue);
+  outline-offset: -2px;
+}
+/* Both weights share one box, so selecting never nudges a neighbour. The reserved
+   copy has empty alternative text and stays out of the accessible name. */
+.ol-segmented-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ol-segmented-label::after {
+  content: attr(data-label) / '';
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: var(--ol-font-weight-semibold);
+  pointer-events: none;
+  user-select: none;
 }
 
 .ol-service-views {
@@ -894,11 +928,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   font-size: 13px;
   font-weight: var(--ol-font-weight-medium);
   line-height: 1.35;
-  color: var(--ol-ink-3);
+  color: var(--ol-choice-idle-ink);
   cursor: pointer;
   transition:
-    color 140ms var(--ol-motion-quick),
-    border-color 140ms var(--ol-motion-quick);
+    color var(--ol-choice-motion),
+    transform 140ms var(--ol-motion-quick);
 }
 
 .ol-service-view-label {
@@ -926,16 +960,17 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 
 .ol-service-views button[aria-pressed='true'] {
-  color: var(--ol-blue);
-  border-bottom-color: transparent;
-  font-weight: 650;
+  color: var(--ol-choice-active-ink);
+  font-weight: var(--ol-font-weight-semibold);
 }
 
-.ol-service-views button:hover:not(:disabled) {
-  color: var(--ol-ink);
+@media (hover: hover) and (pointer: fine) {
+  .ol-service-views button:hover:not(:disabled):not([aria-pressed='true']) {
+    color: var(--ol-choice-hover-ink);
+  }
 }
 .ol-service-views button:disabled {
-  color: var(--ol-ink-4);
+  color: var(--ol-choice-disabled-ink);
   cursor: not-allowed;
   opacity: 1;
 }
@@ -1019,8 +1054,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     transform: none;
   }
 }
-.ol-service-views button,
-.ol-service-pipeline-option,
 .ol-omni-tools-actions > button {
   transition:
     color 140ms var(--ol-motion-quick),
@@ -1028,7 +1061,6 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
     transform 140ms var(--ol-motion-quick);
 }
 .ol-service-views button:active:not(:disabled),
-.ol-service-pipeline-option:active:not(:disabled),
 .ol-omni-tools-actions > button:active:not(:disabled) {
   transform: scale(0.97);
 }
@@ -1054,13 +1086,13 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-radius: var(--ol-panel-radius) var(--ol-panel-radius) 0 0;
 }
 
-.ol-capsule-pill {
+.ol-capsule-pill:not(.ol-default-capsule) {
   background: var(--ol-capsule-pill-bg) !important;
   border-color: var(--ol-capsule-pill-border) !important;
 }
 
-html[data-ol-platform='linux'] .ol-capsule-pill,
-html[data-ol-platform='android'] .ol-capsule-pill {
+html[data-ol-platform='linux'] .ol-capsule-pill:not(.ol-default-capsule),
+html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   background: var(--ol-capsule-pill-bg) !important;
 }
 
@@ -1311,6 +1343,49 @@ html[data-ol-platform='android'] .ol-capsule-pill {
 }
 .ol-channel-form-row[data-stacked='true'] > label {
   padding-top: 0;
+}
+.ol-volcengine-auth-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 20px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--ol-surface-2);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.ol-volcengine-auth-guide > a {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  color: var(--ol-blue);
+  font-weight: var(--ol-font-weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ol-volcengine-auth-guide > a:hover {
+  color: var(--ol-blue-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ol-volcengine-auth-guide > a:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.ol-volcengine-auth-guide > a > svg {
+  flex-shrink: 0;
+}
+.ol-volcengine-auth-guide > p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ol-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ol-channel-section-heading h3 {
   display: flex;

@@ -113,6 +113,16 @@ pub(crate) fn publish<R: tauri::Runtime>(
     backend.event_publisher().publish(session_id, kind);
 }
 
+fn qa_owns_voice_surface(phase: openless_core::QaPhase) -> bool {
+    !cfg!(mobile)
+        && matches!(
+            phase,
+            openless_core::QaPhase::Recording
+                | openless_core::QaPhase::Thinking
+                | openless_core::QaPhase::AwaitingApproval
+        )
+}
+
 async fn forward_legacy_event(
     app: &AppHandle,
     backend: &OpenLessBackend,
@@ -124,6 +134,20 @@ async fn forward_legacy_event(
         kind,
         BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
     ) {
+        if let Ok(qa) = backend.services().qa.snapshot().await {
+            if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                coordinator
+                    .tauri_host()
+                    .set_qa_voice_active(qa_owns_voice_surface(qa.phase));
+            }
+        }
+    }
+    if cfg!(mobile)
+        && matches!(
+            kind,
+            BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
+        )
+    {
         let selection = backend.services().selection.snapshot().await.ok();
         let selection_voice = backend.services().selection_voice.snapshot().await.ok();
         // Read QA after the other async snapshots. Queued levels/terminals from
@@ -138,7 +162,7 @@ async fn forward_legacy_event(
             selection_voice.map(|snapshot| snapshot.phase),
         );
         let previous_voice = capsule_owners.qa_voice;
-        if let Some(payload) = qa_capsule_payload(
+        if let Some(payload) = mobile_qa_capsule_payload(
             capsule_owners,
             session_id,
             &kind,
@@ -387,14 +411,21 @@ async fn forward_legacy_event(
                 });
             // Recheck the current owner after awaiting QA. A queued callback
             // from a cancelled native operation must not replace a new capsule.
-            if let Some(payload) = transcription_notice_payload(
-                session_id,
-                &notice.message,
-                &backend.snapshot().dictation,
-                qa.as_ref(),
-                less_voice.as_ref(),
-                backend.get_preferences().capsule_style,
-            ) {
+            let qa_notice =
+                session_id.is_some() && qa.as_ref().is_some_and(|qa| qa.session_id == session_id);
+            if let Some(payload) = (!qa_notice || cfg!(mobile))
+                .then(|| {
+                    transcription_notice_payload(
+                        session_id,
+                        &notice.message,
+                        &backend.snapshot().dictation,
+                        qa.as_ref(),
+                        less_voice.as_ref(),
+                        backend.get_preferences().capsule_style,
+                    )
+                })
+                .flatten()
+            {
                 if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                     if let Some(owner) = session_id.filter(|id| {
                         qa.as_ref()
@@ -635,7 +666,7 @@ fn finish_qa_transcription_notice(
     }
 }
 
-fn qa_capsule_payload(
+fn mobile_qa_capsule_payload(
     owners: &mut CapsuleOwners,
     session_id: Option<SessionId>,
     event: &BackendEventKind,
@@ -862,6 +893,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_qa_owns_one_surface_until_voice_processing_finishes() {
+        use openless_core::QaPhase;
+        for phase in [
+            QaPhase::Recording,
+            QaPhase::Thinking,
+            QaPhase::AwaitingApproval,
+        ] {
+            assert_eq!(super::qa_owns_voice_surface(phase), !cfg!(mobile));
+        }
+        for phase in [
+            QaPhase::Idle,
+            QaPhase::Completed,
+            QaPhase::Failed,
+            QaPhase::Cancelled,
+        ] {
+            assert!(!super::qa_owns_voice_surface(phase));
+        }
+    }
+
+    #[test]
     fn qa_native_epoch_is_not_reacquired_by_notice_or_resync_after_rejection() {
         let session_id = SessionId::new();
         let mut owners = CapsuleOwners {
@@ -909,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn qa_voice_events_restore_the_capsule_lifecycle() {
+    fn mobile_qa_voice_events_restore_the_capsule_lifecycle() {
         use openless_core::{QaPhase, QaStateKind};
         let session_id = SessionId::new();
         let mut qa = QaSnapshot {
@@ -918,7 +969,7 @@ mod tests {
             ..Default::default()
         };
         let mut owners = CapsuleOwners::default();
-        let payload = qa_capsule_payload(
+        let payload = mobile_qa_capsule_payload(
             &mut owners,
             Some(session_id),
             &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
@@ -926,12 +977,12 @@ mod tests {
             false,
             CapsuleStyle::Classic,
         )
-        .expect("ordinary QA recording must show the existing capsule");
+        .expect("mobile QA recording uses the overlay capsule");
         assert_eq!(payload.state, CapsuleState::Recording);
         assert!(payload.warming);
         assert_eq!(owners.qa_voice, Some(session_id));
         for expected_level in [0.0, 0.35] {
-            let level = qa_capsule_payload(
+            let level = mobile_qa_capsule_payload(
                 &mut owners,
                 Some(session_id),
                 &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
@@ -984,7 +1035,7 @@ mod tests {
             if kind == QaStateKind::Thinking {
                 owners.transcription_notice = Some(session_id);
             }
-            let payload = qa_capsule_payload(
+            let payload = mobile_qa_capsule_payload(
                 &mut owners,
                 Some(session_id),
                 &BackendEventKind::QaState(event),
@@ -1032,7 +1083,7 @@ mod tests {
             QaStateKind::Idle,
         ] {
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(old),
                     &BackendEventKind::QaState(openless_core::QaStateEvent::simple(kind)),
@@ -1046,7 +1097,7 @@ mod tests {
             assert_eq!(owners.qa_voice, Some(current));
             assert_eq!(owners.transcription_notice, Some(current));
         }
-        assert!(qa_capsule_payload(
+        assert!(mobile_qa_capsule_payload(
             &mut owners,
             Some(old),
             &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
@@ -1079,7 +1130,7 @@ mod tests {
             assert!(blocked);
             owners.qa_voice = Some(current);
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(current),
                     &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(
@@ -1094,7 +1145,7 @@ mod tests {
             );
             assert_eq!(owners.qa_voice, None);
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(current),
                     &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
@@ -1110,7 +1161,7 @@ mod tests {
             );
             assert_eq!(owners.qa_voice, None);
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(current),
                     &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
@@ -1126,7 +1177,7 @@ mod tests {
             );
             assert_eq!(owners.qa_voice, None);
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(current),
                     &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(
@@ -1160,7 +1211,7 @@ mod tests {
         ] {
             qa.phase = phase;
             assert!(
-                qa_capsule_payload(
+                mobile_qa_capsule_payload(
                     &mut owners,
                     Some(session_id),
                     &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
@@ -1174,7 +1225,7 @@ mod tests {
         }
         owners.qa_voice = Some(SessionId::new());
         qa.phase = QaPhase::Thinking;
-        let idle = qa_capsule_payload(
+        let idle = mobile_qa_capsule_payload(
             &mut owners,
             Some(session_id),
             &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
@@ -1188,7 +1239,7 @@ mod tests {
 
         qa.phase = QaPhase::Recording;
         assert_eq!(
-            qa_capsule_payload(
+            mobile_qa_capsule_payload(
                 &mut owners,
                 Some(session_id),
                 &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
@@ -1202,7 +1253,7 @@ mod tests {
         );
         qa.phase = QaPhase::Thinking;
         assert_eq!(
-            qa_capsule_payload(
+            mobile_qa_capsule_payload(
                 &mut owners,
                 Some(session_id),
                 &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
@@ -1217,7 +1268,7 @@ mod tests {
 
         let closed = QaSnapshot::default();
         assert_eq!(
-            qa_capsule_payload(
+            mobile_qa_capsule_payload(
                 &mut owners,
                 None,
                 &BackendEventKind::QaState(openless_core::QaStateEvent::simple(QaStateKind::Idle)),

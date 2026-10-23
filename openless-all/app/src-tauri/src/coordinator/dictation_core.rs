@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{qa::handle_qa_option_edge, Inner};
+use super::Inner;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,11 +59,13 @@ pub(super) async fn handle_pressed_edge(
     pressed_at: std::time::Instant,
     press_id: u64,
 ) {
-    if inner.qa_context.is_panel_visible()
-        && inner.backend.snapshot().dictation.phase == openless_core::DictationPhase::Idle
-    {
-        handle_qa_option_edge(inner).await;
-        return;
+    if crate::recording_companion::claimed() || inner.qa_context.is_panel_visible() {
+        // Result/recording windows never hijack the recording key into the old
+        // second-stage follow-up flow. Only the explicit companion chord asks.
+        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
+            if crate::recording_companion::claimed() || matches!(qa.phase,
+                openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
+        }
     }
     match dispatch(
         inner,
@@ -84,10 +86,10 @@ pub(super) async fn handle_released_edge(
     released_at: std::time::Instant,
     press_id: u64,
 ) {
-    if inner.qa_context.is_panel_visible()
-        && inner.backend.snapshot().dictation.phase == openless_core::DictationPhase::Idle
-    {
-        return;
+    if inner.qa_context.is_panel_visible() {
+        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
+            if matches!(qa.phase, openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
+        }
     }
     match dispatch(
         inner,

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowUpIcon,
   CheckIcon,
+  CopyIcon,
   MicIcon,
   PencilLineIcon,
   PlusIcon,
@@ -20,7 +21,8 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '../components/chat/ui/message-scroller';
-import { UserAvatar, useGithubLogin } from '../components/chat/avatars';
+import { OpenLessPill } from '../components/OpenLessCapsule';
+import { QaSurface } from '../components/QaSurface';
 import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { useChatPanelLifecycle } from '../components/chat/lifecycle';
@@ -83,6 +85,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [micBusy, setMicBusy] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
   const [layoutError, setLayoutError] = useState(false);
+  const [nativeReady, setNativeReady] = useState<{
+    expanded: boolean;
+    enterEpoch: number;
+  } | null>(null);
+  const [activity, setActivity] = useState<QaStatePayload['activity']>();
   const activeSessionIdRef = useRef<string | null>(null);
   /** 供事件回调判断当前是否真的处于润色模式（长驻订阅闭包看不到最新 state）。 */
   const polishActiveRef = useRef(false);
@@ -115,14 +122,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const resizeQueue = useRef<Promise<void>>(Promise.resolve());
   const layoutEpoch = useRef(0);
   const requestedLayout = useRef<{ expanded: boolean; promise: Promise<void> } | null>(null);
-  const { enterEpoch, closing } = useChatPanelLifecycle();
+  const { enterEpoch, closing: nativeClosing } = useChatPanelLifecycle();
+  const [dismissEpoch, setDismissEpoch] = useState<number | null>(null);
+  const closing = nativeClosing;
+  const presentationClosing = closing || dismissEpoch === enterEpoch;
   const tRef = useRef(t);
   tRef.current = t;
   const embeddedRef = useRef(embedded);
   embeddedRef.current = embedded;
   const onRequestCloseRef = useRef(onRequestClose);
   onRequestCloseRef.current = onRequestClose;
-  const githubLogin = useGithubLogin(messages.filter((message) => message.role === 'user').length);
 
   const changeStatus = (next: Status) => {
     statusRef.current = next;
@@ -176,7 +185,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (typeof payload.editInstructionMode === 'boolean')
             setEditInstructionMode(payload.editInstructionMode);
           if (payload.kind !== 'recording') setLevel(0);
+          if (payload.activity) setActivity(payload.activity);
+          if (payload.kind === 'recording' || payload.kind === 'idle') setActivity(undefined);
           switch (payload.kind) {
+            case 'activity':
+              break;
             case 'idle':
               changeStatus('idle');
               setSelectionPreview('');
@@ -340,6 +353,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     if (!closing) return;
     invalidateRequests();
     activeSessionIdRef.current = null;
+    requestedLayout.current = null;
     changeStatus('idle');
     setMessages([]);
     setErrorMsg('');
@@ -353,17 +367,26 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setEditRevertAvailable(false);
     setLevel(0);
     setSubmitted(false);
+    setActivity(undefined);
   }, [closing]);
 
   const expanded =
     embedded ||
     polishResult !== null ||
-    submitted ||
-    messages.length > 0 ||
-    streamingAnswer.length > 0 ||
     status === 'error' ||
-    editApplyAvailable ||
-    editRevertAvailable;
+    (status !== 'recording' &&
+      status !== 'thinking' &&
+      (messages.some((message) => message.role === 'assistant') ||
+        editApplyAvailable ||
+        editRevertAvailable));
+  const activityLabel =
+    activity?.kind === 'searching_web'
+      ? t('qa.activity.searchingWeb')
+      : activity?.kind === 'reading_web'
+        ? t('qa.activity.readingWeb')
+        : activity?.kind === 'using_tool'
+          ? t('qa.activity.usingTool', { tool: activity.toolName || t('qa.activity.tool') })
+          : t('capsule.thinking');
   const requestSize = (next: boolean) => {
     if (!isTauri || embeddedRef.current) return Promise.resolve();
     if (requestedLayout.current?.expanded === next) return requestedLayout.current.promise;
@@ -384,9 +407,19 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     const epoch = ++layoutEpoch.current;
     if (closing || embedded || !isTauri) return;
     setLayoutError(false);
-    void requestSize(expanded).catch(() => {
-      if (layoutEpoch.current === epoch) setLayoutError(true);
-    });
+    setNativeReady(null);
+    void requestSize(expanded)
+      .then(() => {
+        // Store the acknowledged layout in state. A fast reply can batch with
+        // the reset; a boolean false/true pair may otherwise skip the render.
+        if (layoutEpoch.current === epoch) setNativeReady({ expanded, enterEpoch });
+      })
+      .catch(() => {
+        if (layoutEpoch.current === epoch) {
+          setLayoutError(true);
+          setNativeReady({ expanded, enterEpoch });
+        }
+      });
     return () => {
       layoutEpoch.current += 1;
     };
@@ -396,6 +429,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     if (dismissRef.current) return;
     const request = Symbol('dismiss');
     dismissRef.current = request;
+    setDismissEpoch(enterEpoch);
     invalidateRequests();
     const epoch = panelEpoch.current;
     try {
@@ -405,6 +439,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       if (panelEpoch.current === epoch) {
         changeStatus('error');
         setErrorMsg(t('qa.compact.closeError'));
+        setDismissEpoch(null);
       }
     } finally {
       if (dismissRef.current === request) dismissRef.current = null;
@@ -455,7 +490,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setComposerText('');
     setErrorMsg('');
     try {
-      await requestSize(true);
+      await requestSize(expanded);
       if (
         panelEpoch.current !== epoch ||
         submissionRef.current !== request ||
@@ -654,7 +689,14 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   // ── 「润色结果」模式：整块面板换成可编辑结果 + 确认并替换 ───────────
   if (polishResult) {
     return (
-      <div
+      <QaSurface
+        closing={presentationClosing}
+        ready={
+          !isTauri ||
+          embedded ||
+          (nativeReady?.expanded === expanded && nativeReady.enterEpoch === enterEpoch)
+        }
+        expanded
         className={`qa-capsule-shell is-expanded${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}`}
         key={enterEpoch}
       >
@@ -717,16 +759,23 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             </button>
           </div>
         </section>
-      </div>
+      </QaSurface>
     );
   }
 
   return (
-    <div
-      className={`qa-capsule-shell${expanded ? ' is-expanded' : ''}${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}`}
+    <QaSurface
+      closing={presentationClosing}
+      ready={
+        !isTauri ||
+        embedded ||
+        (nativeReady?.expanded === expanded && nativeReady.enterEpoch === enterEpoch)
+      }
+      expanded={expanded}
+      className={`qa-capsule-shell${expanded ? ' is-expanded' : ''}${embedded ? ' is-embedded' : ''}${closing ? ' is-closing' : ''}${!expanded ? ' is-capsule' : ''}`}
       key={enterEpoch}
     >
-      <Composer
+      <EmbeddedComposer
         value={composerText}
         status={status}
         level={level}
@@ -743,14 +792,42 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         onClose={onClose}
         t={t}
       />
+      {!expanded && (
+        <>
+          {status === 'recording' && (
+            <div className="qa-voice-hint" title={selectionPreview || undefined}>
+              {t('selectionAsk.title')}
+              {selectionPreview ? ` · ${truncate(selectionPreview, 32)}` : ''}
+            </div>
+          )}
+          <OpenLessPill
+            state={status === 'thinking' || submitted ? 'polishing' : 'recording'}
+            warming={status === 'idle' && !submitted}
+            level={level}
+            message={status === 'thinking' ? activityLabel : undefined}
+            onCancel={onClose}
+            onConfirm={onToggleRecording}
+            leaving={presentationClosing}
+          />
+        </>
+      )}
       {expanded && (
         <section className="qa-answer-panel" aria-label={t('qa.title')}>
           <header className="qa-answer-header" data-tauri-drag-region={embedded ? undefined : true}>
             <span className="qa-symbol" aria-hidden="true">
               ✳
             </span>
-            <h1 data-tauri-drag-region={embedded ? undefined : true}>{t('qa.title')}</h1>
-            <span>{status === 'thinking' ? t('qa.thinking') : t('qa.compact.conversation')}</span>
+            <h1 data-tauri-drag-region={embedded ? undefined : true}>OpenLess</h1>
+            <div className="qa-window-actions">
+              <button
+                type="button"
+                className="qa-close"
+                aria-label={t('common.close')}
+                onClick={onClose}
+              >
+                <XIcon />
+              </button>
+            </div>
           </header>
           {layoutError && (
             <p className="qa-layout-error" role="alert">
@@ -770,13 +847,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                     aria-busy={status === 'thinking' || undefined}
                   >
                     {messages.map((message, index) => (
-                      <MessageRow
-                        key={index}
-                        index={index}
-                        message={message}
-                        githubLogin={githubLogin}
-                        t={t}
-                      />
+                      <MessageRow key={index} index={index} message={message} t={t} />
                     ))}
                     {streamingAnswer && (
                       <MessageScrollerItem messageId="streaming">
@@ -838,8 +909,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           )}
         </section>
       )}
-    </div>
+    </QaSurface>
   );
+}
+
+function EmbeddedComposer(props: Parameters<typeof Composer>[0]) {
+  return props.embedded ? (
+    <div className="qa-composer-dock">
+      <Composer {...props} />
+    </div>
+  ) : null;
 }
 
 function Composer({
@@ -990,24 +1069,23 @@ function Composer({
 }
 
 function AssistantLabel() {
+  const { t } = useTranslation();
   return (
     <div className="qa-assistant-label">
       <span className="qa-symbol" aria-hidden="true">
         ✳
       </span>
-      OpenLess
+      {t('qa.compact.answer')}
     </div>
   );
 }
 function MessageRow({
   index,
   message,
-  githubLogin,
   t,
 }: {
   index: number;
   message: QaChatMessage;
-  githubLogin: string;
   t: Translate;
 }) {
   if (message.role === 'user') {
@@ -1016,12 +1094,13 @@ function MessageRow({
       <MessageScrollerItem messageId={`m${index}`} scrollAnchor>
         <div className="qa-user-message">
           <span className="qa-user-avatar">
-            <UserAvatar login={githubLogin} />
+            <MicIcon size={13} />
           </span>
           <div>
             {selection && <blockquote title={selection}>{truncate(selection, 120)}</blockquote>}
             <p>{question}</p>
           </div>
+          <CopyMessage text={question} />
         </div>
       </MessageScrollerItem>
     );
@@ -1029,10 +1108,37 @@ function MessageRow({
   return (
     <MessageScrollerItem messageId={`m${index}`}>
       <div className="qa-assistant-message" aria-label={t('qa.compact.answer')}>
-        <AssistantLabel />
+        <div className="qa-answer-label-row">
+          <AssistantLabel />
+          <CopyMessage text={message.content} />
+        </div>
         <AssistantMarkdown markdown={message.content} />
       </div>
     </MessageScrollerItem>
+  );
+}
+function CopyMessage({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1200);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      className="qa-copy"
+      type="button"
+      aria-label={t('common.copy')}
+      onClick={() =>
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => setCopied(true))
+          .catch(() => setCopied(false))
+      }
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </button>
   );
 }
 function ErrorContent({ error, t }: { error: string; t: Translate }) {

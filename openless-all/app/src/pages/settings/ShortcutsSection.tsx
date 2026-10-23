@@ -104,19 +104,20 @@ export function ShortcutsSection() {
       id: 'qa',
       label: t('selectionAsk.title'),
       group: 'recording',
-      binding: prefs.qaHotkey,
+      desc: t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) }),
+      binding: prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null,
       save: async (binding) => {
         await setQaHotkey(binding);
-        await updatePrefs((current) => ({ ...current, qaHotkey: binding }));
+        await refresh();
       },
       disable: async () => {
         await setQaHotkey(null);
-        await updatePrefs((current) => ({ ...current, qaHotkey: null }));
+        await refresh();
       },
       reset: async () => {
         const binding = defaultQaShortcut();
         await setQaHotkey(binding);
-        await updatePrefs((current) => ({ ...current, qaHotkey: binding }));
+        await refresh();
       },
     },
     {

@@ -1497,6 +1497,25 @@ mod tests {
         assert!(!format!("{error:?}").contains("response-secret"));
     }
 
+    #[test]
+    fn volcengine_validation_preserves_handshake_status_without_response_body() {
+        use crate::asr::volcengine::VolcengineASRError;
+
+        for (failure, status) in [
+            (VolcengineASRError::AuthRejected(401), 401),
+            (VolcengineASRError::AuthRejected(403), 403),
+            (VolcengineASRError::RateLimited(429), 429),
+        ] {
+            // Cloud transcription wraps the provider error before validation
+            // sanitizes it. Keep the status while discarding untrusted details.
+            let error = sanitize_validation_error(provider_error(format!(
+                "ASR provider failed: {failure}; response-secret"
+            )));
+            assert_eq!(error.message, format!("providerHttpStatus:{status}"));
+            assert!(!format!("{error:?}").contains("response-secret"));
+        }
+    }
+
     #[tokio::test]
     async fn manual_bailian_protocol_is_loaded_per_channel_for_validation() {
         let credentials = Arc::new(InMemoryCredentialStore::default());

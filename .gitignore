@@ -78,6 +78,10 @@ openless-all/app/windows-ime/obj/
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/
 
+# Local review attachments and build records are not repository inputs.
+/docs/reviews/
+/docs/local-builds/
+
 # Internal AI 协作 + 规划 + 审计文档：本地保留，绝不发布到公共仓库。
 # 之前误入库的整套已在 chore/remove-internal-docs 中 git rm --cached，
 # 这里加规则避免再次被 `git add` 拉回来。
@@ -136,3 +140,30 @@ CapsWriter
 # Local Linux toolchains, build logs and packaging workspaces.
 openless-all/app/.cache/
 __pycache__/
+
+# Generated builds, dependency caches and test evidence are never source inputs.
+.cache/
+.vite/
+.artifacts/
+Artifacts/
+artifacts/
+.build-*/
+DerivedData*/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+*.xcresult/
+*.xcarchive/
+*.dSYM/
+*.ipa
+*.dmg
+*.hap
+*.hsp
+*.app/
+*.spec.ts-snapshots/
+*.spec.tsx-snapshots/
+
+# Test screenshots and exported evidence stay out of Beta; keep README and active plans.
+/docs/test-captures/
+/docs/test-results/
+/openless-all/ios/docs/screenshots/

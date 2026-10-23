@@ -12,8 +12,8 @@ export const MODIFIER_CHORD_PRIMARY = 'ModifierChord';
 
 export function defaultQaShortcut(): ShortcutBinding {
   return {
-    primary: ';',
-    modifiers: defaultAppShortcutModifiers(),
+    primary: 'Space',
+    modifiers: [],
   };
 }
 

@@ -1,0 +1,44 @@
+# OpenLess mobile schema. Dictionary: rime-ice common characters + 200k words.
+# Deliberately excludes stroke reverse lookup, Lua, external plugins and OpenCC data.
+schema:
+  schema_id: pinyin_simp
+  name: 中文全拼
+  version: '2'
+switches:
+  - name: ascii_mode
+    reset: 0
+engine:
+  processors: [ascii_composer, recognizer, key_binder, speller, punctuator, selector, navigator, express_editor]
+  segmentors: [ascii_segmentor, matcher, abc_segmentor, punct_segmentor, fallback_segmentor]
+  translators: [punct_translator, script_translator]
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+  algebra:
+    - erase/^hm$/
+    - erase/^m$/
+    - erase/^n$/
+    - erase/^ng$/
+    - abbrev/^([a-z]).+$/$1/
+    - abbrev/^([zcs]h).+$/$1/
+    - derive/^([nl])ue$/$1ve/
+    - derive/^([jqxy])u/$1v/
+translator:
+  dictionary: pinyin_simp
+  enable_user_dict: true
+  enable_completion: true
+  enable_sentence: true
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([jqxy])v/$1u/
+punctuator:
+  half_shape:
+    ',': '，'
+    '.': '。'
+    '?': '？'
+    '!': '！'
+    ':': '：'
+    ';': '；'
+recognizer:
+  patterns:
+    uppercase: '[A-Z][-_+a-zA-Z0-9]*'

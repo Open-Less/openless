@@ -34,8 +34,8 @@
 }
 
 .ol-voice-edit-card.is-preview {
-  border-color: var(--ol-accent, #6d5dfc);
-  background: color-mix(in srgb, var(--ol-accent, #6d5dfc) 8%, transparent);
+  border-color: var(--ol-blue);
+  background: color-mix(in srgb, var(--ol-blue) 8%, transparent);
 }
 
 .ol-voice-edit-label {

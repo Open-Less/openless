@@ -192,6 +192,17 @@ pub enum SideModifier {
     ShiftRight,
 }
 
+impl SideModifier {
+    fn recording_key(self) -> &'static str {
+        match self {
+            Self::CmdLeft => "LeftCommand", Self::CmdRight => "RightCommand",
+            Self::CtrlLeft => "LeftControl", Self::CtrlRight => "RightControl",
+            Self::AltLeft => "LeftAlt", Self::AltRight => "RightAlt",
+            Self::ShiftLeft => "LeftShift", Self::ShiftRight => "RightShift",
+        }
+    }
+}
+
 pub struct SideAwareComboMonitor;
 
 impl SideAwareComboMonitor {
@@ -351,14 +362,17 @@ pub mod platform {
         VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
     };
 
-    pub fn dispatch_vk(vk_code: u32, pressed: bool) {
+    pub fn dispatch_vk(vk_code: u32, pressed: bool) -> bool {
         if let Some(side) = side_from_vk(vk_code) {
+            crate::recording_companion::event(side.recording_key(), pressed);
             handle_side_modifier(side, pressed);
-            return;
+            return false;
         }
         if let Some(primary) = primary_from_vk(vk_code) {
+            if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);
         }
+        false
     }
 
     fn side_from_vk(vk_code: u32) -> Option<SideModifier> {
@@ -543,7 +557,7 @@ pub mod platform {
     const FLAG_MASK_ALTERNATE: u64 = 1 << 19; // 0x0008_0000 (Option/Alt)
     const FLAG_MASK_COMMAND: u64 = 1 << 20; // 0x0010_0000
 
-    pub fn dispatch_keycode(keycode: i64, flags_changed: bool, flags: u64, pressed: bool) {
+    pub fn dispatch_keycode(keycode: i64, flags_changed: bool, flags: u64, pressed: bool) -> bool {
         if flags_changed {
             if let Some(side) = side_from_keycode(keycode) {
                 // The event-carried `flags` are race-free (they describe the state
@@ -556,14 +570,19 @@ pub mod platform {
                     // `CGEventSourceKeyState` (Apple's standard way to resolve side).
                     None => keycode_is_down(keycode),
                 };
+                crate::recording_companion::event(side.recording_key(), down);
                 handle_side_modifier(side, down);
+            } else if keycode == 63 {
+                crate::recording_companion::event("Fn", flags & (1 << 23) != 0);
             }
-            return;
+            return false;
         }
 
         if let Some(primary) = primary_from_keycode(keycode) {
+            if crate::recording_companion::event(&primary, pressed) { return true; }
             handle_primary_key(&primary, pressed);
         }
+        false
     }
 
     /// Modifier-class flag bit for a side-modifier keycode, or `None` if the keycode

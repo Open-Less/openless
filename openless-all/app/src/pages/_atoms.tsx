@@ -302,6 +302,8 @@ export function Collapsible({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div
+      // Like Card: stacked switches inside one group nudge their neighbours.
+      data-ol-toggle-group=""
       style={{
         borderBottom: embedded ? '0.5px solid var(--ol-line)' : undefined,
         border: embedded ? undefined : '0.5px solid var(--ol-line)',

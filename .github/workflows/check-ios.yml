@@ -1,0 +1,90 @@
+name: iOS tests and device build
+
+on:
+  pull_request:
+    paths:
+      - 'openless-all/ios/**'
+      - 'openless-all/app/crates/openless-core/**'
+      - 'openless-all/app/crates/micyou-*/**'
+      - 'openless-all/app/contract/**'
+      - 'openless-all/app/assets/**'
+      - '.github/workflows/check-ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  test:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: clippy
+      - name: Record the unchanged shared source baseline
+        run: |
+          git diff --exit-code HEAD -- openless-all/app
+          git rev-parse HEAD:openless-all/app
+      - name: Prepare the isolated mobile Core
+        run: python3 openless-all/ios/scripts/prepare-core.py
+      - name: Test shared keyboard contracts
+        run: swift test --package-path openless-all/ios/Packages/OpenLessShared
+      - name: Test mobile Core and iOS Host
+        run: cargo test --manifest-path openless-all/ios/CoreHost/Cargo.toml --workspace --lib --locked
+      - name: Check mobile Core
+        run: cargo clippy --manifest-path openless-all/ios/CoreHost/Cargo.toml -p openless-core --all-targets --locked -- -D warnings
+      - name: Test interface resources, predictions and native audio
+        working-directory: openless-all/ios
+        run: |
+          python3 scripts/test-interface-resources.py
+          python3 scripts/build-predictions.py
+          bash scripts/test-predictions.sh
+          bash scripts/test-audio.sh
+      - name: Verify shared sources were not modified
+        run: git diff --exit-code -- openless-all/app
+
+  device-build:
+    needs: test
+    runs-on: xcode-27
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: openless-all/ios
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare native build tools and dependencies
+        run: |
+          xcodebuild -version
+          command -v cmake >/dev/null || brew install cmake
+          bash scripts/bootstrap.sh
+          bash scripts/bootstrap-local-speech.sh
+      - name: Build Rime and test composition
+        run: |
+          bash scripts/build-rime.sh host
+          bash scripts/test-rime.sh
+          bash scripts/build-rime.sh device
+      - name: Build the mobile Core and refresh attribution
+        run: |
+          bash scripts/build-core.sh device
+          python3 scripts/collect-rust-licenses.py
+      - name: Build and validate the unsigned iPhone app
+        env:
+          OPENLESS_DERIVED_DATA: ${{ runner.temp }}/ios-device
+        run: |
+          python3 scripts/validate-project.py
+          bash scripts/build.sh device Release unsigned
+          python3 scripts/package-ipa.py \
+            "$OPENLESS_DERIVED_DATA/Build/Products/Release-iphoneos/OpenLess.app" \
+            "$RUNNER_TEMP/OpenLess-ci-unsigned.ipa"
+      - name: Verify shared sources were not modified
+        run: git diff --exit-code -- ../app

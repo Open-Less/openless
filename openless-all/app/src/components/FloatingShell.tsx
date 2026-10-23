@@ -389,6 +389,9 @@ function FloatingShellBody({
                     >
                       <button
                         onClick={() => setCurrentTab(node.id)}
+                        onPointerEnter={() => preloadPage(node.id)}
+                        onFocus={() => preloadPage(node.id)}
+                        aria-current={active ? 'page' : undefined}
                         className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                         style={navBtnStyle}
                       >
@@ -417,7 +420,6 @@ function FloatingShellBody({
                         name="chevRight"
                         size={12}
                         style={{
-                          color: 'var(--ol-ink-4)',
                           flexShrink: 0,
                           transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
                           transition: 'transform 0.20s var(--ol-motion-spring)',
@@ -452,6 +454,9 @@ function FloatingShellBody({
                               <button
                                 key={child.id}
                                 onClick={() => setCurrentTab(child.id)}
+                                onPointerEnter={() => preloadPage(child.id)}
+                                onFocus={() => preloadPage(child.id)}
+                                aria-current={active ? 'page' : undefined}
                                 className={
                                   active
                                     ? 'ol-nav-btn ol-nav-subitem ol-nav-btn-active'
@@ -489,9 +494,6 @@ function FloatingShellBody({
                     border: 0,
                     fontFamily: 'inherit',
                     fontSize: 15,
-                    cursor: 'default',
-                    transition:
-                      'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
                     textAlign: 'left',
                   }}
                 >
@@ -681,13 +683,15 @@ function FloatingShellBody({
 
       {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
       <style>{`
-        /* Nav three-tier visual hierarchy (flat, no pill slider):
-             base   → ink-3 (mid-gray text + transparent bg)
-             hover  → ink (dark text + surface-2 light bg)  ← highlights labels on hover
-             active → ink (bold dark text + static surface-2 rounded bg)
-           All via class: sidebar buttons carry no inline background so :hover / active
-           backgrounds can apply (CSS can't override inline style); other .ol-nav-btn
-           consumers keep their inline background, so the active bg doesn't affect them. */
+        /* Sidebar nav speaks the shared selection language (tokens.css --ol-choice-*),
+           flat, no sliding pill:
+             idle     → light gray label (icons follow via currentColor)
+             hover    → near-black label on a faint wash, pointer cursor
+             selected → black semibold label on a static wash one step darker;
+                        hovering it changes nothing
+           All via class: sidebar buttons carry no inline colour or background. The base
+           .ol-nav-btn rules serve the mobile bars and sheets, which keep their inline
+           background, so the active bg doesn't reach them. */
         .ol-nav-btn {
           color: var(--ol-ink-3);
           font-weight: var(--ol-font-weight-medium);
@@ -697,13 +701,52 @@ function FloatingShellBody({
           font-weight: var(--ol-font-weight-semibold);
           background: var(--ol-surface-2);
         }
-        .ol-nav-btn:not(.ol-nav-btn-active):hover {
-          background: var(--ol-surface-2);
-          color: var(--ol-ink);
+        .ol-sidebar-surface .ol-nav-btn {
+          color: var(--ol-choice-idle-ink);
+          cursor: pointer;
+          transition:
+            color var(--ol-choice-motion),
+            background-color var(--ol-choice-motion);
+        }
+        .ol-sidebar-surface .ol-nav-btn-active {
+          color: var(--ol-choice-active-ink);
+          background: var(--ol-choice-active-bg);
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .ol-sidebar-surface .ol-nav-btn:not(.ol-nav-btn-active):hover {
+            color: var(--ol-choice-hover-ink);
+            background: var(--ol-choice-hover-bg);
+          }
+        }
+        .ol-sidebar-surface .ol-nav-btn:focus-visible {
+          outline: 2px solid var(--ol-blue);
+          outline-offset: -2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .ol-sidebar-surface .ol-nav-btn { transition: none; }
         }
       `}</style>
     </div>
   );
+}
+
+// Warm likely destinations on hover/focus; React.lazy shares the module cache.
+function preloadPage(tab: AppTab) {
+  const load =
+    tab === 'history'
+      ? import('../pages/History')
+      : tab === 'vocab'
+        ? import('../pages/Vocab')
+        : tab === 'style'
+          ? import('../pages/Style')
+          : tab === 'marketplace'
+            ? import('../pages/Marketplace')
+            : tab === 'translation'
+              ? import('../pages/Translation')
+              : tab === 'selectionAsk'
+                ? import('../pages/SelectionAsk')
+                : null;
+  void load?.catch(() => {}); // The normal lazy boundary owns visible load errors.
 }
 
 const MOBILE_BOTTOM_TABS: Array<{ id: AppTab; icon: string }> = [
@@ -901,7 +944,8 @@ const mobileNavBtnStyle: CSSProperties = {
   cursor: 'default',
 };
 
-/** Base style for sidebar nav buttons (shared by flat items / group titles / children; children override paddingLeft). */
+/** Base style for sidebar nav buttons (shared by flat items / group titles / children; children override paddingLeft).
+ * Layout only: colour, background and cursor come from the .ol-sidebar-surface rules. */
 const navBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -913,8 +957,6 @@ const navBtnStyle: CSSProperties = {
   // (After the Codex sidebar): 15px nav text, 16px icons — closer to the reference design.
   fontFamily: 'inherit',
   fontSize: 15,
-  cursor: 'default',
-  transition: 'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
   textAlign: 'left',
 };
 

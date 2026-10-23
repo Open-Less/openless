@@ -21,11 +21,7 @@ import type {
   MicrophoneDevice,
 } from '../types';
 import { OL_DATA } from '../mockData';
-import {
-  defaultAppShortcutModifiers,
-  defaultQaShortcut,
-  defaultSelectionPolishShortcut,
-} from '../hotkey';
+import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
   hotkey: {
@@ -46,7 +42,7 @@ export let mockSettings: UserPreferences = {
   customStylePrompts: { raw: '', light: '', structured: '', formal: '' },
   launchAtLogin: false,
   showCapsule: true,
-  capsuleStyle: 'siri',
+  capsuleStyle: 'classic',
   capsuleDisplayMode: 'cursorScreen',
   capsuleTranscriptEnabled: true,
   capsuleTranscriptFontSize: 14,
@@ -83,7 +79,8 @@ export let mockSettings: UserPreferences = {
   windowsShowOpenlessInKeyboardList: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
-  qaHotkey: defaultQaShortcut(),
+  qaCompanionKey: 'Space',
+  qaHotkey: null,
   quickNoteHotkey: null,
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',

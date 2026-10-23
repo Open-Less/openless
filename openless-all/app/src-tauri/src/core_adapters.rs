@@ -3823,6 +3823,7 @@ impl AudioRecorder for TauriAudioRecorder {
 }
 
 fn map_recorder_error(error: RecorderError) -> BackendError {
+    log::error!("[recorder] capture failed: {error}");
     let code = match error {
         RecorderError::PermissionDenied => BackendErrorCode::PermissionDenied,
         RecorderError::NoInputDevice | RecorderError::EngineFailed(_) => BackendErrorCode::Platform,
@@ -4113,6 +4114,9 @@ impl CoreTextInserter for TauriTextInserter {
                 )
                 .await?;
                 previous_input_source = previous;
+                // Keep ABC asserted for every batch: reactivating the target
+                // can make macOS re-apply the document's CJK input source.
+                crate::unicode_keystroke::set_streaming_ascii_guard(Some(app_handle.clone()));
                 Some(worker)
             } else {
                 None
@@ -4841,6 +4845,8 @@ impl TauriTextInsertionSession {
     async fn restore_platform_state(&self) -> Result<(), BackendError> {
         #[cfg(target_os = "macos")]
         {
+            // Drop the guard first or it would fight the restore below.
+            crate::unicode_keystroke::set_streaming_ascii_guard::<tauri::Wry>(None);
             let previous_input_source = self.previous_input_source.lock().take();
             crate::unicode_keystroke::restore_input_source(&self.app, previous_input_source)
                 .await
@@ -5369,10 +5375,12 @@ impl HostActions for TauriHostActions {
             HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
             HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
             HostAction::ShowQa => {
+                self.qa_context.set_voice_surface_active(true);
                 self.qa_context.prepare_show();
                 crate::show_qa_window(&app, "idle");
             }
             HostAction::HideQa => {
+                self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }

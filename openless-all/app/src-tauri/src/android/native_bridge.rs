@@ -22,6 +22,18 @@ static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 #[cfg(target_os = "android")]
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+// A panic from a synchronously polled future must not cross an extern JNI
+// boundary. Return an ordinary error so each caller keeps its wire envelope.
+fn catch_jni_panic<T>(
+    operation: &str,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)).unwrap_or_else(|_| {
+        log::error!("[android-native] {operation} panicked");
+        Err(format!("{operation} failed unexpectedly"))
+    })
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AndroidBackendSnapshotResponse {
@@ -89,7 +101,7 @@ fn export_provider_settings_json(include_credentials: bool) -> String {
 fn import_provider_settings_json(json: &str, selection: bool, credentials: bool) -> String {
     let mut applied = Vec::new();
     let mut errors = serde_json::Map::new();
-    let result = (|| -> Result<(), String> {
+    let result = catch_jni_panic("import provider settings", || {
         let root: serde_json::Value =
             serde_json::from_str(json).map_err(|_| "invalid settings file")?;
         let version = root["openlessSettingsExportVersion"]
@@ -174,7 +186,7 @@ fn import_provider_settings_json(json: &str, selection: bool, credentials: bool)
             }
         }
         Ok(())
-    })();
+    });
     if let Err(error) = result {
         for (selected, key) in [
             (selection, "providerSelection"),
@@ -197,7 +209,7 @@ fn export_local_migration_bundle_json(
     include_credentials: bool,
     password: &str,
 ) -> String {
-    let result = (|| -> Result<serde_json::Value, String> {
+    let result = catch_jni_panic("export migration bundle", || {
         let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
         let mode = match mode {
             "share_redacted" => openless_core::local_migration_bundle::BundleMode::ShareRedacted,
@@ -233,7 +245,7 @@ fn export_local_migration_bundle_json(
             "inspection": artifact.inspection,
             "bundleBase64": base64::engine::general_purpose::STANDARD.encode(&artifact.bytes),
         }))
-    })();
+    });
     match result {
         Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
         Err(error) => local_bundle_error(error),
@@ -258,7 +270,7 @@ fn inspect_local_migration_bundle_json(bundle_base64: &str) -> String {
 }
 
 fn preview_local_migration_bundle_json(bundle_base64: &str, password: &str, mode: &str) -> String {
-    let result = (|| -> Result<serde_json::Value, String> {
+    let result = catch_jni_panic("preview migration bundle", || {
         let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(bundle_base64)
@@ -281,7 +293,7 @@ fn preview_local_migration_bundle_json(bundle_base64: &str, password: &str, mode
         )
         .map_err(|error| error.message)?;
         serde_json::to_value(preview).map_err(|_| "invalid bundle preview".into())
-    })();
+    });
     match result {
         Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
         Err(error) => local_bundle_error(error),
@@ -296,7 +308,7 @@ fn import_local_migration_bundle_json(
     expected_generation: &str,
     android_revision: &str,
 ) -> String {
-    let result = (|| -> Result<serde_json::Value, String> {
+    let result = catch_jni_panic("import migration bundle", || {
         let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(bundle_base64)
@@ -344,7 +356,7 @@ fn import_local_migration_bundle_json(
         tauri::async_runtime::block_on(backend.refresh_and_publish_credentials())
             .map_err(|error| error.message)?;
         serde_json::to_value(inspection).map_err(|_| "invalid bundle inspection".into())
-    })();
+    });
     match result {
         Ok(payload) => serde_json::json!({"ok": true, "payload": payload}).to_string(),
         Err(error) => local_bundle_error(error),
@@ -1252,7 +1264,7 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let result = (|| -> Result<serde_json::Value, String> {
+        let result = catch_jni_panic("public dictionary", || {
             let base = env
                 .get_string(&JString::from_raw(base))
                 .map(String::from)
@@ -1276,7 +1288,7 @@ mod jni_exports {
                 _ => return Err("unsupported dictionary action".into()),
             };
             serde_json::to_value(status).map_err(|_| "encode dictionary status".into())
-        })();
+        });
         crate::android::jni::android::export_jstring(
             &mut env,
             &match result {
@@ -1295,10 +1307,15 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let input = env.get_string(&JString::from_raw(pinyin)).map(String::from);
-        let result = input
-            .map(|query| tauri::async_runtime::block_on(openless_core::ime_cloud::query(&query)))
-            .unwrap_or_default();
+        let result = catch_jni_panic("cloud pinyin", || {
+            let input = env.get_string(&JString::from_raw(pinyin)).map(String::from);
+            Ok(input
+                .map(|query| {
+                    tauri::async_runtime::block_on(openless_core::ime_cloud::query(&query))
+                })
+                .unwrap_or_default())
+        })
+        .unwrap_or_default();
         crate::android::jni::android::export_jstring(
             &mut env,
             &serde_json::json!(result).to_string(),
@@ -1502,15 +1519,18 @@ mod jni_exports {
         env: *mut JNIEnv,
         _class: JClass,
     ) -> jstring {
-        let route = match CORE_BACKEND.get() {
-            Some(backend) => match tauri::async_runtime::block_on(backend.asr_route()) {
-                openless_core::AsrRoute::Local => "local",
-                openless_core::AsrRoute::LocalRaw => "localRaw",
-                openless_core::AsrRoute::Cloud => "cloud",
-                openless_core::AsrRoute::Unavailable => "unavailable",
-            },
-            None => "unavailable",
-        };
+        let route = catch_jni_panic("ASR route", || {
+            Ok(match CORE_BACKEND.get() {
+                Some(backend) => match tauri::async_runtime::block_on(backend.asr_route()) {
+                    openless_core::AsrRoute::Local => "local",
+                    openless_core::AsrRoute::LocalRaw => "localRaw",
+                    openless_core::AsrRoute::Cloud => "cloud",
+                    openless_core::AsrRoute::Unavailable => "unavailable",
+                },
+                None => "unavailable",
+            })
+        })
+        .unwrap_or("unavailable");
         match JniEnv::from_raw(env) {
             Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, route),
             Err(_) => std::ptr::null_mut(),
@@ -1833,6 +1853,19 @@ mod tests {
         BackendConfig, BackendDependencies, BackendServices, DictationPhase,
         InMemoryCredentialStore, InsertOutcome, TokioTaskSpawner,
     };
+
+    #[test]
+    fn jni_panic_guard_returns_an_error_for_a_panicking_future() {
+        let result: Result<(), String> = catch_jni_panic("test operation", || {
+            tauri::async_runtime::block_on(async { panic!("simulated TLS panic") })
+        });
+        assert_eq!(result.unwrap_err(), "test operation failed unexpectedly");
+        assert_eq!(catch_jni_panic("test operation", || Ok(42)), Ok(42));
+        assert_eq!(
+            catch_jni_panic::<()>("test operation", || Err("network error".into())),
+            Err("network error".into())
+        );
+    }
 
     #[test]
     fn android_snapshot_envelope_always_carries_contract_version() {

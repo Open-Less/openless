@@ -19,8 +19,9 @@ export function readFontScale(): FontScaleId {
   } catch {
     /* localStorage unavailable: ignore, fall back to the default */
   }
-  // One default on every platform. An explicit user choice above always wins.
-  return 'medium';
+  // A fresh install opens at 110% (user request: 100% read too small), the same on every
+  // platform. An explicit choice above, including one restored by cloud sync, always wins.
+  return 'large';
 }
 
 export function applyFontScale(id: FontScaleId): void {

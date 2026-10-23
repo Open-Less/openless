@@ -84,8 +84,8 @@ const capsuleStylesCss = await readFile(
   new URL('../src/components/CapsuleStyles.css', import.meta.url),
   'utf-8',
 );
-const typelessTsx = await readFile(
-  new URL('../src/components/TypelessCapsule.tsx', import.meta.url),
+const defaultCapsuleTsx = await readFile(
+  new URL('../src/components/OpenLessCapsule.tsx', import.meta.url),
   'utf-8',
 );
 const liveTranscriptTsx = await readFile(
@@ -336,14 +336,14 @@ assertMatch(
   'Classic translation badge and external rail should use one explicit geometry model',
 );
 assertMatch(
-  capsuleTsx,
-  /case 'recording':[\s\S]*?AudioBars[\s\S]*?case 'transcribing':[\s\S]*?case 'polishing':[\s\S]*?cap-state-enter[\s\S]*?AudioBars[\s\S]*?cap-shine[\s\S]*?getClassicProcessingLabel\(operating\)/,
-  'Classic recording/transcribing/polishing should render waveform bars and preserve thinking/using text',
+  defaultCapsuleTsx,
+  /const processing = state === 'transcribing' \|\| state === 'polishing'[\s\S]*?capsule\.using[\s\S]*?capsule\.thinking[\s\S]*?<CapsuleWaveform/,
+  'OpenLess recording keeps waveform feedback and processing keeps thinking/using text',
 );
 assertMatch(
-  capsuleTsx,
-  /const cancelEnabled = state === 'recording' \|\| state === 'transcribing' \|\| state === 'polishing'/,
-  'Classic cancel should remain available during recording and both processing states',
+  defaultCapsuleTsx,
+  /className="ol-default-action ol-default-cancel"[\s\S]*?onClick=\{onCancel\}[\s\S]*?processing &&[\s\S]*?ol-default-processing-cancel[\s\S]*?onClick=\{onCancel\}/,
+  'OpenLess cancel should remain available during recording and both processing states',
 );
 assertMatch(
   capsuleTsx,
@@ -351,9 +351,9 @@ assertMatch(
   'Classic external rail should use the shared badge/body geometry instead of bypassing offset',
 );
 assertMatch(
-  typelessTsx,
-  /<div className="ol-typeless-translation-row">[\s\S]*?ol-typeless-translation[\s\S]*?<div className="ol-typeless-capsule-stage">/,
-  'typeless translation should occupy its own layout row between the rail and capsule',
+  capsuleLayoutTs,
+  /value === 'typeless'\) return 'classic'/,
+  'legacy Typeless preferences and events must resolve to the OpenLess default',
 );
 assertMatch(
   capsuleStylesCss,

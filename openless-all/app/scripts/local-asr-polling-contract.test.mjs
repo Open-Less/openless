@@ -3,8 +3,15 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/pages/LocalAsr/index.tsx', import.meta.url), 'utf-8');
 
+// The poller skips ticks while the window is hidden, so allow that guard before the refresh.
+const HIDDEN_GUARD = String.raw`(?:if \(document\.hidden\) return;\s*)?`;
 const refreshPolling =
-  source.match(/window\.setInterval\(\(\) => \{\s*void refresh\(\);?\s*\}, 3000\)/g) ?? [];
+  source.match(
+    new RegExp(
+      String.raw`window\.setInterval\(\(\) => \{\s*${HIDDEN_GUARD}void refresh\(\);?\s*\}, 3000\)`,
+      'g',
+    ),
+  ) ?? [];
 
 const sourceFile = ts.createSourceFile(
   'LocalAsr/index.tsx',
@@ -62,11 +69,21 @@ if (refreshPolling.length !== 1) {
 }
 
 if (
-  !/if \(downloadDialogOpen\) return[\s\S]{0,200}window\.setInterval\(\(\) => \{\s*void refresh\(\)/.test(
-    source,
-  )
+  !new RegExp(
+    String.raw`if \(downloadDialogOpen\) return[\s\S]{0,300}window\.setInterval\(\(\) => \{\s*${HIDDEN_GUARD}void refresh\(\)`,
+  ).test(source)
 ) {
   throw new Error('LocalAsr refresh polling must stop while the download dialog is open');
+}
+
+if (
+  !/if \(document\.hidden\) return;\s*void refresh\(\);/.test(source) ||
+  !/addEventListener\('visibilitychange', onVisible\)/.test(source) ||
+  !/removeEventListener\('visibilitychange', onVisible\)/.test(source)
+) {
+  throw new Error(
+    'LocalAsr refresh polling must pause while the window is hidden and catch up on visibilitychange',
+  );
 }
 
 for (const contract of [

@@ -21,6 +21,7 @@ struct FixtureQaRuntime {
     recording_sessions: Mutex<Vec<SessionId>>,
     bound_selection_targets: Mutex<Vec<(SessionId, SessionId)>>,
     emit_approval: AtomicBool,
+    emit_web_activity: AtomicBool,
     fail_prepare: AtomicBool,
     fail_finish: AtomicBool,
     fail_answer: AtomicBool,
@@ -50,6 +51,7 @@ impl Default for FixtureQaRuntime {
             recording_sessions: Mutex::new(Vec::new()),
             bound_selection_targets: Mutex::new(Vec::new()),
             emit_approval: AtomicBool::new(false),
+            emit_web_activity: AtomicBool::new(false),
             fail_prepare: AtomicBool::new(false),
             fail_finish: AtomicBool::new(false),
             fail_answer: AtomicBool::new(false),
@@ -183,12 +185,18 @@ impl QaRuntimeAdapter for FixtureQaRuntime {
         self.requests.lock().unwrap().push(request.clone());
         let answer = self.answer.lock().unwrap().clone();
         let emit_approval = self.emit_approval.load(Ordering::Acquire);
+        let emit_web_activity = self.emit_web_activity.load(Ordering::Acquire);
         let fail_answer = self.fail_answer.load(Ordering::Acquire);
         let should_block = self.block_answer.load(Ordering::Acquire);
         let answer_entered = Arc::clone(&self.answer_entered);
         let started = Arc::clone(&self.answer_started);
         let gate = Arc::clone(&self.answer_gate);
         Box::pin(async move {
+            if emit_web_activity {
+                progress.publish(request.session_id, QaProgress::Activity(openless_core::QaActivity {
+                    kind: openless_core::QaActivityKind::SearchingWeb, tool_name: Some("web_search".into())
+                }))?;
+            }
             answer_entered.store(true, Ordering::Release);
             started.notify_waiters();
             progress.publish(
@@ -1349,6 +1357,7 @@ fn qa_snapshot_resync_uses_the_same_complete_wire_contract_as_live_events() {
     let session_id = SessionId::new();
     let session_text = session_id.to_string();
     let event = QaStateEvent::from_snapshot(&QaSnapshot {
+        activity: None,
         phase: QaPhase::AwaitingApproval,
         session_id: Some(session_id),
         conversation_id: Some(SessionId::new()),
@@ -1374,10 +1383,55 @@ fn qa_snapshot_resync_uses_the_same_complete_wire_contract_as_live_events() {
     assert!(event.error.is_none());
 
     let failed = QaStateEvent::from_snapshot(&QaSnapshot {
+        activity: None,
         phase: QaPhase::Failed,
         last_error: Some("public failure".into()),
         ..QaSnapshot::default()
     });
     assert_eq!(failed.kind, QaStateKind::Error);
     assert_eq!(failed.error.as_deref(), Some("public failure"));
+}
+
+#[tokio::test]
+async fn ask_anything_starts_directly_and_each_question_has_fresh_context() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("answer"));
+    *runtime.recorded_text.lock().unwrap() = "question".into();
+    *runtime.selection.lock().unwrap() = Some("selected reference".into());
+    let (backend, data_dir) = backend(runtime.clone());
+    let qa = &backend.services().qa;
+    for _ in 0..2 {
+        qa.start_question().await.unwrap();
+        let recording = qa.snapshot().await.unwrap();
+        assert_eq!(recording.phase, QaPhase::Recording);
+        assert!(recording.messages.is_empty());
+        assert_eq!(recording.selection_preview.as_deref(), Some("selected reference"));
+        qa.stop_recording(recording.session_id.unwrap()).await.unwrap();
+        assert_eq!(qa.snapshot().await.unwrap().phase, QaPhase::Completed);
+    }
+    let requests = runtime.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_ne!(requests[0].conversation_id, requests[1].conversation_id);
+    assert_eq!(requests[1].messages.len(), 1);
+    assert_eq!(requests[1].input.selection_text.as_deref(), Some("selected reference"));
+    drop(requests);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn real_web_tool_activity_is_in_the_snapshot_and_clears_on_completion() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("answer"));
+    runtime.emit_web_activity.store(true, Ordering::Release);
+    runtime.block_answer.store(true, Ordering::Release);
+    let (backend, data_dir) = backend(runtime.clone());
+    let qa = backend.services().qa.clone();
+    let answering = tokio::spawn(async move { qa.submit_text("question".into()).await });
+    runtime.wait_for_answer().await;
+    let snapshot = backend.services().qa.snapshot().await.unwrap();
+    assert_eq!(snapshot.activity.as_ref().unwrap().kind, openless_core::QaActivityKind::SearchingWeb);
+    let event = QaStateEvent::from_snapshot(&snapshot);
+    assert_eq!(event.activity.unwrap().tool_name.as_deref(), Some("web_search"));
+    runtime.answer_gate.add_permits(1);
+    answering.await.unwrap().unwrap();
+    assert!(backend.services().qa.snapshot().await.unwrap().activity.is_none());
+    let _ = std::fs::remove_dir_all(data_dir);
 }

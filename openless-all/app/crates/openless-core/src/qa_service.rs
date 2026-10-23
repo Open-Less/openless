@@ -172,6 +172,7 @@ impl QaService {
                 return;
             }
             state.snapshot.phase = QaPhase::Failed;
+            state.snapshot.activity = None;
             state.snapshot.pending_approval_token = None;
             state.snapshot.last_error = Some(message.clone());
             state.snapshot.conversation_id = None;
@@ -193,7 +194,7 @@ impl QaService {
         }
     }
 
-    async fn begin_recording(&self) -> Result<(), BackendError> {
+    async fn begin_recording(&self, fresh: bool) -> Result<(), BackendError> {
         let _runtime = self.begin_runtime_work()?;
         let session_id = SessionId::new();
         {
@@ -207,8 +208,10 @@ impl QaService {
                 self.voice_sessions
                     .acquire(session_id, crate::voice_session::VoiceSessionKind::Qa)?;
                 let previous = state.snapshot.clone();
+                if fresh { state.snapshot = QaSnapshot::default(); }
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
                 state.snapshot.phase = QaPhase::Recording;
+                state.snapshot.activity = None;
                 state.snapshot.session_id = Some(session_id);
                 state.snapshot.conversation_id = Some(conversation_id);
                 state.snapshot.pending_approval_token = None;
@@ -254,6 +257,7 @@ impl QaService {
             // back on, stop its successor, or compete with a manual stop.
             ensure_current_phase(&state.snapshot, session_id, QaPhase::Recording)?;
             state.snapshot.phase = QaPhase::Thinking;
+            state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
             self.runtime_work.existing_work()
         };
         self.publish_snapshot(QaStateKind::Loading, Some((session_id, QaPhase::Thinking)));
@@ -327,6 +331,7 @@ impl QaService {
                 let previous = state.snapshot.clone();
                 let conversation_id = state.snapshot.conversation_id.unwrap_or(session_id);
                 state.snapshot.phase = QaPhase::Thinking;
+            state.snapshot.activity = Some(crate::domains::QaActivity { kind: crate::domains::QaActivityKind::Thinking, tool_name: None });
                 state.snapshot.session_id = Some(session_id);
                 state.snapshot.conversation_id = Some(conversation_id);
                 state.snapshot.pending_approval_token = None;
@@ -402,6 +407,7 @@ impl QaService {
             let mut state = self.state.lock().expect("QA state lock poisoned");
             ensure_current_phase(&state.snapshot, session_id, QaPhase::Thinking)?;
             state.snapshot.phase = QaPhase::Completed;
+            state.snapshot.activity = None;
             state.snapshot.selection_preview = None;
             drop(state);
             self.publish_snapshot(QaStateKind::Idle, Some((session_id, QaPhase::Completed)));
@@ -522,6 +528,7 @@ impl QaService {
                 selection_text: None,
             });
             state.snapshot.phase = QaPhase::Completed;
+            state.snapshot.activity = None;
             state.snapshot.selection_preview = None;
             state.snapshot.pending_approval_token = None;
             state.snapshot.last_error = None;
@@ -660,6 +667,7 @@ impl QaService {
             .flatten();
             if publish_cancelled {
                 state.snapshot.phase = QaPhase::Cancelled;
+                state.snapshot.activity = None;
             }
             state.snapshot.pending_approval_token = None;
             state.snapshot.last_error = None;
@@ -790,6 +798,11 @@ impl QaApi for QaService {
         })
     }
 
+    fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let service = self.clone();
+        Box::pin(async move { service.begin_recording(true).await })
+    }
+
     fn toggle_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move {
@@ -804,7 +817,7 @@ impl QaApi for QaService {
                     service.finish_recording(session_id).await
                 }
                 (QaPhase::Idle | QaPhase::Completed | QaPhase::Cancelled | QaPhase::Failed, _) => {
-                    service.begin_recording().await
+                    service.begin_recording(false).await
                 }
                 _ => Err(BackendError::new(
                     BackendErrorCode::Busy,
@@ -1030,6 +1043,12 @@ impl QaProgressSink for QaServiceProgress {
         // Linearize native progress with state changes, but do not take the
         // presentation mutex: a Host window action must not block audio levels.
         match progress {
+            QaProgress::Activity(activity) => {
+                let mut state = self.state.lock().expect("QA state lock poisoned");
+                ensure_current_phase(&state.snapshot, session_id, QaPhase::Thinking)?;
+                state.snapshot.activity = Some(activity);
+                publish_qa_snapshot(&self.events, &state.snapshot, QaStateKind::Activity, None, None);
+            }
             QaProgress::RecordingLevel(level) => {
                 let state = self.state.lock().expect("QA state lock poisoned");
                 ensure_current_phase(&state.snapshot, session_id, QaPhase::Recording)?;

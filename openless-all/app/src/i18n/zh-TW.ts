@@ -292,6 +292,8 @@ export const zhTW: typeof zhCN = {
     cancelled: '已取消',
     error: '出錯了',
     inserted: '已插入 {{count}}',
+    translateTo: '翻譯為',
+    translationChangeFailed: '語言切換失敗，請重新選擇。',
     translating: '正在翻譯',
     selectionPolish: {
       polishing: '正在潤色...',
@@ -321,6 +323,12 @@ export const zhTW: typeof zhCN = {
     cancel: '取消',
   },
   qa: {
+    activity: {
+      searchingWeb: '正在搜尋網頁',
+      readingWeb: '正在閱讀網頁',
+      usingTool: '正在使用 {{tool}}',
+      tool: '工具',
+    },
     compact: {
       closeError: '關閉失敗，請重試。',
       sendError: '傳送失敗，輸入已保留，請重試。',
@@ -333,7 +341,7 @@ export const zhTW: typeof zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '視窗展開失敗，請關閉後重新開啟。',
     },
-    title: '劃詞追問',
+    title: '問任何問題',
     headerHint: '隨時提問',
     thinking: '思考中…',
     error: '出錯了，請稍後再試。',
@@ -470,7 +478,7 @@ export const zhTW: typeof zhCN = {
     style: '風格',
     marketplace: '風格市場',
     translation: '翻譯',
-    selectionAsk: '劃詞追問',
+    selectionAsk: '問任何問題',
     quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
@@ -1154,8 +1162,20 @@ export const zhTW: typeof zhCN = {
       fallbackDesc: '翻譯失敗時回退為插入原始轉寫，不會丟字。',
     },
   },
+  askAnything: {
+    dictation: '口述',
+    translation: '翻譯',
+    question: '問任何問題',
+    dictationHint: '說出想法，直接輸入文字',
+    translationHint: '錄音時切換目標語言',
+    questionHint: '選取文字，或直接說出問題',
+    description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
+    auxiliaryKey: '提問附加鍵',
+    auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
+    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。每次組合鍵開始新問題。',
+  },
   selectionAsk: {
-    title: '劃詞追問',
+    title: '問任何問題',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
     guide: {
@@ -1429,7 +1449,6 @@ export const zhTW: typeof zhCN = {
       microphoneMonitorError: '輸入電平監聽失敗：{{message}}',
       capsuleLabel: '錄音膠囊',
       capsuleDesc: '錄音 / 轉寫時在螢幕底部顯示半透明膠囊。',
-      capsuleStyleTypeless: 'Typeless 傳統風格',
       capsuleTranscriptLabel: '顯示串流原文',
       capsuleTranscriptDesc:
         '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
@@ -1445,7 +1464,7 @@ export const zhTW: typeof zhCN = {
         '從所有螢幕顯示切換需要重新啟動軟體，才能清理先前的膠囊視窗。現在重新啟動嗎？',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
-      capsuleStyleClassic: 'Openless 預設風格',
+      capsuleStyleClassic: 'OpenLess 預設風格',
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
@@ -1764,8 +1783,9 @@ export const zhTW: typeof zhCN = {
       volcengineAuthModeApiKey: '新版控制檯 API Key',
       volcengineMappingNote:
         'Secret Key 當前無需填寫。Resource ID 預設使用 volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '使用新版語音控制檯建立的 API Key 鑑權，無需 APP ID。API Key 可在語音控制檯「API Key 管理」建立：console.volcengine.com/speech/new/setting/apikeys。Resource ID 預設使用 volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: '豆包語音 · API Key 管理',
+      volcengineApiKeyNote: '使用此處建立的 API Key 鑑權，請勿使用方舟金鑰。',
+      volcengineResourceIdNote: 'Resource ID 預設使用 {{resourceId}}。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

@@ -1,190 +1,68 @@
-import { useEffect, useRef, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
-import { Card, PageHeader } from './_atoms';
-import { Icon } from '../components/Icon';
-import { SavedToast } from '../components/SavedToast';
-import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import { formatComboLabel } from '../lib/hotkey';
-import type { UserPreferences } from '../lib/types';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { PageHeader } from './_atoms';
 import './SelectionAsk.css';
+import { ShortcutRecorder } from '../components/ShortcutRecorder';
+import { Toggle } from './settings/shared';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
+import { setQaHotkey } from '../lib/ipc';
+import { formatComboLabel } from '../lib/hotkey';
 
-type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
-
-interface SelectionAskProps {
-  onOpenShortcuts?: () => void;
-}
-
-export function SelectionAsk({ onOpenShortcuts }: SelectionAskProps) {
+export function SelectionAsk({ onOpenShortcuts }: { onOpenShortcuts?: () => void }) {
   const { t } = useTranslation();
-  const { prefs, refresh, updatePrefs: savePrefs } = useHotkeySettings();
-  const [saveState, setSaveState] = useState<SaveState>('idle');
-  const [saveMessage, setSaveMessage] = useState('');
-  const statusTimer = useRef<number | null>(null);
-
-  useEffect(
-    () => () => {
-      if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
-    },
-    [],
-  );
-
-  const showSaveStatus = (state: SaveState, message: string, temporary = false) => {
-    if (statusTimer.current !== null) {
-      window.clearTimeout(statusTimer.current);
-      statusTimer.current = null;
-    }
-    setSaveState(state);
-    setSaveMessage(message);
-    if (temporary) {
-      statusTimer.current = window.setTimeout(() => {
-        setSaveState('idle');
-        setSaveMessage('');
-        statusTimer.current = null;
-      }, 1600);
-    }
-  };
-
-  const persistPrefs = async (
-    resolveNext: (current: UserPreferences) => UserPreferences,
-    failureMessage: string,
-  ) => {
-    try {
-      await savePrefs(resolveNext);
-      showSaveStatus('saved', t('common.saved'), true);
-      return true;
-    } catch (error) {
-      console.error('[selection-ask] failed to save preferences', error);
-      showSaveStatus('failed', failureMessage);
-      await refresh().catch((refreshError) => {
-        console.warn(
-          '[selection-ask] failed to refresh preferences after save error',
-          refreshError,
-        );
-      });
-      return false;
-    }
-  };
-
-  if (!prefs) {
-    return (
-      <>
-        <PageHeader title={t('selectionAsk.title')} />
-        <Card>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
-        </Card>
-      </>
-    );
-  }
-
-  const onSaveHistoryChange = (qaSaveHistory: boolean) => {
-    showSaveStatus('saving', t('common.saving'));
-    void persistPrefs(
-      (current) => ({ ...current, qaSaveHistory }),
-      t('selectionAsk.save.historySaveFailed'),
-    );
-  };
-
-  const currentLabel = prefs.qaHotkey ? formatComboLabel(prefs.qaHotkey) : null;
-  const recordHotkeyLabel = formatComboLabel(prefs.dictationHotkey);
-  const saving = saveState === 'saving';
-
+  const { prefs, refresh, updatePrefs } = useHotkeySettings();
+  const [error, setError] = useState('');
+  if (!prefs) return <p>{t('common.loading')}</p>;
   return (
-    <div className="ol-selection-ask">
-      <PageHeader
-        title={t('selectionAsk.title')}
-        desc={t('selectionAsk.desc')}
-        right={
-          onOpenShortcuts && (
-            <button type="button" className="ol-selection-ask-settings" onClick={onOpenShortcuts}>
-              <Icon name="settings" size={15} />
-              {t('selectionAsk.shortcutSettings')}
-              <Icon name="chevRight" size={14} />
-            </button>
-          )
-        }
-      />
-      <SavedToast saveState={saveState} message={saveMessage} />
-
-      <section className="ol-selection-ask-guide" aria-labelledby="selection-ask-guide-title">
-        <h2 id="selection-ask-guide-title">{t('selectionAsk.howto.title')}</h2>
-        <ol className="ol-selection-ask-steps">
-          <li>
-            <span className="ol-selection-ask-step-number" aria-hidden="true">
-              01
-            </span>
-            <div>
-              <h3>{t('selectionAsk.guide.openTitle')}</h3>
-              <p>
-                {currentLabel ? (
-                  <Trans
-                    i18nKey="selectionAsk.guide.openDesc"
-                    values={{ hotkey: currentLabel }}
-                    components={{ key: <kbd /> }}
-                  />
-                ) : (
-                  t('selectionAsk.guide.unsetDesc')
-                )}
-              </p>
-            </div>
-          </li>
-          <li>
-            <span className="ol-selection-ask-step-number" aria-hidden="true">
-              02
-            </span>
-            <div>
-              <h3>{t('selectionAsk.guide.selectTitle')}</h3>
-              <p>{t('selectionAsk.howto.step2')}</p>
-            </div>
-          </li>
-          <li>
-            <span className="ol-selection-ask-step-number" aria-hidden="true">
-              03
-            </span>
-            <div>
-              <h3>{t('selectionAsk.guide.askTitle')}</h3>
-              <p>
-                <Trans
-                  i18nKey="selectionAsk.guide.askDesc"
-                  values={{ recordHotkey: recordHotkeyLabel }}
-                  components={{ key: <kbd /> }}
-                />
-              </p>
-            </div>
-          </li>
-        </ol>
-        <div className="ol-selection-ask-guide-footer">
-          <span>
-            <Icon name="refresh" size={14} />
-            {t('selectionAsk.guide.followup')}
-          </span>
-          <span>
-            <kbd>Esc</kbd>
-            {t('selectionAsk.guide.dismiss')}
-          </span>
+    <div style={{ width: '100%', maxWidth: 960, margin: '0 auto' }}>
+      <PageHeader title={t('askAnything.question')} desc={t('askAnything.description')} />
+      <div className="ol-ask-settings-row">
+        <div>
+          <strong>{t('askAnything.auxiliaryKey')}</strong>
+          <p>{t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) })}</p>
         </div>
-      </section>
-
-      <section className="ol-selection-ask-history" aria-labelledby="selection-ask-history-title">
-        <span className="ol-selection-ask-history-icon">
-          <Icon name="history" size={20} />
-        </span>
-        <div className="ol-selection-ask-history-copy">
-          <h2 id="selection-ask-history-title">{t('selectionAsk.history.title')}</h2>
-          <p id="selection-ask-history-desc">{t('selectionAsk.history.desc')}</p>
+        <ShortcutRecorder
+          value={prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null}
+          onSave={async (binding) => {
+            await setQaHotkey(binding);
+            await refresh();
+          }}
+          onDisable={async () => {
+            await setQaHotkey(null);
+            await refresh();
+          }}
+          onReset={async () => {
+            await setQaHotkey({ primary: 'Space', modifiers: [] });
+            await refresh();
+          }}
+        />
+      </div>
+      <div className="ol-ask-settings-row">
+        <div>
+          <strong>{t('selectionAsk.history.title')}</strong>
+          <p>{t('selectionAsk.history.desc')}</p>
         </div>
-        <button
-          type="button"
-          className="ol-selection-ask-switch"
-          role="switch"
-          aria-checked={prefs.qaSaveHistory}
-          aria-labelledby="selection-ask-history-title"
-          aria-describedby="selection-ask-history-desc"
-          onClick={() => onSaveHistoryChange(!prefs.qaSaveHistory)}
-          disabled={saving}
-        >
-          <span />
-        </button>
-      </section>
+        <Toggle
+          on={prefs.qaSaveHistory}
+          onToggle={(next) => {
+            setError('');
+            void updatePrefs((current) => ({ ...current, qaSaveHistory: next })).catch(() =>
+              setError(t('selectionAsk.save.historySaveFailed')),
+            );
+          }}
+        />
+      </div>
+      {error && (
+        <p role="alert" style={{ color: 'var(--ol-red)' }}>
+          {error}
+        </p>
+      )}
+      <p style={{ color: 'var(--ol-ink-3)', fontSize: 12, lineHeight: 1.8 }}>
+        {t('askAnything.selectionHint')}
+      </p>
+      {onOpenShortcuts && (
+        <button onClick={onOpenShortcuts}>{t('selectionAsk.shortcutSettings')}</button>
+      )}
     </div>
   );
 }

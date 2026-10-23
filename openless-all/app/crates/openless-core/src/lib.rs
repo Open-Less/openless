@@ -220,8 +220,9 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
-    DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
+    LessComputerHotkeyAction, LessComputerVoiceFinish,
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };

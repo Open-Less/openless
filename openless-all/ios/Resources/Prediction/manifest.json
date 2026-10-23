@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "rime_ice_commit": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+  "symspell_commit": "c239062ae02961df18ab7da1671d01b4388204e0",
+  "rime_entries": 208757,
+  "english_words": 82833,
+  "english_bigrams": 115314,
+  "chinese_continuations": 178855,
+  "database_bytes": 15151104,
+  "database_sha256": "bbec6f0934bfd18e25c981fe81246c7d2eb8195151e64b65ddda115afe692e03",
+  "sources": {
+    "8105.dict.yaml": {
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts/8105.dict.yaml",
+      "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120"
+    },
+    "base.dict.yaml": {
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts/base.dict.yaml",
+      "sha256": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0"
+    },
+    "rime-ice-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "frequency_dictionary_en_82_765.txt": {
+      "url": "https://raw.githubusercontent.com/wolfgarbe/SymSpell/c239062ae02961df18ab7da1671d01b4388204e0/SymSpell/frequency_dictionary_en_82_765.txt",
+      "sha256": "c604e1121e398ae7c7fbf777f11e0a0f2fa66eda932cb9fba1321466cf3acd7b"
+    },
+    "frequency_bigramdictionary_en_243_342.txt": {
+      "url": "https://raw.githubusercontent.com/wolfgarbe/SymSpell/c239062ae02961df18ab7da1671d01b4388204e0/SymSpell/frequency_bigramdictionary_en_243_342.txt",
+      "sha256": "fd892a160184101dd7ae807ac5a302d01fcea1c47304181a8ed7ed9c94545bcd"
+    },
+    "SymSpell-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/wolfgarbe/SymSpell/c239062ae02961df18ab7da1671d01b4388204e0/LICENSE",
+      "sha256": "858e5c7e7a38824f33cf466719509884f2ee5e35992dbfce377fec0656545814"
+    }
+  }
+}

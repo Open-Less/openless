@@ -42,7 +42,7 @@ export const CAPSULE_TRANSCRIPT_RAIL_HEIGHTS: Record<CapsuleStyle, number> = {
 
 export const CLASSIC_CAPSULE_HOST_HEIGHT = 172;
 export const CLASSIC_CAPSULE_BOTTOM_INSET = 16;
-export const CLASSIC_CAPSULE_BADGE_HEIGHT = 22;
+export const CLASSIC_CAPSULE_BADGE_HEIGHT = 28;
 export const CLASSIC_CAPSULE_BADGE_GAP = 8;
 export const CLASSIC_CAPSULE_RAIL_GAP = 8;
 
@@ -68,7 +68,8 @@ export function getClassicCapsuleGeometry(
   translationActive: boolean,
   transcriptInSameWindow: boolean,
 ): ClassicCapsuleGeometry {
-  const pillHeight = os === 'win' ? 52 : 42;
+  void os;
+  const pillHeight = 32;
   const hostHeight = CLASSIC_CAPSULE_HOST_HEIGHT;
   const bodyBottom = hostHeight - CLASSIC_CAPSULE_BOTTOM_INSET;
   const bodyTop = bodyBottom - pillHeight;
@@ -199,7 +200,8 @@ const TYPELESS_STAGE_HEIGHT = 57;
 const TYPELESS_TRANSLATION_HOST_HEIGHT = 65;
 
 export function parseCapsuleStyle(value: unknown): CapsuleStyle | undefined {
-  return value === 'siri' || value === 'classic' || value === 'typeless' ? value : undefined;
+  if (value === 'typeless') return 'classic'; // legacy preference / event
+  return value === 'siri' || value === 'classic' ? value : undefined;
 }
 
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {

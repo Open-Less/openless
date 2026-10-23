@@ -64,10 +64,10 @@ fn capsule_transcript_rail_position(
         CapsuleStyle::Classic => {
             const HOST_HEIGHT: f64 = 172.0;
             const BODY_BOTTOM_INSET: f64 = 16.0;
-            const BODY_HEIGHT: f64 = 52.0;
+            const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
             const RAIL_GAP: f64 = 8.0;
-            const BADGE_HEIGHT: f64 = 22.0;
+            const BADGE_HEIGHT: f64 = 28.0;
             const BADGE_GAP: f64 = 8.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
@@ -187,7 +187,7 @@ fn capsule_control_hit_rect(
         // Classic transcript is hosted by the separate click-through rail HWND on
         // Windows. The capsule HWND therefore owns only its 172px host, regardless
         // of whether the rail is visible.
-        CapsuleStyle::Classic => (460.0, 172.0, 196.0, 52.0, 16.0),
+        CapsuleStyle::Classic => (460.0, 172.0, 116.0, 32.0, 16.0),
         // Typeless content is scaled by zoom: 64px CSS × 0.447. The native window may be
         // 57px or 65px high when the dedicated translation row is present.
         CapsuleStyle::Typeless => (
@@ -202,8 +202,13 @@ fn capsule_control_hit_rect(
     let _ = transcript_visible;
     let scale =
         (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
-    let body_width = (logical_body_width * scale).round() as i32;
-    let body_height = (logical_body_height * scale).round() as i32;
+    // Windows clips the native input region as well as CSS. Include the language
+    // picker only while translation is active; the transcript remains click-through.
+    let picker_visible = style == CapsuleStyle::Classic && translation_active;
+    let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
+    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let body_width = (interactive_width * scale).round() as i32;
+    let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
     let control_left = ((window_width as f64 - body_width as f64) / 2.0).round() as i32;
     let control_bottom = window_height - bottom_inset;
@@ -774,8 +779,11 @@ fn capsule_window_action(
     fallback_card_active: bool,
     show_capsule: bool,
     state: CapsuleState,
+    qa_voice_active: bool,
 ) -> CapsuleWindowAction {
-    if fallback_card_active {
+    if qa_voice_active {
+        CapsuleWindowAction::HideCapsule
+    } else if fallback_card_active {
         CapsuleWindowAction::PreserveFallbackCard
     } else if show_capsule && !matches!(state, CapsuleState::Idle) {
         CapsuleWindowAction::ShowCapsule
@@ -818,9 +826,23 @@ pub(crate) struct CapsuleSnapshot {
     pub(crate) payload_revision: u64,
 }
 
+struct CapsuleMenuFrame {
+    label: String,
+    session_id: openless_core::SessionId,
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+}
+
+fn capsule_menu_geometry(y: i32, height: u32, work_top: i32, scale: f64) -> (i32, u32) {
+    let extra = ((320.0 * scale).round() as i32).min(y.saturating_sub(work_top).max(0));
+    (y - extra, height.saturating_add(extra as u32))
+}
+
 struct CapsuleWindowState {
     layout: Mutex<Option<CapsuleLayoutState>>,
     capsule_visible: AtomicBool,
+    qa_voice_active: AtomicBool,
+    translation_menu: Mutex<Option<CapsuleMenuFrame>>,
     cursor_passthrough: AtomicBool,
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
@@ -846,6 +868,8 @@ impl Default for CapsuleWindowState {
         Self {
             layout: Mutex::new(None),
             capsule_visible: AtomicBool::new(false),
+            qa_voice_active: AtomicBool::new(false),
+            translation_menu: Mutex::new(None),
             cursor_passthrough: AtomicBool::new(true),
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
@@ -1148,6 +1172,70 @@ impl TauriCapsuleWindow {
             .map_err(|error| error.to_string())
     }
 
+    fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
+        let frame = {
+            let mut slot = self.state.translation_menu.lock();
+            if let Some((label, session_id)) = owner {
+                if !slot.as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(false); }
+            }
+            slot.take()
+        };
+        let Some(frame) = frame else { return Ok(false); };
+        #[cfg(not(mobile))]
+        crate::hotkey::set_capsule_menu_open(false);
+        self.invalidate_layout();
+        if let Some(window) = self.app.get_webview_window(&frame.label) {
+            window.set_size(frame.size).map_err(|error| error.to_string())?;
+            window.set_position(frame.position).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "windows")]
+            configure_capsule_hit_test(&window, self.state.cached_style(),
+                self.state.transcript_visible.load(Ordering::SeqCst), true).map_err(|error| error.to_string())?;
+        }
+        Ok(true)
+    }
+
+    /// Reserve room for the shared popup above the pill without moving its bottom anchor.
+    pub(crate) fn set_translation_menu_open(&self, label: String, session_id: openless_core::SessionId, open: bool) -> Result<(), String> {
+        if !open {
+            if self.restore_translation_menu(Some((&label, session_id)))? && self.state.capsule_visible.load(Ordering::SeqCst) {
+                self.start_layout_watch();
+                self.refresh_style();
+                self.sync_capsule_mirrors();
+            }
+            return Ok(());
+        }
+        if self.state.qa_voice_active.load(Ordering::SeqCst) { return Err("qa_owns_voice_surface".into()); }
+        if self.state.translation_menu.lock().as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(()); }
+        self.restore_translation_menu(None)?;
+        let window = self.app.get_webview_window(&label).ok_or("capsule_window_unavailable")?;
+        let position = window.outer_position().map_err(|error| error.to_string())?;
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let work_top = window.current_monitor().map_err(|error| error.to_string())?
+            .map(|monitor| monitor.work_area().position.y).unwrap_or(position.y - (320.0 * scale) as i32);
+        let (top, height) = capsule_menu_geometry(position.y, size.height, work_top, scale);
+        *self.state.translation_menu.lock() = Some(CapsuleMenuFrame {label, session_id, position, size});
+        #[cfg(not(mobile))]
+        crate::hotkey::set_capsule_menu_open(true);
+        self.stop_layout_watch();
+        self.hide_transcript_overlay();
+        let result = (|| -> tauri::Result<()> {
+            window.set_position(tauri::PhysicalPosition::new(position.x, top))?;
+            window.set_size(tauri::PhysicalSize::new(size.width, height))?;
+            #[cfg(not(mobile))]
+            window.set_ignore_cursor_events(false)?;
+            #[cfg(target_os = "windows")]
+            configure_card_hit_test(&window)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = self.restore_translation_menu(None);
+            self.start_layout_watch();
+            return Err(error.to_string());
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_size(&self, width: f64, height: f64) -> tauri::Result<()> {
         // Cards temporarily borrow this window; their geometry belongs to the card until released.
         self.stop_layout_watch();
@@ -1271,6 +1359,7 @@ impl TauriCapsuleWindow {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn apply_capsule_mirrors(&self) {
+        if self.state.translation_menu.lock().is_some() { return; }
         use crate::capsule_mirrors::{
             capsule_placement, ensure_capsule_mirror, mirror_label, mirror_targets,
             CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
@@ -1455,6 +1544,7 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
+        let _ = self.restore_translation_menu(None);
         self.state.capsule_visible.store(false, Ordering::SeqCst);
         self.stop_layout_watch();
         self.hide_transcript_overlay();
@@ -1669,6 +1759,7 @@ impl TauriCapsuleWindow {
         translation_active: bool,
         style: CapsuleStyle,
     ) {
+        if self.state.translation_menu.lock().is_some() { return; }
         let Some(next) = self.layout_snapshot(window, translation_active, style) else {
             return;
         };
@@ -1723,6 +1814,7 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn show_for_recording(&self, reassert_spaces: bool) {
+        if self.state.qa_voice_active.load(Ordering::SeqCst) { let _ = self.hide(); return; }
         self.state.capsule_visible.store(true, Ordering::SeqCst);
         if let Some(window) = self.window() {
             show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
@@ -1822,6 +1914,9 @@ impl TauriCapsuleWindow {
         style: CapsuleStyle,
         reassert_spaces: bool,
     ) {
+        if payload.state != CapsuleState::Recording || !payload.translation {
+            let _ = self.restore_translation_menu(None);
+        }
         self.state.cache_style(style);
         let Some(window) = self.window() else {
             return;
@@ -1831,7 +1926,7 @@ impl TauriCapsuleWindow {
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
         {
-            let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
+            let action = capsule_window_action(fallback_card_active, show_capsule, payload.state, self.state.qa_voice_active.load(Ordering::SeqCst));
             if action == CapsuleWindowAction::PreserveFallbackCard {
                 log::debug!(
                     "[capsule] native window update deferred: insert fallback card owns the window"
@@ -2042,6 +2137,15 @@ impl TauriCoordinatorHost {
             state: Arc::clone(&self.capsule),
             qa_context: Arc::clone(&self.qa_context),
         })
+    }
+
+    pub(crate) fn set_qa_voice_active(&self, active: bool) {
+        if self.capsule.qa_voice_active.swap(active, Ordering::SeqCst) == active { return; }
+        if active {
+            if let Some(capsule) = self.capsule_window() {
+                let _ = capsule.run_on_main_thread(|capsule| { let _ = capsule.hide(); });
+            }
+        }
     }
 
     pub(crate) fn cached_capsule_style(&self) -> CapsuleStyle {
@@ -2511,6 +2615,26 @@ mod tests {
     }
 
     #[test]
+    fn dedicated_qa_voice_hides_all_shared_capsule_presentations() {
+        for state in [CapsuleState::Recording, CapsuleState::Transcribing, CapsuleState::Polishing, CapsuleState::Done, CapsuleState::Error, CapsuleState::Idle] {
+            for fallback in [true, false] {
+                assert_eq!(capsule_window_action(fallback, true, state, true), CapsuleWindowAction::HideCapsule);
+            }
+        }
+        assert_eq!(capsule_window_action(false, true, CapsuleState::Recording, false), CapsuleWindowAction::ShowCapsule);
+    }
+
+    #[test]
+    fn language_menu_expands_upward_and_preserves_the_bottom_at_each_scale() {
+        for (y,height,top,scale) in [(600,172,24,1.0), (1200,344,48,2.0), (-200,172,-1000,1.0), (100,172,24,1.0)] {
+            let (expanded_y, expanded_height) = super::capsule_menu_geometry(y,height,top,scale);
+            assert!(expanded_y >= top);
+            assert_eq!(expanded_y + expanded_height as i32, y + height as i32);
+            assert!(expanded_height >= height);
+        }
+    }
+
+    #[test]
     fn fallback_card_owns_native_window_until_dismissed() {
         for state in [
             CapsuleState::Idle,
@@ -2519,7 +2643,7 @@ mod tests {
             CapsuleState::Done,
         ] {
             assert_eq!(
-                capsule_window_action(true, true, state),
+                capsule_window_action(true, true, state, false),
                 CapsuleWindowAction::PreserveFallbackCard
             );
         }
@@ -2528,15 +2652,15 @@ mod tests {
     #[test]
     fn capsule_window_action_follows_visibility_without_fallback_card() {
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Recording),
+            capsule_window_action(false, true, CapsuleState::Recording, false),
             CapsuleWindowAction::ShowCapsule
         );
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Idle),
+            capsule_window_action(false, true, CapsuleState::Idle, false),
             CapsuleWindowAction::HideCapsule
         );
         assert_eq!(
-            capsule_window_action(false, false, CapsuleState::Recording),
+            capsule_window_action(false, false, CapsuleState::Recording, false),
             CapsuleWindowAction::HideCapsule
         );
     }
@@ -2561,14 +2685,14 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 44.0, 8.0)
+            (460.0, 52.0, 64.0, 8.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 82.0,
-                top_offset: 14.0,
+                height: 88.0,
+                top_offset: 28.0,
                 gap: 8.0,
             })
         );
@@ -2601,7 +2725,7 @@ mod tests {
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
             (classic_badge.height, classic_badge.top_offset),
-            (22.0, 74.0)
+            (28.0, 88.0)
         );
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
@@ -2619,18 +2743,18 @@ mod tests {
         assert_eq!(
             capsule_control_hit_rect(CapsuleStyle::Classic, true, false, 460, 172),
             Some(CapsuleHitTestRect {
-                left: 132,
-                right: 328,
-                top: 104,
+                left: 172,
+                right: 288,
+                top: 124,
                 bottom: 156,
             })
         );
         assert_eq!(
             capsule_control_hit_rect(CapsuleStyle::Classic, false, false, 460, 172),
             Some(CapsuleHitTestRect {
-                left: 132,
-                right: 328,
-                top: 104,
+                left: 172,
+                right: 288,
+                top: 124,
                 bottom: 156,
             })
         );

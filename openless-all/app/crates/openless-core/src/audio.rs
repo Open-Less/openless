@@ -17,8 +17,9 @@ pub struct AudioProcessingConfig {
 }
 
 /// Shared processor for native and external microphone hosts.
-/// Enhancement is session-frozen. Hosts must deliver `finish()` before closing
-/// their ASR consumer or recording archive.
+/// Enhancement starts with the session's settings and may be disabled under
+/// load. Hosts must deliver every returned tail before feeding more input or
+/// closing their ASR consumer or recording archive.
 pub struct AudioProcessor {
     config: AudioProcessingConfig,
     normalizer: PcmNormalizer,
@@ -46,6 +47,19 @@ impl AudioProcessor {
 
     pub fn reset(&mut self) {
         *self = Self::new(self.config);
+    }
+
+    /// Flush delayed enhanced samples before switching to basic normalization.
+    /// The change lasts until the processor is replaced for a new capture.
+    pub fn disable_enhancement(&mut self) -> Option<NormalizedPcmChunk> {
+        if !self.config.enhancement_enabled || self.finished {
+            return None;
+        }
+        let tail = self.finish();
+        self.config.enhancement_enabled = false;
+        self.enhanced = None;
+        self.finished = false;
+        tail
     }
 
     pub fn process(
@@ -406,6 +420,36 @@ mod tests {
             processor.process(&input, 2, DICTATION_SAMPLE_RATE),
             normalizer.process(&input, 2, DICTATION_SAMPLE_RATE)
         );
+    }
+
+    #[test]
+    fn disabling_enhancement_flushes_lookahead_once_and_preserves_duration() {
+        for rate in [16_000, 44_100, 48_000] {
+            let mut processor = AudioProcessor::new(AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            });
+            let mut samples = 0;
+            for chunk in [
+                processor.process(&vec![0.25; 317], 1, rate),
+                processor.disable_enhancement(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                samples += chunk.pcm_i16_le.len() / 2;
+            }
+            assert_eq!(
+                samples,
+                (317_u64 * 16_000).div_ceil(u64::from(rate)) as usize
+            );
+            assert!(processor.disable_enhancement().is_none());
+            let next = processor.process(&[0.5; 160], 1, 16_000).unwrap();
+            assert_eq!(decode(&next.pcm_i16_le), vec![16383; 160]);
+            assert!(processor.finish().is_none());
+            assert!(processor.disable_enhancement().is_none());
+            assert!(processor.process(&[0.5; 160], 1, 16_000).is_none());
+        }
     }
 
     #[test]

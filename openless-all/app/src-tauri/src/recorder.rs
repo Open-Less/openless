@@ -31,8 +31,12 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
-/// Maximum number of native callback blocks waiting for the processing worker.
-const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+/// Bound capture backlog by duration and memory, independently of callback size.
+const AUDIO_PROCESSING_MAX_QUEUED_US: u64 = 3_000_000;
+const AUDIO_PROCESSING_MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
+/// Shed optional enhancement before a temporary backlog can stop capture.
+const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
 static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
@@ -1992,7 +1996,7 @@ fn run_audio_thread(
 /// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
@@ -2045,7 +2049,7 @@ fn try_input_candidates<T, U>(
 
 fn start_device_stream(
     device: &cpal::Device,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
@@ -2105,7 +2109,7 @@ fn native_input_alternatives(
 fn start_native_config(
     device: &cpal::Device,
     supported: cpal::SupportedStreamConfig,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
@@ -2226,7 +2230,7 @@ fn build_stream_for_format(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     input_sr: u32,
@@ -2271,13 +2275,21 @@ fn build_stream_for_format(
                         })) {
                             Ok(()) => {}
                             Err(TrySendError::Disconnected(_)) => {
+                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                                    let _ = runtime_error_for_callback.send(
+                                        RecorderError::EngineFailed("audio processing worker disconnected".into()),
+                                    );
+                                }
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
-                                            "audio processing queue overflow".into(),
+                                            format!("audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
+                                                frame_tx.backlog.micros.load(Ordering::Acquire),
+                                                frame_tx.backlog.bytes.load(Ordering::Acquire),
+                                                data.len(), input_sr, channels),
                                         ),
                                     );
                                 }
@@ -2329,9 +2341,110 @@ enum AudioProcessingMessage {
     Shutdown,
 }
 
+#[derive(Default)]
+struct AudioProcessingBacklog {
+    micros: AtomicU64,
+    bytes: AtomicUsize,
+}
+
+struct AudioProcessingReservation {
+    backlog: Arc<AudioProcessingBacklog>,
+    micros: u64,
+    bytes: usize,
+}
+
+impl Drop for AudioProcessingReservation {
+    fn drop(&mut self) {
+        self.backlog.micros.fetch_sub(self.micros, Ordering::AcqRel);
+        self.backlog.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+struct QueuedAudioProcessingMessage {
+    message: AudioProcessingMessage,
+    _reservation: Option<AudioProcessingReservation>,
+}
+
+#[derive(Clone)]
+struct AudioProcessingSender {
+    sender: SyncSender<QueuedAudioProcessingMessage>,
+    backlog: Arc<AudioProcessingBacklog>,
+}
+
+impl AudioProcessingSender {
+    fn reserve(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<QueuedAudioProcessingMessage, AudioProcessingMessage> {
+        let reservation = if let AudioProcessingMessage::Frame(frame) = &message {
+            let rate = u64::from(frame.input_sample_rate) * frame.channels as u64;
+            if rate == 0 {
+                return Err(message);
+            }
+            let micros = (frame.samples.len() as u64 * 1_000_000).div_ceil(rate);
+            let bytes = frame.samples.len() * std::mem::size_of::<f32>();
+            if self
+                .backlog
+                .bytes
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_BYTES)
+                })
+                .is_err()
+            {
+                return Err(message);
+            }
+            if self
+                .backlog
+                .micros
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(micros)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_US)
+                })
+                .is_err()
+            {
+                self.backlog.bytes.fetch_sub(bytes, Ordering::AcqRel);
+                return Err(message);
+            }
+            Some(AudioProcessingReservation {
+                backlog: Arc::clone(&self.backlog),
+                micros,
+                bytes,
+            })
+        } else {
+            None
+        };
+        Ok(QueuedAudioProcessingMessage {
+            message,
+            _reservation: reservation,
+        })
+    }
+
+    fn try_send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), TrySendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(TrySendError::Full)?;
+        self.sender.try_send(queued).map_err(|error| match error {
+            TrySendError::Full(queued) => TrySendError::Full(queued.message),
+            TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.message),
+        })
+    }
+
+    fn send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(std::sync::mpsc::SendError)?;
+        self.sender
+            .send(queued)
+            .map_err(|error| std::sync::mpsc::SendError(error.0.message))
+    }
+}
+
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
-    shutdown: SyncSender<AudioProcessingMessage>,
+    shutdown: AudioProcessingSender,
 }
 
 impl AudioProcessingWorker {
@@ -2341,52 +2454,61 @@ impl AudioProcessingWorker {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archiver: Option<Arc<WavArchiveWriter>>,
         state: Arc<StreamState>,
-    ) -> Result<(Self, SyncSender<AudioProcessingMessage>), RecorderError> {
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
-            sync_channel::<AudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let backlog = Arc::new(AudioProcessingBacklog::default());
+        let sender = AudioProcessingSender {
+            sender,
+            backlog: Arc::clone(&backlog),
+        };
         let join_handle = thread::Builder::new()
             .name("openless-audio-processor".into())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
-                while let Ok(message) = receiver.recv() {
+                let mut enhancement_enabled = processing.enhancement_enabled;
+                let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
+                    state.note_first_pcm(true);
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if let Some(archiver) = &archiver {
+                        archiver.append(&chunk.pcm_i16_le);
+                    }
+                    level_handler(chunk.level);
+                    update_peak(&state.peak_output_rms_milli, chunk.level);
+                };
+                while let Ok(queued) = receiver.recv() {
+                    // Keep the reservation until downstream delivery completes.
+                    let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
+                            let queued_us = backlog.micros.load(Ordering::Acquire);
+                            if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
+                                log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
+                                if let Some(tail) = processor.disable_enhancement() {
+                                    deliver(tail);
+                                }
+                                enhancement_enabled = false;
+                            }
                             if let Some(chunk) = processor.process(
                                 &frame.samples,
                                 frame.channels,
                                 frame.input_sample_rate,
                             ) {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
                         }
                         AudioProcessingMessage::Flush(done) => {
                             if let Some(chunk) = processor.finish() {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
-                            processor.reset();
+                            // A warm microphone reuses this worker across recording segments.
+                            processor = openless_core::AudioProcessor::new(processing);
+                            enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
                         AudioProcessingMessage::Shutdown => {
                             if let Some(chunk) = processor.finish() {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
                             break;
                         }
@@ -2425,7 +2547,7 @@ struct StreamState {
     created_at: std::time::Instant,
     first_raw_pcm_us: AtomicU64,
     first_output_pcm_us: AtomicU64,
-    processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
+    processor_sender: Mutex<Option<AudioProcessingSender>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
     resample_phase: Mutex<f64>,
@@ -2789,6 +2911,138 @@ mod tests {
         fn finish_segment(&self) {
             *self.segment_flushes.lock().unwrap() += 1;
         }
+    }
+
+    #[test]
+    fn audio_processing_budget_is_duration_based_and_released_on_disconnect() {
+        for samples in [48, 480, 4800] {
+            let (tx, rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            let sender = AudioProcessingSender {
+                sender: tx,
+                backlog: Arc::new(AudioProcessingBacklog::default()),
+            };
+            let frame = || {
+                AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25; samples],
+                    channels: 1,
+                    input_sample_rate: 48_000,
+                })
+            };
+            let frames = 3 * 48_000 / samples;
+            for _ in 0..frames {
+                assert!(sender.try_send(frame()).is_ok());
+            }
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Full(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 3_000_000);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 3 * 48_000 * 4);
+            drop(rx);
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Disconnected(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn audio_processing_budget_also_bounds_large_multichannel_frames() {
+        let (tx, _rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let sender = AudioProcessingSender {
+            sender: tx,
+            backlog: Arc::new(AudioProcessingBacklog::default()),
+        };
+        let frame = AudioProcessingMessage::Frame(RawAudioFrame {
+            samples: vec![0.0; 48_000 * 64],
+            channels: 64,
+            input_sample_rate: 48_000,
+        });
+        assert!(matches!(sender.try_send(frame), Err(TrySendError::Full(_))));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn audio_processing_backlog_sheds_enhancement_without_losing_pcm() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (entered_tx, entered_rx) = channel();
+        let (resume_tx, resume_rx) = channel();
+        let resume_rx = Mutex::new(resume_rx);
+        let block_next_level = Arc::new(AtomicBool::new(false));
+        let block_for_level = Arc::clone(&block_next_level);
+        let level_handler = Arc::new(move |_| {
+            if block_for_level.swap(false, Ordering::AcqRel) {
+                entered_tx.send(()).unwrap();
+                resume_rx
+                    .lock()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+        });
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            level_handler,
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            block_next_level.store(true, Ordering::Release);
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25; 997],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            // One second of short callbacks exceeds the old 64-message limit.
+            for _ in 0..100 {
+                assert!(sender
+                    .try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                        samples: vec![0.5; 160],
+                        channels: 1,
+                        input_sample_rate: TARGET_SAMPLE_RATE,
+                    }))
+                    .is_ok());
+            }
+            resume_tx.send(()).unwrap();
+            let (done_tx, done_rx) = channel();
+            sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        worker.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let segment_samples = 997 + 160 * 100;
+        assert_eq!(delivered.len(), segment_samples * 2 * 2);
+        let decoded = decode_i16_le(&delivered);
+        assert_eq!(&decoded[..segment_samples], &decoded[segment_samples..]);
+        assert!(decoded[..997].iter().any(|sample| *sample != 8191));
+        assert!(decoded[997..segment_samples]
+            .iter()
+            .all(|sample| *sample == 16383));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
     }
 
     #[test]
