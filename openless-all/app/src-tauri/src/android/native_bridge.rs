@@ -22,6 +22,7 @@ static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 #[cfg(target_os = "android")]
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+#[cfg(target_os = "android")]
 pub(crate) fn emit_audio_spectrum(raw: Vec<f32>, processed: Vec<f32>) {
     use tauri::Emitter;
     if let Some(app) = APP_HANDLE.get() {
