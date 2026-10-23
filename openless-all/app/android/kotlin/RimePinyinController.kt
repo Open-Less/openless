@@ -27,6 +27,7 @@ internal class RimePinyinController(context: Context) {
     private var pendingLiteral = ""
     private var commit: (String) -> Boolean = { false }
     private val confirmedText = StringBuilder()
+    val associationLearning = TypedContinuationHistory()
     private var associationEpoch = 0L
     fun bindCommit(handler: (String) -> Boolean) { commit = handler }
     fun currentEncoding(): String = encoding
@@ -180,7 +181,9 @@ internal class RimePinyinController(context: Context) {
         if (confirmedText.length > StrokeInputController.MAX_ASSOCIATION_CONTEXT)
             confirmedText.delete(0, confirmedText.length - StrokeInputController.MAX_ASSOCIATION_CONTEXT)
     }
-    fun resetAssociationContext() { confirmedText.clear(); associationEpoch++ }
+    /** What was committed just before the next commit, for StrokePhraseRepository.recordTypedContinuation(). */
+    fun associationContext(): String = confirmedText.toString()
+    fun resetAssociationContext() { confirmedText.clear(); associationLearning.reset(); associationEpoch++ }
     fun queryAssociations(repository: StrokePhraseRepository, update: (List<StrokePhraseRepository.Candidate>) -> Unit) {
         val text = confirmedText.toString()
         if (text.isEmpty()) { update(emptyList()); return }

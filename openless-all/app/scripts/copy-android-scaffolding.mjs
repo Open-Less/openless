@@ -75,8 +75,10 @@ const KOTLIN_FILES = [
   'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
+  'FrequencyStampCache.kt',
   'EnglishCandidateProvider.kt',
   'EnglishUserFrequency.kt',
+  'EnglishAutoText.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
@@ -93,6 +95,9 @@ const KOTLIN_TEST_FILES = [
   'DictationSpanTest.kt',
   'ImePrivacyPolicyTest.kt',
   'ImeDraftReplacementTest.kt',
+  'StrokePhraseSuffixTest.kt',
+  'EnglishAutoTextTest.kt',
+  'InputLearningRulesTest.kt',
   'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessMigrationBundleContractTest.kt',
@@ -111,6 +116,7 @@ const KOTLIN_ANDROID_TEST_FILES = [
   'ImeLearningMigrationTest.kt',
   'OpenLessMigrationBundleInstrumentedTest.kt',
   'RimeEngineIntegrationTest.kt',
+  'ImeAutoTextIntegrationTest.kt',
 ];
 
 const XML_FILES = [

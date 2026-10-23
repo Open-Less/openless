@@ -399,6 +399,8 @@ jobs:
           # Rime is staged for this emulator ABI; do not launch the Tauri Rust build.
           src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
             :app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon
+          # Regression evidence written by ImeAutoTextIntegrationTest (#1230).
+          adb -s emulator-5554 logcat -d -s Ime1230Evidence:I '*:S'
 
       - name: Upload Android emulator failure log
         if: failure()

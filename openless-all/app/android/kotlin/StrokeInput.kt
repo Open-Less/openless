@@ -27,8 +27,11 @@ internal class StrokeInputRepository(context: Context) {
         "六" to "n", "七" to "h", "八" to "p", "九" to "p", "零" to "n",
     )
 
+    // Every list in here is in corpus-frequency order (see ensureLoaded()),
+    // so a query only walks it until it has enough matches.
     private val index = AtomicReference<Map<String, List<Pair<String, String>>>>(emptyMap())
     private val frequency = AtomicReference<Map<String, Long>>(emptyMap())
+    private val codesByChar = AtomicReference<Map<String, List<String>>>(emptyMap())
     private val loading = Any()
 
     // Personal per-code preference, learned from picking a non-top candidate.
@@ -74,33 +77,44 @@ internal class StrokeInputRepository(context: Context) {
     fun searchAsync(pattern: String, callback: (List<String>) -> Unit) {
         executor.execute {
             ensureLoaded()
-            val lookupKey = pattern.takeWhile { it != '*' }.take(PREFIX_INDEX_LENGTH)
-            val freq = frequency.get()
-            val result = if (pattern.isEmpty()) emptyList() else index.get()
-                .getOrDefault(lookupKey, emptyList())
-                .asSequence()
-                .filter { (_, code) -> matches(pattern, code) }
-                .map { it.first }
-                .distinct()
-                .toList()
-                // Personal pick for this exact code always outranks the
-                // static corpus frequency — corpus counts span 1 to several
-                // million, so adding a personal score would never move the
-                // needle for common characters. Candidates with no personal
-                // score (0.0, the common case) fall through to the corpus
-                // order unchanged.
-                .sortedWith(
-                    compareByDescending<String> { userFrequency.score(pattern, it) }
-                        .thenByDescending { freq[it] ?: 0L },
-                )
-                .take(MAX_CANDIDATES)
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            val result = if (pattern.isEmpty()) emptyList() else {
+                val freq = frequency.get()
+                val codes = codesByChar.get()
+                // Only characters still spelled by this code: the store
+                // outlives dictionary updates.
+                val picks = userFrequency.picksFor(pattern).filter { (char, _) ->
+                    codes[char]?.any { strokeCodeMatches(pattern, it) } == true
+                }
+                rankStrokeCandidates(
+                    index.get().getOrDefault(pattern.takeWhile { it != '*' }.take(PREFIX_INDEX_LENGTH), emptyList()),
+                    pattern,
+                    picks,
+                    MAX_CANDIDATES,
+                ) { freq[it] ?: 0L }
+            }
+            android.util.Log.d(
+                "OpenLessStroke",
+                "query pattern=$pattern results=${result.size} elapsed=${android.os.SystemClock.elapsedRealtime() - startedAt}ms",
+            )
             android.os.Handler(android.os.Looper.getMainLooper()).post { callback(result) }
         }
     }
 
-    /** Records that `candidate` was hand-picked over the top result for `pattern`, off the caller's thread. */
-    fun recordPersonalPick(pattern: String, candidate: String) {
-        executor.execute { userFrequency.record(pattern, candidate) }
+    /**
+     * Records a pick of `candidate` for `pattern`, off the caller's thread —
+     * when it was hand-picked over the top result ([wasTop] false), or when
+     * it is on top only because of earlier picks. The latter keeps a learned
+     * character's score fresh: recording corrections alone let it decay and
+     * lose its place to the next one-off pick. Picking a corpus-top
+     * character that was never learned records nothing.
+     */
+    fun recordPick(pattern: String, candidate: String, wasTop: Boolean) {
+        executor.execute {
+            if (shouldRecordStrokePick(wasTop, userFrequency.score(pattern, candidate) > 0.0)) {
+                userFrequency.record(pattern, candidate)
+            }
+        }
     }
 
     fun shutdown() = executor.shutdownNow()
@@ -110,16 +124,23 @@ internal class StrokeInputRepository(context: Context) {
         synchronized(loading) {
             if (index.get().isNotEmpty()) return
             val startedAt = android.os.SystemClock.elapsedRealtime()
-            val entries = loadEntries(appContext)
+            val freq = loadFrequency(appContext)
+            // Sorted once here (stable, so equal counts keep file order) and
+            // bucketed in that order: every bucket comes out frequency-sorted
+            // without sorting each one, and no query ever sorts again.
+            val entries = loadEntries(appContext).sortedByDescending { freq[it.first] ?: 0L }
             val buckets = HashMap<String, MutableList<Pair<String, String>>>()
+            val codes = HashMap<String, MutableList<String>>()
             buckets[""] = entries.toMutableList()
             entries.forEach { entry ->
                 val code = entry.second
                 (1..minOf(PREFIX_INDEX_LENGTH, code.length)).forEach { length ->
                     buckets.getOrPut(code.substring(0, length)) { ArrayList() }.add(entry)
                 }
+                codes.getOrPut(entry.first) { ArrayList(1) }.add(code)
             }
-            frequency.set(loadFrequency(appContext))
+            frequency.set(freq)
+            codesByChar.set(codes)
             index.set(buckets)
             android.util.Log.i(
                 "OpenLessStroke",
@@ -129,13 +150,47 @@ internal class StrokeInputRepository(context: Context) {
         }
     }
 
-    private fun matches(pattern: String, code: String): Boolean {
-        if (pattern.length > code.length) return false
-        return pattern.indices.all { index -> pattern[index] == '*' || pattern[index] == code[index] }
-    }
-
     private companion object {
         const val PREFIX_INDEX_LENGTH = 4
         const val MAX_CANDIDATES = 36
     }
 }
+
+/** A stroke code matches a typed pattern when it starts with it, '*' standing for any one stroke. */
+internal fun strokeCodeMatches(pattern: String, code: String): Boolean {
+    if (pattern.length > code.length) return false
+    return pattern.indices.all { index -> pattern[index] == '*' || pattern[index] == code[index] }
+}
+
+/**
+ * Candidates for [pattern]: the user's own picks for this exact code first
+ * (highest score first, corpus frequency breaking ties), then the remaining
+ * matches from [entries] — which must already be in corpus-frequency order —
+ * each character once, until [limit]. A personal pick always outranks the
+ * corpus: counts there span 1 to several million, so adding a personal score
+ * would never move a common character.
+ *
+ * Same order as sorting every match by (score, frequency), but it stops as
+ * soon as the row is full — the first stroke alone matches up to ~48k
+ * entries, and scoring and sorting all of them made that keystroke slow.
+ */
+internal fun rankStrokeCandidates(
+    entries: List<Pair<String, String>>,
+    pattern: String,
+    picks: List<Pair<String, Double>>,
+    limit: Int,
+    frequencyOf: (String) -> Long,
+): List<String> {
+    val result = LinkedHashSet<String>()
+    picks.filter { it.second > 0.0 }
+        .sortedWith(compareByDescending<Pair<String, Double>> { it.second }.thenByDescending { frequencyOf(it.first) })
+        .forEach { if (result.size < limit) result += it.first }
+    for ((char, code) in entries) {
+        if (result.size >= limit) break
+        if (char !in result && strokeCodeMatches(pattern, code)) result += char
+    }
+    return result.toList()
+}
+
+/** See StrokeInputRepository.recordPick(): a correction always counts, a top pick only once it was learned. */
+internal fun shouldRecordStrokePick(wasTop: Boolean, alreadyLearned: Boolean): Boolean = !wasTop || alreadyLearned
