@@ -71,12 +71,16 @@ const KOTLIN_FILES = [
   'StrokeInput.kt',
   'OpenLessRime.kt',
   'RimePinyinController.kt',
-  'LegacyPinyinBackup.kt',
+  'RimeFuzzyPinyin.kt',
+  'RimeUserDictionaryFile.kt',
+  'KeyboardDataFile.kt',
   'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
+  'FrequencyStampCache.kt',
   'EnglishCandidateProvider.kt',
   'EnglishUserFrequency.kt',
+  'EnglishAutoText.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
@@ -93,6 +97,10 @@ const KOTLIN_TEST_FILES = [
   'DictationSpanTest.kt',
   'ImePrivacyPolicyTest.kt',
   'ImeDraftReplacementTest.kt',
+  'StrokePhraseSuffixTest.kt',
+  'EnglishAutoTextTest.kt',
+  'InputLearningRulesTest.kt',
+  'RimePinyinDataTest.kt',
   'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessMigrationBundleContractTest.kt',
@@ -111,6 +119,7 @@ const KOTLIN_ANDROID_TEST_FILES = [
   'ImeLearningMigrationTest.kt',
   'OpenLessMigrationBundleInstrumentedTest.kt',
   'RimeEngineIntegrationTest.kt',
+  'ImeAutoTextIntegrationTest.kt',
 ];
 
 const XML_FILES = [
@@ -415,6 +424,7 @@ function main() {
     'LitePinyinRepository.kt',
     'LitePinyinUserFrequency.kt',
     'LitePinyinLearnedPhrases.kt',
+    'LegacyPinyinBackup.kt',
   ]) {
     const path = join(kotlinDest, name);
     if (dryRun) console.log(`[dry-run] Would remove retired source ${path}`);

@@ -29,7 +29,9 @@ Android 的空格、删除、回车与字母在同一个串行队列中执行，
 
 Android 继续遵守 `IME_FLAG_NO_PERSONALIZED_LEARNING` 和密码字段策略；不学习的会话使用独立 `openless_pinyin_private` 方案，既不训练也不读取个人词典。鸿蒙密码框不创建中文会话；普通字段的本地学习在获取系统输入框属性后才启用，自检始终使用私密会话。共享资源目录升级为 `rime-shared-1.17.0-ice-da1fbe60-v1`，避免已安装应用因旧资源缓存而漏装学习方案；个人词典目录保持原位。
 
-旧 Android LitePinyin 算法及内置 TSV 已删除；旧备份格式只保留一个不参与输入的兼容适配器。
+旧 Android LitePinyin 算法、内置 TSV 及其备份适配器均已删除；迁移文件的 `pinyinLearnedPhrases` 字段为保持格式兼容仍保留，但始终为空，导入时忽略。
+
+用户词典与模糊音：`user_dict_export` / `user_dict_import` 通过 librime levers 的 `backup_user_dict` / `restore_user_dict` 读写 `pinyin_simp` 的文本快照（`.userdb.txt`，导入为合并：同一词条取较大的使用次数与权重）；`redeploy` 在 `rime-user/<方案>.custom.yaml` 改动后重新部署两个拼音方案。三者都会先销毁全部会话（提交用户词典事务并释放数据库锁），调用方需重建会话。Android 在键盘设置中提供导出 / 导入与模糊音开关，不进入迁移文件或加密同步。`rime_levers_api.h` 原样复制自 librime 1.17.0，因其安装步骤只导出 `rime_api.h`。
 
 可评估的上游扩展（当前未启用）：[librime-predict](https://github.com/rime/librime-predict) 提供下一个词预测，需额外预测数据；[librime-lua](https://github.com/hchunhui/librime-lua) 用于复用成熟方案脚本；[librime-octagram](https://github.com/lotem/librime-octagram) 及其模型可用于语法加权。扩展与数据需分别验证 OHOS / Android 构建、版本兼容及安装体积，不自行实现平行算法。当前个人学习直接使用 librime 原生用户词典。
 

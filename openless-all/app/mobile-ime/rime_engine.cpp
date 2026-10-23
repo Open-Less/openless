@@ -1,5 +1,6 @@
 #include "rime_engine.h"
 #include <rime_api.h>
+#include "rime_levers_api.h"
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -9,7 +10,13 @@
 #include <stdexcept>
 #include <string>
 
+// librime is linked statically: referencing the module keeps its registration
+// (and the user dictionary manager behind it) from being dropped by the linker.
+void rime_require_module_levers();  // C++ linkage, as RIME_REGISTER_MODULE defines it
+
 namespace {
+const char* const kPinyinSchemas[] = {"openless_pinyin_private", "openless_pinyin_learning"};
+const char* const kUserDict = "pinyin_simp";
 std::mutex mutex;
 RimeApi* api = nullptr;
 std::string shared_dir, user_dir;
@@ -68,6 +75,24 @@ std::string snapshot(RimeSessionId id, bool expanded = false, int offset = 0, in
     api->free_context(&context);
     return out;
 }
+void deploy_pinyin_schemas(RimeApi* target) {
+    for (const auto* name : kPinyinSchemas) {
+        const auto schema = shared_dir + "/" + name + ".schema.yaml";
+        if (!target->deploy_schema(schema.c_str())) throw std::runtime_error("Rime schema deployment failed");
+    }
+}
+// Destroying a session commits its user dictionary transaction and releases
+// the database lock, which the user dictionary manager needs to open it.
+void destroy_all_sessions() {
+    for (const auto& entry : sessions) api->destroy_session(entry.first);
+    sessions.clear();
+}
+RimeLeversApi* levers() {
+    auto* module = api->find_module("levers");
+    auto* levers = module && module->get_api ? reinterpret_cast<RimeLeversApi*>(module->get_api()) : nullptr;
+    if (!levers) throw std::runtime_error("Rime user dictionary tools unavailable");
+    return levers;
+}
 std::string request(const std::string& op, const std::string& handle, const std::string& arg) {
     if (op == "initialize") {
         if (api) {
@@ -85,17 +110,49 @@ std::string request(const std::string& op, const std::string& handle, const std:
         candidate->setup(&traits);
         candidate->initialize(&traits);
         if (candidate->start_maintenance(True)) candidate->join_maintenance_thread();
-        for (const auto* name : {"openless_pinyin_private", "openless_pinyin_learning"}) {
-            const auto schema = shared_dir + "/" + name + ".schema.yaml";
-            if (!candidate->deploy_schema(schema.c_str())) {
-                candidate->finalize();
-                throw std::runtime_error("Rime schema deployment failed");
-            }
-        }
+        try { deploy_pinyin_schemas(candidate); }
+        catch (...) { candidate->finalize(); throw; }
+        // On a fresh profile the first installation_update only writes
+        // installation.yaml and leaves the sync dir as the relative "sync"
+        // (the read-only process cwd on Android). A second run reads that file
+        // and points it into the user data dir, where dictionary backups go.
+        candidate->run_task("installation_update");
         api = candidate;
+        rime_require_module_levers();
         return "{\"ok\":true}";
     }
     if (!api) throw std::runtime_error("Rime is not initialized");
+    if (op == "redeploy") {
+        // Rebuild after a schema .custom.yaml changed; deleting the compiled
+        // schema keeps a same-second rewrite from looking up to date.
+        destroy_all_sessions();
+        for (const auto* name : kPinyinSchemas) {
+            std::error_code ignored;
+            std::filesystem::remove(user_dir + "/build/" + name + ".schema.yaml", ignored);
+        }
+        deploy_pinyin_schemas(api);
+        return "{\"ok\":true}";
+    }
+    if (op == "user_dict_export") {
+        if (arg.empty()) throw std::runtime_error("Export path required");
+        destroy_all_sessions();
+        if (!std::filesystem::exists(user_dir + "/" + kUserDict + ".userdb"))
+            return "{\"ok\":true,\"exported\":false}";
+        char sync_dir[1024] = {0};
+        api->get_user_data_sync_dir(sync_dir, sizeof(sync_dir));
+        if (!std::filesystem::path(sync_dir).is_absolute()) throw std::runtime_error("Rime sync directory unavailable");
+        if (!levers()->backup_user_dict(kUserDict)) throw std::runtime_error("Rime user dictionary backup failed");
+        std::filesystem::copy_file(std::string(sync_dir) + "/" + kUserDict + ".userdb.txt", arg,
+            std::filesystem::copy_options::overwrite_existing);
+        return "{\"ok\":true,\"exported\":true}";
+    }
+    if (op == "user_dict_import") {
+        if (arg.empty()) throw std::runtime_error("Import path required");
+        destroy_all_sessions();
+        // Merges like Rime's own sync: the larger commit count and weight win.
+        if (!levers()->restore_user_dict(arg.c_str())) throw std::runtime_error("Rime user dictionary import failed");
+        return "{\"ok\":true}";
+    }
     if (op == "create") {
         auto id = api->create_session();
         if (!id) throw std::runtime_error("Rime session creation failed");

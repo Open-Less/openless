@@ -23,10 +23,12 @@ internal class RimePinyinController(context: Context) {
     @Volatile private var cloudChoices: Set<String> = emptySet()
     @Volatile private var candidateRevision = 0L
     private var session = ""
+    private var sessionGeneration = 0L
     private var pending = ""
     private var pendingLiteral = ""
     private var commit: (String) -> Boolean = { false }
     private val confirmedText = StringBuilder()
+    val associationLearning = TypedContinuationHistory()
     private var associationEpoch = 0L
     fun bindCommit(handler: (String) -> Boolean) { commit = handler }
     fun currentEncoding(): String = encoding
@@ -57,7 +59,14 @@ internal class RimePinyinController(context: Context) {
             try {
                 if (epoch != generation) return@execute
                 OpenLessRime.initialize(context)
-                if (session.isEmpty()) session = OpenLessRime.request("create", "", if (learning) "learning" else "private").getString("session")
+                // A dictionary import/export or a fuzzy-pinyin redeploy closed every native session.
+                if (session.isNotEmpty() && sessionGeneration != OpenLessRime.sessionGeneration) {
+                    session = ""; pending = ""; pendingLiteral = ""
+                }
+                if (session.isEmpty()) {
+                    sessionGeneration = OpenLessRime.sessionGeneration
+                    session = OpenLessRime.request("create", "", if (learning) "learning" else "private").getString("session")
+                }
                 if (pending.isNotEmpty()) {
                     check(deliver(pending, epoch)) { "Editor write failed" }
                     OpenLessRime.request("ack", session); pending = ""
@@ -180,7 +189,9 @@ internal class RimePinyinController(context: Context) {
         if (confirmedText.length > StrokeInputController.MAX_ASSOCIATION_CONTEXT)
             confirmedText.delete(0, confirmedText.length - StrokeInputController.MAX_ASSOCIATION_CONTEXT)
     }
-    fun resetAssociationContext() { confirmedText.clear(); associationEpoch++ }
+    /** What was committed just before the next commit, for StrokePhraseRepository.recordTypedContinuation(). */
+    fun associationContext(): String = confirmedText.toString()
+    fun resetAssociationContext() { confirmedText.clear(); associationLearning.reset(); associationEpoch++ }
     fun queryAssociations(repository: StrokePhraseRepository, update: (List<StrokePhraseRepository.Candidate>) -> Unit) {
         val text = confirmedText.toString()
         if (text.isEmpty()) { update(emptyList()); return }

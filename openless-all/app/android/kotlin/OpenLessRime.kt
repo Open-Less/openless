@@ -9,9 +9,14 @@ internal object OpenLessRime {
     private var initialized = false
     private val dictionaryWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var nextDictionaryCheck = 0L
+    /** Bumped whenever the native side closed every session; a controller holding an older one starts a new one. */
+    @Volatile var sessionGeneration = 0L
+        private set
     external fun nativeRequest(operation: String, session: String, argument: String): String
     @Synchronized fun initialize(context: Context) {
         if (initialized) { refreshPublicDictionary(context); return }
+        // Rime replaced LitePinyin; its stores are no longer read or backed up.
+        for (name in listOf("openless_pinyin_frequency", "openless_pinyin_learned_phrases")) context.deleteSharedPreferences(name)
         val shared = File(context.filesDir, "rime-shared-1.17.0-ice-da1fbe60-v1").apply { mkdirs() }
         val files = context.assets.list("rime") ?: error("Rime assets unavailable")
         require(files.isNotEmpty())
@@ -59,5 +64,31 @@ internal object OpenLessRime {
         val response = JSONObject(nativeRequest(operation, session, argument))
         check(response.optBoolean("ok")) { response.optString("error", "Rime request failed") }
         return response
+    }
+
+    private fun closingSessions(operation: String, argument: String): JSONObject =
+        try { request(operation, "", argument) } finally { sessionGeneration++ }
+
+    /** Writes the pinyin user dictionary snapshot to [target]; false when nothing has been learned yet. Off the main thread. */
+    fun exportUserDictionary(context: Context, target: File): Boolean {
+        initialize(context)
+        return closingSessions("user_dict_export", target.absolutePath).optBoolean("exported")
+    }
+
+    /** Merges a snapshot already checked by [RimeUserDictionaryFile.entryCount] into the user dictionary. Off the main thread. */
+    fun importUserDictionary(context: Context, source: File) {
+        initialize(context)
+        closingSessions("user_dict_import", source.absolutePath)
+    }
+
+    /** Rewrites both pinyin schemas' patches for [groups] and redeploys them. Off the main thread. */
+    fun applyFuzzyPinyin(context: Context, groups: Set<String>) {
+        initialize(context)
+        val patch = RimeFuzzyPinyin.customYaml(groups)
+        for (schema in listOf("openless_pinyin_learning", "openless_pinyin_private")) {
+            val file = File(context.filesDir, "rime-user/$schema.custom.yaml")
+            if (patch == null) file.delete() else file.writeText(patch)
+        }
+        closingSessions("redeploy", "")
     }
 }

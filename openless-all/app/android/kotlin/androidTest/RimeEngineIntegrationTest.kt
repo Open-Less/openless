@@ -197,6 +197,97 @@ class RimeEngineIntegrationTest {
         } finally { OpenLessRime.request("destroy", privateSession) }
     }
 
+    @Test fun userDictionaryExportsAndMergesSnapshots() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.initialize(context)
+        repeat(3) {
+            val session = OpenLessRime.request("create", "", "learning").getString("session")
+            try {
+                var state = typePinyin(session, "nihao")
+                state = choose(session, state, "拟")
+                state = choose(session, OpenLessRime.request("candidates", session), "蚝")
+                assertEquals("拟蚝", state.getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        val open = OpenLessRime.request("create", "", "learning").getString("session")
+        val exported = java.io.File(context.cacheDir, "test-export-pinyin_simp.userdb.txt")
+        val incoming = java.io.File(context.cacheDir, "test-import-pinyin_simp.userdb.txt")
+        try {
+            assertTrue(OpenLessRime.exportUserDictionary(context, exported))
+            // Exporting closes every session so the dictionary can be read.
+            try {
+                OpenLessRime.request("state", open)
+                fail("Sessions must be closed by an export")
+            } catch (_: IllegalStateException) {}
+            val text = exported.readText()
+            assertTrue(RimeUserDictionaryFile.entryCount(text) > 0)
+            assertTrue(text.lines().any { it.split('\t').getOrNull(1) == "拟蚝" })
+            // Another device's snapshot holding a word this one never learned —
+            // on a spelling no other test types, since the dictionary is shared,
+            // and made of rare characters that sentence composition (which
+            // builds 剖剖 from the common 剖) never puts together on its own.
+            val header = text.lines().filter { it.startsWith("#") }.joinToString("\n")
+            fun importRow(row: String) {
+                incoming.writeText("$header\n$row\n")
+                OpenLessRime.importUserDictionary(context, incoming)
+            }
+            fun candidatesFor(input: String): List<String> {
+                val session = OpenLessRime.request("create", "", "learning").getString("session")
+                try {
+                    val rows = typePinyin(session, input).getJSONArray("candidates")
+                    return (0 until rows.length()).map { rows.getString(it) }
+                } finally { OpenLessRime.request("destroy", session) }
+            }
+            assertFalse("No such word before the import", "抔掊" in candidatesFor("poupou"))
+            try {
+                importRow("pou pou \t抔掊\tc=9 d=9 t=1")
+                assertTrue("Imported words become candidates", "抔掊" in candidatesFor("poupou"))
+                assertTrue("Importing merges instead of replacing", "拟蚝" in candidatesFor("nihao"))
+            } finally {
+                // A larger negative count wins the merge and marks the word deleted.
+                importRow("pou pou \t抔掊\tc=-10 d=0 t=1")
+            }
+            assertFalse("The cleanup import deletes the word again", "抔掊" in candidatesFor("poupou"))
+        } finally {
+            exported.delete()
+            incoming.delete()
+        }
+    }
+
+    @Test fun fuzzyPinyinPatchIsDeployedAndRemoved() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.initialize(context)
+        fun candidatesFor(input: String): List<String> {
+            val session = OpenLessRime.request("create", "", "private").getString("session")
+            try {
+                val rows = typePinyin(session, input).getJSONArray("candidates")
+                return (0 until rows.length()).map { rows.getString(it) }
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        assertFalse("知" in candidatesFor("zi"))
+        try {
+            OpenLessRime.applyFuzzyPinyin(context, setOf("zcs"))
+            assertTrue("z = zh after the patch", "知" in candidatesFor("zi"))
+        } finally {
+            OpenLessRime.applyFuzzyPinyin(context, emptySet())
+        }
+        assertFalse(java.io.File(context.filesDir, "rime-user/openless_pinyin_private.custom.yaml").exists())
+        assertFalse("知" in candidatesFor("zi"))
+    }
+
+    @Test fun controllerStartsANewSessionAfterSessionsWereClosed() = withController { controller, committed ->
+        drain(controller) { for (letter in "ni") controller.appendLetter(letter) {} }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.exportUserDictionary(context, java.io.File(context.cacheDir, "test-reset-pinyin_simp.userdb.txt").apply { deleteOnExit() })
+        // The half-typed "ni" went with the closed session; typing continues in a new one.
+        drain(controller) {
+            for (letter in "nihao") controller.appendLetter(letter) {}
+            controller.space {}
+        }
+        assertEquals("你好", committed.toString())
+    }
+
     private fun withController(test: (RimePinyinController, StringBuilder) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         // Cold dictionary compilation is a one-time deployment, not input queue work.
