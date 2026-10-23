@@ -1777,6 +1777,7 @@ export const fr: typeof zhCN = {
       nameHint:
         'Ce nom distingue les canaux d’un même fournisseur. Il n’affecte ni le modèle ni la connexion.',
       errModel: 'Modèle',
+      errThinking: 'activez Raisonnement',
       verify: 'Vérifier',
       verifyHint:
         'Effectue un appel réel à l’API pour vérifier que ce canal fonctionne actuellement',
@@ -2007,6 +2008,8 @@ export const fr: typeof zhCN = {
         'Messages définit automatiquement les en-têtes d’authentification et de version. Retirez x-api-key et anthropic-version des en-têtes supplémentaires.',
       llmStreamError:
         'Le serveur a renvoyé une erreur de flux. Vérifiez le modèle et les paramètres de la requête.',
+      llmThinkingRequired:
+        'Ce modèle n’accepte pas le raisonnement désactivé. Activez « Raisonnement » à côté du modèle, puis vérifiez à nouveau.',
       saveProtocol: 'Enregistrer les réglages du protocole',
       thinkingModeHint:
         'Activez, désactivez ou réduisez le raisonnement avec les paramètres pris en charge par le format et le modèle. Aucune instruction de contrôle n’est ajoutée au prompt.',

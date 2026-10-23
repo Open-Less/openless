@@ -1704,6 +1704,7 @@ export const ko: typeof zhCN = {
       nameHint:
         '같은 제공업체의 여러 채널을 구분하는 이름입니다. 모델이나 연결에는 영향을 주지 않습니다.',
       errModel: '모델',
+      errThinking: '사고 켜기 필요',
       verify: '검증',
       verifyHint: '실제로 API를 한 번 호출해 이 채널이 지금 되는지 확인합니다',
       errTimeout: '시간 초과',
@@ -1928,6 +1929,8 @@ export const ko: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.',
       llmStreamError: '서버가 스트림 오류를 반환했습니다. 모델과 요청 설정을 확인하세요.',
+      llmThinkingRequired:
+        '이 모델은 사고를 끌 수 없습니다. 모델 옆의 "사고"를 켠 뒤 다시 검증하세요.',
       saveProtocol: '프로토콜 설정 저장',
       thinkingModeHint:
         '선택한 요청 형식과 모델이 지원하는 매개변수로 사고를 켜거나 끄거나 줄입니다. 프롬프트에 제어 지시를 추가하지 않습니다.',

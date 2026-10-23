@@ -1640,6 +1640,7 @@ export const zhTW: typeof zhCN = {
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
+      errThinking: '需開啟思考',
       verify: '驗證',
       verifyHint: '點一下會真實呼叫一次介面，確認這張卡現在可用',
       errTimeout: '逾時',
@@ -1851,6 +1852,7 @@ export const zhTW: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。',
       llmStreamError: '伺服器回傳串流錯誤，請檢查模型和請求引數。',
+      llmThinkingRequired: '此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。',
       saveProtocol: '儲存協定設定',
       thinkingModeHint:
         '依所選請求格式與模型支援的引數啟用、關閉或降低思考，不在提示詞注入控制指令。',

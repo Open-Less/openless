@@ -1765,6 +1765,7 @@ export const de: typeof zhCN = {
       nameHint:
         'Dieser Name unterscheidet Kanäle desselben Anbieters. Er beeinflusst weder Modell noch Verbindung.',
       errModel: 'Modell',
+      errThinking: 'Denkmodus einschalten',
       verify: 'Prüfen',
       verifyHint: 'Prüft diesen Kanal mit einem echten API-Aufruf auf aktuelle Funktionsfähigkeit',
       errTimeout: 'Zeitüberschreitung',
@@ -1993,6 +1994,8 @@ export const de: typeof zhCN = {
         'Messages setzt die Authentifizierungs- und Versionsheader automatisch. Entferne x-api-key und anthropic-version aus den zusätzlichen Headern.',
       llmStreamError:
         'Der Server hat einen Streamfehler gemeldet. Prüfe das Modell und die Anfrageparameter.',
+      llmThinkingRequired:
+        'Dieses Modell lässt sich nicht mit ausgeschaltetem Denkmodus nutzen. Schalte „Denkmodus“ neben dem Modell ein und prüfe erneut.',
       saveProtocol: 'Protokolleinstellungen speichern',
       thinkingModeHint:
         'Aktiviere, deaktiviere oder reduziere das Denken mit den vom Anfrageformat und Modell unterstützten Parametern. Dem Prompt werden keine Steueranweisungen hinzugefügt.',

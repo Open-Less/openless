@@ -1640,6 +1640,7 @@ export const zhCN = {
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
+      errThinking: '需开启思考',
       verify: '验证',
       verifyHint: '点一下真实调用一次接口，确认这张卡现在能用',
       errTimeout: '超时',
@@ -1851,6 +1852,7 @@ export const zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
       llmStreamError: '服务端返回流式错误，请检查模型和请求参数。',
+      llmThinkingRequired: '该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。',
       saveProtocol: '保存协议设置',
       thinkingModeHint:
         '按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。',

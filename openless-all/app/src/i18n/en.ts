@@ -1729,6 +1729,7 @@ export const en: typeof zhCN = {
       nameHint:
         'This name distinguishes channels from the same provider. It does not affect the model or connection.',
       errModel: 'Model',
+      errThinking: 'turn on Thinking',
       verify: 'Verify',
       verifyHint: 'Makes one real API call to check this channel works right now',
       errTimeout: 'timeout',
@@ -1955,6 +1956,8 @@ export const en: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.',
       llmStreamError: 'The server returned a stream error. Check the model and request parameters.',
+      llmThinkingRequired:
+        'This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.',
       saveProtocol: 'Save protocol settings',
       thinkingModeHint:
         'Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.',

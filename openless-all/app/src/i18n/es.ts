@@ -1755,6 +1755,7 @@ export const es: typeof zhCN = {
       nameHint:
         'El nombre permite distinguir canales del mismo proveedor. No afecta al modelo ni a la conexión.',
       errModel: 'Modelo',
+      errThinking: 'activa Razonamiento',
       verify: 'Verificar',
       verifyHint: 'Hace una llamada real a la API para comprobar si este canal funciona ahora',
       errTimeout: 'tiempo agotado',
@@ -1979,6 +1980,8 @@ export const es: typeof zhCN = {
         'Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.',
       llmStreamError:
         'El servidor devolvió un error de transmisión. Comprueba el modelo y los parámetros de la solicitud.',
+      llmThinkingRequired:
+        'Este modelo no admite el razonamiento desactivado. Activa «Razonamiento» junto al modelo y vuelve a verificar.',
       saveProtocol: 'Guardar ajustes del protocolo',
       thinkingModeHint:
         'Activa, desactiva o reduce el razonamiento mediante los parámetros admitidos por el formato y el modelo. No se añaden instrucciones de control al prompt.',

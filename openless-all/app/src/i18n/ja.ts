@@ -1716,6 +1716,7 @@ export const ja: typeof zhCN = {
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
       errModel: 'モデル',
+      errThinking: '思考をオンに',
       verify: '検証',
       verifyHint: '実際に API を1回呼んで、このチャネルが今使えるか確認します',
       errTimeout: 'タイムアウト',
@@ -1941,6 +1942,8 @@ export const ja: typeof zhCN = {
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
       llmStreamError:
         'サーバーがストリームエラーを返しました。モデルとリクエスト設定を確認してください。',
+      llmThinkingRequired:
+        'このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。',
       saveProtocol: 'プロトコル設定を保存',
       thinkingModeHint:
         '選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。',
