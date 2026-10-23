@@ -209,6 +209,7 @@ private struct NativeAudioSettings: Codable {
 }
 
 private struct NativeAudioSettingsView: View {
+  @EnvironmentObject private var interfacePreferences: InterfacePreferences
   let core: CoreBridge?
   let blocked: Bool
   @State private var value = NativeAudioSettings()
@@ -226,7 +227,7 @@ private struct NativeAudioSettingsView: View {
   var body: some View {
     Form {
       if let message {
-        Section { Text(message); Button("重新加载") { Task { await load() } }.disabled(saving || blocked) }
+        Section { Text(t(message)); Button("重新加载") { Task { await load() } }.disabled(saving || blocked) }
       }
       Group {
         Section {
@@ -258,7 +259,7 @@ private struct NativeAudioSettingsView: View {
             if value.dsp.equalizerEnabled {
               Menu("均衡器预设") {
                 ForEach(presets.indices, id: \.self) { i in
-                  Button(presets[i].0) { value.dsp.equalizerBandsDb = presets[i].1 }
+                  Button(t(presets[i].0)) { value.dsp.equalizerBandsDb = presets[i].1 }
                 }
               }
               control("前级增益 dB", \.equalizerPreampDb, -20...20)
@@ -289,18 +290,19 @@ private struct NativeAudioSettingsView: View {
       }.disabled(!loaded || blocked || saving)
     }
     .navigationTitle("语音增强")
-    .toolbar { Button(saving ? "保存中…" : "保存") { Task { await save() } }.disabled(!loaded || blocked || saving || core == nil).accessibilityIdentifier("nativeAudioSave") }
+    .toolbar { Button(t(saving ? "保存中…" : "保存")) { Task { await save() } }.disabled(!loaded || blocked || saving || core == nil).accessibilityIdentifier("nativeAudioSave") }
     .task { await load() }
   }
   private func control(_ title: String, _ key: WritableKeyPath<NativeAudioDsp, Int>, _ range: ClosedRange<Int>) -> some View {
     VStack(alignment: .leading) {
-      Text("\(title): \(value.dsp[keyPath: key])")
+      Text("\(t(title)): \(value.dsp[keyPath: key])")
       Slider(value: Binding(get: { Double(value.dsp[keyPath: key]) }, set: { value.dsp[keyPath: key] = Int($0.rounded()) }), in: Double(range.lowerBound)...Double(range.upperBound), step: 1)
     }
   }
   private func stageName(_ key: String) -> String {
-    ["noiseReduction":"降噪", "dereverb":"梳状滤波", "equalizer":"均衡器", "amplifier":"输入增益", "agc":"自动增益", "vad":"语音门限"][key] ?? key
+    t(["noiseReduction":"降噪", "dereverb":"梳状滤波", "equalizer":"均衡器", "amplifier":"输入增益", "agc":"自动增益", "vad":"语音门限"][key] ?? key)
   }
+  private func t(_ key: String) -> String { interfacePreferences.localizer.text(key) }
   private func move(_ stage: String, _ delta: Int) {
     guard let i = value.dsp.processingOrder.firstIndex(of: stage), value.dsp.processingOrder.indices.contains(i + delta) else { return }
     value.dsp.processingOrder.swapAt(i, i + delta)
