@@ -1,16 +1,23 @@
 //! Client-side logical documents for encrypted sync. No network or UI effects live here.
 
 mod export;
+mod limited;
 mod merge;
 pub mod registry;
 mod restore;
 mod types;
 mod validate;
 
-pub use crate::cloud_sync_e2ee_protocol::types::{DocumentKind, Revision};
+pub use crate::cloud_sync_e2ee_protocol::types::{
+    DocumentKind, DocumentSet, LogicalDocument, Revision, SourceDevice, Tombstone,
+};
 pub use export::{
     activity_record, export_provider_credentials_for_sync, export_snapshot, export_style_packs,
     export_sync_documents, secret_rows, ui_preferences, vocabulary_records,
+};
+pub use limited::{
+    AllowedSyncScope, ConfirmedVocabularySelection, LimitedMergePreview, LimitedSyncDocuments,
+    LIMITED_SYNC_NAMESPACE,
 };
 pub use merge::{
     diff_local_replace_documents, diff_sync_documents, record_missing_tombstones, ConflictChoice,
@@ -90,6 +97,8 @@ pub fn serialize_sync_documents(documents: &ValidatedSyncDocuments) -> DocumentR
     serde_json::to_vec(documents.documents()).map_err(|_| DocumentError::InvalidDocument)
 }
 
+#[cfg(test)]
+mod limited_tests;
 #[cfg(test)]
 mod restore_tests;
 #[cfg(test)]

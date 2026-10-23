@@ -382,6 +382,24 @@ pub struct SyncWriteGate {
     runtime_blocked: AtomicBool,
 }
 
+fn contains_existing_sync_state(directory: &Path) -> DocumentResult<bool> {
+    for root in [
+        directory.to_path_buf(),
+        directory.with_file_name(crate::cloud_sync_e2ee::LIMITED_LOCAL_ROOT),
+    ] {
+        match std::fs::read_dir(root) {
+            Ok(mut entries) => {
+                if entries.next().is_some() {
+                    return Ok(true);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(DocumentError::JournalUnavailable),
+        }
+    }
+    Ok(false)
+}
+
 impl SyncWriteGate {
     /// An unreadable/corrupt counter is an error, never a reset to zero.
     pub fn open(state_path: PathBuf) -> DocumentResult<Arc<Self>> {
@@ -395,10 +413,7 @@ impl SyncWriteGate {
                 if initialized_path.exists()
                     || (directory.file_name().and_then(|name| name.to_str())
                         == Some("encrypted-sync")
-                        && std::fs::read_dir(directory)
-                            .map_err(|_| DocumentError::JournalUnavailable)?
-                            .next()
-                            .is_some())
+                        && contains_existing_sync_state(directory)?)
                 {
                     return Err(DocumentError::RecoveryRequired);
                 }
@@ -1071,6 +1086,24 @@ mod tests {
             open_for_data_dir(&other.0),
             Err(DocumentError::RecoveryRequired)
         ));
+    }
+
+    #[test]
+    fn lost_counter_never_resets_over_a_retained_limited_policy_root() {
+        let temp = Temp::new();
+        let limited = temp.0.join(crate::cloud_sync_e2ee::LIMITED_LOCAL_ROOT);
+        std::fs::create_dir_all(&limited).unwrap();
+        let ciphertext = limited.join("fixture.enc");
+        std::fs::write(&ciphertext, b"retained-limited-ciphertext").unwrap();
+        assert!(matches!(
+            open_for_data_dir(&temp.0),
+            Err(DocumentError::RecoveryRequired)
+        ));
+        assert!(!temp.0.join("encrypted-sync/generation.json").exists());
+        assert_eq!(
+            std::fs::read(ciphertext).unwrap(),
+            b"retained-limited-ciphertext"
+        );
     }
 
     #[test]

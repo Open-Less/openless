@@ -1482,6 +1482,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v1_contract_has_a_singleton_vault_and_no_named_scope_capability() {
+        let server = FakeServer::start(vec![
+            caps_reply(),
+            Reply::json("200 OK", empty_metadata()).header("ETag", "\"zero\""),
+        ])
+        .await;
+        let transport = Transport::for_test(&server.origin, CLIENT_ID)
+            .await
+            .unwrap();
+        transport
+            .metadata(&session(&transport, OWNER), None)
+            .await
+            .unwrap();
+        let requests = server.finish().await;
+        assert_eq!(requests[1].path, "/v1/me/vault");
+        assert!(!requests[1].headers.contains_key("x-sync-namespace"));
+
+        // A scope-aware server requires a new negotiated wire contract. Merely sending
+        // opaque bytes to this route would still replace the desktop's single vault.
+        let mut extended = capabilities();
+        extended["collections"] = json!(["confirmed-vocabulary-mode-style-references-v1"]);
+        let server = FakeServer::start(vec![Reply::json("200 OK", extended)]).await;
+        assert!(matches!(
+            Transport::for_test(&server.origin, CLIENT_ID).await,
+            Err(Error::InvalidWire(_))
+        ));
+        assert_eq!(server.finish().await.len(), 1);
+    }
+
+    #[tokio::test]
     async fn wrong_oauth_capability_or_duplicate_wire_key_prevents_authentication() {
         let mut wrong = capabilities();
         wrong["githubClientId"] = json!("another-app");

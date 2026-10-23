@@ -29,6 +29,37 @@ pub(crate) fn build(
     events: crate::events::BackendEventPublisher,
     tasks: Arc<dyn crate::TaskSpawner>,
 ) -> SyncResult<(super::EncryptedSyncService, Arc<CoreSyncStore>)> {
+    let credential_store_for_service = credentials.clone();
+    let (origin, local, store) = build_store(
+        config,
+        data_dir,
+        repositories,
+        credentials,
+        tasks,
+        "encrypted-sync",
+    )?;
+    let service = super::EncryptedSyncService::new(
+        super::SyncServiceConfig {
+            origin,
+            github_client_id,
+        },
+        marketplace,
+        local,
+        store.clone(),
+        credential_store_for_service,
+        events,
+    );
+    Ok((service, store))
+}
+
+pub(super) fn build_store(
+    config: super::EncryptedSyncConfig,
+    data_dir: &Path,
+    repositories: crate::BackendRepositories,
+    credentials: Arc<dyn crate::CredentialStore>,
+    tasks: Arc<dyn crate::TaskSpawner>,
+    root_name: &str,
+) -> SyncResult<(String, LocalStorage, Arc<CoreSyncStore>)> {
     let origin = url::Url::parse(&config.service_origin)
         .map_err(|_| super::error("unsupported_protocol"))?;
     if origin.scheme() != "https"
@@ -42,7 +73,7 @@ pub(crate) fn build(
         return Err(super::error("unsupported_protocol"));
     }
     let origin = origin.origin().ascii_serialization();
-    let root = data_dir.join("encrypted-sync");
+    let root = data_dir.join(root_name);
     log::error!(
         "[e2ee-adapter] build start data_dir={} root={}",
         data_dir.display(),
@@ -80,7 +111,6 @@ pub(crate) fn build(
         credentials.clone(),
     );
     log::error!("[e2ee-adapter] stage=store_new");
-    let credential_store_for_service = credentials.clone();
     let store = Arc::new(
         CoreSyncStore::new(
             repositories,
@@ -97,18 +127,7 @@ pub(crate) fn build(
         })?,
     );
     log::error!("[e2ee-adapter] stage=store_ok");
-    let service = super::EncryptedSyncService::new(
-        super::SyncServiceConfig {
-            origin,
-            github_client_id,
-        },
-        marketplace,
-        local,
-        store.clone(),
-        credential_store_for_service,
-        events,
-    );
-    Ok((service, store))
+    Ok((origin, local, store))
 }
 
 /// Build the native document store without requiring a configured sync account.

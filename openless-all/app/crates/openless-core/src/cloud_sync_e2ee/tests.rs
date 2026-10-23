@@ -2061,3 +2061,43 @@ async fn configuration_failure_discards_cached_identity_and_memory_key() {
         EnableStep::Unlock
     );
 }
+
+#[tokio::test]
+async fn public_verified_account_facade_does_not_enable_or_authenticate_full_sync() {
+    use crate::domains::MarketplaceApi;
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let account = fixture.marketplace.verified_sync_account().await.unwrap();
+    assert_eq!(account.github_id(), OWNER);
+    assert_eq!(
+        serde_json::to_value(&account).unwrap(),
+        json!({"githubId": OWNER})
+    );
+    assert!(!fixture.service.status().enabled);
+    {
+        let state = server.state.lock().unwrap();
+        assert_eq!(
+            state.requests, 1,
+            "only the real account /user authority was contacted"
+        );
+        assert_eq!(state.github_auth_requests, 0);
+        assert_eq!(state.token_auth_requests, 0);
+        assert!(state.puts.is_empty());
+    }
+    server.state.lock().unwrap().owner = "999".into();
+    assert_eq!(
+        fixture
+            .marketplace
+            .verified_sync_account()
+            .await
+            .unwrap()
+            .github_id(),
+        "999"
+    );
+    // The previously returned immutable value remains 42, never a mutable display-login alias.
+    assert_eq!(account.github_id(), OWNER);
+    fixture.marketplace.logout().await.unwrap();
+    let requests = server.state.lock().unwrap().requests;
+    assert!(fixture.marketplace.verified_sync_account().await.is_err());
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+}
