@@ -38,6 +38,7 @@ struct ExternalRecordingState {
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
     processor: Option<crate::AudioProcessor>,
+    samples: Vec<f32>,
 }
 
 struct ExternalActiveRecording {
@@ -139,6 +140,7 @@ impl AudioRecorder for ExternalAudioRecorder {
             });
         let session = Arc::new(ExternalRecordingSession {
             state: Mutex::new(ExternalRecordingState {
+                samples: Vec::new(),
                 active: true,
                 bytes_received: 0,
                 consumer,
@@ -192,14 +194,20 @@ impl AudioRecorder for ExternalAudioRecorder {
         }
         state.bytes_received = state.bytes_received.saturating_add(pcm.len() as u64);
         let elapsed_ms = state.bytes_received.saturating_mul(1_000) / 32_000;
-        if let Some(processor) = &mut state.processor {
-            let samples: Vec<f32> = pcm
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
-                .collect();
-            if let Some(chunk) = processor.process(&samples, 1, crate::audio::DICTATION_SAMPLE_RATE)
+        if let ExternalRecordingState {
+            processor: Some(processor),
+            samples,
+            ..
+        } = &mut *state
+        {
+            samples.clear();
+            samples.extend(
+                pcm.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0),
+            );
+            if let Some(chunk) = processor.process(samples, 1, crate::audio::DICTATION_SAMPLE_RATE)
             {
                 state.consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
                 if let Some(archive) = &session.archive {

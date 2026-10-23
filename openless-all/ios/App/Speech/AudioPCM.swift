@@ -60,6 +60,16 @@ nonisolated struct AudioPacket: Sendable {
 /// Owns the resampler off the UI and real-time audio callback.
 actor PCMWorker {
   private var converter: AVAudioConverter?
+  private var scratch: AVAudioPCMBuffer?
+
+  private func outputBuffer(format: AVAudioFormat, capacity: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+    if scratch?.format != format || (scratch?.frameCapacity ?? 0) < capacity {
+      scratch = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity)
+    }
+    guard let scratch else { throw VoiceFailure.format }
+    scratch.frameLength = 0
+    return scratch
+  }
   func convert(_ packet: AudioPacket) throws -> Data {
     let input = try packet.makeBuffer()
     let inputFormat = input.format
@@ -75,9 +85,7 @@ actor PCMWorker {
     guard let converter else { throw VoiceFailure.format }
     let capacity = AVAudioFrameCount(
       ceil(Double(input.frameLength) * 16_000 / inputFormat.sampleRate) + 32)
-    guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
-      throw VoiceFailure.format
-    }
+    let output = try outputBuffer(format: outputFormat, capacity: capacity)
     var supplied = false
     var error: NSError?
     let status = converter.convert(to: output, error: &error) { _, flag in
@@ -98,8 +106,7 @@ actor PCMWorker {
     guard let converter else { return [] }
     var tail: [Data] = []
     for _ in 0..<8 {
-      guard let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: 2048)
-      else { throw VoiceFailure.format }
+      let output = try outputBuffer(format: converter.outputFormat, capacity: 2048)
       var error: NSError?
       let status = converter.convert(to: output, error: &error) { _, flag in
         flag.pointee = .endOfStream

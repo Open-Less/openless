@@ -7,15 +7,20 @@ import Foundation
       for rate in [8_000.0, 16_000, 44_100, 48_000] {
         for channels: AVAudioChannelCount in [1, 2] {
           let worker = PCMWorker()
+          let reference = ReferencePCMWorker()
           var pcm = Data()
+          var expected = Data()
+          var frameOffset = 0
           for step in 0..<10 {
             let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: channels, interleaved: false)!
-            let frames = AVAudioFrameCount(rate / 10)
+            // Alternate small and large packets to exercise scratch growth,
+            // reuse, and a final flush into a previously larger buffer.
+            let frames = AVAudioFrameCount(rate * (step % 2 == 0 ? 0.02 : 0.18))
             let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
             buffer.frameLength = frames
             for channel in 0..<Int(channels) {
               for frame in 0..<Int(frames) {
-                buffer.floatChannelData![channel][frame] = Float(sin(2 * Double.pi * 440 * (Double(frame) + Double(step) * Double(frames)) / rate) * 0.2)
+                buffer.floatChannelData![channel][frame] = Float(sin(2 * Double.pi * 440 * Double(frame + frameOffset) / rate) * 0.2)
               }
             }
             let packet: AudioPacket
@@ -30,8 +35,12 @@ import Foundation
               packet = AudioPacket(buffer: AVReadOnlyAudioPCMBuffer(copying: buffer))
             }
             pcm.append(try await worker.convert(packet))
+            expected.append(try await reference.convert(packet))
+            frameOffset += Int(frames)
           }
           for tail in try await worker.finish() { pcm.append(tail) }
+          for tail in try await reference.finish() { expected.append(tail) }
+          precondition(pcm == expected, "optimized PCM differs from the original converter: \(rate), \(channels), legacy=\(legacy)")
           precondition(abs(pcm.count / 2 - 16_000) <= 64, "resampling changed duration: \(rate), \(pcm.count)")
           let samples = pcm.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
           let power = samples.map { pow(Double($0) / 32_768, 2) }.reduce(0, +) / Double(samples.count)

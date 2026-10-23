@@ -229,6 +229,7 @@ fn idle_gate_never_scans_starting_capture_or_concurrent_management() {
     owner.broker.captures.lock().unwrap().insert(
         session,
         Arc::new(Capture {
+            processing: None,
             consumer: Arc::new(Sink),
             progress: Arc::new(Sink),
             bytes: AtomicU64::new(0),

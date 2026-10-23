@@ -113,3 +113,41 @@ length. Run on the target device before drawing battery or latency conclusions:
 ```sh
 cargo run --release --manifest-path openless-all/app/Cargo.toml -p openless-core --example audio_performance -- rnnoise 48000
 ```
+
+## Before/after equivalence validation (2026-10-24)
+
+The frozen baseline is commit `f0744e10`. The same `openless-core` example
+`audio_equivalence` was built against that baseline and the optimized sources,
+using their locked dependencies, in separate release build directories.
+Each build exports 48 cases: 16/44.1/48 kHz, mono/stereo, four denoiser modes,
+and default/combined gain-EQ-comb-VAD settings. Inputs contain silence,
+harmonics, deterministic noise, high-frequency interference, an impulse,
+irregular chunk boundaries, and a partial final frame.
+
+On Linux x86-64, all 48 output PCM files were byte-identical to the baseline:
+maximum difference 0 LSB, with matching durations. The full hashes, errors and
+diagnostic processing times are committed in
+`../../scripts/fixtures/audio-equivalence-2026-10-24.json`. This establishes
+equivalence for those inputs and host, not a listening study or ASR accuracy.
+
+Export both builds to separate directories with `audio_equivalence OUTPUT_DIR`,
+then run `python3 scripts/compare-audio-outputs.py BEFORE AFTER --report REPORT`.
+The comparator fails on any PCM difference or duration/case-set mismatch;
+`python3 scripts/test-compare-audio-outputs.py` verifies a one-LSB mutation
+and a truncated output cannot pass. The probe sources must be identical in
+both builds. Original baseline sources/models must remain unchanged.
+
+Desktop Tauri and Linux egui use the shared processor directly. Harmony uses
+the external PCM recorder, which reuses conversion scratch per session.
+The iOS native recorder now optionally applies the same processor with
+session-frozen settings and a reused input buffer; the stop/drain barrier
+flushes its tail before finishing the archive. Enhancement remains off by
+default. Its native Swift settings page persists the same software DSP
+controls as egui and Tauri, with writes blocked while a capture is active.
+Native iOS conversion uses a separate
+Swift AVAudioConverter worker; its output scratch is now actor-owned and
+reused. `ios/scripts/test-audio.sh` compares that worker byte-for-byte against
+the frozen pre-optimization Swift worker for 16 format/ownership combinations,
+including changing packet sizes and end-of-stream flush. That Apple SDK test
+was added but cannot be executed on this Linux host. No claim of on-device
+equivalence, battery savings, or real-time capture latency is made here.
