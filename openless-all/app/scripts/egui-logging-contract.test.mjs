@@ -141,10 +141,39 @@ assert.match(
   /"\[dictation\] start session_id=/,
   'the dictation start boundary must be logged (hotkey pressed but nothing happened)',
 );
+const brokerStart = main.indexOf('    fn acquire_broker(');
+const brokerEnd = main.indexOf('    impl Drop for OpenLessEguiApp', brokerStart);
+assert.ok(brokerStart >= 0 && brokerEnd > brokerStart, 'find the single-instance acquisition function');
+assert.doesNotMatch(
+  main.slice(brokerStart, brokerEnd),
+  /log::(?:info|warn|error)!/,
+  'single-instance acquisition runs before logger initialization; it must not emit lost startup logs',
+);
+const runStart = main.indexOf('    pub fn run() -> Result<(), String>');
+const runEnd = main.indexOf('    #[cfg(test)]', runStart);
+assert.ok(runStart >= 0 && runEnd > runStart, 'find the production startup function');
+const startup = main.slice(runStart, runEnd);
+const acquire = startup.indexOf('acquire_broker(');
+const forwardedExit = startup.indexOf('BrokerAcquisition::Forwarded => return Ok(())');
+const loggerInit = startup.indexOf('init_file_logger(');
+const primaryLog = startup.indexOf('[startup] single-instance lock acquired');
+assert.ok(
+  acquire >= 0 && forwardedExit > acquire && loggerInit > forwardedExit && primaryLog > loggerInit,
+  'only the primary may initialize/rotate logs, and its role must be logged after initialization',
+);
 assert.match(
-  main,
-  /"\[startup\] another instance owns the lock/,
-  'a forwarded second launch must leave a trace, otherwise "clicking the icon does nothing" is invisible',
+  startup,
+  /match openless_linux_egui::init_file_logger\([^)]*\)\s*\{\s*Ok\([^)]*\)\s*=>\s*(?:\{\s*)?log::info!/,
+  'the primary startup line must only be emitted after successful logger initialization',
+);
+const intentLoopStart = main.indexOf('                for intent in launch_intents {');
+const intentLoopEnd = main.indexOf('                // 本地边沿先于插件信号处理', intentLoopStart);
+assert.ok(intentLoopStart >= 0 && intentLoopEnd > intentLoopStart, 'find the primary intent-consumption loop');
+const intentLoop = main.slice(intentLoopStart, intentLoopEnd);
+const receivedLog = intentLoop.indexOf('[ui-host] launch intent from the user:');
+assert.ok(
+  receivedLog >= 0 && receivedLog < intentLoop.indexOf('if matches!('),
+  'the primary must log forwarded intents before any dispatch branch, including ToggleQa',
 );
 
 // 9. Per-event chatter must not sit at info.

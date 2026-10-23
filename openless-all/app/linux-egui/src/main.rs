@@ -4626,6 +4626,7 @@ mod linux_app {
                 let mut actions = Vec::new();
                 native.host_actions().drain(|action| actions.push(action));
                 for intent in launch_intents {
+                    log::info!("[ui-host] launch intent from the user: {intent:?}");
                     // CLI 的 ToggleQa 与「按一次 QA 热键」等价（Tauri
                     // `dispatch_cli_intent` 把 ToggleQa 直接转给 `handle_qa_hotkey_pressed`），
                     // 所以它既不拉起主窗口，也不走 Core 的 ToggleQa（那条是“切换录音”）。
@@ -4637,7 +4638,6 @@ mod linux_app {
                         self.toggle_qa_panel();
                         continue;
                     }
-                    log::info!("[ui-host] launch intent from the user: {intent:?}");
                     launch_intent_window_requested = true;
                     let host = Arc::clone(&host);
                     self.spawn(async move {
@@ -8030,18 +8030,8 @@ mod linux_app {
         )
         .map_err(|error| error.to_string())?
         {
-            SingleInstanceRole::Primary(broker) => {
-                log::info!("[startup] single-instance lock acquired; running as primary");
-                Ok(BrokerAcquisition::Primary(broker))
-            }
-            SingleInstanceRole::Forwarded => {
-                // 「双击图标没反应」最常见的原因就是这一条：意图被已有实例接管，
-                // 本进程直接退出。没有这行日志时，用户和我们看到的都是「什么都没发生」。
-                log::info!(
-                    "[startup] another instance owns the lock; forwarded the launch intent to it and exiting"
-                );
-                Ok(BrokerAcquisition::Forwarded)
-            }
+            SingleInstanceRole::Primary(broker) => Ok(BrokerAcquisition::Primary(broker)),
+            SingleInstanceRole::Forwarded => Ok(BrokerAcquisition::Forwarded),
         }
     }
 
@@ -10367,8 +10357,9 @@ Internal flags (set by OpenLess itself, not for regular use):
         let tray_available = tray.is_some();
         let native = (|| {
             let mut config = backend_config()?;
-            if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
-                eprintln!("OpenLess file logger unavailable: {error}");
+            match openless_linux_egui::init_file_logger(&config.data_dir) {
+                Ok(_) => log::info!("[startup] single-instance lock acquired; running as primary"),
+                Err(error) => eprintln!("OpenLess file logger unavailable: {error}"),
             }
             if let Some(error) = tray_error {
                 // 没有托盘 ⇒ 关窗就退出：这是用户行为差异，必须写进启动日志。
@@ -10515,6 +10506,134 @@ Internal flags (set by OpenLess itself, not for regular use):
             ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
                 Box::pin(async { Ok(()) })
             }
+        }
+
+        #[test]
+        fn startup_logging_records_forwarded_intents_without_rotating_again() {
+            use std::io::Write;
+
+            const CHILD_ENV: &str = "OPENLESS_STARTUP_LOG_TEST_CHILD";
+            const TEST: &str = "linux_app::tests::startup_logging_records_forwarded_intents_without_rotating_again";
+            if std::env::var_os(CHILD_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                    .env(CHILD_ENV, "1")
+                    .env_remove("OPENLESS_LOG")
+                    .env_remove("RUST_LOG")
+                    .output()
+                    .expect("launch isolated startup logging regression");
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{stdout}\n{stderr}");
+                assert!(
+                    stdout.contains("test result: ok. 1 passed; 0 failed"),
+                    "{stdout}"
+                );
+                return;
+            }
+            let root = tempfile::tempdir().unwrap();
+            for key in [
+                "XDG_DATA_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_RUNTIME_DIR",
+            ] {
+                std::env::set_var(key, root.path());
+            }
+            let runtime_dir = root.path().join("runtime");
+            let data_dir = root.path().join("data");
+            std::fs::create_dir_all(&runtime_dir).unwrap();
+            std::fs::create_dir_all(data_dir.join("logs")).unwrap();
+            let path = openless_linux_egui::log_path(&data_dir);
+            let old_log = vec![b'o'; 2 * 1024 * 1024 + 1];
+            std::fs::write(&path, &old_log).unwrap();
+            let args = vec!["openless".to_string()];
+            let primary = match acquire_broker(&runtime_dir, &args).unwrap() {
+                BrokerAcquisition::Primary(broker) => Arc::new(broker),
+                BrokerAcquisition::Forwarded => panic!("the first launch must be primary"),
+            };
+            openless_linux_egui::init_file_logger(&data_dir).unwrap();
+            assert!(std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Linux egui logger ready:"));
+
+            let mut app = fixture_app(false);
+            let host_actions = Arc::new(openless_linux_egui::LinuxHostActions::default());
+            let mut dependencies = openless_core::BackendDependencies::unsupported();
+            dependencies.host_actions = host_actions.clone();
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            dependencies.services.remote_input = Arc::new(
+                openless_core::RemoteInputService::new(
+                    Arc::new(openless_core::testing::RecordingRemoteInputRuntime::default()),
+                    8443,
+                    "en",
+                )
+                .unwrap(),
+            );
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: data_dir.clone(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let runtime = openless_linux_egui::LinuxBackendRuntime {
+                backend: backend.clone(),
+                host_actions,
+                settings_runtime: Arc::new(openless_core::settings::NoopSettingsRuntime),
+            };
+            app.native = Some(
+                app.tokio
+                    .block_on(LinuxNativeRuntime::start(
+                        runtime,
+                        Some(primary.clone()),
+                        None,
+                    ))
+                    .unwrap(),
+            );
+            app.snapshot = Some(backend.snapshot());
+            app.preferences = Some(backend.get_preferences());
+            // 只测试 QA 的收起分支，不创建真实弹窗或启动录音。
+            app.qa_visible = true;
+
+            let mut active = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            active.write_all(&vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap();
+            active.write_all(b"\nactive-file-marker\n").unwrap();
+            drop(active);
+            for args in [
+                args,
+                vec!["openless".to_string(), "--toggle-qa".to_string()],
+            ] {
+                assert!(matches!(
+                    acquire_broker(&runtime_dir, &args).unwrap(),
+                    BrokerAcquisition::Forwarded
+                ));
+            }
+            app.poll(&egui::Context::default());
+            log::logger().flush();
+            let text = std::fs::read_to_string(&path).unwrap();
+            for intent in ["ShowMain", "Cli(ToggleQa)"] {
+                let message = format!("[ui-host] launch intent from the user: {intent}");
+                assert_eq!(text.matches(&message).count(), 1, "{message}");
+            }
+            assert!(text.contains("active-file-marker"));
+            assert!(app.window.should_be_open);
+            assert!(!app.qa_visible);
+            assert_eq!(
+                std::fs::read(data_dir.join("logs/openless.log.1")).unwrap(),
+                old_log
+            );
+            assert!(!data_dir.join("logs/openless.log.2").exists());
+            assert!(!data_dir.join("logs/openless.log.3").exists());
+            drop(app);
+            drop(primary);
         }
 
         #[test]

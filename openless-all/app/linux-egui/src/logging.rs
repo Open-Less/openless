@@ -15,6 +15,10 @@
 //! 3. **`error` 只写失败**，不写进度。轮转后仍有 3 份历史，够回溯一次事故。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+// 导出只报告已安装的规则，不把待重启的设置误当成生效配置。
+static ACTIVE_FILTER: OnceLock<FilterSpec> = OnceLock::new();
 
 /// 单文件上限。整个日志目录最多 `ROTATE_KEEP + 1` 份，即 8 MiB。
 const ROTATE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
@@ -69,12 +73,13 @@ pub fn init_file_logger(data_dir: &Path) -> Result<PathBuf, String> {
         sinks,
         spec: filter.clone(),
     };
-    log::set_max_level(filter.max_level());
     log::set_boxed_logger(Box::new(logger)).map_err(|error| error.to_string())?;
+    log::set_max_level(filter.max_level());
+    let description = filter.describe();
+    let _ = ACTIVE_FILTER.set(filter);
 
     log::info!(
-        "Linux egui logger ready: level={} rotated={rotated} path={}",
-        filter.describe(),
+        "Linux egui logger ready: level={description} rotated={rotated} path={}",
         path.display()
     );
     Ok(path)
@@ -111,9 +116,10 @@ impl FilterSpec {
     fn resolve(data_dir: &Path) -> Self {
         for key in ENV_KEYS {
             if let Ok(value) = std::env::var(key) {
-                if let Some(spec) = Self::parse(&value) {
-                    return spec;
-                }
+                return Self::parse(&value).unwrap_or(Self {
+                    default: DEFAULT_LEVEL,
+                    overrides: Vec::new(),
+                });
             }
         }
         if let Some(level) = read_log_level(data_dir) {
@@ -321,15 +327,10 @@ pub fn export_error_logs(data_dir: &Path, destination: &Path) -> Result<(), crat
     ));
     out.push_str(&format!(
         "level: {}\n",
-        level_name(
-            std::env::var("OPENLESS_LOG")
-                .ok()
-                .and_then(|value| FilterSpec::parse(&value))
-                .map_or_else(
-                    || read_log_level(data_dir).unwrap_or(DEFAULT_LEVEL),
-                    |spec| spec.default
-                )
-        )
+        ACTIVE_FILTER
+            .get()
+            .map(FilterSpec::describe)
+            .unwrap_or_else(|| "unknown (logger not initialized)".to_string())
     ));
     out.push_str(&format!(
         "exported_at: {}\n\n",
@@ -393,6 +394,221 @@ pub fn export_error_log(source: &Path, destination: &Path) -> Result<(), crate::
 mod tests {
     use super::*;
 
+    fn run_in_child(name: &str) -> bool {
+        const CHILD_ENV: &str = "OPENLESS_LOG_TEST_CHILD";
+        if std::env::var(CHILD_ENV).as_deref() == Ok(name) {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("logging::tests::{name}"),
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, name)
+            .env_remove("OPENLESS_LOG_RESTART_ROOT")
+            .env_remove("OPENLESS_LOG")
+            .env_remove("RUST_LOG")
+            .output()
+            .expect("launch isolated logging regression");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "isolated logging regression failed: {}\n{stdout}\n{stderr}",
+            output.status
+        );
+        assert!(
+            stdout.contains("test result: ok. 1 passed; 0 failed"),
+            "{stdout}"
+        );
+        true
+    }
+
+    fn temp_dir() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("openless-log-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        root
+    }
+
+    #[test]
+    fn resolves_configuration_in_priority_order() {
+        if run_in_child("resolves_configuration_in_priority_order") {
+            return;
+        }
+        let cases = [
+            (None, None, None, "info"),
+            (None, None, Some("debug"), "debug"),
+            (None, None, Some("loud"), "info"),
+            (Some("debug"), Some("off"), Some("trace"), "debug"),
+            (
+                Some("debug,openless_core=loud"),
+                Some("off"),
+                Some("off"),
+                "info",
+            ),
+            (Some("loud"), None, Some("off"), "info"),
+            (None, Some("loud"), Some("off"), "info"),
+            (None, Some("debug"), Some("off"), "debug"),
+            (Some("off"), Some("debug"), Some("trace"), "off"),
+            (None, Some("off"), Some("debug"), "off"),
+            (Some(""), Some("off"), Some("debug"), "info"),
+        ];
+        for (openless, rust, saved, expected) in cases {
+            let root = temp_dir();
+            for (key, value) in [("OPENLESS_LOG", openless), ("RUST_LOG", rust)] {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            if let Some(saved) = saved {
+                std::fs::write(root.join("logs/level"), saved).unwrap();
+            }
+            assert_eq!(
+                FilterSpec::resolve(&root).describe(),
+                expected,
+                "OPENLESS_LOG={openless:?}, RUST_LOG={rust:?}, saved={saved:?}"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    fn exported_text(root: &Path) -> String {
+        log::logger().flush();
+        let destination = root.join("diagnostics.log");
+        export_error_logs(root, &destination).unwrap();
+        std::fs::read_to_string(destination).unwrap()
+    }
+
+    #[test]
+    fn exports_the_active_rust_log_filter() {
+        if run_in_child("exports_the_active_rust_log_filter") {
+            return;
+        }
+        let root = temp_dir();
+        write_log_level(&root, "off").unwrap();
+        std::env::set_var("RUST_LOG", "debug");
+        init_file_logger(&root).unwrap();
+        log::debug!("rust-log-debug-probe");
+        let text = exported_text(&root);
+        assert!(text.lines().any(|line| line == "level: debug"), "{text}");
+        assert!(text.contains("rust-log-debug-probe"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exports_module_overrides_and_filters_their_boundaries() {
+        if run_in_child("exports_module_overrides_and_filters_their_boundaries") {
+            return;
+        }
+        let root = temp_dir();
+        std::env::set_var(
+            "OPENLESS_LOG",
+            "info,openless_core=debug,openless_core::asr=warn",
+        );
+        init_file_logger(&root).unwrap();
+        log::debug!(target: "openless_core::api", "core-debug-probe");
+        log::debug!(target: "openless_core::asr", "asr-debug-probe");
+        log::debug!(target: "openless_core_extra", "lookalike-debug-probe");
+        log::warn!(target: "openless_core::asr", "asr-warn-probe");
+        let text = exported_text(&root);
+        assert!(
+            text.lines()
+                .any(|line| line == "level: info (openless_core=debug,openless_core::asr=warn)"),
+            "{text}"
+        );
+        assert!(text.contains("core-debug-probe"));
+        assert!(text.contains("asr-warn-probe"));
+        assert!(!text.contains("asr-debug-probe"));
+        assert!(!text.contains("lookalike-debug-probe"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exports_the_active_level_until_restart() {
+        const NAME: &str = "exports_the_active_level_until_restart";
+        const ROOT_ENV: &str = "OPENLESS_LOG_RESTART_ROOT";
+        if run_in_child(NAME) {
+            return;
+        }
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let root = PathBuf::from(root);
+            init_file_logger(&root).unwrap();
+            log::debug!("restarted-debug-probe");
+            let text = exported_text(&root);
+            assert!(text.lines().any(|line| line == "level: debug"), "{text}");
+            assert!(text.contains("restarted-debug-probe"));
+            return;
+        }
+        let root = temp_dir();
+        write_log_level(&root, "info").unwrap();
+        init_file_logger(&root).unwrap();
+        write_log_level(&root, "debug").unwrap();
+        log::debug!("pending-debug-probe");
+        let text = exported_text(&root);
+        assert!(text.lines().any(|line| line == "level: info"), "{text}");
+        assert!(!text.contains("pending-debug-probe"));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logging::tests::exports_the_active_level_until_restart",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("OPENLESS_LOG_TEST_CHILD", NAME)
+            .env(ROOT_ENV, &root)
+            .env_remove("OPENLESS_LOG")
+            .env_remove("RUST_LOG")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(
+            stdout.contains("test result: ok. 1 passed; 0 failed"),
+            "{stdout}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exports_existing_logs_without_an_initialized_logger() {
+        if run_in_child("exports_existing_logs_without_an_initialized_logger") {
+            return;
+        }
+        let root = temp_dir();
+        std::fs::write(log_path(&root), "existing-log-probe\n").unwrap();
+        write_log_level(&root, "debug").unwrap();
+        let text = exported_text(&root);
+        assert!(
+            text.lines()
+                .any(|line| line == "level: unknown (logger not initialized)"),
+            "{text}"
+        );
+        assert!(text.contains("existing-log-probe"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_initialization_preserves_the_active_filter() {
+        if run_in_child("failed_initialization_preserves_the_active_filter") {
+            return;
+        }
+        let root = temp_dir();
+        std::env::set_var("OPENLESS_LOG", "debug");
+        init_file_logger(&root).unwrap();
+        std::env::set_var("OPENLESS_LOG", "info");
+        assert!(init_file_logger(&root).is_err());
+        assert_eq!(log::max_level(), log::LevelFilter::Debug);
+        log::debug!("still-debug-after-failed-init");
+        let text = exported_text(&root);
+        assert!(text.lines().any(|line| line == "level: debug"), "{text}");
+        assert!(text.contains("still-debug-after-failed-init"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn exports_the_current_log_with_atomic_save() {
         let root = std::env::temp_dir().join(format!(
@@ -432,7 +648,10 @@ mod tests {
         let oldest = text.find("oldest").unwrap();
         let older = text.find("older").unwrap();
         let newest = text.find("newest").unwrap();
-        assert!(oldest < older && older < newest, "sections must be chronological");
+        assert!(
+            oldest < older && older < newest,
+            "sections must be chronological"
+        );
         assert!(text.contains("===== openless.log.2 ====="));
 
         std::fs::remove_dir_all(root).unwrap();
@@ -460,8 +679,14 @@ mod tests {
         assert_eq!(spec.level_for("openless_core"), log::LevelFilter::Debug);
 
         let spec = FilterSpec::parse("info,openless_core=debug").unwrap();
-        assert_eq!(spec.level_for("openless_core::asr"), log::LevelFilter::Debug);
-        assert_eq!(spec.level_for("openless_linux_egui"), log::LevelFilter::Info);
+        assert_eq!(
+            spec.level_for("openless_core::asr"),
+            log::LevelFilter::Debug
+        );
+        assert_eq!(
+            spec.level_for("openless_linux_egui"),
+            log::LevelFilter::Info
+        );
 
         // 更具体的模块前缀优先。
         let spec = FilterSpec::parse("openless_core=debug,openless_core::asr=warn").unwrap();
@@ -469,7 +694,10 @@ mod tests {
             spec.level_for("openless_core::asr::volcengine"),
             log::LevelFilter::Warn
         );
-        assert_eq!(spec.level_for("openless_core::api"), log::LevelFilter::Debug);
+        assert_eq!(
+            spec.level_for("openless_core::api"),
+            log::LevelFilter::Debug
+        );
     }
 
     #[test]
@@ -493,10 +721,16 @@ mod tests {
         assert!(rotate_if_needed(&path).unwrap());
 
         assert!(!path.exists(), "the current log must have been moved aside");
-        assert_eq!(std::fs::read(root.join("openless.log.1")).unwrap().len(), (ROTATE_LIMIT_BYTES + 1) as usize);
+        assert_eq!(
+            std::fs::read(root.join("openless.log.1")).unwrap().len(),
+            (ROTATE_LIMIT_BYTES + 1) as usize
+        );
         assert_eq!(std::fs::read(root.join("openless.log.2")).unwrap(), b"one");
         assert_eq!(std::fs::read(root.join("openless.log.3")).unwrap(), b"two");
-        assert!(!root.join("openless.log.4").exists(), "archives beyond ROTATE_KEEP must be dropped");
+        assert!(
+            !root.join("openless.log.4").exists(),
+            "archives beyond ROTATE_KEEP must be dropped"
+        );
 
         // 小于上限时不轮转。
         std::fs::write(&path, b"small").unwrap();
