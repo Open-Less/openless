@@ -3,7 +3,11 @@
 
 mod adapter;
 mod dto;
+mod limited;
 mod local;
+#[cfg(test)]
+pub(crate) use limited::tests::TestAccount;
+pub use limited::{LimitedSyncExport, LimitedSyncStore, SyncAccountProvider, VerifiedSyncAccount};
 mod service;
 #[cfg(test)]
 mod tests;
@@ -13,6 +17,7 @@ pub use dto::*;
 pub(crate) use service::{EncryptedSyncService, SyncServiceConfig};
 
 pub const DEFAULT_SYNC_SERVICE_ORIGIN: &str = "https://apic.openless.top:9443";
+pub(crate) const LIMITED_LOCAL_ROOT: &str = "encrypted-sync-limited-v1";
 
 #[derive(Debug, Clone)]
 pub struct EncryptedSyncConfig {

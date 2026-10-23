@@ -1168,6 +1168,11 @@ fn parse_strict_json(bytes: &[u8], limit: usize) -> Result<StrictValue> {
         .map_err(|_| Error::InvalidWire("json trailing data"))?;
     Ok(value)
 }
+pub(crate) fn validate_secret_json(bytes: &[u8], limit: usize) -> Result<()> {
+    // StrictValue erases the validation tree on every return path.
+    parse_strict_json(bytes, limit).map(|_| ())
+}
+
 pub(crate) fn parse_wire<T: DeserializeOwned + Validate>(bytes: &[u8], limit: usize) -> Result<T> {
     if bytes.len() > limit {
         return Err(Error::PayloadTooLarge);
