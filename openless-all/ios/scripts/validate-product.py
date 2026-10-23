@@ -87,6 +87,10 @@ def app_groups(bundle, metadata):
 
 
 info = bundle_info(app)
+for key, pattern in [("CFBundleShortVersionString", r"\d+\.\d+\.\d+"),
+                     ("CFBundleVersion", r"[1-9]\d*")]:
+    if not re.fullmatch(pattern, str(info.get(key, ""))):
+        parser.error(f"Missing or unresolved app version: {key}")
 primary = info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
 if primary.get("CFBundleIconName") != "AppIcon":
     parser.error("The built Info.plist does not declare the AppIcon primary icon")
@@ -107,6 +111,9 @@ expected_extensions = {
 }
 for extension in extensions:
     metadata = bundle_info(extension, assets=False)
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"]:
+        if metadata.get(key) != info[key]:
+            parser.error(f"Extension version differs from the app: {extension}: {key}")
     point = metadata.get("NSExtension", {}).get("NSExtensionPointIdentifier")
     if point not in expected_extensions or point in identified:
         parser.error(f"Unexpected or duplicate extension point in {extension}: {point}")

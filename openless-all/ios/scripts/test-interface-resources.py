@@ -54,8 +54,7 @@ class InterfaceResourceTests(unittest.TestCase):
                     self.assertIn(f'"{key}"', helper)
 
     def test_current_chinese_static_literals_have_resources(self):
-        # Deliberately ignores interpolated strings; their explicit migrations are
-        # listed in the handoff. Only static literal presence is asserted here.
+        # Interpolated strings use explicit format keys; this checks static literals.
         paths = [*IOS.glob('App/**/*.swift'), *IOS.glob('Keyboard/**/*.swift'),
                  *IOS.glob('PlatformShared/**/*.swift'),
                  IOS / 'Packages/OpenLessShared/Sources/OpenLessShared/Contract.swift']

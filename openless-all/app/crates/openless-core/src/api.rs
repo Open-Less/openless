@@ -7809,6 +7809,17 @@ impl OpenLessBackend {
             context
         };
 
+        // 一次听写的起点。日志从「按下热键」到第一条识别结果之间原本是空白，
+        // 于是「按了没反应」与「录上了但没识别」在日志里长得一样。
+        log::info!(
+            "[dictation] start session_id={} target={:?} asr={} insert={} translate={} silence_after_ms={:?}",
+            session_id,
+            context.output_target,
+            context.asr.provider_type,
+            context.insertion.enabled,
+            context.polish.translation_active,
+            context.recording.silence_after_ms,
+        );
         if let Err(error) = self
             .deps
             .host_actions
@@ -9368,6 +9379,13 @@ impl OpenLessBackend {
     }
 
     fn mark_dictation_failed(&self, session_id: SessionId, error: &BackendError) {
+        // 诊断：失败只写 errorCode 时无法定位是录音停止、转写还是插入哪一步出的错。
+        log::warn!(
+            "[dictation] session {} failed: code={:?} message={}",
+            session_id,
+            error.code,
+            error.message
+        );
         let mut state = self.state.write().expect("backend state lock poisoned");
         if state.dictation.session_id != Some(session_id) {
             return;
@@ -18493,18 +18511,19 @@ mod tests {
                         Some(stopping) => stopping.await,
                         None => backend.stop_dictation().await,
                     };
-                    if stop_fails {
-                        assert_eq!(result.unwrap_err().code, BackendErrorCode::Platform);
-                        assert_eq!(
-                            backend.list_history().unwrap()[0].error_code.as_deref(),
-                            Some("transcribeFailed")
-                        );
-                    } else {
-                        let result = result.unwrap();
-                        assert_eq!(result.session_id, session_id);
-                        assert_eq!(result.polished_text, "captured prefix");
-                        assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
-                    }
+                    // 录音流的 `stop()` 失败（蓝牙麦掉线、PipeWire 节点被挂起）不再
+                    // 中止这次听写：已经流进 ASR 的音频要照常转写并插入。断言因此
+                    // 与成功路径一致 —— 差别只剩「有没有打过那条 warn」，行为对
+                    // 用户不该有区别。
+                    let result = result.unwrap();
+                    assert_eq!(result.session_id, session_id);
+                    assert_eq!(result.polished_text, "captured prefix");
+                    assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
+                    assert_eq!(
+                        backend.list_history().unwrap()[0].error_code.as_deref(),
+                        None,
+                        "a dropped capture stream must not be recorded as a transcription failure",
+                    );
                     assert_eq!(recorder.stop_count(), 1);
                     assert!(archive.lock().unwrap().as_ref().unwrap().is_available());
                     assert_eq!(
