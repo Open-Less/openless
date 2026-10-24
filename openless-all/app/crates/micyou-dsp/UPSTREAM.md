@@ -146,8 +146,15 @@ default. Its native Swift settings page persists the same software DSP
 controls as egui and Tauri, with writes blocked while a capture is active.
 Native iOS conversion uses a separate
 Swift AVAudioConverter worker; its output scratch is now actor-owned and
-reused. `ios/scripts/test-audio.sh` compares that worker byte-for-byte against
-the frozen pre-optimization Swift worker for 16 format/ownership combinations,
-including changing packet sizes and end-of-stream flush. That Apple SDK test
+reused with exact output capacities and a two-entry bound.
+`ios/scripts/test-audio.sh` compares that worker byte-for-byte against
+the frozen pre-optimization Swift worker using its complete, fixed 100 ms
+input path, over up to 32 format/ownership/packetization combinations and
+end-of-stream flush (older macOS runtimes only exercise legacy ownership).
+The old variable-packet path itself lost 960 samples in the 44.1 kHz CI case.
+The new worker honors the converter's requested input frame count and drains
+available output before accepting another packet. Variable-packet output must
+match the complete fixed-packet baseline, not its truncated old counterpart;
+the duration assertion remains enabled. That Apple SDK test
 was added but cannot be executed on this Linux host. No claim of on-device
 equivalence, battery savings, or real-time capture latency is made here.
