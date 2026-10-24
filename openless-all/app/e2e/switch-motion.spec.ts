@@ -49,7 +49,9 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     return knob.getBoundingClientRect().left;
   });
-  const sampling = control.evaluate(async (element) => {
+  // Install the listeners before dispatching pointer input. ElementHandle.evaluate
+  // may still be resolving its execution context when mouse.down/up are sent.
+  await control.evaluate((element) => {
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     const finished: number[] = [];
     const controlledXs: number[] = [];
@@ -84,19 +86,31 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     };
     knob.addEventListener('transitionrun', onRun);
     knob.addEventListener('transitionend', onEnd);
-    const xs: number[] = [];
-    for (let frame = 0; frame < 45; frame++) {
-      await new Promise<number>(requestAnimationFrame);
-      // A remount would leave this node detached and frozen: count it as a jump.
-      xs.push(element.isConnected ? knob.getBoundingClientRect().left : Number.NaN);
-    }
-    knob.removeEventListener('transitionrun', onRun);
-    knob.removeEventListener('transitionend', onEnd);
-    return { xs, controlledXs, finished };
+    const sampling = (async () => {
+      const xs: number[] = [];
+      for (let frame = 0; frame < 45; frame++) {
+        await new Promise<number>(requestAnimationFrame);
+        // A remount would leave this node detached and frozen: count it as a jump.
+        xs.push(element.isConnected ? knob.getBoundingClientRect().left : Number.NaN);
+      }
+      knob.removeEventListener('transitionrun', onRun);
+      knob.removeEventListener('transitionend', onEnd);
+      return { xs, controlledXs, finished };
+    })();
+    (element as HTMLElement & { __olMotionSample?: typeof sampling }).__olMotionSample = sampling;
   });
   await page.mouse.down();
   await page.mouse.up();
-  const { xs, controlledXs, finished } = await sampling;
+  const { xs, controlledXs, finished } = await control.evaluate(async (element) => {
+    const sampled = element as HTMLElement & {
+      __olMotionSample?: Promise<Pick<Sample, 'xs' | 'controlledXs' | 'finished'>>;
+    };
+    try {
+      return await sampled.__olMotionSample!;
+    } finally {
+      delete sampled.__olMotionSample;
+    }
+  });
   const after = (await control.getAttribute('aria-checked')) ?? '';
   return { name, checked: [before, after], start, end: xs.at(-1)!, xs, controlledXs, finished };
 }

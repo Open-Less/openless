@@ -47,6 +47,8 @@ pub struct GeminiConfig {
     /// think by its own default; false = send Gemini's native channel-level
     /// minimal thinking config.
     pub thinking_enabled: bool,
+    /// Optional per-request output token cap selected by the polish strategy.
+    pub max_output_tokens: Option<u32>,
 }
 
 impl GeminiConfig {
@@ -62,11 +64,22 @@ impl GeminiConfig {
             temperature: DEFAULT_TEMPERATURE,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
+            max_output_tokens: None,
         }
     }
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_tokens;
         self
     }
 }
@@ -309,6 +322,9 @@ impl GeminiProvider {
     /// `generationConfig` injection: temperature + channel-level thinkingConfig.
     fn build_generate_body(&self, system_prompt: &str, contents: Vec<Value>) -> Value {
         let mut generation_config = json!({ "temperature": self.config.temperature });
+        if let Some(max_tokens) = self.config.max_output_tokens {
+            generation_config["maxOutputTokens"] = json!(max_tokens);
+        }
         if !self.config.thinking_enabled {
             generation_config["thinkingConfig"] = disabled_thinking_config();
         }
@@ -789,6 +805,20 @@ mod tests {
         );
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "SYS");
         assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn strategy_request_overrides_gemini_generation_config() {
+        let cfg = GeminiConfig::new("k", "gemini-2.5-flash", "https://x/v1beta")
+            .with_temperature(0.7)
+            .with_max_output_tokens(Some(321));
+        let provider = GeminiProvider::new(cfg);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let temperature = body["generationConfig"]["temperature"]
+            .as_f64()
+            .expect("Gemini temperature should be numeric");
+        assert!((temperature - 0.7).abs() < 1e-6);
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 321);
     }
 
     #[test]

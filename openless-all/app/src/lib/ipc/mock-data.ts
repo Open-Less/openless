@@ -128,6 +128,8 @@ export let mockSettings: UserPreferences = {
   historyRetentionDays: 7,
   polishContextWindowMinutes: 5,
   polishSkipMaxChars: 0,
+  polishStrategyEnabled: false,
+  polishStrategyScript: '',
   startMinimized: false,
   themeMode: 'system',
   updateChannel: 'stable',

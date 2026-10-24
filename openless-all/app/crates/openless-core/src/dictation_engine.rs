@@ -502,7 +502,10 @@ impl DictationEngine for PipelineDictationEngine {
         })
     }
 
-    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+    fn stop_recording(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<bool, BackendError>> {
         let session = self
             .sessions
             .lock()
@@ -785,6 +788,7 @@ impl DictationEngine for PipelineDictationEngine {
                     standby: None,
                 },
             };
+            let mut asr_metadata = transcription.transcript_metadata();
             asr_call_label = transcription.asr_call_label().or(asr_call_label);
             for notification in transcription.take_progress_notifications() {
                 publish_progress(
@@ -802,7 +806,7 @@ impl DictationEngine for PipelineDictationEngine {
             // healthy, so polish still runs.
             let mut local_won_race = false;
             let mut transcript = match race {
-                AsrRace::Local((transcript, label)) => {
+                AsrRace::Local((transcript, label, metadata)) => {
                     log::info!(
                         "[dictation] local {} answered before cloud ASR {}; using the local transcript",
                         context.asr_fallback.as_ref().map_or("", |fallback| fallback.provider_type.as_str()),
@@ -810,6 +814,7 @@ impl DictationEngine for PipelineDictationEngine {
                     );
                     let _ = cancel_transcription_once(&session, Arc::clone(&transcription)).await;
                     asr_call_label = label;
+                    asr_metadata = metadata;
                     local_won_race = true;
                     transcript
                 }
@@ -822,11 +827,12 @@ impl DictationEngine for PipelineDictationEngine {
                         .store(true, Ordering::Release);
                     if transcript.text.trim().is_empty() {
                         if let Some(standby) = standby {
-                            if let Some((local, label)) = standby.result().await {
+                            if let Some((local, label, metadata)) = standby.result().await {
                                 log::warn!(
                                     "[dictation] cloud ASR returned an empty transcript; using the local fallback"
                                 );
                                 asr_call_label = label;
+                                asr_metadata = metadata;
                                 local_fallback_used = true;
                                 local
                             } else {
@@ -886,8 +892,9 @@ impl DictationEngine for PipelineDictationEngine {
                         }
                         None => None,
                     };
-                    if let Some((transcript, label)) = local {
+                    if let Some((transcript, label, metadata)) = local {
                         asr_call_label = label;
+                        asr_metadata = metadata;
                         local_fallback_used = true;
                         transcript
                     } else {
@@ -902,8 +909,9 @@ impl DictationEngine for PipelineDictationEngine {
                             )
                             .await
                             {
-                                Ok((transcript, label)) => {
+                                Ok((transcript, label, metadata)) => {
                                     asr_call_label = label;
+                                    asr_metadata = metadata;
                                     transcript
                                 }
                                 Err((error, label)) => {
@@ -1012,11 +1020,53 @@ impl DictationEngine for PipelineDictationEngine {
                     is_final: true,
                 }),
             )?;
+            // Issue #1225: evaluate the optional policy only after correction and
+            // final transcript publication, so the script sees what the user will
+            // actually receive and cannot affect raw ASR diagnostics.
+            let strategy_input = crate::polish_strategy::PolishStrategyInput {
+                char_count: transcript
+                    .text
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .count(),
+                text: transcript.text.clone(),
+                audio_duration_ms: transcript.duration_ms,
+                language: asr_metadata
+                    .language
+                    .clone()
+                    .or_else(|| context.asr.language.clone()),
+                confidence: asr_metadata.confidence,
+                asr_provider: asr_call_label
+                    .as_ref()
+                    .map(|label| label.provider.clone())
+                    .unwrap_or_else(|| context.asr.provider_type.clone()),
+                asr_model: asr_call_label
+                    .as_ref()
+                    .and_then(|label| label.model.clone())
+                    .or_else(|| context.asr.model.clone()),
+            };
+            let strategy_decision = (context.output_target
+                != crate::dictation_context::DictationOutputTarget::Qa)
+                .then(|| {
+                    crate::polish_strategy::evaluate(
+                        &context.polish.polish_strategy,
+                        &strategy_input,
+                    )
+                })
+                .flatten();
+            let strategy_overrides = match &strategy_decision {
+                Some(crate::polish_strategy::PolishStrategyDecision::Request(overrides)) => {
+                    Some(overrides.clone())
+                }
+                _ => None,
+            };
+            let strategy_skips = strategy_skips_polish(&context, strategy_decision.as_ref());
             // Issue #1032: short transcripts skip polish (user-configured threshold).
             let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
             // Optional polish may be skipped after fallback; an explicit translation is still required.
             let translation_active = context.polish.translation_active;
-            let uses_polisher = context.uses_llm_polisher()
+            let uses_polisher = !strategy_skips
+                && context.uses_llm_polisher()
                 && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
                 && !skips_polish_for_short_text
                 && (!local_fallback_used || translation_active);
@@ -1056,13 +1106,21 @@ impl DictationEngine for PipelineDictationEngine {
                     progress: Arc::clone(&progress),
                 });
                 let polish_started = std::time::Instant::now();
+                let polish_context = strategy_overrides.as_ref().map_or_else(
+                    || Arc::clone(&context),
+                    |overrides| {
+                        let mut updated = (*context).clone();
+                        updated.polish.polish_request_overrides = Some(overrides.clone());
+                        Arc::new(updated)
+                    },
+                );
                 let output = if let Some(error) = context.deferred_llm_error.clone() {
                     Err(error)
                 } else {
                     polisher
                         .polish(
                             session_id,
-                            context,
+                            polish_context,
                             transcript.text.clone(),
                             polish_partials,
                         )
@@ -1418,6 +1476,7 @@ const CLOUD_RETRY: ReplayPlan = ReplayPlan {
 type AsrAttempt = (
     crate::ports::TranscriptOutput,
     Option<crate::auxiliary::AsrCallLabel>,
+    crate::ports::TranscriptMetadata,
 );
 
 /// The outcome of racing the cloud ASR against the local standby.
@@ -1481,14 +1540,21 @@ impl LocalStandby {
         let run = Box::pin(async move {
             let transcribe = async {
                 let fallback = context.asr_fallback.clone()?;
-                let pcm = archive.read_pcm().await.ok().filter(|pcm| !pcm.is_empty())?;
+                let pcm = archive
+                    .read_pcm()
+                    .await
+                    .ok()
+                    .filter(|pcm| !pcm.is_empty())?;
                 let mut local = (*context).clone();
                 local.asr = fallback;
                 local.asr_fallback = None;
                 let prepared = match engine.prepare(session_id, Arc::new(local)).await {
                     Ok(prepared) => prepared,
                     Err(error) => {
-                        log::warn!("[dictation] local ASR standby unavailable: {}", error.message);
+                        log::warn!(
+                            "[dictation] local ASR standby unavailable: {}",
+                            error.message
+                        );
                         return None;
                     }
                 };
@@ -1496,11 +1562,15 @@ impl LocalStandby {
                 let transcription = match prepared.start(Arc::new(DiscardedTextStream)).await {
                     Ok(transcription) => transcription,
                     Err(error) => {
-                        log::warn!("[dictation] local ASR standby failed to start: {}", error.message);
+                        log::warn!(
+                            "[dictation] local ASR standby failed to start: {}",
+                            error.message
+                        );
                         return None;
                     }
                 };
-                *slot.lock().expect("local standby lock poisoned") = Some(Arc::clone(&transcription));
+                *slot.lock().expect("local standby lock poisoned") =
+                    Some(Arc::clone(&transcription));
                 let label = transcription.asr_call_label();
                 transcription.consume_pcm_chunk(&pcm);
                 let result = transcription.finish().await;
@@ -1510,7 +1580,7 @@ impl LocalStandby {
                         log::warn!("[dictation] local ASR standby returned an empty transcript");
                         None
                     }
-                    Ok(output) => Some((output, label)),
+                    Ok(output) => Some((output, label, transcription.transcript_metadata())),
                     Err(error) => {
                         log::warn!("[dictation] local ASR standby failed: {}", error.message);
                         None
@@ -1538,7 +1608,11 @@ impl LocalStandby {
     /// Stops a standby whose result is no longer needed and releases its model.
     async fn abandon(self) {
         drop(self.run);
-        let started = self.started.lock().expect("local standby lock poisoned").take();
+        let started = self
+            .started
+            .lock()
+            .expect("local standby lock poisoned")
+            .take();
         if let Some(transcription) = started {
             let _ = transcription.cancel().await;
         }
@@ -1570,6 +1644,7 @@ async fn retry_transcription(
     (
         crate::ports::TranscriptOutput,
         Option<crate::auxiliary::AsrCallLabel>,
+        crate::ports::TranscriptMetadata,
     ),
     (BackendError, Option<crate::auxiliary::AsrCallLabel>),
 > {
@@ -1639,6 +1714,7 @@ async fn retry_transcription(
         }
         transcription.consume_pcm_chunk(&pcm);
         let transcription_result = transcription.finish().await;
+        let metadata = transcription.transcript_metadata();
         for notification in transcription.take_progress_notifications() {
             if let Err(error) = publish_progress(
                 &session,
@@ -1654,7 +1730,7 @@ async fn retry_transcription(
                 session
                     .transcription_finished
                     .store(true, Ordering::Release);
-                return Ok((output, last_label));
+                return Ok((output, last_label, metadata));
             }
             Err(error) => {
                 let _ = cancel_transcription_once(&session, transcription).await;
@@ -1724,6 +1800,17 @@ fn publish_progress(
         ));
     }
     progress.publish(session_id, event)
+}
+
+fn strategy_skips_polish(
+    context: &DictationContext,
+    decision: Option<&crate::polish_strategy::PolishStrategyDecision>,
+) -> bool {
+    matches!(
+        decision,
+        Some(crate::polish_strategy::PolishStrategyDecision::Skip)
+    ) && !context.polish.translation_active
+        && context.is_plain_dictation_output()
 }
 
 fn can_fallback_to_raw(policy: PolishFailurePolicy, error: &BackendError) -> bool {
@@ -2069,6 +2156,13 @@ impl TranscriptionSession for BufferedTranscriptionSession {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         self.downstream()
             .and_then(|session| session.asr_call_label())
+    }
+
+    fn transcript_metadata(&self) -> crate::ports::TranscriptMetadata {
+        self.downstream()
+            .map_or_else(crate::ports::TranscriptMetadata::default, |session| {
+                session.transcript_metadata()
+            })
     }
 
     fn take_progress_notifications(&self) -> Vec<crate::types::NotificationPayload> {
@@ -3818,6 +3912,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_strategy_skip_bypasses_the_polisher() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("must not be used")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "skip" } }"#.into(),
+        };
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::new(context), fixture.progress.clone())
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.polished_text, "raw text");
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_request_overrides_are_scoped_to_the_polish_call() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("polished text")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "request", maxTokens: 321 } }"#.into(),
+        };
+        let context = Arc::new(context);
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::clone(&context), fixture.progress.clone())
+            .await
+            .unwrap();
+        fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(context.polish.polish_request_overrides, None);
+        let polish_contexts = fixture.polish_contexts.lock().unwrap();
+        assert_eq!(polish_contexts.len(), 1);
+        assert_eq!(
+            polish_contexts[0]
+                .polish
+                .polish_request_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.max_tokens),
+            Some(321)
+        );
+    }
+
+    #[tokio::test]
     async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
         use crate::testing::{
             FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
@@ -4218,6 +4379,20 @@ mod tests {
         (engine, Arc::new(RecordingProgress::default()), starts)
     }
 
+    #[test]
+    fn strategy_skip_preserves_translation_and_voice_edit_semantics() {
+        let context = raw_dictation_context();
+        let decision = crate::polish_strategy::PolishStrategyDecision::Skip;
+        assert!(strategy_skips_polish(&context, Some(&decision)));
+
+        let mut translation = (*context).clone();
+        translation.polish.translation_active = true;
+        assert!(!strategy_skips_polish(&translation, Some(&decision)));
+
+        let voice_edit = context.with_output_target(DictationOutputTarget::VoiceEdit);
+        assert!(!strategy_skips_polish(&voice_edit, Some(&decision)));
+    }
+
     fn raw_dictation_context() -> Arc<DictationContext> {
         let mut context = DictationContext::default();
         context.polish.mode = crate::types::PolishMode::Raw;
@@ -4394,7 +4569,10 @@ mod tests {
             )),
             ..DictationContext::default()
         };
-        assert!(context.uses_llm_polisher(), "fixture must exercise the polisher");
+        assert!(
+            context.uses_llm_polisher(),
+            "fixture must exercise the polisher"
+        );
         context.polish.polish_skip_max_chars = 0;
         Arc::new(context)
     }
@@ -4505,7 +4683,10 @@ mod tests {
             Err(BackendError::new(BackendErrorCode::Provider, "offline")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4535,12 +4716,18 @@ mod tests {
             )),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, local_polishing_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, local_polishing_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
         assert_eq!(result.polished_text, "本地识别");
-        assert!(result.polish_failed, "a rejected key must not be hidden as offline");
+        assert!(
+            result.polish_failed,
+            "a rejected key must not be hidden as offline"
+        );
         assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -4555,7 +4742,10 @@ mod tests {
         context.asr = crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL);
         context.asr_fallback = None;
         let session_id = SessionId::new();
-        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4573,7 +4763,10 @@ mod tests {
             Err(BackendError::new(BackendErrorCode::Provider, "offline")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4609,7 +4802,10 @@ mod tests {
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4628,7 +4824,10 @@ mod tests {
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4648,14 +4847,20 @@ mod tests {
             ))],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let failure = engine.finish(session_id, progress).await.unwrap_err();
 
         // The cloud's own error, not the local model's.
         assert_eq!(failure.error.code, BackendErrorCode::Provider);
         assert_eq!(failure.error.message, "offline");
-        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL, CLOUD, CLOUD]);
+        assert_eq!(
+            started.lock().unwrap().as_slice(),
+            &[CLOUD, LOCAL, CLOUD, CLOUD]
+        );
     }
 
     #[tokio::test]
@@ -4667,7 +4872,10 @@ mod tests {
         let mut context = (*fallback_context()).clone();
         context.asr_fallback = None;
         let session_id = SessionId::new();
-        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4684,7 +4892,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("润色后")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4704,7 +4915,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("unused")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4723,7 +4937,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("unused")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 

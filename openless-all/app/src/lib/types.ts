@@ -542,6 +542,10 @@ export interface UserPreferences {
   polishContextWindowMinutes: number;
   /** Skip LLM polish when the transcript has at most N non-whitespace chars (issue #1032). 0 = off. */
   polishSkipMaxChars: number;
+  /** Enable the bounded post-ASR polish strategy hook (issue #1225). */
+  polishStrategyEnabled: boolean;
+  /** Rhai source evaluated by Core after corrected ASR and before polish. */
+  polishStrategyScript: string;
   /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
    *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;

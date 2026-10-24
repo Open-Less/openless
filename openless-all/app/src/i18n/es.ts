@@ -1669,6 +1669,17 @@ export const es: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Omitir mejora en dictados cortos (máx. caracteres)',
       polishSkipMaxCharsDesc:
         'Las transcripciones de hasta N caracteres (sin contar espacios) se insertan tal cual, sin llamar al LLM. 0 = desactivado. La traducción siempre se mejora.',
+      polishStrategyEnabledLabel: 'Usar estrategia de mejora personalizada',
+      polishStrategyEnabledDesc:
+        'Ejecuta una estrategia local limitada después del ASR. Los errores vuelven a la mejora normal; no puede acceder a archivos, red ni credenciales.',
+      polishStrategyScriptLabel: 'Script de estrategia de mejora',
+      polishStrategyScriptDesc:
+        'Define strategy(input) y devuelve skip, polish o request. Los valores ausentes de idioma, confianza y modelo son ().',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Copiar skill para el agente',
+      polishStrategySkillCopied: 'Skill del agente copiado',
+      polishStrategySkillCopyFailed: 'No se pudo copiar; comprueba los permisos del portapapeles',
       polishContextWindowLabel: 'Ventana de contexto para mejorar texto (minutos)',
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',

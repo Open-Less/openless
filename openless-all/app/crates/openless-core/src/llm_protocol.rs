@@ -262,6 +262,9 @@ pub(crate) fn request_body(
         LlmRequestFormat::Responses => {
             let mut body =
                 json!({"model": config.model, "stream": stream, "store": false, "input": messages});
+            if let Some(max_tokens) = config.max_tokens_override {
+                body["max_output_tokens"] = json!(max_tokens);
+            }
             let model = config
                 .model
                 .trim()
@@ -273,16 +276,27 @@ pub(crate) fn request_body(
                 || model.starts_with("gpt-3.5")
                 || model.starts_with("chatgpt-4"))
             {
-                let effort = if model.starts_with("gpt-5-pro")
-                    || model.contains("-pro") && model.starts_with("gpt-5.")
-                {
-                    "high"
-                } else if config.thinking_enabled {
-                    "medium"
+                let effort = if crate::polish::openai_model_is_gpt5_pro(&model) {
+                    // gpt-5-pro only supports the high tier; a strategy must not
+                    // override this model capability with low/medium/none.
+                    Some("high")
                 } else {
-                    "low"
+                    config.reasoning_effort.as_deref().or({
+                        if config.thinking_enabled {
+                            Some("medium")
+                        } else {
+                            Some("low")
+                        }
+                    })
                 };
-                body["reasoning"] = json!({"effort": effort});
+                // `none` is the portable way for a strategy to disable reasoning.
+                // Responses does not accept it as an effort value, so omit the
+                // reasoning object rather than sending an invalid request.
+                if !matches!(effort, Some("none")) {
+                    if let Some(effort) = effort {
+                        body["reasoning"] = json!({"effort": effort});
+                    }
+                }
             }
             body
         }
@@ -298,7 +312,19 @@ pub(crate) fn request_body(
                     turns.push(message);
                 }
             }
-            let mut body = json!({"model": config.model, "stream": stream, "messages": turns, "max_tokens": config.protocol.max_tokens});
+            let max_tokens = config.max_tokens_override.filter(|max_tokens| {
+                let conflicts_with_thinking_budget = config.thinking_enabled
+                    && config.protocol.messages_thinking == MessagesThinking::Budget
+                    && config.protocol.thinking_budget >= *max_tokens;
+                if conflicts_with_thinking_budget {
+                    log::debug!(
+                        "[llm] omitting strategy maxTokens={} because it is not greater than the configured Messages thinking budget",
+                        max_tokens
+                    );
+                }
+                !conflicts_with_thinking_budget
+            });
+            let mut body = json!({"model": config.model, "stream": stream, "messages": turns, "max_tokens": max_tokens.unwrap_or(config.protocol.max_tokens)});
             if !system.is_empty() {
                 body["system"] = json!(system.join("\n\n"));
             }
@@ -313,8 +339,14 @@ pub(crate) fn request_body(
             body
         }
     };
+    let official_openai_reasoning_model_without_reasoning = config.protocol.format
+        == LlmRequestFormat::Responses
+        && config.provider_id.trim() == "openai"
+        && crate::polish::openai_model_uses_max_completion_tokens(&config.model)
+        && body.get("reasoning").is_none();
     if body.get("reasoning").is_none()
         && !(config.protocol.format == LlmRequestFormat::Messages && config.thinking_enabled)
+        && !official_openai_reasoning_model_without_reasoning
     {
         if let Some(temperature) = config.temperature {
             body["temperature"] = crate::polish::temperature_json(temperature);
@@ -786,6 +818,71 @@ mod tests {
         }
     }
 
+    #[test]
+    fn strategy_request_overrides_map_to_each_protocol() {
+        let messages = vec![json!({"role":"user","content":"hello"})];
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "test",
+            "https://example.com/v1",
+            "key",
+            "custom-model",
+        )
+        .with_max_tokens_override(Some(321))
+        .with_temperature(Some(0.4));
+
+        // Chat Completions is built by OpenAICompatibleLLMProvider::chat_body;
+        // request_body intentionally handles only the other protocol shapes.
+        config.protocol.format = LlmRequestFormat::Responses;
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["max_output_tokens"], 321);
+        assert_eq!(responses["reasoning"]["effort"], "low");
+        assert!(responses.get("temperature").is_none());
+
+        config.provider_id = "openai".into();
+        config.model = "gpt-5-mini".into();
+        config.reasoning_effort = Some("low".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["max_output_tokens"], 321);
+        assert_eq!(responses["reasoning"]["effort"], "low");
+
+        config.reasoning_effort = Some("high".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-pro".into();
+        config.reasoning_effort = Some("low".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-mini".into();
+        config.reasoning_effort = Some("none".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert!(responses.get("reasoning").is_none());
+        assert!(responses.get("temperature").is_none());
+
+        config.model = "gpt-5-pro".into();
+        config.reasoning_effort = Some("none".into());
+        let responses = request_body(&config, true, messages.clone());
+        assert_eq!(responses["reasoning"]["effort"], "high");
+
+        config.model = "gpt-5-mini".into();
+        config.protocol.format = LlmRequestFormat::Messages;
+        let messages_body = request_body(&config, false, messages);
+        assert_eq!(messages_body["max_tokens"], 321);
+        assert!(messages_body.get("reasoning_effort").is_none());
+
+        config.thinking_enabled = true;
+        config.protocol.messages_thinking = MessagesThinking::Budget;
+        config.protocol.thinking_budget = 1024;
+        let messages_body = request_body(
+            &config,
+            false,
+            vec![json!({"role":"user","content":"hello"})],
+        );
+        assert_eq!(messages_body["max_tokens"], config.protocol.max_tokens);
+        assert_eq!(messages_body["thinking"]["budget_tokens"], 1024);
+    }
     #[test]
     fn service_tier_is_validated_and_applied_only_to_ark_requests() {
         let mut protocol = LlmProtocolConfig::default();

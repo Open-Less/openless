@@ -1576,6 +1576,17 @@ export const zhCN = {
       polishSkipMaxCharsLabel: '短句跳过润色（最大字数）',
       polishSkipMaxCharsDesc:
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
+      polishStrategyEnabledLabel: '使用自定义润色策略',
+      polishStrategyEnabledDesc:
+        '在 ASR 后运行受限的本地策略；异常会回退到默认润色规则，脚本无法访问文件、网络或凭据。',
+      polishStrategyScriptLabel: '润色策略脚本',
+      polishStrategyScriptDesc:
+        '定义 strategy(input)，返回 skip、polish 或 request。缺失的语言、置信度和模型值为 ()。',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: '复制 Agent 编写说明',
+      polishStrategySkillCopied: '已复制 Agent 编写说明',
+      polishStrategySkillCopyFailed: '复制失败，请检查剪贴板权限',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
       recordAudioForDebugLabel: '保留原始录音（调试）',

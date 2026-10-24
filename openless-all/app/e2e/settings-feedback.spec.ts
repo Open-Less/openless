@@ -189,3 +189,37 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
   await tabs.nth(0).click();
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
 });
+
+test('polish strategy editor copies an Agent skill without changing the draft', async ({
+  page,
+}) => {
+  const clipboard: string[] = [];
+  await page.exposeFunction('capturePolishStrategyClipboard', (text: string) => {
+    clipboard.push(text);
+  });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) =>
+          (
+            window as unknown as { capturePolishStrategyClipboard: (value: string) => void }
+          ).capturePolishStrategyClipboard(text),
+      },
+    });
+  });
+
+  await settings(page, '权限与数据');
+  const draft = 'fn strategy(input) { #{ action: "polish" } }';
+  const editor = page.getByPlaceholder(/fn strategy\(input\)/).first();
+  await editor.fill(draft);
+  const copy = page.getByRole('button', { name: '复制 Agent 编写说明', exact: true });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(
+    page.getByRole('button', { name: '已复制 Agent 编写说明', exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => clipboard[0] ?? '').toContain('OpenLess ASR polish strategy skill');
+  await expect.poll(() => clipboard[0] ?? '').toContain(draft);
+  await expect(editor).toHaveValue(draft);
+});

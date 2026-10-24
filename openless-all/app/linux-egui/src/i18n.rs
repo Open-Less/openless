@@ -4781,6 +4781,46 @@ pub const CATALOG: &[Msg] = &[
             "짧은 입력은 다듬기 건너뛰기(최대 글자 수)",
         ),
     },
+    Msg {
+        key: "settings.recording.polish_strategy_enabled_desc",
+        text: row(
+            "在 ASR 后运行受限的本地策略；异常会回退到默认润色规则，脚本无法访问文件、网络或凭据。",
+            "在 ASR 後執行受限的本機策略；異常會回退到預設潤色規則，腳本無法存取檔案、網路或憑證。",
+            "Run a bounded local policy after ASR; errors fall back to normal polish and the script cannot access files, network, or credentials.",
+            "ASR 後に制限付きのローカル戦略を実行します。エラー時は通常の整形に戻り、外部アクセスはできません。",
+            "ASR 후 제한된 로컬 전략을 실행합니다. 오류는 일반 다듬기로 되돌아가며 외부 접근은 없습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_enabled_label",
+        text: row(
+            "使用自定义润色策略",
+            "使用自訂潤色策略",
+            "Use custom polish strategy",
+            "カスタム整形戦略を使う",
+            "사용자 지정 다듬기 전략 사용",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_script_desc",
+        text: row(
+            "定义 strategy(input)，返回 skip、polish 或 request。缺失的语言、置信度和模型值为 ()。",
+            "定義 strategy(input)，回傳 skip、polish 或 request。缺少的語言、信心度和模型值為 ()。",
+            "Define strategy(input) and return skip, polish, or request. Missing language, confidence, and model values are ().",
+            "strategy(input) を定義し、skip、polish、request のいずれかを返します。不明な値は () です。",
+            "strategy(input)을 정의하고 skip, polish 또는 request를 반환합니다. 없는 값은 ()입니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.polish_strategy_script_label",
+        text: row(
+            "润色策略脚本",
+            "潤色策略腳本",
+            "Polish strategy script",
+            "整形戦略スクリプト",
+            "다듬기 전략 스크립트",
+        ),
+    },
         Msg {
         key: "settings.recording.restore_clipboard_desc",
         text: row(

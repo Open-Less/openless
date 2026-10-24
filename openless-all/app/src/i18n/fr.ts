@@ -1690,6 +1690,18 @@ export const fr: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Ignorer l’amélioration pour les courtes dictées (caractères max)',
       polishSkipMaxCharsDesc:
         'Les transcriptions d’au plus N caractères (espaces non comptés) sont insérées telles quelles, sans appel au LLM. 0 = désactivé. La traduction est toujours améliorée.',
+      polishStrategyEnabledLabel: 'Utiliser une stratégie d’amélioration personnalisée',
+      polishStrategyEnabledDesc:
+        'Exécute une stratégie locale limitée après l’ASR. Les erreurs reviennent à l’amélioration normale ; aucun accès aux fichiers, au réseau ou aux identifiants.',
+      polishStrategyScriptLabel: 'Script de stratégie d’amélioration',
+      polishStrategyScriptDesc:
+        'Définissez strategy(input) et renvoyez skip, polish ou request. Les valeurs manquantes de langue, confiance et modèle sont ().',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Copier le skill pour l’Agent',
+      polishStrategySkillCopied: 'Skill de l’Agent copié',
+      polishStrategySkillCopyFailed:
+        'Échec de la copie ; vérifiez les autorisations du presse-papiers',
       polishContextWindowLabel: 'Fenêtre de contexte d’amélioration (minutes)',
       polishContextWindowDesc:
         'Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.',

@@ -181,6 +181,7 @@ impl PreparedTranscription for PreparedCloudTranscription {
             Ok(Arc::new(CloudTranscriptionSession {
                 kind,
                 asr_call_label,
+                language: preparation.context.asr.language.clone(),
                 finished: AtomicBool::new(false),
                 task_spawner,
             }) as Arc<dyn TranscriptionSession>)
@@ -207,6 +208,7 @@ enum CloudTranscriptionSessionKind {
 struct CloudTranscriptionSession {
     kind: CloudTranscriptionSessionKind,
     asr_call_label: crate::AsrCallLabel,
+    language: Option<String>,
     finished: AtomicBool,
     task_spawner: Arc<dyn TaskSpawner>,
 }
@@ -270,6 +272,13 @@ impl AudioConsumer for CloudTranscriptionSession {
 impl TranscriptionSession for CloudTranscriptionSession {
     fn asr_call_label(&self) -> Option<crate::AsrCallLabel> {
         Some(self.asr_call_label.clone())
+    }
+
+    fn transcript_metadata(&self) -> crate::ports::TranscriptMetadata {
+        crate::ports::TranscriptMetadata {
+            language: self.language.clone(),
+            confidence: None,
+        }
     }
 
     fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
@@ -1492,10 +1501,17 @@ async fn build_cloud_polisher_provider(
         ));
     }
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
-        let provider = crate::polish::CodexOAuthLLMProvider::new(
-            crate::polish::CodexOAuthConfig::new(model)
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
-        );
+        let mut config = crate::polish::CodexOAuthConfig::new(model)
+            .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        if let Some(effort) = strategy_reasoning_effort(context) {
+            // Codex uses the Responses API, whose effort enum does not accept
+            // `none`; omit that unsupported override rather than sending a
+            // request that the endpoint rejects.
+            let effort = (effort != "none").then_some(effort);
+            config = config.with_reasoning_effort(effort);
+        }
+        config = config.with_max_output_tokens(strategy_max_tokens(context));
+        let provider = crate::polish::CodexOAuthLLMProvider::new(config);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::Codex(provider),
         ));
@@ -1532,17 +1548,22 @@ async fn build_cloud_polisher_provider(
     crate::endpoint_security::validate_http_endpoint(&endpoint)
         .map_err(|error| map_llm_error(error.to_string()))?;
     if provider_type == "gemini" {
-        let provider = crate::llm_gemini::GeminiProvider::new(
+        let thinking_enabled = strategy_thinking_enabled(context);
+        let mut config =
             crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
-                .with_thinking_enabled(context.polish.llm_thinking_enabled),
-        );
+                .with_thinking_enabled(thinking_enabled)
+                .with_max_output_tokens(strategy_max_tokens(context));
+        if let Some(temperature) = strategy_temperature(context) {
+            config = config.with_temperature(temperature);
+        }
+        let provider = crate::llm_gemini::GeminiProvider::new(config);
         return Ok(CloudPolisherProvider::Gemini(provider));
     }
 
     let protocol =
         crate::llm_protocol::LlmProtocolConfig::load(credentials, channel_id, provider_type)
             .await?;
-    let temperature = read_channel_credential(
+    let configured_temperature = read_channel_credential(
         credentials,
         CredentialNamespace::Llm,
         channel_id,
@@ -1553,6 +1574,17 @@ async fn build_cloud_polisher_provider(
     .map(parse_temperature)
     .transpose()?
     .flatten();
+    let strategy_temperature = context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.temperature());
+    let temperature = strategy_temperature.or_else(|| {
+        crate::polish::openai_compatible_temperature_for_provider(
+            provider_type,
+            configured_temperature,
+        )
+    });
     let extra_headers = read_channel_credential(
         credentials,
         CredentialNamespace::Llm,
@@ -1573,16 +1605,69 @@ async fn build_cloud_polisher_provider(
     )
     .with_protocol(protocol)
     .with_thinking_enabled(context.polish.llm_thinking_enabled)
-    .with_temperature(crate::polish::openai_compatible_temperature_for_provider(
-        provider_type,
-        temperature,
-    ))
+    .with_reasoning_effort(strategy_reasoning_effort(context))
+    .with_max_tokens_override(strategy_max_tokens(context))
+    .with_temperature(temperature)
     .with_extra_headers(extra_headers);
     Ok(CloudPolisherProvider::OpenAi(
         crate::polish::ActiveLLMProvider::OpenAI(crate::polish::OpenAICompatibleLLMProvider::new(
             config,
         )),
     ))
+}
+
+fn strategy_temperature(context: &DictationContext) -> Option<f32> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.temperature())
+}
+
+fn omni_temperature(
+    context: &DictationContext,
+    provider_type: &str,
+    configured_temperature: Option<f32>,
+) -> Option<f32> {
+    strategy_temperature(context).or_else(|| {
+        crate::polish::openai_compatible_temperature_for_provider(
+            provider_type,
+            configured_temperature,
+        )
+    })
+}
+
+fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_effort)
+        .map(|effort| match effort {
+            crate::polish_strategy::ReasoningEffort::None => "none",
+            crate::polish_strategy::ReasoningEffort::Low => "low",
+            crate::polish_strategy::ReasoningEffort::Medium => "medium",
+            crate::polish_strategy::ReasoningEffort::High => "high",
+        })
+        .map(str::to_string)
+}
+
+fn strategy_thinking_enabled(context: &DictationContext) -> bool {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_effort)
+        .map(|effort| !matches!(effort, crate::polish_strategy::ReasoningEffort::None))
+        .unwrap_or(context.polish.llm_thinking_enabled)
+}
+
+fn strategy_max_tokens(context: &DictationContext) -> Option<u32> {
+    context
+        .polish
+        .polish_request_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.max_tokens)
 }
 
 pub fn parse_temperature(value: &str) -> Result<Option<f32>, BackendError> {
@@ -1907,7 +1992,7 @@ async fn build_omni_provider_with_task_spawner(
     .map(parse_extra_headers)
     .transpose()?
     .unwrap_or_default();
-    let temperature = read_channel_credential(
+    let configured_temperature = read_channel_credential(
         credentials,
         CredentialNamespace::Omni,
         provider_id,
@@ -1918,17 +2003,17 @@ async fn build_omni_provider_with_task_spawner(
     .map(parse_temperature)
     .transpose()?
     .flatten();
+    let temperature = omni_temperature(context, provider_type, configured_temperature);
     let config = crate::omni::OmniConfig {
         provider_id: provider_type.to_string(),
         base_url,
         api_key,
         model,
         extra_headers,
-        temperature: crate::polish::openai_compatible_temperature_for_provider(
-            provider_type,
-            temperature,
-        ),
-        thinking_enabled: context.polish.llm_thinking_enabled,
+        temperature,
+        thinking_enabled: strategy_thinking_enabled(context),
+        max_tokens_override: strategy_max_tokens(context),
+        reasoning_effort: strategy_reasoning_effort(context),
     };
     let provider = crate::omni::OmniProvider::with_task_spawner(config, task_spawner)
         .with_transcription_hints(&context.polish.working_languages, &context.polish.hotwords);
@@ -2799,6 +2884,23 @@ mod tests {
     }
     use super::*;
     use crate::{InMemoryCredentialStore, ProviderInvocation, SecretValue};
+
+    #[test]
+    fn strategy_temperature_overrides_configured_omni_temperature() {
+        let mut context = DictationContext::default();
+        context.polish.polish_request_overrides =
+            Some(crate::polish_strategy::PolishRequestOverrides {
+                temperature_milli: Some(400),
+                max_tokens: None,
+                reasoning_effort: None,
+            });
+
+        assert_eq!(omni_temperature(&context, "openai", Some(1.2)), Some(0.4));
+        assert_eq!(
+            omni_temperature(&DictationContext::default(), "custom", Some(1.2)),
+            Some(1.2)
+        );
+    }
 
     struct ObservedTranslationStream {
         chunks: Mutex<Vec<TextStreamChunk>>,

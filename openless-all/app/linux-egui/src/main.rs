@@ -5876,6 +5876,7 @@ mod linux_app {
                 s.audio_enhancement = prefs.audio_enhancement_enabled;
                 s.audio_dsp = prefs.audio_dsp;
                 s.audio_cue = prefs.audio_cue_on_record;
+                s.polish_strategy_enabled = prefs.polish_strategy_enabled;
                 s.launch_at_login = prefs.launch_at_login;
                 s.streaming_save_clipboard = prefs.streaming_insert_save_clipboard;
                 s.record_audio_for_debug = prefs.record_audio_for_debug;
@@ -5889,6 +5890,7 @@ mod linux_app {
                     s.retention_days = prefs.history_retention_days.to_string();
                     s.polish_context_window = prefs.polish_context_window_minutes.to_string();
                     s.polish_skip_max_chars = prefs.polish_skip_max_chars.to_string();
+                    s.polish_strategy_script = prefs.polish_strategy_script.clone();
                     s.audio_recording_max_entries = prefs
                         .audio_recording_max_entries
                         .map(|value| value.to_string())

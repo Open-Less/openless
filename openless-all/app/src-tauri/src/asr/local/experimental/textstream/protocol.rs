@@ -99,7 +99,7 @@ mod tests {
                 panic!()
             };
             text.apply(&openless_core::TranscriptDelta {
-                text: finalized + &draft,
+                text: finalized + draft.as_str(),
                 offset: 0,
                 is_final: false,
             })
