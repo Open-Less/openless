@@ -13,6 +13,25 @@
 //!   `drop`ped inside that thread.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(target_os = "android")]
+#[path = "recorder/android_capture.rs"]
+pub(crate) mod android_capture;
+
+struct CaptureStream {
+    _cpal: Option<cpal::Stream>,
+    #[cfg(target_os = "android")]
+    _android: Option<android_capture::AndroidCapture>,
+}
+
+impl From<cpal::Stream> for CaptureStream {
+    fn from(stream: cpal::Stream) -> Self {
+        Self {
+            _cpal: Some(stream),
+            #[cfg(target_os = "android")]
+            _android: None,
+        }
+    }
+}
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySendError};
@@ -82,17 +101,29 @@ pub(crate) fn voice_diagnostic(
         });
         let writer = WRITER.get_or_init(|| {
             let (tx, rx) = sync_channel::<serde_json::Value>(4096);
-            std::thread::Builder::new().name("voice-1003-diagnostics".into()).spawn(move || {
-                let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
-                let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
-                    return;
-                };
-                for record in rx {
-                    let Ok(mut line) = serde_json::to_vec(&record) else { continue; };
-                    line.push(b'\n');
-                    if file.write_all(&line).is_err() { break; }
-                }
-            }).ok().map(|_| tx)
+            std::thread::Builder::new()
+                .name("voice-1003-diagnostics".into())
+                .spawn(move || {
+                    let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
+                    let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                    else {
+                        return;
+                    };
+                    for record in rx {
+                        let Ok(mut line) = serde_json::to_vec(&record) else {
+                            continue;
+                        };
+                        line.push(b'\n');
+                        if file.write_all(&line).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| tx)
         });
         if let Some(writer) = writer {
             let record = serde_json::json!({
@@ -105,7 +136,9 @@ pub(crate) fn voice_diagnostic(
                 "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default().as_millis().to_string(),
             });
-            if writer.try_send(record).is_err() { DROPPED.fetch_add(1, Ordering::Relaxed); }
+            if writer.try_send(record).is_err() {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     #[cfg(any(not(target_os = "windows"), test))]
@@ -531,7 +564,8 @@ impl WarmCaptureSink {
     }
 
     fn set_activation_consumer(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
-        self.activation_consumer_during_capture.store(false, Ordering::Release);
+        self.activation_consumer_during_capture
+            .store(false, Ordering::Release);
         *self.activation_consumer.lock() = consumer;
         self.activation_vad.lock().reset();
     }
@@ -592,7 +626,10 @@ impl WarmCaptureSink {
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let excess = buffer
+            .len()
+            .saturating_add(incoming.len())
+            .saturating_sub(max_bytes);
         let evictable_preroll = excess.min(*pre_roll_bytes);
         for _ in 0..(evictable_preroll / 2) {
             let _ = buffer.pop_front();
@@ -827,8 +864,8 @@ impl AudioConsumer for WarmCaptureSink {
                 && self
                     .activation_consumer_during_capture
                     .load(Ordering::Acquire)))
-            .then(|| self.activation_consumer.lock().clone())
-            .flatten();
+        .then(|| self.activation_consumer.lock().clone())
+        .flatten();
         for target in targets {
             CaptureSink::deliver(&target, pcm);
         }
@@ -1068,7 +1105,10 @@ impl WarmCaptureHub {
 
     pub(crate) fn clear_activation_fault_handler_if(&self, generation: u64) {
         let mut handler = self.sink.activation_fault_handler.lock();
-        if handler.as_ref().is_some_and(|(current, _)| *current == generation) {
+        if handler
+            .as_ref()
+            .is_some_and(|(current, _)| *current == generation)
+        {
             *handler = None;
         }
     }
@@ -1847,6 +1887,7 @@ fn run_audio_thread(
         Arc::clone(&state),
         Arc::clone(&stop_flag),
         runtime_error_tx.clone(),
+        processing,
     ) {
         Ok(s) => s,
         Err(err) => {
@@ -1977,8 +2018,10 @@ fn run_audio_thread(
     // backend it calls AudioOutputUnitStop directly, terminating the callback synchronously.
     // The subsequent drop handles dispose / resource release. If pause fails, warn only and
     // do not block the drop.
-    if let Err(err) = stream.pause() {
-        log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+    if let Some(cpal_stream) = &stream._cpal {
+        if let Err(err) = cpal_stream.pause() {
+            log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+        }
     }
     drop(stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
@@ -2000,7 +2043,49 @@ fn build_input_stream(
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
-) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    _processing: openless_core::AudioProcessingConfig,
+) -> Result<(CaptureStream, Arc<StreamState>), RecorderError> {
+    #[cfg(target_os = "android")]
+    if _processing.enhancement_enabled {
+        let config = _processing.dsp;
+        if config.android_aec_enabled
+            || config.android_noise_suppression_enabled
+            || config.android_agc_enabled
+        {
+            if microphone_device_name
+                .as_ref()
+                .is_some_and(|name| !name.trim().is_empty())
+            {
+                android_capture::record_failure(
+                    "System audio effects require the default Android input".into(),
+                );
+            } else {
+                match android_capture::AndroidCapture::start(
+                    config,
+                    frame_tx.clone(),
+                    Arc::clone(&state),
+                    runtime_error_tx.clone(),
+                ) {
+                    Ok(capture) => {
+                        return Ok((
+                            CaptureStream {
+                                _cpal: None,
+                                _android: Some(capture),
+                            },
+                            state,
+                        ))
+                    }
+                    Err(error) => {
+                        android_capture::record_failure(error.clone());
+                        if error.starts_with("busy:") {
+                            return Err(RecorderError::EngineFailed(error));
+                        }
+                        log::warn!("[android-audio] system effects unavailable; falling back to native capture: {error}");
+                    }
+                }
+            }
+        }
+    }
     let selecting_at = std::time::Instant::now();
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
@@ -2008,6 +2093,7 @@ fn build_input_stream(
     let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
         start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
+            .map(|(stream, state)| (stream.into(), state))
     };
     let initial_error = match start(&selected) {
         Ok(stream) => return Ok(stream),
@@ -2054,6 +2140,24 @@ fn start_device_stream(
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    // Android DSP and neural denoisers share a 48 kHz capture contract.
+    // Keep native fallback for devices that cannot open this rate.
+    #[cfg(target_os = "android")]
+    if let Ok(ranges) = device.supported_input_configs() {
+        for range in ranges.filter(|range| {
+            range.min_sample_rate().0 <= 48_000 && range.max_sample_rate().0 >= 48_000
+        }) {
+            let config = range.with_sample_rate(cpal::SampleRate(48_000));
+            match start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
+            {
+                Ok(stream) => return Ok(stream),
+                Err(RecorderError::PermissionDenied) => {
+                    return Err(RecorderError::PermissionDenied)
+                }
+                Err(error) => log::warn!("[recorder] Android 48 kHz capture failed: {error}"),
+            }
+        }
+    }
     let mut default = None;
     let initial_error = match device.default_input_config() {
         Ok(config) => {
@@ -2465,6 +2569,8 @@ impl AudioProcessingWorker {
         let join_handle = thread::Builder::new()
             .name("openless-audio-processor".into())
             .spawn(move || {
+                #[cfg(target_os = "android")]
+                android_capture::prioritize_current_thread();
                 let mut processor = openless_core::AudioProcessor::new(processing);
                 let mut enhancement_enabled = processing.enhancement_enabled;
                 let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
@@ -2481,6 +2587,8 @@ impl AudioProcessingWorker {
                     let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
+                            #[cfg(target_os = "android")]
+                            processor.set_monitoring_enabled(android_capture::monitoring_enabled());
                             let queued_us = backlog.micros.load(Ordering::Acquire);
                             if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
                                 log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
@@ -2496,6 +2604,8 @@ impl AudioProcessingWorker {
                             ) {
                                 deliver(chunk);
                             }
+                            #[cfg(target_os = "android")]
+                            android_capture::publish_monitor(&processor);
                         }
                         AudioProcessingMessage::Flush(done) => {
                             if let Some(chunk) = processor.finish() {
@@ -3628,8 +3738,14 @@ mod tests {
         sink.set_activation_consumer(None);
         sink.consume_pcm_chunk(&[5, 6]);
 
-        assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![1, 2, 3, 4]]);
-        assert!(matches!(&*sink.state.lock(), WarmCaptureSinkState::Ring { .. }));
+        assert_eq!(
+            consumer.chunks.lock().unwrap().as_slice(),
+            &[vec![1, 2, 3, 4]]
+        );
+        assert!(matches!(
+            &*sink.state.lock(),
+            WarmCaptureSinkState::Ring { .. }
+        ));
     }
 
     #[test]

@@ -1472,6 +1472,27 @@ export const zhTW: typeof zhCN = {
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {
+        aec: '系統回聲消除',
+        systemNoise: '系統降噪',
+        systemAgc: '系統自動增益',
+        unavailable: '目前裝置不支援',
+        androidEffectsHint:
+          'Android 系統音效在軟體處理鏈之前生效。建議避免重複開啟同類效果。啟動不支援時退回一般擷取。',
+        effectsActive: '本次錄音已啟用系統音效。',
+        spectrum: '輸入／處理後頻譜',
+        spectrumHint:
+          '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
+        spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
+        spectrumWaiting: '開啟語音增強並開始錄音後顯示頻譜。',
+        presets: '均衡器預設',
+        choosePreset: '選擇預設',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人聲',
+        preset_deepVoice: '低沉人聲',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人聲',
+        preset_warmVocal: '溫暖人聲',
+
         title: '語音增強設定',
         description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
         noise: '降噪演算法',

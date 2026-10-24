@@ -560,6 +560,8 @@ macro_rules! app_invoke_handler_mobile {
         tauri::generate_handler![
             $crate::commands::get_startup_snapshot,
             $crate::commands::get_settings,
+            $crate::commands::get_android_audio_effects_status,
+            $crate::commands::set_android_audio_monitoring,
             $crate::commands::get_settings_snapshot,
             $crate::commands::update_setting_fields,
             $crate::commands::get_default_style_system_prompts,

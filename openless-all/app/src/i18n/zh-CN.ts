@@ -1470,6 +1470,27 @@ export const zhCN = {
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       dsp: {
+        aec: '系统回声消除',
+        systemNoise: '系统降噪',
+        systemAgc: '系统自动增益',
+        unavailable: '当前设备不支持',
+        androidEffectsHint:
+          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+        effectsActive: '本次录音已启用系统音效。',
+        spectrum: '输入／处理后频谱',
+        spectrumHint:
+          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+        spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
+        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        presets: '均衡器预设',
+        choosePreset: '选择预设',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人声',
+        preset_deepVoice: '低沉人声',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人声',
+        preset_warmVocal: '温暖人声',
+
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
         noise: '降噪算法',

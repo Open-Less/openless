@@ -25,6 +25,7 @@ pub struct AudioProcessor {
     normalizer: PcmNormalizer,
     enhanced: Option<EnhancedStream>,
     finished: bool,
+    monitoring: bool,
 }
 
 impl std::fmt::Debug for AudioProcessor {
@@ -42,11 +43,34 @@ impl AudioProcessor {
             normalizer: Default::default(),
             enhanced: None,
             finished: false,
+            monitoring: false,
         }
     }
 
     pub fn reset(&mut self) {
         *self = Self::new(self.config);
+    }
+
+    /// Visual analysis is opt-in and does not open a microphone or retain PCM.
+    pub fn set_monitoring_enabled(&mut self, enabled: bool) {
+        self.monitoring = enabled;
+        if let Some(stream) = &mut self.enhanced {
+            stream.dsp.set_spectrum_enabled(enabled);
+        }
+    }
+
+    pub fn monitoring_sample_rate(&self) -> Option<u32> {
+        self.enhanced.as_ref().map(|stream| stream.work_rate)
+    }
+
+    pub fn spectrums(&self) -> Option<(Vec<f32>, Vec<f32>)> {
+        self.monitoring
+            .then(|| {
+                self.enhanced
+                    .as_ref()
+                    .map(|stream| stream.dsp.get_spectrums())
+            })
+            .flatten()
     }
 
     /// Flush delayed enhanced samples before switching to basic normalization.
@@ -77,6 +101,7 @@ impl AudioProcessor {
         let stream = self
             .enhanced
             .get_or_insert_with(|| EnhancedStream::new(self.config.dsp, channels, rate));
+        stream.dsp.set_spectrum_enabled(self.monitoring);
         if stream.channels != channels || stream.rate != rate {
             log::error!("audio format changed during an enhancement session; reset required");
             return None;
@@ -89,12 +114,21 @@ impl AudioProcessor {
             }
         }));
         let complete = stream.interleaved.len() / channels * channels;
-        let mono = downmix_to_mono(&stream.interleaved[..complete], channels);
+        stream.mono.clear();
+        stream.mono.extend(
+            stream.interleaved[..complete]
+                .chunks_exact(channels)
+                .map(|frame| frame.iter().sum::<f32>() / channels as f32),
+        );
         stream.interleaved.drain(..complete);
-        stream.input_frames += mono.len() as u64;
-        let working = stream.input_resampler.push(&mono, false);
-        let processed = stream.frames(&working, false);
-        pcm_chunk(&processed)
+        stream.input_frames += stream.mono.len() as u64;
+        stream.working.clear();
+        if let Some(resampler) = &mut stream.input_resampler {
+            resampler.push_into(&stream.mono, false, &mut stream.working);
+        } else {
+            stream.working.extend_from_slice(&stream.mono);
+        }
+        pcm_chunk(stream.frames(false))
     }
 
     /// Idempotent end-of-stream barrier. Flushes fractional resampling state,
@@ -105,19 +139,27 @@ impl AudioProcessor {
         }
         self.finished = true;
         let stream = self.enhanced.as_mut()?;
-        let working = stream.input_resampler.push(&[], true);
-        let processed = stream.frames(&working, true);
-        pcm_chunk(&processed)
+        stream.working.clear();
+        if let Some(resampler) = &mut stream.input_resampler {
+            resampler.push_into(&[], true, &mut stream.working);
+        }
+        pcm_chunk(stream.frames(true))
     }
 }
 
 struct EnhancedStream {
     channels: usize,
     rate: u32,
-    input_resampler: crate::audio_dsp::SpeechResampler,
-    output_resampler: crate::audio_dsp::SpeechResampler,
+    input_resampler: Option<crate::audio_dsp::SpeechResampler>,
+    output_resampler: Option<crate::audio_dsp::SpeechResampler>,
+    work_rate: u32,
+    hop: usize,
     dsp: micyou_dsp::DspProcessor,
     interleaved: Vec<f32>,
+    mono: Vec<f32>,
+    working: Vec<f32>,
+    frame: Vec<f32>,
+    output: Vec<f32>,
     pending: std::collections::VecDeque<f32>,
     skip: usize,
     model_delay: usize,
@@ -128,16 +170,27 @@ struct EnhancedStream {
 impl EnhancedStream {
     fn new(config: crate::audio_dsp::AudioDspConfig, channels: usize, rate: u32) -> Self {
         let config = config.normalized();
+        let work_rate = 48_000;
         Self {
             channels,
             rate,
-            input_resampler: crate::audio_dsp::SpeechResampler::new(rate, 48_000),
-            output_resampler: crate::audio_dsp::SpeechResampler::new(48_000, DICTATION_SAMPLE_RATE),
+            // Preserve the original input filter even at 48 kHz: cached
+            // coefficients remove redundant computation without changing
+            // the signal presented to the denoiser.
+            input_resampler: Some(crate::audio_dsp::SpeechResampler::new(rate, work_rate)),
+            output_resampler: (work_rate != DICTATION_SAMPLE_RATE)
+                .then(|| crate::audio_dsp::SpeechResampler::new(work_rate, DICTATION_SAMPLE_RATE)),
+            work_rate,
+            hop: (work_rate / 100) as usize,
             dsp: micyou_dsp::DspProcessor::new(
                 std::sync::Arc::new(std::sync::RwLock::new(config.settings())),
                 None,
             ),
             interleaved: Vec::new(),
+            mono: Vec::new(),
+            working: Vec::new(),
+            frame: Vec::with_capacity(480),
+            output: Vec::new(),
             pending: Default::default(),
             skip: config.model_delay(),
             model_delay: config.model_delay(),
@@ -146,29 +199,37 @@ impl EnhancedStream {
         }
     }
 
-    fn frames(&mut self, input: &[f32], finish: bool) -> Vec<f32> {
-        self.pending.extend(input);
+    fn frames(&mut self, finish: bool) -> &[f32] {
+        self.pending.extend(&self.working);
         if finish {
-            let tail = self.pending.len().div_ceil(480) * 480 + self.model_delay;
+            let tail = self.pending.len().div_ceil(self.hop) * self.hop + self.model_delay;
             self.pending.resize(tail, 0.0);
         }
-        let mut output = Vec::new();
-        while self.pending.len() >= 480 {
-            let mut frame: Vec<f32> = self.pending.drain(..480).collect();
-            self.dsp.process(&mut frame, 1, 0.0);
-            let skip = self.skip.min(frame.len());
+        self.output.clear();
+        while self.pending.len() >= self.hop {
+            self.frame.clear();
+            self.frame.extend(self.pending.drain(..self.hop));
+            self.dsp.process(&mut self.frame, 1, 0.0);
+            let skip = self.skip.min(self.frame.len());
             self.skip -= skip;
-            output.extend(self.output_resampler.push(&frame[skip..], false));
+            if let Some(resampler) = &mut self.output_resampler {
+                resampler.push_into(&self.frame[skip..], false, &mut self.output);
+            } else {
+                self.output.extend_from_slice(&self.frame[skip..]);
+            }
         }
         if finish {
-            output.extend(self.output_resampler.push(&[], true));
+            if let Some(resampler) = &mut self.output_resampler {
+                resampler.push_into(&[], true, &mut self.output);
+            }
         }
         // The last padded model frame may produce additional samples. Bound
         // output by real capture duration, independently of callback sizes.
         let valid = (self.input_frames * DICTATION_SAMPLE_RATE as u64).div_ceil(self.rate as u64);
-        output.truncate(valid.saturating_sub(self.emitted_frames) as usize);
-        self.emitted_frames += output.len() as u64;
-        output
+        self.output
+            .truncate(valid.saturating_sub(self.emitted_frames) as usize);
+        self.emitted_frames += self.output.len() as u64;
+        &self.output
     }
 }
 
