@@ -60,15 +60,22 @@ nonisolated struct AudioPacket: Sendable {
 /// Owns the resampler off the UI and real-time audio callback.
 actor PCMWorker {
   private var converter: AVAudioConverter?
-  private var scratch: AVAudioPCMBuffer?
+  private var scratch: [AVAudioPCMBuffer] = []
 
   private func outputBuffer(format: AVAudioFormat, capacity: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
-    if scratch?.format != format || (scratch?.frameCapacity ?? 0) < capacity {
-      scratch = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity)
+    // Converter output capacity affects its pull requests and rounding at
+    // fractional ratios (e.g. 44.1 -> 16 kHz). Preserve the original capacity
+    // exactly, including flush; do not substitute a larger cached buffer.
+    if let output = scratch.first(where: { $0.format == format && $0.frameCapacity == capacity }) {
+      output.frameLength = 0
+      return output
     }
-    guard let scratch else { throw VoiceFailure.format }
-    scratch.frameLength = 0
-    return scratch
+    guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { throw VoiceFailure.format }
+    // Two entries cover alternating packet sizes without retaining an
+    // unbounded set of device callback capacities.
+    if scratch.count == 2 { scratch.removeFirst() }
+    scratch.append(output)
+    return output
   }
   func convert(_ packet: AudioPacket) throws -> Data {
     let input = try packet.makeBuffer()
