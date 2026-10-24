@@ -87,6 +87,7 @@ pub fn parse_primary(raw: &str) -> Result<Code, ShortcutBindingError> {
         "TAB" => Code::Tab,
         "ESC" | "ESCAPE" => Code::Escape,
         "SPACE" => Code::Space,
+        "SCROLLLOCK" => Code::ScrollLock,
         "BACKSPACE" => Code::Backspace,
         "DELETE" | "DEL" => Code::Delete,
         "HOME" => Code::Home,
@@ -246,6 +247,30 @@ mod tests {
         let parsed = parse_global_hotkey(&single).expect("single key parses");
         assert!(parsed.mods.is_empty());
         assert_eq!(parsed.key, Code::F8);
+    }
+
+    #[test]
+    fn scroll_lock_uses_the_existing_custom_hotkey_path() {
+        for primary in ["ScrollLock", " scrolllock ", "SCROLLLOCK"] {
+            for modifiers in [vec![], vec!["ctrl".into()]] {
+                let binding = ShortcutBinding {
+                    primary: primary.into(),
+                    modifiers,
+                };
+                assert!(validate_binding(&binding).is_ok());
+                assert!(legacy_modifier_trigger(&binding).is_none());
+                assert!(!binding_requires_side_aware_hook(&binding));
+                let parsed = parse_global_hotkey(&binding).unwrap();
+                assert_eq!(parsed.key, Code::ScrollLock);
+                assert_eq!(
+                    parsed.mods.contains(Modifiers::CONTROL),
+                    !binding.modifiers.is_empty()
+                );
+            }
+        }
+        let binding = combo("ScrollLock", vec!["ctrl-right"]);
+        assert!(validate_binding(&binding).is_ok());
+        assert!(binding_requires_side_aware_hook(&binding));
     }
 
     #[test]

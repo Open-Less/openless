@@ -313,6 +313,7 @@ fn validate_primary(raw: &str) -> Result<(), ShortcutBindingError> {
             | "ESC"
             | "ESCAPE"
             | "SPACE"
+            | "SCROLLLOCK"
             | "BACKSPACE"
             | "DELETE"
             | "DEL"
