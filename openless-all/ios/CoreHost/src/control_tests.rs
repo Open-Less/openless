@@ -53,7 +53,7 @@ fn native_capture_enhancement_and_stop_flush_match_shared_processor() {
         if let Some(chunk) = reference.process(&samples, 1, 16_000) { expected.extend(chunk.pcm_i16_le); }
     }
     if let Some(chunk) = reference.finish() { expected.extend(chunk.pcm_i16_le); }
-    let task = owner.runtime.spawn(Box::new(Recording { broker: owner.broker.clone(), id, archive: None }).stop());
+    let task = owner.executor.spawn(Box::new(Recording { broker: owner.broker.clone(), id, archive: None }).stop());
     loop {
         let request = next(context);
         if request["kind"] == "nativeRequest" {
@@ -62,7 +62,7 @@ fn native_capture_enhancement_and_stop_flush_match_shared_processor() {
             break;
         }
     }
-    owner.runtime.block_on(task).unwrap().unwrap();
+    owner.executor.block_on(task).unwrap().unwrap();
     assert_eq!(*sink.0.lock().unwrap(), expected);
     assert_eq!(expected.len(), pcm.len());
     assert_ne!(expected, pcm);
