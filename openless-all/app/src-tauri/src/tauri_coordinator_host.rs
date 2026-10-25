@@ -148,6 +148,22 @@ struct CapsuleHitTestEntry {
     control_bottom: i32,
 }
 
+/// Whether `entry` still describes the live window behind `hwnd`.
+///
+/// The map is keyed by the numeric HWND, and Windows recycles HWND values: a
+/// destroyed capsule/card can hand its handle to an unrelated new window. The one
+/// fact that distinguishes the two is whether *our* subclass procedure is still
+/// installed on the handle. A recycled HWND carries whatever procedure its new
+/// owner installed, so a mismatch means the entry is stale and must be dropped and
+/// re-installed instead of trusted.
+#[cfg(target_os = "windows")]
+unsafe fn capsule_hit_test_entry_matches(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_WNDPROC};
+
+    let installed = unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) };
+    installed == capsule_hit_test_window_proc as *const () as usize as isize
+}
+
 #[cfg(target_os = "windows")]
 static CAPSULE_HIT_TEST_ENTRIES: OnceLock<Mutex<HashMap<isize, CapsuleHitTestEntry>>> =
     OnceLock::new();
@@ -244,11 +260,20 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
     };
 
     if msg == WM_NCDESTROY {
-        let previous_proc = capsule_hit_test_entries()
-            .lock()
-            .remove(&(hwnd.0 as isize))
-            .map(|entry| entry.previous_proc)
-            .unwrap_or_default();
+        let key = hwnd.0 as isize;
+        // Only retire the entry this window owns. A recycled HWND can reach
+        // WM_NCDESTROY for a *different* window than the one in the map, and
+        // removing that survivor's entry would strand it with our procedure
+        // installed but no recorded `previous_proc` to forward to.
+        let previous_proc = if unsafe { capsule_hit_test_entry_matches(hwnd) } {
+            capsule_hit_test_entries()
+                .lock()
+                .remove(&key)
+                .map(|entry| entry.previous_proc)
+                .unwrap_or_default()
+        } else {
+            0
+        };
         if previous_proc != 0 {
             let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
                 std::mem::transmute(previous_proc);
@@ -258,9 +283,18 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
+    // Every read of the map must prove the entry still belongs to this window
+    // instance. A recycled HWND would otherwise be hit-tested against another
+    // window's geometry and forwarded to another window's `previous_proc`.
+    let live = unsafe { capsule_hit_test_entry_matches(hwnd) };
+    let entry = if live {
+        let entries = capsule_hit_test_entries().lock();
+        entries.get(&(hwnd.0 as isize)).copied()
+    } else {
+        None
+    };
+
     if msg == WM_NCHITTEST {
-        let key = hwnd.0 as isize;
-        let entry = capsule_hit_test_entries().lock().get(&key).copied();
         if let Some(entry) = entry {
             let screen_x = (lparam.0 as i32 & 0xffff) as u16 as i16 as i32;
             let screen_y = ((lparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
@@ -279,11 +313,7 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
         }
     }
 
-    let previous_proc = capsule_hit_test_entries()
-        .lock()
-        .get(&(hwnd.0 as isize))
-        .map(|entry| entry.previous_proc)
-        .unwrap_or_default();
+    let previous_proc = entry.map(|entry| entry.previous_proc).unwrap_or_default();
     if previous_proc != 0 {
         let previous: windows::Win32::UI::WindowsAndMessaging::WNDPROC =
             std::mem::transmute(previous_proc);
@@ -309,25 +339,38 @@ fn install_capsule_hit_test_proc(
 
     let key = hwnd.0 as isize;
     let mut entries = capsule_hit_test_entries().lock();
-    if let Some(entry) = entries.get_mut(&key) {
-        entry.control_left = rect.left;
-        entry.control_right = rect.right;
-        entry.control_top = rect.top;
-        entry.control_bottom = rect.bottom;
-        return Ok(());
+    // The handle alone is not identity: Windows recycles HWND values, so a matching
+    // key can belong to a window that was destroyed and replaced. Re-install for this
+    // instance instead of writing geometry into a dead window's entry — that path
+    // both lost the subclass and left the map describing the wrong window, which is
+    // how a live window ends up dispatched to a stale `previous_proc`.
+    if unsafe { capsule_hit_test_entry_matches(hwnd) } {
+        if let Some(entry) = entries.get_mut(&key) {
+            entry.control_left = rect.left;
+            entry.control_right = rect.right;
+            entry.control_top = rect.top;
+            entry.control_bottom = rect.bottom;
+            return Ok(());
+        }
+        // Our procedure is installed but the map has no entry: the window is ours
+        // yet nothing can forward for it. Fall through and re-install so the entry
+        // is rebuilt; the self-install guard below keeps that from recursing.
     }
+    entries.remove(&key);
     unsafe { SetLastError(ERROR_SUCCESS) };
-    let previous = unsafe {
-        SetWindowLongPtrW(
-            hwnd,
-            GWLP_WNDPROC,
-            capsule_hit_test_window_proc as usize as isize,
-        )
-    };
+    let installed = capsule_hit_test_window_proc as *const () as usize as isize;
+    let previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, installed) };
     if previous == 0 && unsafe { GetLastError() } != ERROR_SUCCESS {
         return Err(tauri::Error::Anyhow(anyhow::anyhow!(
             "SetWindowLongPtrW(GWLP_WNDPROC) failed"
         )));
+    }
+    if previous == installed {
+        // Already wrapped: recording ourselves as `previous_proc` would make every
+        // forwarded message recurse into this same procedure. There is no real
+        // predecessor to call, so leave the map empty and let `DefWindowProcW` take
+        // the traffic instead of overflowing the stack.
+        return Ok(());
     }
     entries.insert(
         key,
@@ -2465,6 +2508,124 @@ impl TauriCoordinatorHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Close the gap that made the recycled-HWND bug possible: re-installing the
+    /// hit-test procedure on a window that already carries it must not overwrite
+    /// the recorded predecessor with ourselves, and must not lose the entry.
+    ///
+    /// Uses a real `HWND_MESSAGE` window because the identity check reads the live
+    /// `GWLP_WNDPROC`, which no mock can stand in for.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reinstall_keeps_the_real_predecessor_and_never_self_wraps() {
+        use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassW,
+            UnregisterClassW, GWLP_WNDPROC, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+            WNDCLASSW,
+        };
+
+        static CLASS_NAME: [u16; 20] = [
+            'O' as u16, 'L' as u16, 'H' as u16, 'i' as u16, 't' as u16, 'T' as u16, 'e' as u16,
+            's' as u16, 't' as u16, 'C' as u16, 'l' as u16, 's' as u16, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        unsafe extern "system" fn plain_proc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> windows::Win32::Foundation::LRESULT {
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        // `HINSTANCE::default()` is NULL, which is what a class registered by the
+        // process itself wants; the `Win32_System_LibraryLoader` feature that
+        // `GetModuleHandleW` needs is not enabled in this crate.
+        let hinstance = HINSTANCE::default();
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(plain_proc),
+            hInstance: hinstance,
+            lpszClassName: windows::core::PCWSTR(CLASS_NAME.as_ptr()),
+            ..Default::default()
+        };
+        assert_ne!(unsafe { RegisterClassW(&class) }, 0, "RegisterClassW");
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                windows::core::PCWSTR(CLASS_NAME.as_ptr()),
+                windows::core::PCWSTR(std::ptr::null()),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                None,
+                hinstance,
+                None,
+            )
+        }
+        .expect("CreateWindowExW");
+
+        let rect = CapsuleHitTestRect {
+            left: 10,
+            right: 20,
+            top: 30,
+            bottom: 40,
+        };
+        install_capsule_hit_test_proc(hwnd, rect).expect("first install");
+        let after_first = unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) };
+        assert_eq!(
+            after_first,
+            capsule_hit_test_window_proc as *const () as usize as isize,
+            "our procedure must be installed"
+        );
+
+        // Second install takes the fast path and only refreshes geometry.
+        install_capsule_hit_test_proc(
+            hwnd,
+            CapsuleHitTestRect {
+                left: 1,
+                right: 2,
+                top: 3,
+                bottom: 4,
+            },
+        )
+        .expect("second install");
+        {
+            let entries = capsule_hit_test_entries().lock();
+            let entry = entries.get(&(hwnd.0 as isize)).expect("entry survives");
+            assert_eq!(
+                entry.previous_proc,
+                plain_proc as *const () as usize as isize,
+                "the recorded predecessor must stay the original window procedure"
+            );
+            assert_eq!(
+                (entry.control_left, entry.control_right),
+                (1, 2),
+                "geometry is refreshed in place"
+            );
+        }
+
+        // Third install with the map wiped exercises the defensive branch: our
+        // procedure is on the window but nothing records it, so `SetWindowLongPtrW`
+        // returns our own address. Recording that as `previous_proc` would send
+        // every message straight back into this same procedure.
+        capsule_hit_test_entries().lock().remove(&(hwnd.0 as isize));
+        install_capsule_hit_test_proc(hwnd, rect).expect("third install");
+        assert!(
+            capsule_hit_test_entries()
+                .lock()
+                .get(&(hwnd.0 as isize))
+                .is_none(),
+            "a self-install must not be recorded, or forwarding recurses forever"
+        );
+
+        unsafe { DestroyWindow(hwnd) }.expect("DestroyWindow");
+        let _ = unsafe { UnregisterClassW(windows::core::PCWSTR(CLASS_NAME.as_ptr()), hinstance) };
+    }
 
     #[test]
     fn display_mode_changes_invalidate_mirrors_without_changing_style() {
