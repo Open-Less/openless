@@ -385,7 +385,7 @@ fn start_linux_recording(
 
     // AEC 打开且参考没被显式关掉时，单独起一条回环采集流喂参考队列。
     let far_end = if audio_processing.enhancement_enabled
-        && audio_processing.dsp.aec_enabled
+        && audio_processing.dsp.aec_mode != openless_core::AecMode::Off
         && aec_reference_device_name != "off"
     {
         Some(openless_core::FarEndQueue::default())

@@ -1,7 +1,7 @@
 import type { AudioDspConfig } from './types';
 
 export const defaultAudioDsp: AudioDspConfig = {
-  aecEnabled: false,
+  aecMode: 'off',
   outputBufferMs: 300,
   noiseReduction: 'rnnoise',
   noiseStrength: 80,

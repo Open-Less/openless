@@ -161,6 +161,28 @@ pub const CATALOG: &[Msg] = &[
         text: row("回声消除与缓冲", "回聲消除與緩衝", "Echo cancellation and buffering", "エコーキャンセルとバッファ", "에코 제거 및 버퍼"),
     },
     Msg {
+        key: "settings.audioDsp.aecOff",
+        text: row("关闭", "關閉", "Off", "オフ", "끄기"),
+    },
+    Msg {
+        key: "settings.audioDsp.aecLight",
+        text: row("轻量（省 CPU）", "輕量（省 CPU）", "Light (low CPU)", "軽量（低 CPU）", "경량(저 CPU)"),
+    },
+    Msg {
+        key: "settings.audioDsp.aecModel",
+        text: row("模型（更强）", "模型（更強）", "Model (stronger)", "モデル（高精度）", "모델(강화)"),
+    },
+    Msg {
+        key: "settings.audioDsp.aecModelCost",
+        text: row(
+            "模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。",
+            "模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。",
+            "The model cancels more echo but costs about 3× the CPU; prefer Light on older machines.",
+            "モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。",
+            "모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.",
+        ),
+    },
+    Msg {
         key: "settings.audioDsp.aecReferenceLabel",
         text: row("扬声器参考源", "揚聲器參考源", "Speaker reference", "スピーカー参照", "스피커 참조"),
     },

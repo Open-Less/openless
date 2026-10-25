@@ -1470,6 +1470,11 @@ export const zhCN = {
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       dsp: {
+        aecOff: '关闭',
+        aecLight: '轻量（省 CPU）',
+        aecModel: '模型（更强）',
+        aecModelHint:
+          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
         aec: '回声消除',
         aecHint:
           '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',

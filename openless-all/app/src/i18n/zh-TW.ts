@@ -1472,6 +1472,11 @@ export const zhTW: typeof zhCN = {
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {
+        aecOff: '關閉',
+        aecLight: '輕量（省 CPU）',
+        aecModel: '模型（更強）',
+        aecModelHint:
+          '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
         aec: '回聲消除',
         aecHint:
           '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',

@@ -1545,6 +1545,11 @@ export const en: typeof zhCN = {
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       dsp: {
+        aecOff: 'Off',
+        aecLight: 'Light (low CPU)',
+        aecModel: 'Model (stronger)',
+        aecModelHint:
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
         aec: 'Echo cancellation',
         aecHint:
           'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',

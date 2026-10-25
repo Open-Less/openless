@@ -1,5 +1,5 @@
 use eframe::egui;
-use openless_core::{AudioDspConfig, AudioDspStage, NoiseReduction};
+use openless_core::{AecMode, AudioDspConfig, AudioDspStage, NoiseReduction};
 use openless_linux_egui::{tr_l10n, Lang};
 
 pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enabled: bool) -> bool {
@@ -14,8 +14,21 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
         // 回声消除与输出缓冲：MicYou 的链路里 AEC 在最前，缓冲区是整条链的全局
         // 参数（设备回调抖动大时调大，代价是延迟）。
         ui.strong(label("settings.audioDsp.echoStage"));
-        ui.checkbox(&mut config.aec_enabled, label("settings.audioDsp.acousticEchoCancellation"));
+        // 三选一：轻量 NLMS 省 CPU（弱机可用），aec7 模型抑制更强但约 3 倍开销。
+        let aec_labels = [
+            (AecMode::Off, label("settings.audioDsp.aecOff")),
+            (AecMode::Light, label("settings.audioDsp.aecLight")),
+            (AecMode::Model, label("settings.audioDsp.aecModel")),
+        ];
+        ui.horizontal_wrapped(|ui| {
+            for (mode, name) in aec_labels {
+                ui.selectable_value(&mut config.aec_mode, mode, name);
+            }
+        });
         ui.small(label("settings.audioDsp.AEC_needs_a_loudspeaker_reference"));
+        if config.aec_mode == AecMode::Model {
+            ui.small(label("settings.audioDsp.aecModelCost"));
+        }
         slider(ui, label("settings.audioDsp.Output_buffer_ms"), &mut config.output_buffer_ms, 100..=1200, " ms");
         ui.small(label("settings.audioDsp.A_larger_buffer_survives_jitter_but_adds_latency"));
         ui.separator();
@@ -89,7 +102,7 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
                 ui.push_id(i, |ui| ui.horizontal(|ui| {
                     ui.monospace(format!("{}", i + 1));
                     let active = match stage {
-                        AudioDspStage::AcousticEchoCancellation => config.aec_enabled,
+                        AudioDspStage::AcousticEchoCancellation => config.aec_mode != AecMode::Off,
                         AudioDspStage::NoiseReduction => config.noise_reduction != NoiseReduction::Off && config.noise_strength > 0,
                         AudioDspStage::Dereverb => config.dereverb_level > 0,
                         AudioDspStage::Equalizer => config.equalizer_enabled,

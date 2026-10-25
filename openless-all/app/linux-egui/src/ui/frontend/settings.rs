@@ -641,7 +641,7 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             }
             // AEC 需要「扬声器此刻在放什么」：让用户挑回环源（自动 / 不采集 / 具名
             // 监听设备）。没有回环源时这里只有前两项，AEC 会退化为无参考。
-            if vm.settings.audio_enhancement && vm.settings.audio_dsp.aec_enabled {
+            if vm.settings.audio_dsp.aec_mode != openless_core::AecMode::Off {
                 let mut options: Vec<&str> = vec![
                     tr_l10n(lang, "settings.audioDsp.aecReferenceAuto"),
                     tr_l10n(lang, "settings.audioDsp.aecReferenceOff"),

@@ -349,8 +349,8 @@ export type AudioDspStage =
   | 'agc'
   | 'vad';
 export interface AudioDspConfig {
-  /** 声学回声消除；只有拿到扬声器参考信号时才起作用。 */
-  aecEnabled: boolean;
+  /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
+  aecMode: 'off' | 'light' | 'model';
   /** 输出环形缓冲余量（100..1200 ms）。 */
   outputBufferMs: number;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';

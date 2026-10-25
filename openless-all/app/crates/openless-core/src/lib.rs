@@ -10,7 +10,7 @@ pub mod api;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
-pub use audio_dsp::{AudioDspConfig, AudioDspStage, NoiseReduction};
+pub use audio_dsp::{AecMode, AudioDspConfig, AudioDspStage, NoiseReduction};
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;

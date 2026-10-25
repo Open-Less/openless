@@ -1566,6 +1566,11 @@ export const es: typeof zhCN = {
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       dsp: {
+        aecOff: 'Desactivado',
+        aecLight: 'Ligero (poca CPU)',
+        aecModel: 'Modelo (más potente)',
+        aecModelHint:
+          'El modelo cancela más pero cuesta unas 3x más CPU; en equipos antiguos usa Ligero.',
         aec: 'Cancelación de eco',
         aecHint:
           'Suprime la realimentación del altavoz. Necesita una señal de referencia; con auriculares puedes dejarlo apagado.',

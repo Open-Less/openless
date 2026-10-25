@@ -1575,6 +1575,11 @@ export const de: typeof zhCN = {
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
       dsp: {
+        aecOff: 'Aus',
+        aecLight: 'Leicht (wenig CPU)',
+        aecModel: 'Modell (stärker)',
+        aecModelHint:
+          'Das Modell unterdrückt mehr Echo, kostet aber rund 3x CPU; auf älteren Geräten besser Leicht.',
         aec: 'Echounterdrückung',
         aecHint:
           'Unterdrückt Lautsprecher-Rückkopplung. Braucht ein Referenzsignal; mit Kopfhörern aus lassen.',

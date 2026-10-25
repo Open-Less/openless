@@ -1586,6 +1586,11 @@ export const fr: typeof zhCN = {
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
       dsp: {
+        aecOff: 'Désactivé',
+        aecLight: 'Léger (CPU réduit)',
+        aecModel: 'Modèle (plus fort)',
+        aecModelHint:
+          'Le modèle annule davantage mais coûte environ 3x plus de CPU ; préférez Léger sur les machines anciennes.',
         aec: 'Annulation d’écho',
         aecHint:
           'Réduit le retour du haut-parleur. Nécessite un signal de référence; inutile au casque.',

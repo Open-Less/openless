@@ -11,6 +11,20 @@ pub enum NoiseReduction {
     Spectral,
 }
 
+/// 回声消除算法。
+///
+/// - `Off`：不做回声消除。
+/// - `Light`：Core 自带的归一化 LMS（单核约 3%），对稳态回声有效，双讲时暂停自适应。
+/// - `Model`：MicYou 的 aec7 神经网络（单核约 50%），非线性/强混响下更强，弱机慎用。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AecMode {
+    #[default]
+    Off,
+    Light,
+    Model,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioDspStage {
@@ -43,8 +57,10 @@ impl AudioDspStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AudioDspConfig {
-    /// 声学回声消除。默认关：外放说话时才会需要，且要能拿到扬声器参考信号。
-    pub aec_enabled: bool,
+    /// 声学回声消除算法。老版本 preferences 里存的是布尔 `aecEnabled`，
+    /// 反序列化时 `true` 映射为 `Light`（轻量、弱机可用），`false` 映射为 `Off`。
+    #[serde(default, deserialize_with = "deserialize_aec_mode")]
+    pub aec_mode: AecMode,
     pub noise_reduction: NoiseReduction,
     pub noise_strength: u8,
     pub gain_db: i8,
@@ -103,11 +119,29 @@ where
     Ok(order)
 }
 
+/// 接受三种写法：新枚举名（`off`/`light`/`model`）、老布尔值（`true`→`light`）。
+fn deserialize_aec_mode<'de, D>(deserializer: D) -> Result<AecMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Mode(AecMode),
+        Enabled(bool),
+    }
+    Ok(match Wire::deserialize(deserializer)? {
+        Wire::Mode(mode) => mode,
+        Wire::Enabled(true) => AecMode::Light,
+        Wire::Enabled(false) => AecMode::Off,
+    })
+}
+
 impl Default for AudioDspConfig {
     fn default() -> Self {
         use AudioDspStage::*;
         Self {
-            aec_enabled: false,
+            aec_mode: AecMode::Off,
             noise_reduction: crate::audio_dsp::NoiseReduction::Rnnoise,
             noise_strength: 80,
             gain_db: 0,
@@ -176,7 +210,7 @@ impl AudioDspConfig {
     pub(crate) fn settings(self) -> micyou_dsp::AudioDspSettings {
         let c = self.normalized();
         micyou_dsp::AudioDspSettings {
-            aec_enabled: c.aec_enabled,
+            aec_enabled: matches!(c.aec_mode, AecMode::Model),
             output_buffer_ms: u32::from(c.output_buffer_ms),
             gain: c.gain_db as f32,
             ns_enabled: c.noise_reduction != NoiseReduction::Off && c.noise_strength > 0,

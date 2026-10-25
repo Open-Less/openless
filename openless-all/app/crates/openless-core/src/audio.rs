@@ -73,6 +73,84 @@ impl FarEndQueue {
     }
 }
 
+const ECHO_FILTER_TAPS: usize = 1_024;
+const ECHO_ADAPTATION_RATE: f32 = 0.12;
+const ECHO_DOUBLE_TALK_RATIO: f32 = 2.5;
+const ECHO_MIN_REFERENCE_POWER: f32 = 0.000_001;
+
+/// 轻量回声消除：有界归一化 LMS（沿用 #1228 的实现）。
+///
+/// 学的是「扬声器 → 麦克风」这条声学路径；近端能量明显强于估计回声（双讲）时
+/// 暂停自适应，避免把说话人自己的声音学掉。单核开销约 3%，弱机可用。
+#[derive(Debug, Clone)]
+struct LightEchoCanceller {
+    coefficients: Vec<f32>,
+    history: Vec<f32>,
+    history_cursor: usize,
+}
+
+impl Default for LightEchoCanceller {
+    fn default() -> Self {
+        Self {
+            coefficients: vec![0.0; ECHO_FILTER_TAPS],
+            history: vec![0.0; ECHO_FILTER_TAPS],
+            history_cursor: 0,
+        }
+    }
+}
+
+impl LightEchoCanceller {
+    fn reset(&mut self) {
+        self.coefficients.fill(0.0);
+        self.history.fill(0.0);
+        self.history_cursor = 0;
+    }
+
+    fn process(&mut self, microphone: &[f32], reference: &[f32]) -> Vec<f32> {
+        if microphone.is_empty() || reference.is_empty() {
+            return microphone.to_vec();
+        }
+        let mut output = Vec::with_capacity(microphone.len());
+        for (index, &sample) in microphone.iter().enumerate() {
+            // 块边界处重采样可能少一个样本：保留麦克风样本、等下一块重建对齐，
+            // 不要把上一个参考值铺满，那样会教坏滤波器。
+            let Some(&reference_sample) = reference.get(index) else {
+                output.push(sample);
+                continue;
+            };
+            self.history[self.history_cursor] = reference_sample;
+            let mut estimate = 0.0;
+            let mut reference_power = 0.0;
+            for tap in 0..ECHO_FILTER_TAPS {
+                let history_index =
+                    (self.history_cursor + ECHO_FILTER_TAPS - tap) % ECHO_FILTER_TAPS;
+                let value = self.history[history_index];
+                estimate += self.coefficients[tap] * value;
+                reference_power += value * value;
+            }
+            let error = sample - estimate;
+            let near_power = sample * sample;
+            let should_adapt = reference_power > ECHO_MIN_REFERENCE_POWER
+                && (estimate.abs() < 0.01
+                    || estimate * estimate * ECHO_DOUBLE_TALK_RATIO >= near_power
+                    || near_power < ECHO_MIN_REFERENCE_POWER);
+            if should_adapt {
+                let normalization = reference_power + 0.000_01;
+                for tap in 0..ECHO_FILTER_TAPS {
+                    let history_index =
+                        (self.history_cursor + ECHO_FILTER_TAPS - tap) % ECHO_FILTER_TAPS;
+                    self.coefficients[tap] +=
+                        ECHO_ADAPTATION_RATE * error * self.history[history_index] / normalization;
+                    self.coefficients[tap] = self.coefficients[tap].clamp(-2.0, 2.0);
+                }
+            }
+            output.push(if error.is_finite() { error } else { 0.0 });
+            self.history_cursor = (self.history_cursor + 1) % ECHO_FILTER_TAPS;
+        }
+        output
+    }
+}
+
 /// Shared processor for native and external microphone hosts.
 /// Enhancement starts with the session's settings and may be disabled under
 /// load. Hosts must deliver every returned tail before feeding more input or
@@ -83,6 +161,11 @@ pub struct AudioProcessor {
     enhanced: Option<EnhancedStream>,
     /// AEC 的扬声器参考输入（宿主在独立的回环采集流里喂）。
     far_end: Option<FarEndQueue>,
+    /// 轻量 NLMS 抵消器（`AecMode::Light`）。
+    light_aec: Option<LightEchoCanceller>,
+    /// 轻量路径把参考重采样到输出采样率（16 kHz 单声道）。
+    light_reference_resampler: Option<crate::audio_dsp::SpeechResampler>,
+    light_reference_rate: Option<u32>,
     finished: bool,
 }
 
@@ -101,8 +184,52 @@ impl AudioProcessor {
             normalizer: Default::default(),
             enhanced: None,
             far_end: None,
+            light_aec: matches!(config.dsp.aec_mode, crate::audio_dsp::AecMode::Light)
+                .then(LightEchoCanceller::default),
+            light_reference_resampler: None,
+            light_reference_rate: None,
             finished: false,
         }
+    }
+
+    /// 把参考队列里的帧转成「与麦克风同一采样率」的单声道，供轻量抵消器使用。
+    ///
+    /// NLMS 的抽头是按样本对齐的，采样率不一致就完全对不上 —— 早先版本把参考重
+    /// 采样到 16 kHz 却拿 48 kHz 的麦克风样本做抵消，实测 ERLE ≈ 0（等于没做）。
+    fn light_reference_at(
+        &mut self,
+        queue: &FarEndQueue,
+        rate: u32,
+    ) -> Option<Vec<f32>> {
+        if queue.is_empty() {
+            return None;
+        }
+        let frames = queue.drain();
+        if frames.is_empty() {
+            return None;
+        }
+        if self.light_reference_rate != Some(rate) {
+            self.light_reference_rate = Some(rate);
+            self.light_reference_resampler =
+                Some(crate::audio_dsp::SpeechResampler::new(rate, rate));
+        }
+        let mut reference = Vec::new();
+        for frame in frames {
+            let mono = downmix_to_mono(&frame.samples, frame.channels);
+            if let Some(resampler) = self.light_reference_resampler.as_mut() {
+                reference.extend(resampler.push(&mono, false));
+            }
+        }
+        (!reference.is_empty()).then_some(reference)
+    }
+
+    /// 会话结束时清掉抵消器状态，避免上一场的声学路径带到下一场。
+    pub fn reset_echo_cancellers(&mut self) {
+        if let Some(canceller) = self.light_aec.as_mut() {
+            canceller.reset();
+        }
+        self.light_reference_resampler = None;
+        self.light_reference_rate = None;
     }
 
     /// 接上扬声器回环参考队列。只有 AEC 打开且宿主真的采到了输出音频时才有意义；
@@ -137,9 +264,23 @@ impl AudioProcessor {
         if self.finished || input.is_empty() || channels == 0 || rate == 0 {
             return None;
         }
-        // 增强关掉时 AEC 仍然可以独立工作（外放场景只想去回声、不想动音色）：
-        // 只要 AEC 打开且本次录音接了参考队列，就走 MicYou 链路。
-        let aec_standalone = self.config.dsp.aec_enabled && self.far_end.is_some();
+        // 轻量 AEC 在主链之前做：抵消后的信号再进降噪/增益，顺序与 MicYou 的
+        // 链路一致（AEC 必须拿到尚未被其它处理改过的信号）。
+        let mut cancelled: Option<Vec<f32>> = None;
+        if self.light_aec.is_some() {
+            let reference = self
+                .far_end
+                .clone()
+                .and_then(|queue| self.light_reference_at(&queue, rate));
+            if let (Some(reference), Some(canceller)) = (reference, self.light_aec.as_mut()) {
+                cancelled = Some(canceller.process(input, &reference));
+            }
+        }
+        let input = cancelled.as_deref().unwrap_or(input);
+
+        // 模型 AEC（`AecMode::Model`）走 MicYou 链路；增强关掉时也要能单独跑。
+        let aec_standalone = matches!(self.config.dsp.aec_mode, crate::audio_dsp::AecMode::Model)
+            && self.far_end.is_some();
         if !self.config.enhancement_enabled && !aec_standalone {
             return self.normalizer.process(input, channels, rate);
         }

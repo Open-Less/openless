@@ -86,8 +86,22 @@ export function AudioDspSettings({
           'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
         )}
       >
-        <Toggle on={draft.aecEnabled} onToggle={() => save({ aecEnabled: !draft.aecEnabled })} />
+        <SelectLite
+          ariaLabel={stageLabels.acousticEchoCancellation}
+          value={draft.aecMode}
+          onChange={(v) => save({ aecMode: v as AudioDspConfig['aecMode'] })}
+          options={[
+            { value: 'off', label: label('aecOff', 'Off') },
+            { value: 'light', label: label('aecLight', 'Light (low CPU)') },
+            { value: 'model', label: label('aecModel', 'Model (stronger)') },
+          ]}
+        />
       </SettingRow>
+      {draft.aecMode === 'model' &&
+        label(
+          'aecModelHint',
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+        )}
       {slider('outputBufferMs', label('buffer', 'Output buffer'), 100, 1200, ' ms')}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite

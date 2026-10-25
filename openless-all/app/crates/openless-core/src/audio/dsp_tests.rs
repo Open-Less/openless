@@ -218,7 +218,7 @@ fn legacy_six_stage_processing_order_still_deserializes() {
         "processingOrder": ["noiseReduction","dereverb","equalizer","amplifier","agc","vad"]
     }"#;
     let config: crate::AudioDspConfig = serde_json::from_str(legacy).unwrap();
-    assert!(!config.aec_enabled, "AEC 默认关");
+    assert_eq!(config.aec_mode, crate::AecMode::Off, "AEC 默认关");
     assert_eq!(config.output_buffer_ms, 300);
     assert_eq!(config.gain_db, 4, "老配置里的值必须保留");
     assert_eq!(
@@ -240,12 +240,12 @@ fn legacy_six_stage_processing_order_still_deserializes() {
 #[test]
 fn aec_and_buffer_reach_the_dsp_settings() {
     let config = crate::AudioDspConfig {
-        aec_enabled: true,
+        aec_mode: crate::AecMode::Model,
         output_buffer_ms: 900,
         ..Default::default()
     };
     let settings = config.settings();
-    assert!(settings.aec_enabled);
+    assert!(settings.aec_enabled, "只有 Model 模式才走 MicYou 的 aec7");
     assert_eq!(settings.output_buffer_ms, 900);
     // 越界值必须夹回 MicYou 接受的范围。
     let clamped = crate::AudioDspConfig {
