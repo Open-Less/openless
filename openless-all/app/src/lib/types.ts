@@ -341,8 +341,18 @@ export interface StylePackRuntimeDiagnostics {
 }
 
 export type AudioDspStage =
-  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+  | 'acousticEchoCancellation'
+  | 'noiseReduction'
+  | 'dereverb'
+  | 'equalizer'
+  | 'amplifier'
+  | 'agc'
+  | 'vad';
 export interface AudioDspConfig {
+  /** 声学回声消除；只有拿到扬声器参考信号时才起作用。 */
+  aecEnabled: boolean;
+  /** 输出环形缓冲余量（100..1200 ms）。 */
+  outputBufferMs: number;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
   noiseStrength: number;
   gainDb: number;
@@ -592,6 +602,10 @@ export interface UserPreferences {
   /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
    *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
+  /** 调试录音：追加保存「处理后」的音频（主档案 `<session>.wav`）。 */
+  debugArchiveProcessed: boolean;
+  /** 调试录音：额外保存「处理前」的 `<session>.raw.wav`，用于 A/B 对照。 */
+  debugArchiveRaw: boolean;
   /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
    *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;

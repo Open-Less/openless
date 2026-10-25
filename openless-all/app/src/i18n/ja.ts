@@ -1533,6 +1533,10 @@ export const ja: typeof zhCN = {
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       dsp: {
+        aec: 'エコーキャンセル',
+        aecHint:
+          'スピーカー使用時の回り込みを抑えます。参照信号が必要なので、ヘッドホンならオフで構いません。',
+        buffer: '出力バッファ',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1637,6 +1641,10 @@ export const ja: typeof zhCN = {
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
+      debugArchiveProcessedLabel: '処理後の音声を保存',
+      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveRawLabel: '処理前の音声も保存',
+      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',

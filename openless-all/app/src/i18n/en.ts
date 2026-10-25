@@ -1545,6 +1545,10 @@ export const en: typeof zhCN = {
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       dsp: {
+        aec: 'Echo cancellation',
+        aecHint:
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        buffer: 'Output buffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1649,6 +1653,10 @@ export const en: typeof zhCN = {
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
+      debugArchiveProcessedLabel: 'Keep processed audio',
+      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveRawLabel: 'Also keep pre-processing audio',
+      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',

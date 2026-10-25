@@ -1575,6 +1575,10 @@ export const de: typeof zhCN = {
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
       dsp: {
+        aec: 'Echounterdrückung',
+        aecHint:
+          'Unterdrückt Lautsprecher-Rückkopplung. Braucht ein Referenzsignal; mit Kopfhörern aus lassen.',
+        buffer: 'Ausgabepuffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1681,6 +1685,10 @@ export const de: typeof zhCN = {
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
+      debugArchiveProcessedLabel: 'Verarbeitetes Audio behalten',
+      debugArchiveProcessedDesc: 'Die Version nach Rauschunterdrückung und Verstärkung, weiterhin in der bisherigen Aufnahmedatei.',
+      debugArchiveRawLabel: 'Auch Audio vor der Verarbeitung behalten',
+      debugArchiveRawDesc: 'Schreibt zusätzlich <session>.raw.wav daneben. Ist nur dies aktiv, landet das Rohaudio in der Hauptdatei.',
       recordAudioForDebugLabel: 'Rohaufnahmen behalten (Diagnose)',
       recordAudioForDebugDesc:
         'Speichert das rohe Mikrofonaudio als WAV, um Erkennungsprobleme zu untersuchen.',

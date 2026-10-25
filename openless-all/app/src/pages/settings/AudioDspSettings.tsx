@@ -53,6 +53,7 @@ export function AudioDspSettings({
     </SettingRow>
   );
   const stageLabels: Record<AudioDspStage, string> = {
+    acousticEchoCancellation: label('aec', 'Echo cancellation'),
     noiseReduction: label('noise', 'Noise reduction'),
     dereverb: label('dereverb', 'Comb filter'),
     equalizer: label('equalizer', 'Equalizer'),
@@ -78,6 +79,16 @@ export function AudioDspSettings({
           'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
         )}
       </p>
+      <SettingRow
+        label={stageLabels.acousticEchoCancellation}
+        desc={label(
+          'aecHint',
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        )}
+      >
+        <Toggle on={draft.aecEnabled} onToggle={() => save({ aecEnabled: !draft.aecEnabled })} />
+      </SettingRow>
+      {slider('outputBufferMs', label('buffer', 'Output buffer'), 100, 1200, ' ms')}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite
           ariaLabel={stageLabels.noiseReduction}

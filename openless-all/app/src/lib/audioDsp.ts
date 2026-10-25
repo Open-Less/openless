@@ -1,6 +1,8 @@
 import type { AudioDspConfig } from './types';
 
 export const defaultAudioDsp: AudioDspConfig = {
+  aecEnabled: false,
+  outputBufferMs: 300,
   noiseReduction: 'rnnoise',
   noiseStrength: 80,
   gainDb: 0,
@@ -14,7 +16,15 @@ export const defaultAudioDsp: AudioDspConfig = {
   equalizerEnabled: false,
   equalizerPreampDb: 0,
   equalizerBandsDb: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  processingOrder: ['noiseReduction', 'dereverb', 'equalizer', 'amplifier', 'agc', 'vad'],
+  processingOrder: [
+    'acousticEchoCancellation',
+    'noiseReduction',
+    'dereverb',
+    'equalizer',
+    'amplifier',
+    'agc',
+    'vad',
+  ],
 };
 
 export const equalizerFrequencies = [

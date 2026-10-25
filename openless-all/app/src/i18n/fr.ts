@@ -1586,6 +1586,10 @@ export const fr: typeof zhCN = {
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
       dsp: {
+        aec: 'Annulation d’écho',
+        aecHint:
+          'Réduit le retour du haut-parleur. Nécessite un signal de référence; inutile au casque.',
+        buffer: 'Tampon de sortie',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1693,6 +1697,10 @@ export const fr: typeof zhCN = {
       polishContextWindowLabel: 'Fenêtre de contexte d’amélioration (minutes)',
       polishContextWindowDesc:
         'Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.',
+      debugArchiveProcessedLabel: 'Conserver l’audio traité',
+      debugArchiveProcessedDesc: 'La version après réduction de bruit et gain, toujours dans le fichier d’enregistrement existant.',
+      debugArchiveRawLabel: 'Conserver aussi l’audio avant traitement',
+      debugArchiveRawDesc: 'Écrit aussi <session>.raw.wav à côté. Si seule cette option est active, l’audio brut va dans l’archive principale.',
       recordAudioForDebugLabel: 'Conserver l’enregistrement brut (débogage)',
       recordAudioForDebugDesc:
         'Enregistre l’audio brut du microphone en WAV pour diagnostiquer les problèmes de reconnaissance.',
