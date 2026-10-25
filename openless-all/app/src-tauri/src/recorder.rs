@@ -288,6 +288,45 @@ impl ArchiveTargets {
     }
 }
 
+/// 「处理前」音频的落盘通道：DSP 线程在处理每一帧之前先按这里落原始 PCM。
+#[derive(Clone)]
+pub(crate) struct RawTap {
+    /// 额外的 `<session>.raw.wav`（只在两份都要时存在）。
+    raw_writer: Option<Arc<WavArchiveWriter>>,
+    /// 主档案；`write_processed == false` 时原始 PCM 直接写进这里。
+    canonical: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
+}
+
+impl RawTap {
+    pub(crate) fn new(
+        canonical: Option<Arc<WavArchiveWriter>>,
+        raw_writer: Option<Arc<WavArchiveWriter>>,
+        write_processed: bool,
+    ) -> Self {
+        Self {
+            raw_writer,
+            canonical,
+            write_processed,
+        }
+    }
+
+    fn append_raw(&self, samples: &[f32]) {
+        if self.raw_writer.is_none() && self.write_processed {
+            return;
+        }
+        let pcm = openless_core::pcm_f32_to_i16_le(samples);
+        if let Some(raw) = self.raw_writer.as_ref() {
+            raw.append(&pcm);
+        }
+        if !self.write_processed {
+            if let Some(canonical) = self.canonical.as_ref() {
+                canonical.append(&pcm);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
@@ -307,9 +346,16 @@ struct CaptureSink {
     state: Mutex<CaptureSinkState>,
     delivery_gate: Mutex<()>,
     max_bytes: usize,
+    /// 处理前音频的落盘通道，由 `promote` 设置；DSP 线程每帧读一次。
+    raw_tap: Arc<Mutex<Option<Arc<RawTap>>>>,
 }
 
 impl CaptureSink {
+    /// DSP 线程用它读「处理前」落盘通道；`promote` 时写入。
+    fn raw_tap_slot(&self) -> Arc<Mutex<Option<Arc<RawTap>>>> {
+        Arc::clone(&self.raw_tap)
+    }
+
     fn new(max_bytes: usize) -> Arc<Self> {
         let max_bytes = (max_bytes.max(2) & !1).min(STAGED_CAPTURE_MAX_BYTES.max(2));
         Arc::new(Self {
@@ -318,6 +364,7 @@ impl CaptureSink {
             }),
             delivery_gate: Mutex::new(()),
             max_bytes,
+            raw_tap: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -333,7 +380,11 @@ impl CaptureSink {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archive: Option<Arc<WavArchiveWriter>>,
+        raw_tap: Option<Arc<RawTap>>,
     ) -> Result<(), RecorderError> {
+        // 只要处理前时，主档案由 DSP 线程写原始 PCM，这里就不能再写处理后。
+        let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        *self.raw_tap.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = raw_tap;
         let _delivery = self.delivery_gate.lock();
         let prefix = {
             let mut state = self.state.lock();
@@ -352,7 +403,7 @@ impl CaptureSink {
             *state = CaptureSinkState::Promoted(ForwardTarget {
                 consumer,
                 level_handler,
-                archive,
+                archive: if write_processed { archive } else { None },
             });
             prefix
         };
@@ -916,9 +967,20 @@ impl WarmStagedRecorder {
         mut self,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        audio_archive_path: Option<PathBuf>,
+        archives: ArchiveTargets,
     ) -> Result<(WarmActiveCapture, Receiver<RecorderError>, bool), RecorderError> {
-        let archive_path = audio_archive_path;
+        let archive_path = archives.canonical();
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_writer = archive_path
             .as_ref()
             .and_then(|path| match WavArchiveWriter::create(path) {
@@ -928,12 +990,18 @@ impl WarmStagedRecorder {
                     None
                 }
             });
+        let raw_tap = Some(Arc::new(RawTap::new(
+            archive_writer.clone(),
+            raw_writer,
+            archives.write_processed,
+        )));
         let archive_active = archive_writer.is_some();
         let result = self.hub.promote(
             self.press_id,
             consumer,
             level_handler,
             archive_writer.clone(),
+            raw_tap.clone(),
         );
         let runtime_errors = match result {
             Ok(runtime_errors) => runtime_errors,
@@ -1263,7 +1331,7 @@ impl WarmCaptureHub {
         let (runtime_error_tx, runtime_error_rx) = channel();
         if let Err(error) = self
             .sink
-            .promote(press_id, consumer, level_handler, archive)
+            .promote(press_id, consumer, level_handler, archive, None)
         {
             let fallback_allowed = self.runtime_fallback_claims.lock().remove(&press_id);
             if !fallback_allowed
@@ -1594,6 +1662,7 @@ impl Recorder {
             level_handler,
             ArchiveTargets::processed_only(audio_archive_path),
             processing,
+            None,
         )
     }
 
@@ -1605,6 +1674,7 @@ impl Recorder {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archives: ArchiveTargets,
         processing: openless_core::AudioProcessingConfig,
+        raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // Startup signal: the child thread reports the result via startup_tx once the Stream
         // is constructed.
@@ -1649,6 +1719,7 @@ impl Recorder {
         let far_end = (processing.dsp.aec_mode != openless_core::AecMode::Off)
             .then(openless_core::FarEndQueue::default);
         let far_end_for_thread = far_end.clone();
+        let raw_tap_slot_for_thread = raw_tap_slot.clone();
         let reference_stream = far_end.as_ref().and_then(|queue| {
             match start_reference_stream(&stop_for_thread, queue) {
                 Ok(stream) => Some(stream),
@@ -1672,6 +1743,7 @@ impl Recorder {
                     raw_for_thread,
                     write_processed,
                     far_end_for_thread,
+                    raw_tap_slot_for_thread,
                     processing,
                     state_for_thread,
                     stop_for_thread,
@@ -1781,12 +1853,14 @@ impl Recorder {
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) = Self::start_with_processing(
+        let raw_tap_slot = sink.raw_tap_slot();
+        let (recorder, runtime_errors, _) = Recorder::start_with_archive_targets(
             microphone_device_name,
             consumer,
             level_handler,
-            None,
+            ArchiveTargets::default(),
             processing,
+            Some(raw_tap_slot),
         )?;
         Ok(StagedRecorder {
             recorder: Some(recorder),
@@ -1808,9 +1882,9 @@ impl StagedRecorder {
         mut self,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        audio_archive_path: Option<PathBuf>,
+        archives: ArchiveTargets,
     ) -> Result<(Recorder, Receiver<RecorderError>, bool), RecorderError> {
-        let archive_path = audio_archive_path;
+        let archive_path = archives.canonical();
         let archive_writer = archive_path
             .as_ref()
             .and_then(|path| match WavArchiveWriter::create(path) {
@@ -1820,10 +1894,26 @@ impl StagedRecorder {
                     None
                 }
             });
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
+        let raw_tap = Some(Arc::new(RawTap::new(
+            archive_writer.clone(),
+            raw_writer,
+            archives.write_processed,
+        )));
         let archive_active = archive_writer.is_some();
         if let Err(error) = self
             .sink
-            .promote(consumer, level_handler, archive_writer.clone())
+            .promote(consumer, level_handler, archive_writer.clone(), raw_tap)
         {
             if let Some(archive) = archive_writer {
                 archive.finish();
@@ -1984,6 +2074,7 @@ fn run_audio_thread(
     raw_archiver: Option<Arc<WavArchiveWriter>>,
     write_processed: bool,
     far_end: Option<openless_core::FarEndQueue>,
+    raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
     processing: openless_core::AudioProcessingConfig,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
@@ -1999,6 +2090,7 @@ fn run_audio_thread(
         Arc::clone(&state),
         write_processed,
         far_end,
+        raw_tap_slot,
     ) {
         Ok(worker) => worker,
         Err(error) => {
@@ -2630,6 +2722,7 @@ impl AudioProcessingWorker {
             state,
             true,
             None,
+            None,
         )
     }
 
@@ -2645,6 +2738,7 @@ impl AudioProcessingWorker {
         state: Arc<StreamState>,
         write_processed: bool,
         far_end: Option<openless_core::FarEndQueue>,
+        raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
     ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
             sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
@@ -2689,6 +2783,15 @@ impl AudioProcessingWorker {
                                     if let Some(canonical) = &archiver {
                                         canonical.append(&pcm);
                                     }
+                                }
+                            }
+                            if let Some(slot) = raw_tap_slot.as_ref() {
+                                let tap = slot
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .clone();
+                                if let Some(tap) = tap {
+                                    tap.append_raw(&frame.samples);
                                 }
                             }
                             let queued_us = backlog.micros.load(Ordering::Acquire);
@@ -3420,6 +3523,7 @@ mod tests {
             Arc::clone(&formal) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
             None,
+            None,
         )
         .unwrap();
 
@@ -3442,6 +3546,7 @@ mod tests {
             8,
             Arc::clone(&formal) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
+            None,
             None,
         )
         .unwrap();
@@ -3772,6 +3877,7 @@ mod tests {
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(move |level| levels_for_handler.lock().unwrap().push(level)),
             None,
+            None,
         )
         .unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
@@ -3794,7 +3900,7 @@ mod tests {
         sink.consume_pcm_chunk(&[1, 2]);
         sink.discard();
         assert!(sink
-            .promote(consumer as Arc<dyn AudioConsumer>, Arc::new(|_| {}), None)
+            .promote(consumer as Arc<dyn AudioConsumer>, Arc::new(|_| {}), None, None)
             .is_err());
         sink.consume_pcm_chunk(&[3, 4]);
         let is_discarded = matches!(&*sink.state.lock(), CaptureSinkState::Discarded);
@@ -3816,6 +3922,7 @@ mod tests {
             17,
             consumer.clone(),
             Arc::new(move |level| levels_for_handler.lock().unwrap().push(level)),
+            None,
             None,
         )
         .unwrap();
@@ -3849,7 +3956,7 @@ mod tests {
         sink.arm(19, false).unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(19, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(19, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
         assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![5, 6]]);
     }
@@ -3862,7 +3969,7 @@ mod tests {
         sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
 
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
 
         assert_eq!(
@@ -3880,7 +3987,7 @@ mod tests {
         sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
 
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
 
         assert_eq!(
@@ -3900,7 +4007,7 @@ mod tests {
 
         let first = Arc::new(RecordingConsumer::default());
         let second = Arc::new(RecordingConsumer::default());
-        sink.promote(18, second.clone(), Arc::new(|_| {}), None)
+        sink.promote(18, second.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
 
@@ -3978,7 +4085,8 @@ mod tests {
                         Arc::new(RecordingConsumer::default()),
                         Arc::new(|_| {}),
                         None,
-                    )
+                        None,
+                )
                     .unwrap();
             }
             hub.configure(

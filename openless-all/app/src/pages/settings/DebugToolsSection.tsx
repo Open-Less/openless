@@ -93,8 +93,20 @@ export function DebugToolsSection() {
     );
   }
 
-  const onRecordAudioForDebugChange = (recordAudioForDebug: boolean) =>
-    savePrefs({ ...prefs, recordAudioForDebug });
+  const onRecordAudioForDebugChange = (recordAudioForDebug: boolean) => {
+    // 打开主开关时如果两项都没勾，默认勾上「处理后」，否则开了开关却什么都不写。
+    const keepSomething =
+      prefs.debugArchiveProcessed || prefs.debugArchiveRaw || !recordAudioForDebug;
+    void savePrefs({
+      ...prefs,
+      recordAudioForDebug,
+      debugArchiveProcessed: keepSomething ? prefs.debugArchiveProcessed : true,
+    });
+  };
+  const onDebugArchiveProcessedChange = (debugArchiveProcessed: boolean) =>
+    void savePrefs({ ...prefs, debugArchiveProcessed });
+  const onDebugArchiveRawChange = (debugArchiveRaw: boolean) =>
+    void savePrefs({ ...prefs, debugArchiveRaw });
   // Empty means unlimited, falling back to null → the backend applies its 200 default.
   const onAudioRecordingMaxEntriesChange = (raw: string) => {
     const trimmed = raw.trim();
@@ -112,6 +124,28 @@ export function DebugToolsSection() {
       <SettingRow label={t('settings.recording.recordAudioForDebugLabel')}>
         <Toggle on={prefs.recordAudioForDebug} onToggle={onRecordAudioForDebugChange} />
       </SettingRow>
+      {prefs.recordAudioForDebug && (
+        <>
+          <SettingRow
+            label={t('settings.recording.debugArchiveProcessedLabel')}
+            desc={t('settings.recording.debugArchiveProcessedDesc')}
+          >
+            <Toggle
+              on={prefs.debugArchiveProcessed}
+              onToggle={() => onDebugArchiveProcessedChange(!prefs.debugArchiveProcessed)}
+            />
+          </SettingRow>
+          <SettingRow
+            label={t('settings.recording.debugArchiveRawLabel')}
+            desc={t('settings.recording.debugArchiveRawDesc')}
+          >
+            <Toggle
+              on={prefs.debugArchiveRaw}
+              onToggle={() => onDebugArchiveRawChange(!prefs.debugArchiveRaw)}
+            />
+          </SettingRow>
+        </>
+      )}
       <SettingRow label={t('settings.recording.audioRecordingMaxEntriesLabel')}>
         <div
           style={{
