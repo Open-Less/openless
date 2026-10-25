@@ -137,7 +137,10 @@ impl AudioProcessor {
         if self.finished || input.is_empty() || channels == 0 || rate == 0 {
             return None;
         }
-        if !self.config.enhancement_enabled {
+        // 增强关掉时 AEC 仍然可以独立工作（外放场景只想去回声、不想动音色）：
+        // 只要 AEC 打开且本次录音接了参考队列，就走 MicYou 链路。
+        let aec_standalone = self.config.dsp.aec_enabled && self.far_end.is_some();
+        if !self.config.enhancement_enabled && !aec_standalone {
             return self.normalizer.process(input, channels, rate);
         }
         let stream = self
