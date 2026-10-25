@@ -66,27 +66,12 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
             ui.small(label("settings.audioDsp.A_high_threshold_can_remove_quiet_speech"));
         }
         ui.add_space(8.0);
-        ui.collapsing(label("settings.audioDsp.Tone_and_room_adjustments"), |ui| {
-            ui.small(label("settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0"));
-            slider(ui, label("settings.audioDsp.Comb_filter"), &mut config.dereverb_level, 0..=100, "%");
-            ui.checkbox(&mut config.equalizer_enabled, label("settings.audioDsp.10_band_equalizer"));
-            if config.equalizer_enabled {
-                slider(ui, label("settings.audioDsp.Preamp_dB"), &mut config.equalizer_preamp_db, -20..=20, " dB");
-                let columns = if ui.available_width() >= 540.0 { 2 } else { 1 };
-                egui::Grid::new("audio-dsp-eq").num_columns(columns).spacing([16.0, 8.0]).show(ui, |ui| {
-                    let width = ((ui.available_width() - 16.0 * (columns - 1) as f32) / columns as f32).max(100.0);
-                    for (index, (band, name)) in config.equalizer_bands_db.iter_mut().zip(["31 Hz", "63 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"]).enumerate() {
-                        ui.push_id(index, |ui| ui.vertical(|ui| {
-                            ui.set_width(width);
-                            ui.label(name);
-                            ui.spacing_mut().slider_width = (width - 80.0).clamp(60.0, 220.0);
-                            ui.add(egui::Slider::new(band, -12..=12).suffix(" dB"));
-                        }));
-                        if (index + 1) % columns == 0 { ui.end_row(); }
-                    }
-                });
-            }
-        });
+        // 房间/音色只剩「梳状滤波」一项：十段均衡器按需求移除（配置字段保留，
+        // 旧 preferences 仍能反序列化），界面上不再暴露。
+        ui.add_space(8.0);
+        ui.strong(label("settings.audioDsp.roomStage"));
+        ui.small(label("settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0"));
+        slider(ui, label("settings.audioDsp.Comb_filter"), &mut config.dereverb_level, 0..=100, "%");
         ui.collapsing(label("settings.audioDsp.Processing_order"), |ui| {
             let mut swap = None;
             for (i, stage) in config.processing_order.iter().enumerate() {

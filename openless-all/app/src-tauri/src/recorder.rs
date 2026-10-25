@@ -262,6 +262,32 @@ impl WavArchiveWriter {
     }
 }
 
+/// 调试录音要落哪几份盘（与 egui 侧同名同义）。
+///
+/// - `processed`：主档案 `<session>.wav`，`write_processed` 时写降噪/增益之后的
+///   PCM，否则写原始 PCM（只勾「处理前」时用，回退/播放功能不变）。
+/// - `raw`：额外的 `<session>.raw.wav`，只在同时要两份时创建，用于 A/B 对照。
+#[derive(Clone, Default)]
+pub(crate) struct ArchiveTargets {
+    pub processed: Option<PathBuf>,
+    pub raw: Option<PathBuf>,
+    pub write_processed: bool,
+}
+
+impl ArchiveTargets {
+    pub(crate) fn processed_only(path: Option<PathBuf>) -> Self {
+        Self {
+            processed: path,
+            raw: None,
+            write_processed: true,
+        }
+    }
+
+    fn canonical(&self) -> Option<PathBuf> {
+        self.processed.clone().or_else(|| self.raw.clone())
+    }
+}
+
 #[derive(Clone)]
 struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
@@ -1514,6 +1540,8 @@ pub struct Recorder {
     stop_flag: Arc<AtomicBool>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     archive_writer: Option<Arc<WavArchiveWriter>>,
+    /// AEC 的扬声器参考采集流；与录音同生命周期，Drop 时自动停。
+    reference_stream: Option<cpal::Stream>,
     state: Arc<StreamState>,
 }
 
@@ -1560,6 +1588,24 @@ impl Recorder {
         audio_archive_path: Option<PathBuf>,
         processing: openless_core::AudioProcessingConfig,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
+        Self::start_with_archive_targets(
+            microphone_device_name,
+            consumer,
+            level_handler,
+            ArchiveTargets::processed_only(audio_archive_path),
+            processing,
+        )
+    }
+
+    /// 由调用方决定主档案写哪份 PCM、是否额外写一份处理前的 `<session>.raw.wav`，
+    /// 以及 AEC 的扬声器参考来源。
+    pub fn start_with_archive_targets(
+        microphone_device_name: Option<String>,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        archives: ArchiveTargets,
+        processing: openless_core::AudioProcessingConfig,
+    ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // Startup signal: the child thread reports the result via startup_tx once the Stream
         // is constructed.
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
@@ -1574,16 +1620,46 @@ impl Recorder {
         // Try creating WavArchiveWriter on the synchronous path — success/failure is known
         // immediately and passed to the caller to decide whether history marks
         // has_audio_recording. Failure only logs a warning, no error; the main path continues.
-        let archive_writer =
-            audio_archive_path.and_then(|path| match WavArchiveWriter::create(&path) {
+        let archive_writer = archives.canonical().and_then(|path| {
+            match WavArchiveWriter::create(&path) {
                 Ok(writer) => Some(Arc::new(writer)),
                 Err(err) => {
                     log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
                     None
                 }
+            }
+        });
+        // 只有两份都要时才创建第二份档案。
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(err) => {
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {err}");
+                    None
+                }
             });
+        let write_processed = archives.write_processed;
         let archive_active = archive_writer.is_some();
         let archive_for_thread = archive_writer.clone();
+        let raw_for_thread = raw_writer.clone();
+        // AEC 的扬声器参考：与录音同生命周期，Drop 时停流。
+        let far_end = (processing.dsp.aec_mode != openless_core::AecMode::Off)
+            .then(openless_core::FarEndQueue::default);
+        let far_end_for_thread = far_end.clone();
+        let reference_stream = far_end.as_ref().and_then(|queue| {
+            match start_reference_stream(&stop_for_thread, queue) {
+                Ok(stream) => Some(stream),
+                Err(error) => {
+                    log::warn!(
+                        "[recorder] speaker reference unavailable; continuing without AEC: {error}"
+                    );
+                    None
+                }
+            }
+        });
 
         let join_handle = match thread::Builder::new()
             .name("openless-recorder".into())
@@ -1593,6 +1669,9 @@ impl Recorder {
                     consumer,
                     level_handler,
                     archive_for_thread,
+                    raw_for_thread,
+                    write_processed,
+                    far_end_for_thread,
                     processing,
                     state_for_thread,
                     stop_for_thread,
@@ -1637,6 +1716,7 @@ impl Recorder {
                 stop_flag,
                 join_handle: Mutex::new(Some(join_handle)),
                 archive_writer,
+                reference_stream,
                 state,
             },
             runtime_error_rx,
@@ -1813,6 +1893,86 @@ pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
     Ok(result)
 }
 
+/// 打开「扬声器回环」参考采集，供 AEC 使用。
+///
+/// 走的是宿主默认**输出**设备：Windows 的 WASAPI 允许在 render 设备上开 capture
+/// 流（loopback），Linux 的 PulseAudio/PipeWire 会把输出映射到 monitor 源，macOS
+/// 走 CoreAudio 的同一设备。没有可用回环源时返回错误，调用方记一条 warn 后继续
+/// 录音（AEC 退化为无参考），绝不让整次录音失败。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn start_reference_stream(
+    stop_flag: &Arc<AtomicBool>,
+    queue: &openless_core::FarEndQueue,
+) -> Result<cpal::Stream, RecorderError> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| RecorderError::EngineFailed("no default output device".into()))?;
+    let supported = device
+        .default_output_config()
+        .map_err(|error| RecorderError::EngineFailed(format!("default output config: {error}")))?;
+    let config = supported.config();
+    let channels = usize::from(config.channels);
+    let rate = config.sample_rate;
+    let device_name = device.to_string();
+    let queue = queue.clone();
+    let stop_for_callback = Arc::clone(stop_flag);
+
+    macro_rules! make_reference_stream {
+        ($t:ty, $to_f32:expr) => {{
+            let queue = queue.clone();
+            let stop_for_callback = Arc::clone(&stop_for_callback);
+            device.build_input_stream(
+                &config,
+                move |data: &[$t], _: &cpal::InputCallbackInfo| {
+                    if stop_for_callback.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let samples: Vec<f32> = data.iter().copied().map($to_f32).collect();
+                    queue.push(&samples, channels, rate);
+                },
+                |error| log::warn!("[recorder] speaker reference stream error: {error}"),
+                None,
+            )
+        }};
+    }
+
+    let stream = match supported.sample_format() {
+        SampleFormat::F32 => make_reference_stream!(f32, |sample: f32| sample),
+        SampleFormat::I16 => make_reference_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32),
+        SampleFormat::I32 => make_reference_stream!(i32, |sample: i32| sample as f32 / i32::MAX as f32),
+        SampleFormat::I8 => make_reference_stream!(i8, |sample: i8| sample as f32 / i8::MAX as f32),
+        SampleFormat::U8 => make_reference_stream!(u8, |sample: u8| (sample as f32 - 128.0) / 128.0),
+        other => {
+            return Err(RecorderError::EngineFailed(format!(
+                "unsupported speaker reference sample format: {other:?}"
+            )))
+        }
+    }
+    .map_err(|error| RecorderError::EngineFailed(format!("build speaker reference stream: {error}")))?;
+    stream
+        .play()
+        .map_err(|error| RecorderError::EngineFailed(format!("play speaker reference: {error}")))?;
+    log::info!(
+        "[recorder] speaker reference capturing outputDevice={} rate={} channels={channels}",
+        device_name,
+        rate
+    );
+    Ok(stream)
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn start_reference_stream(
+    _stop_flag: &Arc<AtomicBool>,
+    _queue: &openless_core::FarEndQueue,
+) -> Result<cpal::Stream, RecorderError> {
+    Err(RecorderError::EngineFailed(
+        "speaker loopback is not available on mobile".into(),
+    ))
+}
+
 /// Audio thread body: build Stream -> report via startup_tx -> loop until stop_flag.
 /// `archiver` was already attempted by the caller on the synchronous path (Ok -> Some /
 /// failed -> None); this only threads it through to build_input_stream for the cpal callback.
@@ -1821,18 +1981,24 @@ fn run_audio_thread(
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archiver: Option<Arc<WavArchiveWriter>>,
+    raw_archiver: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
+    far_end: Option<openless_core::FarEndQueue>,
     processing: openless_core::AudioProcessingConfig,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (processor, frame_tx) = match AudioProcessingWorker::start(
+    let (processor, frame_tx) = match AudioProcessingWorker::start_with_targets(
         processing,
         consumer,
         level_handler,
         archiver,
+        raw_archiver,
         Arc::clone(&state),
+        write_processed,
+        far_end,
     ) {
         Ok(worker) => worker,
         Err(error) => {
@@ -2455,6 +2621,31 @@ impl AudioProcessingWorker {
         archiver: Option<Arc<WavArchiveWriter>>,
         state: Arc<StreamState>,
     ) -> Result<(Self, AudioProcessingSender), RecorderError> {
+        Self::start_with_targets(
+            processing,
+            consumer,
+            level_handler,
+            archiver,
+            None,
+            state,
+            true,
+            None,
+        )
+    }
+
+    /// `write_processed = false` 时主档案写原始 PCM；`raw_archiver` 是额外的
+    /// 「处理前」档案（只在两份都要时给出）。`far_end` 是 AEC 的扬声器参考队列。
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_targets(
+        processing: openless_core::AudioProcessingConfig,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        archiver: Option<Arc<WavArchiveWriter>>,
+        raw_archiver: Option<Arc<WavArchiveWriter>>,
+        state: Arc<StreamState>,
+        write_processed: bool,
+        far_end: Option<openless_core::FarEndQueue>,
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
             sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
         let backlog = Arc::new(AudioProcessingBacklog::default());
@@ -2466,12 +2657,17 @@ impl AudioProcessingWorker {
             .name("openless-audio-processor".into())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
+                if let Some(queue) = far_end.clone() {
+                    processor.attach_far_end(queue);
+                }
                 let mut enhancement_enabled = processing.enhancement_enabled;
                 let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
                     state.note_first_pcm(true);
                     consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                    if let Some(archiver) = &archiver {
-                        archiver.append(&chunk.pcm_i16_le);
+                    if write_processed {
+                        if let Some(archiver) = &archiver {
+                            archiver.append(&chunk.pcm_i16_le);
+                        }
                     }
                     level_handler(chunk.level);
                     update_peak(&state.peak_output_rms_milli, chunk.level);
@@ -2481,6 +2677,20 @@ impl AudioProcessingWorker {
                     let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
+                            // 「处理前」的原始帧：额外 raw 档案永远拿原始 PCM；
+                            // 只要处理前、不要处理后时，主档案也写原始 PCM，回退与
+                            // 播放继续可用，且不会多出一份重复文件。
+                            if raw_archiver.is_some() || !write_processed {
+                                let pcm = openless_core::pcm_f32_to_i16_le(&frame.samples);
+                                if let Some(raw) = &raw_archiver {
+                                    raw.append(&pcm);
+                                }
+                                if !write_processed {
+                                    if let Some(canonical) = &archiver {
+                                        canonical.append(&pcm);
+                                    }
+                                }
+                            }
                             let queued_us = backlog.micros.load(Ordering::Acquire);
                             if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
                                 log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
