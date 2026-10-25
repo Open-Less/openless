@@ -13378,6 +13378,9 @@ mod tests {
         )
         .unwrap();
 
+        let mut preferences = backend.get_preferences();
+        preferences.cursor_context_enabled = false;
+        backend.set_preferences(preferences).unwrap();
         let context = backend
             .capture_host_dictation_context(DictationStartOptions::default())
             .await
@@ -13574,6 +13577,7 @@ mod tests {
         .unwrap();
         let mut preferences = backend.get_preferences();
         preferences.vocabulary_learning_enabled = true;
+        preferences.cursor_context_enabled = false;
         assert!(
             !preferences.cursor_context_enabled,
             "learning must not require uploading cursor context"
