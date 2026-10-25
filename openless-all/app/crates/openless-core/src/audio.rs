@@ -16,6 +16,63 @@ pub struct AudioProcessingConfig {
     pub dsp: crate::audio_dsp::AudioDspConfig,
 }
 
+/// 扬声器回环（far-end）参考音频的交接队列。
+///
+/// AEC 需要「扬声器此刻在放什么」。宿主在一条独立的采集流里拿到输出音频后，
+/// 按自己的采样率塞进这里；DSP 线程在处理每一帧之前把它取走、重采样到 48 kHz
+/// 单声道后交给 MicYou。队列有上限：AEC 只关心最近的参考，堆积只会拖慢。
+#[derive(Clone, Default)]
+pub struct FarEndQueue {
+    inner: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<FarEndFrame>>>,
+}
+
+#[derive(Debug)]
+struct FarEndFrame {
+    rate: u32,
+    channels: usize,
+    samples: Vec<f32>,
+}
+
+/// 参考队列最多保留的样本数（约 2 秒 @48 kHz）。超出时丢弃最旧的。
+const FAR_END_QUEUE_LIMIT: usize = 96_000;
+
+impl FarEndQueue {
+    /// 宿主采集线程调用。非有限值与空帧直接丢弃。
+    pub fn push(&self, samples: &[f32], channels: usize, rate: u32) {
+        if samples.is_empty() || channels == 0 || rate == 0 {
+            return;
+        }
+        let clean: Vec<f32> = samples
+            .iter()
+            .map(|sample| if sample.is_finite() { sample.clamp(-1.0, 1.0) } else { 0.0 })
+            .collect();
+        let mut queue = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        queue.push_back(FarEndFrame {
+            rate,
+            channels,
+            samples: clean,
+        });
+        let mut total: usize = queue.iter().map(|frame| frame.samples.len()).sum();
+        while total > FAR_END_QUEUE_LIMIT {
+            let Some(dropped) = queue.pop_front() else { break };
+            total -= dropped.samples.len();
+        }
+    }
+
+    /// DSP 线程调用：取走全部待处理参考帧（保持到达顺序）。
+    fn drain(&self) -> Vec<FarEndFrame> {
+        let mut queue = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        queue.drain(..).collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    }
+}
+
 /// Shared processor for native and external microphone hosts.
 /// Enhancement starts with the session's settings and may be disabled under
 /// load. Hosts must deliver every returned tail before feeding more input or
@@ -24,6 +81,8 @@ pub struct AudioProcessor {
     config: AudioProcessingConfig,
     normalizer: PcmNormalizer,
     enhanced: Option<EnhancedStream>,
+    /// AEC 的扬声器参考输入（宿主在独立的回环采集流里喂）。
+    far_end: Option<FarEndQueue>,
     finished: bool,
 }
 
@@ -41,8 +100,15 @@ impl AudioProcessor {
             config,
             normalizer: Default::default(),
             enhanced: None,
+            far_end: None,
             finished: false,
         }
+    }
+
+    /// 接上扬声器回环参考队列。只有 AEC 打开且宿主真的采到了输出音频时才有意义；
+    /// 没接或队列为空时 AEC 按「无参考」处理（MicYou 内部会退化）。
+    pub fn attach_far_end(&mut self, queue: FarEndQueue) {
+        self.far_end = Some(queue);
     }
 
     pub fn reset(&mut self) {
@@ -92,6 +158,11 @@ impl AudioProcessor {
         let mono = downmix_to_mono(&stream.interleaved[..complete], channels);
         stream.interleaved.drain(..complete);
         stream.input_frames += mono.len() as u64;
+        // 参考音频必须早于本帧进入 AEC：MicYou 用最近的历史做自适应滤波。
+        if let Some(far_end) = self.far_end.as_ref().filter(|queue| !queue.is_empty()) {
+            let frames = far_end.drain();
+            stream.push_far_end(frames);
+        }
         let working = stream.input_resampler.push(&mono, false);
         let processed = stream.frames(&working, false);
         pcm_chunk(&processed)
@@ -123,6 +194,10 @@ struct EnhancedStream {
     model_delay: usize,
     input_frames: u64,
     emitted_frames: u64,
+    /// 参考音频的重采样器，按输入采样率惰性重建（回环流通常固定，重建仅一次）。
+    far_end_rate: Option<u32>,
+    far_end_resampler: Option<crate::audio_dsp::SpeechResampler>,
+    far_end_pending: Vec<f32>,
 }
 
 impl EnhancedStream {
@@ -143,7 +218,32 @@ impl EnhancedStream {
             model_delay: config.model_delay(),
             input_frames: 0,
             emitted_frames: 0,
+            far_end_rate: None,
+            far_end_resampler: None,
+            far_end_pending: Vec::new(),
         }
+    }
+
+    /// 把宿主采到的回环参考帧转成 48 kHz 单声道后交给 AEC。
+    fn push_far_end(&mut self, frames: Vec<FarEndFrame>) {
+        for frame in frames {
+            let mono = downmix_to_mono(&frame.samples, frame.channels);
+            if self.far_end_rate != Some(frame.rate) {
+                self.far_end_rate = Some(frame.rate);
+                self.far_end_resampler =
+                    Some(crate::audio_dsp::SpeechResampler::new(frame.rate, 48_000));
+                self.far_end_pending.clear();
+            }
+            if let Some(resampler) = self.far_end_resampler.as_mut() {
+                self.far_end_pending
+                    .extend(resampler.push(&mono, false));
+            }
+        }
+        if self.far_end_pending.is_empty() {
+            return;
+        }
+        let reference = std::mem::take(&mut self.far_end_pending);
+        self.dsp.set_far_end_audio(&reference);
     }
 
     fn frames(&mut self, input: &[f32], finish: bool) -> Vec<f32> {

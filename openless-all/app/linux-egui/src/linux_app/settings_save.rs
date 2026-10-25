@@ -267,6 +267,28 @@ impl OpenLessEguiApp {
         field: frontend::view_model::SettingsComboField,
         index: usize,
     ) {
+        // AEC 参考源是 Core 偏好里的字符串（空 = 自动，"off" = 不采集），
+        // 界面用下标表达，这里换算回去。
+        if matches!(field, frontend::view_model::SettingsComboField::AecReference) {
+            let value = match index {
+                0 => String::new(),
+                1 => "off".to_string(),
+                other => self
+                    .frontend_vm
+                    .settings
+                    .aec_reference_devices
+                    .get(other - 2)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            self.frontend_vm.settings.aec_reference_index = index;
+            if let Some(preferences) = self.preferences.as_mut() {
+                preferences.aec_reference_device_name = value;
+                self.save_settings_if_dirty();
+            }
+            return;
+        }
+
         // 日志级别是宿主本地设置（`<data_dir>/logs/level`），不经过 Core 偏好，
         // 因此要放在下面 `self.preferences` 的守卫之前 —— 否则偏好还没加载时
         // 连日志级别都改不了。
@@ -301,6 +323,8 @@ impl OpenLessEguiApp {
         match field {
             // 已在函数开头处理（不走 Core 偏好）。
             frontend::view_model::SettingsComboField::LogLevel => {}
+            // 已在函数开头处理（换算成偏好里的设备名字符串）。
+            frontend::view_model::SettingsComboField::AecReference => {}
             frontend::view_model::SettingsComboField::Theme => {
                 preferences.theme_mode = match index {
                     0 => openless_core::shared_types::ThemeMode::System,

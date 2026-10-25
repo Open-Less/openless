@@ -54,6 +54,8 @@ struct LinuxRecordingOptions {
     archive_processed: bool,
     /// 额外再写一份「处理前」的 `<session>.raw.wav` 做 A/B 对照。
     archive_raw: bool,
+    /// AEC 扬声器参考源：空 = 自动，`"off"` = 不采集。
+    aec_reference_device_name: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -66,6 +68,8 @@ struct LinuxAudioThreadArgs {
     write_processed: bool,
     /// 「处理前」的额外档案（只在同时要两份时创建）。
     raw_writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    /// AEC 的扬声器参考队列（None = 本次录音不接参考）。
+    far_end: Option<openless_core::FarEndQueue>,
     audio_processing: openless_core::AudioProcessingConfig,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
@@ -86,6 +90,7 @@ impl AudioProcessingWorker {
         writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
         write_processed: bool,
         raw_writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+        far_end: Option<openless_core::FarEndQueue>,
     ) -> Result<(Self, SyncSender<RawAudioFrame>), BackendError> {
         let (sender, receiver) = sync_channel::<RawAudioFrame>(AUDIO_PROCESSING_QUEUE_CAPACITY);
         let started = std::time::Instant::now();
@@ -93,6 +98,9 @@ impl AudioProcessingWorker {
             .name("openless-linux-audio-processor".to_string())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
+                if let Some(queue) = far_end {
+                    processor.attach_far_end(queue);
+                }
                 // 处理前的原始 PCM：只在需要时量化，避免常态多一次分配。
                 let write_raw =
                     |frame: &RawAudioFrame, sink: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>| {
@@ -201,6 +209,7 @@ impl AudioRecorder for LinuxCpalRecorder {
             context.output_target == openless_core::DictationOutputTarget::QuickNote;
         let archive_processed = context.recording.archive_processed;
         let archive_raw = context.recording.archive_raw;
+        let aec_reference_device_name = context.recording.aec_reference_device_name.clone();
         Box::pin(async move {
             #[cfg(target_os = "linux")]
             {
@@ -215,6 +224,7 @@ impl AudioRecorder for LinuxCpalRecorder {
                             audio_processing,
                             archive_processed,
                             archive_raw,
+                            aec_reference_device_name,
                         },
                         consumer,
                         progress,
@@ -249,10 +259,16 @@ struct LinuxActiveRecording {
     /// Holds the output-mute guard while capture is live. Its `Drop` restores
     /// the sink on every terminal path (stop/cancel/error/drop/shutdown).
     mute: Option<crate::audio_mute::AudioMuteGuard>,
+    /// AEC 的扬声器参考采集；随录音一起停（字段顺序即 Drop 顺序，先停参考流再
+    /// 拆主线程，避免参考线程还在往已释放的队列里写）。
+    reference: Option<ReferenceCapture>,
 }
 
 impl Drop for LinuxActiveRecording {
     fn drop(&mut self) {
+        // 先显式停掉 AEC 参考流：它只在录音期间有意义，且必须在主采集线程之前
+        // 结束，避免参考线程还在往已释放的队列写。
+        drop(self.reference.take());
         // Taking the guard here forces the field to be consumed (and therefore
         // restored) even if `stop()` is never reached — e.g. the handle is
         // dropped directly on an early error or during Core shutdown before it
@@ -364,7 +380,31 @@ fn start_linux_recording(
         audio_processing,
         archive_processed,
         archive_raw,
+        aec_reference_device_name,
     } = options;
+
+    // AEC 打开且参考没被显式关掉时，单独起一条回环采集流喂参考队列。
+    let far_end = if audio_processing.enhancement_enabled
+        && audio_processing.dsp.aec_enabled
+        && aec_reference_device_name != "off"
+    {
+        Some(openless_core::FarEndQueue::default())
+    } else {
+        None
+    };
+    let mut reference_capture = None;
+    if let Some(queue) = far_end.clone() {
+        let preferred = (!aec_reference_device_name.is_empty())
+            .then(|| aec_reference_device_name.clone());
+        match start_reference_capture(preferred, queue) {
+            Ok(capture) => reference_capture = Some(capture),
+            // 没有回环源（典型是纯 ALSA）不该让整次录音失败：AEC 退化为无参考。
+            Err(error) => log::warn!(
+                "[aec] speaker reference unavailable; continuing without it: {}",
+                error.message
+            ),
+        }
+    }
 
     // Mute is best-effort and independent of capture availability (mirrors the
     // Tauri reference): if it fails we log and continue recording. If capture
@@ -443,6 +483,7 @@ fn start_linux_recording(
                 writer,
                 write_processed: archive_processed,
                 raw_writer,
+                far_end,
                 audio_processing,
                 stop: stop_for_thread,
                 runtime_error: runtime_error_for_thread,
@@ -463,6 +504,7 @@ fn start_linux_recording(
             runtime_error,
             archive,
             mute,
+            reference: reference_capture,
         })),
         Ok(Err(error)) => {
             let _ = thread.join();
@@ -489,6 +531,7 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         writer,
         write_processed,
         raw_writer,
+        far_end,
         audio_processing,
         stop,
         runtime_error,
@@ -502,6 +545,7 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
             writer,
             write_processed,
             raw_writer,
+            far_end,
         ) {
             Ok(worker) => worker,
             Err(error) => {
@@ -577,6 +621,248 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
     drop(stream);
     drop(frame_tx);
     let _ = processor.finish();
+}
+
+/// 判断一个输入设备名是否是「扬声器回环 / 监听」源。
+///
+/// - PulseAudio / PipeWire（走 pulse 兼容层）：`<sink>.monitor`，例如
+///   `alsa_output.pci-0000_00_1f.3.analog-stereo.monitor`
+/// - 部分 PipeWire 版本直接暴露为 `...output...` 的 monitor 节点
+/// - ALSA 没有回环源（除非加载 `snd-aloop`，那会表现为 `Loopback, ...`）
+fn is_loopback_device_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains(".monitor")
+        || lower.contains("monitor of")
+        || lower.starts_with("loopback")
+        || lower.contains(", loopback")
+}
+
+/// 列出所有可用的扬声器回环源，按后端顺序（pipewire → pulseaudio → alsa）去重。
+///
+/// 用户在下拉里选的是设备名原文；空字符串表示「自动」。返回空列表说明当前
+/// 环境没有回环源（典型是纯 ALSA），此时 AEC 只能在没有参考信号的情况下工作。
+pub fn list_loopback_devices() -> Vec<String> {
+    use cpal::traits::HostTrait;
+
+    let hosts = cpal::available_hosts();
+    let mut names: Vec<String> = Vec::new();
+    for backend in audio_backend_order() {
+        let Some(host_id) = hosts
+            .iter()
+            .copied()
+            .find(|id| id.name().eq_ignore_ascii_case(backend))
+        else {
+            continue;
+        };
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        let Ok(devices) = host.input_devices() else {
+            continue;
+        };
+        for device in devices {
+            let name = device.to_string();
+            if is_loopback_device_name(&name) && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// 一次录音期间的扬声器参考采集。Drop 时停流并回收线程。
+#[cfg(target_os = "linux")]
+pub struct ReferenceCapture {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ReferenceCapture {
+    fn drop(&mut self) {
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// 启动扬声器回环采集，把参考音频喂进 AEC 队列。
+///
+/// 与麦克风采集一样按 `pipewire → pulseaudio → alsa` 顺序尝试：只有前两者提供
+/// `<sink>.monitor`；ALSA 在没有 `snd-aloop` 时必然失败，此时返回错误，调用方
+/// 只记一条日志（AEC 退化为无参考，录音本身照常进行）。
+#[cfg(target_os = "linux")]
+pub fn start_reference_capture(
+    preferred_device_name: Option<String>,
+    queue: openless_core::FarEndQueue,
+) -> Result<ReferenceCapture, BackendError> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    let thread = std::thread::Builder::new()
+        .name("openless-linux-aec-reference".to_string())
+        .spawn(move || {
+            let hosts = cpal::available_hosts();
+            let mut stream_slot: Option<cpal::Stream> = None;
+            let mut last_error = None;
+            for backend in audio_backend_order() {
+                let Some(host_id) = hosts
+                    .iter()
+                    .copied()
+                    .find(|id| id.name().eq_ignore_ascii_case(backend))
+                else {
+                    continue;
+                };
+                let Ok(host) = cpal::host_from_id(host_id) else {
+                    continue;
+                };
+                let Ok(devices) = host.input_devices() else {
+                    continue;
+                };
+                let wanted = preferred_device_name.as_deref().filter(|name| !name.is_empty());
+                let device = devices.into_iter().find(|device| {
+                    let name = device.to_string();
+                    match wanted {
+                        Some(wanted) => name == wanted,
+                        None => is_loopback_device_name(&name),
+                    }
+                });
+                let Some(device) = device else {
+                    last_error = Some(BackendError::new(
+                        BackendErrorCode::Platform,
+                        format!("{backend}: no speaker loopback source"),
+                    ));
+                    continue;
+                };
+                let Ok(config) = device.default_input_config() else {
+                    last_error = Some(BackendError::new(
+                        BackendErrorCode::Platform,
+                        format!("{backend}: loopback device has no input config"),
+                    ));
+                    continue;
+                };
+                let channels = usize::from(config.channels());
+                let rate = config.sample_rate();
+                let queue_for_stream = queue.clone();
+                let built = match config.sample_format() {
+                    cpal::SampleFormat::F32 => device.build_input_stream(
+                        config.config(),
+                        move |data: &[f32], _| queue_for_stream.push(data, channels, rate),
+                        |error| log::warn!("[aec] reference stream error: {error}"),
+                        None,
+                    ),
+                    cpal::SampleFormat::I16 => {
+                        let queue_for_stream = queue.clone();
+                        device.build_input_stream(
+                            config.config(),
+                            move |data: &[i16], _| {
+                                let converted: Vec<f32> =
+                                    data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
+                                queue_for_stream.push(&converted, channels, rate)
+                            },
+                            |error| log::warn!("[aec] reference stream error: {error}"),
+                            None,
+                        )
+                    }
+                    other => {
+                        last_error = Some(BackendError::new(
+                            BackendErrorCode::Unsupported,
+                            format!("{backend}: unsupported loopback sample format {other:?}"),
+                        ));
+                        continue;
+                    }
+                };
+                match built {
+                    Ok(stream) => {
+                        if let Err(error) = stream.play() {
+                            last_error = Some(classify_audio_error(
+                                "start loopback stream",
+                                error.to_string(),
+                            ));
+                            continue;
+                        }
+                        log::info!(
+                            "[aec] speaker reference capturing via {backend}: {} ({rate} Hz, {channels} ch)",
+                            device
+                        );
+                        stream_slot = Some(stream);
+                        break;
+                    }
+                    Err(error) => {
+                        last_error = Some(classify_audio_error(
+                            "build loopback stream",
+                            error.to_string(),
+                        ));
+                    }
+                }
+            }
+            match stream_slot {
+                Some(stream) => {
+                    let _ = startup_tx.send(Ok(()));
+                    while !stop_for_thread.load(std::sync::atomic::Ordering::Acquire) {
+                        std::thread::park_timeout(std::time::Duration::from_millis(25));
+                    }
+                    drop(stream);
+                }
+                None => {
+                    let error = last_error.unwrap_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Platform,
+                            "no speaker loopback source is available",
+                        )
+                    });
+                    let _ = startup_tx.send(Err(error));
+                }
+            }
+        })
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Platform,
+                format!("spawn AEC reference thread: {error}"),
+            )
+        })?;
+
+    match startup_rx.recv() {
+        Ok(Ok(())) => Ok(ReferenceCapture {
+            stop,
+            thread: Some(thread),
+        }),
+        Ok(Err(error)) => {
+            let _ = thread.join();
+            Err(error)
+        }
+        Err(error) => {
+            let _ = thread.join();
+            Err(BackendError::new(
+                BackendErrorCode::Platform,
+                format!("AEC reference thread exited during startup: {error}"),
+            ))
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod loopback_tests {
+    use super::is_loopback_device_name;
+
+    #[test]
+    fn recognises_pulse_and_pipewire_monitor_sources() {
+        // PulseAudio / PipeWire 的经典形态
+        assert!(is_loopback_device_name(
+            "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
+        ));
+        // 部分版本带 "Monitor of" 前缀
+        assert!(is_loopback_device_name("Monitor of Built-in Audio Analog Stereo"));
+        // ALSA 的 snd-aloop 模块
+        assert!(is_loopback_device_name("Loopback, PCM Capture"));
+        // 普通麦克风不能被误判成回环源，否则 AEC 会拿麦克风当参考
+        assert!(!is_loopback_device_name("alsa_input.pci-0000_00_1f.3.analog-stereo"));
+        assert!(!is_loopback_device_name("Yeti Stereo Microphone"));
+    }
 }
 
 #[cfg(target_os = "linux")]

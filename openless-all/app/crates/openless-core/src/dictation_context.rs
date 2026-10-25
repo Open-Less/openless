@@ -171,6 +171,8 @@ pub struct DictationInsertionContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingPlan {
     pub microphone_device_name: Option<String>,
+    /// AEC 的扬声器参考源：空字符串 = 自动选默认监听源，`"off"` = 不采集参考。
+    pub aec_reference_device_name: String,
     /// The physical hotkey generation that owns a provisional capture, when
     /// this context is promoted from the native staging path.
     pub capture_generation: Option<u64>,
@@ -316,6 +318,7 @@ impl DictationContext {
             normal_archive_successful_recording: preferences.record_audio_for_debug,
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
+                aec_reference_device_name: preferences.aec_reference_device_name.clone(),
                 capture_generation: None,
                 mute_during_recording: preferences.mute_during_recording,
                 // TextStream is explicitly a live ASR module; do not let an old

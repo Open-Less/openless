@@ -859,6 +859,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "aec_reference_device_name",
+        key: "aecReferenceDeviceName",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Text,
+        reason: "local_hardware",
+    },
+    PreferenceField {
         rust_name: "debug_archive_raw",
         key: "debugArchiveRaw",
         class: PreferenceClass::Portable,

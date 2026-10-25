@@ -880,6 +880,10 @@ pub struct UserPreferences {
     /// 只选它、不选处理后时，主档案直接存原始 PCM（功能不受影响）。
     #[serde(default)]
     pub debug_archive_raw: bool,
+    /// AEC 的扬声器参考源（回环/监听设备名）。空字符串 = 自动选默认扬声器的
+    /// 监听源；`"off"` = 不采集参考（AEC 退化为无参考）。
+    #[serde(default)]
+    pub aec_reference_device_name: String,
     /// How many recent wav files `recordings/` keeps (newest first by mtime).
     /// `None` = follow `HISTORY_CAP` (200); `Some(n)` clamps to 1..=200.
     /// Trimmed before each new session. Lets users tune combinations like
@@ -1239,6 +1243,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     debug_archive_raw: bool,
     #[serde(default)]
+    aec_reference_device_name: String,
+    #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
     quick_note_export_directory: String,
@@ -1433,6 +1439,7 @@ impl Default for UserPreferencesWire {
             record_audio_for_debug: prefs.record_audio_for_debug,
             debug_archive_processed: prefs.debug_archive_processed,
             debug_archive_raw: prefs.debug_archive_raw,
+            aec_reference_device_name: prefs.aec_reference_device_name.clone(),
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
@@ -1672,6 +1679,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             record_audio_for_debug: wire.record_audio_for_debug,
             debug_archive_processed: wire.debug_archive_processed,
             debug_archive_raw: wire.debug_archive_raw,
+            aec_reference_device_name: wire.aec_reference_device_name,
             audio_recording_max_entries: wire.audio_recording_max_entries,
             quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
@@ -2054,6 +2062,7 @@ impl Default for UserPreferences {
             record_audio_for_debug: false,
             debug_archive_processed: false,
             debug_archive_raw: false,
+            aec_reference_device_name: String::new(),
             audio_recording_max_entries: None,
             quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),

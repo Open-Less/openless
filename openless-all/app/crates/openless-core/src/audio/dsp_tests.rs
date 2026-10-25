@@ -255,3 +255,33 @@ fn aec_and_buffer_reach_the_dsp_settings() {
     .normalized();
     assert_eq!(clamped.output_buffer_ms, 1200);
 }
+
+
+/// 参考队列限长：AEC 只关心最近的扬声器信号，堆积只会把 AEC 拖慢。
+#[test]
+fn far_end_queue_drops_oldest_frames_beyond_the_limit() {
+    let queue = crate::FarEndQueue::default();
+    // 每帧 48 kHz 单声道 1 秒 = 48000 样本；塞 3 秒应当留下最近 2 秒。
+    for _ in 0..3 {
+        queue.push(&vec![0.1_f32; 48_000], 1, 48_000);
+    }
+    let frames = queue.drain();
+    let total: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    assert!(total <= 96_000, "队列长度应被限制在 2 秒内，实际 {total}");
+    assert_eq!(frames.len(), 2, "最旧的一秒应当被丢弃");
+}
+
+/// 空帧/非法采样率不该进队列；非有限值被清洗成 0。
+#[test]
+fn far_end_queue_rejects_empty_and_cleans_non_finite_samples() {
+    let queue = crate::FarEndQueue::default();
+    queue.push(&[], 1, 48_000);
+    queue.push(&[0.0; 8], 0, 48_000);
+    queue.push(&[0.0; 8], 1, 0);
+    assert!(queue.is_empty(), "空帧与零通道/零采样率必须被拒绝");
+
+    queue.push(&[f32::NAN, f32::INFINITY, 0.5], 1, 48_000);
+    let frames = queue.drain();
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].samples.iter().all(|sample| sample.is_finite()));
+}

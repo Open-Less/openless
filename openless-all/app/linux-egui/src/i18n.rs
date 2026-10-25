@@ -161,6 +161,28 @@ pub const CATALOG: &[Msg] = &[
         text: row("回声消除与缓冲", "回聲消除與緩衝", "Echo cancellation and buffering", "エコーキャンセルとバッファ", "에코 제거 및 버퍼"),
     },
     Msg {
+        key: "settings.audioDsp.aecReferenceLabel",
+        text: row("扬声器参考源", "揚聲器參考源", "Speaker reference", "スピーカー参照", "스피커 참조"),
+    },
+    Msg {
+        key: "settings.audioDsp.aecReferenceDesc",
+        text: row(
+            "采集哪台扬声器的回环信号供回声消除使用；没有回环源时 AEC 只能在没有参考的情况下工作。",
+            "擷取哪台揚聲器的回環訊號供回聲消除使用；沒有回環源時 AEC 只能在沒有參考的情況下運作。",
+            "Which speaker loopback feeds echo cancellation; without a loopback source AEC runs without a reference.",
+            "どのスピーカーのループバックをエコーキャンセルに使うか。ループバック元がない場合、AEC は参照なしで動作します。",
+            "어떤 스피커의 루프백을 에코 제거에 사용할지 선택합니다. 루프백 소스가 없으면 AEC는 참조 없이 동작합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.audioDsp.aecReferenceAuto",
+        text: row("自动（默认扬声器）", "自動（預設揚聲器）", "Automatic (default speaker)", "自動（既定のスピーカー）", "자동(기본 스피커)"),
+    },
+    Msg {
+        key: "settings.audioDsp.aecReferenceOff",
+        text: row("不采集参考", "不擷取參考", "Do not capture a reference", "参照を取得しない", "참조를 수집하지 않음"),
+    },
+    Msg {
         key: "settings.audioDsp.acousticEchoCancellation",
         text: row("声学回声消除（AEC）", "聲學回聲消除（AEC）", "Acoustic echo cancellation (AEC)", "音響エコーキャンセル（AEC）", "음향 에코 제거(AEC)"),
     },

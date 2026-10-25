@@ -588,6 +588,8 @@ pub enum SettingsComboField {
     SelectionVoicePlanFormat,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
     CodingAgentPermission,
+    /// AEC 的扬声器参考源（回环/监听设备）。
+    AecReference,
     /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
     /// 重启后生效；不是 Core 偏好，所以不上云、不影响 Tauri。
     LogLevel,
@@ -1212,6 +1214,10 @@ pub struct SettingsFields {
     pub debug_archive_processed: bool,
     /// 调试录音：额外保留「处理前」的 `<session>.raw.wav`，用于 A/B 对照。
     pub debug_archive_raw: bool,
+    /// AEC 的扬声器参考源选项：0 = 自动，1 = 不采集，其余为回环设备名。
+    pub aec_reference_devices: Vec<String>,
+    /// 当前选择的下标（见 `aec_reference_devices`）。
+    pub aec_reference_index: usize,
     /// 日志级别：0 = info，1 = debug，2 = trace。宿主本地设置，不进 Core 偏好。
     pub log_level: usize,
     pub history_max_entries: String,
@@ -1283,6 +1289,8 @@ impl Default for SettingsFields {
             record_audio_for_debug: false,
             debug_archive_processed: false,
             debug_archive_raw: false,
+            aec_reference_devices: Vec::new(),
+            aec_reference_index: 0,
             log_level: 0,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),

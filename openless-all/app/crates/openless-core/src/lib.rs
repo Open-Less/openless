@@ -227,7 +227,7 @@ pub use api::{
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
-    encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor,
+    encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
     NormalizedPcmChunk, PcmNormalizer, DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{
