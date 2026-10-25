@@ -852,6 +852,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "debug_archive_processed",
+        key: "debugArchiveProcessed",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "debug_archive_raw",
+        key: "debugArchiveRaw",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "audio_recording_max_entries",
         key: "audioRecordingMaxEntries",
         class: PreferenceClass::Portable,

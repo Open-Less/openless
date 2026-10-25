@@ -551,6 +551,10 @@ pub enum SettingsField {
     /// 轻量本机麦克风增益与软限幅。
     AudioEnhancement,
     RecordAudioForDebug,
+    /// 调试录音：保留处理后的音频（主档案）。
+    DebugArchiveProcessed,
+    /// 调试录音：额外保留处理前的原始音频。
+    DebugArchiveRaw,
     ActivityHeatmap,
     SystemProxy,
     TestingFeatures,
@@ -1204,6 +1208,10 @@ pub struct SettingsFields {
     #[serde(default)]
     pub llm_thinking_enabled: bool,
     pub record_audio_for_debug: bool,
+    /// 调试录音：保留「处理后」的音频（主档案 `<session>.wav`）。
+    pub debug_archive_processed: bool,
+    /// 调试录音：额外保留「处理前」的 `<session>.raw.wav`，用于 A/B 对照。
+    pub debug_archive_raw: bool,
     /// 日志级别：0 = info，1 = debug，2 = trace。宿主本地设置，不进 Core 偏好。
     pub log_level: usize,
     pub history_max_entries: String,
@@ -1273,6 +1281,8 @@ impl Default for SettingsFields {
             capsule_transcript_font_size: 14,
             llm_thinking_enabled: false,
             record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
             log_level: 0,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),

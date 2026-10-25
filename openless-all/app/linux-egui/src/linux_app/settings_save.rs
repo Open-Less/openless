@@ -235,6 +235,20 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsField::RecordAudioForDebug => {
                 preferences.record_audio_for_debug = !preferences.record_audio_for_debug;
+                // 打开主开关时默认选「处理后」，否则主开关打开了却什么都不落盘、
+                // 用户以为坏了；「处理前」保持用户上一次的选择。
+                if preferences.record_audio_for_debug
+                    && !preferences.debug_archive_processed
+                    && !preferences.debug_archive_raw
+                {
+                    preferences.debug_archive_processed = true;
+                }
+            }
+            frontend::view_model::SettingsField::DebugArchiveProcessed => {
+                preferences.debug_archive_processed = !preferences.debug_archive_processed;
+            }
+            frontend::view_model::SettingsField::DebugArchiveRaw => {
+                preferences.debug_archive_raw = !preferences.debug_archive_raw;
             }
             frontend::view_model::SettingsField::StreamingSaveClipboard => {
                 preferences.streaming_insert_save_clipboard =

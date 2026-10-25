@@ -50,6 +50,10 @@ struct LinuxRecordingOptions {
     require_archive: bool,
     mute_during_recording: bool,
     audio_processing: openless_core::AudioProcessingConfig,
+    /// 主档案（`<session>.wav`）写「处理后」的 PCM。
+    archive_processed: bool,
+    /// 额外再写一份「处理前」的 `<session>.raw.wav` 做 A/B 对照。
+    archive_raw: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -58,6 +62,10 @@ struct LinuxAudioThreadArgs {
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
     writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    /// 主档案是否写「处理后」的 PCM；false 时主档案存原始 PCM。
+    write_processed: bool,
+    /// 「处理前」的额外档案（只在同时要两份时创建）。
+    raw_writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
     audio_processing: openless_core::AudioProcessingConfig,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
@@ -76,6 +84,8 @@ impl AudioProcessingWorker {
         consumer: Arc<dyn AudioConsumer>,
         progress: Arc<dyn RecordingProgressSink>,
         writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+        write_processed: bool,
+        raw_writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
     ) -> Result<(Self, SyncSender<RawAudioFrame>), BackendError> {
         let (sender, receiver) = sync_channel::<RawAudioFrame>(AUDIO_PROCESSING_QUEUE_CAPACITY);
         let started = std::time::Instant::now();
@@ -83,18 +93,44 @@ impl AudioProcessingWorker {
             .name("openless-linux-audio-processor".to_string())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
+                // 处理前的原始 PCM：只在需要时量化，避免常态多一次分配。
+                let write_raw =
+                    |frame: &RawAudioFrame, sink: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>| {
+                        let Some(writer) = sink.as_ref() else {
+                            return;
+                        };
+                        let pcm = openless_core::pcm_f32_to_i16_le(&frame.samples);
+                        if let Err(error) = writer
+                            .lock()
+                            .expect("Linux WAV writer lock poisoned")
+                            .append(&pcm)
+                        {
+                            log::warn!("Linux raw recording write failed: {error}");
+                        }
+                    };
                 while let Ok(frame) = receiver.recv() {
+                    // 「处理前」的额外档案永远拿原始帧。
+                    if raw_writer.is_some() {
+                        write_raw(&frame, &raw_writer);
+                    }
+                    // 只要了处理前、没要处理后：主档案也存原始帧，功能（回退/quick
+                    // note 播放）继续可用，且不会多出一份重复文件。
+                    if !write_processed {
+                        write_raw(&frame, &writer);
+                    }
                     if let Some(chunk) =
                         processor.process(&frame.samples, frame.channels, frame.input_sample_rate)
                     {
                         consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                        if let Some(writer) = &writer {
-                            if let Err(error) = writer
-                                .lock()
-                                .expect("Linux WAV writer lock poisoned")
-                                .append(&chunk.pcm_i16_le)
-                            {
-                                log::warn!("Linux recording archive write failed: {error}");
+                        if write_processed {
+                            if let Some(writer) = &writer {
+                                if let Err(error) = writer
+                                    .lock()
+                                    .expect("Linux WAV writer lock poisoned")
+                                    .append(&chunk.pcm_i16_le)
+                                {
+                                    log::warn!("Linux recording archive write failed: {error}");
+                                }
                             }
                         }
                         let _ = progress
@@ -103,7 +139,7 @@ impl AudioProcessingWorker {
                 }
                 if let Some(chunk) = processor.finish() {
                     consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                    if let Some(writer) = &writer {
+                    if let Some(writer) = writer.as_ref().filter(|_| write_processed) {
                         if let Err(error) = writer
                             .lock()
                             .expect("Linux WAV writer lock poisoned")
@@ -163,6 +199,8 @@ impl AudioRecorder for LinuxCpalRecorder {
         let recordings_dir = self.recordings_dir.clone();
         let require_archive =
             context.output_target == openless_core::DictationOutputTarget::QuickNote;
+        let archive_processed = context.recording.archive_processed;
+        let archive_raw = context.recording.archive_raw;
         Box::pin(async move {
             #[cfg(target_os = "linux")]
             {
@@ -175,6 +213,8 @@ impl AudioRecorder for LinuxCpalRecorder {
                             require_archive,
                             mute_during_recording,
                             audio_processing,
+                            archive_processed,
+                            archive_raw,
                         },
                         consumer,
                         progress,
@@ -322,6 +362,8 @@ fn start_linux_recording(
         require_archive,
         mute_during_recording,
         audio_processing,
+        archive_processed,
+        archive_raw,
     } = options;
 
     // Mute is best-effort and independent of capture availability (mirrors the
@@ -343,11 +385,33 @@ fn start_linux_recording(
     let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
     let stop_for_thread = Arc::clone(&stop);
     let runtime_error_for_thread = Arc::clone(&runtime_error);
-    let (writer, archive) = match recordings_dir {
+    // 调试录音两个开关都关时不落盘；quick note / undecided 这类功能必需档案由
+    // Core 把 archive_processed 置为 true，所以这里统一按开关走。
+    let wants_archive = archive_processed || archive_raw;
+    let (writer, archive, raw_writer) = match recordings_dir.filter(|_| wants_archive) {
         Some(directory) => {
             match LinuxWavWriter::create(directory.join(format!("{session_id}.wav"))) {
                 Ok((writer, archive)) => {
-                    (Some(Arc::new(std::sync::Mutex::new(writer))), Some(archive))
+                    // 两份都要时，另开一个 <session>.raw.wav 存处理前的 PCM。
+                    let raw = if archive_processed && archive_raw {
+                        match LinuxWavWriter::create(directory.join(format!("{session_id}.raw.wav")))
+                        {
+                            Ok((raw_writer, _raw_archive)) => {
+                                Some(Arc::new(std::sync::Mutex::new(raw_writer)))
+                            }
+                            Err(error) => {
+                                log::warn!("failed to create raw recording archive: {error}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    (
+                        Some(Arc::new(std::sync::Mutex::new(writer))),
+                        Some(archive),
+                        raw,
+                    )
                 }
                 Err(error) => {
                     if require_archive {
@@ -357,7 +421,7 @@ fn start_linux_recording(
                         ));
                     }
                     log::warn!("failed to create Linux recording archive: {error}");
-                    (None, None)
+                    (None, None, None)
                 }
             }
         }
@@ -367,7 +431,7 @@ fn start_linux_recording(
                 "quick note recording archive directory is missing",
             ))
         }
-        None => (None, None),
+        None => (None, None, None),
     };
     let thread = std::thread::Builder::new()
         .name("openless-linux-recorder".to_string())
@@ -377,6 +441,8 @@ fn start_linux_recording(
                 consumer,
                 progress,
                 writer,
+                write_processed: archive_processed,
+                raw_writer,
                 audio_processing,
                 stop: stop_for_thread,
                 runtime_error: runtime_error_for_thread,
@@ -421,13 +487,22 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         consumer,
         progress,
         writer,
+        write_processed,
+        raw_writer,
         audio_processing,
         stop,
         runtime_error,
         startup,
     } = args;
     let (processor, frame_tx) =
-        match AudioProcessingWorker::start(audio_processing, consumer, progress, writer) {
+        match AudioProcessingWorker::start(
+            audio_processing,
+            consumer,
+            progress,
+            writer,
+            write_processed,
+            raw_writer,
+        ) {
             Ok(worker) => worker,
             Err(error) => {
                 let _ = startup.send(Err(error));

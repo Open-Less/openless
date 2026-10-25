@@ -3810,6 +3810,34 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.recording.archive_processed_label",
+        text: row("保存处理后的音频", "儲存處理後的音訊", "Keep processed audio", "処理後の音声を保存", "처리된 오디오 저장"),
+    },
+    Msg {
+        key: "settings.recording.archive_processed_desc",
+        text: row(
+            "降噪与增益之后的版本，仍保存在原来的录制文件里（quick note 播放、本地模型回退都用它）。",
+            "降噪與增益之後的版本，仍存於原本的錄製檔案（quick note 播放、本機模型回退都用它）。",
+            "The version after noise reduction and gain, still stored in the existing recording file (used by quick-note playback and the local model fallback).",
+            "ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます（クイックノート再生とローカルモデルのフォールバックが使います）。",
+            "노이즈 감소와 게인 적용 후의 오디오로, 기존 녹음 파일에 저장됩니다(퀵노트 재생과 로컬 모델 폴백이 사용).",
+        ),
+    },
+    Msg {
+        key: "settings.recording.archive_raw_label",
+        text: row("另存一份处理前的音频", "另存一份處理前的音訊", "Also keep pre-processing audio", "処理前の音声も保存", "처리 전 오디오도 저장"),
+    },
+    Msg {
+        key: "settings.recording.archive_raw_desc",
+        text: row(
+            "同一目录下另存 <会话>.raw.wav，可与上面那份逐段对照；只开这一项时，原始音频直接存进主档案。",
+            "同一目錄下另存 <session>.raw.wav，可與上面那份逐段對照；只開這一項時，原始音訊直接存進主檔案。",
+            "Writes <session>.raw.wav next to it so you can compare segment by segment; with only this enabled the raw audio goes into the main archive.",
+            "同じフォルダに <session>.raw.wav を追加保存し、上記と区間ごとに比較できます。これだけを有効にすると元音声がメインファイルに保存されます。",
+            "같은 폴더에 <session>.raw.wav를 함께 저장해 구간별로 비교할 수 있습니다. 이것만 켜면 원본 오디오가 기본 파일에 저장됩니다.",
+        ),
+    },
+    Msg {
         key: "settings.recording.record_audio_for_debug_label",
         text: row(
             "保留原始录音（调试）",

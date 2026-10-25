@@ -3197,6 +3197,34 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
+                // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
+                // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
+                if vm.settings.record_audio_for_debug {
+                    ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_processed_label"),
+                            tr_l10n(lang, "settings.recording.archive_processed_desc"),
+                            vm.settings.debug_archive_processed,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveProcessed,
+                                ));
+                            },
+                        );
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_raw_label"),
+                            tr_l10n(lang, "settings.recording.archive_raw_desc"),
+                            vm.settings.debug_archive_raw,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveRaw,
+                                ));
+                            },
+                        );
+                    });
+                }
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),

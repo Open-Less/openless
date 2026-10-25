@@ -354,6 +354,17 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
         .collect()
 }
 
+/// f32 交织采样 → 小端 i16 字节流，供宿主把「处理前」的原始 PCM 也写成 WAV
+/// （调试时与处理后那份做 A/B 对照）。量化规则与 [`AudioProcessor`] 内部一致。
+pub fn pcm_f32_to_i16_le(samples: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        let quantized = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        bytes.extend_from_slice(&quantized.to_le_bytes());
+    }
+    bytes
+}
+
 fn quantize_to_i16_le(samples: &[f32]) -> (Vec<u8>, f32) {
     let mut bytes = Vec::with_capacity(samples.len() * 2);
     let mut square_sum = 0.0_f64;

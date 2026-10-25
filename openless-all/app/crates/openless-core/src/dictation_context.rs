@@ -181,6 +181,11 @@ pub struct RecordingPlan {
     /// keep PCM in memory; successful-recording retention is a separate policy.
     pub archive_enabled: bool,
     pub archive_successful_recording: bool,
+    /// 主档案（`<session>.wav`）写「处理后」的 PCM。调试录音两个开关都关时为
+    /// false；quick note / undecided 这类功能必需档案永远为 true。
+    pub archive_processed: bool,
+    /// 额外再写一份「处理前」的 `<session>.raw.wav` 供 A/B 对照。
+    pub archive_raw: bool,
     /// A quick-note or undecided Android capture must not silently continue
     /// without a disk archive when its path cannot be created.
     pub archive_required: bool,
@@ -321,7 +326,15 @@ impl DictationContext {
                 archive_successful_recording: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
-                ) || preferences.record_audio_for_debug,
+                ) || (preferences.record_audio_for_debug
+                    && (preferences.debug_archive_processed || preferences.debug_archive_raw)),
+                // 功能必需档案（quick note / undecided）始终存处理后的 PCM；
+                // 调试录音则完全由两个开关决定，两个都关就不落盘。
+                archive_processed: matches!(
+                    options.output_target,
+                    DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
+                ) || (preferences.record_audio_for_debug && preferences.debug_archive_processed),
+                archive_raw: preferences.record_audio_for_debug && preferences.debug_archive_raw,
                 archive_required: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
@@ -926,6 +939,74 @@ mod tests {
         let prompt = build_asr_prompt(&[over_budget, "OpenLess".to_string()]).unwrap();
         assert_eq!(prompt, "OpenLess.");
         assert!(prompt.chars().count() <= ASR_PROMPT_CHAR_BUDGET);
+    }
+
+    // 调试录音的两个开关独立生效：
+    // - 都关 → 不落盘
+    // - 只开处理后 → 主档案存处理后
+    // - 只开处理前 → 主档案存原始（功能不减），不额外多一份
+    // - 都开 → 主档案 + `<session>.raw.wav`
+    // quick note 这类功能必需档案不受开关影响。
+    #[test]
+    fn debug_archive_switches_decide_what_the_host_writes() {
+        fn plan(processed: bool, raw: bool) -> (bool, bool, bool) {
+            let preferences = UserPreferences {
+                record_audio_for_debug: true,
+                debug_archive_processed: processed,
+                debug_archive_raw: raw,
+                ..UserPreferences::default()
+            };
+            let pack = builtin_style_pack_for_mode(preferences.default_mode);
+            let context = DictationContext::capture(
+                &preferences,
+                &pack,
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
+                    ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                    ProviderInvocation::for_provider("omni"),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
+            );
+            (
+                context.recording.archive_successful_recording,
+                context.recording.archive_processed,
+                context.recording.archive_raw,
+            )
+        }
+
+        assert_eq!(plan(false, false), (false, false, false));
+        assert_eq!(plan(true, false), (true, true, false));
+        assert_eq!(plan(false, true), (true, false, true));
+        assert_eq!(plan(true, true), (true, true, true));
+
+        // quick note 必须始终有处理后档案，否则播放与本地回退会失去 PCM。
+        let preferences = UserPreferences {
+            record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
+            ..UserPreferences::default()
+        };
+        let pack = builtin_style_pack_for_mode(preferences.default_mode);
+        let context = DictationContext::capture(
+            &preferences,
+            &pack,
+            DictationProviderInvocations::new(
+                ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
+                ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                ProviderInvocation::for_provider("omni"),
+            ),
+            Vec::new(),
+            Vec::new(),
+            &DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::QuickNote,
+                ..DictationStartOptions::default()
+            },
+        );
+        assert!(context.recording.archive_processed);
+        assert!(!context.recording.archive_raw);
     }
 
     #[test]
