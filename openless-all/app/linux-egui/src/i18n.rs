@@ -152,6 +152,42 @@ pub const CATALOG: &[Msg] = &[
     Msg { key: "settings.audioDsp.disabledHint", text: row("开启上方语音增强开关后可调整，当前配置已保留。", "開啟上方語音增強開關後可調整，目前設定已保留。", "Enable speech enhancement above to adjust these settings. Your configuration is retained.", "上の音声強調を有効にすると調整できます。設定は保持されています。", "위에서 음성 향상을 켜면 조정할 수 있습니다. 설정은 유지됩니다.") },
     Msg { key: "settings.audioDsp.moveUp", text: row("上移处理阶段", "上移處理階段", "Move stage up", "処理を上へ移動", "처리 단계 위로 이동") },
     Msg { key: "settings.audioDsp.moveDown", text: row("下移处理阶段", "下移處理階段", "Move stage down", "処理を下へ移動", "처리 단계 아래로 이동") },
+    Msg {
+        key: "settings.audioDsp.aecStage",
+        text: row("回声消除", "回聲消除", "Echo cancellation", "エコーキャンセル", "에코 제거"),
+    },
+    Msg {
+        key: "settings.audioDsp.echoStage",
+        text: row("回声消除与缓冲", "回聲消除與緩衝", "Echo cancellation and buffering", "エコーキャンセルとバッファ", "에코 제거 및 버퍼"),
+    },
+    Msg {
+        key: "settings.audioDsp.acousticEchoCancellation",
+        text: row("声学回声消除（AEC）", "聲學回聲消除（AEC）", "Acoustic echo cancellation (AEC)", "音響エコーキャンセル（AEC）", "음향 에코 제거(AEC)"),
+    },
+    Msg {
+        key: "settings.audioDsp.AEC_needs_a_loudspeaker_reference",
+        text: row(
+            "外放时压掉扬声器回授；没有参考信号时不会起作用，戴耳机可以关掉。",
+            "外放時壓掉揚聲器回授；沒有參考訊號時不會起作用，戴耳機可以關掉。",
+            "Suppresses loudspeaker feedback while on speaker; it does nothing without a reference signal, so leave it off with headphones.",
+            "スピーカー使用時の回り込みを抑えます。参照信号がないと効果はないため、ヘッドホンならオフのままで構いません。",
+            "스피커 사용 시 되먹임을 줄입니다. 참조 신호가 없으면 효과가 없으므로 헤드폰이면 꺼 두세요.",
+        ),
+    },
+    Msg {
+        key: "settings.audioDsp.Output_buffer_ms",
+        text: row("输出缓冲区", "輸出緩衝區", "Output buffer", "出力バッファ", "출력 버퍼"),
+    },
+    Msg {
+        key: "settings.audioDsp.A_larger_buffer_survives_jitter_but_adds_latency",
+        text: row(
+            "调大可吸收声卡回调抖动，代价是端到端延迟增加。默认 300 ms。",
+            "調大可吸收音效卡回呼抖動，代價是端到端延遲增加。預設 300 ms。",
+            "A larger buffer absorbs sound-card callback jitter at the cost of end-to-end latency. Default 300 ms.",
+            "大きくするとサウンドカードのコールバック揺らぎに強くなりますが、遅延が増えます。既定は 300 ms です。",
+            "크게 하면 사운드 카드 콜백 지터를 흡수하지만 지연이 늘어납니다. 기본값은 300 ms입니다.",
+        ),
+    },
     Msg { key: "settings.audioDsp.noiseStage", text: row("降噪", "降噪", "Noise reduction", "ノイズ低減", "잡음 감소") },
     Msg { key: "settings.audioDsp.combStage", text: row("梳状滤波", "梳狀濾波", "Comb filter", "コムフィルター", "콤 필터") },
     Msg { key: "settings.audioDsp.Speech_enhancement_settings", text: row("语音增强设置", "語音增強設置", "Speech enhancement settings", "音声強調設定", "음성 향상 설정") },

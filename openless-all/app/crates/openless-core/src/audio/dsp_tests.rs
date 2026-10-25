@@ -195,3 +195,63 @@ fn default_agc_does_not_amplify_denoised_room_noise_back_to_original_level() {
         );
     }
 }
+
+/// 老 preferences 里 `processingOrder` 只有 6 个阶段（没有 AEC）。数组长度从 6
+/// 变 7 之后必须仍能反序列化，缺的 AEC 补在默认位置，否则升级后用户的增强配置
+/// 会被整个丢掉。
+#[test]
+fn legacy_six_stage_processing_order_still_deserializes() {
+    let legacy = r#"{
+        "noiseReduction": "rnnoise",
+        "noiseStrength": 80,
+        "gainDb": 4,
+        "agcEnabled": true,
+        "agcTarget": 35,
+        "agcAttack": 50,
+        "agcDecay": 50,
+        "vadEnabled": false,
+        "vadThresholdDb": -50,
+        "dereverbLevel": 0,
+        "equalizerEnabled": false,
+        "equalizerPreampDb": 0,
+        "equalizerBandsDb": [0,0,0,0,0,0,0,0,0,0],
+        "processingOrder": ["noiseReduction","dereverb","equalizer","amplifier","agc","vad"]
+    }"#;
+    let config: crate::AudioDspConfig = serde_json::from_str(legacy).unwrap();
+    assert!(!config.aec_enabled, "AEC 默认关");
+    assert_eq!(config.output_buffer_ms, 300);
+    assert_eq!(config.gain_db, 4, "老配置里的值必须保留");
+    assert_eq!(
+        config.processing_order,
+        [
+            // AEC 补到最前，老配置的 6 级顺序原样保留。
+            crate::AudioDspStage::AcousticEchoCancellation,
+            crate::AudioDspStage::NoiseReduction,
+            crate::AudioDspStage::Dereverb,
+            crate::AudioDspStage::Equalizer,
+            crate::AudioDspStage::Amplifier,
+            crate::AudioDspStage::Agc,
+            crate::AudioDspStage::Vad,
+        ],
+        "老配置的 6 级顺序必须保留，AEC 前置补齐"
+    );
+}
+
+#[test]
+fn aec_and_buffer_reach_the_dsp_settings() {
+    let config = crate::AudioDspConfig {
+        aec_enabled: true,
+        output_buffer_ms: 900,
+        ..Default::default()
+    };
+    let settings = config.settings();
+    assert!(settings.aec_enabled);
+    assert_eq!(settings.output_buffer_ms, 900);
+    // 越界值必须夹回 MicYou 接受的范围。
+    let clamped = crate::AudioDspConfig {
+        output_buffer_ms: 5000,
+        ..Default::default()
+    }
+    .normalized();
+    assert_eq!(clamped.output_buffer_ms, 1200);
+}
