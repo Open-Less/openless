@@ -14,6 +14,11 @@ name: Release HarmonyOS
 #
 # Dispatch it after the tag exists; it rebuilds that tag, signs it with material
 # from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
+# `release-tauri.yml` dispatches it automatically once the desktop/Android assets
+# for a `v*-tauri` tag are published (see `dispatch-platform-releases`), so a tag
+# push ships the HAP instead of depending on somebody remembering this page. The
+# manual dispatch stays the repair path for a published tag, and the channel it
+# runs with is `vars.HARMONY_AUTO_CHANNEL` (default `none`) on the automatic one.
 on:
   workflow_dispatch:
     inputs:

@@ -17,6 +17,10 @@ const packaging = readFileSync(join(appRoot, 'scripts/package-harmony-hap.sh'), 
 const signing = readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8');
 const upload = readFileSync(join(appRoot, 'scripts/upload-appgallery.mjs'), 'utf8');
 const releasing = readFileSync(join(appRoot, '../../RELEASING.md'), 'utf8');
+const tauriRelease = readFileSync(
+  join(appRoot, '../../.github/workflows/release-tauri.yml'),
+  'utf8',
+);
 
 // Dispatch-only, with the tag as a required input: the HAP can never come from a
 // branch or ride along with an unrelated push.
@@ -111,6 +115,30 @@ assert.match(workflow, /upload-appgallery\.mjs/);
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);
 assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
+
+// This entry point is dispatch-only, so the Tauri tag build has to hand the tag
+// over explicitly. Without that hand-off the workflow sits at zero runs and every
+// Release ships without a HAP - which is exactly what happened to 2.0.x.
+assert.match(tauriRelease, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+assert.match(
+  tauriRelease,
+  /gh workflow run release-harmony\.yml[\s\S]{0,300}-f "tag=\$RELEASE_TAG"/,
+  'the hand-off must dispatch with the tag as an input',
+);
+assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
+assert.match(
+  tauriRelease,
+  /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,
+  'the hand-off must be tag-push only, so a branch or schedule run dispatches nothing',
+);
+assert.match(tauriRelease, /actions: write/, 'GITHUB_TOKEN needs actions: write to dispatch');
+assert.match(
+  tauriRelease,
+  /HARMONY_CHANNEL: \$\{\{ vars\.HARMONY_AUTO_CHANNEL \|\| 'none' \}\}/,
+  'the automatic hand-off must default to the unsigned repository path',
+);
+assert.match(tauriRelease, /channel=\$HARMONY_CHANNEL/);
+assert.match(releasing, /HARMONY_AUTO_CHANNEL/);
 
 // `env:` at job level outranks `$GITHUB_ENV`, so a placeholder key here would
 // shadow the value the signing step exports and the build would look for
