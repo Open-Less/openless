@@ -1,0 +1,136 @@
+// Contract test for the native HarmonyOS UI.
+//
+// The HAP used to be an ArkWeb shell around the shared web bundle: the whole app
+// was one `Web({ src: $rawfile('web/index.html') })`. It is now a native ArkUI
+// app built for phone, tablet and 2-in-1, and the risks this test guards are the
+// ones that actually bit during the migration:
+//
+//   * a `webview` import creeping back in (it would ship 40 MB of dead assets and
+//     two UIs that drift apart);
+//   * `AppStorage.setOrCreate` used as an assignment - it silently ignores an
+//     existing key, which pinned navigation to the first destination forever;
+//   * `deviceTypes`/`orientation` losing 2-in-1 or rotation support;
+//   * a route that exists in the side bar but has no page behind it;
+//   * a light-mode token without a dark-mode counterpart.
+//
+// Text-based so it also runs in the Linux contract job (no node_modules).
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import ts from 'typescript';
+
+const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = resolve(appRoot, '../..');
+const ets = (path) => readFileSync(join(appRoot, 'harmony/entry/src/main/ets', path), 'utf8');
+const read = (path) => readFileSync(join(appRoot, path), 'utf8');
+
+const index = ets('pages/Index.ets');
+const shell = ets('components/AppShell.ets');
+const nav = ets('components/Nav.ets');
+const tokens = ets('common/Tokens.ets');
+const breakpoints = ets('common/Breakpoint.ets');
+const moduleJson = read('harmony/entry/src/main/module.json5');
+const buildScript = read('scripts/build-harmony-app.sh');
+const packaging = read('scripts/package-harmony-hap.sh');
+
+// 1. Native UI: no ArkWeb shell, no web bundle.
+for (const [label, source] of [['pages/Index.ets', index], ['components/AppShell.ets', shell]]) {
+  assert.doesNotMatch(source, /@kit\.ArkWeb|webview\.|WebviewController/, `${label} must not import ArkWeb`);
+  assert.doesNotMatch(source, /rawfile\('web\/|Web\(\{/, `${label} must not host the web bundle`);
+}
+assert.ok(
+  !existsSync(join(appRoot, 'harmony/entry/src/main/resources/rawfile/web')),
+  'the web bundle must not be staged into the HAP',
+);
+assert.doesNotMatch(buildScript, /npm run build|web-dist|rawfile\/web'\)/, 'the build must not produce a web bundle');
+assert.match(packaging, /build-harmony-app\.sh/, 'packaging drives the native build script');
+assert.ok(
+  !existsSync(join(appRoot, 'scripts/build-harmony-frontend.sh')),
+  'the old frontend-bundle script must be gone',
+);
+
+// 2. `AppStorage.setOrCreate` only creates; every writer needs an assignment.
+assert.match(nav, /Store\.put<string>\('route'/, 'navigation must assign the route, not only create it');
+assert.doesNotMatch(
+  nav + index,
+  /AppStorage\.setOrCreate<string>\('route'/,
+  'setOrCreate silently ignores an existing route key and freezes navigation',
+);
+assert.match(ets('common/Store.ets'), /AppStorage\.set<T>\(key, value\)/, 'Store.put must assign after creating');
+
+// 3. One UI for phone, tablet and PC.
+assert.match(moduleJson, /"phone",\s*\n\s*"tablet",\s*\n\s*"2in1"/, 'deviceTypes must cover phone, tablet and 2in1');
+assert.match(moduleJson, /"orientation": "auto_rotation"/, 'the window must be free to rotate');
+assert.match(moduleJson, /"supportWindowMode":\s*\[\s*\n\s*"fullscreen",\s*\n\s*"split",\s*\n\s*"floating"/, '2-in-1 windows must be able to split and float');
+
+// 4. Size classes come from the window rectangle, not from `mediaquery`.
+assert.doesNotMatch(breakpoints, /mediaquery\.matchMediaSync/, 'the size class must not depend on mediaquery ranges');
+assert.match(breakpoints, /getWindowProperties\(\)/, 'the size class must use the window rectangle');
+assert.match(breakpoints, /'windowSizeChange'/, 'rotation and free-form resize must re-flow through windowSizeChange');
+{
+  const source = breakpoints
+    .replace(/\r\n/g, '\n')
+    .replace(/^import .*;\n/gm, '');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, console });
+  const of = exports.Breakpoints.of;
+  const cases = [
+    [320, 'sm'], // phone portrait
+    [599, 'sm'],
+    [600, 'md'], // phone landscape / small tablet
+    [839, 'md'],
+    [840, 'lg'], // tablet / 2-in-1
+    [1280, 'lg'],
+  ];
+  for (const [width, expected] of cases) assert.equal(of(width), expected, `${width}vp must be ${expected}`);
+}
+
+// 5. Every navigation destination has a page behind it.
+const destinations = [...nav.matchAll(/static readonly [A-Z]+: string = '([a-z]+)'/g)].map((match) => match[1]);
+assert.ok(destinations.length >= 11, `expected at least 11 destinations, got ${destinations.length}`);
+for (const id of destinations) {
+  if (id === 'more' || id === 'overview') continue;
+  assert.match(shell, new RegExp(`Nav\\.${id.toUpperCase()}\\)|Nav\\.${id.toUpperCase()}\\b`), `AppShell must route ${id}`);
+}
+// The overview is the fallback: an unknown route must still land somewhere sane.
+assert.match(shell, /else \{\s*\n\s*OverviewPage\(\)/, 'unknown routes must fall back to the overview');
+const pageFiles = [
+  'pages/OverviewPage.ets',
+  'pages/HistoryPage.ets',
+  'pages/SettingsPage.ets',
+  'pages/LibraryPages.ets',
+  'pages/ToolPages.ets',
+];
+for (const file of pageFiles) assert.ok(existsSync(join(appRoot, 'harmony/entry/src/main/ets', file)), `${file} must exist`);
+const pages = pageFiles.map((file) => ets(file)).join('\n');
+for (const struct of ['OverviewPage', 'HistoryPage', 'VocabPage', 'CorrectionsPage', 'StylePage',
+  'MarketplacePage', 'TranslationPage', 'QaPage', 'QuickNotePage', 'LocalAsrPage', 'SettingsPage']) {
+  assert.ok(pages.includes(`export struct ${struct}`), `missing native page ${struct}`);
+  assert.ok(shell.includes(`${struct}()`), `AppShell must render ${struct}`);
+}
+
+// 6. Everything goes through the one bridge to the shared Rust core.
+for (const file of ['pages/OverviewPage.ets', 'pages/HistoryPage.ets', 'pages/SettingsPage.ets']) {
+  assert.match(ets(file), /from '\.\.\/data\/Api'/, `${file} must use the typed Api façade`);
+}
+assert.doesNotMatch(pages, /nativeHost\.invoke/, 'pages must not call the native module directly');
+
+// 7. Light and dark palettes stay in step.
+const colors = (theme) =>
+  JSON.parse(read(`harmony/entry/src/main/resources/${theme}/element/color.json`)).color.map((entry) => entry.name);
+const light = colors('base');
+const dark = colors('dark');
+assert.ok(light.length >= 20, 'the palette must define the shared tokens');
+for (const name of light) assert.ok(dark.includes(name), `dark palette is missing ${name}`);
+assert.match(tokens, /ol_accent/, 'tokens must expose the brand accent');
+
+// 8. The layout override used for single-device QA stays opt-in.
+assert.match(index, /bpOverride/, 'the size class override must be readable for QA');
+assert.match(ets('entryability/EntryAbility.ets'), /--ps layout/, 'the launcher form is documented next to the parser');
+
+console.log('harmony-native-ui contract passed');
