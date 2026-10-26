@@ -18,6 +18,7 @@ export class Nav {
   static readonly QA: string = 'qa';
   static readonly QUICKNOTE: string = 'quicknote';
   static readonly LOCALASR: string = 'localasr';
+  static readonly CREDENTIALS: string = 'credentials';
   static readonly SETTINGS: string = 'settings';
   static readonly MORE: string = 'more';
 
@@ -36,6 +37,7 @@ export class Nav {
       { id: Nav.QA, label: '问答', group: '工具' },
       { id: Nav.QUICKNOTE, label: '速记', group: '工具' },
       { id: Nav.LOCALASR, label: '模型设置', group: '工具' },
+      { id: Nav.CREDENTIALS, label: '凭据', group: '系统' },
       { id: Nav.SETTINGS, label: '设置', group: '系统' }
     ];
     return list;

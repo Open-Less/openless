@@ -100,6 +100,7 @@ for (const id of destinations) {
 // The overview is the fallback: an unknown route must still land somewhere sane.
 assert.match(shell, /else \{\s*\n\s*OverviewPage\(\)/, 'unknown routes must fall back to the overview');
 const pageFiles = [
+  'pages/CredentialsPage.ets',
   'pages/OverviewPage.ets',
   'pages/HistoryPage.ets',
   'pages/SettingsPage.ets',
@@ -109,7 +110,8 @@ const pageFiles = [
 for (const file of pageFiles) assert.ok(existsSync(join(appRoot, 'harmony/entry/src/main/ets', file)), `${file} must exist`);
 const pages = pageFiles.map((file) => ets(file)).join('\n');
 for (const struct of ['OverviewPage', 'HistoryPage', 'VocabPage', 'CorrectionsPage', 'StylePage',
-  'MarketplacePage', 'TranslationPage', 'QaPage', 'QuickNotePage', 'LocalAsrPage', 'SettingsPage']) {
+  'MarketplacePage', 'TranslationPage', 'QaPage', 'QuickNotePage', 'LocalAsrPage', 'SettingsPage',
+  'CredentialsPage']) {
   assert.ok(pages.includes(`export struct ${struct}`), `missing native page ${struct}`);
   assert.ok(shell.includes(`${struct}()`), `AppShell must render ${struct}`);
 }
@@ -119,6 +121,9 @@ for (const file of ['pages/OverviewPage.ets', 'pages/HistoryPage.ets', 'pages/Se
   assert.match(ets(file), /from '\.\.\/data\/Api'/, `${file} must use the typed Api façade`);
 }
 assert.doesNotMatch(pages, /nativeHost\.invoke/, 'pages must not call the native module directly');
+// Secrets never travel through the preference document.
+assert.match(ets('pages/CredentialsPage.ets'), /Api\.setCredential/, 'credentials must go through set_credential');
+assert.doesNotMatch(ets('pages/CredentialsPage.ets'), /writeString\('\/.*apiKey/i, 'a key must never be a preference');
 
 // 7. Light and dark palettes stay in step.
 const colors = (theme) =>

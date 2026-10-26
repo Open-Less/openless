@@ -1,5 +1,6 @@
 import { Breakpoints } from '../common/Breakpoint';
 import { C, R, S, T } from '../common/Tokens';
+import { CredentialsPage } from '../pages/CredentialsPage';
 import { HistoryPage } from '../pages/HistoryPage';
 import { CorrectionsPage, MarketplacePage, StylePage, VocabPage } from '../pages/LibraryPages';
 import { OverviewPage } from '../pages/OverviewPage';
@@ -79,6 +80,8 @@ export struct AppShell {
       QuickNotePage()
     } else if (this.route === Nav.LOCALASR) {
       LocalAsrPage()
+    } else if (this.route === Nav.CREDENTIALS) {
+      CredentialsPage()
     } else if (this.route === Nav.SETTINGS) {
       SettingsPage()
     } else if (this.route === Nav.MORE) {

@@ -227,6 +227,13 @@ export struct SettingsPage {
       Column() {
         SectionHeader({ title: '转写', hint: '决定语音变成文字的方式' })
         InfoRow({
+          label: '凭据与密钥',
+          value: 'API Key / 接入点 / 模型',
+          hint: '密钥存系统密钥库；未配置时听写会失败',
+          showChevron: true,
+          onTap: () => Nav.go(Nav.CREDENTIALS)
+        })
+        InfoRow({
           label: '转写引擎',
           value: Labels.provider(this.prefs.activeAsrProvider),
           showChevron: true,

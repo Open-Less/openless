@@ -93,6 +93,22 @@ export struct HistoryPage {
     }
   }
 
+  private async repolish(entry: HistoryEntry): Promise<void> {
+    this.busy = true;
+    this.error = '';
+    try {
+      const source: string = entry.rawTranscript !== undefined && entry.rawTranscript.length > 0
+        ? entry.rawTranscript : entry.finalText;
+      const text: string = await Api.repolish(source, this.prefs.activeStylePackId ?? '');
+      await Api.copyText(text);
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   private async retranscribe(id: string): Promise<void> {
     this.busy = true;
     this.error = '';
@@ -317,6 +333,24 @@ export struct HistoryPage {
       }
 
       Row({ space: S.sm }) {
+        if (entry.rawTranscript !== undefined && entry.rawTranscript.length > 0 &&
+          entry.rawTranscript !== entry.finalText) {
+          GhostButton({
+            label: '复制原文',
+            onTap: () => {
+              Api.copyText(entry.asrTranscript !== undefined && entry.asrTranscript !== null &&
+                entry.asrTranscript.length > 0 ? entry.asrTranscript as string : entry.rawTranscript as string);
+            }
+          })
+        }
+        GhostButton({
+          label: this.busy ? '重润色中…' : '重新润色',
+          symbol: 'sparkles',
+          usable: !this.busy,
+          onTap: () => {
+            this.repolish(entry);
+          }
+        })
         GhostButton({
           label: '复制全文',
           onTap: () => {

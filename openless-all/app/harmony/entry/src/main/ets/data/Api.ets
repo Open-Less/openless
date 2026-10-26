@@ -186,6 +186,62 @@ export class Api {
     return JSON.parse(await Api.value('set_active_omni_provider', '{"provider":' + JSON.stringify(provider) + '}')) as SettingsSnapshot;
   }
 
+  // ── Credentials and channels ───────────────────────────────────────────────
+  /**
+   * Keys, endpoints and model ids live in the system keystore, keyed by
+   * (account, provider-channel). `asrConfigured`/`llmConfigured` in the status
+   * tell whether the active channel can actually run.
+   */
+  static async credentialStatus(): Promise<CredentialStatus> {
+    return JSON.parse(await Api.value('get_credentials', '{}')) as CredentialStatus;
+  }
+
+  static async setCredential(account: string, value: string, provider: string): Promise<void> {
+    await Api.value('set_credential',
+      '{"account":' + JSON.stringify(account) + ',"value":' + JSON.stringify(value) +
+        ',"provider":' + JSON.stringify(provider) + '}');
+  }
+
+  static async createChannel(kind: string, providerType: string, name: string): Promise<Channel> {
+    return JSON.parse(await Api.value('create_channel',
+      '{"kind":' + JSON.stringify(kind) + ',"providerType":' + JSON.stringify(providerType) +
+        ',"name":' + JSON.stringify(name) + '}')) as Channel;
+  }
+
+  static async renameChannel(kind: string, id: string, name: string): Promise<void> {
+    await Api.value('rename_channel',
+      '{"kind":' + JSON.stringify(kind) + ',"id":' + JSON.stringify(id) +
+        ',"name":' + JSON.stringify(name) + '}');
+  }
+
+  static async deleteChannel(kind: string, id: string): Promise<void> {
+    await Api.value('delete_channel',
+      '{"kind":' + JSON.stringify(kind) + ',"id":' + JSON.stringify(id) + '}');
+  }
+
+  static async setChannelEnabled(kind: string, id: string, enabled: boolean): Promise<void> {
+    await Api.value('set_channel_enabled',
+      '{"kind":' + JSON.stringify(kind) + ',"id":' + JSON.stringify(id) +
+        ',"enabled":' + (enabled ? 'true' : 'false') + '}');
+  }
+
+  // ── Re-polish / recordings ─────────────────────────────────────────────────
+  static async repolish(rawText: string, stylePackId: string): Promise<string> {
+    const payload = '{"rawText":' + JSON.stringify(rawText) +
+      ',"stylePackId":' + (stylePackId.length > 0 ? JSON.stringify(stylePackId) : 'null') + '}';
+    return JSON.parse(await Api.value('repolish', payload)) as string;
+  }
+
+  static async readRecording(sessionId: string): Promise<RecordingPayload> {
+    return JSON.parse(await Api.value('read_audio_recording',
+      '{"sessionId":' + JSON.stringify(sessionId) + '}')) as RecordingPayload;
+  }
+
+  static async saveStylePack(pack: StylePackPayload): Promise<StylePack> {
+    return JSON.parse(await Api.value('save_style_pack',
+      '{"stylePack":' + JSON.stringify(pack) + '}')) as StylePack;
+  }
+
   // ── Cloud sync / marketplace ───────────────────────────────────────────────
   static async cloudSyncStatus(): Promise<CloudSyncStatus> {
     return JSON.parse(await Api.value('cloud_sync_status', '{}')) as CloudSyncStatus;
@@ -239,6 +295,28 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface CredentialStatus {
+  pipelineMode?: string;
+  asrConfigured?: boolean;
+  llmConfigured?: boolean;
+  omniConfigured?: boolean;
+}
+
+export interface RecordingPayload {
+  mime?: string;
+  fileName?: string;
+  base64: string;
+  size?: number;
+}
+
+export interface StylePackPayload {
+  id?: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  enabled?: boolean;
 }
 
 export interface NetworkState {

@@ -22,9 +22,27 @@ export struct TranslationPage {
   @State private prefs: UserPreferences = {};
   @State private error: string = '';
   @State private busy: boolean = false;
+  @State private draft: string = '';
+  @State private output: string = '';
+  @State private working: boolean = false;
 
   aboutToAppear(): void {
     this.reload();
+  }
+
+  /** One-shot polish/translate through the active model, same path as dictation. */
+  private async runTransform(): Promise<void> {
+    const input: string = this.draft.trim();
+    if (input.length === 0 || this.working) return;
+    this.working = true;
+    this.error = '';
+    try {
+      this.output = await Api.repolish(input, this.prefs.activeStylePackId ?? '');
+    } catch (error) {
+      this.error = (error as Error).message;
+    } finally {
+      this.working = false;
+    }
   }
 
   private async reload(): Promise<void> {
@@ -110,6 +128,52 @@ export struct TranslationPage {
                 .fontSize(T.footnote)
                 .fontColor(C.textTertiary())
                 .width('100%')
+            }
+            .width('100%')
+          }
+
+          Card() {
+            Column({ space: S.sm }) {
+              SectionHeader({ title: '试一下', hint: '走当前模型的一次性改写，不录音' })
+              TextArea({ placeholder: '粘贴一段文字', text: this.draft })
+                .fontSize(T.body)
+                .height(120)
+                .backgroundColor(C.sunken())
+                .borderRadius(R.md)
+                .padding(S.sm)
+                .onChange((value: string) => {
+                  this.draft = value;
+                })
+              Row({ space: S.sm }) {
+                GhostButton({
+                  label: this.working ? '处理中…' : '按当前模式改写',
+                  symbol: 'sparkles',
+                  usable: !this.working && this.draft.trim().length > 0,
+                  onTap: () => {
+                    this.runTransform();
+                  }
+                })
+                GhostButton({
+                  label: '复制结果',
+                  symbol: 'copy',
+                  usable: this.output.length > 0,
+                  onTap: () => {
+                    Api.copyText(this.output);
+                  }
+                })
+              }
+              .width('100%')
+              if (this.output.length > 0) {
+                Text(this.output)
+                  .fontSize(T.body)
+                  .fontColor(C.textPrimary())
+                  .lineHeight(24)
+                  .width('100%')
+                  .padding(S.sm)
+                  .backgroundColor(C.accentSoft())
+                  .borderRadius(R.sm)
+                  .copyOption(CopyOptions.LocalDevice)
+              }
             }
             .width('100%')
           }
