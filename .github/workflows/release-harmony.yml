@@ -319,10 +319,15 @@ jobs:
         if: inputs.upload_to_appgallery && inputs.channel != 'none'
         working-directory: openless-all/app
         # A fork without AGC credentials still gets the GitHub Release; the step
-        # reports that it skipped instead of failing the whole release.
-        run: >-
-          # Only the signed package is uploaded; the unsigned one is what the
-          # GitHub Release distributes.
+        # reports that it skipped instead of failing the whole release. Only the
+        # signed package is uploaded - the Release carries the unsigned one.
+        #
+        # Keep this a literal block: a folded `>-` scalar starting with a comment
+        # swallowed the command line (`# ... node scripts/upload-appgallery.mjs`)
+        # and the step died with `--channel: command not found` (127) the first
+        # time it ever ran.
+        run: |
+          set -euo pipefail
           node scripts/upload-appgallery.mjs \
             --channel "${{ inputs.channel }}" \
             --file target/harmony-packages/OpenLess_harmony_arm64-signed.app \

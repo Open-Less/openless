@@ -131,6 +131,16 @@ assert.match(upload, /api\/publish\/v3\/app-package-info/);
 assert.match(upload, /--dry-run/);
 assert.match(upload, /--skip-if-unconfigured/);
 assert.match(workflow, /upload-appgallery\.mjs/);
+// The upload step must stay a literal `run: |` block. As a folded `>-` scalar its
+// leading explanatory comment joined the command line, so bash saw
+// `# ... node scripts/upload-appgallery.mjs \` and then `--channel` on its own
+// line: `command not found` (127) - the first time the step ever executed.
+assert.doesNotMatch(
+  workflow,
+  /run:\s*>-[ ]*\n\s*#/,
+  'a folded run scalar must not start with a comment; it comments out the command',
+);
+assert.match(workflow, /node scripts\/upload-appgallery\.mjs \\/);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);
