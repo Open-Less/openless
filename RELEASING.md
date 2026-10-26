@@ -264,6 +264,7 @@ candidate package.
 | Variable (optional) | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
 | Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
+| Variable (optional) | `HARMONY_AUTO_CHANNEL` | `none` (default) / `release` / `test` - the channel the automatic tag-build dispatch runs with; `release` or `test` upload the signed App Pack to AppGallery as the candidate package (never submitted for review) |
 
 The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
 `HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there
