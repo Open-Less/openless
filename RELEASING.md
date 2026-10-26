@@ -149,9 +149,21 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
 5. Then, and only then, push the release tag.
 6. Both Beta and Stable tag workflows upload Tauri and Android assets to a shared
-   draft. Wait for **both** workflows to succeed, verify the packages and channel
-   updater manifests, then publish that draft (Beta as a prerelease; Stable as latest).
+   draft. Wait for **both** workflows to succeed, verify the packages, then publish that
+   draft (Beta as a prerelease; Stable as latest).
    Do not rerun an asset workflow after publication without first returning the release to draft.
+   The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
+   `latest-{target}-{arch}-beta.json`). Current clients do **not** read those release assets:
+   they read the CDN, so publishing a release is only half the job — the manifests must also
+   land on the CDN at
+
+   ```text
+   https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+   https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+   ```
+
+   with their `url` fields pointing at the CDN artifacts (`.../releases/{tag}/{asset}`). The
+   in-release copies exist only for clients built before the CDN switch.
 7. Publishing Stable with the administrator's CLI/UI credential automatically
    triggers `sync-homebrew-cask.yml`. It accepts only the published latest Stable
    tag, preserves application build metadata in DMG filenames, verifies matching
@@ -324,6 +336,6 @@ change the published channel. The same format applies to subsequent releases.
 2. For a Stable release, a maintainer merges `beta → main`.
 3. An **admin** bumps the Tauri version (five-location sync), verifies CI is green,
    and pushes the release tag, which triggers the macOS/Windows/Android asset
-   workflows and their channel-specific updater manifests.
+   workflows and their channel updater manifests.
 4. After both release workflows pass, an admin verifies and publishes the shared
    draft. Linux packages are attached independently only after Linux acceptance.

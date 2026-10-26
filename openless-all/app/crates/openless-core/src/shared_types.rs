@@ -140,10 +140,11 @@ pub enum MacosNewlineMode {
 }
 
 /// Auto-update channel. Picks which manifest the background AutoUpdateGate
-/// fetches. `Stable` = `latest-android-{arch}.json` (or the desktop
-/// plugin-updater stable endpoints). `Beta` = `latest-android-{arch}-beta.json`
-/// (or the desktop beta endpoints). The Settings manual "check stable / check
-/// beta" buttons pass the channel explicitly and ignore this pref.
+/// fetches. `Stable` = `/updates/stable/latest-{target}-{arch}.json` on the CDN
+/// (`latest-android-{arch}.json` for the Android client). `Beta` = the
+/// `/updates/beta/` counterpart with a `-beta` filename suffix. The Settings
+/// manual "check stable / check beta" buttons pass the channel explicitly and
+/// ignore this pref.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
