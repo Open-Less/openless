@@ -2,7 +2,7 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#FFFFFF"
+      "value": "#F1F3F5"
     },
     {
       "name": "ime_panel_background",
@@ -31,6 +31,126 @@
     {
       "name": "ime_key_shadow",
       "value": "#33000000"
+    },
+    {
+      "name": "ol_bg",
+      "value": "#F1F3F5"
+    },
+    {
+      "name": "ol_surface",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ol_surface_elevated",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ol_surface_sunken",
+      "value": "#E8EAEE"
+    },
+    {
+      "name": "ol_overlay",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ol_border",
+      "value": "#E0E3E8"
+    },
+    {
+      "name": "ol_divider",
+      "value": "#E8EAEE"
+    },
+    {
+      "name": "ol_text_primary",
+      "value": "#182431"
+    },
+    {
+      "name": "ol_text_secondary",
+      "value": "#5E6670"
+    },
+    {
+      "name": "ol_text_tertiary",
+      "value": "#8A919C"
+    },
+    {
+      "name": "ol_text_on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ol_icon_primary",
+      "value": "#182431"
+    },
+    {
+      "name": "ol_icon_secondary",
+      "value": "#5E6670"
+    },
+    {
+      "name": "ol_accent",
+      "value": "#0A59F7"
+    },
+    {
+      "name": "ol_accent_soft",
+      "value": "#E8F0FE"
+    },
+    {
+      "name": "ol_accent_pressed",
+      "value": "#0846C4"
+    },
+    {
+      "name": "ol_success",
+      "value": "#1FA768"
+    },
+    {
+      "name": "ol_success_soft",
+      "value": "#E4F6EC"
+    },
+    {
+      "name": "ol_warning",
+      "value": "#C97A00"
+    },
+    {
+      "name": "ol_warning_soft",
+      "value": "#FDF1DF"
+    },
+    {
+      "name": "ol_danger",
+      "value": "#D33A2C"
+    },
+    {
+      "name": "ol_danger_soft",
+      "value": "#FCEAE8"
+    },
+    {
+      "name": "ol_pressed",
+      "value": "#0F000000"
+    },
+    {
+      "name": "ol_hover",
+      "value": "#08000000"
+    },
+    {
+      "name": "ol_scrim",
+      "value": "#66000000"
+    },
+    {
+      "name": "ol_heat_0",
+      "value": "#EDEFF3"
+    },
+    {
+      "name": "ol_heat_1",
+      "value": "#CFE0FD"
+    },
+    {
+      "name": "ol_heat_2",
+      "value": "#9DBFFA"
+    },
+    {
+      "name": "ol_heat_3",
+      "value": "#5C92F5"
+    },
+    {
+      "name": "ol_heat_4",
+      "value": "#0A59F7"
     }
   ]
 }

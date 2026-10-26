@@ -7,7 +7,8 @@
     "mainElement": "EntryAbility",
     "deviceTypes": [
       "phone",
-      "tablet"
+      "tablet",
+      "2in1"
     ],
     "deliveryWithInstall": true,
     "installationFree": false,
@@ -31,7 +32,15 @@
           }
         ],
         "startWindowIcon": "$media:openless_icon",
-        "startWindowBackground": "$color:start_window_background"
+        "startWindowBackground": "$color:start_window_background",
+        // One UI for phone, tablet and 2-in-1: the window may rotate, split and
+        // float, and every layout decision comes from the window size class.
+        "orientation": "auto_rotation",
+        "supportWindowMode": [
+          "fullscreen",
+          "split",
+          "floating"
+        ]
       }
     ],
     "extensionAbilities": [

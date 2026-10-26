@@ -2,7 +2,6 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
-import { webview } from '@kit.ArkWeb';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
@@ -31,6 +30,16 @@ interface DeviceInfo { name: string; isDefault: boolean; }
 interface DictationEvent { phase: string; level: number; error: string; }
 interface VoiceCredentialStatus { pipelineMode: string; asrConfigured: boolean; omniConfigured: boolean; }
 interface VoiceCredentialReply { ok: boolean; value: VoiceCredentialStatus; }
+/**
+ * The native UI has no WebView to dispatch DOM events into, so the capability
+ * layer publishes into `AppStorage`: pages observe `dictPhase` / `dictLevel` /
+ * `dictError` / `backendRevision` / `micLevel` with `@StorageLink`.
+ */
+function publishBackendChanged(): void {
+  const current: number = AppStorage.get<number>('backendRevision') ?? 0;
+  AppStorage.setOrCreate<number>('backendRevision', current + 1);
+}
+
 class CommandArgs { channelId: string = ''; action: string = ''; registrationId: string = '';  deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
 export class HarmonyApi {
@@ -116,7 +125,7 @@ export class HarmonyApi {
     const snapshot: RevisionReply = JSON.parse(await nativeHost.invokeAsync('__revision_snapshot', '{}'));
     if (snapshot.ok) {
       if (this.revisions && JSON.stringify(this.revisions) !== JSON.stringify(snapshot.value)) {
-        this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+        publishBackendChanged();
       }
       this.revisions = snapshot.value;
     }
@@ -204,24 +213,7 @@ export class HarmonyApi {
     try { fs.writeSync(destination.fd, bytes.buffer); } finally { fs.closeSync(destination); }
   }
 
-  private sequence: number = 0;
-  private results: Map<string, string> = new Map();
-
-  request(command: string, args: string): string {
-    const id = String(++this.sequence);
-    this.invokeAsync(command, args).then((result: string) => { this.results.set(id, result); });
-    return id;
-  }
-
-  takeResult(id: string): string {
-    const result = this.results.get(id);
-    if (result === undefined) return '';
-    this.results.delete(id);
-    return result;
-  }
-
   private context?: common.UIAbilityContext;
-  private controller?: webview.WebviewController;
   private capturer?: audio.AudioCapturer;
   private lastLevelEvent: number = 0;
   private voice: VoiceClient = new VoiceClient();
@@ -231,9 +223,9 @@ export class HarmonyApi {
 
   private publishVoice(phase: string, level: number = 0, error: string = ''): void {
     this.voicePhase = phase;
-    const state: DictationEvent = { phase: phase, level: level, error: error };
-    this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-dictation',{detail:" +
-      JSON.stringify(state) + '}))').catch(() => {});
+    AppStorage.setOrCreate<string>('dictPhase', phase);
+    AppStorage.setOrCreate<number>('dictLevel', level);
+    AppStorage.setOrCreate<string>('dictError', error);
   }
 
   private async startDictation(): Promise<void> {
@@ -273,7 +265,7 @@ export class HarmonyApi {
       if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
       this.voiceEpoch++;
       this.publishVoice('idle');
-      this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+      publishBackendChanged();
       return result;
     } catch (error) {
       if (epoch === this.voiceEpoch) { this.voiceEpoch++; this.publishVoice('idle', 0, String(error)); }
@@ -287,9 +279,8 @@ export class HarmonyApi {
     try { await this.voice.cancel(); } finally { if (epoch === this.voiceEpoch) this.publishVoice('idle'); }
   }
 
-  configure(context: common.UIAbilityContext, controller: webview.WebviewController): void {
+  configure(context: common.UIAbilityContext): void {
     this.context = context;
-    this.controller = controller;
   }
 
   private bytes(value: string): Uint8Array { return new util.TextEncoder().encodeInto(value); }
@@ -386,7 +377,7 @@ export class HarmonyApi {
         let sum = 0;
         for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
         const level = pcm.length ? Math.min(1, Math.sqrt(sum / pcm.length) / 32768 * 4) : 0;
-        this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-level',{detail:" + level + '}))').catch(() => {});
+        AppStorage.setOrCreate<number>('micLevel', level);
       });
       await capturer.start();
       console.info('[OpenLess Audio] microphone monitor started');
