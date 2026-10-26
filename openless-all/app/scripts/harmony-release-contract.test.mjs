@@ -37,6 +37,26 @@ assert.match(workflow, /does not match package\.json version/);
 // that `prepare-harmony-sdk.sh` pins by checksum - no secrets, no self-hosted box.
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
+
+// A hosted runner ships neither the app's `node_modules` (`build-harmony-frontend.sh`
+// runs `npm run build`) nor the Tier-2 OHOS target std (`build-harmony-backend.sh`
+// runs `cargo build --target aarch64-unknown-linux-ohos`). CI installs both; the
+// first real dispatch of this workflow did not and died with `can't find crate for
+// `core`` (error[E0463]) after the Rime/NDK compile.
+assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
+assert.match(workflow, /targets: aarch64-unknown-linux-ohos/);
+assert.match(workflow, /run: npm ci/);
+{
+  // Keep the target list in step with the CI job that really builds the HAP: a
+  // target added to one workflow only breaks the tag build.
+  const ciWorkflow = readFileSync(join(appRoot, '../../.github/workflows/ci.yml'), 'utf8');
+  const ohosTargets = (source) =>
+    [...source.matchAll(/targets:\s*([^\n]+)/g)]
+      .map((match) => match[1].trim())
+      .filter((targets) => targets.includes('ohos'));
+  assert.ok(ohosTargets(workflow).length > 0, 'release-harmony.yml must install the OHOS target');
+  assert.deepEqual(ohosTargets(workflow), ohosTargets(ciWorkflow));
+}
 const prepare = readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8');
 assert.match(prepare, /DEFAULT_URL=https:\/\//);
 assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);

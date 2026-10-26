@@ -118,6 +118,33 @@ jobs:
         with:
           node-version: '22'
 
+      # The HAP build shells out to `npm run build` for the ArkWeb bundle and to
+      # `cargo build --target aarch64-unknown-linux-ohos` for the Rust host, so it
+      # needs the app's `node_modules` and the Tier-2 OHOS target std. A hosted
+      # runner ships neither, and both gaps only surface minutes into the build -
+      # the first real dispatch of this workflow died with `can't find crate for
+      # `core`` (error[E0463]) after compiling the Rime/NDK tree. Install them up
+      # front, exactly like `ci.yml`'s `harmony-check` does.
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+
+      - name: Install frontend dependencies
+        working-directory: openless-all/app
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Tier-2 OHOS target; `rustup target list` lists it for stable.
+          targets: aarch64-unknown-linux-ohos
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          # Same key as `ci.yml`'s `harmony-check`: a tag build restores the tree
+          # that job already paid for, and a tag never writes to the cache.
+          key: harmony-host
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
       # No toolchain cache here either: `prepare-harmony-sdk.sh` downloads the
       # checksum-pinned official tools in under two minutes, and a 1.77 GB entry
       # that a tag build rarely restores would sit in the 10 GB budget and evict
