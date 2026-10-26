@@ -276,6 +276,30 @@ export class Api {
       '{"stylePack":' + JSON.stringify(pack) + '}')) as StylePack;
   }
 
+  // ── Microphone test, diagnostics, GitHub ───────────────────────────────────
+  static async startMicrophoneMonitor(): Promise<void> {
+    await Api.value('start_microphone_level_monitor', '{}');
+  }
+
+  static async stopMicrophoneMonitor(): Promise<void> {
+    await Api.value('stop_microphone_level_monitor', '{}');
+  }
+
+  static async exportErrorLog(fileName: string): Promise<string> {
+    const wire = await Api.value('export_harmony_error_log',
+      '{"fileName":' + JSON.stringify(fileName) + '}');
+    return JSON.parse(wire) as string;
+  }
+
+  static async githubDeviceFlowStart(): Promise<GithubDeviceFlow> {
+    return JSON.parse(await Api.value('github_device_flow_start', '{}')) as GithubDeviceFlow;
+  }
+
+  static async githubDeviceFlowPoll(flowId: string): Promise<GithubDeviceFlowPoll> {
+    return JSON.parse(await Api.value('github_device_flow_poll',
+      '{"flowId":' + JSON.stringify(flowId) + '}')) as GithubDeviceFlowPoll;
+  }
+
   // ── Cloud sync / marketplace ───────────────────────────────────────────────
   static async cloudSyncStatus(): Promise<CloudSyncStatus> {
     return JSON.parse(await Api.value('cloud_sync_status', '{}')) as CloudSyncStatus;
@@ -330,6 +354,20 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface GithubDeviceFlow {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  interval: number;
+  expiresIn: number;
+}
+
+export interface GithubDeviceFlowPoll {
+  state: string;
+  login?: string;
+  error?: string;
 }
 
 export interface ModelList {

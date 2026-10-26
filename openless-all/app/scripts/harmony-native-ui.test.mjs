@@ -134,7 +134,27 @@ assert.ok(light.length >= 20, 'the palette must define the shared tokens');
 for (const name of light) assert.ok(dark.includes(name), `dark palette is missing ${name}`);
 assert.match(tokens, /ol_accent/, 'tokens must expose the brand accent');
 
-// 8. The layout override used for single-device QA stays opt-in.
+// 8. Feature surfaces stay wired to the shared core.
+const pagesAll = pages;
+for (const [label, source, api] of [
+  ['history playback', ets('pages/HistoryPage.ets'), /Api\.readRecording/],
+  ['history re-polish', ets('pages/HistoryPage.ets'), /Api\.repolish/],
+  ['channel test', ets('pages/CredentialsPage.ets'), /Api\.validateChannel/],
+  ['channel CRUD', ets('pages/CredentialsPage.ets'), /Api\.createChannel/],
+  ['model list', ets('pages/CredentialsPage.ets'), /Api\.listModels/],
+  ['style editing', ets('pages/LibraryPages.ets'), /Api\.saveStylePack/],
+  ['marketplace like', ets('pages/LibraryPages.ets'), /Api\.likePack/],
+  ['marketplace login', ets('pages/LibraryPages.ets'), /Api\.githubDeviceFlowStart/],
+  ['microphone test', ets('pages/SettingsPage.ets'), /Api\.startMicrophoneMonitor/],
+  ['log export', ets('pages/SettingsPage.ets'), /Api\.exportErrorLog/],
+  ['onboarding', ets('pages/OverviewPage.ets'), /Api\.credentialStatus/],
+]) {
+  assert.match(source, api, `${label} must call the core through Api`);
+}
+assert.match(ets('common/AudioPlayback.ets'), /AVPlayer/, 'recording playback must use AVPlayer');
+assert.match(ets('common/AudioPlayback.ets'), /fdSrc/, 'AVPlayer reads the cached wav through fdSrc');
+
+// 9. The layout override used for single-device QA stays opt-in.
 assert.match(index, /bpOverride/, 'the size class override must be readable for QA');
 assert.match(ets('entryability/EntryAbility.ets'), /--ps layout/, 'the launcher form is documented next to the parser');
 

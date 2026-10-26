@@ -24,6 +24,27 @@ const POLISH_MODES: string[] = ['raw', 'polish', 'translate', 'structured'];
  * rest of the app share one preference document (no local shadow state). Wide
  * layouts show two columns; compact layouts stack the same groups.
  */
+/** Live microphone level, fed by the capability layer through AppStorage. */
+@Component
+struct MicLevelBar {
+  @StorageLink('micLevel') level: number = 0;
+
+  build() {
+    Row() {
+      Row()
+        .width(Math.max(6, Math.min(1, this.level) * 120))
+        .height(8)
+        .backgroundColor(C.accent())
+        .borderRadius(R.pill)
+    }
+    .width(120)
+    .height(8)
+    .backgroundColor(C.sunken())
+    .borderRadius(R.pill)
+    .animation({ duration: 120, curve: Curve.EaseOut })
+  }
+}
+
 @Component
 export struct SettingsPage {
   @StorageLink('bp') bp: string = 'md';
@@ -39,6 +60,9 @@ export struct SettingsPage {
   @State private error: string = '';
   @State private busy: boolean = false;
   @State private asrOpen: boolean = false;
+  @State private micTesting: boolean = false;
+  @State private logPath: string = '';
+  @State private syncLogin: string = '';
   @State private llmOpen: boolean = false;
   @State private asrProviders: ProviderDescriptor[] = [];
   @State private llmProviders: ProviderDescriptor[] = [];
@@ -132,6 +156,29 @@ export struct SettingsPage {
       this.error = (error as Error).message;
     } finally {
       this.busy = false;
+    }
+  }
+
+  private async toggleMicTest(): Promise<void> {
+    try {
+      if (this.micTesting) {
+        await Api.stopMicrophoneMonitor();
+        this.micTesting = false;
+      } else {
+        await Api.startMicrophoneMonitor();
+        this.micTesting = true;
+      }
+    } catch (error) {
+      this.error = (error as Error).message;
+      this.micTesting = false;
+    }
+  }
+
+  private async exportLog(): Promise<void> {
+    try {
+      this.logPath = await Api.exportErrorLog('');
+    } catch (error) {
+      this.error = (error as Error).message;
     }
   }
 
@@ -330,6 +377,44 @@ export struct SettingsPage {
         .width('100%')
         .padding({ bottom: S.sm })
 
+        Row({ space: S.sm }) {
+          GhostButton({
+            label: this.micTesting ? '停止电平测试' : '测试麦克风电平',
+            symbol: 'mic',
+            onTap: () => {
+              this.toggleMicTest();
+            }
+          })
+          if (this.micTesting) {
+            MicLevelBar()
+          }
+        }
+        .width('100%')
+        .padding({ bottom: S.sm })
+
+        ToggleRow({
+          label: '低延迟听写',
+          hint: '边录边转写，首字更快',
+          checked: this.prefs.lowLatencyDictationEnabled === true,
+          onToggle: (value: boolean) => {
+            this.writeBool('/lowLatencyDictationEnabled', value);
+          }
+        })
+        ToggleRow({
+          label: '稳定转写',
+          hint: '牺牲一点延迟换取更稳定的长句结果',
+          checked: this.prefs.stableTranscriptionEnabled === true,
+          onToggle: (value: boolean) => {
+            this.writeBool('/stableTranscriptionEnabled', value);
+          }
+        })
+        ToggleRow({
+          label: '音频增强',
+          checked: this.prefs.audioEnhancementEnabled === true,
+          onToggle: (value: boolean) => {
+            this.writeBool('/audioEnhancementEnabled', value);
+          }
+        })
         ToggleRow({
           label: '录音提示音',
           checked: this.prefs.audioCueOnRecord === true,
@@ -449,7 +534,16 @@ export struct SettingsPage {
         InfoRow({
           label: '网络',
           value: this.network,
-          showDivider: false
+          showDivider: true
+        })
+        InfoRow({
+          label: '上传本机偏好',
+          value: '端到端加密，口令不出设备',
+          showChevron: true,
+          showDivider: false,
+          onTap: () => {
+            this.error = '云同步登录需要口令输入，桌面端完成后再回到这里';
+          }
         })
       }
       .width('100%')
@@ -472,7 +566,16 @@ export struct SettingsPage {
         InfoRow({
           label: '输入法',
           value: this.capabilities.supportsImeInput === true ? '已接入系统输入法' : '未接入',
-          showDivider: false
+          showDivider: true
+        })
+        InfoRow({
+          label: '导出诊断日志',
+          value: this.logPath.length > 0 ? this.logPath : '点此导出',
+          showChevron: this.logPath.length === 0,
+          showDivider: false,
+          onTap: () => {
+            this.exportLog();
+          }
         })
       }
       .width('100%')

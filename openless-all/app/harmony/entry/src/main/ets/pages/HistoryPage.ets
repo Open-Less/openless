@@ -1,10 +1,12 @@
 import { Breakpoints } from '../common/Breakpoint';
+import { AudioPlayback } from '../common/AudioPlayback';
 import { Fmt } from '../common/Format';
 import { Store } from '../common/Store';
 import { C, R, S, T } from '../common/Tokens';
 import { Card, EmptyState, GhostButton, Pill, SearchField, SectionHeader, StatusRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Api } from '../data/Api';
+import { common } from '@kit.AbilityKit';
 import { HistoryEntry, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 interface ModeLabel {
@@ -45,6 +47,8 @@ export struct HistoryPage {
   @State private busy: boolean = false;
   @State private error: string = '';
   @State private prefs: UserPreferences = {};
+  @State private playing: boolean = false;
+  private audio: AudioPlayback = new AudioPlayback();
 
   aboutToAppear(): void {
     this.reload();
@@ -90,6 +94,25 @@ export struct HistoryPage {
       this.error = (error as Error).message;
     } finally {
       this.busy = false;
+    }
+  }
+
+  private async togglePlayback(entry: HistoryEntry): Promise<void> {
+    if (this.playing) {
+      await this.audio.stop();
+      this.playing = false;
+      return;
+    }
+    this.error = '';
+    try {
+      const payload = await Api.readRecording(entry.id);
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await this.audio.play(context.cacheDir, entry.id, payload.base64, (playing: boolean) => {
+        this.playing = playing;
+      });
+    } catch (error) {
+      this.playing = false;
+      this.error = '播放失败：' + (error as Error).message;
     }
   }
 
@@ -358,6 +381,13 @@ export struct HistoryPage {
           }
         })
         if (entry.hasAudioRecording === true) {
+          GhostButton({
+            label: this.playing ? '停止播放' : '播放录音',
+            symbol: 'play',
+            onTap: () => {
+              this.togglePlayback(entry);
+            }
+          })
           GhostButton({
             label: this.busy ? '重新转写中…' : '重新转写',
             symbol: 'refresh',

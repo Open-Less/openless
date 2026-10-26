@@ -570,6 +570,8 @@ export struct MarketplacePage {
   @State private error: string = '';
   @State private busy: boolean = false;
   @State private sort: string = 'popular';
+  @State private loginCode: string = '';
+  @State private loginState: string = '';
 
   aboutToAppear(): void {
     this.reload();
@@ -584,6 +586,37 @@ export struct MarketplacePage {
       this.error = (error as Error).message;
     } finally {
       this.busy = false;
+    }
+  }
+
+  private async startLogin(): Promise<void> {
+    try {
+      const flow = await Api.githubDeviceFlowStart();
+      this.loginCode = flow.userCode;
+      this.loginState = '等待授权…';
+      Api.copyText(flow.userCode);
+      let attempts = 0;
+      while (attempts < 60) {
+        attempts++;
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), Math.max(2, flow.interval) * 1000));
+        const poll = await Api.githubDeviceFlowPoll(flow.flowId);
+        if (poll.state === 'authorized') {
+          this.loginState = '已登录 ' + (poll.login ?? '');
+          this.loginCode = '';
+          await this.reload();
+          return;
+        }
+        if (poll.state === 'expired' || poll.state === 'error') {
+          this.loginState = '登录失败';
+          this.loginCode = '';
+          return;
+        }
+      }
+      this.loginState = '登录超时';
+      this.loginCode = '';
+    } catch (error) {
+      this.loginState = '登录不可用';
+      this.error = (error as Error).message;
     }
   }
 
@@ -609,6 +642,23 @@ export struct MarketplacePage {
         })
       }
       .width('100%')
+
+      Row({ space: S.sm }) {
+        GhostButton({
+          label: this.loginState.length > 0 ? this.loginState : 'GitHub 登录',
+          symbol: 'person',
+          onTap: () => {
+            this.startLogin();
+          }
+        })
+        if (this.loginCode.length > 0) {
+          Text('在浏览器输入 ' + this.loginCode)
+            .fontSize(T.caption)
+            .fontColor(C.accent())
+        }
+      }
+      .width('100%')
+      .padding({ top: S.sm })
 
       Row({ space: S.sm }) {
         ForEach(['popular', 'new'], (option: string) => {

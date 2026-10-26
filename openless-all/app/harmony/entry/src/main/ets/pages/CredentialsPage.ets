@@ -28,6 +28,8 @@ export struct CredentialsPage {
   @State private asrDescriptors: ProviderDescriptor[] = [];
   @State private llmDescriptors: ProviderDescriptor[] = [];
   @State private creating: string = '';
+  @State private models: string[] = [];
+  @State private modelKind: string = '';
 
   aboutToAppear(): void {
     this.reload();
@@ -108,6 +110,40 @@ export struct CredentialsPage {
       await this.reload();
     } catch (error) {
       this.error = (error as Error).message;
+    }
+  }
+
+  private async loadModels(kind: string, id: string): Promise<void> {
+    this.modelKind = kind;
+    this.note = '正在拉取模型…';
+    try {
+      this.models = await Api.listModels(kind, id);
+      this.note = this.models.length > 0 ? '可用模型 ' + this.models.length.toString() + ' 个'
+        : '该引擎不返回模型列表';
+    } catch (error) {
+      this.models = [];
+      this.note = '拉取失败：' + (error as Error).message;
+    }
+  }
+
+  @Builder
+  modelPicker(kind: string, channelId: string) {
+    if (this.modelKind === kind && this.models.length > 0) {
+      Flex({ wrap: FlexWrap.Wrap }) {
+        ForEach(this.models, (model: string) => {
+          Text(model)
+            .fontSize(T.caption)
+            .fontColor(C.textSecondary())
+            .padding({ left: S.sm, right: S.sm, top: S.xxs, bottom: S.xxs })
+            .margin({ right: S.xs, bottom: S.xs })
+            .backgroundColor(C.sunken())
+            .borderRadius(R.pill)
+            .onClick(() => {
+              this.save(kind === 'asr' ? 'asr.model' : 'ark.model_id', channelId, model);
+            })
+        }, (model: string) => kind + '-model-' + model)
+      }
+      .width('100%')
     }
   }
 
@@ -306,6 +342,17 @@ export struct CredentialsPage {
                   this.save(account, provider, value);
                 }
               })
+              Row({ space: S.sm }) {
+                GhostButton({
+                  label: '拉取可用模型',
+                  symbol: 'list',
+                  onTap: () => {
+                    this.loadModels('asr', this.asrProvider());
+                  }
+                })
+              }
+              .width('100%')
+              this.modelPicker('asr', this.asrProvider())
               PlainField({
                 label: '模型',
                 account: 'asr.model',
@@ -341,6 +388,17 @@ export struct CredentialsPage {
                   this.save(account, provider, value);
                 }
               })
+              Row({ space: S.sm }) {
+                GhostButton({
+                  label: '拉取可用模型',
+                  symbol: 'list',
+                  onTap: () => {
+                    this.loadModels('llm', this.llmProvider());
+                  }
+                })
+              }
+              .width('100%')
+              this.modelPicker('llm', this.llmProvider())
               PlainField({
                 label: '模型 ID',
                 account: 'ark.model_id',

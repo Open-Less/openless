@@ -44,6 +44,7 @@ export struct OverviewPage {
   @State private prefs: UserPreferences = {};
   @State private online: boolean = true;
   @State private capabilities: PlatformCapabilities = { platform: 'harmony' };
+  @State private configured: boolean = true;
   @State private todayCount: number = 0;
   @State private todayChars: number = 0;
   @State private todayDuration: number = 0;
@@ -67,6 +68,12 @@ export struct OverviewPage {
       const network = await Api.network();
       this.online = network.online;
       this.capabilities = await Api.platformCapabilities();
+      try {
+        const credentials = await Api.credentialStatus();
+        this.configured = credentials.asrConfigured === true;
+      } catch (error) {
+        this.configured = false;
+      }
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -222,6 +229,7 @@ export struct OverviewPage {
           .alignItems(VerticalAlign.Top)
         } else {
           Column({ space: S.md }) {
+            this.onboardingCard()
             this.dictationCard()
             this.resultCard()
             this.metricsCard()
@@ -239,6 +247,46 @@ export struct OverviewPage {
     .width('100%')
     .height('100%')
     .padding({ left: S.gutter(this.bp), right: S.gutter(this.bp) })
+  }
+
+  /** First run: the app cannot transcribe until a provider key exists. */
+  @Builder
+  onboardingCard() {
+    if (!this.configured) {
+      Card() {
+        Column({ space: S.sm }) {
+          Row({ space: S.sm }) {
+            SymbolGlyph(symbolOf('sparkles'))
+              .fontSize(20)
+              .fontColor([C.accent()])
+            Text('先配一个转写密钥')
+              .fontSize(T.headline)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(C.textPrimary())
+              .layoutWeight(1)
+          }
+          .width('100%')
+          Text('鸿蒙端把转写交给云端引擎，密钥存在系统密钥库。没有密钥时录音会失败，历史里只会留下错误码。')
+            .fontSize(T.footnote)
+            .fontColor(C.textSecondary())
+            .lineHeight(21)
+            .width('100%')
+          Row({ space: S.sm }) {
+            GhostButton({
+              label: '去配凭据',
+              symbol: 'settings',
+              onTap: () => Nav.go(Nav.CREDENTIALS)
+            })
+            GhostButton({
+              label: '查看引擎',
+              onTap: () => Nav.go(Nav.SETTINGS)
+            })
+          }
+          .width('100%')
+        }
+        .width('100%')
+      }
+    }
   }
 
   @Builder
