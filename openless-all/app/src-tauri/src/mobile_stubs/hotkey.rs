@@ -11,7 +11,11 @@ use crate::types::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Pressed { at: Instant, press_id: u64 },
-    Released { at: Instant, press_id: u64 },
+    Released {
+        at: Instant,
+        press_id: u64,
+        combined: bool,
+    },
     // Combo-key abort and Esc cancel have no global keyboard listener on
     // mobile and are not in this enum (see the hotkey.rs module comment).
     TranslationModifierPressed,

@@ -118,6 +118,9 @@ pub struct VoiceDictationHandoff {
 /// decides lifecycle and stale-event policy; the host decides how local ASR and
 /// the native capture stream are implemented.
 pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    /// Apply runtime-only standby intent even before a recognizer exists.
+    fn set_capture_paused(&self, _revision: u64, _paused: bool) {}
+
     fn configure(
         &self,
         config: VoiceActivationConfig,

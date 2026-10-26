@@ -397,6 +397,7 @@ export interface UserPreferences {
   lowMemoryBackgroundEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
+  voiceActivationHotkeyLinked: boolean;
   voiceActivationWakeEnabled: boolean;
   voiceActivationFinishEnabled: boolean;
   voiceActivationWakePhrase: string;

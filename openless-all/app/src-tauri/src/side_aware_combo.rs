@@ -125,10 +125,11 @@ impl SideAwareComboState {
 
     fn release_active(&mut self) -> Option<HotkeyEvent> {
         let press_id = self.active_press_id.take()?;
-        self.companion_seen = false;
+        let combined = std::mem::take(&mut self.companion_seen);
         Some(HotkeyEvent::Released {
             at: Instant::now(),
             press_id,
+            combined,
         })
     }
 

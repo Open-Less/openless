@@ -37,6 +37,9 @@ mod restore_runtime;
 pub(crate) mod selection_voice_session;
 pub(crate) mod voice_edit_session;
 use capsule_focus::*;
+use crate::capsule_feedback::{
+    core_capsule_hide_delay, VoiceActivationFeedback, CAPSULE_AUTO_HIDE_DELAY_MS,
+};
 pub(crate) use capsule_focus::{
     capture_external_focus_target, capture_focus_target, capture_frontmost_app,
     restore_focus_target_if_possible,
@@ -592,6 +595,7 @@ struct Inner {
     /// the old hint before the new payload or bails on a changed epoch, never
     /// emitting Idle after a new session.
     capsule_event_lock: Mutex<()>,
+    voice_activation_feedback: Mutex<VoiceActivationFeedback>,
     /// Selection-polish lightweight hint is still showing or being processed.
     /// Older voice/QA auto-hide timers must yield during this window so they do
     /// not dismiss the selection-polish capsule early.
@@ -759,6 +763,7 @@ impl Coordinator {
                 last_capsule_state: Mutex::new(None),
                 capsule_event_epoch: AtomicU64::new(0),
                 capsule_event_lock: Mutex::new(()),
+                voice_activation_feedback: Mutex::new(VoiceActivationFeedback::default()),
                 selection_polish_capsule_active: AtomicBool::new(false),
                 qa_context: Arc::clone(&qa_context),
                 shutdown: AtomicBool::new(false),
@@ -897,6 +902,7 @@ impl Coordinator {
             last_capsule_state: Mutex::new(None),
             capsule_event_epoch: AtomicU64::new(0),
             capsule_event_lock: Mutex::new(()),
+            voice_activation_feedback: Mutex::new(VoiceActivationFeedback::default()),
             selection_polish_capsule_active: AtomicBool::new(false),
             qa_context: Arc::clone(&qa_context),
             shutdown: AtomicBool::new(false),
@@ -975,6 +981,54 @@ impl Coordinator {
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
         let captured_revision = self.inner.host.capsule_revision();
         let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);
+    }
+
+    pub(crate) fn reset_voice_activation_feedback(&self) {
+        self.inner.voice_activation_feedback.lock().request(None);
+    }
+
+    pub(crate) fn present_voice_activation_feedback(
+        &self,
+        state: &openless_core::VoiceActivationStateSnapshot,
+    ) {
+        let latest = self.inner.backend.latest_voice_activation_state();
+        let Some(enabled) = self.inner.voice_activation_feedback.lock().complete(
+            state,
+            latest.as_ref(),
+            self.inner.backend.voice_activation_hotkey_intent(),
+        ) else {
+            return;
+        };
+        let preferences = self.inner.backend.get_preferences();
+        if !preferences.show_capsule {
+            return;
+        }
+        let (epoch, revision) = {
+            let _guard = self.inner.capsule_event_lock.lock();
+            let other_owner = self.selection_voice_owns_capsule()
+                || self.inner.selection_polish_capsule_active.load(Ordering::SeqCst)
+                || self.inner.vocab_card_visible.load(Ordering::SeqCst)
+                || self.inner.qa_context.is_panel_visible()
+                || self.inner.backend.less_computer_active_session().is_some()
+                || crate::recording_companion::claimed();
+            if !crate::capsule_feedback::can_present_feedback(
+                *self.inner.last_capsule_state.lock(),
+                self.inner.backend.snapshot().dictation.phase,
+                other_owner,
+            ) {
+                return;
+            }
+            let Some(revision) = self.inner.host.capsule_feedback_revision() else {
+                return;
+            };
+            (self.inner.capsule_event_epoch.load(Ordering::SeqCst), revision)
+        };
+        let payload = crate::capsule_feedback::voice_activation_payload(
+            enabled, preferences.capsule_style,
+        );
+        // The epoch/revision pair rejects a new shared-surface owner. Done
+        // reuses the existing two-second, epoch-safe, nonactivating outlet.
+        let _ = self.present_core_capsule_at_revision(payload, Some(epoch), revision);
     }
 
     /// Selection-voice claims the shared capsule from hotkey Start through
@@ -1948,29 +2002,13 @@ impl Coordinator {
     }
 }
 
-const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
-
-/// Core terminal events describe semantics only; how long the native capsule
-/// stays is the Tauri Host's job. Centralizing the mapping in a pure function
-/// pins the done/error/cancel timings and lets tests run without real windows
-/// and timers.
-fn core_capsule_hide_delay(state: CapsuleState) -> Option<u64> {
-    match state {
-        CapsuleState::Done | CapsuleState::Error => Some(CAPSULE_AUTO_HIDE_DELAY_MS),
-        CapsuleState::Cancelled => Some(0),
-        _ => None,
-    }
-}
-
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
-    let expected = inner.last_capsule_state.lock().as_ref().copied();
+    let expected_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
     let inner = Arc::clone(inner);
     let spawner = inner.host.clone();
     spawner.spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        if inner.last_capsule_state.lock().as_ref().copied() == expected {
-            hide_capsule_if_all_sessions_idle(&inner);
-        }
+        hide_capsule_if_all_sessions_idle(&inner, expected_epoch);
     });
 }
 

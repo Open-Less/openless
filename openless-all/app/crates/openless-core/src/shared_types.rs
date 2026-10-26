@@ -462,6 +462,8 @@ pub struct UserPreferences {
     /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
     #[serde(default)]
     pub voice_activation_enabled: bool,
+    #[serde(default)]
+    pub voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     pub voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1045,6 +1047,8 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     #[serde(default)]
     voice_activation_enabled: bool,
+    #[serde(default)]
+    voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1323,6 +1327,7 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_hotkey_linked: prefs.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
             voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
             voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
@@ -1544,6 +1549,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_hotkey_linked: wire.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
             voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
             voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
@@ -1943,6 +1949,7 @@ impl Default for UserPreferences {
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             voice_activation_enabled: false,
+            voice_activation_hotkey_linked: false,
             voice_activation_wake_enabled: true,
             voice_activation_finish_enabled: true,
             voice_activation_wake_phrase: default_voice_activation_wake_phrase(),

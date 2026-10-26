@@ -404,7 +404,7 @@ pub(super) fn selection_polish_capsule_epoch_is_current(
 /// Collapse path for old dictation/QA timers. It shares one short lock with all emits: it
 /// yields if Selection Polish is showing, and if a new voice/QA session emitted first, that
 /// emission is ordered before Idle by the lock.
-pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
+pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>, expected_epoch: u64) {
     // Read session state first, then enter the capsule lock. The event epoch cancels this Idle
     // if any new payload arrived between the two reads.
     #[cfg(all(not(mobile), target_os = "windows"))]
@@ -416,13 +416,12 @@ pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
         && inner.backend.less_computer_active_session().is_none()
         && selection_voice_idle;
     let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
-    let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
     if !dictation_idle || selection_polish_active {
         return;
     }
 
     let _event_guard = inner.capsule_event_lock.lock();
-    if inner.capsule_event_epoch.load(Ordering::SeqCst) == observed_epoch
+    if inner.capsule_event_epoch.load(Ordering::SeqCst) == expected_epoch
         && !inner.selection_polish_capsule_active.load(Ordering::SeqCst)
     {
         emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false);

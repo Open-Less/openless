@@ -211,6 +211,9 @@ async fn forward_legacy_event(
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::VoiceActivationStateChanged(state) => {
+            if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                coordinator.present_voice_activation_feedback(&state);
+            }
             let _ = app.emit("voice-activation:state-changed", state);
         }
         BackendEventKind::TranscriptDelta(_) => {}
@@ -821,6 +824,9 @@ fn present_qa_capsule(
 }
 
 async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut CapsuleOwners) {
+    if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+        coordinator.reset_voice_activation_feedback();
+    }
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
     if let Some((owner, _)) = owners

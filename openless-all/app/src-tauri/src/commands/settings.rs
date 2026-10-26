@@ -9,6 +9,11 @@ pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
 }
 
 #[tauri::command]
+pub fn get_voice_activation_state(core: CoreState<'_>) -> Option<openless_core::VoiceActivationStateSnapshot> {
+    core.latest_voice_activation_state()
+}
+
+#[tauri::command]
 pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
     StyleSystemPrompts::default()
 }
@@ -241,6 +246,7 @@ pub(crate) fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
 
 fn voice_activation_preferences_changed(previous: &UserPreferences, next: &UserPreferences) -> bool {
     previous.voice_activation_enabled != next.voice_activation_enabled
+        || previous.voice_activation_hotkey_linked != next.voice_activation_hotkey_linked
         || previous.voice_activation_wake_enabled != next.voice_activation_wake_enabled
         || previous.voice_activation_finish_enabled != next.voice_activation_finish_enabled
         || previous.voice_activation_wake_phrase != next.voice_activation_wake_phrase

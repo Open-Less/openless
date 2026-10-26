@@ -1682,6 +1682,15 @@ export const es: typeof zhCN = {
       voiceActivationDesc: 'Escucha localmente una frase de activación para iniciar el dictado.',
       voiceActivationLocalOnly:
         'El reconocimiento permanece en este dispositivo; el audio de espera no se sube ni se archiva.',
+      voiceActivationHotkeyLinked: "Vincular atajo de grabación",
+      voiceActivationHotkeyLinkedDesc: "Pulsa el atajo para activar o pausar la escucha en vez de grabar. Inicia en pausa. Pausar desactiva el precalentamiento del micrófono, no otras grabaciones. La escucha es local; el dictado usa el servicio actual.",
+      voiceActivationDisabled: "Activación por voz desactivada",
+      voiceActivationPaused: "Escucha en pausa temporal",
+      voiceActivationPausing: "Deteniendo la escucha…",
+      voiceActivationStarting: "Iniciando la escucha…",
+      voiceActivationListening: "Esperando la frase de activación",
+      voiceActivationDictating: "Dictando o finalizando",
+      voiceActivationError: "No se puede iniciar la escucha. Revisa el modelo, los permisos y el micrófono.",
       voiceActivationMultimodalModels:
         'Prepara aquí el modelo de activación por voz. El dictado sigue usando el servicio multimodal actual.',
       voiceActivationModelMissing: 'El modelo local Zipformer no está instalado.',

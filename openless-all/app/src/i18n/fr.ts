@@ -1703,6 +1703,15 @@ export const fr: typeof zhCN = {
       voiceActivationDesc: 'Écouter localement une phrase d’activation pour démarrer la dictée.',
       voiceActivationLocalOnly:
         'La reconnaissance reste sur cet appareil ; l’audio en veille n’est ni envoyé ni archivé.',
+      voiceActivationHotkeyLinked: "Lier le raccourci d’enregistrement",
+      voiceActivationHotkeyLinkedDesc: "Un appui active ou suspend la veille au lieu d’enregistrer. En pause au lancement. La pause coupe le préchauffage du micro, pas les autres enregistrements. La veille est locale ; la dictée utilise le service actuel.",
+      voiceActivationDisabled: "Activation vocale désactivée",
+      voiceActivationPaused: "Veille vocale temporairement suspendue",
+      voiceActivationPausing: "Arrêt de la veille…",
+      voiceActivationStarting: "Démarrage de la veille…",
+      voiceActivationListening: "En attente de la phrase d’activation",
+      voiceActivationDictating: "Dictée ou finalisation en cours",
+      voiceActivationError: "Veille indisponible. Vérifiez le modèle, les autorisations et le microphone.",
       voiceActivationMultimodalModels:
         'Préparez ici le modèle d’activation vocale. La dictée utilise toujours votre service multimodal actuel.',
       voiceActivationModelMissing: 'Le modèle local Zipformer n’est pas installé.',

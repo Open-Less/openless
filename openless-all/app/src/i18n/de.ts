@@ -1690,6 +1690,15 @@ export const de: typeof zhCN = {
       voiceActivationDesc: 'Lokal auf eine Aktivierungsphrase warten, um das Diktat zu starten.',
       voiceActivationLocalOnly:
         'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationHotkeyLinked: "Aufnahme-Tastenkürzel verknüpfen",
+      voiceActivationHotkeyLinkedDesc: "Ein Klick schaltet die lokale Aktivierung statt der Aufnahme um. Nach dem Start pausiert. Pausieren beendet die Mikrofon-Vorwärmung, nicht andere Aufnahmen. Diktate nutzen weiterhin den gewählten Dienst.",
+      voiceActivationDisabled: "Sprachaktivierung deaktiviert",
+      voiceActivationPaused: "Aktivierung vorübergehend pausiert",
+      voiceActivationPausing: "Aktivierung wird gestoppt…",
+      voiceActivationStarting: "Aktivierung wird gestartet…",
+      voiceActivationListening: "Warten auf Aktivierungsphrase",
+      voiceActivationDictating: "Diktat oder Abschluss läuft",
+      voiceActivationError: "Aktivierung nicht verfügbar. Modell, Mikrofonberechtigung und Gerät prüfen.",
       voiceActivationMultimodalModels:
         'Hier das Sprachaktivierungsmodell vorbereiten. Das Diktat nutzt weiterhin den aktuellen multimodalen Dienst.',
       voiceActivationModelMissing: 'Das lokale Zipformer-Modell ist nicht installiert.',

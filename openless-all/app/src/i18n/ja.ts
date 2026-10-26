@@ -1645,6 +1645,15 @@ export const ja: typeof zhCN = {
       voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
       voiceActivationLocalOnly:
         '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
+      voiceActivationHotkeyLinked: "録音ショートカットと連動",
+      voiceActivationHotkeyLinkedDesc: "録音操作の代わりに、1回押すとウェイク監視を開始・一時停止します。起動直後は一時停止します。停止中はマイクの待機予熱を無効にしますが、他の録音は中断しません。監視はローカルで、音声入力は現在のサービスを使用します。",
+      voiceActivationDisabled: "音声起動は無効です",
+      voiceActivationPaused: "ウェイク監視を一時停止中",
+      voiceActivationPausing: "ウェイク監視を停止しています…",
+      voiceActivationStarting: "ウェイク監視を開始しています…",
+      voiceActivationListening: "開始フレーズを待機中",
+      voiceActivationDictating: "音声入力または終了処理中",
+      voiceActivationError: "監視を開始できません。モデル、マイク権限、デバイスを確認してください。",
       voiceActivationMultimodalModels:
         'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
       voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',

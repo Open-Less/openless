@@ -46,6 +46,8 @@ pub enum HotkeyEvent {
     Released {
         at: Instant,
         press_id: u64,
+        /// Native per-press verdict, independent of the asynchronous abort bridge.
+        combined: bool,
     },
     // Combo abort is not in this enum: it goes through the separate `combo_abort` channel to avoid
     // being queued behind the Pressed → begin_session synchronous mic-open flow (see module docs).
@@ -929,7 +931,8 @@ mod platform {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
             if !tap_only_fn {
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
                 return;
             }
 
@@ -946,7 +949,8 @@ mod platform {
                         press_id,
                     },
                 );
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id,
+                    combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id });
             } else {
                 log::info!(
                     "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
@@ -1814,6 +1818,7 @@ mod platform {
                         HotkeyEvent::Released {
                             at: std::time::Instant::now(),
                             press_id,
+                            combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id,
                         },
                     );
                 }
@@ -2128,6 +2133,23 @@ mod platform {
                 replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
                 Err(mpsc::RecvTimeoutError::Disconnected)
             );
+        }
+
+        #[test]
+        fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let (ctx, rx, abort_rx) = callback_context_with_combo(shared(HotkeyTrigger::RightControl));
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected press, got {other:?}"),
+            };
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            // Intentionally read Released before the independently queued Combined.
+            assert!(matches!(rx.recv().unwrap(), HotkeyEvent::Released {
+                press_id: released_id, combined: true, ..
+            } if released_id == press_id));
+            assert_eq!(abort_rx.recv().unwrap().press_id, press_id);
         }
 
         #[test]

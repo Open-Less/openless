@@ -962,6 +962,8 @@ pub(crate) struct WarmCaptureHub {
     runtime_errors: Mutex<HashMap<u64, Sender<RecorderError>>>,
     runtime_fallback_claims: Mutex<HashSet<u64>>,
     enabled: AtomicBool,
+    standby_policy: Mutex<(u64, bool)>,
+    standby_requested: AtomicBool,
     preview_active: AtomicBool,
     cold_capture_active: AtomicBool,
     pending_configuration:
@@ -980,6 +982,8 @@ impl WarmCaptureHub {
             runtime_errors: Mutex::new(HashMap::new()),
             runtime_fallback_claims: Mutex::new(HashSet::new()),
             enabled: AtomicBool::new(false),
+            standby_policy: Mutex::new((0, false)),
+            standby_requested: AtomicBool::new(false),
             preview_active: AtomicBool::new(false),
             cold_capture_active: AtomicBool::new(false),
             pending_configuration: Mutex::new(None),
@@ -1073,6 +1077,21 @@ impl WarmCaptureHub {
         }
     }
 
+    /// A linked pause overrides idle prewarming, never a promoted explicit recording.
+    pub(crate) fn set_capture_paused(&self, revision: u64, paused: bool) {
+        let _lifecycle = self.lifecycle_gate.lock();
+        {
+            let mut policy = self.standby_policy.lock();
+            if revision < policy.0 || *policy == (revision, paused) {
+                return;
+            }
+            *policy = (revision, paused);
+        }
+        let device = self.device_name.lock().clone();
+        let processing = *self.processing_config.lock();
+        self.configure_locked(self.standby_requested.load(Ordering::Acquire), device, processing);
+    }
+
     pub(crate) fn configure(
         &self,
         enabled: bool,
@@ -1080,6 +1099,7 @@ impl WarmCaptureHub {
         processing: openless_core::AudioProcessingConfig,
     ) {
         let _lifecycle = self.lifecycle_gate.lock();
+        self.standby_requested.store(enabled, Ordering::Release);
         self.configure_locked(enabled, device_name, processing);
     }
 
@@ -1089,6 +1109,8 @@ impl WarmCaptureHub {
         device_name: Option<String>,
         processing: openless_core::AudioProcessingConfig,
     ) {
+        let paused = self.standby_policy.lock().1;
+        let enabled = enabled && !paused;
         let device_changed = *self.device_name.lock() != device_name;
         let config_changed = *self.processing_config.lock() != processing;
         if self.cold_capture_active.load(Ordering::Acquire) {
@@ -1096,6 +1118,12 @@ impl WarmCaptureHub {
             return;
         }
         if (device_changed || config_changed || !enabled) && self.sink.has_claims() {
+            // A staged handoff already owns body PCM. Let it promote and finalize;
+            // invalidating it would lose the prefix and reopen a cold microphone.
+            if paused {
+                *self.pending_configuration.lock() = Some((enabled, device_name, processing));
+                return;
+            }
             let staging_claims = self.sink.staging_claim_ids();
             self.runtime_fallback_claims.lock().extend(staging_claims);
             *self.pending_configuration.lock() = Some((enabled, device_name, processing));
@@ -1152,7 +1180,9 @@ impl WarmCaptureHub {
     }
 
     fn ensure_started_locked(&self, device_name: Option<String>) -> Result<(), RecorderError> {
-        if !self.enabled.load(Ordering::Acquire) {
+        if !self.enabled.load(Ordering::Acquire)
+            || (self.standby_policy.lock().1 && !self.sink.has_promoted_claims())
+        {
             return Err(RecorderError::EngineFailed(
                 "warm capture is disabled".into(),
             ));
@@ -1323,6 +1353,9 @@ impl WarmCaptureHub {
         }
         loop {
             let lifecycle = self.lifecycle_gate.lock();
+            if self.standby_policy.lock().1 {
+                return Err(RecorderError::EngineFailed("standby capture is paused".into()));
+            }
             let desired_processing = processing.unwrap_or(*self.processing_config.lock());
             if *self.device_name.lock() != device_name
                 || *self.processing_config.lock() != desired_processing
@@ -3252,6 +3285,60 @@ mod tests {
         assert!(!warm_capture_enabled(true, true, false));
         assert!(!warm_capture_enabled(false, false, false));
         assert!(!warm_capture_enabled(false, true, false));
+    }
+
+    #[test]
+    fn linked_pause_overrides_prewarm_saved_configuration_and_cold_recovery() {
+        let hub = WarmCaptureHub::new();
+        hub.set_capture_paused(1, true);
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+        hub.begin_cold_capture().unwrap();
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        hub.end_cold_capture();
+        hub.resume_after_cold_capture();
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+        hub.set_capture_paused(0, false);
+        assert!(hub.standby_policy.lock().1);
+        assert!(hub.arm(99, None, openless_core::AudioProcessingConfig::default()).is_err());
+    }
+
+    #[test]
+    fn linked_pause_keeps_staged_voice_body_until_promotion_and_finalization() {
+        let hub = WarmCaptureHub::new();
+        let key = voice_capture_key(9);
+        let consumer = Arc::new(RecordingConsumer::default());
+        let body = [0x00, 0x40].repeat(160);
+        hub.sink.arm_with_limit(key, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
+        hub.sink.consume_pcm_chunk(&body);
+        hub.enabled.store(true, Ordering::Release);
+        hub.set_capture_paused(1, true);
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(hub.sink.staging_claim_ids().contains(&key));
+        assert!(!hub.runtime_fallback_claims.lock().contains(&key));
+        hub.sink.promote(key, consumer.clone(), Arc::new(|_| {}), None).unwrap();
+        assert_eq!(consumer.chunks.lock().unwrap().concat(), body);
+        hub.release_claim(key);
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+    }
+
+    #[test]
+    fn linked_pause_preserves_promoted_recording_until_its_claim_releases() {
+        let hub = WarmCaptureHub::new();
+        let consumer = Arc::new(RecordingConsumer::default());
+        hub.sink.arm_with_limit(7, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
+        hub.sink.promote(7, consumer, Arc::new(|_| {}), None).unwrap();
+        hub.enabled.store(true, Ordering::Release);
+        hub.set_capture_paused(1, true);
+        assert!(hub.sink.has_promoted_claims());
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(hub.sink.has_promoted_claims());
+        hub.release_claim(7);
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
     }
 
     #[test]

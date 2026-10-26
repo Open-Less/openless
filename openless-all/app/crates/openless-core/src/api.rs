@@ -2635,6 +2635,7 @@ pub struct OpenLessBackend {
     voice_activation_generation: Arc<AtomicU64>,
     voice_activation_handoff_generation: AtomicU64,
     voice_activation_configure_gate: tokio::sync::Mutex<()>,
+    voice_activation_link: Mutex<crate::voice_activation_hotkey::VoiceActivationLink>,
     backend_lifecycle_gate: tokio::sync::Mutex<()>,
     backend_shutdown_requested: AtomicBool,
     voice_activation_session: Arc<Mutex<Option<crate::voice_activation::VoiceActivationSession>>>,
@@ -3385,6 +3386,7 @@ impl OpenLessBackend {
             voice_activation_generation: Arc::new(AtomicU64::new(0)),
             voice_activation_handoff_generation: AtomicU64::new(0),
             voice_activation_configure_gate: tokio::sync::Mutex::new(()),
+            voice_activation_link: Mutex::new(crate::voice_activation_hotkey::VoiceActivationLink::default()),
             backend_lifecycle_gate: tokio::sync::Mutex::new(()),
             backend_shutdown_requested: AtomicBool::new(false),
             voice_activation_session: Arc::new(Mutex::new(None)),
@@ -3409,12 +3411,171 @@ impl OpenLessBackend {
         Ok(())
     }
 
+    fn voice_activation_intent(&self) -> (bool, bool, u64) {
+        let prefs = self.get_preferences();
+        let linked = prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked
+            && self.deps.voice_activation_runtime.is_some();
+        let (requested, revision) = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            state.configure(linked);
+            (state.requested, state.revision)
+        };
+        let paused = linked && !requested;
+        if let Some(runtime) = &self.deps.voice_activation_runtime {
+            runtime.set_capture_paused(revision, paused);
+        }
+        (prefs.voice_activation_enabled && !paused, paused, revision)
+    }
+
+    fn pause_linked_voice_activation_after_failure(&self, generation: u64) {
+        let prefs = self.get_preferences();
+        if !prefs.voice_activation_enabled || !prefs.voice_activation_hotkey_linked {
+            return;
+        }
+        let revision = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                return;
+            }
+            state.pause();
+            state.revision
+        };
+        if let Some(runtime) = &self.deps.voice_activation_runtime {
+            runtime.set_capture_paused(revision, true);
+        }
+    }
+
+    async fn recover_voice_activation_failure(&self, generation: u64, error: BackendError) {
+        self.pause_linked_voice_activation_after_failure(generation);
+        match self.stop_voice_activation_if_current(generation,
+            crate::voice_activation::VoiceActivationStopReason::RuntimeFailure).await
+        {
+            Ok(true) => {
+                if self.voice_activation_intent().1 {
+                    self.events.publish(None, BackendEventKind::VoiceActivationStateChanged(
+                        crate::voice_activation::VoiceActivationStateSnapshot {
+                            phase: voice_activation_failure_phase(error.code),
+                            activation_generation: self.voice_activation_generation.load(Ordering::Acquire),
+                            session_id: None,
+                            message: Some(error.message),
+                        }));
+                } else if self.voice_activation_is_requested() {
+                    let _ = self.configure_voice_activation().await;
+                }
+            }
+            Ok(false) => {}
+            Err(error) => log::warn!("voice activation recovery stop failed: {error}"),
+        }
+    }
+
+    fn voice_activation_is_requested(&self) -> bool {
+        self.voice_activation_intent().0
+    }
+
+    /// Accept clicks synchronously so native FIFO delivery never waits for ASR startup.
+    /// Some(false) consumes an edge; Some(true) schedules reconciliation.
+    pub fn accept_voice_activation_hotkey_edge(&self, edge: DictationHotkeyEdge) -> Option<bool> {
+        self.voice_activation_intent();
+        let prefs = self.get_preferences();
+        if !prefs.voice_activation_enabled || !prefs.voice_activation_hotkey_linked
+            || self.deps.voice_activation_runtime.is_none()
+        {
+            return None;
+        }
+        let (changed, paused, revision, generation) = {
+            let mut state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            let changed = state.edge(edge);
+            let generation = if changed {
+                let handoff = self.voice_activation_handoff_generation.load(Ordering::Acquire);
+                if !state.requested {
+                    state.finalize_session = self.voice_activation_session.lock()
+                        .expect("voice activation session lock poisoned").as_ref().map(|s| s.session_id);
+                    if handoff != 0 {
+                        state.finalize_generation = Some(handoff);
+                    }
+                }
+                // A handoff may already own staged body PCM before it has a
+                // session ID. Keep its ticket valid until that body can finish.
+                if handoff != 0 && state.finalize_generation == Some(handoff) {
+                    self.voice_activation_generation.load(Ordering::Acquire)
+                } else {
+                    self.voice_activation_generation.fetch_add(1, Ordering::AcqRel) + 1
+                }
+            } else {
+                self.voice_activation_generation.load(Ordering::Acquire)
+            };
+            (changed, !state.requested, state.revision, generation)
+        };
+        if changed {
+            if let Some(runtime) = &self.deps.voice_activation_runtime {
+                runtime.set_capture_paused(revision, paused);
+            }
+            self.events.publish(None, BackendEventKind::VoiceActivationStateChanged(
+                crate::voice_activation::VoiceActivationStateSnapshot {
+                    phase: if paused { crate::voice_activation::VoiceActivationPhase::Pausing }
+                        else { crate::voice_activation::VoiceActivationPhase::Starting },
+                    activation_generation: generation,
+                    session_id: None,
+                    message: None,
+                }));
+        }
+        Some(changed)
+    }
+
+    /// Runtime-only intent token for host feedback; never changes saved preferences.
+    pub fn voice_activation_hotkey_intent(&self) -> Option<(bool, u64)> {
+        let preferences = self.get_preferences();
+        if !preferences.voice_activation_enabled || !preferences.voice_activation_hotkey_linked {
+            return None;
+        }
+        let state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+        Some((state.requested, state.revision))
+    }
+
+    pub async fn reconcile_voice_activation_hotkey(&self) -> Result<(), BackendError> {
+        let paused_session = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_session;
+        let session_id = paused_session.or_else(|| {
+            self.voice_activation_intent().1.then(|| self.voice_activation_session.lock()
+                .expect("voice activation session lock poisoned").as_ref().map(|s| s.session_id)).flatten()
+        });
+        if let Some(session_id) = session_id {
+            // Recorder stop can reconfigure activation: never hold configure_gate here.
+            if let Err(error) = self.stop_dictation_session(session_id).await {
+                if !matches!(error.code, BackendErrorCode::InvalidState | BackendErrorCode::Busy) {
+                    return Err(error);
+                }
+            }
+        }
+        self.configure_voice_activation().await
+    }
+
+    async fn settle_stale_voice_dictation(&self, session_id: SessionId) {
+        let must_finalize = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_session == Some(session_id);
+        if must_finalize || self.voice_activation_intent().1 {
+            let _ = self.stop_dictation_session(session_id).await;
+            let _ = self.configure_voice_activation().await;
+        } else {
+            let _ = self.cancel_dictation(Some(session_id)).await;
+        }
+    }
+
     /// Configure the opt-in local voice activation listener from the current
     /// preference snapshot. Reconfiguration replaces the previous native
     /// handle only after it has been stopped, so one process owns one mic.
     pub async fn configure_voice_activation(&self) -> Result<(), BackendError> {
+        self.voice_activation_intent();
         let _configure_gate = self.voice_activation_configure_gate.lock().await;
+        let (effective, paused, revision) = self.voice_activation_intent();
         let preferences = self.get_preferences();
+        let pending_body = self.voice_activation_link.lock()
+            .expect("voice link lock poisoned").finalize_generation;
+        if pending_body.is_some_and(|generation| {
+            self.voice_activation_handoff_generation.load(Ordering::Acquire) == generation
+        }) {
+            return Ok(());
+        }
         if self
             .voice_activation_session
             .lock()
@@ -3447,7 +3608,7 @@ impl OpenLessBackend {
                 .stop(crate::voice_activation::VoiceActivationStopReason::Disabled)
                 .await;
         }
-        if !preferences.voice_activation_enabled
+        if !effective
             || self.backend_shutdown_requested.load(Ordering::Acquire)
             || !self.snapshot().running
         {
@@ -3455,7 +3616,7 @@ impl OpenLessBackend {
             // activation was never enabled. Existing subscribers expect
             // BackendStarted to be the first startup event; later disable/error
             // transitions still publish Disabled below when a visible state exists.
-            let should_publish_disabled = had_previous_handle
+            let should_publish_disabled = paused || had_previous_handle
                 || self
                     .events
                     .latest_voice_activation_state()
@@ -3468,7 +3629,8 @@ impl OpenLessBackend {
                     None,
                     BackendEventKind::VoiceActivationStateChanged(
                         crate::voice_activation::VoiceActivationStateSnapshot {
-                            phase: crate::voice_activation::VoiceActivationPhase::Disabled,
+                            phase: if paused { crate::voice_activation::VoiceActivationPhase::Paused }
+                                else { crate::voice_activation::VoiceActivationPhase::Disabled },
                             activation_generation: generation,
                             session_id: None,
                             message: None,
@@ -3528,14 +3690,22 @@ impl OpenLessBackend {
         let sink: Arc<dyn crate::ports::VoiceActivationSink> = Arc::new(CoreVoiceActivationSink {
             events: Arc::clone(&self.events),
         });
-        match runtime.configure(config, sink).await {
+        let configured = if preferences.voice_activation_hotkey_linked && !config.wake_enabled {
+            Err(crate::ports::VoiceActivationError::InvalidConfig(
+                "enable the wake phrase before linking the recording shortcut".into()))
+        } else {
+            runtime.configure(config, sink).await
+        };
+        match configured {
             Ok(handle) => {
                 let stale_handle = {
                     let mut slot = self
                         .voice_activation_handle
                         .lock()
                         .expect("voice activation handle lock poisoned");
-                    if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                    if self.voice_activation_generation.load(Ordering::Acquire) != generation
+                        || self.voice_activation_link.lock().expect("voice link lock poisoned").revision != revision
+                    {
                         Some(handle)
                     } else {
                         *slot = Some(handle.into());
@@ -3565,7 +3735,11 @@ impl OpenLessBackend {
                 Ok(())
             }
             Err(error) => {
+                if self.voice_activation_generation.load(Ordering::Acquire) != generation {
+                    return Ok(());
+                }
                 let error = map_voice_activation_error(error);
+                self.pause_linked_voice_activation_after_failure(generation);
                 self.events.publish(
                     None,
                     BackendEventKind::VoiceActivationStateChanged(
@@ -3760,22 +3934,22 @@ impl OpenLessBackend {
                     {
                         Ok(handoff) => handoff,
                         Err(error) => {
-                            log::warn!("voice activation handoff failed: {error}");
-                            match backend
-                                .stop_voice_activation_if_current(
-                                    signal_generation,
-                                    crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                                )
-                                .await
-                            {
-                                Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                                    let _ = backend.configure_voice_activation().await;
-                                }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    log::warn!("voice activation recovery stop failed: {error}");
-                                }
+                            let paused_handoff = {
+                                let mut link = backend.voice_activation_link.lock()
+                                    .expect("voice link lock poisoned");
+                                if link.finalize_generation == Some(signal_generation) {
+                                    link.finalize_generation = None;
+                                    true
+                                } else { false }
+                            };
+                            if paused_handoff {
+                                drop(_handoff_guard);
+                                let _ = backend.configure_voice_activation().await;
+                                return;
                             }
+                            log::warn!("voice activation handoff failed: {error}");
+                            backend.recover_voice_activation_failure(signal_generation,
+                                map_voice_activation_error(error)).await;
                             return;
                         }
                     };
@@ -3792,12 +3966,14 @@ impl OpenLessBackend {
                         .await
                     {
                         Ok(session_id) => {
-                            if backend
+                            let must_finalize = backend.voice_activation_link.lock()
+                                .expect("voice link lock poisoned").finalize_session == Some(session_id);
+                            if must_finalize || backend
                                 .voice_activation_generation
                                 .load(Ordering::Acquire)
                                 != signal_generation
                             {
-                                let _ = backend.cancel_dictation(Some(session_id)).await;
+                                backend.settle_stale_voice_dictation(session_id).await;
                                 return;
                             }
                             let committed = {
@@ -3821,7 +3997,7 @@ impl OpenLessBackend {
                                 }
                             };
                             if !committed {
-                                let _ = backend.cancel_dictation(Some(session_id)).await;
+                                backend.settle_stale_voice_dictation(session_id).await;
                                 return;
                             }
                             backend.events.publish(
@@ -3838,21 +4014,7 @@ impl OpenLessBackend {
                         }
                         Err(error) => {
                             log::warn!("voice dictation start failed: {error}");
-                            match backend
-                                .stop_voice_activation_if_current(
-                                    signal_generation,
-                                    crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                                )
-                                .await
-                            {
-                                Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                                    let _ = backend.configure_voice_activation().await;
-                                }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    log::warn!("voice activation recovery stop failed: {error}");
-                                }
-                            }
+                            backend.recover_voice_activation_failure(signal_generation, error).await;
                         }
                     }
                 }));
@@ -3878,21 +4040,9 @@ impl OpenLessBackend {
             } => {
                 let backend = Arc::clone(self);
                 self.deps.task_spawner.spawn(Box::pin(async move {
-                    match backend
-                        .stop_voice_activation_if_current(
-                            activation_generation,
-                            crate::voice_activation::VoiceActivationStopReason::RuntimeFailure,
-                        )
-                        .await
-                    {
-                        Ok(true) if backend.get_preferences().voice_activation_enabled => {
-                            let _ = backend.configure_voice_activation().await;
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            log::warn!("voice activation recovery stop failed: {error}");
-                        }
-                    }
+                    backend.recover_voice_activation_failure(activation_generation,
+                        BackendError::new(BackendErrorCode::Platform,
+                            "voice activation microphone capture failed")).await;
                 }));
             }
             VoiceActivationSignal::RuntimeStateChanged { .. } => {}
@@ -3980,6 +4130,12 @@ impl OpenLessBackend {
                     },
                 });
         }
+        {
+            let mut link = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if link.finalize_generation == Some(generation) {
+                link.finalize_session = Some(session_id);
+            }
+        }
         match self
             .start_reserved_dictation(reservation, DictationStartOptions::default())
             .await
@@ -4010,13 +4166,18 @@ impl OpenLessBackend {
         if !is_voice_session {
             return;
         }
-        let enabled = self.get_preferences().voice_activation_enabled;
+        {
+            let mut link = self.voice_activation_link.lock().expect("voice link lock poisoned");
+            if link.finalize_session == Some(session_id) {
+                link.finalize_session = None;
+                link.finalize_generation = None;
+            }
+        }
         let _ = self
             .stop_voice_activation(crate::voice_activation::VoiceActivationStopReason::Cancelled)
             .await;
-        if enabled {
-            let _ = self.configure_voice_activation().await;
-        }
+        // Paused is a durable enabled-but-idle state, not Disabled.
+        let _ = self.configure_voice_activation().await;
     }
 
     async fn finish_voice_activation(
@@ -4050,7 +4211,7 @@ impl OpenLessBackend {
             .is_some_and(|session| session.session_id == session_id);
         if still_voice_session {
             let _ = self.stop_voice_activation(reason).await;
-            if self.get_preferences().voice_activation_enabled {
+            if self.voice_activation_is_requested() {
                 let _ = self.configure_voice_activation().await;
             }
         }
@@ -5430,6 +5591,13 @@ impl OpenLessBackend {
         options: DictationHotkeyDispatchOptions,
     ) -> Result<CliDispatchOutcome, BackendError> {
         use crate::hotkey_interpreter::HotkeyIntent;
+
+        if let Some(changed) = self.accept_voice_activation_hotkey_edge(edge) {
+            if changed {
+                self.reconcile_voice_activation_hotkey().await?;
+            }
+            return Ok(CliDispatchOutcome::Noop);
+        }
 
         // Pressed and Released stay FIFO for toggle-like modes even though start/finalize await
         // native work. Hold-mode release deliberately bypasses the gate so a physical key-up can

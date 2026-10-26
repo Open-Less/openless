@@ -1632,6 +1632,15 @@ export const ko: typeof zhCN = {
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
       voiceActivationLocalOnly:
         '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationHotkeyLinked: "녹음 단축키와 연동",
+      voiceActivationHotkeyLinkedDesc: "기존 녹음 동작 대신 한 번 눌러 깨우기 대기를 시작하거나 일시 중지합니다. 앱 시작 시에는 중지됩니다. 중지하면 대기 마이크 예열을 끄지만 다른 녹음은 중단하지 않습니다. 깨우기는 로컬에서 처리하며 받아쓰기는 현재 서비스를 사용합니다.",
+      voiceActivationDisabled: "음성 활성화 꺼짐",
+      voiceActivationPaused: "깨우기 대기 일시 중지됨",
+      voiceActivationPausing: "깨우기 대기 중지 중…",
+      voiceActivationStarting: "깨우기 대기 시작 중…",
+      voiceActivationListening: "깨우기 명령 대기 중",
+      voiceActivationDictating: "받아쓰기 또는 마무리 중",
+      voiceActivationError: "대기를 시작할 수 없습니다. 모델, 마이크 권한 및 장치를 확인하세요.",
       voiceActivationMultimodalModels:
         '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
       voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',

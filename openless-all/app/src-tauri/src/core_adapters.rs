@@ -140,6 +140,8 @@ pub(crate) fn backend_dependencies(
     #[cfg(target_os = "windows")]
     {
         let prefs = preferences.get();
+        warm_hub.set_capture_paused(0,
+            prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked);
         warm_hub.configure(
             crate::recorder::warm_capture_enabled(
                 prefs.low_latency_dictation_enabled,
@@ -1933,6 +1935,10 @@ impl TauriVoiceActivationRuntime {
 
 #[cfg(target_os = "windows")]
 impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
+    fn set_capture_paused(&self, revision: u64, paused: bool) {
+        self.warm_hub.set_capture_paused(revision, paused);
+    }
+
     fn configure(
         &self,
         config: VoiceActivationConfig,

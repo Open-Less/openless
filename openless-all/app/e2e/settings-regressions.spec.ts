@@ -288,3 +288,31 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
   await expect(models).toBeDisabled();
 });
+
+test('Windows wake shortcut linkage is opt-in, keyboard accessible and preserves recording mode', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' });
+  });
+  await page.goto('http://127.0.0.1:5326/?os=win');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const categories = dialog.getByRole('navigation', { name: '设置分类' });
+  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  const linkage = dialog.getByRole('switch', { name: '与录音快捷键联动', exact: true });
+  await expect(linkage).toHaveCount(0);
+  await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
+  await expect(linkage).not.toBeChecked();
+  const mode = await page.evaluate(async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode);
+  await linkage.focus();
+  await page.keyboard.press('Space');
+  await expect(linkage).toBeChecked();
+  await expect(dialog.getByText('已临时暂停唤醒监听', { exact: true })).toBeVisible();
+  expect(await page.evaluate(async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode)).toBe(mode);
+  await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await expect(linkage).toBeChecked();
+  await linkage.click();
+  await expect(linkage).not.toBeChecked();
+  expect(await page.evaluate(async () => (await import('/src/lib/ipc/mock-data.ts')).mockSettings.hotkey.mode)).toBe(mode);
+});

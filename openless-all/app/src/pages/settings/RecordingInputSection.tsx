@@ -22,10 +22,11 @@ import {
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
 import {
   isVoiceActivationModelMissing,
+  voiceActivationStatusKey,
   VOICE_ACTIVATION_MODEL_ALIAS,
   type VoiceActivationStateSnapshot,
 } from '../../lib/voiceActivation';
-import { getNativeCapsuleStatus } from '../../lib/ipc/settings';
+import { getNativeCapsuleStatus, getVoiceActivationState } from '../../lib/ipc/settings';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
   NativeCapsuleStatus,
@@ -85,6 +86,7 @@ export function RecordingInputSection({
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
+  const [voiceActivationState, setVoiceActivationState] = useState<VoiceActivationStateSnapshot | null>(null);
   const voiceActivationStateObservedRef = useRef(false);
   const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
   const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
@@ -162,6 +164,10 @@ export function RecordingInputSection({
         'voice-activation:state-changed',
         (event) => {
           voiceActivationStateObservedRef.current = true;
+          setVoiceActivationState((previous) =>
+            (previous?.activationGeneration ?? -1) > (event.payload.activationGeneration ?? 0)
+              ? previous : event.payload,
+          );
           setVoiceActivationModelMissing(isVoiceActivationModelMissing(event.payload));
         },
       );
@@ -170,8 +176,15 @@ export function RecordingInputSection({
         return;
       }
       unlisten = stopListening;
+      const snapshot = await getVoiceActivationState();
+      if (!cancelled && snapshot) {
+        setVoiceActivationState((previous) =>
+          (previous?.activationGeneration ?? -1) >= (snapshot.activationGeneration ?? 0)
+            ? previous : snapshot,
+        );
+      }
     }
-    void listenForVoiceActivationChanges();
+    void listenForVoiceActivationChanges().catch(console.error);
     return () => {
       cancelled = true;
       unlisten?.();
@@ -203,6 +216,18 @@ export function RecordingInputSection({
   useEffect(() => {
     if (!prefs?.voiceActivationEnabled) setVoiceActivationModelMissing(false);
   }, [prefs?.voiceActivationEnabled]);
+
+  useEffect(() => {
+    if (isTauri || os !== 'win') return;
+    let cancelled = false;
+    void getVoiceActivationState()
+      .then((snapshot) => {
+        if (!cancelled) setVoiceActivationState(snapshot);
+      })
+      .catch(console.error);
+    return () => { cancelled = true; };
+    // The confirmed preference snapshot also changes after an optimistic write.
+  }, [os, prefs]);
 
   const saveKeyboardListAffectingPrefs = useCallback(
     async (nextPrefs: UserPreferences) => {
@@ -627,6 +652,23 @@ export function RecordingInputSection({
                 <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 8 }}>
                   {t('settings.recording.voiceActivationLocalOnly')}
                 </div>
+                <SettingRow
+                  label={t('settings.recording.voiceActivationHotkeyLinked')}
+                  desc={t('settings.recording.voiceActivationHotkeyLinkedDesc')}
+                >
+                  <Toggle
+                    on={prefs.voiceActivationHotkeyLinked ?? false}
+                    onToggle={(next) => savePrefs({ ...prefs, voiceActivationHotkeyLinked: next })}
+                  />
+                </SettingRow>
+                {prefs.voiceActivationHotkeyLinked && (
+                  <div role="status" style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', margin: '6px 0' }}>
+                    {voiceActivationState
+                      ? t(voiceActivationStatusKey(voiceActivationState))
+                      : t('settings.recording.voiceActivationStarting')}
+                    {voiceActivationState?.message && ` — ${voiceActivationState.message}`}
+                  </div>
+                )}
                 {voiceActivationModelMissing && (
                   <div
                     role="alert"

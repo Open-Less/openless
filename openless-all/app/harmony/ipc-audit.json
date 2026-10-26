@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 198,
+  "total": 199,
   "wired": 103,
-  "missing": 95,
+  "missing": 96,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -554,6 +554,13 @@
       "name": "get_update_channel",
       "calledFrom": [
         "src/lib/ipc/updater.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "get_voice_activation_state",
+      "calledFrom": [
+        "src/lib/ipc/settings.ts"
       ],
       "implementation": "unimplemented"
     },

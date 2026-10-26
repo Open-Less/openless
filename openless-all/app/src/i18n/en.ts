@@ -1658,6 +1658,15 @@ export const en: typeof zhCN = {
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
       voiceActivationLocalOnly:
         'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationHotkeyLinked: "Link recording shortcut",
+      voiceActivationHotkeyLinkedDesc: "Click the recording shortcut to toggle wake listening instead of the usual recording gesture. Starts paused after launch. Pausing disables idle microphone prewarming, not other recordings. Wake listening is local; dictation still uses your current service.",
+      voiceActivationDisabled: "Voice activation disabled",
+      voiceActivationPaused: "Wake listening temporarily paused",
+      voiceActivationPausing: "Stopping wake listening…",
+      voiceActivationStarting: "Starting wake listening…",
+      voiceActivationListening: "Listening for the wake phrase",
+      voiceActivationDictating: "Dictating or finishing",
+      voiceActivationError: "Unable to start wake listening. Check the model, microphone permissions and device.",
       voiceActivationMultimodalModels:
         'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
       voiceActivationModelMissing: 'The local Zipformer model is not installed.',

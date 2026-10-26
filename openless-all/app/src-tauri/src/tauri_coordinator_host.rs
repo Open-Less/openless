@@ -2175,6 +2175,11 @@ impl TauriCoordinatorHost {
     /// Commit the replay frame before the webview/main-thread work is queued.
     /// The rail snapshot is an IPC replay source, so it must not wait for a
     /// window callback to become internally consistent.
+    pub(crate) fn capsule_feedback_revision(&self) -> Option<u64> {
+        let snapshot = self.capsule.snapshot.lock();
+        snapshot.pending_payload_revision.is_none().then_some(snapshot.revision)
+    }
+
     pub(crate) fn capsule_revision(&self) -> u64 {
         self.capsule.snapshot.lock().revision
     }
