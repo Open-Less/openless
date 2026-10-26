@@ -2,7 +2,7 @@ import { Breakpoints } from '../common/Breakpoint';
 import { Fmt } from '../common/Format';
 import { Store } from '../common/Store';
 import { C, R, S, T } from '../common/Tokens';
-import { Card, EmptyState, GhostButton, Pill, SearchField, SectionHeader } from '../components/Common';
+import { Card, EmptyState, GhostButton, Pill, SearchField, SectionHeader, StatusRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Api } from '../data/Api';
 import { HistoryEntry, SettingsSnapshot, UserPreferences } from '../data/Types';
@@ -298,14 +298,19 @@ export struct HistoryPage {
       Card() {
         Column() {
           SectionHeader({ title: '参数' })
-          this.metaRow('模式', modeLabel(entry.mode))
-          this.metaRow('时长', Fmt.duration(entry.durationMs))
-          this.metaRow('转写', (entry.asrProvider ?? '—') + (entry.asrMs !== undefined && entry.asrMs !== null ? ' · ' + entry.asrMs.toString() + ' ms' : ''))
-          this.metaRow('润色', (entry.llmProvider ?? '—') + (entry.polishMs !== undefined && entry.polishMs !== null ? ' · ' + entry.polishMs.toString() + ' ms' : ''))
-          this.metaRow('应用', entry.appName ?? '—')
-          this.metaRow('写入', entry.insertStatus ?? '—')
+          StatusRow({ label: '模式', value: modeLabel(entry.mode), showChevron: false })
+          StatusRow({ label: '时长', value: Fmt.duration(entry.durationMs), showChevron: false })
+          StatusRow({ label: '转写', value: this.latency(entry.asrProvider, entry.asrMs), showChevron: false })
+          StatusRow({ label: '润色', value: this.latency(entry.llmProvider, entry.polishMs), showChevron: false })
+          StatusRow({ label: '应用', value: entry.appName ?? '—', showChevron: false })
+          StatusRow({
+            label: '写入',
+            value: entry.insertStatus ?? '—',
+            showChevron: false,
+            showDivider: entry.errorCode === undefined || entry.errorCode === null
+          })
           if (entry.errorCode !== undefined && entry.errorCode !== null) {
-            this.metaRow('错误', entry.errorCode as string)
+            StatusRow({ label: '错误', value: entry.errorCode as string, showChevron: false, showDivider: false })
           }
         }
         .width('100%')
@@ -343,21 +348,9 @@ export struct HistoryPage {
     .alignItems(HorizontalAlign.Start)
   }
 
-  @Builder
-  metaRow(label: string, value: string) {
-    Row({ space: S.md }) {
-      Text(label)
-        .fontSize(T.callout)
-        .fontColor(C.textSecondary())
-        .width(72)
-      Text(value.length > 0 ? value : '—')
-        .fontSize(T.callout)
-        .fontColor(C.textPrimary())
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .width('100%')
-    .padding({ top: S.xs, bottom: S.xs })
+  private latency(provider: string | null | undefined, ms: number | null | undefined): string {
+    const name: string = provider === undefined || provider === null || provider.length === 0 ? '—' : provider;
+    if (ms === undefined || ms === null || ms <= 0) return name;
+    return name + ' · ' + ms.toString() + ' ms';
   }
 }

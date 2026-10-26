@@ -323,6 +323,53 @@ export struct MetricTile {
   }
 }
 
+/**
+ * Label / value row used by the summary cards.
+ *
+ * A `@Builder` with string parameters is evaluated once: when the value arrives
+ * after an async load, the row keeps rendering the first (empty) string. As a
+ * component with `@Prop`, it re-renders when the value changes.
+ */
+@Component
+export struct StatusRow {
+  @Prop label: string;
+  @Prop value: string;
+  @Prop showChevron: boolean = true;
+  @Prop showDivider: boolean = true;
+  onTap: () => void = () => {
+  };
+
+  build() {
+    Column() {
+      Row({ space: S.sm }) {
+        Text(this.label)
+          .fontSize(T.callout)
+          .fontColor(C.textSecondary())
+          .layoutWeight(1)
+        Text(this.value.length > 0 ? this.value : '—')
+          .fontSize(T.callout)
+          .fontColor(C.textPrimary())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .constraintSize({ maxWidth: 220 })
+        if (this.showChevron) {
+          SymbolGlyph(symbolOf('chevron'))
+            .fontSize(12)
+            .fontColor([C.textTertiary()])
+        }
+      }
+      .width('100%')
+      .padding({ top: S.sm, bottom: S.sm })
+      .onClick(() => this.onTap())
+
+      if (this.showDivider) {
+        Divider().color(C.divider()).strokeWidth(0.5)
+      }
+    }
+    .width('100%')
+  }
+}
+
 /** Page title block; every page starts with it so headers line up across layouts. */
 @Component
 export struct PageTitle {

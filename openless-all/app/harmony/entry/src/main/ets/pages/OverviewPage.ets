@@ -3,11 +3,11 @@ import { Fmt } from '../common/Format';
 import { Labels } from '../common/Labels';
 import { Store } from '../common/Store';
 import { C, R, S, T, cardShadow } from '../common/Tokens';
-import { Card, EmptyState, GhostButton, MetricTile, Pill, PrimaryButton, SectionHeader } from '../components/Common';
+import { Card, EmptyState, GhostButton, MetricTile, Pill, PrimaryButton, SectionHeader, StatusRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
 import { Api } from '../data/Api';
-import { ActivityDay, HistoryEntry, SettingsSnapshot, UserPreferences } from '../data/Types';
+import { ActivityDay, HistoryEntry, PlatformCapabilities, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 interface DayCell {
   date: string;
@@ -43,6 +43,7 @@ export struct OverviewPage {
   @State private recent: HistoryEntry[] = [];
   @State private prefs: UserPreferences = {};
   @State private online: boolean = true;
+  @State private capabilities: PlatformCapabilities = { platform: 'harmony' };
   @State private todayCount: number = 0;
   @State private todayChars: number = 0;
   @State private todayDuration: number = 0;
@@ -65,6 +66,7 @@ export struct OverviewPage {
       this.recent = history.slice(0, 3);
       const network = await Api.network();
       this.online = network.online;
+      this.capabilities = await Api.platformCapabilities();
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -435,43 +437,35 @@ export struct OverviewPage {
     Card() {
       Column() {
         SectionHeader({ title: '当前配置' })
-        this.statusRow('转写引擎', Labels.provider(this.prefs.activeAsrProvider), Nav.SETTINGS, true)
-        this.statusRow('润色模型', Labels.provider(this.prefs.activeLlmProvider), Nav.SETTINGS, true)
-        this.statusRow('麦克风', this.microphoneLabel(), Nav.SETTINGS, true)
-        this.statusRow('网络', this.online ? '已连接' : '未连接', Nav.SETTINGS, true)
-        this.statusRow('离线听写', '鸿蒙端需要联网转写', Nav.SETTINGS, false)
+        StatusRow({
+          label: '转写引擎',
+          value: Labels.provider(this.prefs.activeAsrProvider),
+          onTap: () => Nav.go(Nav.SETTINGS)
+        })
+        StatusRow({
+          label: '润色模型',
+          value: Labels.provider(this.prefs.activeLlmProvider),
+          onTap: () => Nav.go(Nav.SETTINGS)
+        })
+        StatusRow({
+          label: '麦克风',
+          value: this.microphoneLabel(),
+          onTap: () => Nav.go(Nav.SETTINGS)
+        })
+        StatusRow({
+          label: '网络',
+          value: this.online ? '已连接' : '未连接',
+          onTap: () => Nav.go(Nav.SETTINGS)
+        })
+        StatusRow({
+          label: '离线听写',
+          value: this.capabilities.supportsLocalAsr === true ? '可用' : '需联网转写',
+          showDivider: false,
+          onTap: () => Nav.go(Nav.LOCALASR)
+        })
       }
       .width('100%')
     }
-  }
-
-  @Builder
-  statusRow(label: string, value: string, route: string, divider: boolean) {
-    Column() {
-      Row({ space: S.md }) {
-        Text(label)
-          .fontSize(T.callout)
-          .fontColor(C.textSecondary())
-          .layoutWeight(1)
-        Text(value)
-          .fontSize(T.callout)
-          .fontColor(C.textPrimary())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .constraintSize({ maxWidth: 200 })
-        SymbolGlyph(symbolOf('chevron'))
-          .fontSize(12)
-          .fontColor([C.textTertiary()])
-      }
-      .width('100%')
-      .padding({ top: S.sm, bottom: S.sm })
-      .onClick(() => Nav.go(route))
-
-      if (divider) {
-        Divider().color(C.divider()).strokeWidth(0.5)
-      }
-    }
-    .width('100%')
   }
 
   @Builder
