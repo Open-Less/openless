@@ -188,6 +188,7 @@ export struct SettingsPage {
               this.transcriptionCard()
               this.polishCard()
               this.inputCard()
+              this.appearanceCard()
             }
             .layoutWeight(1)
 
@@ -205,6 +206,7 @@ export struct SettingsPage {
             this.transcriptionCard()
             this.polishCard()
             this.inputCard()
+            this.appearanceCard()
             this.privacyCard()
             this.syncCard()
             this.aboutCard()
@@ -372,6 +374,25 @@ export struct SettingsPage {
           .width('100%')
           .padding({ top: S.sm })
         }
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder
+  appearanceCard() {
+    Card() {
+      Column({ space: S.sm }) {
+        SectionHeader({ title: '外观', hint: '跟随系统时由深浅色模式自动切换' })
+        Row({ space: S.sm }) {
+          ForEach(['system', 'light', 'dark'], (option: string) => {
+            this.choiceChip(option === 'system' ? '跟随系统' : (option === 'light' ? '浅色' : '深色'),
+              (this.prefs.theme ?? 'system') === option, () => {
+                this.writeString('/theme', option);
+              })
+          }, (option: string) => 'theme-' + option)
+        }
+        .width('100%')
       }
       .width('100%')
     }

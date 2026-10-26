@@ -225,6 +225,40 @@ export class Api {
         ',"enabled":' + (enabled ? 'true' : 'false') + '}');
   }
 
+  static async validateChannel(kind: string, channelId: string): Promise<boolean> {
+    const wire = await Api.value('validate_provider_credentials',
+      '{"kind":' + JSON.stringify(kind) + ',"channelId":' + JSON.stringify(channelId) + '}');
+    return wire.indexOf('"ok":true') >= 0;
+  }
+
+  static async listModels(kind: string, channelId: string): Promise<string[]> {
+    const wire = await Api.value('list_provider_models',
+      '{"kind":' + JSON.stringify(kind) + ',"channelId":' + JSON.stringify(channelId) + '}');
+    const parsed = JSON.parse(wire) as ModelList;
+    return parsed.models ?? [];
+  }
+
+  static async recordChannelTest(kind: string, id: string, ok: boolean, latencyMs: number,
+    error: string): Promise<void> {
+    const payload = '{"kind":' + JSON.stringify(kind) + ',"id":' + JSON.stringify(id) +
+      ',"ok":' + (ok ? 'true' : 'false') + ',"latencyMs":' + latencyMs.toString() +
+      ',"error":' + (error.length > 0 ? JSON.stringify(error) : 'null') + '}';
+    await Api.value('record_channel_test', payload);
+  }
+
+  // ── Style packs (write side) ───────────────────────────────────────────────
+  static async deleteStylePack(id: string): Promise<void> {
+    await Api.value('delete_style_pack', '{"id":' + JSON.stringify(id) + '}');
+  }
+
+  static async resetBuiltinStylePack(id: string): Promise<StylePack[]> {
+    return JSON.parse(await Api.value('reset_builtin_style_pack', '{"id":' + JSON.stringify(id) + '}')) as StylePack[];
+  }
+
+  static async likePack(packId: string): Promise<void> {
+    await Api.value('marketplace_like', '{"packId":' + JSON.stringify(packId) + '}');
+  }
+
   // ── Re-polish / recordings ─────────────────────────────────────────────────
   static async repolish(rawText: string, stylePackId: string): Promise<string> {
     const payload = '{"rawText":' + JSON.stringify(rawText) +
@@ -247,9 +281,10 @@ export class Api {
     return JSON.parse(await Api.value('cloud_sync_status', '{}')) as CloudSyncStatus;
   }
 
-  static async marketplace(query: string): Promise<MarketplacePack[]> {
+  static async marketplace(query: string, sort: string): Promise<MarketplacePack[]> {
     return JSON.parse(await Api.value('marketplace_list',
-      '{"query":' + JSON.stringify(query) + ',"limit":50}')) as MarketplacePack[];
+      '{"query":' + JSON.stringify(query) + ',"sort":' + JSON.stringify(sort) +
+        ',"limit":50}')) as MarketplacePack[];
   }
 
   static async installMarketplacePack(packId: string): Promise<void> {
@@ -295,6 +330,10 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface ModelList {
+  models?: string[];
 }
 
 export interface CredentialStatus {

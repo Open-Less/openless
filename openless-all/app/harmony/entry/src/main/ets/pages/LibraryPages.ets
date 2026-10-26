@@ -4,6 +4,7 @@ import { Card, EmptyState, GhostButton, PageTitle, Pill, SearchField, SectionHea
 import { symbolOf } from '../components/Icons';
 import { Api } from '../data/Api';
 import { CorrectionRule, DictionaryEntry, MarketplacePack, StylePack } from '../data/Types';
+import { StylePackPayload } from '../data/Api';
 
 /**
  * 词典 / 纠正规则 / 风格 / 风格市场.
@@ -319,6 +320,11 @@ export struct StylePage {
   @State private packs: StylePack[] = [];
   @State private active: string = '';
   @State private error: string = '';
+  @State private editing: string = '';
+  @State private draftPrompt: string = '';
+  @State private newName: string = '';
+  @State private newPrompt: string = '';
+  @State private composerOpen: boolean = false;
 
   aboutToAppear(): void {
     this.reload();
@@ -335,9 +341,103 @@ export struct StylePage {
     }
   }
 
+  private async savePrompt(pack: StylePack): Promise<void> {
+    try {
+      await Api.saveStylePack({
+        id: pack.id,
+        name: pack.name,
+        description: pack.description ?? '',
+        systemPrompt: this.draftPrompt,
+        enabled: pack.enabled !== false
+      } as StylePackPayload);
+      this.editing = '';
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
+  private async createPack(): Promise<void> {
+    const name: string = this.newName.trim();
+    if (name.length === 0) return;
+    try {
+      await Api.saveStylePack({
+        name: name,
+        description: '',
+        systemPrompt: this.newPrompt.trim(),
+        enabled: true
+      } as StylePackPayload);
+      this.newName = '';
+      this.newPrompt = '';
+      this.composerOpen = false;
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
+  private async removePack(id: string): Promise<void> {
+    try {
+      await Api.deleteStylePack(id);
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
   build() {
     Column() {
       PageTitle({ title: '风格', subtitle: this.packs.length.toString() + ' 个风格包 · 决定润色的语气' })
+
+      Row({ space: S.sm }) {
+        GhostButton({
+          label: this.composerOpen ? '收起' : '新建风格',
+          symbol: 'add',
+          onTap: () => {
+            this.composerOpen = !this.composerOpen;
+          }
+        })
+      }
+      .width('100%')
+      .padding({ bottom: S.sm })
+
+      if (this.composerOpen) {
+        Card() {
+          Column({ space: S.sm }) {
+            SectionHeader({ title: '新建风格', hint: '提示词决定润色的角色与语气' })
+            TextInput({ placeholder: '名称，例如「工作邮件」', text: this.newName })
+              .fontSize(T.body)
+              .height(44)
+              .backgroundColor(C.sunken())
+              .borderRadius(R.md)
+              .onChange((value: string) => {
+                this.newName = value;
+              })
+            TextArea({ placeholder: '系统提示词', text: this.newPrompt })
+              .fontSize(T.body)
+              .height(120)
+              .backgroundColor(C.sunken())
+              .borderRadius(R.md)
+              .padding(S.sm)
+              .onChange((value: string) => {
+                this.newPrompt = value;
+              })
+            Row() {
+              GhostButton({
+                label: '保存风格',
+                symbol: 'check',
+                usable: this.newName.trim().length > 0,
+                onTap: () => {
+                  this.createPack();
+                }
+              })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.End)
+          }
+          .width('100%')
+        }
+      }
 
       if (this.error.length > 0) {
         Text(this.error).fontSize(T.footnote).fontColor(C.danger()).padding({ bottom: S.sm })
@@ -376,6 +476,53 @@ export struct StylePage {
                     .fontSize(T.footnote)
                     .fontColor(C.textSecondary())
                     .width('100%')
+                }
+
+                if (this.editing === pack.id) {
+                  TextArea({ placeholder: '系统提示词', text: this.draftPrompt })
+                    .fontSize(T.footnote)
+                    .height(180)
+                    .backgroundColor(C.sunken())
+                    .borderRadius(R.sm)
+                    .padding(S.sm)
+                    .onChange((value: string) => {
+                      this.draftPrompt = value;
+                    })
+                  Row({ space: S.sm }) {
+                    GhostButton({
+                      label: '保存',
+                      symbol: 'check',
+                      onTap: () => {
+                        this.savePrompt(pack);
+                      }
+                    })
+                    GhostButton({
+                      label: '取消',
+                      onTap: () => {
+                        this.editing = '';
+                      }
+                    })
+                  }
+                  .width('100%')
+                  .justifyContent(FlexAlign.End)
+                } else {
+                  Row({ space: S.sm }) {
+                    GhostButton({
+                      label: '编辑提示词',
+                      onTap: () => {
+                        this.editing = pack.id;
+                        this.draftPrompt = pack.systemPrompt ?? '';
+                      }
+                    })
+                    GhostButton({
+                      label: '删除',
+                      symbol: 'trash',
+                      onTap: () => {
+                        this.removePack(pack.id);
+                      }
+                    })
+                  }
+                  .width('100%')
                 }
 
                 if (pack.id !== this.active) {
@@ -422,6 +569,7 @@ export struct MarketplacePage {
   @State private query: string = '';
   @State private error: string = '';
   @State private busy: boolean = false;
+  @State private sort: string = 'popular';
 
   aboutToAppear(): void {
     this.reload();
@@ -430,7 +578,7 @@ export struct MarketplacePage {
   private async reload(): Promise<void> {
     this.busy = true;
     try {
-      this.packs = await Api.marketplace(this.query);
+      this.packs = await Api.marketplace(this.query, this.sort);
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -461,6 +609,23 @@ export struct MarketplacePage {
         })
       }
       .width('100%')
+
+      Row({ space: S.sm }) {
+        ForEach(['popular', 'new'], (option: string) => {
+          Text(option === 'popular' ? '按热度' : '最新')
+            .fontSize(T.caption)
+            .fontColor(this.sort === option ? C.textOnAccent() : C.textSecondary())
+            .padding({ left: S.md, right: S.md, top: S.xxs, bottom: S.xxs })
+            .backgroundColor(this.sort === option ? C.accent() : C.sunken())
+            .borderRadius(R.pill)
+            .onClick(() => {
+              this.sort = option;
+              this.reload();
+            })
+        }, (option: string) => 'sort-' + option)
+      }
+      .width('100%')
+      .padding({ top: S.sm })
 
       if (this.error.length > 0) {
         Text(this.error)
@@ -511,9 +676,22 @@ export struct MarketplacePage {
                     .fontColor(C.textSecondary())
                     .width('100%')
                 }
-                Text((pack.author ?? '社区') + ' · ' + (pack.downloads ?? 0).toString() + ' 次下载')
-                  .fontSize(T.caption)
-                  .fontColor(C.textTertiary())
+                Row({ space: S.sm }) {
+                  Text((pack.author ?? '社区') + ' · ' + (pack.downloads ?? 0).toString() + ' 次下载 · ' +
+                    (pack.likes ?? 0).toString() + ' 赞')
+                    .fontSize(T.caption)
+                    .fontColor(C.textTertiary())
+                    .layoutWeight(1)
+                  GhostButton({
+                    label: '点赞',
+                    onTap: () => {
+                      Api.likePack(pack.id).then(() => this.reload()).catch((error: Error) => {
+                        this.error = error.message;
+                      });
+                    }
+                  })
+                }
+                .width('100%')
               }
               .width('100%')
               .alignItems(HorizontalAlign.Start)

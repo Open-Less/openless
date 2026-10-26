@@ -3,7 +3,7 @@ import { C, R, S, T } from '../common/Tokens';
 import { Card, GhostButton, PageTitle, Pill, SectionHeader } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Api, CredentialStatus } from '../data/Api';
-import { Channel, SettingsSnapshot, UserPreferences } from '../data/Types';
+import { Channel, ProviderDescriptor, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 /**
  * Provider credentials.
@@ -24,6 +24,10 @@ export struct CredentialsPage {
   @State private llmChannels: Channel[] = [];
   @State private saved: string = '';
   @State private error: string = '';
+  @State private note: string = '';
+  @State private asrDescriptors: ProviderDescriptor[] = [];
+  @State private llmDescriptors: ProviderDescriptor[] = [];
+  @State private creating: string = '';
 
   aboutToAppear(): void {
     this.reload();
@@ -36,6 +40,8 @@ export struct CredentialsPage {
       this.status = await Api.credentialStatus();
       this.asrChannels = await Api.channels('asr');
       this.llmChannels = await Api.channels('llm');
+      this.asrDescriptors = await Api.providerDescriptors('asr');
+      this.llmDescriptors = await Api.providerDescriptors('llm');
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -65,6 +71,133 @@ export struct CredentialsPage {
     } catch (error) {
       this.error = (error as Error).message;
     }
+  }
+
+  private async addChannel(kind: string, providerType: string): Promise<void> {
+    try {
+      const channel: Channel = await Api.createChannel(kind, providerType, '');
+      if (kind === 'asr') {
+        await Api.activateAsrProvider(channel.id);
+      } else {
+        await Api.activateLlmProvider(channel.id);
+      }
+      this.note = '已新建渠道 ' + providerType;
+      this.creating = '';
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
+  private async activate(kind: string, id: string): Promise<void> {
+    try {
+      if (kind === 'asr') {
+        await Api.activateAsrProvider(id);
+      } else {
+        await Api.activateLlmProvider(id);
+      }
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
+  private async removeChannel(kind: string, id: string): Promise<void> {
+    try {
+      await Api.deleteChannel(kind, id);
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
+  private async testChannel(kind: string, id: string): Promise<void> {
+    this.note = '正在测试…';
+    const started: number = Date.now();
+    try {
+      const ok: boolean = await Api.validateChannel(kind, id);
+      const latency: number = Date.now() - started;
+      await Api.recordChannelTest(kind, id, ok, latency, ok ? '' : '校验未通过');
+      this.note = ok ? '连通正常 · ' + latency.toString() + ' ms' : '校验失败，请检查密钥与接入点';
+      await this.reload();
+    } catch (error) {
+      this.note = '测试失败：' + (error as Error).message;
+    }
+  }
+
+  @Builder
+  channelList(kind: string, channels: Channel[], activeId: string, descriptors: ProviderDescriptor[]) {
+    Column({ space: S.xs }) {
+      ForEach(channels, (channel: Channel) => {
+        Row({ space: S.sm }) {
+          Column({ space: S.xxs }) {
+            Text(channel.name.length > 0 ? channel.name : channel.providerType)
+              .fontSize(T.callout)
+              .fontColor(channel.id === activeId ? C.accent() : C.textPrimary())
+            Text(channel.id === activeId ? '当前使用' : channel.providerType)
+              .fontSize(T.caption)
+              .fontColor(C.textTertiary())
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          if (channel.id !== activeId) {
+            GhostButton({
+              label: '启用',
+              onTap: () => {
+                this.activate(kind, channel.id);
+              }
+            })
+          }
+          GhostButton({
+            label: '测试',
+            onTap: () => {
+              this.testChannel(kind, channel.id);
+            }
+          })
+          SymbolGlyph(symbolOf('trash'))
+            .fontSize(16)
+            .fontColor([C.textTertiary()])
+            .onClick(() => {
+              this.removeChannel(kind, channel.id);
+            })
+        }
+        .width('100%')
+        .padding({ top: S.xs, bottom: S.xs })
+      }, (channel: Channel) => kind + '-' + channel.id)
+
+      if (this.creating === kind) {
+        Row({ space: S.xs }) {
+          ForEach(descriptors, (descriptor: ProviderDescriptor) => {
+            Text(descriptor.providerType)
+              .fontSize(T.caption)
+              .fontColor(C.textSecondary())
+              .padding({ left: S.sm, right: S.sm, top: S.xxs, bottom: S.xxs })
+              .backgroundColor(C.sunken())
+              .borderRadius(R.pill)
+              .onClick(() => {
+                this.addChannel(kind, descriptor.providerType);
+              })
+          }, (descriptor: ProviderDescriptor) => 'new-' + kind + '-' + descriptor.providerType)
+        }
+        .width('100%')
+        .padding({ top: S.xs })
+      } else {
+        Row() {
+          GhostButton({
+            label: '新建渠道',
+            symbol: 'add',
+            onTap: () => {
+              this.creating = kind;
+            }
+          })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+      }
+    }
+    .width('100%')
+    .padding({ top: S.xs })
   }
 
   private channelCount(kind: string): string {
@@ -137,6 +270,7 @@ export struct CredentialsPage {
                 title: '转写引擎',
                 hint: '当前：' + Labels.provider(this.asrProvider()) + ' · ' + this.channelCount('asr')
               })
+              this.channelList('asr', this.asrChannels, this.asrProvider(), this.asrDescriptors)
               if (this.isVolcengine(this.asrProvider())) {
                 SecretField({
                   label: 'App ID',
@@ -190,6 +324,7 @@ export struct CredentialsPage {
                 title: '润色模型',
                 hint: '当前：' + Labels.provider(this.llmProvider()) + ' · ' + this.channelCount('llm')
               })
+              this.channelList('llm', this.llmChannels, this.llmProvider(), this.llmDescriptors)
               SecretField({
                 label: 'API Key',
                 account: this.llmProvider() + '.apiKey',
@@ -218,6 +353,12 @@ export struct CredentialsPage {
             .width('100%')
           }
 
+          if (this.note.length > 0) {
+            Text(this.note)
+              .fontSize(T.caption)
+              .fontColor(C.textSecondary())
+              .width('100%')
+          }
           if (this.saved.length > 0) {
             Row({ space: S.xs }) {
               SymbolGlyph(symbolOf('check'))
