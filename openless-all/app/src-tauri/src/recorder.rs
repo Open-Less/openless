@@ -1735,15 +1735,16 @@ impl Recorder {
         // Try creating WavArchiveWriter on the synchronous path — success/failure is known
         // immediately and passed to the caller to decide whether history marks
         // has_audio_recording. Failure only logs a warning, no error; the main path continues.
-        let archive_writer = archives.canonical().and_then(|path| {
-            match WavArchiveWriter::create(&path) {
-                Ok(writer) => Some(Arc::new(writer)),
-                Err(err) => {
-                    log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
-                    None
-                }
-            }
-        });
+        let archive_writer =
+            archives
+                .canonical()
+                .and_then(|path| match WavArchiveWriter::create(&path) {
+                    Ok(writer) => Some(Arc::new(writer)),
+                    Err(err) => {
+                        log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                        None
+                    }
+                });
         // 只有两份都要时才创建第二份档案。
         let raw_writer = archives
             .raw
@@ -1944,9 +1945,9 @@ impl StagedRecorder {
             archives.write_processed,
         )));
         let archive_active = archive_writer.is_some();
-        if let Err(error) = self
-            .sink
-            .promote(consumer, level_handler, archive_writer.clone(), raw_tap)
+        if let Err(error) =
+            self.sink
+                .promote(consumer, level_handler, archive_writer.clone(), raw_tap)
         {
             if let Some(archive) = archive_writer {
                 archive.finish();
@@ -2064,17 +2065,25 @@ fn start_reference_stream(
 
     let stream = match supported.sample_format() {
         SampleFormat::F32 => make_reference_stream!(f32, |sample: f32| sample),
-        SampleFormat::I16 => make_reference_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32),
-        SampleFormat::I32 => make_reference_stream!(i32, |sample: i32| sample as f32 / i32::MAX as f32),
+        SampleFormat::I16 => {
+            make_reference_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32)
+        }
+        SampleFormat::I32 => {
+            make_reference_stream!(i32, |sample: i32| sample as f32 / i32::MAX as f32)
+        }
         SampleFormat::I8 => make_reference_stream!(i8, |sample: i8| sample as f32 / i8::MAX as f32),
-        SampleFormat::U8 => make_reference_stream!(u8, |sample: u8| (sample as f32 - 128.0) / 128.0),
+        SampleFormat::U8 => {
+            make_reference_stream!(u8, |sample: u8| (sample as f32 - 128.0) / 128.0)
+        }
         other => {
             return Err(RecorderError::EngineFailed(format!(
                 "unsupported speaker reference sample format: {other:?}"
             )))
         }
     }
-    .map_err(|error| RecorderError::EngineFailed(format!("build speaker reference stream: {error}")))?;
+    .map_err(|error| {
+        RecorderError::EngineFailed(format!("build speaker reference stream: {error}"))
+    })?;
     stream
         .play()
         .map_err(|error| RecorderError::EngineFailed(format!("play speaker reference: {error}")))?;
@@ -4013,7 +4022,12 @@ mod tests {
         sink.consume_pcm_chunk(&[1, 2]);
         sink.discard();
         assert!(sink
-            .promote(consumer as Arc<dyn AudioConsumer>, Arc::new(|_| {}), None, None)
+            .promote(
+                consumer as Arc<dyn AudioConsumer>,
+                Arc::new(|_| {}),
+                None,
+                None
+            )
             .is_err());
         sink.consume_pcm_chunk(&[3, 4]);
         let is_discarded = matches!(&*sink.state.lock(), CaptureSinkState::Discarded);
@@ -4135,7 +4149,9 @@ mod tests {
             second.chunks.lock().unwrap().as_slice(),
             &[vec![1, 2, 3, 4], vec![5, 6]]
         );
-        assert!(sink.promote(17, first, Arc::new(|_| {}), None).is_err());
+        assert!(sink
+            .promote(17, first, Arc::new(|_| {}), None, None)
+            .is_err());
     }
 
     fn complete_hub_operation(operation: impl FnOnce() + Send + 'static) {
@@ -4205,7 +4221,7 @@ mod tests {
                         Arc::new(|_| {}),
                         None,
                         None,
-                )
+                    )
                     .unwrap();
             }
             hub.configure(
