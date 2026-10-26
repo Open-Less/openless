@@ -473,27 +473,14 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     assert_eq!(unsupported.code, BackendErrorCode::Unsupported);
     assert_eq!(backend.snapshot().preferences_revision, revision + 2);
     assert_eq!(events.try_recv(), Err(EventRecvError::Empty));
+    // Less Computer 在 Linux 端已删除：即使 Core 偏好里打开它，宿主也不再注册
+    // 任何触发键、不再拉起面板。这里只确认设置仍能被接受（字段属于 Core）。
     for enabled in [true, false] {
         let mut preferences = backend.get_preferences();
         preferences.coding_agent_enabled = enabled;
         preferences.testing_features_enabled = true;
-        preferences.coding_agent_voice_hotkey = Some(ShortcutBinding {
-            primary: "F10".into(),
-            modifiers: vec!["ctrl".into()],
-        });
         host.update_settings_strict(preferences, backend.snapshot().preferences_revision)
-            .expect("Linux must allow enabling and disabling its wired Less Computer action");
-        assert_eq!(backend.get_preferences().coding_agent_enabled, enabled);
-        assert_eq!(
-            effects
-                .hotkeys
-                .lock()
-                .unwrap()
-                .last()
-                .unwrap()
-                .coding_agent_enabled,
-            enabled
-        );
+            .expect("Core preferences stay writable even when Linux does not surface the feature");
     }
     let _ = std::fs::remove_dir_all(data_dir);
 }

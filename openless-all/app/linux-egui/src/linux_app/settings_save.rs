@@ -187,9 +187,6 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::Multimodal => {
                 preferences.multimodal_pipeline_enabled = !preferences.multimodal_pipeline_enabled;
             }
-            frontend::view_model::SettingsField::LessComputer => {
-                preferences.coding_agent_enabled = !preferences.coding_agent_enabled;
-            }
             frontend::view_model::SettingsField::SelectionVoiceEnabled => {
                 preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
             }
@@ -203,9 +200,6 @@ impl OpenLessEguiApp {
                 } else {
                     openless_core::shared_types::SelectionVoiceIntentMode::Auto
                 };
-            }
-            frontend::view_model::SettingsField::TestingFeatures => {
-                preferences.testing_features_enabled = !preferences.testing_features_enabled;
             }
             frontend::view_model::SettingsField::SilenceAutoStop => {
                 preferences.silence_auto_stop_enabled = !preferences.silence_auto_stop_enabled;
@@ -318,24 +312,6 @@ impl OpenLessEguiApp {
                     _ => openless_core::shared_types::HotkeyMode::Toggle,
                 };
             }
-            frontend::view_model::SettingsComboField::CodingAgentProvider => {
-                preferences.coding_agent_provider = match index {
-                    1 => "opencode-cli",
-                    2 => "codex-cli",
-                    3 => "dsh-cli",
-                    _ => "claude-code-cli",
-                }
-                .to_string();
-            }
-            frontend::view_model::SettingsComboField::CodingAgentPermission => {
-                preferences.coding_agent_permission_mode = match index {
-                    1 => "plan",
-                    2 => "default",
-                    3 => "bypassPermissions",
-                    _ => "acceptEdits",
-                }
-                .to_string();
-            }
             frontend::view_model::SettingsComboField::SelectionPolishDelivery => {
                 preferences.selection_polish_output_mode = match index {
                     1 => openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm,
@@ -432,11 +408,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = Some(binding),
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = Some(binding),
             ShortcutField::OpenApp => preferences.open_app_hotkey = Some(binding),
-            ShortcutField::CodingAgentVoice => {
-                preferences.coding_agent_voice_hotkey = Some(binding);
-                // 「按住说话」有了触发键，Agent 也就该启用（Tauri 同样顺带打开）。
-                preferences.coding_agent_enabled = true;
-            }
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = Some(binding),
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get_mut(index) {
@@ -479,7 +450,6 @@ impl OpenLessEguiApp {
             ShortcutField::QuickNote => preferences.quick_note_hotkey = None,
             ShortcutField::SwitchStyle => preferences.switch_style_hotkey = None,
             ShortcutField::OpenApp => preferences.open_app_hotkey = None,
-            ShortcutField::CodingAgentVoice => preferences.coding_agent_voice_hotkey = None,
             ShortcutField::SelectionPolish => preferences.selection_polish_hotkey = None,
             ShortcutField::StylePack(index) => {
                 if let Some(row) = preferences.style_pack_hotkeys.get(index) {
@@ -517,9 +487,6 @@ impl OpenLessEguiApp {
                 preferences.switch_style_hotkey = defaults.switch_style_hotkey
             }
             ShortcutField::OpenApp => preferences.open_app_hotkey = defaults.open_app_hotkey,
-            ShortcutField::CodingAgentVoice => {
-                preferences.coding_agent_voice_hotkey = defaults.coding_agent_voice_hotkey
-            }
             ShortcutField::SelectionPolish => {
                 preferences.selection_polish_hotkey = defaults.selection_polish_hotkey
             }
@@ -634,33 +601,6 @@ impl OpenLessEguiApp {
                     .map(|value| value.clamp(1, 200));
 
                 self.frontend_vm.settings.audio_recording_max_entries = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentModel => {
-                preferences.coding_agent_model = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_model = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentWorkdir => {
-                preferences.coding_agent_workdir = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_workdir = text;
-            }
-            frontend::view_model::SettingsTextField::CodingAgentExe => {
-                preferences.coding_agent_exe = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().to_string())
-                };
-
-                self.frontend_vm.settings.coding_agent_exe = text;
             }
             frontend::view_model::SettingsTextField::SelectionVoiceKeywords => {
                 // Tauri：一行一条，空行丢弃。

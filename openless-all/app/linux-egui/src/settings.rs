@@ -245,18 +245,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             }
         }
         tolerate_optional_fcitx_method(crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys))?;
-        let (symbol, states) = target
-            .coding_agent_voice
-            .as_ref()
-            // The configured binding survives a disabled feature, but the
-            // native hook must be removed until the user enables it again.
-            .filter(|_| target.coding_agent_enabled)
-            .map(registerable_raw)
-            .transpose()?
-            .unwrap_or((0, 0));
-        let result = crate::fcitx5::set_less_computer_hotkey_raw(symbol, states);
-        log_registration_result("SetLessComputerHotkeyRaw", (symbol, states), &result);
-        tolerate_optional_fcitx_method(result)
+        Ok(())
     }
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError> {
@@ -416,7 +405,7 @@ pub(crate) fn registration_summary(target: &HotkeyRuntimeTarget) -> String {
         }
     }
     format!(
-        "dictation={} qa={} selection_polish={} translation={} switch_style={} open_app={} style_packs={} less_computer={}",
+        "dictation={} qa={} selection_polish={} translation={} switch_style={} open_app={} style_packs={}",
         describe(Some(&target.dictation)),
         describe(target.qa.as_ref()),
         describe(target.selection_polish.as_ref()),
@@ -424,11 +413,6 @@ pub(crate) fn registration_summary(target: &HotkeyRuntimeTarget) -> String {
         describe(target.switch_style.as_ref()),
         describe(target.open_app.as_ref()),
         target.style_packs.len(),
-        if target.coding_agent_enabled {
-            describe(target.coding_agent_voice.as_ref())
-        } else {
-            "disabled".to_string()
-        },
     )
 }
 
@@ -755,10 +739,6 @@ mod tests {
         let summary = registration_summary(&target);
         assert!(summary.contains("dictation=alt+A"), "{summary}");
         assert!(summary.contains("qa=ctrl+shift+:"), "{summary}");
-        assert!(
-            summary.contains("less_computer=modifier(LeftControl)"),
-            "{summary}"
-        );
     }
 
     #[test]
