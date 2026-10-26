@@ -3,6 +3,7 @@
 
 The bridge trait below matches the only core interface used by recorder.rs.
 This checks the production recorder module; it does not replace a desktop cargo check.
+Pass --check to compile the same tests for a cross target without linking or running them.
 """
 import json
 from pathlib import Path
@@ -11,6 +12,10 @@ import sys
 import tempfile
 
 recorder = Path(__file__).resolve().parents[1] / "src-tauri/src/recorder.rs"
+cargo_args = sys.argv[1:]
+check_only = "--check" in cargo_args
+if check_only:
+    cargo_args.remove("--check")
 with tempfile.TemporaryDirectory(prefix="openless-recorder-tests-") as directory:
     root = Path(directory)
     (root / "src").mkdir()
@@ -19,13 +24,13 @@ name = "openless-recorder-tests"
 version = "0.1.0"
 edition = "2021"
 [dependencies]
-cpal = "=0.15.3"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 log = "0.4"
-""" + "micyou-dsp = { path = " + json.dumps((recorder.parents[2] / "crates/micyou-dsp").as_posix()) + " }\n")
+""" + "cpal = { version = \"=0.15.3\", path = " + json.dumps((recorder.parents[1] / "vendor/cpal").as_posix()) + " }\n"
+        + "micyou-dsp = { path = " + json.dumps((recorder.parents[2] / "crates/micyou-dsp").as_posix()) + " }\n")
     (root / "src/lib.rs").write_text(
         "extern crate self as openless_core;\n"
         "#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum BackendErrorCode { InvalidArgument }\n"
@@ -38,4 +43,8 @@ log = "0.4"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
     )
-    subprocess.run(["cargo", "test", "--manifest-path", str(root / "Cargo.toml"), *sys.argv[1:]], check=True)
+    subprocess.run(
+        ["cargo", "check" if check_only else "test", "--manifest-path", str(root / "Cargo.toml"),
+         *(["--tests"] if check_only else []), *cargo_args],
+        check=True,
+    )

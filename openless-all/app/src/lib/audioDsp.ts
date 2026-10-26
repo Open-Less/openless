@@ -1,6 +1,8 @@
 import type { AudioDspConfig } from './types';
 
 export const defaultAudioDsp: AudioDspConfig = {
+  aecMode: 'off',
+  outputBufferMs: 300,
   androidAecEnabled: false,
   androidNoiseSuppressionEnabled: false,
   androidAgcEnabled: false,
@@ -17,7 +19,15 @@ export const defaultAudioDsp: AudioDspConfig = {
   equalizerEnabled: false,
   equalizerPreampDb: 0,
   equalizerBandsDb: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  processingOrder: ['noiseReduction', 'dereverb', 'equalizer', 'amplifier', 'agc', 'vad'],
+  processingOrder: [
+    'acousticEchoCancellation',
+    'noiseReduction',
+    'dereverb',
+    'equalizer',
+    'amplifier',
+    'agc',
+    'vad',
+  ],
 };
 
 // MicYou EqualizerPanel.vue, pinned upstream revision in micyou-upstream.json.

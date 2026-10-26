@@ -1493,6 +1493,14 @@ export const zhTW: typeof zhCN = {
         preset_vocalClarity: '清晰人聲',
         preset_warmVocal: '溫暖人聲',
 
+        aecOff: '關閉',
+        aecLight: '輕量（省 CPU）',
+        aecModel: '模型（更強）',
+        aecModelHint:
+          '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
+        aecHint:
+          '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',
+        buffer: '輸出緩衝區',
         title: '語音增強設定',
         description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
         noise: '降噪演算法',
@@ -1587,6 +1595,10 @@ export const zhTW: typeof zhCN = {
         '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
       polishContextWindowLabel: '對話上下文視窗（分鐘）',
       polishContextWindowDesc: '把最近 N 分鐘內已潤色的轉寫作為多輪上下文，0 = 關閉。',
+      debugArchiveProcessedLabel: '儲存處理後的音訊',
+      debugArchiveProcessedDesc: '降噪與增益之後的版本，仍存於原本的錄製檔案。',
+      debugArchiveRawLabel: '另存一份處理前的音訊',
+      debugArchiveRawDesc: '同一目錄下另存 <session>.raw.wav 便於對照；只開這一項時，原始音訊直接存進主檔案。',
       recordAudioForDebugLabel: '保留原始錄音（除錯）',
       recordAudioForDebugDesc: '儲存原始麥克風音訊為 wav，便於排查識別問題。',
       audioRecordingMaxEntriesLabel: '原始錄音保留條數',

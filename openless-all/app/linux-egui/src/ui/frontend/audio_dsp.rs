@@ -1,5 +1,5 @@
 use eframe::egui;
-use openless_core::{AudioDspConfig, AudioDspStage, NoiseReduction};
+use openless_core::{AecMode, AudioDspConfig, AudioDspStage, NoiseReduction};
 use openless_linux_egui::{tr_l10n, Lang};
 
 pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enabled: bool) -> bool {
@@ -11,6 +11,27 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
         ui.add_enabled_ui(enabled, |ui| {
         ui.small(label("settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording"));
         ui.add_space(8.0);
+        // 回声消除与输出缓冲：MicYou 的链路里 AEC 在最前，缓冲区是整条链的全局
+        // 参数（设备回调抖动大时调大，代价是延迟）。
+        ui.strong(label("settings.audioDsp.echoStage"));
+        // 三选一：轻量 NLMS 省 CPU（弱机可用），aec7 模型抑制更强但约 3 倍开销。
+        let aec_labels = [
+            (AecMode::Off, label("settings.audioDsp.aecOff")),
+            (AecMode::Light, label("settings.audioDsp.aecLight")),
+            (AecMode::Model, label("settings.audioDsp.aecModel")),
+        ];
+        ui.horizontal_wrapped(|ui| {
+            for (mode, name) in aec_labels {
+                ui.selectable_value(&mut config.aec_mode, mode, name);
+            }
+        });
+        ui.small(label("settings.audioDsp.AEC_needs_a_loudspeaker_reference"));
+        if config.aec_mode == AecMode::Model {
+            ui.small(label("settings.audioDsp.aecModelCost"));
+        }
+        slider(ui, label("settings.audioDsp.Output_buffer_ms"), &mut config.output_buffer_ms, 100..=1200, " ms");
+        ui.small(label("settings.audioDsp.A_larger_buffer_survives_jitter_but_adds_latency"));
+        ui.separator();
         ui.strong(label("settings.audioDsp.noiseStage"));
         egui::ComboBox::from_id_salt("audio-dsp-algorithm")
             .width(ui.available_width().min(280.0))
@@ -45,48 +66,17 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
             ui.small(label("settings.audioDsp.A_high_threshold_can_remove_quiet_speech"));
         }
         ui.add_space(8.0);
-        ui.collapsing(label("settings.audioDsp.Tone_and_room_adjustments"), |ui| {
-            ui.small(label("settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0"));
-            slider(ui, label("settings.audioDsp.Comb_filter"), &mut config.dereverb_level, 0..=100, "%");
-            ui.checkbox(&mut config.equalizer_enabled, label("settings.audioDsp.10_band_equalizer"));
-            if config.equalizer_enabled {
-                egui::ComboBox::from_id_salt("audio-dsp-eq-preset")
-                    .selected_text(label("settings.audioDsp.eqPresets"))
-                    .show_ui(ui, |ui| {
-                        // MicYou EqualizerPanel.vue, pinned revision in UPSTREAM.md.
-                        for (key, bands) in [
-                            ("settings.audioDsp.eqNormal", [0; 10]),
-                            ("settings.audioDsp.eqBright", [-2, -1, 0, 1, 2, 3, 4, 4, 3, 2]),
-                            ("settings.audioDsp.eqDeep", [3, 4, 4, 3, 1, 0, -1, -2, -2, -1]),
-                            ("settings.audioDsp.eqPodcast", [2, 3, 2, 0, -1, -1, 1, 2, 3, 2]),
-                            ("settings.audioDsp.eqClarity", [-1, -1, 0, 1, 2, 3, 4, 3, 2, 1]),
-                            ("settings.audioDsp.eqWarm", [1, 2, 3, 2, 1, 0, -1, -1, 0, 1]),
-                        ] {
-                            if ui.selectable_label(config.equalizer_bands_db == bands, label(key)).clicked() {
-                                config.equalizer_bands_db = bands;
-                            }
-                        }
-                    });
-                slider(ui, label("settings.audioDsp.Preamp_dB"), &mut config.equalizer_preamp_db, -20..=20, " dB");
-                let columns = if ui.available_width() >= 540.0 { 2 } else { 1 };
-                egui::Grid::new("audio-dsp-eq").num_columns(columns).spacing([16.0, 8.0]).show(ui, |ui| {
-                    let width = ((ui.available_width() - 16.0 * (columns - 1) as f32) / columns as f32).max(100.0);
-                    for (index, (band, name)) in config.equalizer_bands_db.iter_mut().zip(["31 Hz", "63 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"]).enumerate() {
-                        ui.push_id(index, |ui| ui.vertical(|ui| {
-                            ui.set_width(width);
-                            ui.label(name);
-                            ui.spacing_mut().slider_width = (width - 80.0).clamp(60.0, 220.0);
-                            ui.add(egui::Slider::new(band, -15..=15).suffix(" dB"));
-                        }));
-                        if (index + 1) % columns == 0 { ui.end_row(); }
-                    }
-                });
-            }
-        });
+        // 房间/音色只剩「梳状滤波」一项：十段均衡器按需求移除（配置字段保留，
+        // 旧 preferences 仍能反序列化），界面上不再暴露。
+        ui.add_space(8.0);
+        ui.strong(label("settings.audioDsp.roomStage"));
+        ui.small(label("settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0"));
+        slider(ui, label("settings.audioDsp.Comb_filter"), &mut config.dereverb_level, 0..=100, "%");
         ui.collapsing(label("settings.audioDsp.Processing_order"), |ui| {
             let mut swap = None;
             for (i, stage) in config.processing_order.iter().enumerate() {
                 let name = match stage {
+                    AudioDspStage::AcousticEchoCancellation => label("settings.audioDsp.aecStage"),
                     AudioDspStage::NoiseReduction => label("settings.audioDsp.noiseStage"),
                     AudioDspStage::Dereverb => label("settings.audioDsp.combStage"),
                     AudioDspStage::Equalizer => label("settings.audioDsp.Equalizer"),
@@ -97,6 +87,7 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
                 ui.push_id(i, |ui| ui.horizontal(|ui| {
                     ui.monospace(format!("{}", i + 1));
                     let active = match stage {
+                        AudioDspStage::AcousticEchoCancellation => config.aec_mode != AecMode::Off,
                         AudioDspStage::NoiseReduction => config.noise_reduction != NoiseReduction::Off && config.noise_strength > 0,
                         AudioDspStage::Dereverb => config.dereverb_level > 0,
                         AudioDspStage::Equalizer => config.equalizer_enabled,

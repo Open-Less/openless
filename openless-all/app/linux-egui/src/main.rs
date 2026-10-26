@@ -589,6 +589,8 @@ mod linux_app {
         hydrate_text_fields: bool,
         overview: OverviewState,
         microphones: Vec<openless_core::MicrophoneDevice>,
+        /// AEC 可选的扬声器回环源（缓存一次 cpal 枚举结果）。
+        aec_reference_devices: Vec<String>,
         /// 麦克风枚举失败的原因（设置页据此显示 `microphoneLoadError`）。
         microphone_error: Option<String>,
         transcript: String,
@@ -853,6 +855,7 @@ mod linux_app {
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
                         microphones: Vec::new(),
+                    aec_reference_devices: Vec::new(),
                         microphone_error: None,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
@@ -974,6 +977,7 @@ mod linux_app {
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
+                    aec_reference_devices: Vec::new(),
                     microphone_error: None,
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
@@ -5690,6 +5694,27 @@ mod linux_app {
             // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
             // 内容每帧弹回旧值。
             let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
+            // AEC 参考源：设备列表要枚举一次 cpal 主机，缓存到应用里；下标由
+            // 偏好里的设备名换算（0 = 自动，1 = 不采集）。
+            if self.aec_reference_devices.is_empty() && hydrate_text {
+                self.aec_reference_devices = openless_linux_egui::list_loopback_devices();
+            }
+            let aec_reference_devices = self.aec_reference_devices.clone();
+            let aec_reference_index = match self
+                .preferences
+                .as_ref()
+                .map(|prefs| prefs.aec_reference_device_name.as_str())
+                .unwrap_or_default()
+            {
+                "" => 0,
+                "off" => 1,
+                current => self
+                    .aec_reference_devices
+                    .iter()
+                    .position(|name| name == current)
+                    .map_or(0, |index| index + 2),
+            };
+
             // 日志级别是宿主本地文件（不在 Core 偏好里），要在借用 vm 之前读。
             let log_level_index = self
                 .backend()
@@ -5879,8 +5904,12 @@ mod linux_app {
                 s.launch_at_login = prefs.launch_at_login;
                 s.streaming_save_clipboard = prefs.streaming_insert_save_clipboard;
                 s.record_audio_for_debug = prefs.record_audio_for_debug;
+                s.debug_archive_processed = prefs.debug_archive_processed;
+                s.debug_archive_raw = prefs.debug_archive_raw;
                 // 日志级别是宿主本地文件，不在 Core 偏好里；读不到就按 info 显示。
                 s.log_level = log_level_index;
+                s.aec_reference_devices = aec_reference_devices.clone();
+                s.aec_reference_index = aec_reference_index;
                 if hydrate_text {
                     s.history_max_entries = prefs
                         .history_max_entries

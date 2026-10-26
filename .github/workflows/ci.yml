@@ -749,6 +749,12 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
+      - name: Run Windows audio COM lifecycle tests
+        # These tests use independent processes for COM/enumerator lifetime checks and do not
+        # require a microphone. Device-dependent capture/playback tests remain explicitly ignored.
+        if: runner.os == 'Windows'
+        run: cargo test --locked --manifest-path src-tauri/vendor/cpal/Cargo.toml --lib --test windows_lifecycle
+
       - name: Check Tauri backend with Rust 1.99 MSRV
         if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml

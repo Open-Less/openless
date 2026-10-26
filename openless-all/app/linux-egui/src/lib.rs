@@ -50,6 +50,8 @@ pub mod wgpu_device;
 pub mod siri_wgpu;
 
 pub use audio::LinuxCpalRecorder;
+#[cfg(target_os = "linux")]
+pub use audio::{list_loopback_devices, start_reference_capture, ReferenceCapture};
 pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
 pub use audio_mute::AudioMuteGuard;
 pub use audio_player::ClipPlayer;

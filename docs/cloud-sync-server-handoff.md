@@ -60,6 +60,8 @@
 - `baseRevision=0` 且云端确无记录时创建首份快照（版本 1）。
 - `schemaVersion` 不是 1 返回 `400`（`unsupported_schema_version`）。
 
+`payload.preferences` 中的新增字段必须按可选字段处理，以兼容旧客户端上传的数据；当前客户端会上传可迁移的界面、听写、选择语音、布局、历史和更新偏好（包括 `cursorContextEnabled`、`polishContextWindowMinutes`、`polishSkipMaxChars`、`streamingInsert`、`windowsCompositionInput`、`selectionVoice*` 等）。旧响应缺少这些字段时，客户端保留本机已有值；服务端不能把未知字段静默丢失后再返回一个看似成功的完整快照，应完成 DTO、持久化和读回合同的同步更新。
+
 ### DELETE /me/sync — 清空云端
 
 请求 `{"baseRevision":2}`；成功返回递增版本、`updatedAt` 更新、`payload:null` 的快照。对不存在（`revision=0`）的快照执行删除且 `baseRevision=0` 时，按合同创建版本 1 的空记录。本机数据由客户端自行保留，服务端只管云端。

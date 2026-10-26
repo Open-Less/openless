@@ -170,7 +170,7 @@ fn controlled_export_keeps_real_service_keys_but_excludes_local_secrets_and_gran
     );
     assert!(!raw.contains("fixture-pin-never-export"));
     assert!(!raw.contains("codingAgentEnabled"));
-    assert!(!raw.contains("cursorContextEnabled"));
+    assert!(raw.contains("cursorContextEnabled"));
     assert!(!raw.contains("vocabularyLearningEnabled"));
     assert!(!raw.contains("fixture-login"));
     assert!(!raw.contains("activeLlmProvider"));

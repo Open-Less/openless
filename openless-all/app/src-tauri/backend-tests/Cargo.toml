@@ -39,5 +39,5 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Thre
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Exercise the production recorder worker without the retired Linux Tauri host.
-cpal = "0.15.3"
+cpal = { version = "=0.15.3", path = "../vendor/cpal" }
 parking_lot = "0.12"

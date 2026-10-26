@@ -56,6 +56,7 @@ export function AudioDspSettings({
     </SettingRow>
   );
   const stageLabels: Record<AudioDspStage, string> = {
+    acousticEchoCancellation: label('aec', 'Echo cancellation'),
     noiseReduction: label('noise', 'Noise reduction'),
     dereverb: label('dereverb', 'Comb filter'),
     equalizer: label('equalizer', 'Equalizer'),
@@ -84,6 +85,30 @@ export function AudioDspSettings({
           'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
         )}
       </p>
+      <SettingRow
+        label={stageLabels.acousticEchoCancellation}
+        desc={label(
+          'aecHint',
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        )}
+      >
+        <SelectLite
+          ariaLabel={stageLabels.acousticEchoCancellation}
+          value={draft.aecMode}
+          onChange={(v) => save({ aecMode: v as AudioDspConfig['aecMode'] })}
+          options={[
+            { value: 'off', label: label('aecOff', 'Off') },
+            { value: 'light', label: label('aecLight', 'Light (low CPU)') },
+            { value: 'model', label: label('aecModel', 'Model (stronger)') },
+          ]}
+        />
+      </SettingRow>
+      {draft.aecMode === 'model' &&
+        label(
+          'aecModelHint',
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+        )}
+      {slider('outputBufferMs', label('buffer', 'Output buffer'), 100, 1200, ' ms')}
       {isAndroid() && expanded && <AndroidAudioEffects value={draft} onChange={save} />}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite

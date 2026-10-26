@@ -1566,6 +1566,14 @@ export const en: typeof zhCN = {
         preset_vocalClarity: 'Vocal clarity',
         preset_warmVocal: 'Warm vocal',
 
+        aecOff: 'Off',
+        aecLight: 'Light (low CPU)',
+        aecModel: 'Model (stronger)',
+        aecModelHint:
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+        aecHint:
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        buffer: 'Output buffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1670,6 +1678,10 @@ export const en: typeof zhCN = {
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
+      debugArchiveProcessedLabel: 'Keep processed audio',
+      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveRawLabel: 'Also keep pre-processing audio',
+      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',

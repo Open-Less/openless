@@ -109,6 +109,7 @@ try {
   } as EncryptedSyncStatus;
   const event = {
     sequence: '9007199254740994',
+    serviceOrigin: 'https://sync.example',
     accountId: 'owner',
     vaultId: 'vault',
     taskId: 'task',
@@ -119,6 +120,7 @@ try {
     { ...event, sequence: '01' },
     { ...event, sequence: '18446744073709551616' },
     { ...event, accountId: 'other' },
+    { ...event, serviceOrigin: 'https://other.example' },
     { ...event, vaultId: 'other' },
     { ...event, taskId: 'old-task' },
   ])

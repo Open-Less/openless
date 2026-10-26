@@ -639,6 +639,28 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             ) {
                 actions.push(FrontendAction::SettingsAudioDsp(vm.settings.audio_dsp));
             }
+            // AEC 需要「扬声器此刻在放什么」：让用户挑回环源（自动 / 不采集 / 具名
+            // 监听设备）。没有回环源时这里只有前两项，AEC 会退化为无参考。
+            if vm.settings.audio_dsp.aec_mode != openless_core::AecMode::Off {
+                let mut options: Vec<&str> = vec![
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceAuto"),
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceOff"),
+                ];
+                options.extend(vm.settings.aec_reference_devices.iter().map(String::as_str));
+                combo_index_row(
+                    ui,
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceLabel"),
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceDesc"),
+                    vm.settings.aec_reference_index.min(options.len().saturating_sub(1)),
+                    &options,
+                    |index| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::AecReference,
+                            index,
+                        ));
+                    },
+                );
+            }
             // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
             toggle_row(
                 ui,
@@ -3197,6 +3219,34 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
+                // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
+                // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
+                if vm.settings.record_audio_for_debug {
+                    ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_processed_label"),
+                            tr_l10n(lang, "settings.recording.archive_processed_desc"),
+                            vm.settings.debug_archive_processed,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveProcessed,
+                                ));
+                            },
+                        );
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_raw_label"),
+                            tr_l10n(lang, "settings.recording.archive_raw_desc"),
+                            vm.settings.debug_archive_raw,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveRaw,
+                                ));
+                            },
+                        );
+                    });
+                }
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
