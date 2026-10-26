@@ -152,18 +152,31 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    draft. Wait for **both** workflows to succeed, verify the packages, then publish that
    draft (Beta as a prerelease; Stable as latest).
    Do not rerun an asset workflow after publication without first returning the release to draft.
+
    The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
-   `latest-{target}-{arch}-beta.json`). Current clients do **not** read those release assets:
-   they read the CDN, so publishing a release is only half the job — the manifests must also
-   land on the CDN at
+   `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
+   current clients read the CDN, not the release. Download them from the run and publish them to
+   the CDN as part of publishing the release:
+
+   | platform | workflow artifact |
+   | --- | --- |
+   | macOS | `openless-macos-<arch>-updater` |
+   | Windows | `openless-windows-x64-updater` |
+   | Android | `openless-android-updater-manifests` |
+
+   Destination (overwrite in place; the file name is per platform and channel, never per
+   version):
 
    ```text
    https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
    https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
    ```
 
-   with their `url` fields pointing at the CDN artifacts (`.../releases/{tag}/{asset}`). The
-   in-release copies exist only for clients built before the CDN switch.
+   Their `url` fields must point at the CDN artifacts (`.../releases/{tag}/{asset}`).
+   Manifest upload is the step that makes a release reachable by auto-update: a published
+   release whose manifests were not synced is downloadable by hand but invisible to the updater.
+   Clients built before the CDN switch read the old `releases/latest/download/latest-*.json`
+   assets, which new releases no longer carry, so they need one manual download.
 7. Publishing Stable with the administrator's CLI/UI credential automatically
    triggers `sync-homebrew-cask.yml`. It accepts only the published latest Stable
    tag, preserves application build metadata in DMG filenames, verifies matching

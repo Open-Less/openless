@@ -346,7 +346,7 @@ https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
 https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
 ```
 
-渠道隔离就是 URL 路径(`/updates/stable/` vs `/updates/beta/`),Stable 客户端即使请求错地址也拿不到 Beta 清单。清单里的下载地址同样指向 CDN(`https://dl.aeoform.com/releases/{tag}/{asset}`),国内用户直接从这里下载。当前客户端已不需要 GitHub Release 资产里的清单副本,那边继续保留只是为了改动前的旧客户端还能更新。
+渠道隔离就是 URL 路径(`/updates/stable/` vs `/updates/beta/`),Stable 客户端即使请求错地址也拿不到 Beta 清单。清单里的下载地址同样指向 CDN(`https://dl.aeoform.com/releases/{tag}/{asset}`),国内用户直接从这里下载。清单由发布 workflow 生成为运行产物(run artifact),**不再挂到 GitHub Release**;因此发版后需要维护者手动把清单上传到 CDN,见 `RELEASING.md`。改动前装的客户端读的是旧的 `releases/latest/download/latest-*.json`,因此无法自动更新到最后一个还带这些文件的版本之后,需要手动下载一次。
 
 ## 凭据
 
