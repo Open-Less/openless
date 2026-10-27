@@ -96,13 +96,25 @@ assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
 // The capsule crates used to run in their own pull-request-only workflow: it
 // wrote a dependency tree under `refs/pull/<n>/merge` (never restored again)
-// while beta produced nothing to restore. It now lives here, behind the same
-// `Changed areas` verdict, and saves only from beta.
+// while beta produced nothing to restore. They now live inside
+// `cross-platform`, which already builds the same `openless-all/app` workspace
+// on both desktop platforms — so they cost a warm incremental compile instead of
+// two extra runners and a second cache prefix.
 {
-  const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
-  assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
-  assert.match(capsuleJob, /shared-key: native-capsule/);
-  assert.match(capsuleJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/);
+  const crossPlatform = ci.match(/\n  cross-platform:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
+  assert.ok(crossPlatform, 'ci.yml must keep the cross-platform job');
+  assert.match(
+    crossPlatform,
+    /cargo check --locked -p openless-native-capsule/,
+    'the capsule crates must be checked inside cross-platform',
+  );
+  assert.match(crossPlatform, /cargo test --locked -p openless-capsule --features ui,host/);
+  assert.doesNotMatch(
+    ci,
+    /\n  native-capsule:/,
+    'the capsule crates must not need a dedicated runner pair',
+  );
+  assert.doesNotMatch(ci, /shared-key: native-capsule/);
   assert.ok(
     !existsSync(join(root, '.github/workflows/native-capsule.yml')),
     'native-capsule.yml must stay merged into ci.yml',

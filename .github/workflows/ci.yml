@@ -8,8 +8,12 @@ name: CI
 # macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
 
 on:
+  # Feature branches are covered by their pull request. Running both produced two full
+  # matrices for the same commit (measured: 8 of 42 CI runs were such duplicates).
+  # The default branches keep a push run because that run is the baseline evidence and
+  # the only writer of the Rust/Playwright caches.
   push:
-    branches: ['**']
+    branches: [main, beta]
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
@@ -43,6 +47,8 @@ jobs:
       msrv: ${{ steps.detect.outputs.msrv }}
       linux: ${{ steps.detect.outputs.linux }}
       harmony: ${{ steps.detect.outputs.harmony }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      android: ${{ steps.detect.outputs.android }}
       # Validate the pinned minimum compiler whenever native sources can change.
       msrv_needed: ${{ steps.detect.outputs.msrv }}
     steps:
@@ -58,7 +64,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux harmony; do
+          for area in tauri msrv linux harmony frontend android; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
@@ -67,7 +73,9 @@ jobs:
   ui-motion:
     name: UI motion (Chromium + WebKit)
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    # Browser-rendered surface only: 15 minutes of Playwright on a change that
+    # cannot alter what Chromium/WebKit paints is pure cost.
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -115,7 +123,8 @@ jobs:
 
   android-check:
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    # Android compiles its own Rust graph: a bundle-only change cannot break it.
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -553,47 +562,6 @@ jobs:
         # anything here; everything else runs on macOS (full suite) and Linux.
         run: node scripts/frontend-test-runner.mjs --platform-only windows
 
-  native-capsule:
-    # The capsule crates compile into the desktop shells, so a break there would
-    # otherwise only surface inside the long Tauri matrix. They are checked on
-    # both desktop platforms inside this workflow rather than in a second
-    # workflow: one run per pull request, one `Changed areas` gate, one cache
-    # policy. Being a `push` job on the default branches is also what keeps the
-    # Rust cache warm - a pull-request-only workflow can never save a tree the
-    # next pull request is allowed to restore.
-    needs: [changes]
-    if: needs.changes.outputs.tauri != 'false'
-    name: Native capsule (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || '["macos-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: openless-all/app
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Stable prefix per platform instead of the job name, so renaming or
-          # splitting the job keeps the tree.
-          shared-key: native-capsule
-          workspaces: openless-all/app -> target
-          # Pull requests restore the beta tree and never write their own copy:
-          # `refs/pull/<n>/merge` scopes are never restored again and only evict
-          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
-          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
-      - run: cargo check --locked -p openless-native-capsule
-      - run: cargo test --locked -p openless-capsule --features ui,host
-      - run: cargo clippy --locked -p openless-native-capsule -p openless-capsule --features openless-capsule/ui,openless-capsule/host -- -D warnings
-
   cross-platform:
     needs: [changes]
     # 失败即运行：只有判定脚本明确说“够不到”才跳过。
@@ -781,6 +749,19 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: openless-all/app/windows-ime
         run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+
+      # The capsule crates compile into the desktop shells, so a break there would
+      # otherwise only surface inside the long Tauri matrix. They used to run in a
+      # separate macOS + Windows job pair — two extra runners whose whole payload
+      # was ~40 s of `cargo check` — while this job already builds the same
+      # `openless-all/app` workspace target directory. Checking them here costs a
+      # warm incremental compile and saves two VM allocations per run.
+      - name: Check the native capsule crates
+        run: cargo check --locked -p openless-native-capsule
+      - name: Test the capsule crates
+        run: cargo test --locked -p openless-capsule --features ui,host
+      - name: Lint the capsule crates
+        run: cargo clippy --locked -p openless-native-capsule -p openless-capsule --features openless-capsule/ui,openless-capsule/host -- -D warnings
 
       - name: Verify version sync across all 5 files
         # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
