@@ -3,7 +3,7 @@ import { C, R, S, T } from '../common/Tokens';
 import { Card, EmptyState, GhostButton, PageTitle, Pill, SearchField, SectionHeader } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
-import { Api } from '../data/Api';
+import { Api, PendingCorrection } from '../data/Api';
 import { CorrectionRule, DictionaryEntry, MarketplacePack, StylePack } from '../data/Types';
 import { StylePackPayload } from '../data/Api';
 
@@ -182,6 +182,7 @@ export struct CorrectionsPage {
   @State private rules: CorrectionRule[] = [];
   @State private pattern: string = '';
   @State private replacement: string = '';
+  @State private pending: PendingCorrection[] = [];
   @State private error: string = '';
   @State private busy: boolean = false;
 
@@ -192,6 +193,11 @@ export struct CorrectionsPage {
   private async reload(): Promise<void> {
     try {
       this.rules = await Api.correctionRules();
+      try {
+        this.pending = await Api.pendingCorrections();
+      } catch (error) {
+        this.pending = [];
+      }
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -218,6 +224,45 @@ export struct CorrectionsPage {
   build() {
     Column() {
       PageTitle({ title: '纠正规则', subtitle: this.rules.length.toString() + ' 条规则 · 在润色前替换' })
+
+      if (this.pending.length > 0) {
+        Card() {
+          Column({ space: S.xs }) {
+            SectionHeader({ title: '学习建议', hint: '模型从历史里发现的重复纠正，接受后成为规则' })
+            ForEach(this.pending, (item: PendingCorrection) => {
+              Row({ space: S.sm }) {
+                Column({ space: S.xxs }) {
+                  Text(item.pattern + ' → ' + item.replacement)
+                    .fontSize(T.callout)
+                    .fontColor(C.textPrimary())
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                GhostButton({
+                  label: '接受',
+                  symbol: 'check',
+                  onTap: () => {
+                    Api.acceptCorrection(item.id).then(() => this.reload()).catch((error: Error) => {
+                      this.error = error.message;
+                    });
+                  }
+                })
+                GhostButton({
+                  label: '忽略',
+                  onTap: () => {
+                    Api.rejectCorrection(item.id).then(() => this.reload()).catch((error: Error) => {
+                      this.error = error.message;
+                    });
+                  }
+                })
+              }
+              .width('100%')
+              .padding({ top: S.xxs, bottom: S.xxs })
+            }, (item: PendingCorrection) => item.id)
+          }
+          .width('100%')
+        }
+      }
 
       Card() {
         Column({ space: S.sm }) {

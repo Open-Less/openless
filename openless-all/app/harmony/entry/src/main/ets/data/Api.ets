@@ -300,6 +300,31 @@ export class Api {
       '{"flowId":' + JSON.stringify(flowId) + '}')) as GithubDeviceFlowPoll;
   }
 
+  /**
+   * Learning suggestions live in the backend snapshot (the desktop UI receives them
+   * as events; the Harmony host has no event channel, so the snapshot is the source).
+   */
+  static async pendingCorrections(): Promise<PendingCorrection[]> {
+    const wire = await Api.value('get_startup_snapshot', '{}');
+    const snapshot = JSON.parse(wire) as SnapshotWithPending;
+    const backend = snapshot.backend;
+    if (backend === undefined) return [];
+    const list = backend.pendingCorrections;
+    return list === undefined ? [] : list;
+  }
+
+  static async acceptCorrection(id: string): Promise<void> {
+    await Api.value('accept_pending_correction', '{"id":' + JSON.stringify(id) + '}');
+  }
+
+  static async rejectCorrection(id: string): Promise<void> {
+    await Api.value('reject_pending_correction', '{"id":' + JSON.stringify(id) + '}');
+  }
+
+  static async dismissSuggestions(): Promise<void> {
+    await Api.value('dismiss_vocab_suggestions', '{}');
+  }
+
   static async takeSplashPlayback(): Promise<void> {
     try {
       await Api.value('take_splash_playback', '{}');
@@ -386,6 +411,22 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface PendingCorrection {
+  id: string;
+  pattern: string;
+  replacement: string;
+  source?: string;
+  at?: string;
+}
+
+interface SnapshotWithPending {
+  backend?: PendingBackend;
+}
+
+interface PendingBackend {
+  pendingCorrections?: PendingCorrection[];
 }
 
 export interface MarketplaceAuth {
