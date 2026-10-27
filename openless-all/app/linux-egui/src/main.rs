@@ -1386,6 +1386,20 @@ mod linux_app {
                     // 电平走高频率的 `HostToPopup::QaLevel`，快照里只保证录音相位
                     // 切换时不残留上一段的电平。
                     audio_level: None,
+                    // Tauri 的 `qa.activity.*`：把「思考中」换成具体动作。
+                    activity: state.activity.as_ref().map(|activity| {
+                        match activity.kind {
+                            openless_core::domains::QaActivityKind::Thinking => "thinking",
+                            openless_core::domains::QaActivityKind::SearchingWeb => "searching_web",
+                            openless_core::domains::QaActivityKind::ReadingWeb => "reading_web",
+                            openless_core::domains::QaActivityKind::UsingTool => "using_tool",
+                        }
+                        .to_string()
+                    }),
+                    activity_tool: state
+                        .activity
+                        .as_ref()
+                        .and_then(|activity| activity.tool_name.clone()),
                     error: state.error,
                     edit_instruction_mode: self.qa_edit.instruction_mode,
                     edit_apply_available: self.qa_edit.apply_available,
@@ -11871,6 +11885,8 @@ Internal flags (set by OpenLess itself, not for regular use):
                 selection_preview: None,
                 streaming_answer: String::new(),
                 audio_level: None,
+                activity: None,
+                activity_tool: None,
                 error: None,
                 edit_instruction_mode: false,
                 edit_apply_available: false,

@@ -8147,6 +8147,34 @@ pub const CATALOG: &[Msg] = &[
             "수정으로 단어 학습",
         ),
     },
+    Msg {
+        key: "qa.activity.reading_web",
+        text: row(
+            "正在阅读网页",
+            "正在閱讀網頁",
+            "Reading web pages",
+            "ウェブページを読込中",
+            "웹 페이지 읽는 중",
+        ),
+    },
+    Msg {
+        key: "qa.activity.searching_web",
+        text: row(
+            "正在搜索网页",
+            "正在搜尋網頁",
+            "Searching the web",
+            "ウェブを検索中",
+            "웹 검색 중",
+        ),
+    },
+    Msg {
+        key: "qa.activity.tool",
+        text: row("工具", "工具", "tool", "ツール", "도구"),
+    },
+    Msg {
+        key: "qa.activity.using_tool",
+        text: row("正在使用 {}", "正在使用 {}", "Using {}", "{} を使用中", "{} 사용 중"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

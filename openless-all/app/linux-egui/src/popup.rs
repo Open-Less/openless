@@ -76,6 +76,13 @@ pub enum HostToPopup {
         /// 数据来自 Core 的 `BackendEventKind::QaLevel`。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audio_level: Option<f32>,
+        /// 正在做什么（思考 / 搜索网页 / 阅读网页 / 使用工具）。
+        /// Tauri 的 `qa.activity.*` 就靠它把「思考中」换成具体动作。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<String>,
+        /// `activity` 是 `using_tool` 时的工具名。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity_tool: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         /// 「编辑指令」勾选框状态（Core `QaSnapshot.edit_instruction_mode`）。
@@ -621,6 +628,9 @@ pub struct QaPopupState {
     pub selection_preview: Option<String>,
     pub streaming_answer: String,
     pub audio_level: Option<f32>,
+    /// 见 `HostToPopup::QaSnapshot::activity`。
+    pub activity: Option<String>,
+    pub activity_tool: Option<String>,
     pub error: Option<String>,
     pub edit_instruction_mode: bool,
     /// 润色结果模式：Some = 正在编辑润色结果（替代原来的独立预览窗口）。
@@ -753,6 +763,8 @@ impl PopupState {
                 selection_preview,
                 streaming_answer,
                 audio_level,
+                activity,
+                activity_tool,
                 error,
                 edit_instruction_mode,
                 edit_apply_available,
@@ -768,6 +780,8 @@ impl PopupState {
                     selection_preview,
                     streaming_answer,
                     audio_level,
+                    activity,
+                    activity_tool,
                     error,
                     edit_instruction_mode,
                     edit_apply_available,
@@ -850,7 +864,9 @@ pub enum PopupSendError {
 }
 
 enum SupervisorCommand {
-    Send(HostToPopup),
+    /// Boxed: `HostToPopup` 现在有 20 多个变体、最大的快照有 240 B，
+    /// 直接内联会让通道里每条消息都按最大变体占内存（clippy 也会报）。
+    Send(Box<HostToPopup>),
     Shutdown,
 }
 
@@ -947,7 +963,7 @@ impl PopupSupervisor {
 
     /// Queue a message without ever waiting in an egui frame.
     pub fn try_send(&self, message: HostToPopup) -> Result<(), PopupSendError> {
-        match self.commands.try_send(SupervisorCommand::Send(message)) {
+        match self.commands.try_send(SupervisorCommand::Send(Box::new(message))) {
             Ok(()) => Ok(()),
             Err(tokio_mpsc::error::TrySendError::Full(_)) => Err(PopupSendError::Full),
             Err(tokio_mpsc::error::TrySendError::Closed(_)) => Err(PopupSendError::Closed),
@@ -1050,7 +1066,7 @@ async fn supervise(
             command = commands.recv() => {
                 match command {
                     Some(SupervisorCommand::Send(message)) => {
-                        match serde_json::to_vec(&message) {
+                        match serde_json::to_vec(message.as_ref()) {
                             Ok(encoded) if encoded.len() <= MAX_JSONL_LINE_BYTES => {
                                 if let Err(error) = stdin.write_all(&encoded).await {
                                     let _ = events.try_send(PopupSupervisorEvent::ProtocolError(
@@ -1364,6 +1380,8 @@ mod tests {
             selection_preview: None,
             streaming_answer: String::new(),
             audio_level: None,
+            activity: None,
+            activity_tool: None,
             error: None,
             edit_instruction_mode: true,
             edit_apply_available: true,
