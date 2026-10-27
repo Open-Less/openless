@@ -118,7 +118,11 @@ assert.doesNotMatch(
 assert.ok(existsSync(join(appRoot, 'scripts/package-harmony-hap.sh')));
 assert.match(packaging, /sign-harmony-hap\.py/);
 assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
-assert.match(packaging, /sha256sum \.\/\*\.hap > SHA256SUMS/);
+assert.match(
+  packaging,
+  /sha256sum \.\/OpenLess_harmony_arm64\.hap \.\/OpenLess_harmony\.hap > SHA256SUMS/,
+  'Release checksums must cover only the unsigned HAP pair uploaded to GitHub',
+);
 assert.match(packaging, /OpenLess_harmony_arm64\.hap/);
 assert.match(packaging, /OpenLess_harmony\.hap/);
 assert.match(signing, /HARMONY_KEYSTORE_PASSWORD/);
@@ -155,7 +159,17 @@ assert.match(
   /gh workflow run release-harmony\.yml[\s\S]{0,300}-f "tag=\$RELEASE_TAG"/,
   'the hand-off must dispatch with the tag as an input',
 );
+assert.match(
+  tauriRelease,
+  /gh workflow run release-harmony\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
+  'the downstream workflow definition must be loaded from the same immutable release tag',
+);
 assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
+assert.match(
+  tauriRelease,
+  /gh workflow run release-linux-egui\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
+  'the Linux workflow definition must use the same immutable release tag',
+);
 assert.match(
   tauriRelease,
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,

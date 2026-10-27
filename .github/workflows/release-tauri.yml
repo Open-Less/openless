@@ -739,8 +739,8 @@ jobs:
   #
   # `workflow_dispatch` is one of the two events `GITHUB_TOKEN` may still
   # trigger, so this needs no PAT - only `actions: write` for this job. The
-  # downstream runs execute the workflow definition from the default branch and
-  # check the tag out by input, re-validating it against `package.json`.
+  # downstream runs use the same release tag for their workflow definition and
+  # checkout, so the package, workflow and cache inputs stay on one immutable ref.
   dispatch-platform-releases:
     needs: build
     # Independent of the desktop result: the HAP and the Linux packages only need
@@ -758,7 +758,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       # Repository distribution path by default: the HAP is attached to the
       # GitHub Release unsigned and nothing reaches AppGallery. Set the
       # `HARMONY_AUTO_CHANNEL` repository variable to `release` (production) or
@@ -775,13 +774,13 @@ jobs:
             *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test (got '$HARMONY_CHANNEL')"; exit 1 ;;
           esac
           gh workflow run release-harmony.yml \
-            --ref "$DEFAULT_BRANCH" \
+            --ref "$RELEASE_TAG" \
             -f "tag=$RELEASE_TAG" \
             -f "channel=$HARMONY_CHANNEL" \
             -f publish=true \
             -f upload_to_appgallery=true
           gh workflow run release-linux-egui.yml \
-            --ref "$DEFAULT_BRANCH" \
+            --ref "$RELEASE_TAG" \
             -f "tag=$RELEASE_TAG" \
             -f publish=true
 
@@ -795,7 +794,7 @@ jobs:
           sleep 10
           for workflow in release-harmony.yml release-linux-egui.yml; do
             echo "### $workflow"
-            gh run list --workflow="$workflow" --branch="$DEFAULT_BRANCH" --limit 3 \
+            gh run list --workflow="$workflow" --limit 3 \
               --json createdAt,status,conclusion,url \
               --jq '.[] | "\(.createdAt) \(.status) \(.conclusion // "-") \(.url)"'
           done
