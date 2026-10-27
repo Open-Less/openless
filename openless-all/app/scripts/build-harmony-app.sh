@@ -33,6 +33,20 @@ shutil.copytree(source, target, dirs_exist_ok=True, ignore=shutil.ignore_pattern
 stale_web = target / 'entry/src/main/resources/rawfile/web'
 if stale_web.exists():
     shutil.rmtree(stale_web)
+# The repository ships the phone/tablet declaration because that is what the local
+# debug profile grants. Store channels are signed with the AGC release profile, which
+# also covers 2-in-1 - declare it there so the release build can actually run on PC
+# with free-form windows. A profile without 2in1 would make the system reject the
+# app ("不支持 PC 和 2in1 设备"), so this stays tied to the signed channel.
+if os.environ.get('OPENLESS_HARMONY_STORE_SIGNING'):
+    manifest = target / 'entry/src/main/module.json5'
+    text = manifest.read_text()
+    text = text.replace('"deviceTypes": [\n      "phone",\n      "tablet"\n    ],',
+                        '"deviceTypes": [\n      "phone",\n      "tablet",\n      "2in1"\n    ],')
+    text = text.replace('"supportWindowMode": [\n          "fullscreen",\n          "split"\n        ]',
+                        '"supportWindowMode": [\n          "fullscreen",\n          "split",\n          "floating"\n        ]')
+    manifest.write_text(text)
+
 if os.environ['OPENLESS_HARMONY_CLIPBOARD_ACCESS'] == '1':
     manifest = target / 'entry/src/main/module.json5'
     module = json.loads(manifest.read_text())

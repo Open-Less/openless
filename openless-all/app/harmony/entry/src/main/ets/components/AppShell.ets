@@ -118,9 +118,9 @@ export struct AppShell {
         .fontColor(C.textTertiary())
         .padding({ left: S.md, bottom: S.lg })
     }
-    .width(264)
+    .width(S.rail(this.bp))
     .height('100%')
-    .padding({ left: S.md, right: S.md })
+    .padding({ left: S.sm, right: S.sm })
     .backgroundColor(C.glass())
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
     .border({ width: { right: 0.5 }, color: C.border() })
@@ -139,7 +139,7 @@ export struct AppShell {
         .layoutWeight(1)
     }
     .width('100%')
-    .height(48)
+    .height(S.rowSingle)
     .padding({ left: S.md, right: S.md })
     .margin({ bottom: S.xxs })
     .backgroundColor(this.tabActive(item.id) ? C.accentSoft() : Color.Transparent)

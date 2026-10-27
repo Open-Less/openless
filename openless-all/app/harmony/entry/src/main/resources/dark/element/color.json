@@ -2,7 +2,7 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#0E0F11"
+      "value": "#000000"
     },
     {
       "name": "ime_panel_background",
@@ -34,43 +34,43 @@
     },
     {
       "name": "ol_bg",
-      "value": "#0E0F11"
+      "value": "#000000"
     },
     {
       "name": "ol_surface",
-      "value": "#1A1C1F"
+      "value": "#1C1C1E"
     },
     {
       "name": "ol_surface_elevated",
-      "value": "#22252A"
+      "value": "#242426"
     },
     {
       "name": "ol_surface_sunken",
-      "value": "#131417"
+      "value": "#101012"
     },
     {
       "name": "ol_overlay",
-      "value": "#22252A"
+      "value": "#242426"
     },
     {
       "name": "ol_border",
-      "value": "#2E3238"
+      "value": "#2C2C2E"
     },
     {
       "name": "ol_divider",
-      "value": "#26292E"
+      "value": "#14FFFFFF"
     },
     {
       "name": "ol_text_primary",
-      "value": "#F1F3F6"
+      "value": "#E6FFFFFF"
     },
     {
       "name": "ol_text_secondary",
-      "value": "#A6ADB8"
+      "value": "#99FFFFFF"
     },
     {
       "name": "ol_text_tertiary",
-      "value": "#7C848F"
+      "value": "#4DFFFFFF"
     },
     {
       "name": "ol_text_on_accent",
@@ -78,47 +78,47 @@
     },
     {
       "name": "ol_icon_primary",
-      "value": "#F1F3F6"
+      "value": "#E6FFFFFF"
     },
     {
       "name": "ol_icon_secondary",
-      "value": "#A6ADB8"
+      "value": "#99FFFFFF"
     },
     {
       "name": "ol_accent",
-      "value": "#4A8CF7"
+      "value": "#3D8BFF"
     },
     {
       "name": "ol_accent_soft",
-      "value": "#16253D"
+      "value": "#142A45"
     },
     {
       "name": "ol_accent_pressed",
-      "value": "#6BA0FF"
+      "value": "#79AEFF"
     },
     {
       "name": "ol_success",
-      "value": "#3FBF7F"
+      "value": "#37CC7C"
     },
     {
       "name": "ol_success_soft",
-      "value": "#132A20"
+      "value": "#0F2A1C"
     },
     {
       "name": "ol_warning",
-      "value": "#E8A33C"
+      "value": "#FFA033"
     },
     {
       "name": "ol_warning_soft",
-      "value": "#2E2415"
+      "value": "#2E2113"
     },
     {
       "name": "ol_danger",
-      "value": "#F06A5C"
+      "value": "#F06A57"
     },
     {
       "name": "ol_danger_soft",
-      "value": "#31201E"
+      "value": "#301B18"
     },
     {
       "name": "ol_pressed",
@@ -134,47 +134,47 @@
     },
     {
       "name": "ol_heat_0",
-      "value": "#202329"
+      "value": "#1E1E20"
     },
     {
       "name": "ol_heat_1",
-      "value": "#17304F"
+      "value": "#12304F"
     },
     {
       "name": "ol_heat_2",
-      "value": "#1E4675"
+      "value": "#1B4675"
     },
     {
       "name": "ol_heat_3",
-      "value": "#2C63A6"
+      "value": "#2A63A6"
     },
     {
       "name": "ol_heat_4",
-      "value": "#4A8CF7"
+      "value": "#3D8BFF"
     },
     {
       "name": "ol_glass",
-      "value": "#D91A1C1F"
+      "value": "#D91C1C1E"
     },
     {
       "name": "ol_glass_strong",
-      "value": "#F022252A"
+      "value": "#F0242426"
     },
     {
       "name": "ol_glass_sunken",
-      "value": "#CC14161A"
+      "value": "#CC101012"
     },
     {
       "name": "ol_glow_a",
-      "value": "#4D0A59F7"
+      "value": "#33007DFF"
     },
     {
       "name": "ol_glow_b",
-      "value": "#3D7B61FF"
+      "value": "#2B4D7CFF"
     },
     {
       "name": "ol_glow_c",
-      "value": "#3300C2B4"
+      "value": "#1F7A5CFF"
     }
   ]
 }

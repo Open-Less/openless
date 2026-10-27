@@ -54,23 +54,23 @@
     },
     {
       "name": "ol_border",
-      "value": "#E0E3E8"
+      "value": "#E4E6EB"
     },
     {
       "name": "ol_divider",
-      "value": "#E8EAEE"
+      "value": "#14000000"
     },
     {
       "name": "ol_text_primary",
-      "value": "#182431"
+      "value": "#E5000000"
     },
     {
       "name": "ol_text_secondary",
-      "value": "#5E6670"
+      "value": "#99000000"
     },
     {
       "name": "ol_text_tertiary",
-      "value": "#8A919C"
+      "value": "#4D000000"
     },
     {
       "name": "ol_text_on_accent",
@@ -78,55 +78,55 @@
     },
     {
       "name": "ol_icon_primary",
-      "value": "#182431"
+      "value": "#E5000000"
     },
     {
       "name": "ol_icon_secondary",
-      "value": "#5E6670"
+      "value": "#99000000"
     },
     {
       "name": "ol_accent",
-      "value": "#0A59F7"
+      "value": "#007DFF"
     },
     {
       "name": "ol_accent_soft",
-      "value": "#E8F0FE"
+      "value": "#E6F0FF"
     },
     {
       "name": "ol_accent_pressed",
-      "value": "#0846C4"
+      "value": "#0060CC"
     },
     {
       "name": "ol_success",
-      "value": "#1FA768"
+      "value": "#00C566"
     },
     {
       "name": "ol_success_soft",
-      "value": "#E4F6EC"
+      "value": "#E0F8EC"
     },
     {
       "name": "ol_warning",
-      "value": "#C97A00"
+      "value": "#FF8800"
     },
     {
       "name": "ol_warning_soft",
-      "value": "#FDF1DF"
+      "value": "#FFF1E0"
     },
     {
       "name": "ol_danger",
-      "value": "#D33A2C"
+      "value": "#E84026"
     },
     {
       "name": "ol_danger_soft",
-      "value": "#FCEAE8"
+      "value": "#FDEAE7"
     },
     {
       "name": "ol_pressed",
-      "value": "#0F000000"
+      "value": "#12000000"
     },
     {
       "name": "ol_hover",
-      "value": "#08000000"
+      "value": "#0A000000"
     },
     {
       "name": "ol_scrim",
@@ -138,19 +138,19 @@
     },
     {
       "name": "ol_heat_1",
-      "value": "#CFE0FD"
+      "value": "#CCE2FF"
     },
     {
       "name": "ol_heat_2",
-      "value": "#9DBFFA"
+      "value": "#99C6FF"
     },
     {
       "name": "ol_heat_3",
-      "value": "#5C92F5"
+      "value": "#4D9BFF"
     },
     {
       "name": "ol_heat_4",
-      "value": "#0A59F7"
+      "value": "#007DFF"
     },
     {
       "name": "ol_glass",
@@ -166,15 +166,15 @@
     },
     {
       "name": "ol_glow_a",
-      "value": "#330A59F7"
+      "value": "#1F007DFF"
     },
     {
       "name": "ol_glow_b",
-      "value": "#2E7B61FF"
+      "value": "#1A4D7CFF"
     },
     {
       "name": "ol_glow_c",
-      "value": "#2600C2B4"
+      "value": "#147A5CFF"
     }
   ]
 }

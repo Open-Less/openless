@@ -19,20 +19,27 @@ export class Breakpoints {
   static readonly SM: string = 'sm';
   static readonly MD: string = 'md';
   static readonly LG: string = 'lg';
+  /** 2-in-1 / PC: 12-column layouts, three panes. */
+  static readonly XL: string = 'xl';
 
   static isCompact(bp: string): boolean {
     return bp === Breakpoints.SM;
   }
 
   static isWide(bp: string): boolean {
-    return bp === Breakpoints.LG;
+    return bp === Breakpoints.LG || bp === Breakpoints.XL;
+  }
+
+  static isExtraWide(bp: string): boolean {
+    return bp === Breakpoints.XL;
   }
 
   /** Window width in vp to a size class. */
   static of(widthVp: number): string {
     if (widthVp < 600) return Breakpoints.SM;
     if (widthVp < 840) return Breakpoints.MD;
-    return Breakpoints.LG;
+    if (widthVp < 1080) return Breakpoints.LG;
+    return Breakpoints.XL;
   }
 }
 

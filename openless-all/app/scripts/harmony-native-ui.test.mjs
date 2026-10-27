@@ -88,8 +88,10 @@ assert.match(breakpoints, /'windowSizeChange'/, 'rotation and free-form resize m
     [599, 'sm'],
     [600, 'md'], // phone landscape / small tablet
     [839, 'md'],
-    [840, 'lg'], // tablet / 2-in-1
-    [1280, 'lg'],
+    [840, 'lg'], // large tablet / folded phone
+    [1079, 'lg'],
+    [1080, 'xl'], // 2-in-1 / PC
+    [1600, 'xl'],
   ];
   for (const [width, expected] of cases) assert.equal(of(width), expected, `${width}vp must be ${expected}`);
 }
@@ -118,6 +120,14 @@ assert.ok(!existsSync(join(appRoot, 'harmony/entry/src/main/ets/components/MoreP
 // Portrait stays phone-shaped: only the widest class gets a side bar.
 assert.match(shell, /if \(Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.sideBar\(\)/, 'only lg may draw a side bar');
 assert.match(shell, /if \(!Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.tabBar\(\)/, 'md and sm keep the bottom tab bar');
+
+// HarmonyOS design baseline: 8vp grid, spec type scale, 16vp card radius.
+assert.match(tokens, /static readonly xxs: number = 4;/, 'spacing starts at 4vp');
+assert.match(tokens, /static readonly xxxl: number = 64;/, 'spacing follows the 8vp grid up to 64vp');
+assert.match(tokens, /static readonly body: number = 16;/, 'Body M is 16fp');
+assert.match(tokens, /static readonly caption: number = 12;/, 'captions bottom out at 12fp');
+assert.match(tokens, /static readonly touch: number = 44;/, 'touch targets stay above 40vp');
+assert.match(tokens, /static gutter\(bp: string\): number \{[\s\S]{0,200}return 32;/, 'XL margins are 32vp');
 
 // Immersive material: translucent glass + blur over an ambient glow.
 assert.match(ets('common/Tokens.ets'), /static glass\(\)/, 'cards need a translucent glass token');

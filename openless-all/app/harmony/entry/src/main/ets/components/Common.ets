@@ -44,7 +44,7 @@ export struct Card {
     .padding(this.inset)
     .backgroundColor(C.glass())
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .borderRadius(R.xl)
+    .borderRadius(R.lg)
     .border({ width: 0.5, color: C.border() })
     .shadow(cardShadow())
   }

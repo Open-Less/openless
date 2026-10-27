@@ -154,56 +154,96 @@ export class C {
 
 /** Spacing on an 8vp grid. */
 export class S {
-  static readonly xxs: number = 2;
-  static readonly xs: number = 4;
-  static readonly sm: number = 8;
-  static readonly md: number = 12;
-  static readonly lg: number = 16;
-  static readonly xl: number = 24;
-  static readonly xxl: number = 32;
-  static readonly xxxl: number = 48;
+  // HarmonyOS 8vp grid: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64.
+  static readonly xxs: number = 4;
+  static readonly xs: number = 8;
+  static readonly sm: number = 12;
+  static readonly md: number = 16;
+  static readonly lg: number = 24;
+  static readonly xl: number = 32;
+  static readonly xxl: number = 48;
+  static readonly xxxl: number = 64;
+  /** Minimum touch target (spec: 40vp, recommended 48vp). */
+  static readonly touch: number = 44;
+  /** Single-line list row / two-line row. */
+  static readonly rowSingle: number = 48;
+  static readonly rowDouble: number = 64;
 
-  /** Page gutter: phones keep 16vp, wider layouts breathe. */
+  /** Page margin: SM 16 / MD-LG 24 / XL 32 (spec table). */
   static gutter(bp: string): number {
-    if (bp === 'lg') return 32;
-    if (bp === 'md') return 24;
+    if (bp === 'xl') return 32;
+    if (bp === 'lg' || bp === 'md') return 24;
     return 16;
   }
 
-  /** Sidebar / rail width by size class. */
+  /** Column gutter between cards in a multi-column layout. */
+  static columnGap(bp: string): number {
+    return bp === 'sm' ? 16 : 24;
+  }
+
+  /** Side bar width; 0 means no side bar (bottom tab bar instead). */
   static rail(bp: string): number {
-    if (bp === 'lg') return 240;
-    if (bp === 'md') return 88;
+    if (bp === 'xl') return 288;
+    if (bp === 'lg') return 264;
     return 0;
   }
 }
 
 /** Corner radii. */
 export class R {
-  static readonly xs: number = 6;
+  static readonly xs: number = 4;
+  /** Spec S: small buttons, inputs, tags. */
   static readonly sm: number = 8;
-  static readonly md: number = 12;
-  static readonly lg: number = 16;
-  static readonly xl: number = 24;
+  /** Spec M: cards, list items, dialogs. */
+  static readonly md: number = 16;
+  /** Spec L: large cards, bottom sheets. */
+  static readonly lg: number = 24;
+  /** Spec XL: page-level containers. */
+  static readonly xl: number = 32;
   static readonly pill: number = 999;
 }
 
 /** Type scale (fp). */
+/**
+ * HarmonyOS type scale (fp). Line heights follow the spec table; use `Lh` next to
+ * these when a block needs explicit leading.
+ */
 export class T {
-  static readonly display: number = 30;
-  static readonly title: number = 22;
-  static readonly headline: number = 18;
-  static readonly body: number = 16;
-  static readonly callout: number = 15;
-  static readonly footnote: number = 13;
-  static readonly caption: number = 12;
+  static readonly display: number = 32;   // Headline L for page titles
+  static readonly title: number = 24;     // Headline S: card/section titles
+  static readonly headline: number = 20;  // Title L: list/section headings
+  static readonly body: number = 16;      // Body M: default text
+  static readonly callout: number = 17;   // Title M / Body L
+  static readonly footnote: number = 14;  // Body S: helper text
+  static readonly caption: number = 12;   // Caption: timestamps
+  static readonly hero: number = 48;      // Display: big numbers only
 }
 
-/** Shared card shadow; flat surfaces on dark stay flat. */
+export class Lh {
+  static readonly hero: number = 60;
+  static readonly display: number = 40;
+  static readonly title: number = 32;
+  static readonly headline: number = 28;
+  static readonly body: number = 24;
+  static readonly footnote: number = 20;
+  static readonly caption: number = 16;
+}
+
+/** Spec Level 2 shadow (card elevation): blur 8vp, 15% black, no Y offset. */
 export function cardShadow(): ShadowOptions {
   return {
+    radius: 8,
+    color: '#26000000',
+    offsetX: 0,
+    offsetY: 2
+  };
+}
+
+/** Spec Level 3 shadow for sheets and modals: blur 16vp, 20% black. */
+export function sheetShadow(): ShadowOptions {
+  return {
     radius: 16,
-    color: '#12000000',
+    color: '#33000000',
     offsetX: 0,
     offsetY: 4
   };
