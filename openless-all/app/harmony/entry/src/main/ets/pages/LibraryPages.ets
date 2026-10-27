@@ -383,6 +383,7 @@ export struct StylePage {
   @State private newName: string = '';
   @State private newPrompt: string = '';
   @State private composerOpen: boolean = false;
+  @State private packNote: string = '';
 
   aboutToAppear(): void {
     this.reload();
@@ -454,6 +455,18 @@ export struct StylePage {
           onTap: () => Nav.go(Nav.MARKETPLACE)
         })
         GhostButton({
+          label: '从 ZIP 导入',
+          symbol: 'add',
+          onTap: () => {
+            Api.importStylePack().then((note: string) => {
+              this.packNote = note;
+              this.reload();
+            }).catch((error: Error) => {
+              this.packNote = error.message;
+            });
+          }
+        })
+        GhostButton({
           label: this.composerOpen ? '收起' : '新建风格',
           symbol: 'add',
           onTap: () => {
@@ -504,6 +517,9 @@ export struct StylePage {
 
       if (this.error.length > 0) {
         Text(this.error).fontSize(T.footnote).fontColor(C.danger()).padding({ bottom: S.sm })
+      }
+      if (this.packNote.length > 0) {
+        Text(this.packNote).fontSize(T.caption).fontColor(C.textSecondary()).padding({ bottom: S.sm })
       }
 
       Scroll() {
@@ -575,6 +591,17 @@ export struct StylePage {
                       onTap: () => {
                         this.editing = pack.id;
                         this.draftPrompt = pack.systemPrompt ?? '';
+                      }
+                    })
+                    GhostButton({
+                      label: '导出 ZIP',
+                      symbol: 'copy',
+                      onTap: () => {
+                        Api.exportStylePack(pack.id, pack.name).then((note: string) => {
+                          this.packNote = note;
+                        }).catch((error: Error) => {
+                          this.packNote = error.message;
+                        });
                       }
                     })
                     GhostButton({

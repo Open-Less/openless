@@ -259,6 +259,39 @@ export class Api {
     await Api.value('marketplace_like', '{"packId":' + JSON.stringify(packId) + '}');
   }
 
+  /**
+   * Style pack archives.
+   *
+   * Export opens the system save dialog (`DocumentSaveOptions`) with a sensible
+   * file name, so the user can drop it into 下载/文档; third-party apps cannot
+   * write the public Downloads directory directly - that needs
+   * `ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY`, which only system apps get.
+   * Import opens the document picker filtered to `.zip`.
+   */
+  static async exportStylePack(id: string, name: string): Promise<string> {
+    const safeName: string = (name.length > 0 ? name : 'style-pack').replace(/[\\/:*?"<>|]/g, '-');
+    const target: string | null = JSON.parse(await Api.value('pick_style_pack_zip_target',
+      '{"fileName":' + JSON.stringify('OpenLess-' + safeName + '.zip') + '}')) as string | null;
+    const uri: string = target === null ? '' : target;
+    if (uri.length === 0) return '已取消';
+    const wire = await Api.bridge.invokeAsync('export_style_pack_to_zip',
+      '{"id":' + JSON.stringify(id) + ',"targetPath":' + JSON.stringify(uri) + '}');
+    const reply = JSON.parse(wire) as NativeReply;
+    if (!reply.ok) throw new Error(reply.error ?? '导出失败');
+    return '已导出到所选目录';
+  }
+
+  static async importStylePack(): Promise<string> {
+    const picked: string | null = JSON.parse(await Api.value('pick_style_pack_zip', '{}')) as string | null;
+    const uri: string = picked === null ? '' : picked;
+    if (uri.length === 0) return '已取消';
+    const wire = await Api.bridge.invokeAsync('import_style_pack_from_zip',
+      '{"zipPath":' + JSON.stringify(uri) + '}');
+    const reply = JSON.parse(wire) as NativeReply;
+    if (!reply.ok) throw new Error(reply.error ?? '导入失败');
+    return '已导入风格包';
+  }
+
   // ── Re-polish / recordings ─────────────────────────────────────────────────
   static async repolish(rawText: string, stylePackId: string): Promise<string> {
     const payload = '{"rawText":' + JSON.stringify(rawText) +
