@@ -181,10 +181,7 @@ async fn forwarded_launch_intents_use_core_state_and_semantic_host_actions() {
         .unwrap(),
     );
     backend.start().await.unwrap();
-    let host = LinuxHost::with_settings_runtime(
-        Arc::clone(&backend),
-        Arc::new(openless_core::NoopSettingsRuntime),
-    );
+    let host = LinuxHost::new(Arc::clone(&backend));
 
     assert_eq!(
         host.dispatch_launch_intent(LinuxLaunchIntent::ShowMain)
@@ -489,6 +486,57 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
 }
 
 #[test]
+fn retired_binding_migration_preserves_native_registration_semantics() {
+    use openless_core::{
+        SettingsEffectKind, SettingsEffectPlan, SettingsEffectReceipt, SettingsRuntime,
+        SettingsValueChange, UserPreferences,
+    };
+    let effects = Arc::new(RecordingSettingsEffects::default());
+    let runtime = LinuxSettingsRuntime::with_effects(effects.clone());
+    let previous = HotkeyRuntimeTarget::from(&UserPreferences::default());
+    let mut migrated = previous.clone();
+    migrated.coding_agent_voice = None;
+    let mut changed = migrated.clone();
+    changed.dictation = ShortcutBinding {
+        primary: "F12".into(),
+        modifiers: Vec::new(),
+    };
+    let mut registrations = 0;
+    for (case, previous, next, applies) in [
+        ("retired-only", previous, migrated.clone(), false),
+        (
+            "startup hydration",
+            migrated.clone(),
+            migrated.clone(),
+            true,
+        ),
+        ("active binding edit", migrated, changed, true),
+    ] {
+        let mut receipt = SettingsEffectReceipt::default();
+        runtime
+            .commit(
+                &SettingsEffectPlan {
+                    hotkeys: Some(SettingsValueChange { previous, next }),
+                    ..Default::default()
+                },
+                &mut receipt,
+            )
+            .unwrap();
+        registrations += usize::from(applies);
+        assert_eq!(
+            effects.hotkeys.lock().unwrap().len(),
+            registrations,
+            "{case}"
+        );
+        assert_eq!(
+            receipt.applied.contains(&SettingsEffectKind::Hotkeys),
+            applies,
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn linux_settings_saves_release_removed_agent_bindings() {
     for document_save in [false, true] {
         let data_dir = std::env::temp_dir().join(format!(
@@ -607,10 +655,7 @@ async fn linux_headless_selection_contract_covers_capability_and_session_edges()
         )
         .unwrap(),
     );
-    let host = LinuxHost::with_settings_runtime(
-        Arc::clone(&backend),
-        Arc::new(openless_core::NoopSettingsRuntime),
-    );
+    let host = LinuxHost::new(Arc::clone(&backend));
     let selection = &backend.services().selection;
 
     let direct_session = selection

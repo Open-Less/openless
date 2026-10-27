@@ -126,6 +126,14 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         let Some(change) = &plan.hotkeys else {
             return Ok(());
         };
+        // Retiring the Core-only binding is not a native hotkey change.
+        if change.previous.coding_agent_voice != change.next.coding_agent_voice {
+            let mut previous = change.previous.clone();
+            previous.coding_agent_voice = change.next.coding_agent_voice.clone();
+            if previous == change.next {
+                return Ok(());
+            }
+        }
         if !receipt.applied.contains(&SettingsEffectKind::Hotkeys) {
             receipt.applied.push(SettingsEffectKind::Hotkeys);
         }
