@@ -1,3 +1,4 @@
+import { KeyCode } from '@kit.InputKit';
 import { Breakpoints } from '../common/Breakpoint';
 import { C, R, S, T } from '../common/Tokens';
 import { CredentialsPage } from '../pages/CredentialsPage';
@@ -47,6 +48,30 @@ export struct AppShell {
     }
     .width('100%')
     .height('100%')
+    .focusable(true)
+    .onKeyEvent((event: KeyEvent) => this.handleKey(event))
+  }
+
+  /** Ctrl/⌘ + 1..5 jumps to a primary destination (2-in-1 and tablets with keyboards). */
+  private handleKey(event: KeyEvent): void {
+    if (event.type !== KeyType.Down) return;
+    let withModifier: boolean = false;
+    if (event.getModifierKeyState !== undefined) {
+      try {
+        withModifier = event.getModifierKeyState(['Ctrl']) || event.getModifierKeyState(['Meta']);
+      } catch (error) {
+        withModifier = false;
+      }
+    }
+    if (!withModifier) return;
+    const slots: number[] = [KeyCode.KEYCODE_1, KeyCode.KEYCODE_2, KeyCode.KEYCODE_3,
+      KeyCode.KEYCODE_4, KeyCode.KEYCODE_5];
+    for (let index = 0; index < slots.length; index++) {
+      if (event.keyCode === slots[index]) {
+        Nav.go(Nav.PRIMARY[index]);
+        return;
+      }
+    }
   }
 
   /** Route table: navigation only rebuilds this slot, pages keep their own state. */
