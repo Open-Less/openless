@@ -130,6 +130,14 @@ export struct OverviewPage {
     return 4;
   }
 
+  private greeting(): string {
+    const hour: number = new Date().getHours();
+    if (hour < 6) return '夜深了';
+    if (hour < 12) return '早上好';
+    if (hour < 18) return '下午好';
+    return '晚上好';
+  }
+
   private microphoneLabel(): string {
     const name: string | undefined = this.prefs.microphoneDeviceName;
     if (name === undefined || name.length === 0) return '系统默认';
@@ -184,13 +192,13 @@ export struct OverviewPage {
     Column() {
       Row({ space: S.md }) {
         Column({ space: S.xxs }) {
+          Text(this.greeting())
+            .fontSize(T.footnote)
+            .fontColor(C.textTertiary())
           Text('概览')
             .fontSize(T.display)
             .fontWeight(FontWeight.Medium)
             .fontColor(C.textPrimary())
-          Text(this.todayCount > 0 ? '今天已经说了 ' + this.todayCount.toString() + ' 段' : '今天还没有开始')
-            .fontSize(T.footnote)
-            .fontColor(C.textTertiary())
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
@@ -440,11 +448,12 @@ export struct OverviewPage {
       Column({ space: S.md }) {
         SectionHeader({ title: '今天', hint: '设备本地统计，不上传' })
         Row() {
-          MetricTile({ label: '段数', value: this.todayCount.toString() })
-          MetricTile({ label: '字数', value: Fmt.count(this.todayChars) })
-          MetricTile({ label: '时长', value: Fmt.duration(this.todayDuration) })
+          MetricTile({ label: '段数', value: this.todayCount.toString(), hero: true })
+          MetricTile({ label: '字数', value: Fmt.count(this.todayChars), hero: true })
+          MetricTile({ label: '时长', value: Fmt.duration(this.todayDuration), hero: true })
         }
         .width('100%')
+        .alignItems(VerticalAlign.Bottom)
       }
       .width('100%')
     }

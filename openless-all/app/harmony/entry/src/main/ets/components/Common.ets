@@ -1,4 +1,4 @@
-import { C, R, S, T, cardShadow } from '../common/Tokens';
+import { C, Lh, R, S, T, cardShadow } from '../common/Tokens';
 import { symbolOf } from './Icons';
 
 /**
@@ -32,7 +32,7 @@ export struct SectionHeader {
 
 @Component
 export struct Card {
-  @Prop inset: number = S.lg;
+  @Prop inset: number = S.md;
   @BuilderParam content: () => void;
 
   build() {
@@ -163,6 +163,80 @@ export struct GhostButton {
     .onClick(() => {
       if (this.usable) this.onTap();
     })
+  }
+}
+
+/**
+ * Spec list row: 64vp two-line / 48vp one-line, leading symbol tile, trailing
+ * value + chevron. HarmonyOS lists read as icon + title + subtitle, not as a bare
+ * text stack, so every navigation list uses this instead of ad-hoc Rows.
+ */
+@Component
+export struct ListRow {
+  @Prop symbol: string = '';
+  @Prop title: string;
+  @Prop subtitle: string = '';
+  @Prop value: string = '';
+  @Prop showChevron: boolean = true;
+  @Prop showDivider: boolean = true;
+  @Prop accent: boolean = false;
+  onTap: () => void = () => {
+  };
+
+  build() {
+    Column() {
+      Row({ space: S.md }) {
+        if (this.symbol.length > 0) {
+          Stack() {
+            SymbolGlyph(symbolOf(this.symbol))
+              .fontSize(20)
+              .fontColor([this.accent ? C.accent() : C.iconPrimary()])
+          }
+          .width(40)
+          .height(40)
+          .backgroundColor(this.accent ? C.accentSoft() : C.glassSunken())
+          .borderRadius(R.sm)
+        }
+        Column({ space: S.xxs }) {
+          Text(this.title)
+            .fontSize(T.body)
+            .fontColor(C.textPrimary())
+          if (this.subtitle.length > 0) {
+            Text(this.subtitle)
+              .fontSize(T.footnote)
+              .fontColor(C.textTertiary())
+              .maxLines(2)
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        if (this.value.length > 0) {
+          Text(this.value)
+            .fontSize(T.footnote)
+            .fontColor(C.textSecondary())
+            .constraintSize({ maxWidth: 180 })
+            .maxLines(1)
+        }
+        if (this.showChevron) {
+          SymbolGlyph(symbolOf('chevron'))
+            .fontSize(14)
+            .fontColor([C.textTertiary()])
+        }
+      }
+      .width('100%')
+      .constraintSize({ minHeight: this.subtitle.length > 0 ? S.rowDouble + 8 : S.rowSingle })
+      .padding({ left: S.md, right: S.md, top: S.xs, bottom: S.xs })
+      .onClick(() => this.onTap())
+
+      if (this.showDivider) {
+        Divider()
+          .color(C.divider())
+          .strokeWidth(0.5)
+          .margin({ left: this.symbol.length > 0 ? 64 : S.md })
+      }
+    }
+    .width('100%')
   }
 }
 
@@ -300,12 +374,15 @@ export struct MetricTile {
   @Prop label: string;
   @Prop value: string;
   @Prop unit: string = '';
+  /** Hero numbers use the spec Display style (48fp / 60 line height). */
+  @Prop hero: boolean = false;
 
   build() {
     Column({ space: S.xxs }) {
       Row({ space: S.xxs }) {
         Text(this.value)
-          .fontSize(T.title)
+          .fontSize(this.hero ? T.hero : T.title)
+          .lineHeight(this.hero ? Lh.hero : Lh.title)
           .fontWeight(FontWeight.Medium)
           .fontColor(C.textPrimary())
         if (this.unit.length > 0) {
@@ -317,7 +394,7 @@ export struct MetricTile {
       .alignItems(VerticalAlign.Bottom)
 
       Text(this.label)
-        .fontSize(T.caption)
+        .fontSize(T.footnote)
         .fontColor(C.textSecondary())
     }
     .alignItems(HorizontalAlign.Start)

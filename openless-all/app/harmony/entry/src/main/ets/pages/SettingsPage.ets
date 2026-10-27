@@ -1,7 +1,7 @@
 import { Breakpoints } from '../common/Breakpoint';
 import { Labels } from '../common/Labels';
 import { C, R, S, T } from '../common/Tokens';
-import { Card, GhostButton, InfoRow, Pill, SectionHeader, ToggleRow } from '../components/Common';
+import { Card, GhostButton, InfoRow, ListRow, Pill, SectionHeader, ToggleRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Nav, NavItem } from '../components/Nav';
 import { Api, NetworkState } from '../data/Api';
@@ -276,10 +276,10 @@ export struct SettingsPage {
     Card() {
       Column() {
         SectionHeader({ title: '转写', hint: '决定语音变成文字的方式' })
-        InfoRow({
-          label: '转写引擎',
+        ListRow({
+          symbol: 'localasr',
+          title: '转写引擎',
           value: Labels.provider(this.prefs.activeAsrProvider),
-          showChevron: true,
           onTap: () => {
             this.asrOpen = !this.asrOpen;
           }
@@ -312,10 +312,10 @@ export struct SettingsPage {
     Card() {
       Column() {
         SectionHeader({ title: '润色', hint: '决定文字最终长什么样' })
-        InfoRow({
-          label: '润色模型',
+        ListRow({
+          symbol: 'style',
+          title: '润色模型',
           value: Labels.provider(this.prefs.activeLlmProvider),
-          showChevron: true,
           onTap: () => {
             this.llmOpen = !this.llmOpen;
           }
@@ -465,9 +465,9 @@ export struct SettingsPage {
       Column() {
         SectionHeader({ title: '内容与工具', hint: '市场、翻译、问答、速记与规则' })
         ForEach(Nav.tools(), (item: NavItem, index: number) => {
-          InfoRow({
-            label: item.label,
-            value: '',
+          ListRow({
+            symbol: item.id,
+            title: item.label,
             showChevron: true,
             showDivider: index < Nav.tools().length - 1,
             onTap: () => Nav.go(item.id)
