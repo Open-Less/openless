@@ -772,6 +772,12 @@ pub struct UserPreferences {
     /// always polish regardless of this value.
     #[serde(default = "default_polish_skip_max_chars")]
     pub polish_skip_max_chars: u32,
+    /// Enables the bounded post-ASR polish strategy hook. Disabled by default.
+    #[serde(default)]
+    pub polish_strategy_enabled: bool,
+    /// Rhai source for the bounded post-ASR polish strategy.
+    #[serde(default)]
+    pub polish_strategy_script: String,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -1215,6 +1221,10 @@ struct UserPreferencesWire {
     #[serde(default = "default_polish_skip_max_chars")]
     polish_skip_max_chars: u32,
     #[serde(default)]
+    polish_strategy_enabled: bool,
+    #[serde(default)]
+    polish_strategy_script: String,
+    #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
     theme_mode: ThemeMode,
@@ -1428,6 +1438,8 @@ impl Default for UserPreferencesWire {
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             polish_skip_max_chars: prefs.polish_skip_max_chars,
+            polish_strategy_enabled: prefs.polish_strategy_enabled,
+            polish_strategy_script: prefs.polish_strategy_script,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
@@ -1669,6 +1681,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             polish_skip_max_chars: wire.polish_skip_max_chars,
+            polish_strategy_enabled: wire.polish_strategy_enabled,
+            polish_strategy_script: wire.polish_strategy_script,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
@@ -2053,6 +2067,8 @@ impl Default for UserPreferences {
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             polish_skip_max_chars: default_polish_skip_max_chars(),
+            polish_strategy_enabled: false,
+            polish_strategy_script: String::new(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
@@ -3737,6 +3753,28 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_strategy_defaults_disabled_and_round_trips() {
+        assert!(!UserPreferences::default().polish_strategy_enabled);
+        assert!(UserPreferences::default().polish_strategy_script.is_empty());
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!from_empty.polish_strategy_enabled);
+        assert!(from_empty.polish_strategy_script.is_empty());
+
+        let configured: UserPreferences = serde_json::from_str(
+            r#"{"polishStrategyEnabled":true,"polishStrategyScript":"fn strategy(input) { #{ action: \"polish\" } }"}"#,
+        )
+        .unwrap();
+        assert!(configured.polish_strategy_enabled);
+        assert!(configured.polish_strategy_script.contains("strategy"));
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishStrategyEnabled"], true);
+        assert!(saved["polishStrategyScript"]
+            .as_str()
+            .unwrap()
+            .contains("strategy"));
     }
 
     #[test]

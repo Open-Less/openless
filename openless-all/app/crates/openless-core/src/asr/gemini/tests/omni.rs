@@ -17,6 +17,8 @@ fn omni_provider(endpoint: String) -> OmniProvider {
         extra_headers: Default::default(),
         temperature: Some(0.3),
         thinking_enabled: true,
+        max_tokens_override: None,
+        reasoning_effort: None,
     })
 }
 

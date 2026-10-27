@@ -116,6 +116,10 @@ pub struct OpenAICompatibleConfig {
     /// allowlist checks, but the official OpenAI channel skips ordinary chat models known
     /// not to support reasoning_effort.
     pub thinking_enabled: bool,
+    /// One-call normalized effort selected by the post-ASR strategy, if any.
+    pub reasoning_effort: Option<String>,
+    /// One-call token cap selected by the post-ASR strategy.
+    pub max_tokens_override: Option<u32>,
 }
 
 impl OpenAICompatibleConfig {
@@ -143,11 +147,23 @@ impl OpenAICompatibleConfig {
             temperature,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
+            reasoning_effort: None,
+            max_tokens_override: None,
         }
     }
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_tokens_override(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens_override = max_tokens;
         self
     }
 
@@ -843,12 +859,23 @@ impl OpenAICompatibleLLMProvider {
                 body["temperature"] = temperature_json(temperature);
             }
         }
-        apply_openai_compatible_thinking_control(
+        if let Some(max_tokens) = self.config.max_tokens_override {
+            let field = if self.config.provider_id.trim() == "openai"
+                && openai_model_uses_max_completion_tokens(&self.config.model)
+            {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
+        }
+        apply_openai_compatible_thinking_control_with_effort(
             &mut body,
             &self.config.provider_id,
             &self.config.base_url,
             &self.config.model,
             self.config.thinking_enabled,
+            self.config.reasoning_effort.as_deref(),
         );
         self.config
             .protocol
@@ -1167,6 +1194,7 @@ pub struct CodexOAuthConfig {
     pub model: String,
     pub auth_path: Option<PathBuf>,
     pub reasoning_effort: Option<String>,
+    pub max_output_tokens: Option<u32>,
     pub text_verbosity: Option<String>,
     pub request_timeout_secs: u64,
 }
@@ -1178,6 +1206,7 @@ impl CodexOAuthConfig {
             model: normalize_codex_model(model.into().as_str()),
             auth_path: None,
             reasoning_effort: Some("medium".to_string()),
+            max_output_tokens: None,
             text_verbosity: Some("medium".to_string()),
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
@@ -1195,6 +1224,16 @@ impl CodexOAuthConfig {
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.reasoning_effort = Some(if enabled { "medium" } else { "low" }.to_string());
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_tokens;
         self
     }
 }
@@ -1469,6 +1508,9 @@ impl CodexOAuthLLMProvider {
         });
         if let Some(effort) = self.config.reasoning_effort.as_deref() {
             body["reasoning"] = json!({ "effort": effort });
+        }
+        if let Some(max_tokens) = self.config.max_output_tokens {
+            body["max_output_tokens"] = json!(max_tokens);
         }
         if let Some(verbosity) = self.config.text_verbosity.as_deref() {
             body["text"] = json!({ "verbosity": verbosity });
@@ -1947,13 +1989,23 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn apply_openai_compatible_thinking_control(
+pub(crate) fn apply_openai_compatible_thinking_control_with_effort(
     body: &mut Value,
     provider_id: &str,
     base_url: &str,
     model: &str,
     thinking_enabled: bool,
+    override_effort: Option<&str>,
 ) {
+    // Providers with boolean thinking controls cannot represent four effort
+    // levels, but the strategy still needs to be able to enable or disable
+    // thinking for this request. Preserve the exact effort only in the
+    // provider-specific fields that support it; map low/medium/high to enabled
+    // for boolean controls.
+    let base_thinking_enabled = thinking_enabled;
+    let thinking_enabled = override_effort
+        .map(|effort| effort != "none")
+        .unwrap_or(thinking_enabled);
     if provider_id.trim() == "tencentTokenHub" {
         apply_tokenhub_chat_thinking_control(body, model, thinking_enabled);
         return;
@@ -1983,10 +2035,51 @@ pub(crate) fn apply_openai_compatible_thinking_control(
             // Official OpenAI Chat Completions only accepts reasoning_effort on the
             // reasoning model families; ordinary chat models get a plain 400. Other
             // compatible channels keep sending it as declared per channel.
-            let effort = if provider_id.trim() == "openai" {
-                openai_chat_reasoning_effort(model, thinking_enabled)
+            let effort = if let Some(override_effort) = override_effort {
+                if provider_id.trim() == "openai" {
+                    if openai_model_is_gpt5_pro(model) {
+                        if override_effort != "high" {
+                            log::debug!(
+                                "[llm] preserving gpt-5-pro high reasoning effort instead of unsupported strategy effort={}",
+                                override_effort
+                            );
+                        }
+                        Some("high")
+                    } else if openai_model_supports_reasoning_effort(model, override_effort) {
+                        Some(override_effort)
+                    } else {
+                        log::debug!(
+                            "[llm] omitting unsupported strategy reasoning_effort provider={} model={} effort={}",
+                            provider_id,
+                            model,
+                            override_effort
+                        );
+                        openai_chat_reasoning_effort(model, base_thinking_enabled)
+                    }
+                } else if override_effort == "none" {
+                    // StepFun and other compatible reasoning-effort providers do
+                    // not accept `none`; preserve the channel's existing tier.
+                    log::debug!(
+                        "[llm] preserving configured reasoning effort for unsupported strategy effort=none provider={} model={}",
+                        provider_id,
+                        model
+                    );
+                    Some(if base_thinking_enabled {
+                        "medium"
+                    } else {
+                        "low"
+                    })
+                } else {
+                    Some(override_effort)
+                }
+            } else if provider_id.trim() == "openai" {
+                openai_chat_reasoning_effort(model, base_thinking_enabled)
             } else {
-                Some(if thinking_enabled { "medium" } else { "low" })
+                Some(if base_thinking_enabled {
+                    "medium"
+                } else {
+                    "low"
+                })
             };
             if let Some(effort) = effort {
                 body["reasoning_effort"] = json!(effort);
@@ -1997,7 +2090,7 @@ pub(crate) fn apply_openai_compatible_thinking_control(
         }
         Some(ThinkingControl::OpenRouterReasoning) => {
             body["reasoning"] = json!({
-                "effort": if thinking_enabled { "medium" } else { "none" },
+                "effort": override_effort.unwrap_or(if thinking_enabled { "medium" } else { "none" }),
                 // OpenLess QA/polish output only shows the final answer; reasoning
                 // content, even if generated, must not reach the UI.
                 "exclude": true,
@@ -2194,6 +2287,33 @@ fn openai_model_supports_none_reasoning_effort(model: &str) -> bool {
     ]
     .iter()
     .any(|family| openai_model_matches_family(model, family))
+}
+
+pub(crate) fn openai_model_is_gpt5_pro(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("gpt-5-pro")
+        || normalized.starts_with("gpt-5.") && normalized.contains("-pro")
+}
+
+pub(crate) fn openai_model_uses_max_completion_tokens(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
+}
+
+fn openai_model_supports_reasoning_effort(model: &str, effort: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    if effort == "none" {
+        return openai_model_supports_none_reasoning_effort(&normalized);
+    }
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
 }
 
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
@@ -3921,6 +4041,57 @@ mod tests {
     }
 
     #[test]
+    fn strategy_max_tokens_uses_completion_field_for_openai_reasoning_models() {
+        for model in ["o1", "o3-mini", "o4-mini", "gpt-5-mini", "gpt-6"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    model,
+                )
+                .with_max_tokens_override(Some(321)),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["max_completion_tokens"], 321, "{model}");
+            assert!(body.get("max_tokens").is_none(), "{model}");
+        }
+
+        let custom = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://example.test/v1",
+                "k",
+                "o3-mini",
+            )
+            .with_max_tokens_override(Some(321)),
+        );
+        let body = custom.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+        assert_eq!(body["max_tokens"], 321);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_preserves_gpt5_pro_high_capability() {
+        for effort in ["none", "low", "medium", "high"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    "gpt-5-pro",
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["reasoning_effort"], "high", "{effort}");
+        }
+    }
+
+    #[test]
     fn openai_chat_body_lowers_reasoning_when_disabled_for_channel() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "codingPlanX",
@@ -3970,6 +4141,25 @@ mod tests {
     }
 
     #[test]
+    fn strategy_reasoning_effort_overrides_openrouter_default() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "openrouterFree",
+                "OpenRouter",
+                "https://openrouter.ai/api/v1",
+                "k",
+                "openai/gpt-5-mini",
+            )
+            .with_reasoning_effort(Some("high".into())),
+        );
+
+        let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["reasoning"]["exclude"], true);
+    }
+
+    #[test]
     fn openai_chat_body_adds_openrouter_reasoning_by_channel_not_model() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "openrouterFree",
@@ -3998,6 +4188,111 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_boolean_thinking_presets() {
+        let body = |provider_id: &str, endpoint: &str, model: &str, effort: &str| -> Value {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(provider_id, provider_id, endpoint, "k", model)
+                    .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "high"
+            )["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "medium",
+            )["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "none",
+            )["enable_thinking"],
+            false
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "low"
+            )["thinking"]["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "high")["chat_template_kwargs"]
+                ["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "none")["chat_template_kwargs"]
+                ["enable_thinking"],
+            false
+        );
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_tokenhub_thinking() {
+        let body = |model: &str, effort: &str| {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "tencentTokenHub",
+                    "Tencent TokenHub",
+                    "https://tokenhub.tencentmaas.com/v1",
+                    "k",
+                    model,
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body("deepseek-v4-pro", "high")["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body("deepseek-v4-pro", "none")["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(body("qwen3.5-plus", "low")["enable_thinking"], true);
+        assert_eq!(body("qwen3.5-plus", "none")["enable_thinking"], false);
+        assert_eq!(body("kimi-k3", "none").get("reasoning_effort"), None);
     }
 
     #[test]
@@ -4187,6 +4482,25 @@ mod tests {
 
             assert_eq!(body["reasoning_effort"], expected);
         }
+    }
+
+    #[test]
+    fn strategy_none_preserves_stepfun_reasoning_capability() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "stepfun",
+                "StepFun",
+                "https://api.stepfun.com/v1",
+                "k",
+                "step-3.7-flash",
+            )
+            .with_thinking_enabled(true)
+            .with_reasoning_effort(Some("none".into())),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning_effort"], "medium");
     }
 
     #[test]
@@ -4849,6 +5163,13 @@ mod tests {
     }
 
     #[test]
+    fn codex_oauth_config_omits_unsupported_none_reasoning() {
+        let config = CodexOAuthConfig::new("gpt-5.5").with_reasoning_effort(None);
+
+        assert_eq!(config.reasoning_effort, None);
+    }
+
+    #[test]
     fn codex_oauth_config_lowers_reasoning_when_thinking_disabled() {
         let config = CodexOAuthConfig::new("gpt-5.5").with_thinking_enabled(false);
 
@@ -4876,6 +5197,7 @@ mod tests {
             assert!(request_text.contains(r#""role":"developer"#));
             assert!(request_text.contains(r#""type":"input_text"#));
             assert!(request_text.contains(r#""reasoning":{"effort":"medium"}"#));
+            assert!(request_text.contains(r#""max_output_tokens":321"#));
             assert!(!request_text.contains(r#""temperature":"#));
 
             let body = concat!(
@@ -4893,7 +5215,8 @@ mod tests {
         let provider = CodexOAuthLLMProvider::new(
             CodexOAuthConfig::new("gpt-5.5")
                 .with_base_url(format!("http://{}", addr))
-                .with_auth_path(auth_path.clone()),
+                .with_auth_path(auth_path.clone())
+                .with_max_output_tokens(Some(321)),
         );
         let deltas = StdMutex::new(String::new());
         let output = provider

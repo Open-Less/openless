@@ -754,6 +754,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "polish_strategy_enabled",
+        key: "polishStrategyEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_strategy_script",
+        key: "polishStrategyScript",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "start_minimized",
         key: "startMinimized",
         class: PreferenceClass::Portable,

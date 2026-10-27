@@ -697,10 +697,22 @@ pub struct TranscriptOutput {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TranscriptMetadata {
+    /// Detected language, when the ASR provider reports one.
+    pub language: Option<String>,
+    /// Provider confidence in the final transcript, when available.
+    pub confidence: Option<f32>,
+}
+
 /// One provider transcription session that receives PCM while recording.
 pub trait TranscriptionSession: AudioConsumer {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         None
+    }
+
+    fn transcript_metadata(&self) -> TranscriptMetadata {
+        TranscriptMetadata::default()
     }
 
     /// Drain provider notices discovered during finalization. This lets a

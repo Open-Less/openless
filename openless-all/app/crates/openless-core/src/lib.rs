@@ -53,6 +53,7 @@ pub mod omni;
 pub mod output_cleaning;
 mod persistence;
 pub mod polish;
+pub mod polish_strategy;
 pub mod ports;
 pub mod preferences;
 pub mod prompt_compose;
@@ -222,9 +223,9 @@ pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
     AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
     DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
-    LessComputerHotkeyAction, LessComputerVoiceFinish,
-    LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
-    QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
+    LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
+    LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
+    StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
     encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
@@ -298,6 +299,10 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use polish_strategy::{
+    evaluate as evaluate_polish_strategy, PolishRequestOverrides, PolishStrategyConfig,
+    PolishStrategyDecision, PolishStrategyInput, ReasoningEffort,
+};
 pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
@@ -307,10 +312,10 @@ pub use ports::{
     InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, UnsupportedVoiceActivationRuntime, VoiceActivationError,
-    VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink, VoiceCapture,
-    VoiceDictationHandoff, VoiceDictationHandoffRequest,
+    TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession, UnsupportedTextInserter, UnsupportedVoiceActivationRuntime,
+    VoiceActivationError, VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink,
+    VoiceCapture, VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{

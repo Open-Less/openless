@@ -1666,6 +1666,17 @@ export const ja: typeof zhCN = {
       polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
       polishSkipMaxCharsDesc:
         '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
+      polishStrategyEnabledLabel: 'カスタム整形戦略を使う',
+      polishStrategyEnabledDesc:
+        'ASR 後に制限付きのローカル戦略を実行します。エラー時は通常の整形に戻り、ファイル・ネットワーク・認証情報にはアクセスできません。',
+      polishStrategyScriptLabel: '整形戦略スクリプト',
+      polishStrategyScriptDesc:
+        'strategy(input) を定義し、skip、polish、request のいずれかを返します。不明な言語・信頼度・モデルは () です。',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Agent 用スキルをコピー',
+      polishStrategySkillCopied: 'Agent 用スキルをコピーしました',
+      polishStrategySkillCopyFailed: 'コピーに失敗しました。クリップボードの権限を確認してください',
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',

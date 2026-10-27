@@ -247,6 +247,9 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::DebugArchiveRaw => {
                 preferences.debug_archive_raw = !preferences.debug_archive_raw;
             }
+            frontend::view_model::SettingsField::PolishStrategyEnabled => {
+                preferences.polish_strategy_enabled = !preferences.polish_strategy_enabled;
+            }
             frontend::view_model::SettingsField::StreamingSaveClipboard => {
                 preferences.streaming_insert_save_clipboard =
                     !preferences.streaming_insert_save_clipboard;
@@ -633,6 +636,11 @@ impl OpenLessEguiApp {
                 preferences.polish_skip_max_chars = parsed;
 
                 self.frontend_vm.settings.polish_skip_max_chars = parsed.to_string();
+            }
+            frontend::view_model::SettingsTextField::PolishStrategyScript => {
+                preferences.polish_strategy_script = text.chars().take(32_768).collect();
+                self.frontend_vm.settings.polish_strategy_script =
+                    preferences.polish_strategy_script.clone();
             }
             frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
                 preferences.audio_recording_max_entries = text

@@ -1653,6 +1653,17 @@ export const ko: typeof zhCN = {
       polishSkipMaxCharsLabel: '짧은 입력은 다듬기 건너뛰기(최대 글자 수)',
       polishSkipMaxCharsDesc:
         '공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.',
+      polishStrategyEnabledLabel: '사용자 지정 다듬기 전략 사용',
+      polishStrategyEnabledDesc:
+        'ASR 후 제한된 로컬 전략을 실행합니다. 오류는 일반 다듬기로 되돌아가며 파일·네트워크·자격 증명에 접근하지 않습니다.',
+      polishStrategyScriptLabel: '다듬기 전략 스크립트',
+      polishStrategyScriptDesc:
+        'strategy(input)을 정의하고 skip, polish 또는 request를 반환합니다. 없는 언어·신뢰도·모델 값은 ()입니다.',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Agent용 스킬 복사',
+      polishStrategySkillCopied: 'Agent용 스킬을 복사했습니다',
+      polishStrategySkillCopyFailed: '복사하지 못했습니다. 클립보드 권한을 확인하세요',
       polishContextWindowLabel: '대화 컨텍스트 윈도(분)',
       polishContextWindowDesc:
         '최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.',

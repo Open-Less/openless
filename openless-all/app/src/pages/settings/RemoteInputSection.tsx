@@ -18,27 +18,7 @@ import {
   type RemoteInputStatus,
 } from '../../lib/ipc';
 import { getRemoteInputViewState } from './remoteInputViewState';
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    // Fallback: hidden textarea + execCommand, for environments without async clipboard support.
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-    } catch {
-      /* ignore */
-    }
-    document.body.removeChild(ta);
-  }
-}
+import { copyTextToClipboard } from '../../lib/clipboard';
 
 export function RemoteInputSection() {
   const { t, i18n } = useTranslation();
@@ -132,7 +112,10 @@ export function RemoteInputSection() {
   };
 
   const doCopy = async (url: string, pin: string) => {
-    await copyText(`${url}\n${t('settings.remoteInput.pinLabel')}：${pin}`);
+    const copied = await copyTextToClipboard(
+      `${url}\n${t('settings.remoteInput.pinLabel')}：${pin}`,
+    );
+    if (!copied) return;
     setCopied(url);
     window.setTimeout(() => setCopied((c) => (c === url ? null : c)), 1500);
   };
@@ -207,7 +190,8 @@ export function RemoteInputSection() {
                   <button
                     type="button"
                     onClick={async () => {
-                      await copyText(formattedFingerprint);
+                      const copied = await copyTextToClipboard(formattedFingerprint);
+                      if (!copied) return;
                       setCopied('ca-fingerprint');
                       window.setTimeout(
                         () => setCopied((c) => (c === 'ca-fingerprint' ? null : c)),
@@ -270,7 +254,8 @@ export function RemoteInputSection() {
                       disabled={!canVerifyCertificate}
                       onClick={async () => {
                         const link = `${u}/cert.mobileconfig`;
-                        await copyText(link);
+                        const copied = await copyTextToClipboard(link);
+                        if (!copied) return;
                         setCopied(link);
                         window.setTimeout(() => setCopied((c) => (c === link ? null : c)), 1500);
                       }}

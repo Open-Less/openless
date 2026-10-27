@@ -1678,6 +1678,17 @@ export const en: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Skip polish for short dictations (max characters)',
       polishSkipMaxCharsDesc:
         'Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.',
+      polishStrategyEnabledLabel: 'Use custom polish strategy',
+      polishStrategyEnabledDesc:
+        'Run a local, bounded Rhai function after ASR. Errors fall back to the normal polish rules; the script cannot access files, network, or credentials.',
+      polishStrategyScriptLabel: 'Polish strategy script',
+      polishStrategyScriptDesc:
+        'Define strategy(input) and return #{ action: "skip" }, #{ action: "polish" }, or #{ action: "request", temperature: 0.4, maxTokens: 400, reasoningEffort: "low" }. Missing language/confidence/model values are ().',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Copy Agent skill',
+      polishStrategySkillCopied: 'Agent skill copied',
+      polishStrategySkillCopyFailed: 'Copy failed; check clipboard permissions',
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',

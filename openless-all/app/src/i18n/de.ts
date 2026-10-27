@@ -1710,6 +1710,18 @@ export const de: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)',
       polishSkipMaxCharsDesc:
         'Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.',
+      polishStrategyEnabledLabel: 'Benutzerdefinierte Überarbeitungsstrategie verwenden',
+      polishStrategyEnabledDesc:
+        'Führt nach ASR eine begrenzte lokale Strategie aus. Fehler fallen auf die normale Überarbeitung zurück; Dateien, Netzwerk und Zugangsdaten sind nicht erreichbar.',
+      polishStrategyScriptLabel: 'Skript der Überarbeitungsstrategie',
+      polishStrategyScriptDesc:
+        'strategy(input) definieren und skip, polish oder request zurückgeben. Fehlende Werte für Sprache, Konfidenz und Modell sind ().',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Agent-Anleitung kopieren',
+      polishStrategySkillCopied: 'Agent-Anleitung kopiert',
+      polishStrategySkillCopyFailed:
+        'Kopieren fehlgeschlagen; überprüfe die Zwischenablage-Berechtigung',
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
