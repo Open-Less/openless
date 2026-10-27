@@ -358,6 +358,19 @@ export class Api {
     await Api.value('dismiss_vocab_suggestions', '{}');
   }
 
+  /**
+   * Vocabulary presets come from the encrypted document store (they are part of the
+   * cloud-sync document, with an `origin` per record). The Harmony UI shows them
+   * read-only for now: writing them back needs the whole store contract, and a
+   * partial round-trip could drop fields the core expects.
+   */
+  static async vocabularyPresets(): Promise<VocabPreset[]> {
+    const wire = await Api.value('list_vocab_presets', '{}');
+    const store = JSON.parse(wire) as VocabPresetStore;
+    const list = store.presets;
+    return list === undefined ? [] : list;
+  }
+
   static async takeSplashPlayback(): Promise<void> {
     try {
       await Api.value('take_splash_playback', '{}');
@@ -444,6 +457,19 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface VocabPreset {
+  id: string;
+  origin?: string;
+  name?: string | null;
+  phrases?: string[];
+  enabled?: boolean;
+  order?: number;
+}
+
+interface VocabPresetStore {
+  presets?: VocabPreset[];
 }
 
 export interface PendingCorrection {

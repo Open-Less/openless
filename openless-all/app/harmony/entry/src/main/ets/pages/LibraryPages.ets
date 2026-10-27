@@ -3,7 +3,7 @@ import { C, R, S, T } from '../common/Tokens';
 import { Card, EmptyState, GhostButton, PageTitle, Pill, SearchField, SectionHeader } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
-import { Api, PendingCorrection } from '../data/Api';
+import { Api, PendingCorrection, VocabPreset } from '../data/Api';
 import { CorrectionRule, DictionaryEntry, MarketplacePack, StylePack } from '../data/Types';
 import { StylePackPayload } from '../data/Api';
 
@@ -24,6 +24,7 @@ export struct VocabPage {
   @State private query: string = '';
   @State private error: string = '';
   @State private busy: boolean = false;
+  @State private presets: VocabPreset[] = [];
 
   aboutToAppear(): void {
     this.reload();
@@ -32,6 +33,11 @@ export struct VocabPage {
   private async reload(): Promise<void> {
     try {
       this.entries = await Api.vocabulary();
+      try {
+        this.presets = await Api.vocabularyPresets();
+      } catch (error) {
+        this.presets = [];
+      }
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -118,6 +124,32 @@ export struct VocabPage {
 
       Scroll() {
         Column({ space: S.sm }) {
+          if (this.presets.length > 0) {
+            Card() {
+              Column({ space: S.xs }) {
+                SectionHeader({ title: '预设词组', hint: '来自加密文档库，随云同步一起更新' })
+                ForEach(this.presets, (preset: VocabPreset) => {
+                  Row({ space: S.sm }) {
+                    Text(preset.name !== undefined && preset.name !== null && preset.name.length > 0
+                      ? preset.name : preset.id)
+                      .fontSize(T.callout)
+                      .fontColor(C.textPrimary())
+                      .layoutWeight(1)
+                    Text((preset.phrases === undefined ? 0 : preset.phrases.length).toString() + ' 条')
+                      .fontSize(T.caption)
+                      .fontColor(C.textTertiary())
+                    Pill({
+                      text: preset.enabled === false ? '已停用' : '启用中',
+                      tone: preset.enabled === false ? 'neutral' : 'success'
+                    })
+                  }
+                  .width('100%')
+                  .padding({ top: S.xxs, bottom: S.xxs })
+                }, (preset: VocabPreset) => preset.id)
+              }
+              .width('100%')
+            }
+          }
           if (this.filtered().length === 0) {
             EmptyState({
               symbol: 'vocab',
