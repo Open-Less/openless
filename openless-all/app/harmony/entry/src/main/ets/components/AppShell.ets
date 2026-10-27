@@ -144,6 +144,9 @@ export struct AppShell {
     .margin({ bottom: S.xxs })
     .backgroundColor(this.tabActive(item.id) ? C.accentSoft() : Color.Transparent)
     .borderRadius(R.md)
+    // 2-in-1 / PC: pointer hover and keyboard focus must be visible before the click.
+    .hoverEffect(HoverEffect.Highlight)
+    .focusable(true)
     .onClick(() => Nav.go(item.id))
   }
 
@@ -176,6 +179,8 @@ export struct AppShell {
     .layoutWeight(1)
     .height('100%')
     .justifyContent(FlexAlign.Center)
+    .hoverEffect(HoverEffect.Highlight)
+    .focusable(true)
     .onClick(() => Nav.go(id))
   }
 
