@@ -560,6 +560,10 @@ pub enum SettingsField {
     AutoUpdate,
     /// 跟随 Beta 频道（写 `update_channel` + `update_channel_explicit`）。
     BetaUpdateChannel,
+    /// 光标上下文（读焦点应用光标前后的文字，给润色当参考）。
+    CursorContext,
+    /// 自动学词（观察用户是否改了刚插入的文本）。
+    VocabularyLearning,
     RemoteInput,
     SilenceAutoStop,
     AudioCue,
@@ -615,6 +619,9 @@ pub enum SettingsComboField {
 pub enum SettingsTextField {
     RemotePort,
     HistoryMaxEntries,
+    VocabObservationSeconds,
+    VocabSuggestionSeconds,
+    VocabMaxPhraseChars,
     /// 历史保留天数（0 = 永久）。
     RetentionDays,
     /// 润色上下文窗口（分钟，0 = 关闭）。
@@ -648,6 +655,8 @@ pub enum SettingsActionField {
     CheckUpdate,
     /// 打开「发现新版本」对应的发布页。
     OpenUpdatePage,
+    /// 把自动学词的三个参数恢复出厂值。
+    ResetVocabularyLearning,
 }
 
 // ── Vocab types ─────────────────────────────────────────────────────────────
@@ -1207,6 +1216,13 @@ pub struct SettingsFields {
     /// 关于页的更新状态与所选频道（跟随 Tauri 的 `update_channel`）。
     pub update_state: UpdateState,
     pub update_beta_channel: bool,
+    /// 光标上下文开关（Core 偏好 `cursor_context_enabled`）。
+    pub cursor_context: bool,
+    /// 自动学词开关与三个参数（秒 / 秒 / 字符）。
+    pub vocabulary_learning: bool,
+    pub vocab_observation_seconds: String,
+    pub vocab_suggestion_seconds: String,
+    pub vocab_max_phrase_chars: String,
     pub remote_input: bool,
     pub remote_default_mode: usize,
     pub silence_auto_stop: bool,
@@ -1282,6 +1298,11 @@ impl Default for SettingsFields {
             auto_update: false,
             update_state: UpdateState::Idle,
             update_beta_channel: false,
+            cursor_context: false,
+            vocabulary_learning: false,
+            vocab_observation_seconds: "60".into(),
+            vocab_suggestion_seconds: "10".into(),
+            vocab_max_phrase_chars: "12".into(),
             remote_input: false,
             remote_default_mode: 0,
             silence_auto_stop: false,

@@ -128,6 +128,12 @@ impl LinuxBackendBuilder {
             Arc::clone(&task_spawner),
         ));
 
+        // 光标上下文与自动学词共用 fcitx5 的 surrounding text；这两条 adapter
+        // 不注入的话 Core 用的是 Noop（等于两个功能都不存在）。
+        services.host_context = Arc::new(crate::host_context::LinuxHostContextAdapter::default());
+        services.edit_observation =
+            Arc::new(crate::host_context::LinuxEditObservationAdapter::default());
+
         Ok(Self::new(config, transcription, polisher)
             .with_task_spawner(task_spawner)
             .with_auxiliary_polisher(auxiliary_polisher)

@@ -3049,6 +3049,17 @@ fn privacy_data(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec
                 ));
             },
         );
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.data_storage.cursor_context_label"),
+            tr_l10n(lang, "settings.data_storage.cursor_context_desc"),
+            vm.settings.cursor_context,
+            || {
+                actions.push(FrontendAction::SettingsToggle(
+                    SettingsField::CursorContext,
+                ));
+            },
+        );
         text_edit_row(
             ui,
             tr_l10n(lang, "settings.recording.polish_skip_max_chars_label"),
@@ -3077,7 +3088,79 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
+        (
+            4,
+            SettingsIcon::Sparkle,
+            tr_l10n(lang, "settings.vocabulary_learning.title"),
+            tr_l10n(lang, "settings.vocabulary_learning.description"),
+        ),
     ];
+    if vm.advanced_open == 4 {
+        card(ui, "", "", |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.enabled"),
+                tr_l10n(lang, "settings.vocabulary_learning.description"),
+                vm.settings.vocabulary_learning,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::VocabularyLearning,
+                    ));
+                },
+            );
+            if !vm.settings.vocabulary_learning {
+                return;
+            }
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.observation_seconds"),
+                tr_l10n(lang, "settings.vocabulary_learning.observation_seconds_hint"),
+                &mut vm.settings.vocab_observation_seconds,
+                "60",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabObservationSeconds,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.suggestion_seconds"),
+                tr_l10n(lang, "settings.vocabulary_learning.suggestion_seconds_hint"),
+                &mut vm.settings.vocab_suggestion_seconds,
+                "10",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabSuggestionSeconds,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.max_phrase_chars"),
+                tr_l10n(lang, "settings.vocabulary_learning.max_phrase_chars_hint"),
+                &mut vm.settings.vocab_max_phrase_chars,
+                "12",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabMaxPhraseChars,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            action_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.reset"),
+                "",
+                tr_l10n(lang, "settings.vocabulary_learning.reset"),
+                SettingsActionField::ResetVocabularyLearning,
+                actions,
+            );
+        });
+        return;
+    }
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| {
                 toggle_row(

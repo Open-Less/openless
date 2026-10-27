@@ -5624,6 +5624,14 @@ mod linux_app {
                 s.auto_update = prefs.auto_update_check;
                 s.update_beta_channel =
                     prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta;
+                s.cursor_context = prefs.cursor_context_enabled;
+                s.vocabulary_learning = prefs.vocabulary_learning_enabled;
+                let vocab = prefs.vocabulary_learning_settings.normalized();
+                if hydrate_text {
+                    s.vocab_observation_seconds = vocab.observation_seconds.to_string();
+                    s.vocab_suggestion_seconds = vocab.suggestion_seconds.to_string();
+                    s.vocab_max_phrase_chars = vocab.max_phrase_chars.to_string();
+                }
                 s.remote_input = prefs.remote_input_enabled;
                 if hydrate_text {
                     s.remote_port = prefs.remote_input_port.to_string();

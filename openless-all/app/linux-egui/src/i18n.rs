@@ -8007,6 +8007,126 @@ pub const CATALOG: &[Msg] = &[
             "정식판 확인",
         ),
     },
+    Msg {
+        key: "settings.data_storage.cursor_context_desc",
+        text: row(
+            "润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。",
+            "潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。",
+            "Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.",
+            "推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。",
+            "다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.data_storage.cursor_context_label",
+        text: row(
+            "光标上下文（实验）",
+            "遊標上下文（實驗）",
+            "Cursor context (experimental)",
+            "カーソル文脈（実験的）",
+            "커서 문맥 (실험적)",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.description",
+        text: row(
+            "插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。",
+            "插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。",
+            "After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.",
+            "挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。",
+            "입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.enabled",
+        text: row(
+            "启用手改学词",
+            "啟用手改學詞",
+            "Enable learning from corrections",
+            "修正からの学習を有効にする",
+            "수정 학습 사용",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars",
+        text: row(
+            "最大词长",
+            "最大詞長",
+            "Maximum phrase length",
+            "最大文字数",
+            "최대 글자 수",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars_hint",
+        text: row(
+            "自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。",
+            "自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。",
+            "Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.",
+            "自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。",
+            "자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.observation_seconds",
+        text: row(
+            "观察时长",
+            "觀察時長",
+            "Observation duration",
+            "監視時間",
+            "관찰 시간",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.observation_seconds_hint",
+        text: row(
+            "听写落字后观察当前输入框的最长时间，10–60 秒。",
+            "聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。",
+            "Maximum time to observe the current field after dictation: 10–60 seconds.",
+            "音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。",
+            "음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.reset",
+        text: row(
+            "恢复默认参数",
+            "恢復預設參數",
+            "Reset parameters",
+            "設定値をリセット",
+            "매개변수 초기화",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds",
+        text: row(
+            "建议保留时长",
+            "建議保留時長",
+            "Suggestion duration",
+            "候補の表示時間",
+            "제안 유지 시간",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds_hint",
+        text: row(
+            "未确认的建议会在 5–60 秒后消失，不加入词典。",
+            "未確認的建議會在 5–60 秒後消失，不加入詞典。",
+            "Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.",
+            "未確認の候補は 5～60 秒後に消え、辞書には追加されません。",
+            "확인하지 않은 제안은 5~60초 후 사전에 추가되지 않고 사라집니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.title",
+        text: row(
+            "手改学词",
+            "手改學詞",
+            "Learn from corrections",
+            "修正から単語を学習",
+            "수정으로 단어 학습",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

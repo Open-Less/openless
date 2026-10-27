@@ -968,6 +968,54 @@ pub(crate) fn rekey_selection_target(_: &str, _: &str) -> Result<(), BackendErro
     ))
 }
 
+
+/// 焦点输入上下文自报的 surrounding text。
+///
+/// Linux 的光标上下文（给润色的前后文）与自动学词（观察用户是否改了刚插入的
+/// 文本）都以它为准：宿主本来就在这条输入链路里提交文字，应用自报的光标位置
+/// 比遍历无障碍树（AT-SPI）可靠，也不需要额外权限。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SurroundingText {
+    /// 应用名（fcitx5 的 `ic->program()`），用于敏感应用门禁。
+    pub program: String,
+    pub text: String,
+    /// 光标偏移（**字符**数，不是字节）。
+    pub cursor: usize,
+    pub anchor: usize,
+}
+
+/// 读取 surrounding text。`Ok(None)` = 焦点应用不支持（valid=0）。
+#[cfg(target_os = "linux")]
+pub fn surrounding_text() -> Result<Option<SurroundingText>, BackendError> {
+    let raw = send_string_message("GetSurroundingText", |message| message)?;
+    Ok(parse_surrounding_text(&raw))
+}
+
+/// 解析插件返回的 `valid\x1fprogram\x1fcursor\x1fanchor\x1ftext`。
+///
+/// 文本在最后一段，所以按 5 段切分；程序名与偏移都是纯量，不会包含分隔符。
+pub(crate) fn parse_surrounding_text(raw: &str) -> Option<SurroundingText> {
+    const SEP: char = '\u{1f}';
+    let mut parts = raw.splitn(5, SEP);
+    let valid = parts.next()? == "1";
+    let program = parts.next()?.to_string();
+    let cursor = parts.next()?.parse::<usize>().unwrap_or(0);
+    let anchor = parts.next()?.parse::<usize>().unwrap_or(0);
+    let text = parts.next().unwrap_or_default().to_string();
+    valid.then_some(SurroundingText {
+        program,
+        text,
+        cursor,
+        anchor,
+    })
+}
+
+/// 非 Linux 构建里 surrounding text 不可用（宿主只在 Linux 上跑）。
+#[cfg(not(target_os = "linux"))]
+pub fn surrounding_text() -> Result<Option<SurroundingText>, BackendError> {
+    Ok(None)
+}
+
 #[cfg(target_os = "linux")]
 pub fn set_hotkeys(keys: Vec<String>) -> Result<(), BackendError> {
     send_message("SetHotkey", |message| message.append1(keys))

@@ -182,6 +182,12 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.update_beta_channel = following_beta;
             }
+            frontend::view_model::SettingsField::CursorContext => {
+                preferences.cursor_context_enabled = !preferences.cursor_context_enabled;
+            }
+            frontend::view_model::SettingsField::VocabularyLearning => {
+                preferences.vocabulary_learning_enabled = !preferences.vocabulary_learning_enabled;
+            }
             frontend::view_model::SettingsField::RemoteInput => {
                 preferences.remote_input_enabled = !preferences.remote_input_enabled;
             }
@@ -671,6 +677,24 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.selection_voice_system_prompt = text;
             }
+            frontend::view_model::SettingsTextField::VocabObservationSeconds => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.observation_seconds = value;
+                }
+                self.frontend_vm.settings.vocab_observation_seconds = text;
+            }
+            frontend::view_model::SettingsTextField::VocabSuggestionSeconds => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.suggestion_seconds = value;
+                }
+                self.frontend_vm.settings.vocab_suggestion_seconds = text;
+            }
+            frontend::view_model::SettingsTextField::VocabMaxPhraseChars => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.max_phrase_chars = value;
+                }
+                self.frontend_vm.settings.vocab_max_phrase_chars = text;
+            }
             frontend::view_model::SettingsTextField::HistoryMaxEntries => {
                 preferences.history_max_entries = text
                     .trim()
@@ -798,6 +822,15 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsActionField::CheckUpdate => {
                 self.check_updates();
+            }
+            frontend::view_model::SettingsActionField::ResetVocabularyLearning => {
+                if let Some(preferences) = self.preferences.as_mut() {
+                    preferences.vocabulary_learning_settings =
+                        openless_core::shared_types::VocabularyLearningSettings::default();
+                }
+                self.frontend_vm.settings.vocab_observation_seconds = "60".into();
+                self.frontend_vm.settings.vocab_suggestion_seconds = "10".into();
+                self.frontend_vm.settings.vocab_max_phrase_chars = "12".into();
             }
             frontend::view_model::SettingsActionField::OpenUpdatePage => {
                 let url = match &self.frontend_vm.settings.update_state {
