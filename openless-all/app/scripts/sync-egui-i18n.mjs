@@ -49,6 +49,8 @@ const KEEP_EGUI = new Set([
   'settings.network.use_system_proxy_desc',
   // Linux 的更新检测只到「发现新版本 + 跳下载页」，Tauri 没有同句文案。
   'settings.about.update_available',
+  // Linux 用桌面通知 + 状态行代替 Tauri 的插入兜底卡片，Tauri 没有同句文案。
+  'status.insert_fallback',
 ]);
 
 function placeholderCount(text) {

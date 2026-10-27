@@ -7968,6 +7968,16 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "status.insert_fallback",
+        text: row(
+            "插入失败，文字已复制到剪贴板（Ctrl+V 粘贴）",
+            "插入失敗，文字已複製到剪貼簿（Ctrl+V 貼上）",
+            "Insertion failed; the text is on your clipboard (press Ctrl+V)",
+            "挿入に失敗しました。テキストはクリップボードにあります（Ctrl+V）",
+            "삽입에 실패했습니다. 텍스트가 클립보드에 있습니다(Ctrl+V)",
+        ),
+    },
+    Msg {
         key: "settings.about.update_available",
         text: row(
             "有新版本 v{}",

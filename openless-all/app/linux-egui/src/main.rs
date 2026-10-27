@@ -1383,6 +1383,9 @@ mod linux_app {
                         .collect(),
                     selection_preview: state.selection_preview,
                     streaming_answer: state.chunk.unwrap_or_default(),
+                    // 电平走高频率的 `HostToPopup::QaLevel`，快照里只保证录音相位
+                    // 切换时不残留上一段的电平。
+                    audio_level: None,
                     error: state.error,
                     edit_instruction_mode: self.qa_edit.instruction_mode,
                     edit_apply_available: self.qa_edit.apply_available,
@@ -3788,6 +3791,58 @@ mod linux_app {
                 }
                 BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
                     self.load_library()
+                }
+                BackendEventKind::InsertFallback(fallback) => {
+                    // 插入没成功（例如目标窗口拿不到焦点）：Core 已经兜底把文字
+                    // 放进了剪贴板，但用户不看剪贴板就不知道 —— 必须显式说一声。
+                    // `reason` 是给日志看的错误码（Tauri 也不显示它）。
+                    log::info!("[insert] fallback: {}", fallback.reason);
+                    let message = tr_l10n(lang, "status.insert_fallback").to_string();
+                    self.status = message.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = notify(Notification {
+                            summary: "OpenLess",
+                            body: &message,
+                            icon: "openless",
+                            timeout_ms: 0,
+                        }) {
+                            log::warn!("OpenLess insert-fallback notification failed: {error}");
+                        }
+                    });
+                }
+                BackendEventKind::Notification(payload) => {
+                    // Core 主动通知（插件升级、权限变化等）。Linux 用桌面通知呈现，
+                    // 同时也留在状态行里，免得通知中心被清掉后无从追溯。
+                    let message = payload.message.clone();
+                    self.status = message.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = notify(Notification {
+                            summary: "OpenLess",
+                            body: &message,
+                            icon: "openless",
+                            timeout_ms: 0,
+                        }) {
+                            log::warn!("OpenLess notification failed: {error}");
+                        }
+                    });
+                }
+                BackendEventKind::QaLevel(level) => {
+                    // 电平是高频消息：只转发给当前会话的面板，窗口没开就直接丢。
+                    let current = self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref());
+                    if current == Some(level.session_id.as_str()) && self.qa_visible {
+                        self.send_popup(
+                            PopupKind::Qa,
+                            HostToPopup::QaLevel {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: level.session_id,
+                                sequence: self.last_event_sequence,
+                                level: level.level,
+                            },
+                        );
+                    }
                 }
                 BackendEventKind::QaState(state) => {
                     self.qa_edit.merge(&state);
@@ -11792,6 +11847,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 messages: Vec::new(),
                 selection_preview: None,
                 streaming_answer: String::new(),
+                audio_level: None,
                 error: None,
                 edit_instruction_mode: false,
                 edit_apply_available: false,

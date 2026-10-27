@@ -628,7 +628,13 @@ pub fn selection_ask(
                             color_to_f32(theme::INK)
                         };
                         let drive = siri_wgpu::SiriDrive {
-                            level: 0.0,
+                            // 录音时环跟着麦克风电平呼吸（Tauri 的 olchat-ring 同源）。
+                            // 电平来自 Core 的 `QaLevel` 事件；没收到就是 0。
+                            level: if recording {
+                                state.audio_level.unwrap_or(0.0)
+                            } else {
+                                0.0
+                            },
                             resolved: if recording { 1.0 } else { 0.0 },
                             // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
                             speed: if recording { 1.0 } else { 1.45 },
@@ -2429,6 +2435,7 @@ mod tests {
             ],
             selection_preview: Some("selected source".to_string()),
             streaming_answer: String::new(),
+            audio_level: None,
             error: Some("network error".to_string()),
             edit_instruction_mode: false,
             edit_apply_available: false,

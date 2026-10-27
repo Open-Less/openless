@@ -784,31 +784,10 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.advanced.streaming_insert_label"),
-                tr_l10n(lang, "settings.advanced.streaming_insert_desc"),
-                vm.settings.streaming_insert,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StreamingInsert,
-                    ));
-                },
-            );
-            toggle_row(
-                ui,
-                tr_l10n(
-                    lang,
-                    "settings.advanced.streaming_insert_save_clipboard_label",
-                ),
-                "",
-                vm.settings.streaming_save_clipboard,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StreamingSaveClipboard,
-                    ));
-                },
-            );
+            // 「流式插入」在 Linux 上是**假的**：Core 会先问
+            // `TextInsertionSession::supports_streaming()`，而 fcitx5 的插入会话
+            // 只实现「整段提交」（`CommitDictationTarget`），没有增量替换通道。
+            // 画一个点了没反应的开关不算对齐 —— 等真的实现增量替换再放出来。
         },
     );
 
