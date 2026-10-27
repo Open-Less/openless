@@ -3,7 +3,7 @@ import { AudioPlayback } from '../common/AudioPlayback';
 import { Fmt } from '../common/Format';
 import { Store } from '../common/Store';
 import { C, R, S, T } from '../common/Tokens';
-import { Card, EmptyState, GhostButton, Pill, SearchField, SectionHeader, StatusRow } from '../components/Common';
+import { Card, EmptyState, ErrorState, GhostButton, Pill, SearchField, SectionHeader, SkeletonList, StatusRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
 import { Api } from '../data/Api';
 import { common } from '@kit.AbilityKit';
@@ -46,6 +46,7 @@ export struct HistoryPage {
   @State private query: string = '';
   @State private busy: boolean = false;
   @State private error: string = '';
+  @State private loading: boolean = true;
   @State private prefs: UserPreferences = {};
   @State private playing: boolean = false;
   private audio: AudioPlayback = new AudioPlayback();
@@ -55,6 +56,7 @@ export struct HistoryPage {
   }
 
   private async reload(): Promise<void> {
+    this.loading = true;
     try {
       this.entries = await Api.history();
       const settings: SettingsSnapshot = await Api.settings();
@@ -62,6 +64,8 @@ export struct HistoryPage {
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
+    } finally {
+      this.loading = false;
     }
   }
 
@@ -180,11 +184,12 @@ export struct HistoryPage {
       })
 
       if (this.error.length > 0) {
-        Text(this.error)
-          .fontSize(T.footnote)
-          .fontColor(C.danger())
-          .width('100%')
-          .padding({ top: S.sm })
+        ErrorState({
+          message: this.error,
+          onRetry: () => {
+            this.reload();
+          }
+        })
       }
 
       if (Breakpoints.isWide(this.bp)) {
@@ -231,7 +236,9 @@ export struct HistoryPage {
 
   @Builder
   listPane() {
-    if (this.filtered().length === 0) {
+    if (this.loading && this.entries.length === 0) {
+      SkeletonList({ rows: 4 })
+    } else if (this.filtered().length === 0) {
       EmptyState({
         symbol: 'history',
         title: this.query.length > 0 ? '没有匹配的记录' : '还没有听写记录',

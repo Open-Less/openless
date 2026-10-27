@@ -449,6 +449,78 @@ export struct StatusRow {
   }
 }
 
+/** Spec loading state: three shimmering rows instead of a spinner over empty content. */
+@Component
+export struct SkeletonList {
+  @Prop rows: number = 3;
+
+  build() {
+    Column({ space: S.sm }) {
+      ForEach([0, 1, 2, 3, 4], (index: number) => {
+        if (index < this.rows) {
+          Row({ space: S.md }) {
+            Column()
+              .width(40)
+              .height(40)
+              .backgroundColor(C.glassSunken())
+              .borderRadius(R.sm)
+            Column({ space: S.xs }) {
+              Column()
+                .width('70%')
+                .height(14)
+                .backgroundColor(C.glassSunken())
+                .borderRadius(R.xs)
+              Column()
+                .width('40%')
+                .height(10)
+                .backgroundColor(C.glassSunken())
+                .borderRadius(R.xs)
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+          }
+          .width('100%')
+          .padding(S.md)
+          .backgroundColor(C.glass())
+          .borderRadius(R.lg)
+          .opacity(0.7)
+        }
+      }, (index: number) => 'sk-' + index.toString())
+    }
+    .width('100%')
+  }
+}
+
+/** Spec error state: icon + reason + one retry action. */
+@Component
+export struct ErrorState {
+  @Prop message: string;
+  @Prop actionLabel: string = '重试';
+  onRetry: () => void = () => {
+  };
+
+  build() {
+    Column({ space: S.sm }) {
+      SymbolGlyph(symbolOf('close'))
+        .fontSize(28)
+        .fontColor([C.danger()])
+      Text(this.message)
+        .fontSize(T.footnote)
+        .fontColor(C.textSecondary())
+        .textAlign(TextAlign.Center)
+      GhostButton({
+        label: this.actionLabel,
+        symbol: 'refresh',
+        onTap: () => this.onRetry()
+      })
+    }
+    .width('100%')
+    .padding(S.xl)
+    .backgroundColor(C.dangerSoft())
+    .borderRadius(R.lg)
+  }
+}
+
 /** Page title block; every page starts with it so headers line up across layouts. */
 @Component
 export struct PageTitle {
