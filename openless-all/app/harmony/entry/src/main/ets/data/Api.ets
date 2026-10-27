@@ -323,6 +323,20 @@ export class Api {
     return JSON.parse(await Api.value('cloud_sync_status', '{}')) as CloudSyncStatus;
   }
 
+  /** Uploads the encrypted snapshot built from the current preferences. */
+  static async cloudSyncUpload(baseRevision: number, uiPreferencesJson: string): Promise<void> {
+    await Api.value('cloud_sync_upload',
+      '{"baseRevision":' + baseRevision.toString() + ',"uiPreferences":' + uiPreferencesJson + '}');
+  }
+
+  static async cloudSyncRestore(): Promise<void> {
+    await Api.value('cloud_sync_restore', '{}');
+  }
+
+  static async cloudSyncDelete(baseRevision: number): Promise<void> {
+    await Api.value('cloud_sync_delete', '{"baseRevision":' + baseRevision.toString() + '}');
+  }
+
   static async marketplace(query: string, sort: string): Promise<MarketplacePack[]> {
     return JSON.parse(await Api.value('marketplace_list',
       '{"query":' + JSON.stringify(query) + ',"sort":' + JSON.stringify(sort) +

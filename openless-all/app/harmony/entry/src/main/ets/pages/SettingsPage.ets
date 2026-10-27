@@ -63,6 +63,9 @@ export struct SettingsPage {
   @State private micTesting: boolean = false;
   @State private logPath: string = '';
   @State private syncLogin: string = '';
+  @State private syncRevision: number = 0;
+  @State private syncNote: string = '';
+  @State private syncing: boolean = false;
   @State private llmOpen: boolean = false;
   @State private asrProviders: ProviderDescriptor[] = [];
   @State private llmProviders: ProviderDescriptor[] = [];
@@ -86,8 +89,12 @@ export struct SettingsPage {
       try {
         const sync: CloudSyncStatus = await Api.cloudSyncStatus();
         this.syncStatus = sync.loggedIn === true ? '已登录 ' + (sync.account ?? '') : '未登录';
+        this.syncRevision = sync.revision ?? 0;
+        this.syncNote = sync.lastSyncAt !== undefined && sync.lastSyncAt !== null
+          ? '上次同步 ' + sync.lastSyncAt : '';
       } catch (error) {
         this.syncStatus = '未启用';
+        this.syncNote = '';
       }
       this.asrProviders = await Api.providerDescriptors('asr');
       this.llmProviders = await Api.providerDescriptors('llm');
@@ -191,6 +198,49 @@ export struct SettingsPage {
       this.logPath = await Api.exportErrorLog('');
     } catch (error) {
       this.error = (error as Error).message;
+    }
+  }
+
+  private async syncUpload(): Promise<void> {
+    this.syncing = true;
+    this.syncNote = '正在上传…';
+    try {
+      const snapshot: SettingsSnapshot = await Api.settings();
+      await Api.cloudSyncUpload(this.syncRevision, JSON.stringify(snapshot.preferences));
+      await this.reload();
+      this.syncNote = '已上传，等待其他设备合并';
+    } catch (error) {
+      this.syncNote = '上传失败：' + (error as Error).message;
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async syncRestore(): Promise<void> {
+    this.syncing = true;
+    this.syncNote = '正在恢复…';
+    try {
+      await Api.cloudSyncRestore();
+      await this.reload();
+      this.syncNote = '已从云端恢复偏好';
+    } catch (error) {
+      this.syncNote = '恢复失败：' + (error as Error).message;
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async syncDelete(): Promise<void> {
+    this.syncing = true;
+    this.syncNote = '正在删除…';
+    try {
+      await Api.cloudSyncDelete(this.syncRevision);
+      await this.reload();
+      this.syncNote = '云端快照已删除';
+    } catch (error) {
+      this.syncNote = '删除失败：' + (error as Error).message;
+    } finally {
+      this.syncing = false;
     }
   }
 
@@ -562,15 +612,44 @@ export struct SettingsPage {
           value: this.network,
           showDivider: true
         })
-        InfoRow({
-          label: '上传本机偏好',
-          value: '端到端加密，口令不出设备',
-          showChevron: true,
-          showDivider: false,
-          onTap: () => {
-            this.error = '云同步登录需要口令输入，桌面端完成后再回到这里';
-          }
-        })
+        Row({ space: S.sm }) {
+          GhostButton({
+            label: this.syncing ? '处理中…' : '上传本机偏好',
+            symbol: 'refresh',
+            usable: !this.syncing,
+            onTap: () => {
+              this.syncUpload();
+            }
+          })
+          GhostButton({
+            label: '从云端恢复',
+            usable: !this.syncing,
+            onTap: () => {
+              this.syncRestore();
+            }
+          })
+          GhostButton({
+            label: '删除云端',
+            symbol: 'trash',
+            usable: !this.syncing,
+            onTap: () => {
+              this.syncDelete();
+            }
+          })
+        }
+        .width('100%')
+        .padding({ top: S.xs })
+
+        if (this.syncNote.length > 0) {
+          Text(this.syncNote)
+            .fontSize(T.caption)
+            .fontColor(C.textSecondary())
+            .width('100%')
+        }
+        Text('端到端加密；口令与密钥留在设备密钥库，不上传。冲突时以云端修订号为准。')
+          .fontSize(T.caption)
+          .fontColor(C.textTertiary())
+          .width('100%')
       }
       .width('100%')
     }

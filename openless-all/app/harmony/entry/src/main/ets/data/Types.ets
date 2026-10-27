@@ -218,4 +218,6 @@ export interface CloudSyncStatus {
   account?: string | null;
   lastSyncAt?: string | null;
   pending?: number;
+  /** Server revision the next upload must be based on. */
+  revision?: number;
 }
