@@ -67,7 +67,10 @@ jobs:
           for area in tauri msrv linux harmony frontend android; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
-            echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+            decision=$( [ "$verdict" = 'false' ] && echo false || echo true )
+            # 打出来才能事后判断某次跳过是「够不到」还是「读不到差异」。
+            echo "$area=$decision"
+            echo "$area=$decision" >> "$GITHUB_OUTPUT"
           done
 
   ui-motion:

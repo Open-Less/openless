@@ -48,7 +48,9 @@ jobs:
           set -euo pipefail
           verdict=$(bash scripts/ci-changed-areas.sh ios-device "$BASE_SHA")
           # Fail open: only an explicit `false` skips the device build.
-          echo "device=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+          decision=$( [ "$verdict" = 'false' ] && echo false || echo true )
+          echo "ios-device=$decision"
+          echo "device=$decision" >> "$GITHUB_OUTPUT"
 
   test:
     runs-on: xcode-27
