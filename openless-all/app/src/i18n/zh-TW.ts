@@ -1496,6 +1496,9 @@ export const zhTW: typeof zhCN = {
         down: '下移',
         reset: '恢復增強預設設定',
       },
+      echoCancellationLabel: '播放回聲抑制',
+      echoCancellationDesc:
+        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
       audioEnhancementLabel: '語音增強',
       audioEnhancementDesc:
         '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',

@@ -1602,6 +1602,9 @@ export const de: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Wiedergabe-Echounterdrückung',
+      echoCancellationDesc:
+        'Verwendet eine lokale Wiedergabereferenz, ohne die Wiedergabe stummzuschalten. macOS benötigt 14.6+ und die Berechtigung zur Systemaudioaufnahme. Nicht unterstützte Geräte, Bluetooth-Routen und Linux ALSA verwenden nur das Mikrofon. Gilt ab der nächsten Aufnahme.',
       audioEnhancementLabel: 'Sprachverbesserung',
       audioEnhancementDesc:
         'RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.',

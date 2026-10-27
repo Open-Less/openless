@@ -5556,6 +5556,7 @@ mod linux_app {
                 };
                 s.mute_while_recording = prefs.mute_during_recording;
                 s.audio_enhancement = prefs.audio_enhancement_enabled;
+                s.echo_cancellation = prefs.echo_cancellation_enabled;
                 s.audio_dsp = prefs.audio_dsp;
                 s.audio_cue = prefs.audio_cue_on_record;
                 s.launch_at_login = prefs.launch_at_login;

@@ -1613,6 +1613,9 @@ export const fr: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Annulation de l’écho de lecture',
+      echoCancellationDesc:
+        'Utilise une référence de lecture locale sans couper le son. Sur macOS, nécessite 14.6+ et une autorisation de capture audio système. Les appareils, routes Bluetooth ou configurations Linux ALSA non pris en charge utilisent uniquement le microphone. Prend effet à la prochaine capture.',
       audioEnhancementLabel: 'Amélioration de la voix',
       audioEnhancementDesc:
         'Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.',

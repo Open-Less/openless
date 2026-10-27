@@ -1547,6 +1547,9 @@ export const ko: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: '재생 에코 제거',
+      echoCancellationDesc:
+        '재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.',
       audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
         'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',

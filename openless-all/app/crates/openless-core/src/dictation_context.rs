@@ -335,6 +335,7 @@ impl DictationContext {
                     .then(|| (preferences.silence_auto_stop_seconds * 1_000.0).round() as u64),
                 audio_processing: AudioProcessingConfig {
                     enhancement_enabled: preferences.audio_enhancement_enabled,
+                    echo_cancellation_enabled: preferences.echo_cancellation_enabled,
                     dsp: preferences.audio_dsp,
                 },
             },

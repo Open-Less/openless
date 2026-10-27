@@ -1,5 +1,9 @@
 //! Framework-independent audio normalization used by native recorder adapters.
 
+#[path = "audio/echo.rs"]
+mod echo;
+pub use echo::ReferenceAudioBuffer;
+
 pub const DICTATION_SAMPLE_RATE: u32 = 16_000;
 const LEVEL_RMS_GAIN: f32 = 4.0;
 
@@ -13,6 +17,7 @@ pub struct NormalizedPcmChunk {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioProcessingConfig {
     pub enhancement_enabled: bool,
+    pub echo_cancellation_enabled: bool,
     pub dsp: crate::audio_dsp::AudioDspConfig,
 }
 
@@ -24,6 +29,7 @@ pub struct AudioProcessor {
     config: AudioProcessingConfig,
     normalizer: PcmNormalizer,
     enhanced: Option<EnhancedStream>,
+    echo: Option<echo::EchoProcessor>,
     finished: bool,
 }
 
@@ -41,6 +47,9 @@ impl AudioProcessor {
             config,
             normalizer: Default::default(),
             enhanced: None,
+            echo: config
+                .echo_cancellation_enabled
+                .then(echo::EchoProcessor::default),
             finished: false,
         }
     }
@@ -95,6 +104,21 @@ impl AudioProcessor {
         let working = stream.input_resampler.push(&mono, false);
         let processed = stream.frames(&working, false);
         pcm_chunk(&processed)
+    }
+
+    /// A playback gap bypasses only cancellation; enhancement keeps its format and tail.
+    pub fn process_with_reference(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        rate: u32,
+        reference: Option<&[f32]>,
+    ) -> Option<NormalizedPcmChunk> {
+        let Some(echo) = self.echo.as_mut() else {
+            return self.process(input, channels, rate);
+        };
+        let samples = echo.process(input, channels, rate, reference);
+        self.process(&samples, 1, DICTATION_SAMPLE_RATE)
     }
 
     /// Idempotent end-of-stream barrier. Flushes fractional resampling state,

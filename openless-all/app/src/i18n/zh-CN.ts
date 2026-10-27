@@ -1494,6 +1494,9 @@ export const zhCN = {
         down: '下移',
         reset: '恢复增强默认设置',
       },
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
         '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',

@@ -2537,6 +2537,16 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.recording.echo_cancellation_label",
+        text: row(
+            "播放回声抑制",
+            "播放回聲抑制",
+            "Playback echo cancellation",
+            "再生エコーキャンセル",
+            "재생 에코 제거",
+        ),
+    },
+    Msg {
         key: "settings.recording.mute_during_recording_label",
         text: row(
             "录音时静音",
@@ -4561,6 +4571,16 @@ pub const CATALOG: &[Msg] = &[
             "Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.",
             "RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。",
             "RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.recording.echo_cancellation_desc",
+        text: row(
+            "保持系统播放声音，同时使用桌面音频输出作为参考抑制回声。部分设备、蓝牙路径或 Linux ALSA 环境可能不可用。",
+            "保持系統播放聲音，同時使用桌面音訊輸出作為參考抑制回聲。部分裝置、藍牙路徑或 Linux ALSA 環境可能不可用。",
+            "Use desktop output as a reference while keeping playback audible; some devices, Bluetooth routes, or Linux ALSA setups may be unavailable.",
+            "再生音を聞きながらデスクトップ出力を参照してエコーを抑制します。デバイス、Bluetooth、Linux ALSA では利用できない場合があります。",
+            "재생을 계속 들으면서 데스크톱 출력을 참조해 에코를 줄입니다. 일부 장치, Bluetooth 경로 또는 Linux ALSA에서는 사용할 수 없을 수 있습니다.",
         ),
     },
     Msg {

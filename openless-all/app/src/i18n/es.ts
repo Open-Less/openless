@@ -1593,6 +1593,9 @@ export const es: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Cancelación del eco de reproducción',
+      echoCancellationDesc:
+        'Usa una referencia local sin silenciar la reproducción. En macOS requiere 14.6+ y permiso para grabar audio del sistema. Los dispositivos, rutas Bluetooth o entornos Linux ALSA no compatibles usan solo el micrófono. Se aplica en la próxima captura.',
       audioEnhancementLabel: 'Mejora de voz',
       audioEnhancementDesc:
         'Reducción de ruido RNNoise o PureVox, ganancia automática y limitación. Desactivada por defecto; los cambios se aplican a la próxima grabación.',

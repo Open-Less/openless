@@ -1572,6 +1572,9 @@ export const en: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Playback echo cancellation',
+      echoCancellationDesc:
+        'Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.',
       audioEnhancementLabel: 'Speech enhancement',
       audioEnhancementDesc:
         'Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.',

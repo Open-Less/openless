@@ -19,6 +19,11 @@ on:
         type: choice
         options: [all, macos]
         default: all
+      macos_runner:
+        description: macOS runner (Intel fallback when hosted ARM capacity is unavailable)
+        type: choice
+        options: [macos-latest, macos-15-intel]
+        default: macos-latest
 
 # Cancel old runs when the same PR is pushed repeatedly; workflow_dispatch is isolated by run_id.
 concurrency:
@@ -599,7 +604,8 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
-    runs-on: ${{ matrix.os }}
+    # Dispatch-only fallback; push/PR runs keep the default matrix and all test gates.
+    runs-on: ${{ matrix.label == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.macos_runner || matrix.os }}
     timeout-minutes: 60
     env:
       # The shared Core and full Tauri test binary compile together; limit concurrency
@@ -811,7 +817,7 @@ jobs:
     # Run the declared minimum toolchain even when stable has the same version.
     if: needs.changes.outputs.msrv != 'false'
     name: macOS Rust 1.99 MSRV
-    runs-on: macos-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_runner || 'macos-latest' }}
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
