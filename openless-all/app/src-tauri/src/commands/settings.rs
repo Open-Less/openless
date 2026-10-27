@@ -1,6 +1,26 @@
 use super::*;
 
 #[tauri::command]
+pub fn get_android_audio_effects_status() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    {
+        crate::recorder::android_capture::status()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        serde_json::json!({"aecAvailable": false, "noiseSuppressionAvailable": false, "agcAvailable": false, "runtime": null})
+    }
+}
+
+#[tauri::command]
+pub fn set_android_audio_monitoring(enabled: bool) {
+    #[cfg(target_os = "android")]
+    crate::recorder::android_capture::set_monitoring(enabled);
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+}
+
+#[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
     let mut prefs = core.get_preferences();
     prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
@@ -231,6 +251,7 @@ pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
             .then(|| prefs.microphone_device_name.clone()),
         openless_core::AudioProcessingConfig {
             enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             dsp: prefs.audio_dsp,
         },
     );
@@ -239,7 +260,10 @@ pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn sync_low_latency_capture_preferences(_prefs: &UserPreferences) {}
 
-fn voice_activation_preferences_changed(previous: &UserPreferences, next: &UserPreferences) -> bool {
+fn voice_activation_preferences_changed(
+    previous: &UserPreferences,
+    next: &UserPreferences,
+) -> bool {
     previous.voice_activation_enabled != next.voice_activation_enabled
         || previous.voice_activation_wake_enabled != next.voice_activation_wake_enabled
         || previous.voice_activation_finish_enabled != next.voice_activation_finish_enabled
@@ -250,9 +274,7 @@ fn voice_activation_preferences_changed(previous: &UserPreferences, next: &UserP
         || previous.microphone_device_name != next.microphone_device_name
 }
 
-fn validate_voice_activation_preferences(
-    prefs: &UserPreferences,
-) -> Result<(), String> {
+fn validate_voice_activation_preferences(prefs: &UserPreferences) -> Result<(), String> {
     openless_core::VoiceActivationConfig {
         enabled: prefs.voice_activation_enabled,
         wake_enabled: prefs.voice_activation_wake_enabled,

@@ -19,7 +19,6 @@ enum SettingsIcon {
     Settings,
     Mic,
     Sparkle,
-    Monitor,
     Cloud,
     Shield,
     Bolt,
@@ -337,7 +336,6 @@ fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: 
         SettingsIcon::Settings => IconName::Settings,
         SettingsIcon::Mic => IconName::Mic,
         SettingsIcon::Sparkle => IconName::Sparkle,
-        SettingsIcon::Monitor => IconName::Monitor,
         SettingsIcon::Cloud => IconName::Cloud,
         SettingsIcon::Shield => IconName::Shield,
         SettingsIcon::Bolt => IconName::Bolt,
@@ -376,9 +374,6 @@ fn panel(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
             }
             // 实验与扩展的下钻页把标题换成子页标题，并在左侧给出返回箭头
             // （Tauri 的 `activeAdvancedPage` 顶栏）。
-            if vm.advanced_open == 0 && !vm.settings.testing_features {
-                vm.advanced_open = 3;
-            }
             let detail = if vm.settings_section == SettingsSection::Advanced {
                 advanced_page_title(vm, lang)
             } else {
@@ -490,17 +485,9 @@ pub(super) fn save_state(
 /// Title + description of the open 实验与扩展 sub-page (`None` on the list page).
 fn advanced_page_title(vm: &FrontendViewModel, lang: Lang) -> Option<(&'static str, &'static str)> {
     match vm.advanced_open {
-        0 => Some((
-            tr_l10n(lang, "settings.coding_agent.title"),
-            tr_l10n(lang, "modal.advanced_pages.less_computer"),
-        )),
         2 => Some((
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
-        )),
-        3 => Some((
-            tr_l10n(lang, "settings.testing_features.title"),
-            tr_l10n(lang, "modal.advanced_pages.testing_features"),
         )),
         _ => None,
     }
@@ -639,6 +626,28 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             ) {
                 actions.push(FrontendAction::SettingsAudioDsp(vm.settings.audio_dsp));
             }
+            // AEC 需要「扬声器此刻在放什么」：让用户挑回环源（自动 / 不采集 / 具名
+            // 监听设备）。没有回环源时这里只有前两项，AEC 会退化为无参考。
+            if vm.settings.audio_dsp.aec_mode != openless_core::AecMode::Off {
+                let mut options: Vec<&str> = vec![
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceAuto"),
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceOff"),
+                ];
+                options.extend(vm.settings.aec_reference_devices.iter().map(String::as_str));
+                combo_index_row(
+                    ui,
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceLabel"),
+                    tr_l10n(lang, "settings.audioDsp.aecReferenceDesc"),
+                    vm.settings.aec_reference_index.min(options.len().saturating_sub(1)),
+                    &options,
+                    |index| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::AecReference,
+                            index,
+                        ));
+                    },
+                );
+            }
             // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
             toggle_row(
                 ui,
@@ -743,6 +752,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                             SettingsActionField::PreviewAudioCue,
                         ));
                     }
+                },
+            );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.echo_cancellation_label"),
+                tr_l10n(lang, "settings.recording.echo_cancellation_desc"),
+                vm.settings.echo_cancellation,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::EchoCancellation,
+                    ));
                 },
             );
         },
@@ -1094,7 +1114,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         .unwrap_or_default();
 
     let dictation_hint = recording_mode_hint(lang, vm.settings.recording_mode);
-    let mut rows: Vec<ShortcutRow> = vec![
+    let rows: Vec<ShortcutRow> = vec![
         ShortcutRow {
             field: ShortcutField::Dictation,
             label: tr_l10n(lang, "settings.shortcuts.start_stop"),
@@ -1144,18 +1164,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
             can_disable: true,
             hint: String::new(),
         },
-        ShortcutRow {
-            field: ShortcutField::CodingAgentVoice,
-            label: tr_l10n(lang, "settings.coding_agent.title"),
-            value: vm.coding_agent_hotkey.clone(),
-            can_disable: true,
-            hint: tr_l10n(lang, "settings.coding_agent.voice_hotkey_desc").to_string(),
-        },
     ];
-    // Less Computer 属于 Beta 功能（与 Tauri 的门禁一致）。
-    if !vm.settings.testing_features {
-        rows.retain(|row| row.field != ShortcutField::CodingAgentVoice);
-    }
 
     let trimmed = query.trim().to_lowercase();
     let group_of = |field: ShortcutField| match field {
@@ -1165,7 +1174,7 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         | ShortcutField::QuickNote
         | ShortcutField::SelectionPolish => 0,
         ShortcutField::SwitchStyle => 1,
-        ShortcutField::OpenApp | ShortcutField::CodingAgentVoice => 2,
+        ShortcutField::OpenApp => 2,
         ShortcutField::StylePack(_) | ShortcutField::StyleDraft => 1,
     };
     let matches = |label: &str, value: &str| -> bool {
@@ -3053,139 +3062,14 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // Keep existing drill-in IDs, but the pipeline now lives only on Services.
     let rows = [
         (
-            0,
-            SettingsIcon::Monitor,
-            tr_l10n(lang, "settings.coding_agent.title"),
-            tr_l10n(lang, "modal.advanced_pages.less_computer"),
-        ),
-        (
             2,
             SettingsIcon::Bolt,
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
-        (
-            3,
-            SettingsIcon::Sparkle,
-            tr_l10n(lang, "settings.testing_features.title"),
-            tr_l10n(lang, "modal.advanced_pages.testing_features"),
-        ),
     ];
-    // Beta 开关：Tauri 用 `ExperimentalSectionTitle`（标题 + Beta 徽章）单独成页。
-    if vm.advanced_open == 3 {
-        experimental_card(ui, rows[2].2, "Beta", "", |ui| {
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.testing_features.enable"),
-                tr_l10n(lang, "settings.testing_features.description"),
-                vm.settings.testing_features,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::TestingFeatures,
-                    ))
-                },
-            );
-            if vm.settings.testing_features && drill_row(ui, rows[0].1, rows[0].2, rows[0].3) {
-                vm.advanced_open = 0;
-            }
-        });
-        return;
-    }
-    // 测试功能（Less Computer 等）在 Tauri 里挂在 Beta 页下：开关没开时
-    // 既不在根列表出现，也不能停留在它的详情页。
-    if !vm.settings.testing_features && matches!(vm.advanced_open, 0) {
-        vm.advanced_open = 3;
-        return;
-    }
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
-        card(ui, "", "", |ui| match vm.advanced_open {
-            0 => {
-                toggle_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_agent.enable"),
-                    tr_l10n(lang, "settings.coding_agent.hotkey_hint"),
-                    vm.settings.less_computer,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(SettingsField::LessComputer));
-                    },
-                );
-                // Tauri `CodingAgentSection`：后端 / 模型等高级项只在启用后展开。
-                if !vm.settings.less_computer {
-                    return;
-                }
-                combo_index_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_agent.provider"),
-                    tr_l10n(lang, "settings.coding_agent.coming_soon_note"),
-                    vm.settings.coding_agent_provider.min(3),
-                    &["Claude Code", "OpenCode", "Codex", "dsh"],
-                    |val| {
-                        actions.push(FrontendAction::SettingsCombo(
-                            SettingsComboField::CodingAgentProvider,
-                            val,
-                        ));
-                    },
-                );
-                combo_index_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_console.permission_mode"),
-                    "",
-                    vm.settings.coding_agent_permission.min(3),
-                    &[
-                        tr_l10n(lang, "settings.coding_console.mode.accept_edits"),
-                        tr_l10n(lang, "settings.coding_console.mode.plan"),
-                        tr_l10n(lang, "settings.coding_console.mode.default"),
-                        tr_l10n(lang, "settings.coding_console.mode.bypass_permissions"),
-                    ],
-                    |val| {
-                        actions.push(FrontendAction::SettingsCombo(
-                            SettingsComboField::CodingAgentPermission,
-                            val,
-                        ));
-                    },
-                );
-                text_edit_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_agent.model"),
-                    tr_l10n(lang, "settings.coding_agent.model_hint"),
-                    &mut vm.settings.coding_agent_model,
-                    tr_l10n(lang, "settings.coding_agent.model_placeholder"),
-                    |text| {
-                        actions.push(FrontendAction::SettingsText(
-                            SettingsTextField::CodingAgentModel,
-                            text.to_owned(),
-                        ));
-                    },
-                );
-                text_edit_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_console.workdir"),
-                    tr_l10n(lang, "settings.coding_console.workdir_desc"),
-                    &mut vm.settings.coding_agent_workdir,
-                    tr_l10n(lang, "settings.coding_console.workdir_placeholder"),
-                    |text| {
-                        actions.push(FrontendAction::SettingsText(
-                            SettingsTextField::CodingAgentWorkdir,
-                            text.to_owned(),
-                        ));
-                    },
-                );
-                text_edit_row(
-                    ui,
-                    tr_l10n(lang, "settings.coding_agent.exe"),
-                    "",
-                    &mut vm.settings.coding_agent_exe,
-                    "claude",
-                    |text| {
-                        actions.push(FrontendAction::SettingsText(
-                            SettingsTextField::CodingAgentExe,
-                            text.to_owned(),
-                        ));
-                    },
-                );
-            }
-            1 => {}
-            _ => {
+        card(ui, "", "", |ui| {
                 toggle_row(
                     ui,
                     tr_l10n(lang, "settings.recording.record_audio_for_debug_label"),
@@ -3197,6 +3081,34 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
+                // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
+                // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
+                if vm.settings.record_audio_for_debug {
+                    ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_processed_label"),
+                            tr_l10n(lang, "settings.recording.archive_processed_desc"),
+                            vm.settings.debug_archive_processed,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveProcessed,
+                                ));
+                            },
+                        );
+                        toggle_row(
+                            ui,
+                            tr_l10n(lang, "settings.recording.archive_raw_label"),
+                            tr_l10n(lang, "settings.recording.archive_raw_desc"),
+                            vm.settings.debug_archive_raw,
+                            || {
+                                actions.push(FrontendAction::SettingsToggle(
+                                    SettingsField::DebugArchiveRaw,
+                                ));
+                            },
+                        );
+                    });
+                }
                 text_edit_row(
                     ui,
                     tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
@@ -3231,23 +3143,12 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                     SettingsActionField::ExportDiagnostics,
                     actions,
                 );
-            }
         });
         return;
     }
     card(ui, "", "", |ui| {
         for (id, icon, title, description) in &rows {
-            // 测试功能页（Less Computer）只在 Beta 页里列出。
-            if *id == 0 {
-                continue;
-            }
-            // Beta 页在 Tauri 里带徽章，行标题同样标出来。
-            let title = if *id == 3 {
-                format!("{title} · Beta")
-            } else {
-                title.to_string()
-            };
-            if drill_row(ui, *icon, &title, description) {
+            if drill_row(ui, *icon, title, description) {
                 vm.advanced_open = *id;
             }
         }
@@ -5188,51 +5089,6 @@ fn link_row(
 }
 
 // ── Card & row helpers ──────────────────────────────────────────────────────
-
-/// 实验性功能卡片：标题旁带一枚徽章，悬停给说明（Tauri 的
-/// `ExperimentalSectionTitle`）。多模态管线与 Beta 开关都用它。
-fn experimental_card(
-    ui: &mut egui::Ui,
-    title: &str,
-    badge: &str,
-    hint: &str,
-    contents: impl FnOnce(&mut egui::Ui),
-) {
-    egui::Frame::new()
-        .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(0.5, theme::LINE))
-        .corner_radius(egui::CornerRadius::same(14))
-        .inner_margin(egui::Margin::symmetric(18, 18))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(title)
-                        .size(13.0)
-                        .strong()
-                        .color(theme::INK),
-                );
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(layout::text_width(ui, badge, 10.0) + 12.0, 16.0),
-                    egui::Sense::hover(),
-                );
-                ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(8), theme::BLUE_SOFT);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    badge,
-                    egui::FontId::proportional(10.0),
-                    theme::BLUE,
-                );
-                if !hint.is_empty() {
-                    let _ = response.on_hover_text(hint);
-                }
-            });
-            ui.add_space(6.0);
-            contents(ui);
-        });
-    ui.add_space(16.0);
-}
 
 /// A settings card. Tauri hides every `SectionDesc` (the only visible
 /// description is the one under the pane title), so the second argument is a

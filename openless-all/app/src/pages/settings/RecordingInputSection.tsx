@@ -275,6 +275,8 @@ export function RecordingInputSection({
     savePrefs({ ...prefs, lowLatencyDictationEnabled });
   const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
     savePrefs({ ...prefs, audioEnhancementEnabled });
+  const onEchoCancellationChange = (echoCancellationEnabled: boolean) =>
+    savePrefs({ ...prefs, echoCancellationEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -484,6 +486,17 @@ export function RecordingInputSection({
             )}
           </div>
         </SettingRow>
+        {platformCaps?.platform === 'desktop' && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={onEchoCancellationChange}
+            />
+          </SettingRow>
+        )}
         <>
           <SettingRow
             label={t('settings.recording.audioEnhancementLabel')}

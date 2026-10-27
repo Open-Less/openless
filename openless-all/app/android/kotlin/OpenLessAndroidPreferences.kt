@@ -107,7 +107,7 @@ object OpenLessAndroidPreferences {
         readPreferenceBoolean(context, "strokeUsageEnabled") ?: true
 
     fun cursorContextEnabled(context: Context): Boolean =
-        readPreferenceBoolean(context, "cursorContextEnabled") ?: false
+        readPreferenceBoolean(context, "cursorContextEnabled") ?: true
 
     private fun readPreferenceString(context: Context, key: String): String? {
         for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {

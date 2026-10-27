@@ -45,9 +45,8 @@
 - [macOS 实验性本地语音模型](experimental-local-asr.md)：三模型、旧版下架、升级清理和隔离验收。
 - [本地 ASR 生命周期](local-asr-lifecycle.md)：下载、选择和推理状态的边界。
 
-## 依赖与发布记录
+## 发布记录
 
-- [依赖审计（全部工程）](dependency-audit.md)：四个 workspace、npm、Gradle 的版本面与升级约束。
 - [2.0.2-Beta.1 发布说明](releases/2.0.2-Beta.1-release-notes.md)
 - [2.0.1 发布说明](releases/2.0.1-release-notes.md)
 

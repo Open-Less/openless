@@ -10,15 +10,15 @@
 | --- | --- |
 | `startupSnapshot` | 启动快照结构与版本校验规则；UI 必须先消费快照再渲染 |
 | `backendEvent` | 语义事件清单、顺序与重放规则 |
-| `testingFeatures` | 本设备 Beta 总开关、默认关闭、运行门禁与取消合同 |
-| `lessComputerVoice` | Less Computer 语音事件面 |
+| `testingFeatures` | 本设备 Beta 总开关、默认关闭、运行门禁与取消合同（Linux egui 已不再消费：Less Computer 在 Linux 端删除） |
+| `lessComputerVoice` | Less Computer 语音事件面（仅 Tauri/移动端消费，Linux egui 不接入） |
 | `androidJni` | Android JNI 合同（src-tauri android 桥接共用） |
 | `linuxFacade` | Linux 专用 facade 面（`LinuxHost` 公开方法对应） |
 | `enums` | 共享枚举（provider 类型、状态、错误等） |
 
 ## 2. Linux 侧公开签名（源码为准）
 
-- `linux-egui/src/lib.rs`：`pub struct LinuxHost`；`LinuxHost::new(Arc<OpenLessBackend>)`、`with_settings_runtime`、`backend()`、`subscribe() -> EventSubscription`、`snapshot() -> BackendSnapshot`、`save_settings(...)`、`update_settings_strict(...)`、`update_preference_fields(...)`（`preference_patch.rs`） 、`drain_events(...)`、`feed_less_computer_pcm(&[u8])`。
+- `linux-egui/src/lib.rs`：`pub struct LinuxHost`；`LinuxHost::new(Arc<OpenLessBackend>)`、`with_settings_runtime`、`backend()`、`subscribe() -> EventSubscription`、`snapshot() -> BackendSnapshot`、`save_settings(...)`、`update_settings_strict(...)`、`update_preference_fields(...)`（`preference_patch.rs`） 、`drain_events(...)`。
 - `linux-egui/src/backend.rs`：`LinuxBackendRuntime`；`LinuxBackendBuilder::from_shared_providers(BackendConfig)` + `with_task_spawner / with_recorder / with_auxiliary_polisher / with_text_inserter / with_credential_store / with_services / with_settings_runtime / with_polish_failure_policy` → `build() -> LinuxBackendRuntime`。
 - 事件消费：`drain_events`（`lib.rs`）批量取走 Core 语义事件；订阅经 `EventSubscription`。
 
@@ -34,7 +34,7 @@
 
 ## 5. 行为约定（合同级）
 
-- `UserPreferences.testingFeaturesEnabled` 默认 `false`，设备独立选择，不进入云同步。实验与扩展中的 Less Computer 移到 Beta 测试功能子页，开启总开关后才显示，运行还须开启原有 `codingAgentEnabled`。Core 在会话预约、录音与文字提交时验证有效开关，关闭返回 `PermissionDenied`；关闭总开关取消当前任务、注销热键并关闭独立弹窗，保留功能配置。
+- **Linux egui 不再提供 Less Computer / Claude 控制台**：设置页的 Beta 总开关、Agent 配置页、快捷键行、独立面板、fcitx5 的 `SetLessComputerHotkeyRaw` 方法与 `LessComputerKeyEvent`/`LessComputerKeyCombined` 信号、以及 CLI 进程适配器（`linux-egui/src/coding_agent.rs`）均已删除。`UserPreferences.testingFeaturesEnabled` 与 `codingAgent*` 字段仍在 Core（其他平台使用），Linux 只是不再读写它们；删除后 Linux 上不再存在"开关关闭仍可触发"或"开关无效"的表面。
 
 - fcitx5 为生产启动硬依赖：持有单实例锁后检查插件和会话 D-Bus，按需刷新并在 15 秒就绪预算内等待，再启动监听器、注册必需热键、启动 Core 和 Remote Input。失败清理已启动资源并显示错误窗口；关闭后以非零状态退出，外层锁覆盖完整生命周期。
 - 设置保存状态与动作处理位于 `linux_app/settings_save.rs`：按序列化字段生成补丁、串行提交、只重试明确 revision 冲突（最多三次），失败保留草稿并显式重试；Core 合同与持久化格式不变。

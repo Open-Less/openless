@@ -1,0 +1,8 @@
+{
+  "crate": "cpal",
+  "version": "0.15.3",
+  "source": "https://static.crates.io/crates/cpal/cpal-0.15.3.crate",
+  "sha256": "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779",
+  "verified_against": "https://crates.io/api/v1/crates/cpal/0.15.3",
+  "upstream_commit": "ac6cbb2ba55e61665a35ab88ae136a83380d1354"
+}

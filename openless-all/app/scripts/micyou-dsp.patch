@@ -47,7 +47,38 @@
  pub struct AudioDspSettings {
      pub gain: f32, // dB, -50 to +50
      pub ns_enabled: bool,
-@@ -874,76 +883,13 @@
+@@ -69,10 +78,6 @@
+     pub vad_enabled: bool,
+     pub vad_threshold: f32, // dB, -100..0
+     pub aec_enabled: bool,
+-
+-    /// Output playback ring buffer headroom in milliseconds (100..1200).
+-    #[serde(default = "default_output_buffer_ms")]
+-    pub output_buffer_ms: u32,
+ 
+     #[serde(default)]
+     pub processing_chain: Vec<String>,
+@@ -96,7 +101,6 @@
+             vad_enabled: false,
+             vad_threshold: -40.0,
+             aec_enabled: false,
+-            output_buffer_ms: 300,
+             processing_chain: vec![
+                 "AEC".to_string(),
+                 "NoiseReduction".to_string(),
+@@ -117,11 +121,6 @@
+             self.ns_type = Self::default().ns_type;
+         }
+     }
+-}
+-
+-/// Default output playback buffer headroom in milliseconds.
+-fn default_output_buffer_ms() -> u32 {
+-    300
+ }
+ 
+ // ─── Shared STFT window helpers ───────────────────────────────────────────
+@@ -874,76 +873,13 @@
      }
  }
  
@@ -126,7 +157,7 @@
      // RNNoise states - separate per channel to avoid RNN state cross-contamination
      #[cfg(feature = "dsp")]
      denoiser_left: Box<DenoiseState<'static>>,
-@@ -983,9 +929,6 @@
+@@ -983,9 +919,6 @@
      speex_ns: SpeexStyleNS,
      // Equalizer
      equalizer: EqualizerEffect,
@@ -136,7 +167,68 @@
      // Dereverb state
      dereverb_buffer_left: Vec<f32>,
      dereverb_buffer_right: Vec<f32>,
-@@ -1042,6 +985,8 @@
+@@ -996,6 +929,9 @@
+     agc_smoothed_gain: f32,
+     // VAD fade state (0.0 = muted, 1.0 = full)
+     vad_fade: f32,
++    #[cfg(feature = "noise-suppression")]
++    spectrum_analyzer: Option<SpectrumAnalyzer>,
++    spectrum_tick: usize,
+     // Spectrum snapshots
+     raw_spectrum: Vec<f32>,
+     processed_spectrum: Vec<f32>,
+@@ -1038,10 +974,59 @@
+ 
+ const RNNOISE_FRAME_SIZE: usize = 480;
+ 
++#[cfg(feature = "noise-suppression")]
++struct SpectrumAnalyzer {
++    fft: Arc<dyn rustfft::Fft<f32>>,
++    buffer: Vec<Complex<f32>>,
++    scratch: Vec<Complex<f32>>,
++    window: Vec<f32>,
++}
++
++#[cfg(feature = "noise-suppression")]
++impl SpectrumAnalyzer {
++    fn new() -> Self {
++        let fft = rustfft::FftPlanner::new().plan_fft_forward(512);
++        let scratch = vec![Complex::default(); fft.get_inplace_scratch_len()];
++        Self {
++            fft,
++            scratch,
++            buffer: vec![Complex::default(); 512],
++            window: (0..512)
++                .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 511.0).cos())
++                .collect(),
++        }
++    }
++
++    fn analyze(&mut self, data: &[f32], target: &mut [f32]) {
++        self.buffer.fill(Complex::default());
++        let count = data.len().min(512);
++        for (i, sample) in data[data.len() - count..].iter().enumerate() {
++            self.buffer[i].re = sample * self.window[i];
++        }
++        self.fft
++            .process_with_scratch(&mut self.buffer, &mut self.scratch);
++        for (band, value) in target.iter_mut().enumerate() {
++            let low = 20.0 * 1200.0_f32.powf(band as f32 / 64.0);
++            let high = 20.0 * 1200.0_f32.powf((band + 1) as f32 / 64.0);
++            let start = ((low * 512.0 / 48_000.0) as usize).min(256);
++            let end = ((high * 512.0 / 48_000.0).ceil() as usize).clamp(start + 1, 257);
++            let magnitude = self.buffer[start..end]
++                .iter()
++                .map(|bin| bin.norm())
++                .fold(0.0_f32, f32::max)
++                / 128.0;
++            let normalized = ((20.0 * magnitude.max(1e-8).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
++            *value = normalized.max(*value * 0.8);
++        }
++    }
++}
++
+ impl DspProcessor {
      pub fn new(settings: Arc<RwLock<AudioDspSettings>>, _model_dir: Option<PathBuf>) -> Self {
          Self {
              settings: settings.clone(),
@@ -145,7 +237,7 @@
              #[cfg(feature = "dsp")]
              denoiser_left: DenoiseState::new(),
              #[cfg(feature = "dsp")]
-@@ -1069,7 +1014,6 @@
+@@ -1069,13 +1054,15 @@
              #[cfg(feature = "dsp")]
              speex_ns: SpeexStyleNS::new(),
              equalizer: EqualizerEffect::new(),
@@ -153,7 +245,24 @@
              dereverb_buffer_left: vec![0.0; 480],
              dereverb_buffer_right: vec![0.0; 480],
              dereverb_index: 0,
-@@ -1176,6 +1120,14 @@
+             agc_envelope: 0.0,
+             agc_smoothed_gain: 1.0,
+             vad_fade: 1.0,
++            #[cfg(feature = "noise-suppression")]
++            spectrum_analyzer: None,
++            spectrum_tick: 0,
+             raw_spectrum: vec![0.0; 64],
+             processed_spectrum: vec![0.0; 64],
+             accum_buffer: Vec::new(),
+@@ -1101,6 +1088,7 @@
+         }
+ 
+         let raw_rms = compute_rms(data);
++        self.spectrum_tick = (self.spectrum_tick + 1) % 10;
+         self.compute_spectrum(data, true);
+ 
+         // Frame accumulation: align to 480*channels samples before processing,
+@@ -1176,6 +1164,14 @@
                              settings.agc_target,
                              attack_rate,
                              decay_rate,
@@ -168,7 +277,7 @@
                          );
                      }
                  }
-@@ -1186,7 +1138,12 @@
+@@ -1186,7 +1182,12 @@
                      // Legacy synthetic plugin stage (may be absent): runs
                      // every registered plugin at this chain position.
                      if let Some(hook) = &mut self.external_hook {
@@ -182,7 +291,7 @@
                      }
                  }
                  node if node.starts_with(PLUGIN_NODE_PREFIX) => {
-@@ -1200,8 +1157,8 @@
+@@ -1200,8 +1201,8 @@
              }
          }
  
@@ -193,7 +302,7 @@
  
          // Soft clip — avoids harsh hard-clipping artifacts (crackling/pops)
          for sample in self.output_buffer.iter_mut() {
-@@ -1368,14 +1325,45 @@
+@@ -1368,14 +1369,45 @@
          channels: usize,
          settings: &AudioDspSettings,
      ) {
@@ -243,7 +352,7 @@
          }
      }
  
-@@ -1397,18 +1385,19 @@
+@@ -1397,18 +1429,19 @@
              }
  
              // Process each channel with its own denoiser (no RNN state cross-contamination)
@@ -265,7 +374,7 @@
  
              data.clear();
              for i in 0..frames {
-@@ -1416,7 +1405,7 @@
+@@ -1416,7 +1449,7 @@
                  data.push(right[i]);
              }
          } else {
@@ -274,7 +383,7 @@
                  data,
                  &mut self.ns_buffer_left,
                  &mut self.denoiser_left,
-@@ -1431,12 +1420,13 @@
+@@ -1431,12 +1464,13 @@
          ns_buffer: &mut Vec<f32>,
          denoiser: &mut DenoiseState<'static>,
          intensity: f32,
@@ -289,7 +398,7 @@
  
          while ns_buffer.len() >= RNNOISE_FRAME_SIZE {
              let frame: Vec<f32> = ns_buffer.drain(..RNNOISE_FRAME_SIZE).collect();
-@@ -1444,7 +1434,8 @@
+@@ -1444,7 +1478,8 @@
              let input_frame: Vec<f32> = frame.iter().map(|s| s * 32767.0).collect();
              let mut output_frame = vec![0.0f32; RNNOISE_FRAME_SIZE];
  
@@ -299,7 +408,7 @@
  
              for i in 0..RNNOISE_FRAME_SIZE {
                  let clean = output_frame[i] / 32767.0;
-@@ -1463,6 +1454,7 @@
+@@ -1463,6 +1498,7 @@
          }
  
          data.copy_from_slice(&output);
@@ -307,7 +416,7 @@
      }
  
      #[cfg(feature = "noise-suppression")]
-@@ -1618,7 +1610,14 @@
+@@ -1618,7 +1654,14 @@
  
      // ── AGC ─────────────────────────────────────────────────────────────────
  
@@ -323,7 +432,7 @@
          let target_linear = target / 32767.0;
          // Noise gate threshold: below this level, don't apply AGC gain
          // (prevents amplifying hiss/noise floor during speech pauses)
-@@ -1633,7 +1632,7 @@
+@@ -1633,7 +1676,7 @@
              }
              if self.agc_envelope > gate_threshold {
                  let desired_gain = target_linear / self.agc_envelope;
@@ -332,6 +441,151 @@
                  // Smooth gain transition to avoid pops (exponential moving average)
                  let smooth_factor = 0.005_f32;
                  self.agc_smoothed_gain += smooth_factor * (clamped_gain - self.agc_smoothed_gain);
+@@ -1671,59 +1714,34 @@
+ 
+     // ── Spectrum ─────────────────────────────────────────────────────────────
+ 
++    pub fn set_spectrum_enabled(&mut self, enabled: bool) {
++        #[cfg(feature = "noise-suppression")]
++        if enabled && self.spectrum_analyzer.is_none() {
++            self.spectrum_analyzer = Some(SpectrumAnalyzer::new());
++        } else if !enabled {
++            self.spectrum_analyzer = None;
++            self.raw_spectrum.fill(0.0);
++            self.processed_spectrum.fill(0.0);
++        }
++        #[cfg(not(feature = "noise-suppression"))]
++        let _ = enabled;
++    }
++
+     fn compute_spectrum(&mut self, data: &[f32], is_raw: bool) {
+-        let bands = 64;
+-        let target = if is_raw {
+-            &mut self.raw_spectrum
+-        } else {
+-            &mut self.processed_spectrum
+-        };
+-        if target.len() != bands {
+-            target.resize(bands, 0.0);
+-        }
+-        if data.is_empty() {
+-            for v in target.iter_mut() {
+-                *v = 0.0;
+-            }
++        if self.spectrum_tick != 1 {
+             return;
+         }
+-
+-        const BANDS: usize = 64;
+-        static BAND_LIMITS: std::sync::OnceLock<[f32; BANDS + 1]> = std::sync::OnceLock::new();
+-        let limits = BAND_LIMITS.get_or_init(|| {
+-            let mut array = [0.0; BANDS + 1];
+-            for (i, limit) in array.iter_mut().enumerate() {
+-                *limit = (i as f32 / BANDS as f32).powf(1.5);
+-            }
+-            array
+-        });
+-
+-        for (band_idx, band_val) in target.iter_mut().enumerate() {
+-            let start = limits[band_idx] * data.len() as f32;
+-            let end = limits[band_idx + 1] * data.len() as f32;
+-            let start = start as usize;
+-            let end = (end as usize).min(data.len());
+-            if start >= end {
+-                *band_val *= 0.85;
+-                continue;
+-            }
+-            let mut sum = 0.0_f32;
+-            for sample in &data[start..end] {
+-                sum += sample * sample;
+-            }
+-            let rms = (sum / (end - start) as f32).sqrt();
+-            let db = if rms > 1e-10 {
+-                20.0 * rms.log10()
++        #[cfg(feature = "noise-suppression")]
++        if let Some(analyzer) = &mut self.spectrum_analyzer {
++            let target = if is_raw {
++                &mut self.raw_spectrum
+             } else {
+-                -100.0
++                &mut self.processed_spectrum
+             };
+-            let normalized = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+-            if normalized > *band_val {
+-                *band_val = normalized;
+-            } else {
+-                *band_val = *band_val * 0.85 + normalized * 0.15;
+-            }
+-        }
++            analyzer.analyze(data, target);
++        }
++        #[cfg(not(feature = "noise-suppression"))]
++        let _ = (data, is_raw);
+     }
+ }
+ 
+@@ -2096,11 +2114,13 @@
+     #[test]
+     fn dsp_processor_chain_smoke() {
+         // Full chain: AEC → PureVox NS through the public DspProcessor API.
+-        let mut settings = AudioDspSettings::default();
+-        settings.ns_enabled = true;
+-        settings.ns_type = "PureVox".to_string();
+-        settings.ns_intensity = 100.0;
+-        settings.aec_enabled = true;
++        let settings = AudioDspSettings {
++            ns_enabled: true,
++            ns_type: "PureVox".to_string(),
++            ns_intensity: 100.0,
++            aec_enabled: true,
++            ..Default::default()
++        };
+         let settings = Arc::new(RwLock::new(settings));
+         let mut dsp = DspProcessor::new(settings, None);
+ 
+@@ -2127,3 +2147,42 @@
+         );
+     }
+ }
++
++#[cfg(all(test, feature = "noise-suppression"))]
++mod spectrum_tests {
++    use super::*;
++
++    #[test]
++    fn spectrum_is_opt_in_and_tracks_frequency_without_changing_audio() {
++        let settings = Arc::new(RwLock::new(AudioDspSettings {
++            gain: 6.0,
++            ..Default::default()
++        }));
++        let mut plain = DspProcessor::new(Arc::clone(&settings), None);
++        let mut monitored = DspProcessor::new(settings, None);
++        assert!(plain.spectrum_analyzer.is_none());
++        monitored.set_spectrum_enabled(true);
++        let tone: Vec<f32> = (0..480)
++            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin() * 0.05)
++            .collect();
++        for _ in 0..12 {
++            let mut a = tone.clone();
++            let mut b = tone.clone();
++            plain.process(&mut a, 1, 0.0);
++            monitored.process(&mut b, 1, 0.0);
++            assert_eq!(a, b);
++        }
++        let (raw, processed) = monitored.get_spectrums();
++        let peak = raw
++            .iter()
++            .enumerate()
++            .max_by(|a, b| a.1.total_cmp(b.1))
++            .unwrap()
++            .0;
++        assert!((30..=40).contains(&peak), "1 kHz peak at {peak}");
++        assert!(processed[peak] > raw[peak]);
++        monitored.set_spectrum_enabled(false);
++        assert!(monitored.spectrum_analyzer.is_none());
++        assert!(monitored.get_spectrums().0.iter().all(|v| *v == 0.0));
++    }
++}
 --- a/crates/micyou-infer/src/lib.rs
 +++ b/crates/micyou-infer/src/lib.rs
 @@ -48,6 +48,19 @@
@@ -354,3 +608,123 @@
  use std::fmt;
  
  mod ops;
+--- a/crates/micyou-infer/src/ops.rs
++++ b/crates/micyou-infer/src/ops.rs
+@@ -396,9 +396,7 @@
+             for kk in 0..k {
+                 let av = arow[kk];
+                 let brow = &bbase[kk * n..(kk + 1) * n];
+-                for j in 0..n {
+-                    orow[j] += av * brow[j];
+-                }
++                axpy(orow, brow, av);
+             }
+         }
+         if nb > 0 {
+@@ -501,9 +499,7 @@
+                         for ci in 0..cpg {
+                             let wv = wg[mi * cpg + ci];
+                             let xrow = &xg[ci * hw_in..(ci + 1) * hw_in];
+-                            for p in 0..hw_out {
+-                                orow[p] += wv * xrow[p];
+-                            }
++                            axpy(orow, &xrow[..hw_out], wv);
+                         }
+                     }
+                 }
+@@ -753,9 +749,7 @@
+                 for i in 0..batch {
+                     let xv = xb[i * in_dim + kk];
+                     let prow = &mut pb[i * h3..(i + 1) * h3];
+-                    for j in 0..h3 {
+-                        prow[j] += xv * wrow[j];
+-                    }
++                    axpy(prow, wrow, xv);
+                 }
+             }
+         }
+@@ -784,9 +778,7 @@
+                 for i in 0..batch {
+                     let sv = state_s[i * h + kk];
+                     let orow = &mut rproj_s[i * h3..(i + 1) * h3];
+-                    for j in 0..h3 {
+-                        orow[j] += sv * wrow[j];
+-                    }
++                    axpy(orow, wrow, sv);
+                 }
+             }
+             // gates (elementwise passes — vectorize; rounding order matches
+@@ -1508,6 +1500,50 @@
+ 
+ // ─── AVX2+FMA runtime dispatch ─────────────────────────────────────────────
+ //
++// Use baseline SIMD on x86-64 and NEON-enabled ARM64 targets. Vectorize rows
++// without changing reduction order or using fused multiply-add: recurrent
++// models retain the scalar rounding contract. No extra model/runtime/thread
++// pool is loaded alongside local ASR.
++#[inline(always)]
++fn axpy(output: &mut [f32], input: &[f32], scale: f32) {
++    assert_eq!(output.len(), input.len());
++    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
++    let offset = unsafe {
++        let mut offset = 0;
++        use std::arch::aarch64::{vaddq_f32, vld1q_f32, vmulq_n_f32, vst1q_f32};
++        while offset + 4 <= output.len() {
++            let value = vmulq_n_f32(vld1q_f32(input.as_ptr().add(offset)), scale);
++            let sum = vaddq_f32(vld1q_f32(output.as_ptr().add(offset)), value);
++            vst1q_f32(output.as_mut_ptr().add(offset), sum);
++            offset += 4;
++        }
++        offset
++    };
++    #[cfg(target_arch = "x86_64")]
++    let offset = unsafe {
++        // SSE2 is part of the x86-64 baseline. Unaligned loads/stores support
++        // every tensor row; no AVX CPU requirement or FMA rounding changes.
++        use std::arch::x86_64::{_mm_add_ps, _mm_loadu_ps, _mm_mul_ps, _mm_set1_ps, _mm_storeu_ps};
++        let factor = _mm_set1_ps(scale);
++        let mut offset = 0;
++        while offset + 4 <= output.len() {
++            let value = _mm_mul_ps(_mm_loadu_ps(input.as_ptr().add(offset)), factor);
++            let sum = _mm_add_ps(_mm_loadu_ps(output.as_ptr().add(offset)), value);
++            _mm_storeu_ps(output.as_mut_ptr().add(offset), sum);
++            offset += 4;
++        }
++        offset
++    };
++    #[cfg(not(any(
++        target_arch = "x86_64",
++        all(target_arch = "aarch64", target_feature = "neon")
++    )))]
++    let offset = 0;
++    for (dst, src) in output[offset..].iter_mut().zip(&input[offset..]) {
++        *dst += scale * src;
++    }
++}
++
+ // The workspace builds for baseline x86-64 (SSE2) so the shipped binaries
+ // run everywhere; ONNX Runtime's MLAS gets its speed from runtime CPUID
+ // dispatch to AVX kernels. We mirror that: each hot kernel body is compiled
+@@ -1755,3 +1791,22 @@
+ ) {
+     layer_norm_impl(xp, xsh, scale, bias, op_, axis, eps)
+ }
++
++#[cfg(test)]
++mod projection_tests {
++    #[test]
++    fn projections_keep_scalar_rounding_and_handle_vector_tails() {
++        for size in [0, 1, 3, 4, 5, 17, 192, 257] {
++            let input: Vec<f32> = (0..size).map(|i| (i as f32 * 0.7).sin()).collect();
++            let mut actual = vec![0.17; size];
++            let mut expected = actual.clone();
++            for scale in [0.0, -0.37, 0.81, 1e-12] {
++                for (dst, src) in expected.iter_mut().zip(&input) {
++                    *dst += scale * src;
++                }
++                super::axpy(&mut actual, &input, scale);
++            }
++            assert_eq!(actual, expected, "projection width {size}");
++        }
++    }
++}
