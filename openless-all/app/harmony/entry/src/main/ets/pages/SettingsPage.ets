@@ -343,12 +343,20 @@ export struct SettingsPage {
           title: '转写引擎',
           value: Labels.provider(this.prefs.activeAsrProvider),
           onTap: () => {
-            this.asrOpen = !this.asrOpen;
+            this.asrOpen = true;
           }
         })
-        if (this.asrOpen) {
-          this.providerList(this.asrProviders, this.prefs.activeAsrProvider ?? '', true)
-        }
+        Row()
+          .width(0)
+          .height(0)
+          .bindSheet($$this.asrOpen, this.asrSheet, {
+            height: SheetSize.MEDIUM,
+            dragBar: true,
+            showClose: true,
+            onDisappear: () => {
+              this.asrOpen = false;
+            }
+          })
         InfoRow({
           label: '处理管线',
           value: Labels.pipeline(this.prefs.pipelineMode),
@@ -369,6 +377,29 @@ export struct SettingsPage {
     }
   }
 
+  /** Spec half-modal: pick from the bottom instead of expanding the card. */
+  @Builder
+  asrSheet() {
+    Column({ space: S.md }) {
+      SectionHeader({ title: '选择转写引擎', hint: '当前：' + Labels.provider(this.prefs.activeAsrProvider) })
+      this.providerList(this.asrProviders, this.prefs.activeAsrProvider ?? '', true)
+    }
+    .width('100%')
+    .padding({ left: S.md, right: S.md, top: S.sm, bottom: S.xl })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  llmSheet() {
+    Column({ space: S.md }) {
+      SectionHeader({ title: '选择润色模型', hint: '当前：' + Labels.provider(this.prefs.activeLlmProvider) })
+      this.providerList(this.llmProviders, this.prefs.activeLlmProvider ?? '', false)
+    }
+    .width('100%')
+    .padding({ left: S.md, right: S.md, top: S.sm, bottom: S.xl })
+    .alignItems(HorizontalAlign.Start)
+  }
+
   @Builder
   polishCard() {
     Card() {
@@ -379,12 +410,20 @@ export struct SettingsPage {
           title: '润色模型',
           value: Labels.provider(this.prefs.activeLlmProvider),
           onTap: () => {
-            this.llmOpen = !this.llmOpen;
+            this.llmOpen = true;
           }
         })
-        if (this.llmOpen) {
-          this.providerList(this.llmProviders, this.prefs.activeLlmProvider ?? '', false)
-        }
+        Row()
+          .width(0)
+          .height(0)
+          .bindSheet($$this.llmOpen, this.llmSheet, {
+            height: SheetSize.MEDIUM,
+            dragBar: true,
+            showClose: true,
+            onDisappear: () => {
+              this.llmOpen = false;
+            }
+          })
         ToggleRow({
           label: '深度思考',
           hint: '更慢，但长句改写更稳',
