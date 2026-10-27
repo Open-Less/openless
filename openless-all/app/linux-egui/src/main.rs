@@ -66,7 +66,11 @@ mod linux_app {
         },
         HotkeyError(BackendError),
         /// 关于页的更新检测结果（Linux 只检测 + 跳转，不安装）。
-        Update(Result<Option<openless_linux_egui::update_check::UpdateCheck>, String>),
+        Update {
+            /// 后台自动检查（找到新版本时给一条桌面通知，手动检查不打扰）。
+            auto: bool,
+            result: Result<Option<openless_linux_egui::update_check::UpdateCheck>, String>,
+        },
         ProviderSaved {
             editor: Box<ProviderEditor>,
             result: Result<(), String>,
@@ -4589,8 +4593,32 @@ mod linux_app {
                             );
                         }
                     }
-                    UiResult::Update(result) => {
+                    UiResult::Update { auto, result } => {
                         self.last_update_check = Some(std::time::Instant::now());
+                        if auto {
+                            if let Ok(Some(check)) = &result {
+                                if check.newer {
+                                    let message = openless_linux_egui::fmt_l10n(
+                                        self.lang,
+                                        "settings.about.update_available",
+                                        &[&check.latest.version],
+                                    );
+                                    self.status = message.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(error) = notify(Notification {
+                                            summary: "OpenLess",
+                                            body: &message,
+                                            icon: "openless",
+                                            timeout_ms: 0,
+                                        }) {
+                                            log::warn!(
+                                                "OpenLess update notification failed: {error}"
+                                            );
+                                        }
+                                    });
+                                }
+                            }
+                        }
                         self.frontend_vm.settings.update_state = match result {
                             Ok(Some(check)) if check.newer => {
                                 frontend::view_model::UpdateState::Available {
@@ -5351,6 +5379,11 @@ mod linux_app {
         /// 检查更新：Linux 只判断「有没有更新的发布」，不下载安装
         /// （deb/rpm 无法自替换，安装交给用户点发布页）。
         fn check_updates(&mut self) {
+            self.check_updates_with(false);
+        }
+
+        /// `auto = true`：后台定时检查，发现新版本时额外发一条桌面通知。
+        fn check_updates_with(&mut self, auto: bool) {
             let channel = match self.backend() {
                 Some(backend) => {
                     let prefs = backend.get_preferences();
@@ -5366,7 +5399,7 @@ mod linux_app {
             let tx = self.tx.clone();
             self.tokio.spawn(async move {
                 let result = openless_linux_egui::update_check::check(channel).await;
-                let _ = tx.send(UiResult::Update(result));
+                let _ = tx.send(UiResult::Update { auto, result });
             });
         }
 
@@ -5397,7 +5430,7 @@ mod linux_app {
                             .last_update_check
                             .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(3600))
                     {
-                        self.check_updates();
+                        self.check_updates_with(true);
                     }
                 }
             }
