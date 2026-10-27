@@ -768,28 +768,10 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         },
     );
 
-    // 插入与剪贴板（Tauri：可折叠分组，含流式输入）
-    card_group(
-        ui,
-        tr_l10n(lang, "settings.recording.insert_group_title"),
-        |ui| {
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.recording.restore_clipboard_label"),
-                tr_l10n(lang, "settings.recording.restore_clipboard_desc"),
-                vm.settings.restore_clipboard,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::RestoreClipboard,
-                    ));
-                },
-            );
-            // 「流式插入」在 Linux 上是**假的**：Core 会先问
-            // `TextInsertionSession::supports_streaming()`，而 fcitx5 的插入会话
-            // 只实现「整段提交」（`CommitDictationTarget`），没有增量替换通道。
-            // 画一个点了没反应的开关不算对齐 —— 等真的实现增量替换再放出来。
-        },
-    );
+    // 插入分组在 Linux 上没有可画的项，所以整组不画：
+    // - 剪贴板写入/恢复：用户决定 Linux 不做
+    // - 流式插入：Core 先问 `TextInsertionSession::supports_streaming()`，
+    //   fcitx5 的插入会话只实现整段提交，没有增量替换通道
 
     // 启动（Tauri `RecordingInputSection` 的 startup 折叠组，顺序一致：
     // 开机自启 → 启动时静默运行 → 自动检查更新）

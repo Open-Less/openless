@@ -239,7 +239,7 @@ impl LinuxBackendBuilder {
         });
         let text_inserter = self
             .text_inserter
-            .unwrap_or_else(|| Arc::new(Fcitx5TextInserter::new(true)) as Arc<dyn TextInserter>);
+            .unwrap_or_else(|| Arc::new(Fcitx5TextInserter::new(false)) as Arc<dyn TextInserter>);
         let (credential_store, default_settings_runtime): (
             Arc<dyn CredentialStore>,
             Arc<dyn SettingsRuntime>,

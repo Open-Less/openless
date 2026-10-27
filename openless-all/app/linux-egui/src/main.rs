@@ -3792,6 +3792,29 @@ mod linux_app {
                 BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
                     self.load_library()
                 }
+                BackendEventKind::MicrophoneDevicesChanged => {
+                    // 麦克风热插拔：重扫设备列表，否则设置页的下拉会停在旧设备上。
+                    log::info!("[audio] microphone devices changed; reloading the list");
+                    self.load_microphones();
+                }
+                BackendEventKind::HotkeyStatusChanged(status) => {
+                    // 热键注册状态（fcitx5 插件重载/注册失败等）：失败时把原因亮出来，
+                    // 并强制下一帧重探隐私页的探针状态，避免页面继续显示「已就绪」。
+                    self.linux_access_last_check = None;
+                    if matches!(
+                        status.state,
+                        openless_core::shared_types::HotkeyStatusState::Failed
+                    ) {
+                        let detail = status
+                            .message
+                            .clone()
+                            .or_else(|| status.last_error.as_ref().map(|error| format!("{error:?}")))
+                            .unwrap_or_else(|| "hotkey registration failed".to_string());
+                        log::warn!("[hotkey] status failed: {detail}");
+                        self.status =
+                            fmt_l10n(self.lang, "status.hotkey_failed", &[&detail]);
+                    }
+                }
                 BackendEventKind::InsertFallback(fallback) => {
                     // 插入没成功（例如目标窗口拿不到焦点）：Core 已经兜底把文字
                     // 放进了剪贴板，但用户不看剪贴板就不知道 —— 必须显式说一声。

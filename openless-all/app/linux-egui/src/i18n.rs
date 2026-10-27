@@ -7968,13 +7968,23 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "status.hotkey_failed",
+        text: row(
+            "热键注册失败：{}",
+            "熱鍵註冊失敗：{}",
+            "Hotkey registration failed: {}",
+            "ホットキーの登録に失敗しました: {}",
+            "단축키 등록에 실패했습니다: {}",
+        ),
+    },
+    Msg {
         key: "status.insert_fallback",
         text: row(
-            "插入失败，文字已复制到剪贴板（Ctrl+V 粘贴）",
-            "插入失敗，文字已複製到剪貼簿（Ctrl+V 貼上）",
-            "Insertion failed; the text is on your clipboard (press Ctrl+V)",
-            "挿入に失敗しました。テキストはクリップボードにあります（Ctrl+V）",
-            "삽입에 실패했습니다. 텍스트가 클립보드에 있습니다(Ctrl+V)",
+            "插入失败：请确认焦点在可输入的位置后重试（文字仍保留在历史里）",
+            "插入失敗：請確認焦點在可輸入的位置後重試（文字仍保留在歷史裡）",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+            "挿入に失敗しました。入力可能な場所にフォーカスして再試行してください（テキストは履歴に残ります）",
+            "삽입에 실패했습니다. 입력 가능한 곳에 포커스를 두고 다시 시도하세요(텍스트는 기록에 남아 있습니다)",
         ),
     },
     Msg {

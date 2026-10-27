@@ -51,6 +51,8 @@ const KEEP_EGUI = new Set([
   'settings.about.update_available',
   // Linux 用桌面通知 + 状态行代替 Tauri 的插入兜底卡片，Tauri 没有同句文案。
   'status.insert_fallback',
+  // Linux 把热键注册失败的原因直接写进状态行（Tauri 是弹窗）。
+  'status.hotkey_failed',
 ]);
 
 function placeholderCount(text) {
