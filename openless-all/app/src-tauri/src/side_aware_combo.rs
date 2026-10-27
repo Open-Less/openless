@@ -359,7 +359,7 @@ pub mod platform {
         VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
         VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
         VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RCONTROL, VK_RETURN, VK_RIGHT,
-        VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
+        VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SPACE, VK_TAB, VK_UP,
     };
 
     pub fn dispatch_vk(vk_code: u32, pressed: bool) -> bool {
@@ -398,6 +398,7 @@ pub mod platform {
         }
         let named = match vk_code {
             x if x == VK_SPACE.0 as u32 => "Space",
+            x if x == VK_SCROLL.0 as u32 => "ScrollLock",
             x if x == VK_RETURN.0 as u32 => "Enter",
             x if x == VK_TAB.0 as u32 => "Tab",
             x if x == VK_BACK.0 as u32 => "Backspace",
@@ -444,6 +445,51 @@ pub mod platform {
             _ => return None,
         };
         Some(named.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scroll_lock_maps_to_the_canonical_primary() {
+            assert_eq!(
+                primary_from_vk(VK_SCROLL.0 as u32).as_deref(),
+                Some("ScrollLock")
+            );
+        }
+
+        #[test]
+        fn scroll_lock_side_combo_pairs_edges_and_ignores_repeat() {
+            let primary = primary_from_vk(VK_SCROLL.0 as u32).unwrap();
+            let mut state = SideAwareComboState::new(ShortcutBinding {
+                primary: "ScrollLock".into(),
+                modifiers: vec!["ctrl-right".into()],
+            });
+            state.set_side(SideModifier::CtrlLeft, true);
+            assert_eq!(state.on_primary(&primary, true), None);
+            state.set_side(SideModifier::CtrlLeft, false);
+            state.set_side(SideModifier::CtrlRight, true);
+            let press_id = match state.on_primary(&primary, true) {
+                Some(HotkeyEvent::Pressed { press_id, .. }) => press_id,
+                other => panic!("expected ScrollLock Pressed, got {other:?}"),
+            };
+            assert_eq!(state.on_primary(&primary, true), None);
+            assert!(matches!(
+                state.on_primary(&primary, false),
+                Some(HotkeyEvent::Released { press_id: released_id, .. }) if released_id == press_id
+            ));
+            assert_eq!(state.on_primary(&primary, false), None);
+            assert!(matches!(
+                state.on_primary(&primary, true),
+                Some(HotkeyEvent::Pressed { .. })
+            ));
+            assert!(matches!(
+                state.on_modifier_release(SideModifier::CtrlRight),
+                Some(HotkeyEvent::Released { .. })
+            ));
+            assert_eq!(state.on_primary(&primary, false), None);
+        }
     }
 }
 

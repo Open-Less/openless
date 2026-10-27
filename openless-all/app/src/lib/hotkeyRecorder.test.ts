@@ -207,5 +207,25 @@ assertEqual(
   'Space',
   'Space code with Space key name',
 );
+for (const key of ['ScrollLock', 'Unidentified', '', 'x', 'F1', ' ']) {
+  assertEqual(
+    primaryFromKeyboardEvent({ code: 'ScrollLock', key }),
+    'ScrollLock',
+    'physical ScrollLock uses its canonical primary',
+  );
+}
+assertEqual(
+  primaryFromKeyboardEvent({ code: '', key: 'ScrollLock' }),
+  'ScrollLock',
+  'named ScrollLock fallback',
+);
+{
+  let result = apply(undefined, 'ScrollLock', true);
+  result = apply(result.state, 'ScrollLock', true);
+  assertEqual(result.commitCodes, null, 'ScrollLock repeat does not commit early');
+  result = apply(result.state, 'ScrollLock', false);
+  assertDeepEqual(result.commitCodes, ['ScrollLock'], 'ScrollLock commits once on release');
+  assertDeepEqual(result.state, createHotkeyRecorderState(), 'ScrollLock recording resets');
+}
 assertEqual(primaryFromKeyboardEvent({ code: 'KeyA', key: 'a' }), 'A', 'letter from code');
 assertEqual(primaryFromKeyboardEvent({ code: 'Digit1', key: '!' }), '1', 'digit from code');
