@@ -28,6 +28,7 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 | `linux` | Linux Core/egui 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-egui` 的闭包。Linux 宿主是原生 egui，不读前端 `dist/` |
 | `harmony` | 鸿蒙 ArkTS 契约、Rust host、HAP | 改动能到达 `openless-harmony-host` 的闭包，或动了它要打包的前端 bundle |
 | `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`public/**`、`e2e/**`、`assets/**`、样式与 vite/playwright 配置 |
+| `capsule` | 胶囊 crates（macOS + Windows 双 runner） | 拥有改动文件的包是 `openless-capsule` / `openless-native-capsule`。它们的 `ui,host` feature 组合不在别处构建，所以保留独立 job，但常见 PR 不再为它付出两台 runner |
 | `ios-device` | iOS `device-build`（Xcode/Rime 工程层） | **只**看 `openless-all/ios/**`。共享 crate 已经由 iOS 的 `test` job 编译校验过，工程层改动才需要 Xcode |
 
 契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
@@ -84,7 +85,8 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 - `playwright` 与 `mobile-rime` 使用 restore/save 拆分；`swatinem/rust-cache` 用 `save-if` 达到同样效果。
 - `build-linux-egui` 保留 PR 内自写并开 `cache-on-failure: true`：失败的运行也会把依赖缓存存下来，下一次迭代仍然热；同时关掉 dev/test debug info，缓存更小、链接更快。
 - key 结构为 `v0-rust-<job>-<os>-<环境哈希>-<lockfile哈希>`：环境哈希含工具链与 `CARGO_PROFILE_*`，所以 stable / MSRV / release 天然分开，不要用跨平台 `shared-key` 混合。
-- 原生胶囊的三个命令（`cargo check -p openless-native-capsule`、`cargo test -p openless-capsule`、clippy）现在跑在 `cross-platform` 里：那个 job 本来就为 `generate_context!` 构建同一个 `openless-all/app` workspace target 目录，所以增量编译几乎是免费的，不再需要独立的 macOS + Windows 双 job，也省掉 `native-capsule` 这个独立缓存前缀。它原本还经历过一次 `pull_request`-only workflow 阶段：缓存写在 `refs/pull/<n>/merge`，这个作用域此后再不会被恢复，PR 永远冷编译——这是“缓存只能由基线分支写”规则的来源。
+- 原生胶囊（`native-capsule` job）原本是一个 `pull_request`-only workflow：缓存写在 `refs/pull/<n>/merge`，这个作用域此后再不会被恢复，而 beta 上没有 job 产出同 key 的树，所以 PR 永远冷编译。现在它在 `ci.yml` 里，用 `shared-key: native-capsule` + beta 门控的 `save-if`，并且由 `capsule` 区域门控——常见 PR 完全不会为它拉起 runner。
+  曾试过把它并进 `cross-platform`（省两台 VM），实测否决：run 40510306688 里那三个命令在 Windows 关键路径上花了 43+53+21 s，比它省下的两台 runner 更贵。要合并先要确认那套 `ui,host` feature 在桌面 job 的缓存里是热的。
 - `Cargo.lock` 变化时精确键失效，但 `restore-keys` 前缀回退会拿到同前缀的旧缓存，所以“锁变了”不等于“全冷”——前提是那份没被淘汰，这正是要守预算的原因。
 
 ## 4. 维护

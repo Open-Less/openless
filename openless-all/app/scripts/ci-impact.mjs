@@ -39,7 +39,7 @@ const REPO_ROOT = resolve(SCRIPT_DIR, '../../..');
 /** Everything runs. */
 const ALL = Symbol('all');
 
-const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'ios-device'];
+const AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule', 'ios-device'];
 
 /** Cargo workspaces that describe this repository's own packages. */
 const WORKSPACES = ['openless-all/app/Cargo.toml', 'openless-all/app/src-tauri/Cargo.toml'];
@@ -61,6 +61,12 @@ const PLATFORM_ROOTS = {
   harmony: ['openless-harmony-host'],
   ios: ['openless-core'],
 };
+
+/**
+ * Capsule crates: compiled into the desktop shells and covered by their own
+ * macOS + Windows runners, which only earn their keep when these change.
+ */
+const CAPSULE_PACKAGES = new Set(['openless-capsule', 'openless-native-capsule']);
 
 /** Rust target_os names used when evaluating `cfg(...)` guards. */
 const PLATFORM_TARGET_OS = {
@@ -255,6 +261,7 @@ function classify(file, context) {
 
   const owner = ownerPackage(file, context);
   if (owner) {
+    if (CAPSULE_PACKAGES.has(owner)) tags.add('capsule');
     for (const [platform, packages] of context.closures) {
       if (packages.has(owner)) tags.add(platform);
     }
@@ -303,6 +310,8 @@ function decide(area, context, files) {
       return reached.has('frontend');
     case 'android':
       return reached.has('android');
+    case 'capsule':
+      return reached.has('capsule');
     case 'ios-device':
       return reached.has('ios-device');
     default:

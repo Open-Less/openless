@@ -60,7 +60,16 @@ const reset = () => {
 };
 
 try {
-  const ALL_AREAS = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'ios-device'];
+  const ALL_AREAS = [
+    'tauri',
+    'msrv',
+    'linux',
+    'harmony',
+    'frontend',
+    'android',
+    'capsule',
+    'ios-device',
+  ];
   const every = (verdict) => Object.fromEntries(ALL_AREAS.map((area) => [area, verdict]));
   const expect = (label, expectations) => {
     for (const [area, expected] of Object.entries(expectations)) {
@@ -130,12 +139,19 @@ try {
     linux: 'false',
     harmony: 'false',
     android: 'true',
+    capsule: 'false',
     'ios-device': 'false',
   });
   reset();
 
   commit({ 'openless-all/app/native-capsule/src/lib.rs': 'pub fn x() {}\n' }, 'capsule source');
-  expect('capsule source', { tauri: 'true', msrv: 'true', linux: 'false', harmony: 'false' });
+  expect('capsule source', {
+    tauri: 'true',
+    msrv: 'true',
+    capsule: 'true',
+    linux: 'false',
+    harmony: 'false',
+  });
   reset();
 
   // The rendered bundle is embedded by every shell that paints it; the Linux
@@ -218,7 +234,7 @@ const reusable = readFileSync(
   ),
   'utf8',
 );
-const areas = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android'];
+const areas = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -226,7 +242,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv linux harmony frontend android; do/.test(workflow),
+  /for area in tauri msrv linux harmony frontend android capsule; do/.test(workflow),
   true,
 );
 check(
@@ -273,6 +289,11 @@ check(
 check(
   'android gate is fail-open',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.android != 'false'/.test(workflow),
+  true,
+);
+check(
+  'capsule gate is fail-open',
+  workflow.includes("needs.changes.outputs.capsule != 'false'"),
   true,
 );
 check(
