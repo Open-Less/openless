@@ -1,5 +1,6 @@
 import { C, Lh, R, S, T, cardShadow } from '../common/Tokens';
 import { symbolOf } from './Icons';
+import { Glass } from './Material';
 
 /**
  * Shared surfaces for the native pages.
@@ -43,6 +44,7 @@ export struct Card {
     .alignItems(HorizontalAlign.Start)
     .padding(this.inset)
     .backgroundColor(C.glass())
+    .systemMaterial(Glass.surface())
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .borderRadius(R.lg)
     .border({ width: 0.5, color: C.border() })
