@@ -2,7 +2,6 @@ import type { AudioDspConfig } from './types';
 
 export const defaultAudioDsp: AudioDspConfig = {
   aecMode: 'off',
-  outputBufferMs: 300,
   androidAecEnabled: false,
   androidNoiseSuppressionEnabled: false,
   androidAgcEnabled: false,

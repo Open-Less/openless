@@ -11,8 +11,6 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
         ui.add_enabled_ui(enabled, |ui| {
         ui.small(label("settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording"));
         ui.add_space(8.0);
-        // 回声消除与输出缓冲：MicYou 的链路里 AEC 在最前，缓冲区是整条链的全局
-        // 参数（设备回调抖动大时调大，代价是延迟）。
         ui.strong(label("settings.audioDsp.echoStage"));
         // 三选一：轻量 NLMS 省 CPU（弱机可用），aec7 模型抑制更强但约 3 倍开销。
         let aec_labels = [
@@ -29,8 +27,6 @@ pub fn settings(ui: &mut egui::Ui, config: &mut AudioDspConfig, lang: Lang, enab
         if config.aec_mode == AecMode::Model {
             ui.small(label("settings.audioDsp.aecModelCost"));
         }
-        slider(ui, label("settings.audioDsp.Output_buffer_ms"), &mut config.output_buffer_ms, 100..=1200, " ms");
-        ui.small(label("settings.audioDsp.A_larger_buffer_survives_jitter_but_adds_latency"));
         ui.separator();
         ui.strong(label("settings.audioDsp.noiseStage"));
         egui::ComboBox::from_id_salt("audio-dsp-algorithm")

@@ -351,8 +351,6 @@ export type AudioDspStage =
 export interface AudioDspConfig {
   /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
   aecMode: 'off' | 'light' | 'model';
-  /** 输出环形缓冲余量（100..1200 ms）。 */
-  outputBufferMs: number;
   androidAecEnabled?: boolean;
   androidNoiseSuppressionEnabled?: boolean;
   androidAgcEnabled?: boolean;

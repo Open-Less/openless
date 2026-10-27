@@ -108,7 +108,6 @@ export function AudioDspSettings({
           'aecModelHint',
           'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
         )}
-      {slider('outputBufferMs', label('buffer', 'Output buffer'), 100, 1200, ' ms')}
       {isAndroid() && expanded && <AndroidAudioEffects value={draft} onChange={save} />}
       <SettingRow label={stageLabels.noiseReduction}>
         <SelectLite

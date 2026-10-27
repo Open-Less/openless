@@ -187,6 +187,11 @@ struct SettingsView: View {
 }
 
 private struct NativeAudioDsp: Codable {
+  // Keep shared fields round-trippable even though iOS does not expose every host-specific control.
+  var aecMode = "off"
+  var androidAecEnabled = false
+  var androidNoiseSuppressionEnabled = false
+  var androidAgcEnabled = false
   var noiseReduction = "rnnoise"
   var noiseStrength = 80
   var gainDb = 0

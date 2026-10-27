@@ -225,20 +225,6 @@ pub const CATALOG: &[Msg] = &[
             "스피커 사용 시 되먹임을 줄입니다. 참조 신호가 없으면 효과가 없으므로 헤드폰이면 꺼 두세요.",
         ),
     },
-    Msg {
-        key: "settings.audioDsp.Output_buffer_ms",
-        text: row("输出缓冲区", "輸出緩衝區", "Output buffer", "出力バッファ", "출력 버퍼"),
-    },
-    Msg {
-        key: "settings.audioDsp.A_larger_buffer_survives_jitter_but_adds_latency",
-        text: row(
-            "调大可吸收声卡回调抖动，代价是端到端延迟增加。默认 300 ms。",
-            "調大可吸收音效卡回呼抖動，代價是端到端延遲增加。預設 300 ms。",
-            "A larger buffer absorbs sound-card callback jitter at the cost of end-to-end latency. Default 300 ms.",
-            "大きくするとサウンドカードのコールバック揺らぎに強くなりますが、遅延が増えます。既定は 300 ms です。",
-            "크게 하면 사운드 카드 콜백 지터를 흡수하지만 지연이 늘어납니다. 기본값은 300 ms입니다.",
-        ),
-    },
     Msg { key: "settings.audioDsp.noiseStage", text: row("降噪", "降噪", "Noise reduction", "ノイズ低減", "잡음 감소") },
     Msg { key: "settings.audioDsp.roomStage", text: row("音色与房间", "音色與房間", "Tone and room", "音色と残響", "음색과 잔향") },
     Msg { key: "settings.audioDsp.combStage", text: row("梳状滤波（简易去混响）", "梳狀濾波（簡易去混響）", "Comb filter (simple dereverb)", "コムフィルター（簡易デリバーブ）", "콤 필터(간이 디버브)") },

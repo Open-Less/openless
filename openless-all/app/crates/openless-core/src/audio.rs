@@ -165,7 +165,8 @@ pub struct AudioProcessor {
     light_aec: Option<LightEchoCanceller>,
     /// 轻量路径把参考重采样到输出采样率（16 kHz 单声道）。
     light_reference_resampler: Option<crate::audio_dsp::SpeechResampler>,
-    light_reference_rate: Option<u32>,
+    light_reference_rate: Option<(u32, u32)>,
+    light_reference_pending: Vec<f32>,
     finished: bool,
     monitoring: bool,
 }
@@ -189,6 +190,7 @@ impl AudioProcessor {
                 .then(LightEchoCanceller::default),
             light_reference_resampler: None,
             light_reference_rate: None,
+            light_reference_pending: Vec::new(),
             finished: false,
             monitoring: false,
         }
@@ -202,27 +204,59 @@ impl AudioProcessor {
         &mut self,
         queue: &FarEndQueue,
         rate: u32,
+        needed_frames: usize,
     ) -> Option<Vec<f32>> {
-        if queue.is_empty() {
-            return None;
-        }
-        let frames = queue.drain();
-        if frames.is_empty() {
-            return None;
-        }
-        if self.light_reference_rate != Some(rate) {
-            self.light_reference_rate = Some(rate);
-            self.light_reference_resampler =
-                Some(crate::audio_dsp::SpeechResampler::new(rate, rate));
-        }
-        let mut reference = Vec::new();
-        for frame in frames {
+        for frame in queue.drain() {
+            let key = (frame.rate, rate);
+            if self.light_reference_rate != Some(key) {
+                self.light_reference_rate = Some(key);
+                self.light_reference_resampler = Some(
+                    crate::audio_dsp::SpeechResampler::new(frame.rate, rate),
+                );
+            }
             let mono = downmix_to_mono(&frame.samples, frame.channels);
             if let Some(resampler) = self.light_reference_resampler.as_mut() {
-                resampler.push_into(&mono, false, &mut reference);
+                resampler.push_into(&mono, false, &mut self.light_reference_pending);
             }
         }
-        (!reference.is_empty()).then_some(reference)
+        if self.light_reference_pending.is_empty() {
+            return None;
+        }
+        let take = needed_frames.min(self.light_reference_pending.len());
+        Some(self.light_reference_pending.drain(..take).collect())
+    }
+
+    fn apply_light_aec(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        reference: &[f32],
+    ) -> Vec<f32> {
+        if channels <= 1 {
+            return self
+                .light_aec
+                .as_mut()
+                .expect("light AEC is enabled")
+                .process(input, reference);
+        }
+        let frame_count = input.len() / channels;
+        let mono = input
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
+            .collect::<Vec<_>>();
+        let clean = self
+            .light_aec
+            .as_mut()
+            .expect("light AEC is enabled")
+            .process(&mono, reference);
+        let mut output = input.to_vec();
+        for frame in 0..frame_count {
+            let correction = clean[frame] - mono[frame];
+            for channel in 0..channels {
+                output[frame * channels + channel] += correction;
+            }
+        }
+        output
     }
 
     /// 会话结束时清掉抵消器状态，避免上一场的声学路径带到下一场。
@@ -232,6 +266,7 @@ impl AudioProcessor {
         }
         self.light_reference_resampler = None;
         self.light_reference_rate = None;
+        self.light_reference_pending.clear();
     }
 
     /// 接上扬声器回环参考队列。只有 AEC 打开且宿主真的采到了输出音频时才有意义；
@@ -292,12 +327,11 @@ impl AudioProcessor {
         // 链路一致（AEC 必须拿到尚未被其它处理改过的信号）。
         let mut cancelled: Option<Vec<f32>> = None;
         if self.light_aec.is_some() {
-            let reference = self
-                .far_end
-                .clone()
-                .and_then(|queue| self.light_reference_at(&queue, rate));
-            if let (Some(reference), Some(canceller)) = (reference, self.light_aec.as_mut()) {
-                cancelled = Some(canceller.process(input, &reference));
+            let needed_frames = input.len() / channels;
+            if let Some(queue) = self.far_end.clone() {
+                if let Some(reference) = self.light_reference_at(&queue, rate, needed_frames) {
+                    cancelled = Some(self.apply_light_aec(input, channels, &reference));
+                }
             }
         }
         let input = cancelled.as_deref().unwrap_or(input);
@@ -726,6 +760,45 @@ mod tests {
         assert!(normalizer.process(&[], 1, 48_000).is_none());
         assert!(normalizer.process(&[0.0], 0, 48_000).is_none());
         assert!(normalizer.process(&[0.0], 1, 0).is_none());
+    }
+
+    #[test]
+    fn light_aec_resamples_reference_and_preserves_backlog() {
+        let mut processor = AudioProcessor::new(AudioProcessingConfig {
+            dsp: crate::audio_dsp::AudioDspConfig {
+                aec_mode: crate::audio_dsp::AecMode::Light,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let queue = FarEndQueue::default();
+        queue.push(&vec![0.1; 480], 1, 16_000);
+        let first = processor.light_reference_at(&queue, 48_000, 480).unwrap();
+        assert_eq!(first.len(), 480);
+        assert!(!processor.light_reference_pending.is_empty());
+        let second = processor
+            .light_reference_at(&queue, 48_000, 480)
+            .unwrap();
+        assert!(!second.is_empty());
+    }
+
+    #[test]
+    fn light_aec_applies_one_mono_correction_to_all_input_channels() {
+        let mut processor = AudioProcessor::new(AudioProcessingConfig {
+            dsp: crate::audio_dsp::AudioDspConfig {
+                aec_mode: crate::audio_dsp::AecMode::Light,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        processor.light_aec.as_mut().unwrap().coefficients[0] = 1.0;
+        let input = [0.2, 0.4, 0.2, 0.4];
+        let reference = [0.1, 0.1];
+        let output = processor.apply_light_aec(&input, 2, &reference);
+        assert_eq!(output.len(), input.len());
+        assert_eq!(output[0] - output[1], input[0] - input[1]);
+        assert_eq!(output[2] - output[3], input[2] - input[3]);
+        assert!(output[0] < input[0]);
     }
 
     #[test]

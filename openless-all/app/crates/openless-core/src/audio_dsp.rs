@@ -76,9 +76,6 @@ pub struct AudioDspConfig {
     pub equalizer_enabled: bool,
     pub equalizer_preamp_db: i8,
     pub equalizer_bands_db: [i8; 10],
-    /// 输出环形缓冲的余量（毫秒）。设备回调抖动大时调大，端到端延迟会跟着变大。
-    /// MicYou 的范围是 100..=1200，默认 300。
-    pub output_buffer_ms: u16,
     /// 处理链路顺序，7 个阶段各一次。老版本 preferences 里存的是 6 个阶段（没有
     /// AEC），反序列化时把 AEC 前插补齐，不会因为数组长度变化而丢配置。
     #[serde(
@@ -159,7 +156,6 @@ impl Default for AudioDspConfig {
             equalizer_enabled: false,
             equalizer_preamp_db: 0,
             equalizer_bands_db: [0; 10],
-            output_buffer_ms: 300,
             // 与 MicYou 的默认链路一致：AEC 在最前，其后是降噪、去混响、均衡、
             // 增益、AGC、VAD。
             processing_order: [
@@ -189,7 +185,6 @@ impl AudioDspConfig {
         self.dereverb_level = self.dereverb_level.min(100);
         self.equalizer_preamp_db = self.equalizer_preamp_db.clamp(-20, 20);
         self.equalizer_bands_db = self.equalizer_bands_db.map(|gain| gain.clamp(-15, 15));
-        self.output_buffer_ms = self.output_buffer_ms.clamp(100, 1200);
         if self
             .processing_order
             .iter()
@@ -218,7 +213,6 @@ impl AudioDspConfig {
         let c = self.normalized();
         micyou_dsp::AudioDspSettings {
             aec_enabled: matches!(c.aec_mode, AecMode::Model),
-            output_buffer_ms: u32::from(c.output_buffer_ms),
             gain: c.gain_db as f32,
             ns_enabled: c.noise_reduction != NoiseReduction::Off && c.noise_strength > 0,
             ns_type: match c.noise_reduction {

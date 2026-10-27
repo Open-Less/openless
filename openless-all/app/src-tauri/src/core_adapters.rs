@@ -3101,10 +3101,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                 openless_core::DictationOutputTarget::QuickNote
                     | openless_core::DictationOutputTarget::Undecided
             );
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),
@@ -3710,10 +3707,7 @@ impl AudioRecorder for TauriAudioRecorder {
             );
             // Undecided Android captures use the permanent quick-note spool
             // until the terminal tap/gesture classifies the session.
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),

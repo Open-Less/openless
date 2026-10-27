@@ -1762,7 +1762,8 @@ impl Recorder {
         let archive_for_thread = archive_writer.clone();
         let raw_for_thread = raw_writer.clone();
         // AEC 的扬声器参考：与录音同生命周期，Drop 时停流。
-        let far_end = (processing.dsp.aec_mode != openless_core::AecMode::Off)
+        let far_end = (processing.enhancement_enabled
+            && processing.dsp.aec_mode != openless_core::AecMode::Off)
             .then(openless_core::FarEndQueue::default);
         let far_end_for_thread = far_end.clone();
         let raw_tap_slot_for_thread = raw_tap_slot.clone();

@@ -440,11 +440,17 @@ impl DictationContext {
     pub fn with_output_target(&self, target: DictationOutputTarget) -> Self {
         let mut next = self.clone();
         next.output_target = target;
+        let normal_archive_processed = self.normal_archive_successful_recording
+            && (self.recording.archive_processed || !self.recording.archive_raw);
+        let normal_archive_raw =
+            self.normal_archive_successful_recording && self.recording.archive_raw;
         match target {
             DictationOutputTarget::CloudNote => {
                 next.insertion.enabled = false;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = false;
+                next.recording.archive_processed = false;
+                next.recording.archive_raw = false;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::Qa => {
@@ -453,6 +459,8 @@ impl DictationContext {
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording =
                     self.normal_archive_successful_recording;
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::VoiceEdit => {
@@ -460,12 +468,15 @@ impl DictationContext {
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording =
                     self.normal_archive_successful_recording;
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::QuickNote => {
                 next.insertion.enabled = false;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = true;
+                next.recording.archive_processed = true;
                 next.recording.archive_required = true;
             }
             DictationOutputTarget::ForegroundApp => {
@@ -475,12 +486,15 @@ impl DictationContext {
                 }
                 next.recording.archive_successful_recording =
                     next.normal_archive_successful_recording();
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::Undecided => {
                 next.insertion.enabled = true;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = true;
+                next.recording.archive_processed = true;
                 next.recording.archive_required = true;
             }
         }
