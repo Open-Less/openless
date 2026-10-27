@@ -65,6 +65,8 @@ mod linux_app {
             result: Result<String, String>,
         },
         HotkeyError(BackendError),
+        /// 关于页的更新检测结果（Linux 只检测 + 跳转，不安装）。
+        Update(Result<Option<openless_linux_egui::update_check::UpdateCheck>, String>),
         ProviderSaved {
             editor: Box<ProviderEditor>,
             result: Result<(), String>,
@@ -581,6 +583,8 @@ mod linux_app {
         settings_channels_request: u64,
         settings_channels_refresh_requested: bool,
         linux_access_last_check: Option<std::time::Instant>,
+        /// 上次自动检查更新的时间（`auto_update_check` 打开时每 60 分钟一次）。
+        last_update_check: Option<std::time::Instant>,
         /// 语言模型 / 语音识别是否各自有启用的渠道（AI 服务页的状态点）。
         service_configured: [bool; 2],
         /// 文本型设置行（端口/条数/路径…）只在偏好刚载入或外部变更时回灌，
@@ -839,6 +843,7 @@ mod linux_app {
                         settings_channels_request: 0,
                         settings_channels_refresh_requested: false,
                         linux_access_last_check: None,
+                        last_update_check: None,
                         service_configured: [false; 2],
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
@@ -955,6 +960,7 @@ mod linux_app {
                     settings_channels_request: 0,
                     settings_channels_refresh_requested: false,
                     linux_access_last_check: None,
+                    last_update_check: None,
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
@@ -4583,6 +4589,20 @@ mod linux_app {
                             );
                         }
                     }
+                    UiResult::Update(result) => {
+                        self.last_update_check = Some(std::time::Instant::now());
+                        self.frontend_vm.settings.update_state = match result {
+                            Ok(Some(check)) if check.newer => {
+                                frontend::view_model::UpdateState::Available {
+                                    version: check.latest.version.clone(),
+                                    url: check.latest.url.clone(),
+                                }
+                            }
+                            Ok(Some(_)) => frontend::view_model::UpdateState::UpToDate,
+                            Ok(None) => frontend::view_model::UpdateState::UpToDate,
+                            Err(message) => frontend::view_model::UpdateState::Failed { message },
+                        };
+                    }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
                     UiResult::Remote(Err(error)) => self.status = error,
                     UiResult::Providers {
@@ -5328,6 +5348,28 @@ mod linux_app {
 
         // ── Frontend bridge ─────────────────────────────────────────────────
 
+        /// 检查更新：Linux 只判断「有没有更新的发布」，不下载安装
+        /// （deb/rpm 无法自替换，安装交给用户点发布页）。
+        fn check_updates(&mut self) {
+            let channel = match self.backend() {
+                Some(backend) => {
+                    let prefs = backend.get_preferences();
+                    if prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta {
+                        openless_linux_egui::update_check::UpdateChannel::Beta
+                    } else {
+                        openless_linux_egui::update_check::UpdateChannel::Stable
+                    }
+                }
+                None => openless_linux_egui::update_check::UpdateChannel::Stable,
+            };
+            self.frontend_vm.settings.update_state = frontend::view_model::UpdateState::Checking;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = openless_linux_egui::update_check::check(channel).await;
+                let _ = tx.send(UiResult::Update(result));
+            });
+        }
+
         /// Sync backend state into the frontend view model each frame before
         /// rendering. Only fields that have real data sources are populated;
         /// unwired fields remain in their default empty / loading state.
@@ -5342,6 +5384,22 @@ mod linux_app {
                     .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(30))
             {
                 self.refresh_linux_access();
+            }
+            // 自动检查更新：开关打开时启动后查一次、之后每 60 分钟一次。
+            // 只在空闲态触发，避免与手动检查并发。
+            if matches!(
+                self.frontend_vm.settings.update_state,
+                frontend::view_model::UpdateState::Idle
+            ) {
+                if let Some(backend) = self.backend() {
+                    if backend.get_preferences().auto_update_check
+                        && self
+                            .last_update_check
+                            .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(3600))
+                    {
+                        self.check_updates();
+                    }
+                }
             }
             self.frontend_vm.settings_saving = self.settings_save.in_flight.is_some();
             self.frontend_vm.settings_save_error = self.settings_save.error.clone();
@@ -5531,6 +5589,8 @@ mod linux_app {
                 s.stable_transcription = prefs.stable_transcription_enabled;
                 s.start_minimized = prefs.start_minimized;
                 s.auto_update = prefs.auto_update_check;
+                s.update_beta_channel =
+                    prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta;
                 s.remote_input = prefs.remote_input_enabled;
                 if hydrate_text {
                     s.remote_port = prefs.remote_input_port.to_string();

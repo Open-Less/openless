@@ -7913,6 +7913,100 @@ pub const CATALOG: &[Msg] = &[
         text: row("隐藏", "隱藏", "Hide", "隠す", "숨기기"),
     },
 
+    Msg {
+        key: "settings.about.beta_channel_desc",
+        text: row(
+            "开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。",
+            "開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。",
+            "When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.",
+            "オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。",
+            "켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_label",
+        text: row(
+            "加入 Beta 渠道",
+            "加入 Beta 渠道",
+            "Join Beta channel",
+            "Beta チャンネルに参加",
+            "Beta 채널 참여",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_toggle_label",
+        text: row(
+            "启用 Beta 渠道",
+            "啟用 Beta 渠道",
+            "Enable Beta channel",
+            "Beta チャンネルを有効化",
+            "Beta 채널 사용",
+        ),
+    },
+    Msg {
+        key: "settings.about.checking_update",
+        text: row("检查中…", "檢查中…", "Checking…", "確認中…", "확인 중…"),
+    },
+    Msg {
+        key: "settings.about.open_releases",
+        text: row(
+            "打开 Releases",
+            "開啟 Releases",
+            "Open Releases",
+            "Releases を開く",
+            "Releases 열기",
+        ),
+    },
+    Msg {
+        key: "settings.about.up_to_date",
+        text: row(
+            "当前已是最新版本。",
+            "當前已是最新版本。",
+            "You are already on the latest version.",
+            "現在最新バージョンです。",
+            "현재 최신 버전입니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_available",
+        text: row(
+            "有新版本 v{}",
+            "有新版本 v{}",
+            "Version v{} is available",
+            "新しいバージョン v{} があります",
+            "새 버전 v{}이(가) 있습니다",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_error",
+        text: row(
+            "检查或更新失败，请稍后重试。",
+            "檢查或更新失敗，請稍後重試。",
+            "Update check or install failed. Please try again later.",
+            "確認またはアップデートに失敗しました。後で再試行してください。",
+            "확인 또는 업데이트에 실패했습니다. 잠시 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_beta_update_btn",
+        text: row(
+            "检查 Beta 更新",
+            "檢查 Beta 更新",
+            "Check Beta update",
+            "Beta を確認",
+            "Beta 확인",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_stable_update_btn",
+        text: row(
+            "检查正式版更新",
+            "檢查正式版更新",
+            "Check stable update",
+            "正式版を確認",
+            "정식판 확인",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {

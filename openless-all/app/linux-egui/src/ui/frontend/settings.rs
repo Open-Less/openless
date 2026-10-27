@@ -8,7 +8,7 @@ use super::view_model::{
     FrontendAction, FrontendViewModel, SettingsActionField, SettingsChannelProvider,
     SettingsComboField, SettingsField, SettingsProviderAuth, SettingsProviderEditor,
     SettingsProviderField, SettingsSection, SettingsTextField, ShortcutField, StylePack,
-    StylePackHotkeyRow,
+    StylePackHotkeyRow, UpdateState,
 };
 
 const RAIL_WIDTH: f32 = 214.0;
@@ -829,6 +829,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             );
             toggle_row(
                 ui,
+                tr_l10n(lang, "settings.recording.auto_update_check_label"),
+                "",
+                vm.settings.auto_update,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::AutoUpdate,
+                    ));
+                },
+            );
+            toggle_row(
+                ui,
                 tr_l10n(lang, "settings.recording.start_minimized_label"),
                 tr_l10n(lang, "settings.recording.start_minimized_desc"),
                 vm.settings.start_minimized,
@@ -838,9 +849,8 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            // Tauri 也画了「自动检查更新」，但 Linux 版本没有任何更新器
-            // （`supports_auto_update == false`，`auto_update_check` 存下来后没人读），
-            // 画一个点了没反应的开关不算对齐。等真有更新通道再加回来。
+            // Tauri 的启动分组里还有「自动检查更新」。Linux 现在也会读这个偏好
+            // （启动时 + 每 60 分钟查一次 GitHub Releases），所以这一行是真的。
         },
     );
 
@@ -3253,6 +3263,92 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
         );
         if let Some(notice) = &vm.settings_notice {
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
+        }
+    });
+    // 更新（Tauri About 页的「检查更新 + Beta 频道」，Linux 只检测不安装）。
+    ui.add_space(-8.0);
+    card(ui, tr_l10n(lang, "settings.about.beta_channel_label"), "", |ui| {
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.about.beta_channel_toggle_label"),
+            tr_l10n(lang, "settings.about.beta_channel_desc"),
+            vm.settings.update_beta_channel,
+            || {
+                actions.push(FrontendAction::SettingsToggle(
+                    SettingsField::BetaUpdateChannel,
+                ));
+            },
+        );
+        let checking = matches!(vm.settings.update_state, UpdateState::Checking);
+        // 两个标签各自用字面量查表，词条同步脚本只认字面量。
+        let check_label = if vm.settings.update_beta_channel {
+            tr_l10n(lang, "settings.about.check_beta_update_btn")
+        } else {
+            tr_l10n(lang, "settings.about.check_stable_update_btn")
+        };
+        row_desc(ui, "", "", |ui| {
+            if checking {
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(
+                        egui::RichText::new(tr_l10n(lang, "settings.about.checking_update")).size(11.5),
+                    )
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(0.0, 26.0)),
+                );
+            } else if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(check_label).size(11.5),
+                    )
+                    .fill(theme::SURFACE_2)
+                    .stroke(egui::Stroke::new(0.8, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(0.0, 26.0)),
+                )
+                .clicked()
+            {
+                actions.push(FrontendAction::SettingsAction(
+                    SettingsActionField::CheckUpdate,
+                ));
+            }
+            if let UpdateState::Available { version, .. } = &vm.settings.update_state {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr_l10n(lang, "settings.about.open_releases"))
+                                .size(11.5)
+                                .color(theme::BLUE),
+                        )
+                        .fill(theme::SURFACE)
+                        .stroke(egui::Stroke::new(0.8, theme::BLUE_SOFT))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 26.0)),
+                    )
+                    .on_hover_text(format!("v{version}"))
+                    .clicked()
+                {
+                    actions.push(FrontendAction::SettingsAction(
+                        SettingsActionField::OpenUpdatePage,
+                    ));
+                }
+            }
+        });
+        match &vm.settings.update_state {
+            UpdateState::Idle | UpdateState::Checking => {}
+            UpdateState::UpToDate => {
+                hint_line(ui, tr_l10n(lang, "settings.about.up_to_date"));
+            }
+            UpdateState::Available { version, .. } => {
+                hint_line(
+                    ui,
+                    &fmt_l10n(lang, "settings.about.update_available", &[version]),
+                );
+            }
+            UpdateState::Failed { message } => {
+                hint_line(ui, tr_l10n(lang, "settings.about.update_error"));
+                ui.label(egui::RichText::new(message).size(11.0).color(theme::ERR));
+            }
         }
     });
     // The Tauri link card groups documentation links above a divider.

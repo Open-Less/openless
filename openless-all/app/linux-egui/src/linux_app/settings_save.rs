@@ -170,6 +170,18 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AutoUpdate => {
                 preferences.auto_update_check = !preferences.auto_update_check;
             }
+            frontend::view_model::SettingsField::BetaUpdateChannel => {
+                let following_beta =
+                    preferences.update_channel != openless_core::shared_types::UpdateChannel::Beta;
+                preferences.update_channel = if following_beta {
+                    openless_core::shared_types::UpdateChannel::Beta
+                } else {
+                    openless_core::shared_types::UpdateChannel::Stable
+                };
+                preferences.update_channel_explicit = true;
+
+                self.frontend_vm.settings.update_beta_channel = following_beta;
+            }
             frontend::view_model::SettingsField::RemoteInput => {
                 preferences.remote_input_enabled = !preferences.remote_input_enabled;
             }
@@ -783,6 +795,16 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsActionField::OpenFeedback => {
                 let _ = open_external(ISSUES_URL);
+            }
+            frontend::view_model::SettingsActionField::CheckUpdate => {
+                self.check_updates();
+            }
+            frontend::view_model::SettingsActionField::OpenUpdatePage => {
+                let url = match &self.frontend_vm.settings.update_state {
+                    frontend::view_model::UpdateState::Available { url, .. } => url.clone(),
+                    _ => openless_linux_egui::update_check::RELEASES_URL.to_string(),
+                };
+                let _ = open_external(&url);
             }
             frontend::view_model::SettingsActionField::CopyQQ => {
                 match fcitx5_copy_to_clipboard("1078960553") {

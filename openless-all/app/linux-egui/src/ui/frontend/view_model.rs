@@ -386,6 +386,25 @@ pub enum ShortcutField {
     StyleDraft,
 }
 
+/// 关于页「检查更新」的状态。Linux 只做检测与跳转，不做自安装（deb/rpm 无法自替换）。
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Available {
+        version: String,
+        url: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 /// One credential channel shown in the AI-services settings tab.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
@@ -539,6 +558,8 @@ pub enum SettingsField {
     StartMinimized,
     LaunchAtLogin,
     AutoUpdate,
+    /// 跟随 Beta 频道（写 `update_channel` + `update_channel_explicit`）。
+    BetaUpdateChannel,
     RemoteInput,
     SilenceAutoStop,
     AudioCue,
@@ -623,6 +644,10 @@ pub enum SettingsActionField {
     OpenReleaseNotes,
     OpenFeedback,
     CopyQQ,
+    /// 检查更新（Linux：只检测版本并给出下载页）。
+    CheckUpdate,
+    /// 打开「发现新版本」对应的发布页。
+    OpenUpdatePage,
 }
 
 // ── Vocab types ─────────────────────────────────────────────────────────────
@@ -1179,6 +1204,9 @@ pub struct SettingsFields {
     pub start_minimized: bool,
     pub launch_at_login: bool,
     pub auto_update: bool,
+    /// 关于页的更新状态与所选频道（跟随 Tauri 的 `update_channel`）。
+    pub update_state: UpdateState,
+    pub update_beta_channel: bool,
     pub remote_input: bool,
     pub remote_default_mode: usize,
     pub silence_auto_stop: bool,
@@ -1252,6 +1280,8 @@ impl Default for SettingsFields {
             start_minimized: false,
             launch_at_login: false,
             auto_update: false,
+            update_state: UpdateState::Idle,
+            update_beta_channel: false,
             remote_input: false,
             remote_default_mode: 0,
             silence_auto_stop: false,

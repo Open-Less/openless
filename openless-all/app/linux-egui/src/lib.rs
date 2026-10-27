@@ -24,6 +24,7 @@ pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
 pub mod omni_settings;
+pub mod update_check;
 mod popup;
 mod popup_layer;
 mod popup_window;
