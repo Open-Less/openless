@@ -149,6 +149,38 @@ export struct HistoryPage {
     }
   }
 
+  /** A2: wide screens use Navigation's Split mode; the detail is a NavDestination. */
+  private stack: NavPathStack = new NavPathStack();
+
+  private setDetail(id: string): void {
+    this.setDetail(id);
+    if (Breakpoints.isWide(this.bp) && this.stack.size() === 0) {
+      this.stack.pushPath({ name: 'detail', param: id });
+    }
+  }
+
+  @Builder
+  historyDestination(name: string, param: object) {
+    NavDestination() {
+      Column() {
+        if (this.selected() === undefined) {
+          EmptyState({ symbol: 'history', title: '选一条记录', hint: '左侧列表里点开任意一条' })
+        } else {
+          Scroll() {
+            this.detailPane(this.selected() as HistoryEntry, true)
+          }
+          .scrollBar(BarState.Off)
+          .width('100%')
+          .height('100%')
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ top: S.md })
+    }
+    .title('详情')
+  }
+
   build() {
     Column() {
       Row({ space: S.md }) {
@@ -193,27 +225,20 @@ export struct HistoryPage {
       }
 
       if (Breakpoints.isWide(this.bp)) {
-        Row({ space: S.md }) {
+        Navigation(this.stack) {
           Column() {
             this.listPane()
           }
-          .layoutWeight(4)
+          .width('100%')
           .height('100%')
-
-          Column() {
-            if (this.selected() === undefined) {
-              EmptyState({ symbol: 'history', title: '选一条记录', hint: '左侧列表里点开任意一条即可查看全文与参数' })
-            } else {
-              this.detailPane(this.selected() as HistoryEntry, true)
-            }
-          }
-          .layoutWeight(5)
-          .height('100%')
-          .padding({ top: S.md })
         }
+        .mode(NavigationMode.Split)
+        .navBarWidth(360)
+        .navBarWidthRange([300, 460])
+        .hideTitleBar(true)
+        .navDestination(this.historyDestination)
         .width('100%')
         .layoutWeight(1)
-        .alignItems(VerticalAlign.Top)
       } else if (this.detailId.length > 0 && this.selected() !== undefined) {
         Scroll() {
           this.detailPane(this.selected() as HistoryEntry, false)
