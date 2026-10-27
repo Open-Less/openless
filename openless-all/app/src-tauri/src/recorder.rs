@@ -158,6 +158,127 @@ fn voice_capture_key(generation: u64) -> u64 {
     generation | VOICE_CAPTURE_KEY_PREFIX
 }
 
+/// [DEBUG-ISSUE1223] Per-capture state shared by the two native stream roles.
+/// Only the first callback and callbacks immediately following errors are logged.
+struct CaptureDiagnostics {
+    run_id: u64,
+    microphone: StreamDiagnostics,
+    reference: StreamDiagnostics,
+}
+
+#[derive(Default)]
+struct StreamDiagnostics {
+    callbacks: AtomicUsize,
+    errors: AtomicUsize,
+    error_pending: AtomicBool,
+}
+
+impl StreamDiagnostics {
+    fn record_error(&self) -> usize {
+        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
+        self.error_pending.store(true, Ordering::Release);
+        count
+    }
+
+    fn record_callback(&self) -> (usize, bool) {
+        let count = self.callbacks.fetch_add(1, Ordering::Relaxed) + 1;
+        let after_error = self.error_pending.swap(false, Ordering::AcqRel);
+        (count, after_error)
+    }
+}
+
+impl CaptureDiagnostics {
+    fn new() -> Self {
+        static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+        Self {
+            run_id: NEXT_RUN.fetch_add(1, Ordering::Relaxed),
+            microphone: StreamDiagnostics::default(),
+            reference: StreamDiagnostics::default(),
+        }
+    }
+
+    /// Only code-controlled enums, booleans and numeric facts may enter the payload.
+    /// Use the existing logger; do not open files on native callback threads.
+    fn event(
+        &self,
+        probe_id: &str,
+        hypothesis_ids: &str,
+        event: &str,
+        outcome: &str,
+        safe_json: &str,
+    ) {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        log::info!(
+            "[DEBUG-ISSUE1223] {{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"s1223-20261019\",\"run_id\":\"pid-{}-capture-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{},\"ts\":{}}}",
+            std::process::id(),
+            self.run_id,
+            probe_id,
+            hypothesis_ids,
+            event,
+            outcome,
+            safe_json,
+            timestamp_ms,
+        );
+    }
+
+    fn data_callback(&self, reference: bool, accepting_audio: bool, frames: usize) {
+        let stream = if reference {
+            &self.reference
+        } else {
+            &self.microphone
+        };
+        let (count, after_error) = stream.record_callback();
+        if count == 1 || after_error {
+            self.event(
+                "P5",
+                "[\"H1\",\"H2\",\"H3\"]",
+                "data_callback",
+                if after_error { "after_error" } else { "first_callback" },
+                &format!(
+                    "{{\"stream_role\":\"{}\",\"accepting_audio\":{},\"callback_count\":{},\"error_count\":{},\"frames\":{}}}",
+                    if reference { "reference" } else { "microphone" },
+                    accepting_audio,
+                    count,
+                    stream.errors.load(Ordering::Relaxed),
+                    frames,
+                ),
+            );
+        }
+    }
+}
+
+fn handle_microphone_stream_error(
+    state: &StreamState,
+    error: cpal::StreamError,
+    runtime_error_tx: &Sender<RecorderError>,
+) {
+    if !state.accepting_audio.load(Ordering::Acquire) {
+        return;
+    }
+    let error_count = state.diagnostics.microphone.record_error();
+    // Vendored 0.15 does not turn CoreAudio overload notices into stream errors.
+    // Preserve its device-loss and backend-error contract.
+    let kind = match &error {
+        cpal::StreamError::DeviceNotAvailable => "device_not_available",
+        cpal::StreamError::BackendSpecific { .. } => "backend_error",
+    };
+    state.diagnostics.event(
+        "P2",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "microphone_stream_error",
+        "fatal_candidate",
+        &format!("{{\"error_kind\":\"{kind}\",\"error_count\":{error_count}}}"),
+    );
+    log::error!("[recorder] stream error: {error}");
+    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
+}
+
+#[path = "playback_reference.rs"]
+mod playback_reference;
+
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
     /// Each delivery is a little-endian byte sequence of Int16 samples;
@@ -1762,7 +1883,8 @@ impl Recorder {
         let archive_for_thread = archive_writer.clone();
         let raw_for_thread = raw_writer.clone();
         // AEC 的扬声器参考：与录音同生命周期，Drop 时停流。
-        let far_end = (processing.enhancement_enabled
+        let far_end = (!processing.echo_cancellation_enabled
+            && processing.enhancement_enabled
             && processing.dsp.aec_mode != openless_core::AecMode::Off)
             .then(openless_core::FarEndQueue::default);
         let far_end_for_thread = far_end.clone();
@@ -2125,6 +2247,35 @@ fn run_audio_thread(
     runtime_error_tx: Sender<RecorderError>,
 ) {
     let far_end_for_reference = far_end.clone();
+    let (reference_stream, reference) = if processing.echo_cancellation_enabled {
+        match playback_reference::start(&stop_flag, &state.diagnostics) {
+            Ok((stream, buffer)) => (Some(stream), Some(buffer)),
+            Err(error) => {
+                log::warn!(
+                    "[recorder] playback reference unavailable; recording without AEC: {error}"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+    state.diagnostics.event(
+        "P1",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "reference_start",
+        if reference.is_some() {
+            "available"
+        } else {
+            "fallback"
+        },
+        &format!(
+            "{{\"aec_requested\":{},\"reference_available\":{}}}",
+            processing.echo_cancellation_enabled,
+            reference.is_some()
+        ),
+    );
+    *state.reference.lock() = reference;
     let (processor, frame_tx) = match AudioProcessingWorker::start_with_targets(
         processing,
         consumer,
@@ -2250,6 +2401,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "callback_silent", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
@@ -2265,6 +2417,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
                             );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "first_callback_timeout", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
@@ -2299,6 +2452,7 @@ fn run_audio_thread(
         }
     }
     drop(stream);
+    drop(reference_stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
@@ -2625,29 +2779,27 @@ fn build_stream_for_format(
             let runtime_error_for_error = runtime_error_tx.clone();
             let error_state = Arc::clone(&state);
             let err_cb = move |err| {
-                if !error_state.accepting_audio.load(Ordering::Acquire) {
-                    return;
-                }
-                log::error!("[recorder] stream error: {err}");
-                let _ = runtime_error_for_error
-                    .send(RecorderError::EngineFailed(format!("stream: {err}")));
+                handle_microphone_stream_error(&error_state, err, &runtime_error_for_error);
             };
             device
                 .build_input_stream::<$t, _, _>(
                     config,
-                    move |data: &[$t], _info| {
+                    move |data: &[$t], info| {
                         if !state.accepting_audio.load(Ordering::Acquire) {
                             return;
                         }
                         if !data.is_empty() {
                             state.note_first_pcm(false);
                         }
+                        let captured_at = playback_reference::capture_time(info);
+                        state.diagnostics.data_callback(false, true, data.len() / channels.max(1));
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
                         }
                         *state.last_callback_time.lock() = Some(std::time::Instant::now());
                         match frame_tx.try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                            captured_at,
                             samples: floats,
                             channels,
                             input_sample_rate: input_sr,
@@ -2662,6 +2814,7 @@ fn build_stream_for_format(
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                state.diagnostics.event("P4", "[\"H4\"]", "processing_backpressure", "queue_full", "{}");
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
@@ -2709,6 +2862,7 @@ fn build_stream_for_format(
 }
 
 struct RawAudioFrame {
+    captured_at: std::time::Instant,
     samples: Vec<f32>,
     channels: usize,
     input_sample_rate: u32,
@@ -2923,10 +3077,13 @@ impl AudioProcessingWorker {
                                 }
                                 enhancement_enabled = false;
                             }
-                            if let Some(chunk) = processor.process(
+                            let reference = state.reference.lock().clone();
+                            let render = reference.and_then(|buffer| buffer.take_for_input_at(frame.samples.len()/frame.channels.max(1), frame.input_sample_rate, frame.captured_at));
+                            if let Some(chunk) = processor.process_with_reference(
                                 &frame.samples,
                                 frame.channels,
                                 frame.input_sample_rate,
+                                render.as_deref(),
                             ) {
                                 deliver(chunk);
                             }
@@ -2979,6 +3136,8 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    diagnostics: Arc<CaptureDiagnostics>,
+    reference: Mutex<Option<Arc<openless_core::ReferenceAudioBuffer>>>,
     capture_id: u64,
     created_at: std::time::Instant,
     first_raw_pcm_us: AtomicU64,
@@ -3002,6 +3161,8 @@ impl StreamState {
     fn new() -> Self {
         Self {
             capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+            diagnostics: Arc::new(CaptureDiagnostics::new()),
+            reference: Mutex::new(None),
             created_at: std::time::Instant::now(),
             first_raw_pcm_us: AtomicU64::new(0),
             first_output_pcm_us: AtomicU64::new(0),
@@ -3359,6 +3520,7 @@ mod tests {
             };
             let frame = || {
                 AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
                     samples: vec![0.25; samples],
                     channels: 1,
                     input_sample_rate: 48_000,
@@ -3394,6 +3556,7 @@ mod tests {
             backlog: Arc::new(AudioProcessingBacklog::default()),
         };
         let frame = AudioProcessingMessage::Frame(RawAudioFrame {
+            captured_at: std::time::Instant::now(),
             samples: vec![0.0; 48_000 * 64],
             channels: 64,
             input_sample_rate: 48_000,
@@ -3435,6 +3598,7 @@ mod tests {
             block_next_level.store(true, Ordering::Release);
             sender
                 .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
                     samples: vec![0.25; 997],
                     channels: 1,
                     input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3447,6 +3611,7 @@ mod tests {
             for _ in 0..100 {
                 assert!(sender
                     .try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                        captured_at: std::time::Instant::now(),
                         samples: vec![0.5; 160],
                         channels: 1,
                         input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3482,6 +3647,45 @@ mod tests {
     }
 
     #[test]
+    fn playback_reference_uses_capture_times_after_an_early_start() {
+        let epoch=std::time::Instant::now();
+        let state=Arc::new(StreamState::new());
+        let reference=Arc::new(openless_core::ReferenceAudioBuffer::new(16_000));
+        reference.push_interleaved_at(&[0.9;160],1,epoch);
+        reference.push_interleaved_at(&[0.0;1280],1,epoch+std::time::Duration::from_millis(10));
+        *state.reference.lock()=Some(reference);
+        let consumer=Arc::new(RecordingConsumer::default());
+        let (worker,sender)=AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {echo_cancellation_enabled:true,..Default::default()},
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,Arc::new(|_|{}),None,state,
+        ).unwrap();
+        for index in 1..=8 {
+            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at:epoch+std::time::Duration::from_millis(index*10),samples:vec![0.25;160],channels:1,input_sample_rate:16_000,
+            })).unwrap();
+        }
+        drop(sender);worker.finish();
+        let chunks=consumer.chunks.lock().unwrap();assert_eq!(chunks.len(),8);
+        assert!(chunks.iter().all(|chunk|decode_i16_le(chunk)==vec![8191;160]));
+    }
+
+    #[test]
+    fn diagnostics_and_microphone_errors_stay_capture_scoped() {
+        let first=StreamState::new();let second=StreamState::new();
+        assert_ne!(first.diagnostics.run_id,second.diagnostics.run_id);
+        let (sender,receiver)=channel();
+        first.accepting_audio.store(false,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(receiver.try_recv().is_err());assert_eq!(first.diagnostics.microphone.errors.load(Ordering::Relaxed),0);
+        first.accepting_audio.store(true,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(matches!(receiver.try_recv(),Ok(RecorderError::EngineFailed(_))));
+        assert_eq!(first.diagnostics.microphone.record_callback(),(1,true));
+        assert_eq!(first.diagnostics.reference.record_callback(),(1,false));
+        assert_eq!(second.diagnostics.microphone.record_callback(),(1,false));
+    }
+
+    #[test]
     fn audio_processing_worker_drains_accepted_frames_before_join() {
         let consumer = Arc::new(RecordingConsumer::default());
         let state = Arc::new(StreamState::new());
@@ -3498,6 +3702,7 @@ mod tests {
         .unwrap();
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![0.25, -0.25],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3536,6 +3741,7 @@ mod tests {
         .unwrap();
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![0.15; 317],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3558,6 +3764,7 @@ mod tests {
         );
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![-0.15; 211],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3596,6 +3803,7 @@ mod tests {
         for _ in 0..8 {
             sender
                 .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
                     samples: vec![0.25, -0.25],
                     channels: 1,
                     input_sample_rate: TARGET_SAMPLE_RATE,

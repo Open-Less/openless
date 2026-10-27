@@ -5,6 +5,7 @@ use crate::{AudioDspConfig, NoiseReduction};
 fn config(algorithm: NoiseReduction) -> AudioProcessingConfig {
     AudioProcessingConfig {
         enhancement_enabled: true,
+        echo_cancellation_enabled: false,
         dsp: AudioDspConfig {
             noise_reduction: algorithm,
             agc_enabled: false,
@@ -174,6 +175,7 @@ fn default_agc_does_not_amplify_denoised_room_noise_back_to_original_level() {
     for algorithm in [NoiseReduction::Rnnoise, NoiseReduction::Purevox] {
         let config = AudioProcessingConfig {
             enhancement_enabled: true,
+            echo_cancellation_enabled: false,
             dsp: AudioDspConfig {
                 noise_reduction: algorithm,
                 ..Default::default()

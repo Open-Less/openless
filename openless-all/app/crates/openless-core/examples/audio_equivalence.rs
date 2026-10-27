@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let mut processor = AudioProcessor::new(AudioProcessingConfig {
                         enhancement_enabled: true,
+                        echo_cancellation_enabled: false,
                         dsp: config,
                     });
                     let mut random = 42u32;

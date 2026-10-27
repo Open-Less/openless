@@ -150,6 +150,7 @@ pub(crate) fn backend_dependencies(
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
+                echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                 dsp: prefs.audio_dsp,
             },
         );
@@ -2007,6 +2008,7 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
             );
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences_snapshot.echo_cancellation_enabled,
                 dsp: preferences_snapshot.audio_dsp,
             };
             if let Some(wake_asr) = wake_asr.as_ref() {
@@ -2272,6 +2274,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                         .then(|| prefs.microphone_device_name.clone()),
                     openless_core::AudioProcessingConfig {
                         enhancement_enabled: prefs.audio_enhancement_enabled,
+                        echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                         dsp: prefs.audio_dsp,
                     },
                 );

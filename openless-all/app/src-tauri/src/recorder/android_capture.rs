@@ -307,6 +307,7 @@ fn read_audio(
             state.note_first_pcm(false);
             *state.last_callback_time.lock() = Some(std::time::Instant::now());
             let message = AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: samples[..count as usize]
                     .iter()
                     .map(|s| *s as f32 / 32768.0)

@@ -8,6 +8,7 @@ fn main() {
     let rate: u32 = args.get(2).map(|s| s.parse().unwrap()).unwrap_or(48_000);
     let mut processor = AudioProcessor::new(AudioProcessingConfig {
         enhancement_enabled: name != "disabled",
+        echo_cancellation_enabled: false,
         dsp: AudioDspConfig {
             noise_reduction: match name {
                 "purevox" => NoiseReduction::Purevox,

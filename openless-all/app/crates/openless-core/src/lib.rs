@@ -228,7 +228,7 @@ pub use api::{
 };
 pub use audio::{
     encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
-    NormalizedPcmChunk, PcmNormalizer, DICTATION_SAMPLE_RATE,
+    NormalizedPcmChunk, PcmNormalizer, ReferenceAudioBuffer, DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,

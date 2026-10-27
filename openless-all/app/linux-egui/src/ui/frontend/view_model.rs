@@ -381,7 +381,6 @@ pub enum ShortcutField {
     QuickNote,
     SwitchStyle,
     OpenApp,
-    CodingAgentVoice,
     SelectionPolish,
     StylePack(usize),
     StyleDraft,
@@ -550,6 +549,8 @@ pub enum SettingsField {
     MuteWhileRecording,
     /// 轻量本机麦克风增益与软限幅。
     AudioEnhancement,
+    /// 使用桌面播放参考进行回声抑制。
+    EchoCancellation,
     RecordAudioForDebug,
     /// 调试录音：保留处理后的音频（主档案）。
     DebugArchiveProcessed,
@@ -557,8 +558,6 @@ pub enum SettingsField {
     DebugArchiveRaw,
     ActivityHeatmap,
     SystemProxy,
-    TestingFeatures,
-    LessComputer,
     Multimodal,
     /// 选区助手：语音编辑（口述指令改选区）开关（Tauri `selectionVoiceEnabled`）。
     SelectionVoiceEnabled,
@@ -582,12 +581,8 @@ pub enum SettingsComboField {
     /// 识别管线模式：0 = 传统（ASR + LLM 两段），1 = 多模态（单模型一步）。
     /// 与 Tauri 的 `pipelineMode` 同义：切换只改偏好，不动另一套凭据。
     PipelineMode,
-    /// Less Computer 的 Agent 后端（0 = Claude Code, 1 = OpenCode, 2 = Codex, 3 = dsh）。
-    CodingAgentProvider,
     /// 选区助手：编辑方案格式（0 = XML，1 = JSON）。
     SelectionVoicePlanFormat,
-    /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
-    CodingAgentPermission,
     /// AEC 的扬声器参考源（回环/监听设备）。
     AecReference,
     /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
@@ -607,9 +602,6 @@ pub enum SettingsTextField {
     PolishSkipMaxChars,
     /// 调试录音最多保留条数。
     AudioRecordingMaxEntries,
-    CodingAgentModel,
-    CodingAgentWorkdir,
-    CodingAgentExe,
     /// 选区助手：额外问句线索（每行一个）。
     SelectionVoiceKeywords,
     /// 选区助手：编辑方案系统提示词（留空 = 用风格包 / 内置默认）。
@@ -1007,8 +999,6 @@ pub struct FrontendViewModel {
     pub switch_style_hotkey: String,
     /// Display label for the open-app shortcut.
     pub open_app_hotkey: String,
-    /// Display label for the Less Computer voice shortcut.
-    pub coding_agent_hotkey: String,
     /// Display label for the selection-polish shortcut.
     pub selection_polish_hotkey: String,
     /// Pipeline mode is 多模态 → the task strip hides the legacy LLM/ASR views.
@@ -1171,7 +1161,6 @@ impl Default for FrontendViewModel {
             translation_hotkey: String::new(),
             switch_style_hotkey: String::new(),
             open_app_hotkey: String::new(),
-            coding_agent_hotkey: String::new(),
         }
     }
 }
@@ -1200,6 +1189,7 @@ pub struct SettingsFields {
     pub microphone_error: Option<String>,
     pub mute_while_recording: bool,
     pub audio_enhancement: bool,
+    pub echo_cancellation: bool,
     pub audio_dsp: openless_core::AudioDspConfig,
     pub audio_cue: bool,
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
@@ -1243,14 +1233,6 @@ pub struct SettingsFields {
     pub selection_voice_system_prompt: String,
     pub activity_heatmap: bool,
     pub system_proxy: bool,
-    pub testing_features: bool,
-    pub less_computer: bool,
-    /// Less Computer（Coding Agent）配置，全部直连 `coding_agent_*` 偏好。
-    pub coding_agent_provider: usize,
-    pub coding_agent_permission: usize,
-    pub coding_agent_model: String,
-    pub coding_agent_workdir: String,
-    pub coding_agent_exe: String,
     pub multimodal: bool,
     pub language: usize,
     pub theme: usize,
@@ -1279,6 +1261,7 @@ impl Default for SettingsFields {
             microphone_error: None,
             mute_while_recording: false,
             audio_enhancement: false,
+            echo_cancellation: false,
             audio_dsp: Default::default(),
             audio_cue: false,
             show_capsule: true,
@@ -1305,13 +1288,6 @@ impl Default for SettingsFields {
             selection_voice_system_prompt: String::new(),
             activity_heatmap: true,
             system_proxy: false,
-            testing_features: false,
-            less_computer: false,
-            coding_agent_provider: 0,
-            coding_agent_permission: 0,
-            coding_agent_model: String::new(),
-            coding_agent_workdir: String::new(),
-            coding_agent_exe: String::new(),
             multimodal: false,
             language: 0,
             theme: 0,

@@ -51,6 +51,7 @@ export let mockSettings: UserPreferences = {
   lowLatencyDictationEnabled: false,
   lowMemoryBackgroundEnabled: false,
   audioEnhancementEnabled: false,
+  echoCancellationEnabled: false,
   voiceActivationEnabled: false,
   voiceActivationWakeEnabled: true,
   voiceActivationFinishEnabled: true,

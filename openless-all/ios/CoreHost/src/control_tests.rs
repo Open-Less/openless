@@ -36,6 +36,7 @@ fn native_capture_enhancement_and_stop_flush_match_shared_processor() {
     let id = SessionId::new();
     let config = openless_core::AudioProcessingConfig {
         enhancement_enabled: true,
+        echo_cancellation_enabled: false,
         dsp: openless_core::AudioDspConfig { noise_reduction: openless_core::NoiseReduction::Off, gain_db: 6, agc_enabled: false, ..Default::default() },
     };
     let sink = Arc::new(Sink::default());

@@ -1,5 +1,9 @@
 //! Framework-independent audio normalization used by native recorder adapters.
 
+#[path = "audio/echo.rs"]
+mod echo;
+pub use echo::ReferenceAudioBuffer;
+
 pub const DICTATION_SAMPLE_RATE: u32 = 16_000;
 const LEVEL_RMS_GAIN: f32 = 4.0;
 
@@ -13,6 +17,7 @@ pub struct NormalizedPcmChunk {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioProcessingConfig {
     pub enhancement_enabled: bool,
+    pub echo_cancellation_enabled: bool,
     pub dsp: crate::audio_dsp::AudioDspConfig,
 }
 
@@ -167,6 +172,7 @@ pub struct AudioProcessor {
     light_reference_resampler: Option<crate::audio_dsp::SpeechResampler>,
     light_reference_rate: Option<(u32, u32)>,
     light_reference_pending: Vec<f32>,
+    echo: Option<echo::EchoProcessor>,
     finished: bool,
     monitoring: bool,
 }
@@ -180,7 +186,11 @@ impl std::fmt::Debug for AudioProcessor {
 }
 
 impl AudioProcessor {
-    pub fn new(config: AudioProcessingConfig) -> Self {
+    pub fn new(mut config: AudioProcessingConfig) -> Self {
+        // The independent playback-cancellation switch owns AEC when enabled; never stack cancellers.
+        if config.echo_cancellation_enabled {
+            config.dsp.aec_mode = crate::audio_dsp::AecMode::Off;
+        }
         Self {
             config,
             normalizer: Default::default(),
@@ -191,6 +201,9 @@ impl AudioProcessor {
             light_reference_resampler: None,
             light_reference_rate: None,
             light_reference_pending: Vec::new(),
+            echo: config
+                .echo_cancellation_enabled
+                .then(echo::EchoProcessor::default),
             finished: false,
             monitoring: false,
         }
@@ -378,6 +391,21 @@ impl AudioProcessor {
             stream.working.extend_from_slice(&stream.mono);
         }
         pcm_chunk(stream.frames(false))
+    }
+
+    /// A playback gap bypasses only cancellation; enhancement keeps its format and tail.
+    pub fn process_with_reference(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        rate: u32,
+        reference: Option<&[f32]>,
+    ) -> Option<NormalizedPcmChunk> {
+        let Some(echo) = self.echo.as_mut() else {
+            return self.process(input, channels, rate);
+        };
+        let samples = echo.process(input, channels, rate, reference);
+        self.process(&samples, 1, DICTATION_SAMPLE_RATE)
     }
 
     /// Idempotent end-of-stream barrier. Flushes fractional resampling state,
@@ -799,6 +827,35 @@ mod tests {
         assert_eq!(output[0] - output[1], input[0] - input[1]);
         assert_eq!(output[2] - output[3], input[2] - input[3]);
         assert!(output[0] < input[0]);
+    }
+
+    #[test]
+    fn standalone_echo_switch_does_not_stack_enhancement_aec() {
+        for enhancement_enabled in [false, true] {
+            let config = AudioProcessingConfig {
+                enhancement_enabled,
+                echo_cancellation_enabled: true,
+                ..Default::default()
+            };
+            for mode in [crate::AecMode::Light, crate::AecMode::Model] {
+                let mut selected = AudioProcessor::new(AudioProcessingConfig {
+                    dsp: crate::AudioDspConfig { aec_mode: mode, ..config.dsp },
+                    ..config
+                });
+                let mut standalone = AudioProcessor::new(config);
+                assert!(selected.light_aec.is_none());
+                assert_eq!(selected.config.dsp.aec_mode, crate::AecMode::Off);
+                let microphone = vec![0.2; 480];
+                let reference = vec![0.1; 240];
+                for input_reference in [Some(reference.as_slice()), None, Some(reference.as_slice())] {
+                    assert_eq!(
+                        selected.process_with_reference(&microphone, 2, 48_000, input_reference),
+                        standalone.process_with_reference(&microphone, 2, 48_000, input_reference),
+                    );
+                }
+                assert_eq!(selected.finish(), standalone.finish());
+            }
+        }
     }
 
     #[test]

@@ -403,6 +403,8 @@ export interface UserPreferences {
   lowLatencyDictationEnabled: boolean;
   /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a local playback reference for optional echo cancellation. Off by default. */
+  echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
   lowMemoryBackgroundEnabled: boolean;
