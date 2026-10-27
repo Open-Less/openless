@@ -101,9 +101,12 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       },
     });
   });
-  // Sampling now starts with the click and settles within ~750ms, so `xs.at(-1)` is still the
-  // position the knob came to rest at.
-  const sampling = control.evaluate(async (element) => {
+  await page.mouse.down();
+  await page.mouse.up();
+  // The frame loop starts *after* the click: 45 frames (~750ms) still covers the 180ms slide
+  // and settles, so `xs.at(-1)` is the resting position regardless of how long the click takes
+  // to arrive. Listening already started above, so a late click cannot lose the transition.
+  const { xs, controlledXs, finished } = await control.evaluate(async (element) => {
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     const armed = (
       window as unknown as {
@@ -122,9 +125,6 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     armed.stop();
     return { xs, controlledXs: armed.state.controlledXs, finished: armed.state.finished };
   });
-  await page.mouse.down();
-  await page.mouse.up();
-  const { xs, controlledXs, finished } = await sampling;
   const after = (await control.getAttribute('aria-checked')) ?? '';
   return { name, checked: [before, after], start, end: xs.at(-1)!, xs, controlledXs, finished };
 }
