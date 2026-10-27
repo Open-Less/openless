@@ -776,7 +776,16 @@ export struct MarketplacePage {
           label: this.loginState.length > 0 ? this.loginState : 'GitHub 登录',
           symbol: 'person',
           onTap: () => {
-            this.startLogin();
+            if (this.loginState.length > 0) {
+              Api.marketplaceLogout().then(() => {
+                this.loginState = '';
+                this.reload();
+              }).catch((error: Error) => {
+                this.error = error.message;
+              });
+            } else {
+              this.startLogin();
+            }
           }
         })
         if (this.loginCode.length > 0) {

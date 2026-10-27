@@ -385,6 +385,10 @@ export class Api {
       '{"mode":' + JSON.stringify(mode) + '}')) as SettingsSnapshot;
   }
 
+  static async marketplaceLogout(): Promise<void> {
+    await Api.value('marketplace_logout', '{}');
+  }
+
   static async marketplaceAuthStatus(): Promise<MarketplaceAuth> {
     return JSON.parse(await Api.value('marketplace_auth_status', '{}')) as MarketplaceAuth;
   }
