@@ -181,7 +181,10 @@ async fn forwarded_launch_intents_use_core_state_and_semantic_host_actions() {
         .unwrap(),
     );
     backend.start().await.unwrap();
-    let host = LinuxHost::new(Arc::clone(&backend));
+    let host = LinuxHost::with_settings_runtime(
+        Arc::clone(&backend),
+        Arc::new(openless_core::NoopSettingsRuntime),
+    );
 
     assert_eq!(
         host.dispatch_launch_intent(LinuxLaunchIntent::ShowMain)
@@ -604,7 +607,10 @@ async fn linux_headless_selection_contract_covers_capability_and_session_edges()
         )
         .unwrap(),
     );
-    let host = LinuxHost::new(Arc::clone(&backend));
+    let host = LinuxHost::with_settings_runtime(
+        Arc::clone(&backend),
+        Arc::new(openless_core::NoopSettingsRuntime),
+    );
     let selection = &backend.services().selection;
 
     let direct_session = selection
