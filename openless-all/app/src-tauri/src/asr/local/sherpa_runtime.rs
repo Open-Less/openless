@@ -530,8 +530,15 @@ async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
 #[cfg(local_asr_sherpa)]
 fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognizer> {
     let mut config = OfflineRecognizerConfig::default();
-    // Keep Windows offline decode on one ONNX worker until native multi-threaded decode is proven stable.
-    config.model_config.num_threads = 1;
+    let default_num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 4) as i32)
+        .unwrap_or(2);
+    config.model_config.num_threads = default_num_threads;
+    #[cfg(target_os = "windows")]
+    {
+        // Keep Windows offline decode on one ONNX worker until native multi-threaded decode is proven stable.
+        config.model_config.num_threads = 1;
+    }
     config.model_config.provider = Some("cpu".into());
     match sherpa_target(alias)?.sherpa_family() {
         Some(openless_core::SherpaModelFamily::SenseVoice) => {
@@ -569,7 +576,14 @@ fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognize
                 max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
                 ..Default::default()
             };
-            config.model_config.num_threads = 1;
+            #[cfg(target_os = "windows")]
+            {
+                config.model_config.num_threads = 1;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                config.model_config.num_threads = 3;
+            }
         }
         Some(openless_core::SherpaModelFamily::Zipformer) => {
             anyhow::bail!("zipformer is not supported by offline batch M2")
