@@ -1,4 +1,4 @@
-import { common } from '@kit.AbilityKit';
+import { bundleManager, common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import nativeHost from 'libopenless_harmony.so';
@@ -106,6 +106,13 @@ struct Index {
         this.startupError = reply.error ?? '后端启动失败';
         return;
       }
+      try {
+        const info = bundleManager.getBundleInfoForSelfSync(
+          bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+        Store.put<string>('appVersion', info.versionName);
+      } catch (error) {
+        console.warn('[OpenLess Boot] version unavailable');
+      }
       await Api.bridgeOf().restoreCredentials();
       this.ready = true;
       console.info('[OpenLess Native] core ready');
@@ -121,12 +128,41 @@ struct Index {
       } else if (!this.ready) {
         this.loading()
       } else {
-        AppShell()
+        Stack() {
+          this.ambient()
+          AppShell()
+        }
+        .width('100%')
+        .height('100%')
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(C.bg())
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  /**
+   * Background: one very low-alpha brand wash instead of blurred colour blobs.
+   * Large blurred circles read as stains on a tablet panel; a single diagonal
+   * gradient stays even under the translucent chrome and still gives the material
+   * something to refract.
+   */
+  @Builder
+  ambient() {
+    Column()
+      .width('100%')
+      .height('100%')
+      .backgroundColor(C.bg())
+      .linearGradient({
+        angle: 150,
+        colors: [
+          [C.bg(), 0.0],
+          [C.glowA(), 0.42],
+          [C.bg(), 0.72],
+          [C.glowB(), 1.0]
+        ]
+      })
   }
 
   @Builder

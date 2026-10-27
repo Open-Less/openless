@@ -3,7 +3,7 @@ import { Labels } from '../common/Labels';
 import { C, R, S, T } from '../common/Tokens';
 import { Card, GhostButton, InfoRow, Pill, SectionHeader, ToggleRow } from '../components/Common';
 import { symbolOf } from '../components/Icons';
-import { Nav } from '../components/Nav';
+import { Nav, NavItem } from '../components/Nav';
 import { Api, NetworkState } from '../data/Api';
 import {
   CloudSyncStatus,
@@ -250,6 +250,7 @@ export struct SettingsPage {
           .alignItems(VerticalAlign.Top)
         } else {
           Column({ space: S.md }) {
+            this.toolsCard()
             this.transcriptionCard()
             this.polishCard()
             this.inputCard()
@@ -275,13 +276,6 @@ export struct SettingsPage {
     Card() {
       Column() {
         SectionHeader({ title: '转写', hint: '决定语音变成文字的方式' })
-        InfoRow({
-          label: '凭据与密钥',
-          value: 'API Key / 接入点 / 模型',
-          hint: '密钥存系统密钥库；未配置时听写会失败',
-          showChevron: true,
-          onTap: () => Nav.go(Nav.CREDENTIALS)
-        })
         InfoRow({
           label: '转写引擎',
           value: Labels.provider(this.prefs.activeAsrProvider),
@@ -459,6 +453,26 @@ export struct SettingsPage {
           .width('100%')
           .padding({ top: S.sm })
         }
+      }
+      .width('100%')
+    }
+  }
+
+  /** Everything that used to be a top-level destination, kept one tap deeper. */
+  @Builder
+  toolsCard() {
+    Card() {
+      Column() {
+        SectionHeader({ title: '内容与工具', hint: '市场、翻译、问答、速记与规则' })
+        ForEach(Nav.tools(), (item: NavItem, index: number) => {
+          InfoRow({
+            label: item.label,
+            value: '',
+            showChevron: true,
+            showDivider: index < Nav.tools().length - 1,
+            onTap: () => Nav.go(item.id)
+          })
+        }, (item: NavItem) => 'tool-' + item.id)
       }
       .width('100%')
     }

@@ -1,6 +1,13 @@
-/** Navigation model shared by the shell, the tab bar and the routes. */
 import { Store } from '../common/Store';
 
+/**
+ * Navigation model.
+ *
+ * One level only: 概览 / 历史 / 风格 / 词典 / 设置. Everything else (风格市场,
+ * 翻译, 问答, 速记, 纠正规则, 模型设置, 凭据) lives inside 设置, and each content
+ * page links to the tool that belongs to it - a HarmonyOS app keeps the tab bar
+ * or side bar to a handful of destinations instead of listing every screen.
+ */
 export interface NavItem {
   id: string;
   label: string;
@@ -10,53 +17,67 @@ export interface NavItem {
 export class Nav {
   static readonly OVERVIEW: string = 'overview';
   static readonly HISTORY: string = 'history';
-  static readonly VOCAB: string = 'vocab';
-  static readonly CORRECTIONS: string = 'corrections';
   static readonly STYLE: string = 'style';
+  static readonly VOCAB: string = 'vocab';
+  static readonly SETTINGS: string = 'settings';
+
+  // Secondary destinations, reachable from 设置 and from their owning page.
   static readonly MARKETPLACE: string = 'marketplace';
   static readonly TRANSLATION: string = 'translation';
   static readonly QA: string = 'qa';
   static readonly QUICKNOTE: string = 'quicknote';
+  static readonly CORRECTIONS: string = 'corrections';
   static readonly LOCALASR: string = 'localasr';
   static readonly CREDENTIALS: string = 'credentials';
-  static readonly SETTINGS: string = 'settings';
-  static readonly MORE: string = 'more';
 
-  /** Compact layouts keep five primary destinations and push the rest into 更多. */
-  static readonly PRIMARY: string[] = [Nav.OVERVIEW, Nav.HISTORY, Nav.VOCAB, Nav.STYLE, Nav.SETTINGS];
+  /** Tab bar / side bar order. */
+  static readonly PRIMARY: string[] = [Nav.OVERVIEW, Nav.HISTORY, Nav.STYLE, Nav.VOCAB, Nav.SETTINGS];
 
   static items(): NavItem[] {
-    const list: NavItem[] = [
-      { id: Nav.OVERVIEW, label: '概览', group: '写作' },
-      { id: Nav.HISTORY, label: '历史', group: '写作' },
-      { id: Nav.VOCAB, label: '词典', group: '写作' },
-      { id: Nav.CORRECTIONS, label: '纠正规则', group: '写作' },
-      { id: Nav.STYLE, label: '风格', group: '写作' },
-      { id: Nav.MARKETPLACE, label: '风格市场', group: '写作' },
-      { id: Nav.TRANSLATION, label: '翻译', group: '工具' },
-      { id: Nav.QA, label: '问答', group: '工具' },
-      { id: Nav.QUICKNOTE, label: '速记', group: '工具' },
-      { id: Nav.LOCALASR, label: '模型设置', group: '工具' },
-      { id: Nav.CREDENTIALS, label: '凭据', group: '系统' },
-      { id: Nav.SETTINGS, label: '设置', group: '系统' }
+    return [
+      { id: Nav.OVERVIEW, label: '概览', group: '主要' },
+      { id: Nav.HISTORY, label: '历史', group: '主要' },
+      { id: Nav.STYLE, label: '风格', group: '主要' },
+      { id: Nav.VOCAB, label: '词典', group: '主要' },
+      { id: Nav.SETTINGS, label: '设置', group: '主要' }
     ];
-    return list;
+  }
+
+  /** Shown as a list inside 设置. */
+  static tools(): NavItem[] {
+    return [
+      { id: Nav.CREDENTIALS, label: '凭据与密钥', group: '内容与工具' },
+      { id: Nav.MARKETPLACE, label: '风格市场', group: '内容与工具' },
+      { id: Nav.CORRECTIONS, label: '纠正规则', group: '内容与工具' },
+      { id: Nav.TRANSLATION, label: '翻译', group: '内容与工具' },
+      { id: Nav.QA, label: '问答', group: '内容与工具' },
+      { id: Nav.QUICKNOTE, label: '速记', group: '内容与工具' },
+      { id: Nav.LOCALASR, label: '模型设置', group: '内容与工具' }
+    ];
   }
 
   static label(id: string): string {
-    const list: NavItem[] = Nav.items();
-    for (let index = 0; index < list.length; index++) {
-      if (list[index].id === id) return list[index].label;
+    const main: NavItem[] = Nav.items();
+    for (let index = 0; index < main.length; index++) {
+      if (main[index].id === id) return main[index].label;
+    }
+    const tools: NavItem[] = Nav.tools();
+    for (let index = 0; index < tools.length; index++) {
+      if (tools[index].id === id) return tools[index].label;
     }
     return '概览';
   }
 
-  static isPrimary(id: string): boolean {
-    return Nav.PRIMARY.indexOf(id) >= 0;
+  /** True when a secondary page is open, so the tab bar can keep the owning tab lit. */
+  static ownerOf(id: string): string {
+    if (id === Nav.MARKETPLACE) return Nav.STYLE;
+    if (id === Nav.CORRECTIONS) return Nav.VOCAB;
+    if (id === Nav.CREDENTIALS || id === Nav.LOCALASR || id === Nav.TRANSLATION ||
+      id === Nav.QA || id === Nav.QUICKNOTE) return Nav.SETTINGS;
+    return id;
   }
 
   static go(id: string): void {
-    console.info('[OpenLess Nav] ' + id);
     Store.put<string>('route', id);
     Store.put<string>('detailId', '');
   }

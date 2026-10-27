@@ -15,8 +15,39 @@ export class C {
     return $r('app.color.ol_bg');
   }
 
+  /** Opaque surface: sheets, inputs, anything that must stay readable. */
   static surface(): Resource {
     return $r('app.color.ol_surface');
+  }
+
+  /**
+   * Translucent glass for cards and navigation chrome. Pair with
+   * `backgroundBlurStyle` so the ambient glow behind it shows through - that is
+   * the HarmonyOS "immersive material" look rather than a flat painted card.
+   */
+  static glass(): Resource {
+    return $r('app.color.ol_glass');
+  }
+
+  static glassStrong(): Resource {
+    return $r('app.color.ol_glass_strong');
+  }
+
+  static glassSunken(): Resource {
+    return $r('app.color.ol_glass_sunken');
+  }
+
+  /** Ambient light sources painted behind the whole app. */
+  static glowA(): Resource {
+    return $r('app.color.ol_glow_a');
+  }
+
+  static glowB(): Resource {
+    return $r('app.color.ol_glow_b');
+  }
+
+  static glowC(): Resource {
+    return $r('app.color.ol_glow_c');
   }
 
   static elevated(): Resource {

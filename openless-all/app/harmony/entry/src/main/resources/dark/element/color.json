@@ -151,6 +151,30 @@
     {
       "name": "ol_heat_4",
       "value": "#4A8CF7"
+    },
+    {
+      "name": "ol_glass",
+      "value": "#D91A1C1F"
+    },
+    {
+      "name": "ol_glass_strong",
+      "value": "#F022252A"
+    },
+    {
+      "name": "ol_glass_sunken",
+      "value": "#CC14161A"
+    },
+    {
+      "name": "ol_glow_a",
+      "value": "#4D0A59F7"
+    },
+    {
+      "name": "ol_glow_b",
+      "value": "#3D7B61FF"
+    },
+    {
+      "name": "ol_glow_c",
+      "value": "#3300C2B4"
     }
   ]
 }

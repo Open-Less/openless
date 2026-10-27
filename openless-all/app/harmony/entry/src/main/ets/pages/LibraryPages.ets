@@ -2,6 +2,7 @@ import { Fmt } from '../common/Format';
 import { C, R, S, T } from '../common/Tokens';
 import { Card, EmptyState, GhostButton, PageTitle, Pill, SearchField, SectionHeader } from '../components/Common';
 import { symbolOf } from '../components/Icons';
+import { Nav } from '../components/Nav';
 import { Api } from '../data/Api';
 import { CorrectionRule, DictionaryEntry, MarketplacePack, StylePack } from '../data/Types';
 import { StylePackPayload } from '../data/Api';
@@ -64,7 +65,19 @@ export struct VocabPage {
 
   build() {
     Column() {
-      PageTitle({ title: '词典', subtitle: this.entries.length.toString() + ' 个词条 · 转写时优先命中' })
+      Row({ space: S.sm }) {
+        Column() {
+          PageTitle({ title: '词典', subtitle: this.entries.length.toString() + ' 个词条 · 转写时优先命中' })
+        }
+        .layoutWeight(1)
+        GhostButton({
+          label: '纠正规则',
+          symbol: 'corrections',
+          onTap: () => Nav.go(Nav.CORRECTIONS)
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
 
       Row({ space: S.sm }) {
         TextInput({ placeholder: '添加词条，例如人名、产品名', text: this.draft })
@@ -390,6 +403,11 @@ export struct StylePage {
       PageTitle({ title: '风格', subtitle: this.packs.length.toString() + ' 个风格包 · 决定润色的语气' })
 
       Row({ space: S.sm }) {
+        GhostButton({
+          label: '风格市场',
+          symbol: 'marketplace',
+          onTap: () => Nav.go(Nav.MARKETPLACE)
+        })
         GhostButton({
           label: this.composerOpen ? '收起' : '新建风格',
           symbol: 'add',

@@ -61,9 +61,13 @@ assert.doesNotMatch(
 assert.match(ets('common/Store.ets'), /AppStorage\.set<T>\(key, value\)/, 'Store.put must assign after creating');
 
 // 3. One UI for phone, tablet and PC.
-assert.match(moduleJson, /"phone",\s*\n\s*"tablet",\s*\n\s*"2in1"/, 'deviceTypes must cover phone, tablet and 2in1');
+// deviceTypes must stay inside what the signing profile grants: declaring `2in1`
+// without a 2-in-1 profile makes the system reject the app outright.
+assert.match(moduleJson, /"deviceTypes":\s*\[\s*\n\s*"phone",\s*\n\s*"tablet"\s*\n\s*\]/, 'deviceTypes must be phone + tablet');
+assert.doesNotMatch(moduleJson, /"2in1"/, 'a 2in1 device type needs a 2-in-1 signing profile first');
 assert.match(moduleJson, /"orientation": "auto_rotation"/, 'the window must be free to rotate');
-assert.match(moduleJson, /"supportWindowMode":\s*\[\s*\n\s*"fullscreen",\s*\n\s*"split",\s*\n\s*"floating"/, '2-in-1 windows must be able to split and float');
+assert.doesNotMatch(moduleJson, /"supportWindowMode":\s*\[[^\]]*"floating"/, 'free-form windows are a 2-in-1 capability the profile does not cover');
+assert.match(moduleJson, /"supportWindowMode":\s*\[\s*\n\s*"fullscreen",\s*\n\s*"split"\s*\n\s*\]/, 'tablets may still split');
 
 // 4. Size classes come from the window rectangle, not from `mediaquery`.
 assert.doesNotMatch(breakpoints, /mediaquery\.matchMediaSync/, 'the size class must not depend on mediaquery ranges');
@@ -92,13 +96,36 @@ assert.match(breakpoints, /'windowSizeChange'/, 'rotation and free-form resize m
 
 // 5. Every navigation destination has a page behind it.
 const destinations = [...nav.matchAll(/static readonly [A-Z]+: string = '([a-z]+)'/g)].map((match) => match[1]);
-assert.ok(destinations.length >= 11, `expected at least 11 destinations, got ${destinations.length}`);
+assert.ok(destinations.length >= 12, `expected at least 12 routes, got ${destinations.length}`);
 for (const id of destinations) {
-  if (id === 'more' || id === 'overview') continue;
+  if (id === 'overview') continue;
   assert.match(shell, new RegExp(`Nav\\.${id.toUpperCase()}\\)|Nav\\.${id.toUpperCase()}\\b`), `AppShell must route ${id}`);
 }
 // The overview is the fallback: an unknown route must still land somewhere sane.
 assert.match(shell, /else \{\s*\n\s*OverviewPage\(\)/, 'unknown routes must fall back to the overview');
+
+// Navigation stays short: five primary destinations, everything else under 设置.
+const primary = nav.match(/static readonly PRIMARY: string\[\] = \[([^\]]+)\]/)?.[1] ?? '';
+const primaryIds = [...primary.matchAll(/Nav\.([A-Z]+)/g)].map((match) => match[1]);
+assert.equal(primaryIds.length, 5, `the tab bar may hold five destinations, got ${primaryIds.length}`);
+for (const id of ['CORRECTIONS', 'LOCALASR', 'CREDENTIALS', 'MARKETPLACE', 'TRANSLATION', 'QA', 'QUICKNOTE']) {
+  assert.ok(!primaryIds.includes(id), `${id} belongs in 设置, not in the tab bar`);
+  assert.match(nav, new RegExp(`\\{ id: Nav\\.${id}, label: `), `${id} must be listed in Nav.tools()`);
+}
+assert.match(ets('pages/SettingsPage.ets'), /Nav\.tools\(\)/, '设置 must render the tool list');
+assert.ok(!existsSync(join(appRoot, 'harmony/entry/src/main/ets/components/MorePage.ets')), 'the 更多 sheet is gone with the old 11-item bar');
+
+// Portrait stays phone-shaped: only the widest class gets a side bar.
+assert.match(shell, /if \(Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.sideBar\(\)/, 'only lg may draw a side bar');
+assert.match(shell, /if \(!Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.tabBar\(\)/, 'md and sm keep the bottom tab bar');
+
+// Immersive material: translucent glass + blur over an ambient glow.
+assert.match(ets('common/Tokens.ets'), /static glass\(\)/, 'cards need a translucent glass token');
+assert.match(ets('components/Common.ets'), /backgroundBlurStyle\(BlurStyle\.COMPONENT_THICK\)/, 'cards must use the system blur material');
+assert.match(shell, /backgroundBlurStyle\(BlurStyle\.COMPONENT_ULTRA_THICK\)/, 'navigation chrome must use the system blur material');
+assert.match(index, /ambient\(\)/, 'the shell must paint an ambient background');
+assert.match(index, /linearGradient\(/, 'the ambient wash is a single gradient, not blurred colour blobs');
+assert.match(index, /C\.glowA\(\)/, 'the wash must use the brand glow token');
 const pageFiles = [
   'pages/CredentialsPage.ets',
   'pages/OverviewPage.ets',

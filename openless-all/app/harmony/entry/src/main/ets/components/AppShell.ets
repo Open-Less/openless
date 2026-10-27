@@ -7,18 +7,19 @@ import { OverviewPage } from '../pages/OverviewPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { LocalAsrPage, QaPage, QuickNotePage, TranslationPage } from '../pages/ToolPages';
 import { symbolOf } from './Icons';
-import { MorePage } from './MorePage';
 import { Nav, NavItem } from './Nav';
 
 /**
  * Adaptive application shell (一次开发，多端部署).
  *
- *   sm  bottom tab bar            phone portrait
- *   md  icon rail + content       phone landscape, small tablet, narrow window
- *   lg  labelled sidebar + content tablet, 2-in-1, wide window
+ *   < 840vp   bottom tab bar (five destinations)     phone portrait/landscape,
+ *                                                    tablet portrait
+ *   >= 840vp  labelled side bar                      tablet landscape, 2-in-1
  *
- * The shell only owns navigation chrome; each page owns its own header and body,
- * so a page looks the same in a single column and in a two-column wide layout.
+ * Only five destinations exist at this level. Secondary screens live inside 设置,
+ * which is what keeps a phone-sized tab bar readable and a tablet side bar short.
+ * Chrome is drawn on translucent material (`backgroundBlurStyle`) over the ambient
+ * glow painted by `Index`, i.e. the HarmonyOS immersive-material look.
  */
 @Component
 export struct AppShell {
@@ -27,51 +28,44 @@ export struct AppShell {
 
   build() {
     Row() {
-      if (Breakpoints.isCompact(this.bp)) {
-        Column() {
-          Column() {
-            this.content()
-          }
-          .layoutWeight(1)
-          .width('100%')
-
-          this.tabBar()
-        }
-        .layoutWeight(1)
-        .height('100%')
-      } else {
+      if (Breakpoints.isWide(this.bp)) {
         this.sideBar()
+      }
+      Column() {
         Column() {
           this.content()
         }
         .layoutWeight(1)
-        .height('100%')
+        .width('100%')
+
+        if (!Breakpoints.isWide(this.bp)) {
+          this.tabBar()
+        }
       }
+      .layoutWeight(1)
+      .height('100%')
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(C.bg())
   }
 
-  /**
-   * Route table.
-   *
-   * The switch lives in the shell rather than in `Index`: navigation then only
-   * rebuilds the shell's content slot, and the page tree keeps its own state
-   * (`@StorageLink`) across switches instead of being torn down with the parent.
-   */
+  /** Route table: navigation only rebuilds this slot, pages keep their own state. */
   @Builder
   content() {
     if (this.route === Nav.HISTORY) {
       HistoryPage()
-    } else if (this.route === Nav.VOCAB) {
-      VocabPage()
-    } else if (this.route === Nav.CORRECTIONS) {
-      CorrectionsPage()
     } else if (this.route === Nav.STYLE) {
       StylePage()
+    } else if (this.route === Nav.VOCAB) {
+      VocabPage()
+    } else if (this.route === Nav.SETTINGS) {
+      SettingsPage()
+    } else if (this.route === Nav.CREDENTIALS) {
+      CredentialsPage()
     } else if (this.route === Nav.MARKETPLACE) {
       MarketplacePage()
+    } else if (this.route === Nav.CORRECTIONS) {
+      CorrectionsPage()
     } else if (this.route === Nav.TRANSLATION) {
       TranslationPage()
     } else if (this.route === Nav.QA) {
@@ -80,12 +74,6 @@ export struct AppShell {
       QuickNotePage()
     } else if (this.route === Nav.LOCALASR) {
       LocalAsrPage()
-    } else if (this.route === Nav.CREDENTIALS) {
-      CredentialsPage()
-    } else if (this.route === Nav.SETTINGS) {
-      SettingsPage()
-    } else if (this.route === Nav.MORE) {
-      MorePage()
     } else {
       OverviewPage()
     }
@@ -94,53 +82,47 @@ export struct AppShell {
   @Builder
   sideBar() {
     Column() {
-      Column({ space: S.xxs }) {
-        Row({ space: S.sm }) {
-          Text('OL')
-            .fontSize(T.footnote)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(C.textOnAccent())
-            .width(28)
-            .height(28)
-            .textAlign(TextAlign.Center)
-            .backgroundColor(C.accent())
-            .borderRadius(R.sm)
-          if (Breakpoints.isWide(this.bp)) {
-            Column({ space: 0 }) {
-              Text('OpenLess')
-                .fontSize(T.body)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(C.textPrimary())
-              Text('鸿蒙原生版')
-                .fontSize(T.caption)
-                .fontColor(C.textTertiary())
-            }
-            .alignItems(HorizontalAlign.Start)
-          }
+      Row({ space: S.md }) {
+        Text('OL')
+          .fontSize(T.footnote)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(C.textOnAccent())
+          .width(32)
+          .height(32)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(C.accent())
+          .borderRadius(R.md)
+        Column({ space: 0 }) {
+          Text('OpenLess')
+            .fontSize(T.body)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(C.textPrimary())
+          Text('鸿蒙原生版')
+            .fontSize(T.caption)
+            .fontColor(C.textTertiary())
         }
-        .width('100%')
-        .padding({ top: S.lg, bottom: S.lg, left: Breakpoints.isWide(this.bp) ? S.sm : 0 })
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
       }
       .width('100%')
-      .justifyContent(FlexAlign.Center)
+      .padding({ top: S.xl, bottom: S.xl, left: S.sm, right: S.sm })
 
-      Scroll() {
-        Column({ space: S.xxs }) {
-          ForEach(Nav.items(), (item: NavItem) => {
-            this.railItem(item)
-          }, (item: NavItem) => item.id)
-        }
-        .width('100%')
-        .padding({ bottom: S.lg })
-      }
-      .scrollBar(BarState.Off)
-      .layoutWeight(1)
-      .align(Alignment.Top)
+      ForEach(Nav.items(), (item: NavItem) => {
+        this.railItem(item)
+      }, (item: NavItem) => item.id)
+
+      Blank()
+
+      Text('v' + (AppStorage.get<string>('appVersion') ?? '—'))
+        .fontSize(T.caption)
+        .fontColor(C.textTertiary())
+        .padding({ left: S.md, bottom: S.lg })
     }
-    .width(S.rail(this.bp))
+    .width(264)
     .height('100%')
-    .padding({ left: S.sm, right: S.sm })
-    .backgroundColor(C.surface())
+    .padding({ left: S.md, right: S.md })
+    .backgroundColor(C.glass())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
     .border({ width: { right: 0.5 }, color: C.border() })
   }
 
@@ -149,19 +131,18 @@ export struct AppShell {
     Row({ space: S.md }) {
       SymbolGlyph(symbolOf(item.id))
         .fontSize(20)
-        .fontColor([this.route === item.id ? C.accent() : C.iconSecondary()])
-      if (Breakpoints.isWide(this.bp)) {
-        Text(item.label)
-          .fontSize(T.callout)
-          .fontColor(this.route === item.id ? C.accent() : C.textPrimary())
-          .fontWeight(this.route === item.id ? FontWeight.Medium : FontWeight.Regular)
-      }
+        .fontColor([this.tabActive(item.id) ? C.accent() : C.iconSecondary()])
+      Text(item.label)
+        .fontSize(T.callout)
+        .fontColor(this.tabActive(item.id) ? C.accent() : C.textPrimary())
+        .fontWeight(this.tabActive(item.id) ? FontWeight.Medium : FontWeight.Regular)
+        .layoutWeight(1)
     }
     .width('100%')
-    .height(44)
-    .padding({ left: Breakpoints.isWide(this.bp) ? S.md : 0, right: Breakpoints.isWide(this.bp) ? S.md : 0 })
-    .justifyContent(Breakpoints.isWide(this.bp) ? FlexAlign.Start : FlexAlign.Center)
-    .backgroundColor(this.route === item.id ? C.accentSoft() : Color.Transparent)
+    .height(48)
+    .padding({ left: S.md, right: S.md })
+    .margin({ bottom: S.xxs })
+    .backgroundColor(this.tabActive(item.id) ? C.accentSoft() : Color.Transparent)
     .borderRadius(R.md)
     .onClick(() => Nav.go(item.id))
   }
@@ -172,12 +153,12 @@ export struct AppShell {
       ForEach(Nav.PRIMARY, (id: string) => {
         this.tabItem(id)
       }, (id: string) => 'tab-' + id)
-      this.tabItem(Nav.MORE)
     }
     .width('100%')
     .height(64)
     .padding({ left: S.sm, right: S.sm, bottom: S.xs })
-    .backgroundColor(C.surface())
+    .backgroundColor(C.glassStrong())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
     .border({ width: { top: 0.5 }, color: C.border() })
   }
 
@@ -187,20 +168,19 @@ export struct AppShell {
       SymbolGlyph(symbolOf(id))
         .fontSize(22)
         .fontColor([this.tabActive(id) ? C.accent() : C.iconSecondary()])
-      Text(id === Nav.MORE ? '更多' : Nav.label(id))
+      Text(Nav.label(id))
         .fontSize(T.caption)
         .fontColor(this.tabActive(id) ? C.accent() : C.textSecondary())
+        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Regular)
     }
     .layoutWeight(1)
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .onClick(() => Nav.go(id === Nav.MORE ? Nav.MORE : id))
+    .onClick(() => Nav.go(id))
   }
 
+  /** A secondary page keeps its owner tab lit (风格市场 → 风格, 纠正规则 → 词典). */
   private tabActive(id: string): boolean {
-    if (id === Nav.MORE) {
-      return !Nav.isPrimary(this.route) || this.route === Nav.MORE;
-    }
-    return this.route === id;
+    return Nav.ownerOf(this.route) === id;
   }
 }

@@ -42,8 +42,10 @@ export struct Card {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding(this.inset)
-    .backgroundColor(C.surface())
-    .borderRadius(R.lg)
+    .backgroundColor(C.glass())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .borderRadius(R.xl)
+    .border({ width: 0.5, color: C.border() })
     .shadow(cardShadow())
   }
 }

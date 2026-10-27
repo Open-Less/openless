@@ -296,6 +296,11 @@ export struct OverviewPage {
         Column({ space: S.sm }) {
           Stack() {
             Circle()
+              .width(180)
+              .height(180)
+              .fill(C.accentSoft())
+              .opacity(0.25)
+            Circle()
               .width(148)
               .height(148)
               .fill(C.accentSoft())
@@ -307,6 +312,12 @@ export struct OverviewPage {
               .width(108)
               .height(108)
               .fill(this.phase === 'recording' ? C.accent() : C.accentSoft())
+              .shadow({
+                radius: this.phase === 'recording' ? 32 : 16,
+                color: C.accentSoft(),
+                offsetX: 0,
+                offsetY: 6
+              })
 
             SymbolGlyph(symbolOf(this.phase === 'recording' ? 'stop' : 'mic'))
               .fontSize(42)
