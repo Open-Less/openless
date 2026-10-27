@@ -199,6 +199,8 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             "[fcitx] hotkey registration: {}",
             registration_summary(target)
         );
+        // 兼容无法重启的旧插件：先注销已删除功能的绑定，再注册普通快捷键。
+        tolerate_optional_fcitx_method(apply_action_hotkey("SetLessComputerHotkeyRaw", None))?;
         apply_dictation_hotkey(&target.dictation)?;
         // 宿主只把热键注册给插件，**从不改动输入法自己的配置**。曾短暂加过
         // 「检测到引擎占用主键就去清空拼音的快速短语触发键」，实测证明那是假象：
@@ -765,7 +767,9 @@ mod tests {
 
     #[test]
     fn legacy_addon_may_omit_optional_extended_hotkey_methods() {
+        assert!(tolerate_optional_fcitx_method(Ok(())).is_ok());
         for message in [
+            "Unknown method SetLessComputerHotkeyRaw",
             "Unknown method SetSwitchStyleHotkeyRaw",
             "org.freedesktop.DBus.Error.UnknownMethod",
         ] {

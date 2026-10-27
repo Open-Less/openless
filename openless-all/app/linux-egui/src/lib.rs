@@ -71,8 +71,8 @@ pub use fcitx5::{
     copy_to_clipboard as fcitx5_copy_to_clipboard,
     ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_fcitx5_if_plugin_updated,
     reload_running_fcitx5, selection_text as fcitx5_selection_text,
-    set_hotkeys as set_fcitx5_hotkeys, Fcitx5TextInserter,
-    FcitxPluginInstallPlan, FcitxPluginStatus,
+    set_hotkeys as set_fcitx5_hotkeys, Fcitx5TextInserter, FcitxPluginInstallPlan,
+    FcitxPluginStatus,
 };
 pub use host_actions::LinuxHostActions;
 
@@ -100,10 +100,10 @@ pub use logging::{
 pub use popup::{
     force_x11_for, popup_command, read_jsonl, run_popup, write_jsonl,
     ApplyOutcome as PopupApplyOutcome, CapsulePopupState, CapsuleSuggestion, HostToPopup,
-    PopupActionGuard,
-    PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor, PopupSupervisorEvent,
-    PopupToHost, ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind,
-    QaPolishState, QaPopupState, MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
+    PopupActionGuard, PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor,
+    PopupSupervisorEvent, PopupToHost, ProtocolError as PopupProtocolError,
+    ProtocolErrorKind as PopupProtocolErrorKind, QaPolishState, QaPopupState, MAX_JSONL_LINE_BYTES,
+    POPUP_PROTOCOL_VERSION,
 };
 pub use popup_layer::{
     capsule_geometry, capsule_path_override, choose_capsule_path, detect_capsule_path,
@@ -117,7 +117,7 @@ pub use popup_window::{
     bottom_center, clamp_to_area, monitor_containing, place_overlay, place_panel, popup_position,
     popup_size, select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement,
     OverlayX11, WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
-     QA_WINDOW_SIZE,
+    QA_WINDOW_SIZE,
 };
 
 pub use openless_core::contract::*;
@@ -225,9 +225,11 @@ impl LinuxHost {
     /// and the Linux platform-effect transaction.
     pub fn save_settings(
         &self,
-        preferences: UserPreferences,
+        mut preferences: UserPreferences,
         expected_preferences_revision: u64,
     ) -> Result<SettingsUpdateOutcome, BackendError> {
+        // The retired Linux binding must not reserve keys in Core's shared validation.
+        preferences.coding_agent_voice_hotkey = None;
         self.backend.update_settings(
             preferences,
             SettingsUpdateOptions::SETTINGS_DOCUMENT.at_revision(expected_preferences_revision),
@@ -238,9 +240,11 @@ impl LinuxHost {
     /// Apply a focused settings mutation with strict shortcut-collision rules.
     pub fn update_settings_strict(
         &self,
-        preferences: UserPreferences,
+        mut preferences: UserPreferences,
         expected_preferences_revision: u64,
     ) -> Result<SettingsUpdateOutcome, BackendError> {
+        // The retired Linux binding must not reserve keys in Core's shared validation.
+        preferences.coding_agent_voice_hotkey = None;
         self.backend.update_settings(
             preferences,
             SettingsUpdateOptions::STRICT.at_revision(expected_preferences_revision),

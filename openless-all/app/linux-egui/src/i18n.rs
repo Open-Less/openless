@@ -4576,11 +4576,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.echo_cancellation_desc",
         text: row(
-            "保持系统播放声音，同时使用桌面音频输出作为参考抑制回声。部分设备、蓝牙路径或 Linux ALSA 环境可能不可用。",
-            "保持系統播放聲音，同時使用桌面音訊輸出作為參考抑制回聲。部分裝置、藍牙路徑或 Linux ALSA 環境可能不可用。",
-            "Use desktop output as a reference while keeping playback audible; some devices, Bluetooth routes, or Linux ALSA setups may be unavailable.",
-            "再生音を聞きながらデスクトップ出力を参照してエコーを抑制します。デバイス、Bluetooth、Linux ALSA では利用できない場合があります。",
-            "재생을 계속 들으면서 데스크톱 출력을 참조해 에코를 줄입니다. 일부 장치, Bluetooth 경로 또는 Linux ALSA에서는 사용할 수 없을 수 있습니다.",
+            "保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。",
+            "保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。",
+            "Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.",
+            "再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。",
+            "재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.",
         ),
     },
     Msg {
