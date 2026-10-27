@@ -39,6 +39,9 @@ export struct AppShell {
         }
         .layoutWeight(1)
         .width('100%')
+        // Column centers its children by default, so the capped column sits centred
+        // with equal side margins instead of hugging the left edge on a portrait tablet.
+        .constraintSize({ maxWidth: S.contentMax(this.bp) })
 
         if (!Breakpoints.isWide(this.bp)) {
           this.tabBar()

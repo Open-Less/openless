@@ -44,7 +44,6 @@ export struct Card {
     .alignItems(HorizontalAlign.Start)
     .padding(this.inset)
     .backgroundColor(C.glass())
-    .systemMaterial(Glass.surface())
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .borderRadius(R.lg)
     .border({ width: 0.5, color: C.border() })

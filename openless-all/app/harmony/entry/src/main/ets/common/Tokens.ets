@@ -176,6 +176,17 @@ export class S {
     return 16;
   }
 
+  /**
+   * Content width cap. A tablet in portrait is ~800vp wide: without a cap a form
+   * stretches edge to edge and stops reading like the phone layout. md is capped so
+   * the single-column pages stay a comfortable column (phone-like), lg/xl keep the
+   * full width because they show list + detail.
+   */
+  static contentMax(bp: string): number {
+    if (bp === 'md') return 560;
+    return 10000;
+  }
+
   /** Column gutter between cards in a multi-column layout. */
   static columnGap(bp: string): number {
     return bp === 'sm' ? 16 : 24;
