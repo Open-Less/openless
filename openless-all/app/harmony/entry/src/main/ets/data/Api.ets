@@ -300,6 +300,24 @@ export class Api {
       '{"flowId":' + JSON.stringify(flowId) + '}')) as GithubDeviceFlowPoll;
   }
 
+  static async takeSplashPlayback(): Promise<void> {
+    try {
+      await Api.value('take_splash_playback', '{}');
+    } catch (error) {
+      console.info('[OpenLess Splash] skipped');
+    }
+  }
+
+  /** Mirrors the mode chips into the pipeline so dictation picks it up at once. */
+  static async setDefaultPolishMode(mode: string): Promise<SettingsSnapshot> {
+    return JSON.parse(await Api.value('set_default_polish_mode',
+      '{"mode":' + JSON.stringify(mode) + '}')) as SettingsSnapshot;
+  }
+
+  static async marketplaceAuthStatus(): Promise<MarketplaceAuth> {
+    return JSON.parse(await Api.value('marketplace_auth_status', '{}')) as MarketplaceAuth;
+  }
+
   // ── Cloud sync / marketplace ───────────────────────────────────────────────
   static async cloudSyncStatus(): Promise<CloudSyncStatus> {
     return JSON.parse(await Api.value('cloud_sync_status', '{}')) as CloudSyncStatus;
@@ -354,6 +372,11 @@ export class Api {
 interface DeviceName {
   name: string;
   isDefault: boolean;
+}
+
+export interface MarketplaceAuth {
+  loggedIn?: boolean;
+  login?: string | null;
 }
 
 export interface GithubDeviceFlow {

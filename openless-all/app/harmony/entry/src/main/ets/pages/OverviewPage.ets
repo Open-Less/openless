@@ -51,6 +51,7 @@ export struct OverviewPage {
   @State private weeks: WeekColumn[] = [];
 
   aboutToAppear(): void {
+    Api.takeSplashPlayback();
     this.reload();
   }
 

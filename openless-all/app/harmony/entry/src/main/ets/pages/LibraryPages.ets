@@ -598,6 +598,12 @@ export struct MarketplacePage {
   private async reload(): Promise<void> {
     this.busy = true;
     try {
+      try {
+        const auth = await Api.marketplaceAuthStatus();
+        this.loginState = auth.loggedIn === true ? '已登录 ' + (auth.login ?? '') : '';
+      } catch (error) {
+        this.loginState = '';
+      }
       this.packs = await Api.marketplace(this.query, this.sort);
       this.error = '';
     } catch (error) {

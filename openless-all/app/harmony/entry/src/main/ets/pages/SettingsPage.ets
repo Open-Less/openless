@@ -121,6 +121,18 @@ export struct SettingsPage {
     }
   }
 
+  private async applyMode(mode: string): Promise<void> {
+    this.busy = true;
+    try {
+      const snapshot: SettingsSnapshot = await Api.setDefaultPolishMode(mode);
+      this.prefs = snapshot.preferences;
+    } catch (error) {
+      this.error = (error as Error).message;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   private async writeNumber(pointer: string, value: number): Promise<void> {
     this.busy = true;
     try {
@@ -339,7 +351,7 @@ export struct SettingsPage {
         Row({ space: S.sm }) {
           ForEach(POLISH_MODES, (mode: string) => {
             this.choiceChip(Labels.polishMode(mode), this.prefs.defaultMode === mode, () => {
-              this.writeString('/defaultMode', mode);
+              this.applyMode(mode);
             })
           }, (mode: string) => 'mode-' + mode)
         }
