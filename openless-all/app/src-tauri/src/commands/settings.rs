@@ -539,6 +539,28 @@ mod tests {
         assert_eq!(stale_payload.update_channel, UpdateChannel::Stable);
         assert!(stale_payload.update_channel_explicit);
     }
+
+    #[test]
+    fn android_update_url_validation_requires_exact_https_release_hosts() {
+        assert!(is_allowed_android_update_url(
+            "https://dl.aeoform.com/releases/v2.0.2-tauri/OpenLess_aarch64.app.tar.gz"
+        ));
+        assert!(is_allowed_android_update_url(
+            "https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk"
+        ));
+        assert!(is_allowed_android_update_url(
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "https://dl.aeoform.com@attacker.example/package.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "https://dl.aeoform.com.attacker.example/package.apk"
+        ));
+        assert!(!is_allowed_android_update_url(
+            "http://dl.aeoform.com/releases/v2.0.2-tauri/OpenLess.apk"
+        ));
+    }
 }
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
@@ -825,6 +847,27 @@ pub async fn app_check_update_with_channel(
     }
 }
 
+fn is_allowed_android_update_url(raw: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(raw) else {
+        return false;
+    };
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+    {
+        return false;
+    }
+    match (parsed.host_str(), parsed.path()) {
+        (Some("dl.aeoform.com"), path) => path.starts_with("/releases/"),
+        (Some("github.com"), path) => path.starts_with("/Open-Less/openless/releases/"),
+        (Some("fastgit.cc"), path) => {
+            path.starts_with("/https://github.com/Open-Less/openless/releases/")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn app_download_and_install_android_update(
@@ -833,17 +876,9 @@ pub async fn app_download_and_install_android_update(
     signature: String,
     version: String,
 ) -> Result<(), String> {
-    // Security: validate the URL before downloading to prevent SSRF (e.g. intranet metadata
-    // endpoints, localhost services). Only the project CDN and the legacy GitHub/fastgit
-    // prefixes are allowed — manifests used to point at the latter two, and artifacts already
-    // cached by an older client must keep installing.
-    const CDN_BASE: &str = crate::update_source::CDN_BASE;
-    const DIRECT_BASE: &str = "https://github.com/Open-Less/openless";
-    const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/Open-Less/openless";
-    if !url.starts_with(CDN_BASE)
-        && !url.starts_with(DIRECT_BASE)
-        && !url.starts_with(MIRROR_BASE)
-    {
+    // Parse and validate the host before downloading so userinfo and hostname-prefix tricks
+    // cannot turn the signed update fetch into an SSRF primitive.
+    if !is_allowed_android_update_url(&url) {
         return Err(format!("不信任的更新 URL，拒绝下载: {url}"));
     }
     #[cfg(target_os = "android")]
