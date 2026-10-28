@@ -25,8 +25,8 @@
 //   linux        The Linux egui host, its tests and the deb/rpm chain.
 //   harmony      The HarmonyOS host (ArkTS contracts, Rust host, HAP).
 //   frontend     Browser-rendered surface: the Chromium/WebKit motion suite.
-//   ios-device   The Xcode/Rime project layer. Shared Rust crates are excluded
-//                on purpose — the iOS `test` job already compiles those.
+//   ios-device   The Xcode/Rime project layer and the shared Rust crates that
+//                are compiled for the real iOS device target.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -57,7 +57,8 @@ const PLATFORM_ROOTS = {
   macos: ['openless', 'openless-native-capsule'],
   windows: ['openless', 'openless-native-capsule'],
   android: ['openless'],
-  linux: ['openless-linux-egui'],
+  // The Linux reusable workflow also owns Harmony Rust unit tests.
+  linux: ['openless-linux-egui', 'openless-harmony-host'],
   harmony: ['openless-harmony-host'],
   ios: ['openless-core'],
 };
@@ -223,11 +224,17 @@ const workflowOrTooling = (file) =>
   file.startsWith('scripts/');
 
 /**
- * Contract suites are executed by `npm test` (macOS) and its platform subset
- * (Windows); they change no build input, so they reach those two runners and
- * the browser suite at most.
+ * Contract tests are consumed by multiple platform jobs (and some run during
+ * Android/Harmony prebuilds). Changing a gate test must not skip the gate it
+ * describes, so classify every app script test as fail-open.
  */
 const contractSuite = (file) => /^openless-all\/app\/scripts\/[^/]+\.test\.(mjs|js|ts)$/.test(file);
+
+const nativeResource = (file) =>
+  file.startsWith('openless-all/app/assets/') || file.startsWith('openless-all/app/public/');
+
+const androidTooling = (file) =>
+  /^openless-all\/app\/(package\.json|package-lock\.json)$/.test(file);
 
 /** Browser-rendered surface: sources, styles, the bundle entry and its specs. */
 const motionSurface = (file) =>
@@ -241,14 +248,16 @@ const motionSurface = (file) =>
 const iosProject = (file) => file.startsWith('openless-all/ios/');
 
 /**
- * Platforms a file's change can reach. `ALL` when the file is tooling that
- * gates every platform (workflows, contract suite, package manifests).
+ * Platforms a file's change can reach. `ALL` when the file is tooling or a
+ * shared resource whose native consumers cannot be proven by one package.
  */
 function classify(file, context) {
   if (prose(file)) return new Set();
-  if (contractSuite(file)) return new Set(['macos', 'windows']);
+  if (contractSuite(file)) return ALL;
   if (workflowOrTooling(file)) return ALL;
   if (iosProject(file)) return new Set(['ios', 'ios-device']);
+  if (nativeResource(file)) return ALL;
+  if (androidTooling(file)) return new Set(['frontend', 'macos', 'windows', 'harmony', 'android']);
 
   const tags = new Set();
   if (motionSurface(file)) {
@@ -263,7 +272,10 @@ function classify(file, context) {
   if (owner) {
     if (CAPSULE_PACKAGES.has(owner)) tags.add('capsule');
     for (const [platform, packages] of context.closures) {
-      if (packages.has(owner)) tags.add(platform);
+      if (packages.has(owner)) {
+        tags.add(platform);
+        if (platform === 'ios') tags.add('ios-device');
+      }
     }
   }
   // Files outside every package still have to be evaluated by the shells that

@@ -109,6 +109,17 @@ try {
   });
   reset();
 
+  // The Linux workflow owns Harmony Rust unit tests as well as the egui host.
+  commit({ 'openless-all/app/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
+  expect('harmony rust', {
+    tauri: 'false',
+    harmony: 'true',
+    linux: 'true',
+    frontend: 'false',
+    'ios-device': 'false',
+  });
+  reset();
+
   // The shared Core is linked by every platform build.
   commit({ 'openless-all/app/crates/openless-core/src/lib.rs': 'pub fn x() {}\n' }, 'shared core');
   expect('shared core', {
@@ -117,8 +128,8 @@ try {
     linux: 'true',
     harmony: 'true',
     android: 'true',
-    // Compiling the shared Core for iOS is the `test` job's job, not the Xcode build's.
-    'ios-device': 'false',
+    // The device build compiles this shared Core for aarch64-apple-ios.
+    'ios-device': 'true',
     frontend: 'false',
   });
   reset();
@@ -169,19 +180,35 @@ try {
   });
   reset();
 
-  // A contract suite changes no build input: it runs on the desktop runners and
-  // nowhere else.
+  // Contract tests are consumed by Linux, Harmony and Android as well as desktop.
   commit(
     { 'openless-all/app/scripts/foo-contract.test.mjs': 'console.log(1);\n' },
     'contract suite',
   );
-  expect('contract suite', {
+  expect('contract suite', every('true'));
+  reset();
+
+  // Native resources have both bundle and direct native consumers.
+  commit({ 'openless-all/app/assets/vocab-presets.json': '{}\n' }, 'native asset');
+  expect('native asset', every('true'));
+  reset();
+
+  // npm manifests also control Android project generation, not only the bundle.
+  commit(
+    {
+      'openless-all/app/package.json': '{}\n',
+      'openless-all/app/package-lock.json': '{}\n',
+    },
+    'android tooling',
+  );
+  expect('android tooling', {
     tauri: 'true',
     msrv: 'false',
     linux: 'false',
-    harmony: 'false',
-    frontend: 'false',
-    android: 'false',
+    harmony: 'true',
+    frontend: 'true',
+    android: 'true',
+    capsule: 'false',
     'ios-device': 'false',
   });
   reset();

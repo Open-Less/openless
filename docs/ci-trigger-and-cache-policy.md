@@ -23,13 +23,13 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 | 区域 | 覆盖的 job | 判定 |
 |---|---|---|
 | `tauri` | macOS / Windows 桌面检查 | 改动能到达 `openless`（含 vendor 路径依赖）或桌面专属的 `openless-native-capsule` |
-| `android` | Android cargo check | 改动能到达 `openless` 的 Android 闭包（bundle-only 改动不算：该 job 只编 Rust） |
+| `android` | Android cargo check | 改动能到达 `openless` 的 Android 闭包，或影响 Android 项目生成/构建的 npm manifest；纯 bundle-only 改动不单独触发 |
 | `msrv` | macOS Rust 1.99 MSRV | 有任何 `.rs` / `Cargo.toml` / `Cargo.lock` / `rust-toolchain*` / `.github/**` |
 | `linux` | Linux Core/egui 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-egui` 的闭包。Linux 宿主是原生 egui，不读前端 `dist/` |
 | `harmony` | 鸿蒙 ArkTS 契约、Rust host、HAP | 改动能到达 `openless-harmony-host` 的闭包，或动了它要打包的前端 bundle |
-| `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`public/**`、`e2e/**`、`assets/**`、样式与 vite/playwright 配置 |
+| `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`e2e/**`、样式与 vite/playwright 配置；`app/assets/**` / `app/public/**` 按 native consumer 处理 |
 | `capsule` | 胶囊 crates（macOS + Windows 双 runner） | 拥有改动文件的包是 `openless-capsule` / `openless-native-capsule`。它们的 `ui,host` feature 组合不在别处构建，所以保留独立 job，但常见 PR 不再为它付出两台 runner |
-| `ios-device` | iOS `device-build`（Xcode/Rime 工程层） | **只**看 `openless-all/ios/**`。共享 crate 已经由 iOS 的 `test` job 编译校验过，工程层改动才需要 Xcode |
+| `ios-device` | iOS `device-build`（Xcode/Rime 与真实 device Core 编译） | 改动能到达 iOS Core 闭包，或动了 `openless-all/ios/**`；共享 Rust 代码也要保留 device target 证据 |
 
 契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
 

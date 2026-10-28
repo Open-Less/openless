@@ -4,7 +4,7 @@
 #
 #   ci-changed-areas.sh <area> [base-sha]
 #
-# Areas: tauri | msrv | linux | harmony | frontend | ios-device
+# Areas: tauri | msrv | linux | harmony | frontend | android | capsule | ios-device
 #
 # The decision is made by scripts/ci-impact.mjs, which walks Cargo's own package
 # graph (`cargo metadata`) from each platform's root package: a file is in scope
@@ -24,7 +24,7 @@
 # cannot reach it, never of a failure to read the change set.
 set -uo pipefail
 
-area=${1:?usage: ci-changed-areas.sh <tauri|msrv|linux|harmony|frontend|ios-device> [base-sha]}
+area=${1:?usage: ci-changed-areas.sh <tauri|msrv|linux|harmony|frontend|android|capsule|ios-device> [base-sha]}
 base=${2:-}
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 script="$repo_root/openless-all/app/scripts/ci-impact.mjs"
