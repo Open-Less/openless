@@ -77,6 +77,11 @@ export class Nav {
     return id;
   }
 
+  /** Secondary screens get a back affordance to the page that owns them. */
+  static isSecondary(id: string): boolean {
+    return Nav.ownerOf(id) !== id;
+  }
+
   static go(id: string): void {
     Store.put<string>('route', id);
     Store.put<string>('detailId', '');

@@ -35,6 +35,23 @@ export struct AppShell {
       }
       Column() {
         Column() {
+          // Secondary screens (工具页) live outside the five tabs, so they need an
+          // explicit way back; without it the tab bar only leads to a primary page.
+          if (Nav.isSecondary(this.route)) {
+            Row({ space: S.xs }) {
+              SymbolGlyph(symbolOf('chevron_left'))
+                .fontSize(20)
+                .fontColor([C.accent()])
+              Text(Nav.label(Nav.ownerOf(this.route)))
+                .fontSize(T.footnote)
+                .fontColor(C.accent())
+            }
+            .width('100%')
+            .height(44)
+            .padding({ left: S.md, right: S.md })
+            .hoverEffect(HoverEffect.Highlight)
+            .onClick(() => Nav.go(Nav.ownerOf(this.route)))
+          }
           this.content()
         }
         .layoutWeight(1)
