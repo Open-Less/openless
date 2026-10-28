@@ -152,6 +152,7 @@ if [ -n "$SIGNED" ]; then
   # of the Release.
   cp "$SIGNED" "$OUTPUT/OpenLess_harmony_arm64-signed.hap"
 fi
-( cd "$OUTPUT" && sha256sum ./*.hap > SHA256SUMS )
+# SHA256SUMS belongs to the GitHub Release, which contains only the unsigned HAP pair.
+( cd "$OUTPUT" && sha256sum ./OpenLess_harmony_arm64.hap ./OpenLess_harmony.hap > SHA256SUMS )
 echo "HAP packages ready in $OUTPUT"
 ls -l "$OUTPUT"

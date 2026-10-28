@@ -452,17 +452,38 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
       if (cancelled) return;
       const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
-        const unlisten = await listen<T>(name, (event) => {
-          if (!cancelled) apply(event.payload);
-        });
+        // Tauri's default Any listener also receives emit_to(otherWindow). In particular,
+        // hiding a mirror sends it idle; that must never exit the primary capsule.
+        const unlisten = await listen<T>(
+          name,
+          (event) => {
+            if (!cancelled) apply(event.payload);
+          },
+          name === 'backend:event' ? undefined : { target },
+        );
         if (cancelled) {
           unlisten();
           return false;
         }
         unlisteners.push(unlisten);
         return true;
+      };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot().catch((error) => {
+          if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
+          return undefined;
+        });
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptViewRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptViewRef.current = next;
+        setLocalAsrText(next.text);
       };
       const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
@@ -483,7 +504,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         // Any new recording session must drop prior ASR text — including when
         // the previous capsule was still transcribing/polishing/done from
         // dictation (selection-voice Start used to keep the stale stream).
-        if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
+        const sessionId = p.sessionId;
+        const reactivatedSession =
+          p.state === 'recording' &&
+          previous !== 'recording' &&
+          !sessionChanged &&
+          !previousTranscript.sessionStartObserved &&
+          sessionId != null &&
+          nextTranscript.sessionId === sessionId;
+        if (reactivatedSession) {
+          void replayActiveSessionTranscript(sessionId);
+        } else if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
           nextTranscript = beginTranscriptGeneration(nextTranscript);
         }
         if (

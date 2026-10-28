@@ -24,3 +24,14 @@ test('a swipe still suppresses the click from the same touch sequence', () => {
   assert.match(keyboardKey,
     /setOnClickListener \{\s*if \(suppressNextClick\) \{\s*suppressNextClick = false\s*\} else \{\s*action\(\)/);
 });
+
+test('a reused English letter panel synchronizes Shift even when its state does not change', () => {
+  const startView = source.slice(
+    source.indexOf('override fun onStartInputView('),
+    source.indexOf('private fun keyboardFootprintKey('),
+  );
+  assert.match(startView, /updateAutoShift\(refresh = false\)/);
+  assert.match(startView,
+    /else if \(inputMode == InputMode\.ENGLISH && englishLayer == EnglishLayer\.LETTERS\) \{\s*applyShiftState\(\)/,
+    'onStartInput resets automatic Shift before a cached panel is shown again');
+});

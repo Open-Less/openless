@@ -25,6 +25,8 @@ pub(crate) enum ControlAction {
     AccountSync { request: Value },
     VocabularyBridge { request: Value },
     Snapshot,
+    AudioSettings,
+    UpdateAudioSettings { enabled: bool, dsp: openless_core::AudioDspConfig },
     StyleLibrary,
     StyleDetail { id: String },
     SetStyleEnabled { id: String, enabled: bool },
@@ -194,6 +196,7 @@ impl Host {
             return;
         }
         let product_action = matches!(action,
+            ControlAction::AudioSettings | ControlAction::UpdateAudioSettings { .. } |
             ControlAction::AccountSync { .. } | ControlAction::VocabularyBridge { .. } | ControlAction::Library | ControlAction::SearchHistory { .. } | ControlAction::HistoryDetail { .. }
             | ControlAction::DeleteHistory { .. } | ControlAction::ClearLibraryHistory
             | ControlAction::AudioAsset { .. } | ControlAction::Vocabulary { .. }
@@ -216,7 +219,7 @@ impl Host {
         // interval before Core has installed its own session. No start/save race.
         let admission = self.admission.lock().unwrap();
         if admission.is_some() && !matches!(action,
-            ControlAction::Snapshot | ControlAction::Library | ControlAction::SearchHistory { .. }
+            ControlAction::AudioSettings | ControlAction::Snapshot | ControlAction::Library | ControlAction::SearchHistory { .. }
             | ControlAction::HistoryDetail { .. } | ControlAction::Vocabulary { .. }
             | ControlAction::StyleLibrary | ControlAction::StyleDetail { .. }
             | ControlAction::CapabilitySnapshot | ControlAction::TranslationConfiguration) {
@@ -355,6 +358,21 @@ impl Host {
     }
     pub(super) async fn control(&self, action: ControlAction) -> Result<Value, BackendError> {
         match action {
+            ControlAction::AudioSettings => {
+                let prefs = self.backend.get_preferences();
+                Ok(json!({"enabled":prefs.audio_enhancement_enabled,"dsp":prefs.audio_dsp}))
+            }
+            ControlAction::UpdateAudioSettings { enabled, dsp } => {
+                let mut prefs = self.backend.get_preferences();
+                prefs.audio_enhancement_enabled = enabled;
+                prefs.audio_dsp = dsp.normalized();
+                prefs.audio_dsp.android_aec_enabled = false;
+                prefs.audio_dsp.android_noise_suppression_enabled = false;
+                prefs.audio_dsp.android_agc_enabled = false;
+                self.backend.update_settings(prefs, SettingsUpdateOptions::STRICT, &NoopSettingsRuntime)?;
+                let prefs = self.backend.get_preferences();
+                Ok(json!({"enabled":prefs.audio_enhancement_enabled,"dsp":prefs.audio_dsp}))
+            }
             ControlAction::AccountSync { request } => self.account_sync.execute(request).await,
             ControlAction::VocabularyBridge { request } => vocabulary_bridge::execute(&self.backend, self.vocabulary_metadata_directory()?, request),
             ControlAction::Snapshot => self.control_snapshot().await,

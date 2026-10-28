@@ -236,7 +236,9 @@ test('voice activation opens model setup without leaving the multimodal pipeline
 }, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-    Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' });
+    Object.defineProperty(navigator, 'userAgent', {
+      get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
   });
   await page.goto('http://127.0.0.1:5326/?os=win');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -244,9 +246,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   const categories = dialog.getByRole('navigation', { name: '设置分类' });
   await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
-  const models = dialog
-    .locator('.ol-service-views')
-    .getByRole('button', { name: /^本地模型/ });
+  const models = dialog.locator('.ol-service-views').getByRole('button', { name: /^本地模型/ });
   await expect(models).toBeDisabled();
   await categories.getByRole('button', { name: '录音与输入', exact: true }).click();
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
@@ -287,4 +287,24 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
   await categories.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
   await expect(models).toBeDisabled();
+});
+
+test('playback echo cancellation is opt-in and does not change output muting', async ({
+  page,
+}, testInfo) => {
+  const dialog = await openSettings(page);
+  const cancellation = dialog.getByRole('switch', { name: '播放回声抑制', exact: true });
+  const mute = dialog.getByRole('switch', { name: '录音时静音', exact: true });
+  await expect(cancellation).not.toBeChecked();
+  const muted = await mute.isChecked();
+  await cancellation.click();
+  await expect(cancellation).toBeChecked();
+  await expect(mute).toHaveAttribute('aria-checked', String(muted));
+  await dialog.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await expect(cancellation).toBeChecked();
+  await cancellation.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('playback-echo-cancellation.png') });
+  await cancellation.click();
+  await expect(cancellation).not.toBeChecked();
 });

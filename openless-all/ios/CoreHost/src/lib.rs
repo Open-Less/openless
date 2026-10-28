@@ -77,6 +77,7 @@ struct Callbacks {
     context: u64,
 }
 struct Capture {
+    processing: Option<Mutex<(openless_core::AudioProcessor, Vec<f32>)>>,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
     bytes: AtomicU64,
@@ -185,6 +186,7 @@ impl AudioRecorder for NativeRecorder {
             broker.captures.lock().unwrap().insert(
                 id,
                 Arc::new(Capture {
+                    processing: context.recording.audio_processing.enhancement_enabled.then(|| Mutex::new((openless_core::AudioProcessor::new(context.recording.audio_processing), Vec::new()))),
                     consumer,
                     progress,
                     bytes: AtomicU64::new(0),
@@ -212,7 +214,16 @@ impl ActiveRecording for Recording {
                 .broker
                 .request("captureStop", self.id, Value::Null)
                 .await;
-            self.broker.captures.lock().unwrap().remove(&self.id);
+            let capture = self.broker.captures.lock().unwrap().remove(&self.id);
+            if result.is_ok() {
+                if let Some(capture) = capture {
+                    let tail = capture.processing.as_ref().and_then(|processing| processing.lock().unwrap().0.finish());
+                    if let Some(tail) = tail {
+                        capture.consumer.consume_pcm_chunk(&tail.pcm_i16_le);
+                        if let Some(archive) = &capture.archive { archive.append(&tail.pcm_i16_le); }
+                    }
+                }
+            }
             if let Some(archive) = &self.archive { archive.finish(); }
             result.map(|_| ())
         })
@@ -799,9 +810,19 @@ pub unsafe extern "C" fn ol_ios_feed_pcm(
         let capture = owner.broker.captures.lock().unwrap().get(&session).cloned();
         let Some(capture) = capture else { return 1; };
         let bytes = unsafe { std::slice::from_raw_parts(pcm,len) };
+        let chunk = if let Some(processing) = &capture.processing {
+            let mut processing = processing.lock().unwrap();
+            let (processor, samples) = &mut *processing;
+            samples.clear();
+            samples.extend(bytes.chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]]) as f32 / 32768.0));
+            Some(processor.process(samples, 1, 16_000))
+        } else { None };
+        let elapsed = capture.bytes.fetch_add(len as u64,Ordering::Relaxed).saturating_add(len as u64) * 1000 / 32_000;
+        if matches!(chunk, Some(None)) { return 0; }
+        let processed = chunk.flatten();
+        let bytes = processed.as_ref().map(|chunk| chunk.pcm_i16_le.as_slice()).unwrap_or(bytes);
         if let Some(archive) = &capture.archive { archive.append(bytes); }
         capture.consumer.consume_pcm_chunk(bytes);
-        let elapsed = capture.bytes.fetch_add(len as u64,Ordering::Relaxed).saturating_add(len as u64) * 1000 / 32_000;
         let level = openless_core::external_audio::pcm_i16_le_rms(bytes);
         let _ = capture.progress.publish_level(elapsed,level);
         owner.broker.emit(json!({"kind":"level","sessionID":session.to_string(),"level":level,"elapsedMs":elapsed}));

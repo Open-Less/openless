@@ -483,7 +483,7 @@ assertMatch(
 );
 assertMatch(
   liveTranscriptTsx,
-  /export function CapsuleTranscriptOverlay[\s\S]*?listen<CapsulePayload>\('capsule:state'[\s\S]*?listen<BackendEvent>\('backend:event'[\s\S]*?prefs:changed/,
+  /export function CapsuleTranscriptOverlay[\s\S]*?listen<CapsulePayload>\(\s*'capsule:state'[\s\S]*?listen<BackendEvent>\(\s*'backend:event'[\s\S]*?prefs:changed/,
   'rail should own state, transcript, and preference subscriptions',
 );
 assertMatch(
@@ -535,6 +535,11 @@ assertMatch(
   coordinatorRs,
   /fn set_capsule_window_topmost_no_activate[\s\S]*?let position_result = if show[\s\S]*?SetWindowPos\([\s\S]*?if let Err\(error\) = position_result[\s\S]*?return false/,
   'no-activate display should return false when SetWindowPos fails',
+);
+assertMatch(
+  dictationRs,
+  /set_capsule_transcript_visible\([\s\S]*?window: tauri::WebviewWindow[\s\S]*?if window\.label\(\) != "capsule"[\s\S]*?return Ok\(\(\)\);[\s\S]*?let host = coord\.tauri_host\(\)/,
+  'only the Tauri-injected primary capsule caller may mutate shared transcript visibility',
 );
 assertMatch(
   dictationRs,

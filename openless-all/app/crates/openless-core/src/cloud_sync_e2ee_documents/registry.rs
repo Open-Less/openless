@@ -187,6 +187,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "echo_cancellation_enabled",
+        key: "echoCancellationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "audio_enhancement_enabled",
         key: "audioEnhancementEnabled",
         class: PreferenceClass::Excluded,
@@ -847,6 +854,27 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "record_audio_for_debug",
         key: "recordAudioForDebug",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "debug_archive_processed",
+        key: "debugArchiveProcessed",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "aec_reference_device_name",
+        key: "aecReferenceDeviceName",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Text,
+        reason: "local_hardware",
+    },
+    PreferenceField {
+        rust_name: "debug_archive_raw",
+        key: "debugArchiveRaw",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
         reason: "portable_setting",

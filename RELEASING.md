@@ -7,7 +7,7 @@ day-to-day development.
 
 **Only repository administrators may create version tags and publish releases.**
 
-- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets require a separate accepted build and explicit administrator upload.
+- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets ride the same tag, but the L01-L12 device acceptance must be finished *before* the tag is cut.
 - Contributors (including AI agents) **must not** create release tags, publish
   releases, or trigger release automation. If a release is needed, **request an admin
   to cut it** — open an issue or ping a maintainer with the target version and the
@@ -43,18 +43,34 @@ component, which is a 16-bit field. The full version still appears in the app an
 updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
-These tags build the macOS, Windows, and Android Tauri hosts in parallel. Linux is
-triggered separately so an unaccepted package can never ride along with a desktop
-release: `.github/workflows/release-linux-egui.yml` is manual-only, requires the
-release tag as an input, checks it out, runs the same Core/host/deb/rpm
-verification as CI, and then **attaches the verified packages to that same
-Release automatically**. Nothing is uploaded by hand. Linux has no in-app updater
-manifest or AppImage.
+These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
-HarmonyOS rides in the same Release through `.github/workflows/release-harmony.yml`.
-It is manual-only as well and requires the same tag. It builds, signs and attaches
-`OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias, then uploads
-the same HAP to HUAWEI AppGallery Connect.
+Linux and HarmonyOS ride in the same Release through two dispatch-only entry
+points, `.github/workflows/release-linux-egui.yml` and
+`.github/workflows/release-harmony.yml`. Neither reacts to a `push:` event, so an
+arbitrary commit can never rebuild a package; `release-tauri.yml` dispatches both
+through `dispatch-platform-releases` as soon as the desktop/Android assets of a
+`v*-tauri` tag are published. That dispatch is what makes a tag push ship a
+complete Release: the two workflows only wait ten minutes for the Release to
+exist, less than the desktop matrix needs, which is why they cannot be triggered
+by the tag itself. To rebuild one platform for an already-published tag, dispatch
+it by hand on the same tag - that stays the repair path.
+
+Linux runs the same Core/host/deb/rpm verification as CI and **attaches the
+verified packages to that Release automatically**; nothing is uploaded by hand,
+and there is no in-app updater manifest or AppImage. Because the tag now ships
+Linux unattended, the device acceptance in
+[docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+is a **pre-tag** gate rather than a post-build one.
+
+HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
+`OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
+HUAWEI AppGallery Connect. The automatic dispatch uses `channel: none`, the
+repository path: the HAP is attached to the GitHub Release unsigned and nothing
+reaches the store. Set the repository variable `HARMONY_AUTO_CHANNEL` to
+`release` (production) or `test` (test channel) to have the signed package
+uploaded as the AGC candidate package automatically; the upload never submits it
+for review, so store submission remains a human decision either way.
 
 The build needs the official HarmonyOS command-line tools (SDK + hvigor + ohpm +
 bundled node). Huawei's download page wants an account, but the same archive is
@@ -149,9 +165,34 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 4. The applicable [desktop feature and device acceptance](docs/2.0-desktop-acceptance.md), signing, and distribution requirements are met; green builds alone do not establish product readiness. Linux acceptance below is required before including Linux assets.
 5. Then, and only then, push the release tag.
 6. Both Beta and Stable tag workflows upload Tauri and Android assets to a shared
-   draft. Wait for **both** workflows to succeed, verify the packages and channel
-   updater manifests, then publish that draft (Beta as a prerelease; Stable as latest).
+   draft. Wait for **both** workflows to succeed, verify the packages, then publish that
+   draft (Beta as a prerelease; Stable as latest).
    Do not rerun an asset workflow after publication without first returning the release to draft.
+
+   The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
+   `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
+   current clients read the CDN, not the release. Download them from the run and publish them to
+   the CDN as part of publishing the release:
+
+   | platform | workflow artifact |
+   | --- | --- |
+   | macOS | `openless-macos-<arch>-updater` |
+   | Windows | `openless-windows-x64-updater` |
+   | Android | `openless-android-updater-manifests` |
+
+   Destination (overwrite in place; the file name is per platform and channel, never per
+   version):
+
+   ```text
+   https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+   https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+   ```
+
+   Their `url` fields must point at the CDN artifacts (`.../releases/{tag}/{asset}`).
+   Manifest upload is the step that makes a release reachable by auto-update: a published
+   release whose manifests were not synced is downloadable by hand but invisible to the updater.
+   Clients built before the CDN switch read the old `releases/latest/download/latest-*.json`
+   assets, which new releases no longer carry, so they need one manual download.
 7. Publishing Stable with the administrator's CLI/UI credential automatically
    triggers `sync-homebrew-cask.yml`. It accepts only the published latest Stable
    tag, preserves application build metadata in DMG filenames, verifies matching
@@ -248,6 +289,7 @@ candidate package.
 | Variable (optional) | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
 | Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
+| Variable (optional) | `HARMONY_AUTO_CHANNEL` | `none` (default) / `release` / `test` - the channel the automatic tag-build dispatch runs with; `release` or `test` upload the signed App Pack to AppGallery as the candidate package (never submitted for review) |
 
 The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
 `HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there
@@ -324,6 +366,6 @@ change the published channel. The same format applies to subsequent releases.
 2. For a Stable release, a maintainer merges `beta → main`.
 3. An **admin** bumps the Tauri version (five-location sync), verifies CI is green,
    and pushes the release tag, which triggers the macOS/Windows/Android asset
-   workflows and their channel-specific updater manifests.
+   workflows and their channel updater manifests.
 4. After both release workflows pass, an admin verifies and publishes the shared
    draft. Linux packages are attached independently only after Linux acceptance.

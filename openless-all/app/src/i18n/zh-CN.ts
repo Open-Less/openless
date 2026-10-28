@@ -1470,6 +1470,35 @@ export const zhCN = {
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       dsp: {
+        aec: '系统回声消除',
+        systemNoise: '系统降噪',
+        systemAgc: '系统自动增益',
+        unavailable: '当前设备不支持',
+        androidEffectsHint:
+          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+        effectsActive: '本次录音已启用系统音效。',
+        spectrum: '输入／处理后频谱',
+        spectrumHint:
+          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+        spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
+        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        presets: '均衡器预设',
+        choosePreset: '选择预设',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人声',
+        preset_deepVoice: '低沉人声',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人声',
+        preset_warmVocal: '温暖人声',
+
+        aecOff: '关闭',
+        aecLight: '轻量（省 CPU）',
+        aecModel: '模型（更强）',
+        aecModelHint:
+          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
+        aecHint:
+          '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        buffer: '输出缓冲区',
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
         noise: '降噪算法',
@@ -1494,6 +1523,9 @@ export const zhCN = {
         down: '下移',
         reset: '恢复增强默认设置',
       },
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
         '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
@@ -1578,6 +1610,10 @@ export const zhCN = {
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
+      debugArchiveProcessedLabel: '保存处理后的音频',
+      debugArchiveProcessedDesc: '降噪与增益之后的版本，仍保存在原来的录制文件里。',
+      debugArchiveRawLabel: '另存一份处理前的音频',
+      debugArchiveRawDesc: '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
       recordAudioForDebugDesc: '保存原始麦克风音频为 wav，便于排查识别问题。',
       audioRecordingMaxEntriesLabel: '原始录音保留条数',

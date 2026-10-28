@@ -140,10 +140,11 @@ pub enum MacosNewlineMode {
 }
 
 /// Auto-update channel. Picks which manifest the background AutoUpdateGate
-/// fetches. `Stable` = `latest-android-{arch}.json` (or the desktop
-/// plugin-updater stable endpoints). `Beta` = `latest-android-{arch}-beta.json`
-/// (or the desktop beta endpoints). The Settings manual "check stable / check
-/// beta" buttons pass the channel explicitly and ignore this pref.
+/// fetches. `Stable` = `/updates/stable/latest-{target}-{arch}.json` on the CDN
+/// (`latest-android-{arch}.json` for the Android client). `Beta` = the
+/// `/updates/beta/` counterpart with a `-beta` filename suffix. The Settings
+/// manual "check stable / check beta" buttons pass the channel explicitly and
+/// ignore this pref.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -427,6 +428,9 @@ pub struct UserPreferences {
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,
+    /// Optional local playback-reference cancellation; independent of enhancement.
+    #[serde(default)]
+    pub echo_cancellation_enabled: bool,
     #[serde(default)]
     pub audio_dsp: crate::audio_dsp::AudioDspConfig,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
@@ -870,6 +874,20 @@ pub struct UserPreferences {
     /// policy as `history_retention_days`.
     #[serde(default)]
     pub record_audio_for_debug: bool,
+    /// 调试录音里保留「处理后」的音频（降噪/增益/AGC 之后）。占用现有档案名
+    /// `<session>.wav`，quick note 播放与本地 ASR 回退都用它。默认 false：
+    /// 只有显式选择才会落盘。
+    #[serde(default)]
+    pub debug_archive_processed: bool,
+    /// 调试录音里额外保留「处理前」的原始音频，写成同目录的
+    /// `<session>.raw.wav`，用于和 `debug_archive_processed` 的那份做 A/B 对照。
+    /// 只选它、不选处理后时，主档案直接存原始 PCM（功能不受影响）。
+    #[serde(default)]
+    pub debug_archive_raw: bool,
+    /// AEC 的扬声器参考源（回环/监听设备名）。空字符串 = 自动选默认扬声器的
+    /// 监听源；`"off"` = 不采集参考（AEC 退化为无参考）。
+    #[serde(default)]
+    pub aec_reference_device_name: String,
     /// How many recent wav files `recordings/` keeps (newest first by mtime).
     /// `None` = follow `HISTORY_CAP` (200); `Some(n)` clamps to 1..=200.
     /// Trimmed before each new session. Lets users tune combinations like
@@ -1027,6 +1045,8 @@ struct UserPreferencesWire {
     mute_during_recording: bool,
     #[serde(default)]
     audio_enhancement_enabled: bool,
+    #[serde(default)]
+    echo_cancellation_enabled: bool,
     #[serde(default)]
     audio_dsp: crate::audio_dsp::AudioDspConfig,
     #[serde(default)]
@@ -1225,6 +1245,12 @@ struct UserPreferencesWire {
     #[serde(default)]
     record_audio_for_debug: bool,
     #[serde(default)]
+    debug_archive_processed: bool,
+    #[serde(default)]
+    debug_archive_raw: bool,
+    #[serde(default)]
+    aec_reference_device_name: String,
+    #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
     quick_note_export_directory: String,
@@ -1314,6 +1340,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             audio_dsp: prefs.audio_dsp.normalized(),
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
@@ -1417,6 +1444,9 @@ impl Default for UserPreferencesWire {
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
+            debug_archive_processed: prefs.debug_archive_processed,
+            debug_archive_raw: prefs.debug_archive_raw,
+            aec_reference_device_name: prefs.aec_reference_device_name.clone(),
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
@@ -1535,6 +1565,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
+            echo_cancellation_enabled: wire.echo_cancellation_enabled,
             audio_dsp: wire.audio_dsp.normalized(),
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
@@ -1654,6 +1685,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
+            debug_archive_processed: wire.debug_archive_processed,
+            debug_archive_raw: wire.debug_archive_raw,
+            aec_reference_device_name: wire.aec_reference_device_name,
             audio_recording_max_entries: wire.audio_recording_max_entries,
             quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
@@ -1934,6 +1968,7 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
+            echo_cancellation_enabled: false,
             audio_dsp: Default::default(),
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
@@ -2034,6 +2069,9 @@ impl Default for UserPreferences {
             auto_update_check: true,
             history_max_entries: None,
             record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
+            aec_reference_device_name: String::new(),
             audio_recording_max_entries: None,
             quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),

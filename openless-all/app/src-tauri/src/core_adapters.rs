@@ -150,6 +150,7 @@ pub(crate) fn backend_dependencies(
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
+                echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                 dsp: prefs.audio_dsp,
             },
         );
@@ -2007,6 +2008,7 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
             );
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences_snapshot.echo_cancellation_enabled,
                 dsp: preferences_snapshot.audio_dsp,
             };
             if let Some(wake_asr) = wake_asr.as_ref() {
@@ -2272,6 +2274,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                         .then(|| prefs.microphone_device_name.clone()),
                     openless_core::AudioProcessingConfig {
                         enhancement_enabled: prefs.audio_enhancement_enabled,
+                        echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                         dsp: prefs.audio_dsp,
                     },
                 );
@@ -2964,13 +2967,13 @@ impl TauriStagedCapture {
         self,
         consumer: Arc<dyn LegacyAudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        archive_path: Option<PathBuf>,
+        archives: crate::recorder::ArchiveTargets,
         processing: openless_core::AudioProcessingConfig,
     ) -> Result<TauriCommittedCapture, RecorderError> {
         match self {
             Self::Cold(staged) => {
                 let (recorder, runtime_errors, archive_active) =
-                    staged.commit(consumer, level_handler, archive_path)?;
+                    staged.commit(consumer, level_handler, archives)?;
                 Ok(TauriCommittedCapture::Cold {
                     recorder,
                     runtime_errors,
@@ -2983,8 +2986,8 @@ impl TauriStagedCapture {
                 let fallback_hub = staged.capture_hub();
                 let fallback_consumer = Arc::clone(&consumer);
                 let fallback_level_handler = Arc::clone(&level_handler);
-                let fallback_archive_path = archive_path.clone();
-                match staged.commit(consumer, level_handler, archive_path) {
+                let fallback_archives = archives.clone();
+                match staged.commit(consumer, level_handler, archives) {
                     Ok((capture, runtime_errors, archive_active)) => {
                         Ok(TauriCommittedCapture::Warm {
                             capture,
@@ -3022,7 +3025,7 @@ impl TauriStagedCapture {
                                 })
                                 .unwrap_or(fallback_consumer),
                             fallback_level_handler,
-                            fallback_archive_path,
+                            fallback_archives,
                         ) {
                             Ok(committed) => committed,
                             Err(error) => {
@@ -3101,10 +3104,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                 openless_core::DictationOutputTarget::QuickNote
                     | openless_core::DictationOutputTarget::Undecided
             );
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),
@@ -3128,6 +3128,15 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     })
                     .ok()
                     .flatten();
+                // 调试录音：主档案写处理后（或只勾处理前时写原始），需要对照时
+                // 同目录再存一份 `<session>.raw.wav`。
+                let archives = crate::recorder::ArchiveTargets {
+                    processed: archive_path.clone(),
+                    raw: (recording_plan.archive_raw && archive_path.is_some())
+                        .then(|| archive_path.as_ref().map(|path| path.with_extension("raw.wav")))
+                        .flatten(),
+                    write_processed: recording_plan.archive_processed,
+                };
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
@@ -3154,7 +3163,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                             .commit(
                                 consumer,
                                 level_handler,
-                                archive_path.clone(),
+                                archives.clone(),
                                 recording_plan.audio_processing,
                             )
                             .map_err(map_recorder_error)
@@ -3701,10 +3710,7 @@ impl AudioRecorder for TauriAudioRecorder {
             );
             // Undecided Android captures use the permanent quick-note spool
             // until the terminal tap/gesture classifies the session.
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),
