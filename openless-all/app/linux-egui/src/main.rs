@@ -65,6 +65,12 @@ mod linux_app {
             result: Result<String, String>,
         },
         HotkeyError(BackendError),
+        /// 关于页的更新检测结果（Linux 只检测 + 跳转，不安装）。
+        Update {
+            /// 后台自动检查（找到新版本时给一条桌面通知，手动检查不打扰）。
+            auto: bool,
+            result: Result<Option<openless_linux_egui::update_check::UpdateCheck>, String>,
+        },
         ProviderSaved {
             editor: Box<ProviderEditor>,
             result: Result<(), String>,
@@ -581,6 +587,8 @@ mod linux_app {
         settings_channels_request: u64,
         settings_channels_refresh_requested: bool,
         linux_access_last_check: Option<std::time::Instant>,
+        /// 上次自动检查更新的时间（`auto_update_check` 打开时每 60 分钟一次）。
+        last_update_check: Option<std::time::Instant>,
         /// 语言模型 / 语音识别是否各自有启用的渠道（AI 服务页的状态点）。
         service_configured: [bool; 2],
         /// 文本型设置行（端口/条数/路径…）只在偏好刚载入或外部变更时回灌，
@@ -839,6 +847,7 @@ mod linux_app {
                         settings_channels_request: 0,
                         settings_channels_refresh_requested: false,
                         linux_access_last_check: None,
+                        last_update_check: None,
                         service_configured: [false; 2],
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
@@ -955,6 +964,7 @@ mod linux_app {
                     settings_channels_request: 0,
                     settings_channels_refresh_requested: false,
                     linux_access_last_check: None,
+                    last_update_check: None,
                     service_configured: [false; 2],
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
@@ -1373,6 +1383,23 @@ mod linux_app {
                         .collect(),
                     selection_preview: state.selection_preview,
                     streaming_answer: state.chunk.unwrap_or_default(),
+                    // 电平走高频率的 `HostToPopup::QaLevel`，快照里只保证录音相位
+                    // 切换时不残留上一段的电平。
+                    audio_level: None,
+                    // Tauri 的 `qa.activity.*`：把「思考中」换成具体动作。
+                    activity: state.activity.as_ref().map(|activity| {
+                        match activity.kind {
+                            openless_core::domains::QaActivityKind::Thinking => "thinking",
+                            openless_core::domains::QaActivityKind::SearchingWeb => "searching_web",
+                            openless_core::domains::QaActivityKind::ReadingWeb => "reading_web",
+                            openless_core::domains::QaActivityKind::UsingTool => "using_tool",
+                        }
+                        .to_string()
+                    }),
+                    activity_tool: state
+                        .activity
+                        .as_ref()
+                        .and_then(|activity| activity.tool_name.clone()),
                     error: state.error,
                     edit_instruction_mode: self.qa_edit.instruction_mode,
                     edit_apply_available: self.qa_edit.apply_available,
@@ -3779,6 +3806,81 @@ mod linux_app {
                 BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
                     self.load_library()
                 }
+                BackendEventKind::MicrophoneDevicesChanged => {
+                    // 麦克风热插拔：重扫设备列表，否则设置页的下拉会停在旧设备上。
+                    log::info!("[audio] microphone devices changed; reloading the list");
+                    self.load_microphones();
+                }
+                BackendEventKind::HotkeyStatusChanged(status) => {
+                    // 热键注册状态（fcitx5 插件重载/注册失败等）：失败时把原因亮出来，
+                    // 并强制下一帧重探隐私页的探针状态，避免页面继续显示「已就绪」。
+                    self.linux_access_last_check = None;
+                    if matches!(
+                        status.state,
+                        openless_core::shared_types::HotkeyStatusState::Failed
+                    ) {
+                        let detail = status
+                            .message
+                            .clone()
+                            .or_else(|| status.last_error.as_ref().map(|error| format!("{error:?}")))
+                            .unwrap_or_else(|| "hotkey registration failed".to_string());
+                        log::warn!("[hotkey] status failed: {detail}");
+                        self.status =
+                            fmt_l10n(self.lang, "status.hotkey_failed", &[&detail]);
+                    }
+                }
+                BackendEventKind::InsertFallback(fallback) => {
+                    // 插入没成功（例如目标窗口拿不到焦点）：Core 已经兜底把文字
+                    // 放进了剪贴板，但用户不看剪贴板就不知道 —— 必须显式说一声。
+                    // `reason` 是给日志看的错误码（Tauri 也不显示它）。
+                    log::info!("[insert] fallback: {}", fallback.reason);
+                    let message = tr_l10n(lang, "status.insert_fallback").to_string();
+                    self.status = message.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = notify(Notification {
+                            summary: "OpenLess",
+                            body: &message,
+                            icon: "openless",
+                            timeout_ms: 0,
+                        }) {
+                            log::warn!("OpenLess insert-fallback notification failed: {error}");
+                        }
+                    });
+                }
+                BackendEventKind::Notification(payload) => {
+                    // Core 主动通知（插件升级、权限变化等）。Linux 用桌面通知呈现，
+                    // 同时也留在状态行里，免得通知中心被清掉后无从追溯。
+                    let message = payload.message.clone();
+                    self.status = message.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = notify(Notification {
+                            summary: "OpenLess",
+                            body: &message,
+                            icon: "openless",
+                            timeout_ms: 0,
+                        }) {
+                            log::warn!("OpenLess notification failed: {error}");
+                        }
+                    });
+                }
+                BackendEventKind::QaLevel(level) => {
+                    // 电平是高频消息：只转发给当前会话的面板，窗口没开就直接丢。
+                    let current = self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref());
+                    if current == Some(level.session_id.as_str()) && self.qa_visible {
+                        self.send_popup(
+                            PopupKind::Qa,
+                            HostToPopup::QaLevel {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: level.session_id,
+                                sequence: self.last_event_sequence,
+                                level: level.level,
+                            },
+                        );
+                    }
+                }
                 BackendEventKind::QaState(state) => {
                     self.qa_edit.merge(&state);
                     if state.kind == QaStateKind::AnswerDelta {
@@ -4583,6 +4685,44 @@ mod linux_app {
                             );
                         }
                     }
+                    UiResult::Update { auto, result } => {
+                        self.last_update_check = Some(std::time::Instant::now());
+                        if auto {
+                            if let Ok(Some(check)) = &result {
+                                if check.newer {
+                                    let message = openless_linux_egui::fmt_l10n(
+                                        self.lang,
+                                        "settings.about.update_available",
+                                        &[&check.latest.version],
+                                    );
+                                    self.status = message.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(error) = notify(Notification {
+                                            summary: "OpenLess",
+                                            body: &message,
+                                            icon: "openless",
+                                            timeout_ms: 0,
+                                        }) {
+                                            log::warn!(
+                                                "OpenLess update notification failed: {error}"
+                                            );
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        self.frontend_vm.settings.update_state = match result {
+                            Ok(Some(check)) if check.newer => {
+                                frontend::view_model::UpdateState::Available {
+                                    version: check.latest.version.clone(),
+                                    url: check.latest.url.clone(),
+                                }
+                            }
+                            Ok(Some(_)) => frontend::view_model::UpdateState::UpToDate,
+                            Ok(None) => frontend::view_model::UpdateState::UpToDate,
+                            Err(message) => frontend::view_model::UpdateState::Failed { message },
+                        };
+                    }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
                     UiResult::Remote(Err(error)) => self.status = error,
                     UiResult::Providers {
@@ -5328,6 +5468,33 @@ mod linux_app {
 
         // ── Frontend bridge ─────────────────────────────────────────────────
 
+        /// 检查更新：Linux 只判断「有没有更新的发布」，不下载安装
+        /// （deb/rpm 无法自替换，安装交给用户点发布页）。
+        fn check_updates(&mut self) {
+            self.check_updates_with(false);
+        }
+
+        /// `auto = true`：后台定时检查，发现新版本时额外发一条桌面通知。
+        fn check_updates_with(&mut self, auto: bool) {
+            let channel = match self.backend() {
+                Some(backend) => {
+                    let prefs = backend.get_preferences();
+                    if prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta {
+                        openless_linux_egui::update_check::UpdateChannel::Beta
+                    } else {
+                        openless_linux_egui::update_check::UpdateChannel::Stable
+                    }
+                }
+                None => openless_linux_egui::update_check::UpdateChannel::Stable,
+            };
+            self.frontend_vm.settings.update_state = frontend::view_model::UpdateState::Checking;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = openless_linux_egui::update_check::check(channel).await;
+                let _ = tx.send(UiResult::Update { auto, result });
+            });
+        }
+
         /// Sync backend state into the frontend view model each frame before
         /// rendering. Only fields that have real data sources are populated;
         /// unwired fields remain in their default empty / loading state.
@@ -5342,6 +5509,22 @@ mod linux_app {
                     .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(30))
             {
                 self.refresh_linux_access();
+            }
+            // 自动检查更新：开关打开时启动后查一次、之后每 60 分钟一次。
+            // 只在空闲态触发，避免与手动检查并发。
+            if matches!(
+                self.frontend_vm.settings.update_state,
+                frontend::view_model::UpdateState::Idle
+            ) {
+                if let Some(backend) = self.backend() {
+                    if backend.get_preferences().auto_update_check
+                        && self
+                            .last_update_check
+                            .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(3600))
+                    {
+                        self.check_updates_with(true);
+                    }
+                }
             }
             self.frontend_vm.settings_saving = self.settings_save.in_flight.is_some();
             self.frontend_vm.settings_save_error = self.settings_save.error.clone();
@@ -5531,6 +5714,16 @@ mod linux_app {
                 s.stable_transcription = prefs.stable_transcription_enabled;
                 s.start_minimized = prefs.start_minimized;
                 s.auto_update = prefs.auto_update_check;
+                s.update_beta_channel =
+                    prefs.update_channel == openless_core::shared_types::UpdateChannel::Beta;
+                s.cursor_context = prefs.cursor_context_enabled;
+                s.vocabulary_learning = prefs.vocabulary_learning_enabled;
+                let vocab = prefs.vocabulary_learning_settings.normalized();
+                if hydrate_text {
+                    s.vocab_observation_seconds = vocab.observation_seconds.to_string();
+                    s.vocab_suggestion_seconds = vocab.suggestion_seconds.to_string();
+                    s.vocab_max_phrase_chars = vocab.max_phrase_chars.to_string();
+                }
                 s.remote_input = prefs.remote_input_enabled;
                 if hydrate_text {
                     s.remote_port = prefs.remote_input_port.to_string();
@@ -11691,6 +11884,9 @@ Internal flags (set by OpenLess itself, not for regular use):
                 messages: Vec::new(),
                 selection_preview: None,
                 streaming_answer: String::new(),
+                audio_level: None,
+                activity: None,
+                activity_tool: None,
                 error: None,
                 edit_instruction_mode: false,
                 edit_apply_available: false,

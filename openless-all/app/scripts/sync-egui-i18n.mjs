@@ -47,6 +47,12 @@ const KEEP_EGUI = new Set([
   'history.retranscribe',
   // Linux 已删除 Less Computer，代理说明里不能再提它（Tauri 仍保留该功能）。
   'settings.network.use_system_proxy_desc',
+  // Linux 的更新检测只到「发现新版本 + 跳下载页」，Tauri 没有同句文案。
+  'settings.about.update_available',
+  // Linux 用桌面通知 + 状态行代替 Tauri 的插入兜底卡片，Tauri 没有同句文案。
+  'status.insert_fallback',
+  // Linux 把热键注册失败的原因直接写进状态行（Tauri 是弹窗）。
+  'status.hotkey_failed',
 ]);
 
 function placeholderCount(text) {
@@ -299,7 +305,7 @@ async function main() {
   const known = new Set(messages.map((message) => message.key));
   const missing = [];
   for (const key of referencedKeys()) {
-    if (known.has(key)) continue;
+    if (known.has(key) || KEEP_EGUI.has(key)) continue;
     const tauri = shared.get(normalizeKey(key));
     if (!tauri) missing.push(key);
   }

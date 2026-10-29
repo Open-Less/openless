@@ -2,8 +2,8 @@
 
 use openless_core::BackendErrorCode;
 use openless_linux_egui::{
-    fcitx5_available, fcitx5_commit_text, fcitx5_selection_text, set_fcitx5_hotkeys,
-    Fcitx5HotkeyListener,
+    fcitx5_available, fcitx5_commit_text, fcitx5_selection_text, fcitx5_surrounding_text,
+    set_fcitx5_hotkeys, Fcitx5HotkeyListener,
 };
 
 /// Exercise the real fcitx5 DBus object and listener lifecycle.  Key event
@@ -61,6 +61,19 @@ fn fcitx5_dbus_methods_and_listener_have_stable_platform_semantics() {
     ));
     drop(listener);
 
+    // 光标上下文：方法必须存在且能回答。没有焦点输入上下文时返回
+    // `Ok(None)`（应用不支持 / 没有焦点），不应报错 —— 这是宿主每次听写都会
+    // 走的一条路径，报错会污染日志并且让「不支持」看起来像故障。
+    match fcitx5_surrounding_text() {
+        Ok(Some(surrounding)) => {
+            assert!(
+                surrounding.cursor <= surrounding.text.chars().count(),
+                "cursor offset must be inside the reported text"
+            );
+        }
+        Ok(None) => {}
+        Err(error) => panic!("surrounding text must not fail without focus: {error:?}"),
+    }
     match fcitx5_selection_text() {
         Ok(_) => {}
         Err(error) => assert!(

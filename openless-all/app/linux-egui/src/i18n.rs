@@ -7923,6 +7923,268 @@ pub const CATALOG: &[Msg] = &[
         text: row("隐藏", "隱藏", "Hide", "隠す", "숨기기"),
     },
 
+    Msg {
+        key: "settings.about.beta_channel_desc",
+        text: row(
+            "开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。",
+            "開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。",
+            "When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.",
+            "オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。",
+            "켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_label",
+        text: row(
+            "加入 Beta 渠道",
+            "加入 Beta 渠道",
+            "Join Beta channel",
+            "Beta チャンネルに参加",
+            "Beta 채널 참여",
+        ),
+    },
+    Msg {
+        key: "settings.about.beta_channel_toggle_label",
+        text: row(
+            "启用 Beta 渠道",
+            "啟用 Beta 渠道",
+            "Enable Beta channel",
+            "Beta チャンネルを有効化",
+            "Beta 채널 사용",
+        ),
+    },
+    Msg {
+        key: "settings.about.checking_update",
+        text: row("检查中…", "檢查中…", "Checking…", "確認中…", "확인 중…"),
+    },
+    Msg {
+        key: "settings.about.open_releases",
+        text: row(
+            "打开 Releases",
+            "開啟 Releases",
+            "Open Releases",
+            "Releases を開く",
+            "Releases 열기",
+        ),
+    },
+    Msg {
+        key: "settings.about.up_to_date",
+        text: row(
+            "当前已是最新版本。",
+            "當前已是最新版本。",
+            "You are already on the latest version.",
+            "現在最新バージョンです。",
+            "현재 최신 버전입니다.",
+        ),
+    },
+    Msg {
+        key: "status.hotkey_failed",
+        text: row(
+            "热键注册失败：{}",
+            "熱鍵註冊失敗：{}",
+            "Hotkey registration failed: {}",
+            "ホットキーの登録に失敗しました: {}",
+            "단축키 등록에 실패했습니다: {}",
+        ),
+    },
+    Msg {
+        key: "status.insert_fallback",
+        text: row(
+            "插入失败：请确认焦点在可输入的位置后重试（文字仍保留在历史里）",
+            "插入失敗：請確認焦點在可輸入的位置後重試（文字仍保留在歷史裡）",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+            "挿入に失敗しました。入力可能な場所にフォーカスして再試行してください（テキストは履歴に残ります）",
+            "삽입에 실패했습니다. 입력 가능한 곳에 포커스를 두고 다시 시도하세요(텍스트는 기록에 남아 있습니다)",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_available",
+        text: row(
+            "有新版本 v{}",
+            "有新版本 v{}",
+            "Version v{} is available",
+            "新しいバージョン v{} があります",
+            "새 버전 v{}이(가) 있습니다",
+        ),
+    },
+    Msg {
+        key: "settings.about.update_error",
+        text: row(
+            "检查或更新失败，请稍后重试。",
+            "檢查或更新失敗，請稍後重試。",
+            "Update check or install failed. Please try again later.",
+            "確認またはアップデートに失敗しました。後で再試行してください。",
+            "확인 또는 업데이트에 실패했습니다. 잠시 후 다시 시도하세요.",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_beta_update_btn",
+        text: row(
+            "检查 Beta 更新",
+            "檢查 Beta 更新",
+            "Check Beta update",
+            "Beta を確認",
+            "Beta 확인",
+        ),
+    },
+    Msg {
+        key: "settings.about.check_stable_update_btn",
+        text: row(
+            "检查正式版更新",
+            "檢查正式版更新",
+            "Check stable update",
+            "正式版を確認",
+            "정식판 확인",
+        ),
+    },
+    Msg {
+        key: "settings.data_storage.cursor_context_desc",
+        text: row(
+            "润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。",
+            "潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。",
+            "Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.",
+            "推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。",
+            "다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.",
+        ),
+    },
+    Msg {
+        key: "settings.data_storage.cursor_context_label",
+        text: row(
+            "光标上下文（实验）",
+            "遊標上下文（實驗）",
+            "Cursor context (experimental)",
+            "カーソル文脈（実験的）",
+            "커서 문맥 (실험적)",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.description",
+        text: row(
+            "插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。",
+            "插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。",
+            "After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.",
+            "挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。",
+            "입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.enabled",
+        text: row(
+            "启用手改学词",
+            "啟用手改學詞",
+            "Enable learning from corrections",
+            "修正からの学習を有効にする",
+            "수정 학습 사용",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars",
+        text: row(
+            "最大词长",
+            "最大詞長",
+            "Maximum phrase length",
+            "最大文字数",
+            "최대 글자 수",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars_hint",
+        text: row(
+            "自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。",
+            "自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。",
+            "Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.",
+            "自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。",
+            "자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.observation_seconds",
+        text: row(
+            "观察时长",
+            "觀察時長",
+            "Observation duration",
+            "監視時間",
+            "관찰 시간",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.observation_seconds_hint",
+        text: row(
+            "听写落字后观察当前输入框的最长时间，10–60 秒。",
+            "聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。",
+            "Maximum time to observe the current field after dictation: 10–60 seconds.",
+            "音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。",
+            "음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.reset",
+        text: row(
+            "恢复默认参数",
+            "恢復預設參數",
+            "Reset parameters",
+            "設定値をリセット",
+            "매개변수 초기화",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds",
+        text: row(
+            "建议保留时长",
+            "建議保留時長",
+            "Suggestion duration",
+            "候補の表示時間",
+            "제안 유지 시간",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds_hint",
+        text: row(
+            "未确认的建议会在 5–60 秒后消失，不加入词典。",
+            "未確認的建議會在 5–60 秒後消失，不加入詞典。",
+            "Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.",
+            "未確認の候補は 5～60 秒後に消え、辞書には追加されません。",
+            "확인하지 않은 제안은 5~60초 후 사전에 추가되지 않고 사라집니다.",
+        ),
+    },
+    Msg {
+        key: "settings.vocabulary_learning.title",
+        text: row(
+            "手改学词",
+            "手改學詞",
+            "Learn from corrections",
+            "修正から単語を学習",
+            "수정으로 단어 학습",
+        ),
+    },
+    Msg {
+        key: "qa.activity.reading_web",
+        text: row(
+            "正在阅读网页",
+            "正在閱讀網頁",
+            "Reading web pages",
+            "ウェブページを読込中",
+            "웹 페이지 읽는 중",
+        ),
+    },
+    Msg {
+        key: "qa.activity.searching_web",
+        text: row(
+            "正在搜索网页",
+            "正在搜尋網頁",
+            "Searching the web",
+            "ウェブを検索中",
+            "웹 검색 중",
+        ),
+    },
+    Msg {
+        key: "qa.activity.tool",
+        text: row("工具", "工具", "tool", "ツール", "도구"),
+    },
+    Msg {
+        key: "qa.activity.using_tool",
+        text: row("正在使用 {}", "正在使用 {}", "Using {}", "{} を使用中", "{} 사용 중"),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
