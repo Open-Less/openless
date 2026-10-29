@@ -52,14 +52,14 @@
 
 <p align="center">
   <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Mivra)" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">悠雾云数据 · Mivra (mivra.dev)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
 </p>
 
 <p align="center">
-  悠雾云数据（Mivra）专注云服务器与物理裸机，节点覆盖香港、美国与游戏云，支持按需选配，为中小企业提供稳定可靠的算力。
+  Mivra 专注云服务器与物理裸机，节点覆盖香港、美国与游戏云，支持按需选配，为中小企业提供稳定可靠的算力。
 </p>
 
 <h2 align="center">开发者</h2>

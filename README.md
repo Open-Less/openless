@@ -52,14 +52,14 @@
 
 <p align="center">
   <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Mivra)" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">悠雾云数据 · Mivra (mivra.dev)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
 </p>
 
 <p align="center">
-  Mivra (悠雾云数据) provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
+  Mivra provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
 </p>
 
 <h2 align="center">Developers</h2>
