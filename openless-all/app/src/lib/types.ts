@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;
@@ -588,6 +589,7 @@ export interface UserPreferences {
     observationSeconds: number;
     suggestionSeconds: number;
     maxPhraseChars: number;
+    suggestionPosition: 'nearInput' | 'bottomRight';
   };
   /** Whether Overview shows the yearly activity heatmap card. Default true; turning it off only hides the card, activity counting continues. */
   showOverviewActivityHeatmap: boolean;

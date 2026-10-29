@@ -1312,6 +1312,11 @@ export const ko: typeof zhCN = {
     vocabularyLearning: {
       title: '수정으로 단어 학습',
       enabled: '수정 학습 사용',
+      suggestionPosition: '제안 카드 위치',
+      positionNearInput: '입력 위치 근처',
+      positionBottomRight: '오른쪽 아래 고정',
+      suggestionPositionHint:
+        'Windows 전용: 텍스트 커서나 입력란 근처에 표시하며, 위치를 알 수 없으면 원래 입력 화면의 오른쪽 아래에 표시합니다. 고정 위치는 항상 해당 화면의 작업 영역을 사용합니다.',
       observationSeconds: '관찰 시간',
       observationSecondsHint: '음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).',
       suggestionSeconds: '제안 유지 시간',

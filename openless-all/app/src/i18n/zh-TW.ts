@@ -1276,6 +1276,11 @@ export const zhTW: typeof zhCN = {
     vocabularyLearning: {
       title: '手改學詞',
       enabled: '啟用手改學詞',
+      suggestionPosition: '建議卡片位置',
+      positionNearInput: '輸入位置附近',
+      positionBottomRight: '固定右下角',
+      suggestionPositionHint:
+        '僅 Windows：預設靠近文字游標或輸入框；無法定位時退回原輸入目標所在螢幕的右下角。固定右下角一律使用該螢幕的工作區。',
       observationSeconds: '觀察時長',
       observationSecondsHint: '聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。',
       suggestionSeconds: '建議保留時長',

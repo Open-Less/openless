@@ -1,6 +1,7 @@
 //! Short-lived UIA observation. All registration and COM objects belong to one
 //! MTA worker; callbacks only mark text dirty and never read document contents.
 use super::EditPair;
+use crate::vocab_card_placement::{AnchorSnapshot, Rect};
 use openless_core::host_document::ObservedInsertion;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,7 +24,7 @@ use windows::Win32::{
     UI::{Accessibility::*, WindowsAndMessaging::GetForegroundWindow},
 };
 
-type Callback = Box<dyn Fn(EditPair) -> bool + Send + Sync>;
+type Callback = Box<dyn Fn(EditPair, Option<AnchorSnapshot>) -> bool + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub(super) struct VoiceEditTarget {
@@ -377,6 +378,8 @@ pub(crate) fn insert_with_delivery_check(
 }
 struct Request {
     text: String,
+    target: crate::selection::SelectionInsertionTarget,
+    on_end: Box<dyn Fn() + Send + Sync>,
     window: isize,
     lifetime: Duration,
     stop: Arc<AtomicBool>,
@@ -412,7 +415,9 @@ impl IUIAutomationPropertyChangedEventHandler_Impl for Changed_Impl {
 pub(super) fn spawn_edit_watcher(
     text: String,
     lifetime: Duration,
+    target: crate::selection::SelectionInsertionTarget,
     callback: Callback,
+    on_end: Box<dyn Fn() + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     if text.trim().is_empty() {
         return None;
@@ -431,6 +436,7 @@ pub(super) fn spawn_edit_watcher(
                         if !request.stop.load(Ordering::Acquire) {
                             let _ = observe(&request);
                         }
+                        (request.on_end)();
                     }
                     CoUninitialize();
                 })
@@ -443,6 +449,8 @@ pub(super) fn spawn_edit_watcher(
         .send(Request {
             text,
             lifetime,
+            target,
+            on_end,
             window: unsafe { GetForegroundWindow().0 as isize },
             stop: stop.clone(),
             callback,
@@ -526,7 +534,104 @@ unsafe fn read_text(element: &IUIAutomationElement) -> Result<String> {
     Ok(text)
 }
 
+fn physical_rect(rect: windows::Win32::Foundation::RECT) -> Option<Rect> {
+    let rect = Rect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+    rect.valid().then_some(rect)
+}
+
+unsafe fn caret_screen_rect(element: &IUIAutomationElement) -> Option<Rect> {
+    use windows::Win32::System::Ole::{
+        SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    };
+    let CaretLookup::Found(range, _) = find_caret_range(element) else {
+        return None;
+    };
+    let array = range.GetBoundingRectangles().ok()?;
+    if array.is_null() {
+        return None;
+    }
+    // A collapsed range can legitimately have no rectangles. Never expand it into
+    // unrelated text merely to manufacture a precise-looking caret position.
+    let rect = (|| {
+        let first = SafeArrayGetLBound(array, 1).ok()?;
+        let last = SafeArrayGetUBound(array, 1).ok()?;
+        if last.checked_sub(first)? != 3 {
+            return None;
+        }
+        let mut values = [0.0f64; 4];
+        for (offset, value) in values.iter_mut().enumerate() {
+            let index = first + offset as i32;
+            SafeArrayGetElement(array, &index, value as *mut f64 as *mut _).ok()?;
+        }
+        Rect::from_xywh(values[0], values[1], values[2], values[3])
+    })();
+    let _ = SafeArrayDestroy(array);
+    rect
+}
+
+unsafe fn capture_placement(
+    element: &IUIAutomationElement,
+    window: HWND,
+) -> Option<AnchorSnapshot> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowThreadProcessId};
+    let mut window_rect = RECT::default();
+    GetWindowRect(window, &mut window_rect).ok()?;
+    let window_rect = physical_rect(window_rect)?;
+    let mut process_id = 0;
+    GetWindowThreadProcessId(window, Some(&mut process_id));
+    if process_id == 0 {
+        return None;
+    }
+    let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let screen_rect = GetMonitorInfoW(monitor, &mut info)
+        .as_bool()
+        .then(|| physical_rect(info.rcMonitor))
+        .flatten();
+    let anchor = if element
+        .CurrentIsOffscreen()
+        .map(|value| value.as_bool())
+        .unwrap_or(true)
+    {
+        None
+    } else {
+        caret_screen_rect(element).or_else(|| {
+            let rect = physical_rect(element.CurrentBoundingRectangle().ok()?)?;
+            // A whole document is not an insertion point. Large controls use the
+            // original monitor's corner instead of covering the editor itself.
+            let screen = screen_rect?;
+            let width = i64::from(rect.right) - i64::from(rect.left);
+            let height = i64::from(rect.bottom) - i64::from(rect.top);
+            (width > 0 && height * 2 < i64::from(screen.bottom) - i64::from(screen.top))
+                .then_some(rect)
+        })
+    };
+    Some(AnchorSnapshot {
+        window: window.0 as usize,
+        process_id,
+        window_rect,
+        anchor,
+        screen_rect,
+        captured_at: Instant::now(),
+    })
+}
+
 unsafe fn observe(request: &Request) -> Result<()> {
+    if !crate::selection::selection_insertion_target_is_current(&request.target) {
+        return Ok(());
+    }
     let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
     let timeouts: IUIAutomation2 = uia.cast()?;
     timeouts.SetConnectionTimeout(200)?;
@@ -537,6 +642,7 @@ unsafe fn observe(request: &Request) -> Result<()> {
     }
     let active = || -> Result<bool> {
         Ok(!request.stop.load(Ordering::Acquire)
+            && crate::selection::selection_insertion_target_is_current(&request.target)
             && GetForegroundWindow() == HWND(request.window as *mut _)
             && !element.CurrentIsPassword()?.as_bool()
             && uia
@@ -593,7 +699,8 @@ unsafe fn observe(request: &Request) -> Result<()> {
                 let current = read_text(&element)?;
                 if !active()?
                     || !anchor.observe(&current, |edit| {
-                        !request.stop.load(Ordering::Acquire) && (request.callback)(edit)
+                        let snapshot = capture_placement(&element, HWND(request.window as *mut _));
+                        active().unwrap_or(false) && (request.callback)(edit, snapshot)
                     })
                 {
                     break;

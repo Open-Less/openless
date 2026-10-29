@@ -1350,6 +1350,11 @@ export const es: typeof zhCN = {
     vocabularyLearning: {
       title: 'Aprender de las correcciones',
       enabled: 'Activar aprendizaje de correcciones',
+      suggestionPosition: 'Posición de la tarjeta',
+      positionNearInput: 'Cerca de la entrada',
+      positionBottomRight: 'Fija abajo a la derecha',
+      suggestionPositionHint:
+        'Solo Windows: cerca del cursor de texto o del campo; si no es posible, abajo a la derecha en la pantalla de entrada original. La posición fija siempre usa el área de trabajo de esa pantalla.',
       observationSeconds: 'Tiempo de observación',
       observationSecondsHint:
         'Observar el campo actual durante un máximo de 10–60 segundos después del dictado.',

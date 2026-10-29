@@ -90,17 +90,22 @@ const VOCAB_CARD_EDGE_MARGIN: f64 = 24.0;
 /// So the window shrinks to the card's actual size while shown, and is
 /// restored when hidden.
 fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
-    let pending = inner.backend.pending_corrections();
-    if pending.is_empty() {
-        return;
-    }
+    let epoch = inner.vocab_card_epoch.next();
     let Some(capsule) = inner.host.capsule_window() else {
         return;
     };
-    let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
     let inner_for_main = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
         let inner = inner_for_main;
+        if !inner.vocab_card_epoch.is_current(epoch) {
+            return;
+        }
+        let pending = inner.backend.pending_corrections();
+        if pending.is_empty() {
+            return;
+        }
+        let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
+        let observation_ids: Vec<_> = pending.iter().map(|item| item.observation_id).collect();
         // Last gate: never show the card while dictation is not Idle.
         //
         // Upstream checks (observer generation, non-empty `pending_corrections`)
@@ -125,17 +130,34 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         #[cfg(not(mobile))]
         if let Err(e) = capsule.set_card_hit_test_mode() {
             log::warn!("[vocab-card] enabling card hit testing failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
+        #[cfg(not(target_os = "windows"))]
         if let Err(e) = capsule.set_size(VOCAB_CARD_WIDTH, height) {
             log::warn!("[vocab-card] resize failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
-        if let Err(e) =
-            capsule.position_vocab_card(VOCAB_CARD_WIDTH, height, VOCAB_CARD_EDGE_MARGIN)
-        {
+        if let Err(e) = capsule.position_vocab_card(
+            VOCAB_CARD_WIDTH,
+            height,
+            VOCAB_CARD_EDGE_MARGIN,
+            &observation_ids,
+            inner
+                .backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_position,
+        ) {
             log::warn!("[vocab-card] position failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
         if let Err(e) = capsule.refresh_card_hit_test() {
             log::warn!("[vocab-card] refreshing card hit testing failed: {e}");
+            hide_vocab_suggestion_card(&inner);
+            return;
         }
         // Positioning ditto: the dedup cache in `maybe_position_capsule_bottom_center`
         // only tracks "monitor + translation state" and knows nothing about
@@ -144,7 +166,14 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         // and leave the capsule in the bottom-right corner the card moved it
         // to.
         capsule.invalidate_layout();
-        capsule.show_for_recording(true);
+        if !capsule.show_vocab_card() {
+            log::warn!("[vocab-card] no-activate show failed; suppressing this presentation");
+            let _ = capsule.hide();
+            #[cfg(not(mobile))]
+            let _ = capsule.restore_capsule_hit_test_mode();
+            inner.vocab_card_visible.store(false, Ordering::SeqCst);
+            inner.backend.dismiss_pending_corrections();
+        }
         #[cfg(target_os = "macos")]
         capsule.restore_main_window_key_if_active();
     });
@@ -160,14 +189,21 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
 /// the same window — the capsule flickers and the user thinks the hotkey is
 /// broken.
 fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
+    let epoch = inner
+        .vocab_card_epoch
+        .request_hide(&inner.vocab_card_visible);
     inner.backend.dismiss_pending_corrections();
-    if !inner.vocab_card_visible.swap(false, Ordering::SeqCst) {
+    let Some(epoch) = epoch else {
         return;
-    }
+    };
     let Some(capsule) = inner.host.capsule_window() else {
         return;
     };
+    let inner = Arc::clone(inner);
     let _ = capsule.run_on_main_thread(move |capsule| {
+        if !inner.vocab_card_epoch.is_current(epoch) {
+            return;
+        }
         // Hide before changing geometry: restoring size and position while the
         // window is visible can composite a frame with the card stretched wide
         // and flying across half the screen.
@@ -184,6 +220,7 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         if let Err(e) = capsule.restore_capsule_geometry() {
             log::warn!("[vocab-card] restoring capsule geometry failed: {e}");
         }
+        inner.vocab_card_visible.store(false, Ordering::SeqCst);
     });
 }
 
@@ -533,6 +570,7 @@ struct Inner {
     /// every dictation start would hide the capsule window and race
     /// `emit_capsule`'s show for the same window.
     vocab_card_visible: AtomicBool,
+    vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Arc<Mutex<HotkeyStatus>>,
     /// Webview fallback only: pairs one raw keydown/up edge with the same Core press id.
@@ -728,6 +766,7 @@ impl Coordinator {
                 overlay_qa_handoff: tokio::sync::Mutex::new(()),
                 inserter: TextInserter::new(),
                 vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
                 hotkey: Mutex::new(None),
                 hotkey_status,
                 window_hotkey_press_id: AtomicU64::new(0),
@@ -868,6 +907,7 @@ impl Coordinator {
             overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
             hotkey: Mutex::new(None),
             hotkey_status,
             window_hotkey_press_id: AtomicU64::new(0),

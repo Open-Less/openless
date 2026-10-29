@@ -1333,6 +1333,11 @@ export const en: typeof zhCN = {
     vocabularyLearning: {
       title: 'Learn from corrections',
       enabled: 'Enable learning from corrections',
+      suggestionPosition: 'Suggestion card position',
+      positionNearInput: 'Near input',
+      positionBottomRight: 'Fixed bottom-right',
+      suggestionPositionHint:
+        'Windows only: prefer the text caret or input field; if unavailable, fall back to the original input screen’s bottom-right corner. Fixed bottom-right always uses that screen’s work area.',
       observationSeconds: 'Observation duration',
       observationSecondsHint:
         'Maximum time to observe the current field after dictation: 10–60 seconds.',

@@ -1321,6 +1321,11 @@ export const ja: typeof zhCN = {
     vocabularyLearning: {
       title: '修正から単語を学習',
       enabled: '修正からの学習を有効にする',
+      suggestionPosition: '提案カードの位置',
+      positionNearInput: '入力位置の近く',
+      positionBottomRight: '右下に固定',
+      suggestionPositionHint:
+        'Windows のみ：テキストカーソルまたは入力欄の近くに表示し、位置を取得できない場合は元の入力先画面の右下に表示します。固定表示では常にその画面の作業領域を使います。',
       observationSeconds: '監視時間',
       observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
       suggestionSeconds: '候補の表示時間',

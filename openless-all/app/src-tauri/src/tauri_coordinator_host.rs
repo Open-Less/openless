@@ -142,6 +142,7 @@ fn position_rail_for_capsule<R: tauri::Runtime>(
 #[derive(Clone, Copy)]
 struct CapsuleHitTestEntry {
     previous_proc: isize,
+    no_activate: bool,
     control_left: i32,
     control_right: i32,
     control_top: i32,
@@ -240,7 +241,7 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC,
-        HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST,
+        HTTRANSPARENT, MA_NOACTIVATE, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST,
     };
 
     if msg == WM_NCDESTROY {
@@ -256,6 +257,15 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
             return CallWindowProcW(previous, hwnd, msg, wparam, lparam);
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    if msg == WM_MOUSEACTIVATE
+        && capsule_hit_test_entries()
+            .lock()
+            .get(&(hwnd.0 as isize))
+            .is_some_and(|entry| entry.no_activate)
+    {
+        return windows::Win32::Foundation::LRESULT(MA_NOACTIVATE as isize);
     }
 
     if msg == WM_NCHITTEST {
@@ -297,6 +307,7 @@ unsafe extern "system" fn capsule_hit_test_window_proc(
 fn install_capsule_hit_test_proc(
     hwnd: windows::Win32::Foundation::HWND,
     rect: CapsuleHitTestRect,
+    no_activate: bool,
 ) -> tauri::Result<()> {
     use windows::Win32::Foundation::{GetLastError, SetLastError, ERROR_SUCCESS};
     use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC};
@@ -310,6 +321,7 @@ fn install_capsule_hit_test_proc(
     let key = hwnd.0 as isize;
     let mut entries = capsule_hit_test_entries().lock();
     if let Some(entry) = entries.get_mut(&key) {
+        entry.no_activate = no_activate;
         entry.control_left = rect.left;
         entry.control_right = rect.right;
         entry.control_top = rect.top;
@@ -333,6 +345,7 @@ fn install_capsule_hit_test_proc(
         key,
         CapsuleHitTestEntry {
             previous_proc: previous,
+            no_activate,
             control_left: rect.left,
             control_right: rect.right,
             control_top: rect.top,
@@ -424,7 +437,7 @@ fn configure_capsule_hit_test<R: tauri::Runtime>(
         return Ok(());
     };
     set_capsule_input_region(hwnd, rect)?;
-    if let Err(error) = install_capsule_hit_test_proc(hwnd, rect) {
+    if let Err(error) = install_capsule_hit_test_proc(hwnd, rect, false) {
         clear_capsule_input_region(hwnd);
         return Err(error);
     }
@@ -457,7 +470,7 @@ fn configure_card_hit_test<R: tauri::Runtime>(
     }
     let rect = capsule_card_hit_rect(client.right - client.left, client.bottom - client.top);
     clear_capsule_input_region(hwnd);
-    install_capsule_hit_test_proc(hwnd, rect)
+    install_capsule_hit_test_proc(hwnd, rect, true)
 }
 
 #[cfg(target_os = "windows")]
@@ -1293,6 +1306,7 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
+        self.stop_layout_watch();
         if crate::desktop_resources::active() {
             if let Some(coordinator) = self.app.try_state::<Arc<crate::coordinator::Coordinator>>()
             {
@@ -1316,6 +1330,20 @@ impl TauriCapsuleWindow {
 
     #[cfg(not(mobile))]
     pub(crate) fn restore_capsule_hit_test_mode(&self) -> tauri::Result<()> {
+        #[cfg(target_os = "windows")]
+        if let Some(window) = self.window() {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(raw) = handle.as_raw() {
+                    if let Some(entry) = capsule_hit_test_entries()
+                        .lock()
+                        .get_mut(&(raw.hwnd.get() as isize))
+                    {
+                        entry.no_activate = false;
+                    }
+                }
+            }
+        }
         self.state
             .hit_test_mode
             .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
@@ -1570,24 +1598,173 @@ impl TauriCapsuleWindow {
         width: f64,
         height: f64,
         edge_margin: f64,
+        observation_ids: &[Option<u64>],
+        position: openless_core::shared_types::VocabularySuggestionPosition,
     ) -> tauri::Result<()> {
-        let Some(window) = self.window() else {
+        #[cfg(target_os = "windows")]
+        {
+            use crate::capsule_mirrors::MonitorRect;
+            use crate::vocab_card_placement::{place_card, Rect, Screen};
+            use windows::Win32::Foundation::{HWND, RECT};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow,
+            };
+            let Some(window) = self.window() else {
+                return Ok(());
+            };
+            let state = self
+                .app
+                .try_state::<crate::core_adapters::VocabPlacementState>();
+            let ids: Vec<_> = observation_ids.iter().flatten().copied().collect();
+            if let Some(state) = state.as_ref() {
+                state.retain(&ids);
+            }
+            let id = observation_ids
+                .first()
+                .copied()
+                .flatten()
+                .filter(|id| observation_ids.iter().all(|other| *other == Some(*id)));
+            let snapshot = id.and_then(|id| state.as_ref()?.snapshot(id));
+            let monitors: Vec<_> = self
+                .app
+                .available_monitors()?
+                .iter()
+                .map(MonitorRect::from_tauri)
+                .collect();
+            let rect = |m: MonitorRect| Rect {
+                left: m.left,
+                top: m.top,
+                right: m.right,
+                bottom: m.bottom,
+            };
+            let mut anchor = None;
+            let mut source_monitor = None;
+            if let Some(snapshot) = snapshot {
+                let hwnd = HWND(snapshot.window as *mut _);
+                let mut pid = 0;
+                let mut bounds = RECT::default();
+                let valid_window = unsafe {
+                    IsWindow(hwnd).as_bool() && {
+                        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                        pid == snapshot.process_id
+                    }
+                };
+                if valid_window {
+                    source_monitor =
+                        crate::capsule_mirrors::monitor_rect_for_hwnd(&self.app, snapshot.window);
+                    let unchanged = unsafe {
+                        GetWindowRect(hwnd, &mut bounds).is_ok() && GetForegroundWindow() == hwnd
+                    };
+                    let current = Rect {
+                        left: bounds.left,
+                        top: bounds.top,
+                        right: bounds.right,
+                        bottom: bounds.bottom,
+                    };
+                    if position == openless_core::shared_types::VocabularySuggestionPosition::NearInput
+                        && unchanged
+                        && current == snapshot.window_rect
+                        && id.is_some_and(|id| {
+                            state
+                                .as_ref()
+                                .is_some_and(|state| state.source_is_current(id))
+                        })
+                    {
+                        anchor = snapshot.anchor;
+                    }
+                }
+                if source_monitor.is_none() {
+                    source_monitor = snapshot
+                        .screen_rect
+                        .and_then(|screen| monitors.iter().copied().find(|m| rect(*m) == screen));
+                }
+            }
+            let anchor_monitor = anchor.and_then(|a| {
+                let x = ((i64::from(a.left) + i64::from(a.right)) / 2) as i32;
+                let y = ((i64::from(a.top) + i64::from(a.bottom)) / 2) as i32;
+                crate::capsule_mirrors::monitor_at_point(&monitors, x, y)
+            });
+            // A detached monitor cannot keep a stale near-input anchor alive.
+            if anchor_monitor.is_none() {
+                anchor = None;
+            }
+            let monitor = anchor_monitor
+                .or(source_monitor)
+                .or_else(|| {
+                    self.app
+                        .primary_monitor()
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        .map(MonitorRect::from_tauri)
+                })
+                .or_else(|| monitors.first().copied());
+            let Some(monitor) = monitor else {
+                return Ok(());
+            };
+            let screen = Screen {
+                bounds: rect(monitor),
+                work: Rect {
+                    left: monitor.work_left,
+                    top: monitor.work_top,
+                    right: monitor.work_right,
+                    bottom: monitor.work_bottom,
+                },
+                scale: monitor.scale,
+            };
+            if let Some(p) = place_card(screen, anchor, width, height, edge_margin) {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+                };
+                let handle = window
+                    .window_handle()
+                    .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!("{error}")))?;
+                let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+                    return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+                        "card has no Win32 window"
+                    )));
+                };
+                unsafe {
+                    SetWindowPos(
+                        HWND(raw.hwnd.get() as *mut _),
+                        HWND::default(),
+                        p.x,
+                        p.y,
+                        p.width as i32,
+                        p.height as i32,
+                        SWP_NOACTIVATE | SWP_NOZORDER,
+                    )
+                    .map_err(|error| tauri::Error::Anyhow(error.into()))?;
+                }
+            } else {
+                return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+                    "no usable vocabulary card work area"
+                )));
+            }
             return Ok(());
-        };
-        let Some(monitor) = window.current_monitor()? else {
-            return Ok(());
-        };
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let position = monitor.position();
-        let monitor_width = size.width as f64 / scale;
-        let monitor_height = size.height as f64 / scale;
-        let monitor_x = position.x as f64 / scale;
-        let monitor_y = position.y as f64 / scale;
-        window.set_position(tauri::LogicalPosition::new(
-            monitor_x + monitor_width - width - edge_margin,
-            monitor_y + monitor_height - height - 80.0,
-        ))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (observation_ids, position);
+            let Some(window) = self.window() else {
+                return Ok(());
+            };
+            let Some(monitor) = window.current_monitor()? else {
+                return Ok(());
+            };
+            let scale = monitor.scale_factor();
+            let size = monitor.size();
+            let position = monitor.position();
+            let monitor_width = size.width as f64 / scale;
+            let monitor_height = size.height as f64 / scale;
+            let monitor_x = position.x as f64 / scale;
+            let monitor_y = position.y as f64 / scale;
+            window.set_position(tauri::LogicalPosition::new(
+                monitor_x + monitor_width - width - edge_margin,
+                monitor_y + monitor_height - height - 80.0,
+            ))
+        }
     }
 
     pub(crate) fn position_fallback_card(&self, width: f64, height: f64) -> tauri::Result<()> {
@@ -1810,6 +1987,29 @@ impl TauriCapsuleWindow {
             ) {
                 log::warn!("[capsule] configure client-band hit testing failed: {error}");
             }
+        }
+    }
+
+    pub(crate) fn show_vocab_card(&self) -> bool {
+        if self.state.qa_voice_active.load(Ordering::SeqCst) {
+            return false;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let Some(window) = self.window() else {
+                return false;
+            };
+            if !set_capsule_window_topmost_no_activate(&window, true) {
+                return false;
+            }
+            self.state.capsule_visible.store(true, Ordering::SeqCst);
+            self.sync_capsule_mirrors();
+            true
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.show_for_recording(true);
+            true
         }
     }
 
@@ -2040,6 +2240,7 @@ impl TauriCoordinatorHost {
     }
 
     pub(crate) fn bind(&self, app: AppHandle) {
+        app.manage(crate::core_adapters::VocabPlacementState::default());
         #[cfg(not(mobile))]
         if crate::desktop_resources::active() {
             match crate::native_capsule::NativeCapsule::new(app.clone()) {

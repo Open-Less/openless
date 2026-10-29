@@ -344,7 +344,10 @@ pub(crate) fn backend_dependencies(
     dependencies.services.platform =
         Arc::new(TauriPlatformApi::new(Arc::clone(&app), hotkey_status));
     dependencies.services.host_context = Arc::new(TauriHostContextAdapter::default());
-    dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter::default());
+    dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter {
+        app: Arc::clone(&app),
+        watcher: Mutex::new(None),
+    });
     dependencies.services.experimental_asr = experimental_asr;
     dependencies.local_asr_runtime = Some(local_asr_runtime);
     #[cfg(not(mobile))]
@@ -3855,7 +3858,67 @@ pub(crate) struct TauriTextInserter {
 }
 
 #[derive(Default)]
+pub(crate) struct VocabPlacementState {
+    targets: Mutex<
+        crate::vocab_card_placement::TargetHandoff<
+            SessionId,
+            crate::selection::SelectionInsertionTarget,
+        >,
+    >,
+    anchors: Mutex<crate::vocab_card_placement::AnchorRegistry>,
+    observed_targets: Mutex<Vec<(u64, crate::selection::SelectionInsertionTarget)>>,
+}
+
+impl VocabPlacementState {
+    fn remember_target(
+        &self,
+        session: SessionId,
+        target: crate::selection::SelectionInsertionTarget,
+    ) {
+        self.targets.lock().remember(session, target);
+    }
+
+    fn take_target(
+        &self,
+        session: SessionId,
+    ) -> Option<crate::selection::SelectionInsertionTarget> {
+        self.targets.lock().take(session)
+    }
+
+    fn begin(&self, id: u64, target: Option<&crate::selection::SelectionInsertionTarget>) {
+        let mut targets = self.observed_targets.lock();
+        targets.retain(|(key, _)| *key != id);
+        if let Some(target) = target {
+            targets.push((id, target.clone()));
+        }
+        if targets.len() > 8 {
+            targets.remove(0);
+        }
+        self.anchors.lock().begin(id);
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn source_is_current(&self, id: u64) -> bool {
+        self.observed_targets
+            .lock()
+            .iter()
+            .find(|(key, _)| *key == id)
+            .is_some_and(|(_, target)| {
+                crate::selection::selection_insertion_target_is_current(target)
+            })
+    }
+
+    pub(crate) fn snapshot(&self, id: u64) -> Option<crate::vocab_card_placement::AnchorSnapshot> {
+        self.anchors.lock().get(id)
+    }
+
+    pub(crate) fn retain(&self, ids: &[u64]) {
+        self.anchors.lock().retain(ids);
+    }
+}
+
 struct TauriEditObservationAdapter {
+    app: AppHandleSlot,
     watcher: Mutex<Option<crate::host_document::EditWatcher>>,
 }
 
@@ -3865,15 +3928,54 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
+        let app = self.app.lock().clone();
+        let state = app
+            .as_ref()
+            .and_then(|app| app.try_state::<VocabPlacementState>());
+        let observation_id = sink.observation_id();
+        let target = sink
+            .session_id()
+            .and_then(|session| state.as_ref()?.take_target(session));
+        if let (Some(state), Some(id)) = (state.as_ref(), observation_id) {
+            state.begin(id, target.as_ref());
+        }
+        drop(state);
+        let update_app = app.clone();
         *self.watcher.lock() = crate::host_document::watch_for_edits(
             typed_text,
             sink.observation_duration(),
-            move |edit| sink.publish(edit),
+            target,
+            move |edit, snapshot| {
+                if let (Some(app), Some(id)) = (update_app.as_ref(), observation_id) {
+                    if let Some(state) = app.try_state::<VocabPlacementState>() {
+                        let mut anchors = state.anchors.lock();
+                        match snapshot {
+                            Some(snapshot) => {
+                                anchors.update(id, snapshot);
+                            }
+                            None => anchors.invalidate(id),
+                        }
+                    }
+                }
+                sink.publish(edit)
+            },
+            move || {
+                if let (Some(app), Some(id)) = (app.as_ref(), observation_id) {
+                    if let Some(state) = app.try_state::<VocabPlacementState>() {
+                        state.anchors.lock().invalidate(id);
+                    }
+                }
+            },
         );
         Ok(())
     }
 
     fn disarm(&self) {
+        if let Some(app) = self.app.lock().as_ref() {
+            if let Some(state) = app.try_state::<VocabPlacementState>() {
+                state.anchors.lock().stop();
+            }
+        }
         *self.watcher.lock() = None;
     }
 }
@@ -4078,6 +4180,12 @@ impl CoreTextInserter for TauriTextInserter {
             // whichever application happens to be focused at the end.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
+            #[cfg(target_os = "windows")]
+            if let Some(handle) = app.lock().as_ref() {
+                if let Some(state) = handle.try_state::<VocabPlacementState>() {
+                    state.remember_target(session_id, insertion_target.clone());
+                }
+            }
             #[cfg(target_os = "macos")]
             let (app_handle, mut previous_input_source, streaming_ready) = {
                 let app_handle = app.lock().clone().ok_or_else(|| {

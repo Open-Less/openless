@@ -3598,6 +3598,7 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 /// Pure multi-monitor capsule helpers (tests run on every CI host). Window creation
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
+mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
 /// current style explicitly.

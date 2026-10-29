@@ -2667,6 +2667,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    session_id: SessionId,
     settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
@@ -2676,6 +2677,14 @@ struct CoreEditObservationSink {
 }
 
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.settings.observation_seconds as u64)
     }
@@ -2751,6 +2760,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            observation_id: generation.map(|(_, expected)| expected),
             expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
@@ -7343,6 +7353,7 @@ impl OpenLessBackend {
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
         let sink = Arc::new(CoreEditObservationSink {
+            session_id,
             settings: self
                 .get_preferences()
                 .vocabulary_learning_settings
@@ -9518,11 +9529,109 @@ mod tests {
         assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
         assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
         assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        assert_eq!(
+            prefs.vocabulary_learning_settings.suggestion_position,
+            crate::shared_types::VocabularySuggestionPosition::NearInput
+        );
         let restored: UserPreferences =
             serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
         assert_eq!(
             restored.vocabulary_learning_settings,
             prefs.vocabulary_learning_settings
+        );
+    }
+
+    #[test]
+    fn vocabulary_suggestion_position_roundtrips_and_defaults_for_old_settings() {
+        use crate::shared_types::{VocabularyLearningSettings, VocabularySuggestionPosition};
+        let old: VocabularyLearningSettings = serde_json::from_value(serde_json::json!({
+            "observationSeconds": 20, "suggestionSeconds": 30, "maxPhraseChars": 16
+        }))
+        .unwrap();
+        assert_eq!(
+            old.suggestion_position,
+            VocabularySuggestionPosition::NearInput
+        );
+        for (value, expected) in [
+            ("nearInput", VocabularySuggestionPosition::NearInput),
+            ("bottomRight", VocabularySuggestionPosition::BottomRight),
+        ] {
+            let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+                "vocabularyLearningSettings": { "suggestionPosition": value }
+            }))
+            .unwrap();
+            assert_eq!(
+                prefs.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+            let encoded = serde_json::to_value(&prefs).unwrap();
+            assert_eq!(
+                encoded["vocabularyLearningSettings"]["suggestionPosition"],
+                value
+            );
+            let restored: UserPreferences = serde_json::from_value(encoded).unwrap();
+            assert_eq!(
+                restored.vocabulary_learning_settings.suggestion_position,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn changing_only_vocabulary_card_position_invalidates_pending_and_stale_sink() {
+        use crate::shared_types::VocabularySuggestionPosition;
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        let before = backend.get_preferences();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: before.vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "ZIP".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::minimal_edit("ZIP", "VIP").unwrap();
+        assert!(sink.publish(edit.clone()));
+        assert!(!backend.pending_corrections().is_empty());
+        let mut prefs = before.clone();
+        prefs.vocabulary_learning_settings.suggestion_position =
+            VocabularySuggestionPosition::BottomRight;
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        let saved = backend.get_preferences();
+        assert!(saved.vocabulary_learning_enabled);
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_position,
+            VocabularySuggestionPosition::BottomRight
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.observation_seconds,
+            before.vocabulary_learning_settings.observation_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.suggestion_seconds,
+            before.vocabulary_learning_settings.suggestion_seconds
+        );
+        assert_eq!(
+            saved.vocabulary_learning_settings.max_phrase_chars,
+            before.vocabulary_learning_settings.max_phrase_chars
         );
     }
 
@@ -9542,6 +9651,7 @@ mod tests {
             )
             .unwrap();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9590,6 +9700,7 @@ mod tests {
     fn observed_spelling_correction_saves_only_the_complete_confirmed_word() {
         let (backend, _) = backend();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9602,6 +9713,8 @@ mod tests {
         ));
         let suggestions = backend.pending_corrections();
         assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].observation_id, sink.observation_id());
+        assert_eq!(suggestions[1].observation_id, sink.observation_id());
         assert_eq!(suggestions[0].pattern, "ZIP");
         assert_eq!(suggestions[0].replacement, "VIP");
         assert_eq!(suggestions[1].pattern, "codx");
@@ -12064,6 +12177,8 @@ mod tests {
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
             .unwrap();
+        assert_eq!(first.observation_id, None);
+        assert!(serde_json::to_value(&first).unwrap().get("observationId").is_none());
         assert!(backend
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()

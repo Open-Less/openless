@@ -2515,6 +2515,7 @@ pub(crate) mod less_computer_test_support {
             overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
+            vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
             hotkey: Mutex::new(None),
             hotkey_status: Arc::new(Mutex::new(HotkeyStatus::default())),
             window_hotkey_press_id: AtomicU64::new(0),

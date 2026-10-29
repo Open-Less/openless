@@ -1357,6 +1357,11 @@ export const de: typeof zhCN = {
     vocabularyLearning: {
       title: 'Aus Korrekturen lernen',
       enabled: 'Lernen aus Korrekturen aktivieren',
+      suggestionPosition: 'Position der Vorschlagskarte',
+      positionNearInput: 'Nahe der Eingabe',
+      positionBottomRight: 'Unten rechts fixiert',
+      suggestionPositionHint:
+        'Nur Windows: bevorzugt beim Textcursor oder Eingabefeld; andernfalls unten rechts auf dem ursprünglichen Eingabebildschirm. Die feste Position nutzt immer dessen Arbeitsbereich.',
       observationSeconds: 'Beobachtungsdauer',
       observationSecondsHint:
         'Das aktuelle Eingabefeld nach dem Diktat höchstens 10–60 Sekunden beobachten.',

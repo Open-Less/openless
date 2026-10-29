@@ -1276,6 +1276,11 @@ export const zhCN = {
     vocabularyLearning: {
       title: '手改学词',
       enabled: '启用手改学词',
+      suggestionPosition: '建议卡片位置',
+      positionNearInput: '输入位置附近',
+      positionBottomRight: '固定右下角',
+      suggestionPositionHint:
+        '仅 Windows：默认靠近文本光标或输入框；定位不可用时回退到原输入目标所在屏幕的右下角。固定右下角始终使用该屏幕的工作区。',
       observationSeconds: '观察时长',
       observationSecondsHint: '听写落字后观察当前输入框的最长时间，10–60 秒。',
       suggestionSeconds: '建议保留时长',
