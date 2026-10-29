@@ -33,6 +33,10 @@ const sharedTypesRs = await readFile(
 );
 // Contract check over the union of the capsule subsystem compiled into the binary; native
 // window manipulation belongs to the explicit Tauri Host.
+const capsuleHitTestRs = await readFile(
+  new URL('../src-tauri/src/capsule_hit_test.rs', import.meta.url),
+  'utf-8',
+);
 const coordinatorRs =
   (await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')) +
   '\n' +
@@ -43,7 +47,9 @@ const coordinatorRs =
   '\n' +
   (await readFile(new URL('../src-tauri/src/capsule_snapshot.rs', import.meta.url), 'utf-8')) +
   '\n' +
-  (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8'));
+  (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')) +
+  '\n' +
+  capsuleHitTestRs;
 const tauriEventsRs = await readFile(
   new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
   'utf-8',
@@ -404,9 +410,9 @@ assertMatch(
   'capsule hit testing should cover X/Y and use a real native input region',
 );
 assertMatch(
-  coordinatorRs,
-  /control_left:[\s\S]*?control_right:[\s\S]*?control_top:[\s\S]*?control_bottom:/,
-  'capsule hit-test state should store both X and Y bounds',
+  capsuleHitTestRs,
+  /struct CapsuleHitTestRect \{[\s\S]*?left: i32,[\s\S]*?right: i32,[\s\S]*?top: i32,[\s\S]*?bottom: i32,/,
+  'window-owned capsule hit-test state should store both X and Y bounds',
 );
 assertMatch(
   coordinatorRs,
@@ -414,14 +420,14 @@ assertMatch(
   'capsule input region should be native',
 );
 assertMatch(
-  coordinatorRs,
-  /WM_NCDESTROY[\s\S]*?remove\([\s\S]*?SetWindowLongPtrW/,
-  'subclass teardown should restore the old WndProc and remove its table entry',
+  capsuleHitTestRs,
+  /WM_NCDESTROY[\s\S]*?RemoveWindowSubclass[\s\S]*?drop\(Box::from_raw\([\s\S]*?DefSubclassProc/,
+  'subclass teardown should release window-owned state and preserve message forwarding',
 );
 assertMatch(
-  coordinatorRs,
-  /SetLastError[\s\S]*?GetLastError/,
-  'WndProc installation should detect SetWindowLongPtrW failure',
+  capsuleHitTestRs,
+  /if !SetWindowSubclass\([\s\S]*?\.as_bool\(\)[\s\S]*?drop\(Box::from_raw\(data\)\);[\s\S]*?return Err/,
+  'failed subclass installation should release its allocation and return an error',
 );
 assertMatch(
   coordinatorRs,
