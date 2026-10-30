@@ -1282,6 +1282,11 @@ export const en: typeof zhCN = {
       unavailable: 'No testing features are available on this platform yet.',
     },
     selectionWorkspace: {
+      extraControls: 'Advanced controls',
+      extraControlsDesc: 'Configure question/edit routing and model output only when needed.',
+      openExtraControls: 'Open advanced controls',
+      extraControlsSaveHint: 'Changes save automatically.',
+      extraControlsDone: 'Done',
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',

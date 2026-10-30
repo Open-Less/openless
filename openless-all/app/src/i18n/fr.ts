@@ -1318,6 +1318,12 @@ export const fr: typeof zhCN = {
       unavailable: 'Aucune fonctionnalité de test n’est encore disponible sur cette plateforme.',
     },
     selectionWorkspace: {
+      extraControls: 'Options avancées',
+      extraControlsDesc:
+        'Configurez la distinction question/édition et le format de sortie du modèle.',
+      openExtraControls: 'Ouvrir les options avancées',
+      extraControlsSaveHint: 'Les modifications sont enregistrées automatiquement.',
+      extraControlsDone: 'Terminé',
       title: 'Assistant de sélection',
       hint: 'Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.',
       polishHotkey: 'Raccourci de l’assistant de sélection',

@@ -194,6 +194,10 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 - The pipeline is: speech → transcript → cleanup → insertion at the cursor, with a clipboard fallback on failure.
 - Everything else (modes, dictionary, history, menu bar, home report) exists to support that single path.
 
+## Stability freeze
+
+OpenLess is currently in a stability phase. The project is not accepting pull requests that add new product features or expand the existing feature set. Work should focus on making the current release reliable: bug fixes, regressions, security fixes, documentation, tests, compatibility, and release maintenance are welcome. New-feature proposals and implementation PRs will be held or closed until the stability phase ends.
+
 ## Comparison
 
 | Tool | Form | How OpenLess differs |

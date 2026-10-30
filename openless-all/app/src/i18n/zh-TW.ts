@@ -1231,6 +1231,11 @@ export const zhTW: typeof zhCN = {
       unavailable: '目前平台暫無可用的測試功能。',
     },
     selectionWorkspace: {
+      extraControls: '額外控制項',
+      extraControlsDesc: '設定提問/編輯判斷與模型輸出格式；一般使用不需要調整。',
+      openExtraControls: '開啟額外控制項',
+      extraControlsSaveHint: '修改後會自動儲存。',
+      extraControlsDone: '完成',
       title: '選區助手',
       hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
       polishHotkey: '選區助手快捷鍵',

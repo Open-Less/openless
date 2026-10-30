@@ -1264,6 +1264,12 @@ export const ko: typeof zhCN = {
       unavailable: '이 플랫폼에서는 아직 사용 가능한 테스트 기능이 없습니다.',
     },
     selectionWorkspace: {
+      extraControls: '추가 설정',
+      extraControlsDesc:
+        '질문/편집 판단과 모델 출력 형식을 설정합니다. 일반적으로 변경할 필요가 없습니다.',
+      openExtraControls: '추가 설정 열기',
+      extraControlsSaveHint: '변경 사항은 자동 저장됩니다.',
+      extraControlsDone: '완료',
       title: '선택 영역 도우미',
       hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
       polishHotkey: '선택 영역 도우미 단축키',

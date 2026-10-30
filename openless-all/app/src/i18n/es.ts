@@ -1298,6 +1298,12 @@ export const es: typeof zhCN = {
       unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
     },
     selectionWorkspace: {
+      extraControls: 'Controles avanzados',
+      extraControlsDesc:
+        'Configura la decisión entre pregunta y edición y el formato de salida del modelo.',
+      openExtraControls: 'Abrir controles avanzados',
+      extraControlsSaveHint: 'Los cambios se guardan automáticamente.',
+      extraControlsDone: 'Listo',
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',

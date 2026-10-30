@@ -1230,6 +1230,11 @@ export const zhCN = {
       unavailable: '当前平台暂无可用的测试功能。',
     },
     selectionWorkspace: {
+      extraControls: '额外控件',
+      extraControlsDesc: '配置提问与编辑判断及模型输出格式；普通使用无需调整。',
+      openExtraControls: '打开额外控件',
+      extraControlsSaveHint: '修改后自动保存。',
+      extraControlsDone: '完成',
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
       polishHotkey: '选区助手快捷键',

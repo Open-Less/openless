@@ -1306,6 +1306,12 @@ export const de: typeof zhCN = {
       unavailable: 'Auf dieser Plattform sind noch keine Testfunktionen verfügbar.',
     },
     selectionWorkspace: {
+      extraControls: 'Erweiterte Einstellungen',
+      extraControlsDesc:
+        'Frage-/Bearbeitungsentscheidung und Ausgabeformat des Modells konfigurieren.',
+      openExtraControls: 'Erweiterte Einstellungen öffnen',
+      extraControlsSaveHint: 'Änderungen werden automatisch gespeichert.',
+      extraControlsDone: 'Fertig',
       title: 'Assistent für Textauswahl',
       hint: 'Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.',
       polishHotkey: 'Kurzbefehl für den Auswahlassistenten',
