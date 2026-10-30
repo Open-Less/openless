@@ -116,7 +116,6 @@ mod unicode_keystroke;
 #[cfg(mobile)]
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
-mod update_source;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;

@@ -169,15 +169,16 @@ try {
     const apk = `OpenLess_${version}_${gradleAbi}.apk`;
     const alias = `OpenLess_android_${gradleAbi}.apk`;
     originals.push(`${directory}/${apk}`);
-    return [apk, `${apk}.sig`, alias, `${alias}.sig`];
+    return [
+      apk,
+      `${apk}.sig`,
+      alias,
+      `${alias}.sig`,
+      `latest-android-${abi}.json`,
+      `latest-android-${abi}-mirror.json`,
+    ];
   });
-  // The manifests are still written (they feed the CDN sync through a workflow artifact) but
-  // must never be re-attached to the release: the in-app updater reads them from the CDN.
-  const manifests = ANDROID_ABI_MATRIX.flatMap(({ abi }) => [
-    `latest-android-${abi}.json`,
-    `latest-android-${abi}-mirror.json`,
-  ]);
-  for (const name of [...names, ...manifests]) writeFileSync(join(releaseTmp, name), 'fixture');
+  for (const name of names) writeFileSync(join(releaseTmp, name), 'fixture');
   const step = parsed.jobs['publish-android-release'].steps.find(
     (step) => step.id === 'release_assets',
   );
@@ -198,14 +199,6 @@ try {
     .trim()
     .split(/\r?\n/);
   assert.deepEqual(assets.sort(), names.map((name) => `${directory}/${name}`).sort());
-  const manifestUpload = parsed.jobs['publish-android-release'].steps.find((step) =>
-    step.uses?.startsWith('actions/upload-artifact@'),
-  );
-  assert.match(
-    manifestUpload?.with.path,
-    /latest-android-\*\.json/,
-    'manifests must leave the run as an artifact so the CDN sync can publish them',
-  );
 } finally {
   rmSync(releaseTmp, { recursive: true, force: true });
 }
