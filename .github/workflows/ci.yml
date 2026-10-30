@@ -590,8 +590,8 @@ jobs:
 
   native-capsule:
     # The capsule crates compile into the desktop shells. They get their own macOS + Windows
-    # runners only because their `ui,host` feature set is not built anywhere else (the shells
-    # use `build:native-capsule:dev`), and that warm cache makes the job ~40 s. It is gated on
+    # runners only because their `ui,host` feature set is not built anywhere else, and that
+    # warm cache makes the job ~40 s. It is gated on
     # its own area, so the common PR pays zero runners for it: measured on run 40510306688,
     # moving these three commands into `cross-platform` cost 117 s on the critical-path Windows
     # job, which is more than the two runners it saved.
@@ -736,10 +736,6 @@ jobs:
         if: runner.os == 'macOS'
         run: npm test
 
-      # Direct Cargo checks do not execute Tauri beforeBuildCommand.
-      - name: Build native capsule for Tauri checks
-        run: npm run build:native-capsule:dev
-
       - name: Install pinned Codex CLI for sandbox contract
         if: runner.os == 'macOS'
         run: npm install --global @openai/codex@0.146.0
@@ -880,8 +876,6 @@ jobs:
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
-      - name: Build native capsule for Tauri checks
-        run: npm run build:native-capsule:dev
       - name: Check Tauri backend with Rust 1.99 MSRV
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Compile backend tests with Rust 1.99 MSRV

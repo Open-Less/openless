@@ -59,10 +59,7 @@
     ]
   },
   "build": {
-    "beforeBuildCommand": "npm run build:native-capsule && npm run build",
-    "beforeDevCommand": "npm run build:native-capsule:dev && npm run dev"
-  },
-  "bundle": {
-    "externalBin": ["binaries/openless-native-capsule"]
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev"
   }
 }
