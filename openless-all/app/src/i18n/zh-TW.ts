@@ -1472,6 +1472,35 @@ export const zhTW: typeof zhCN = {
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {
+        aec: '系統回聲消除',
+        systemNoise: '系統降噪',
+        systemAgc: '系統自動增益',
+        unavailable: '目前裝置不支援',
+        androidEffectsHint:
+          'Android 系統音效在軟體處理鏈之前生效。建議避免重複開啟同類效果。啟動不支援時退回一般擷取。',
+        effectsActive: '本次錄音已啟用系統音效。',
+        spectrum: '輸入／處理後頻譜',
+        spectrumHint:
+          '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
+        spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
+        spectrumWaiting: '開啟語音增強並開始錄音後顯示頻譜。',
+        presets: '均衡器預設',
+        choosePreset: '選擇預設',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人聲',
+        preset_deepVoice: '低沉人聲',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人聲',
+        preset_warmVocal: '溫暖人聲',
+
+        aecOff: '關閉',
+        aecLight: '輕量（省 CPU）',
+        aecModel: '模型（更強）',
+        aecModelHint:
+          '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
+        aecHint:
+          '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',
+        buffer: '輸出緩衝區',
         title: '語音增強設定',
         description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
         noise: '降噪演算法',
@@ -1496,6 +1525,9 @@ export const zhTW: typeof zhCN = {
         down: '下移',
         reset: '恢復增強預設設定',
       },
+      echoCancellationLabel: '播放回聲抑制',
+      echoCancellationDesc:
+        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
       audioEnhancementLabel: '語音增強',
       audioEnhancementDesc:
         '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',
@@ -1566,6 +1598,10 @@ export const zhTW: typeof zhCN = {
         '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
       polishContextWindowLabel: '對話上下文視窗（分鐘）',
       polishContextWindowDesc: '把最近 N 分鐘內已潤色的轉寫作為多輪上下文，0 = 關閉。',
+      debugArchiveProcessedLabel: '儲存處理後的音訊',
+      debugArchiveProcessedDesc: '降噪與增益之後的版本，仍存於原本的錄製檔案。',
+      debugArchiveRawLabel: '另存一份處理前的音訊',
+      debugArchiveRawDesc: '同一目錄下另存 <session>.raw.wav 便於對照；只開這一項時，原始音訊直接存進主檔案。',
       recordAudioForDebugLabel: '保留原始錄音（除錯）',
       recordAudioForDebugDesc: '儲存原始麥克風音訊為 wav，便於排查識別問題。',
       audioRecordingMaxEntriesLabel: '原始錄音保留條數',
@@ -1640,6 +1676,7 @@ export const zhTW: typeof zhCN = {
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
+      errThinking: '需開啟思考',
       verify: '驗證',
       verifyHint: '點一下會真實呼叫一次介面，確認這張卡現在可用',
       errTimeout: '逾時',
@@ -1851,6 +1888,7 @@ export const zhTW: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。',
       llmStreamError: '伺服器回傳串流錯誤，請檢查模型和請求引數。',
+      llmThinkingRequired: '此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。',
       saveProtocol: '儲存協定設定',
       thinkingModeHint:
         '依所選請求格式與模型支援的引數啟用、關閉或降低思考，不在提示詞注入控制指令。',

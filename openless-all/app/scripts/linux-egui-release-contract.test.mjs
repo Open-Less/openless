@@ -96,6 +96,18 @@ assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
 assert.match(release, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
+// `release-linux-egui.yml` is dispatch-only above, so the Tauri tag build must
+// dispatch it: the workflow had zero runs before that hand-off existed and every
+// 2.0.x Release shipped without a `.deb` or `.rpm`. Publishing stays implicit in
+// the hand-off (`publish=true`), which is safe because the tag is admin-created
+// after acceptance.
+assert.match(tauri, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+assert.match(
+  tauri,
+  /gh workflow run release-linux-egui\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,
+  'the Linux hand-off must attach the packages for the same tag',
+);
+
 // Keep deb/rpm only, including dynamically-loaded desktop libraries and the
 // fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
 //

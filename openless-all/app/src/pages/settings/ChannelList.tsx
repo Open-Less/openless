@@ -183,6 +183,7 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
   if (message === 'llmModelMissing' || message === 'asrModelMissing') {
     return t('settings.channels.errModel');
   }
+  if (message === 'llmThinkingRequired') return t('settings.channels.errThinking');
   return t('settings.channels.errGeneric');
 }
 

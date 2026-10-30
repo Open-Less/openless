@@ -15,6 +15,24 @@ for (const name of ['release-tauri.yml', 'android-apk.yml']) {
     `${name}: no channel may publish a partially built release`,
   );
   assert.match(publishers[0].with.prerelease, /OPENLESS_RELEASE_CHANNEL == 'beta'/);
+  // Updater manifests belong to the CDN, not to the release assets: current clients read
+  // `/updates/{stable,beta}/` (see src-tauri/src/update_source.rs), and cloning them into the
+  // release produced fourteen near-identical files per tag.
+  assert.doesNotMatch(
+    publishers[0].with.files,
+    /latest-[^\s]*\.json/,
+    `${name}: updater manifests must not be attached to the release`,
+  );
+  const manifestUploads = steps.filter(
+    (step) =>
+      step.uses?.startsWith('actions/upload-artifact@') &&
+      /latest-[^\s]*\.json/.test(step.with?.path ?? ''),
+  );
+  assert.equal(
+    manifestUploads.length,
+    1,
+    `${name}: exactly one artifact must carry the updater manifests for the CDN sync`,
+  );
 }
 const sync = workflow('sync-homebrew-cask.yml');
 assert.deepEqual(sync.on.release.types, ['published']);

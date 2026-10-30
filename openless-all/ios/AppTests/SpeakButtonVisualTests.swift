@@ -29,21 +29,20 @@ nonisolated final class SpeakButtonVisualTests: XCTestCase {
     controller.view.layoutIfNeeded()
     button.configure(phase: .recording, level: 0, available: true)
     try await Task.sleep(for: .milliseconds(300))
-    capture(controller.view, name: "build11-recording-silence")
-    // Synthetic RMS inputs exercise only the presentation. No microphone is
-    // activated; screenshots/video must not be described as capture evidence.
+    capture(controller.view, name: "recording-silence")
+    // Synthetic RMS values exercise presentation without opening the microphone.
     for _ in 0..<3 {
       for level: Float in [0, 0.004, 0.01, 0.025, 0.06, 0.1, 0.025, 0.01] {
         button.configure(phase: .recording, level: level, available: true)
         try await Task.sleep(for: .milliseconds(160))
       }
     }
-    capture(controller.view, name: "build11-recording-speech")
+    capture(controller.view, name: "recording-speech")
     XCTAssertEqual(button.accessibilityLabel, "结束录音")
     button.configure(phase: .processing, level: 0, available: false)
     try await Task.sleep(for: .milliseconds(350))
     XCTAssertEqual(button.accessibilityLabel, "thinking")
-    capture(controller.view, name: "build11-thinking")
+    capture(controller.view, name: "thinking")
   }
 
   @MainActor private func capture(_ view: UIView, name: String) {

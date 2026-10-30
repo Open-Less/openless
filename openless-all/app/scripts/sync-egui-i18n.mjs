@@ -45,8 +45,8 @@ const KEEP_EGUI = new Set([
   'nav.corrections',
   // Screenshot labels the detail action "重新转写"; Tauri uses "重新转录".
   'history.retranscribe',
-  // The egui status line prefixes the product name.
-  'less_computer.done',
+  // Linux 已删除 Less Computer，代理说明里不能再提它（Tauri 仍保留该功能）。
+  'settings.network.use_system_proxy_desc',
 ]);
 
 function placeholderCount(text) {

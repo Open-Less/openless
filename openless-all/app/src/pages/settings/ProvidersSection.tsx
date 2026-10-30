@@ -1704,6 +1704,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
     'llmResponseIncomplete',
     'llmStreamError',
     'llmProtocolHeaderConflict',
+    'llmThinkingRequired',
   ]) {
     if (message.includes(code)) return t(`settings.providers.${code}`);
   }
@@ -2283,6 +2284,21 @@ export function OmniChannelSection() {
             placeholder={omniPreset?.modelPlaceholder || 'model-name'}
             onValueChange={setOmniModel}
             mono
+            trailing={
+              committedOmniProvider === 'gemini' && !geminiTranscribe ? (
+                <LlmThinkingToggle
+                  enabled={prefs?.llmThinkingEnabled ?? false}
+                  onToggle={(enabled) => {
+                    void updatePrefs((current) => ({
+                      ...current,
+                      llmThinkingEnabled: enabled,
+                    })).catch((error) =>
+                      console.error('[settings] failed to update Omni thinking mode', error),
+                    );
+                  }}
+                />
+              ) : undefined
+            }
           />
         </div>
         {committedOmniProvider === 'gemini' && (

@@ -208,7 +208,7 @@ impl OpenLessEguiApp {
                     self.pending_ui_actions.push(*action);
                 }
                 WindowToHost::Hotkey { sequence, edge } => {
-                    log::info!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
+                    log::debug!("[hotkey] local edge from the UI window #{sequence}: {edge:?}");
                     self.pending_local_hotkeys
                         .push((std::time::Instant::now(), edge));
                 }
@@ -584,7 +584,8 @@ impl UiClientApp {
                             let count = self.latency_samples.len();
                             let max = self.latency_samples.iter().copied().max().unwrap_or(0);
                             let sum: u128 = self.latency_samples.iter().sum();
-                            log::info!(
+                            // 每 20 次探针一条；它是仪表，不是事件，走 debug。
+                            log::debug!(
                                     "[ui-client] ipc round-trip avg={}ms max={max}ms over {count} probes (last #{sequence})",
                                     sum / count as u128
                                 );
@@ -802,7 +803,7 @@ impl eframe::App for UiClientApp {
             }
         }
         if ui_debug_enabled() && !actions.is_empty() {
-            log::info!("[ui-client] actions from the renderer: {actions:?}");
+            log::debug!("[ui-client] actions from the renderer: {actions:?}");
         }
         self.dispatch(actions, &ctx);
         self.ping_if_due();

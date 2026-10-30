@@ -44,6 +44,13 @@ for path in (root / "App").rglob("*.swift"):
 app = plist("App-Info.plist")
 keyboard = plist("Keyboard-Info.plist")
 widget = plist("RecordingWidget-Info.plist")
+version = (root / "Config/Version.xcconfig").read_text()
+assert re.search(r"^MARKETING_VERSION = \d+\.\d+\.\d+$", version, re.MULTILINE)
+assert re.search(r"^CURRENT_PROJECT_VERSION = [1-9]\d*$", version, re.MULTILINE)
+assert '#include "Version.xcconfig"' in (root / "Config/Base.xcconfig").read_text()
+for metadata in [app, keyboard, widget]:
+    assert metadata["CFBundleShortVersionString"] == "$(MARKETING_VERSION)"
+    assert metadata["CFBundleVersion"] == "$(CURRENT_PROJECT_VERSION)"
 assert app["NSMicrophoneUsageDescription"]
 assert app["UIBackgroundModes"] == ["audio"]
 extension = keyboard["NSExtension"]
@@ -58,8 +65,7 @@ assert json.loads((root / "Resources/KeepAliveCompatibility.json").read_text()) 
 for path in (root / "Keyboard").glob("*.swift"):
     text = path.read_text()
     assert "AVAudioEngine" not in text and "SFSpeechRecognizer" not in text and "URLSession" not in text
-# The existing interface-resource suite covers App/Keyboard/PlatformShared.
-# Include the new widget's static localization keys here without narrowing it.
+# Widget strings must share the app and keyboard localization inventory.
 inventory = json.loads((root / "Resources/LocalizationSources.json").read_text())["entries"]
 token = re.compile(r'"(?:\\.|[^"\\])*"')
 han = re.compile(r'[\u3400-\u9fff]')

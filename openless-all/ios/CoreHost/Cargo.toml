@@ -9,9 +9,12 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [workspace]
+members = [".build/core-source/crates/openless-core"]
+exclude = [".build/core-source/crates/micyou-dsp", ".build/core-source/crates/micyou-infer"]
+resolver = "2"
 
 [dependencies]
-openless-core = { path = "../../app/crates/openless-core" }
+openless-core = { path = ".build/core-source/crates/openless-core" }
 futures-util = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }

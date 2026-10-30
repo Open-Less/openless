@@ -17,6 +17,10 @@ const packaging = readFileSync(join(appRoot, 'scripts/package-harmony-hap.sh'), 
 const signing = readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8');
 const upload = readFileSync(join(appRoot, 'scripts/upload-appgallery.mjs'), 'utf8');
 const releasing = readFileSync(join(appRoot, '../../RELEASING.md'), 'utf8');
+const tauriRelease = readFileSync(
+  join(appRoot, '../../.github/workflows/release-tauri.yml'),
+  'utf8',
+);
 
 // Dispatch-only, with the tag as a required input: the HAP can never come from a
 // branch or ride along with an unrelated push.
@@ -33,6 +37,26 @@ assert.match(workflow, /does not match package\.json version/);
 // that `prepare-harmony-sdk.sh` pins by checksum - no secrets, no self-hosted box.
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
+
+// A hosted runner ships neither the app's `node_modules` (`build-harmony-frontend.sh`
+// runs `npm run build`) nor the Tier-2 OHOS target std (`build-harmony-backend.sh`
+// runs `cargo build --target aarch64-unknown-linux-ohos`). CI installs both; the
+// first real dispatch of this workflow did not and died with `can't find crate for
+// `core`` (error[E0463]) after the Rime/NDK compile.
+assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
+assert.match(workflow, /targets: aarch64-unknown-linux-ohos/);
+assert.match(workflow, /run: npm ci/);
+{
+  // Keep the target list in step with the CI job that really builds the HAP: a
+  // target added to one workflow only breaks the tag build.
+  const ciWorkflow = readFileSync(join(appRoot, '../../.github/workflows/ci.yml'), 'utf8');
+  const ohosTargets = (source) =>
+    [...source.matchAll(/targets:\s*([^\n]+)/g)]
+      .map((match) => match[1].trim())
+      .filter((targets) => targets.includes('ohos'));
+  assert.ok(ohosTargets(workflow).length > 0, 'release-harmony.yml must install the OHOS target');
+  assert.deepEqual(ohosTargets(workflow), ohosTargets(ciWorkflow));
+}
 const prepare = readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8');
 assert.match(prepare, /DEFAULT_URL=https:\/\//);
 assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
@@ -94,7 +118,11 @@ assert.doesNotMatch(
 assert.ok(existsSync(join(appRoot, 'scripts/package-harmony-hap.sh')));
 assert.match(packaging, /sign-harmony-hap\.py/);
 assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
-assert.match(packaging, /sha256sum \.\/\*\.hap > SHA256SUMS/);
+assert.match(
+  packaging,
+  /sha256sum \.\/OpenLess_harmony_arm64\.hap \.\/OpenLess_harmony\.hap > SHA256SUMS/,
+  'Release checksums must cover only the unsigned HAP pair uploaded to GitHub',
+);
 assert.match(packaging, /OpenLess_harmony_arm64\.hap/);
 assert.match(packaging, /OpenLess_harmony\.hap/);
 assert.match(signing, /HARMONY_KEYSTORE_PASSWORD/);
@@ -107,10 +135,54 @@ assert.match(upload, /api\/publish\/v3\/app-package-info/);
 assert.match(upload, /--dry-run/);
 assert.match(upload, /--skip-if-unconfigured/);
 assert.match(workflow, /upload-appgallery\.mjs/);
+// The upload step must stay a literal `run: |` block. As a folded `>-` scalar its
+// leading explanatory comment joined the command line, so bash saw
+// `# ... node scripts/upload-appgallery.mjs \` and then `--channel` on its own
+// line: `command not found` (127) - the first time the step ever executed.
+assert.doesNotMatch(
+  workflow,
+  /run:\s*>-[ ]*\n\s*#/,
+  'a folded run scalar must not start with a comment; it comments out the command',
+);
+assert.match(workflow, /node scripts\/upload-appgallery\.mjs \\/);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);
 assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
+
+// This entry point is dispatch-only, so the Tauri tag build has to hand the tag
+// over explicitly. Without that hand-off the workflow sits at zero runs and every
+// Release ships without a HAP - which is exactly what happened to 2.0.x.
+assert.match(tauriRelease, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+assert.match(
+  tauriRelease,
+  /gh workflow run release-harmony\.yml[\s\S]{0,300}-f "tag=\$RELEASE_TAG"/,
+  'the hand-off must dispatch with the tag as an input',
+);
+assert.match(
+  tauriRelease,
+  /gh workflow run release-harmony\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
+  'the downstream workflow definition must be loaded from the same immutable release tag',
+);
+assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
+assert.match(
+  tauriRelease,
+  /gh workflow run release-linux-egui\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
+  'the Linux workflow definition must use the same immutable release tag',
+);
+assert.match(
+  tauriRelease,
+  /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,
+  'the hand-off must be tag-push only, so a branch or schedule run dispatches nothing',
+);
+assert.match(tauriRelease, /actions: write/, 'GITHUB_TOKEN needs actions: write to dispatch');
+assert.match(
+  tauriRelease,
+  /HARMONY_CHANNEL: \$\{\{ vars\.HARMONY_AUTO_CHANNEL \|\| 'none' \}\}/,
+  'the automatic hand-off must default to the unsigned repository path',
+);
+assert.match(tauriRelease, /channel=\$HARMONY_CHANNEL/);
+assert.match(releasing, /HARMONY_AUTO_CHANNEL/);
 
 // `env:` at job level outranks `$GITHUB_ENV`, so a placeholder key here would
 // shadow the value the signing step exports and the build would look for

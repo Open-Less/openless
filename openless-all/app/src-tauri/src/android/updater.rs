@@ -8,12 +8,10 @@ mod android_impl {
     use tauri::{AppHandle, Emitter};
 
     use crate::android::updater_logic::{
-        beta_manifest_urls, format_manifest_error, map_abi_to_arch, stable_manifest_urls,
-        verify_updater_signature, version_is_newer, INSTALLER_NOT_OPENED_MSG, UPDATER_PUBKEY_B64,
+        format_manifest_error, map_abi_to_arch, verify_updater_signature, version_is_newer,
+        INSTALLER_NOT_OPENED_MSG, UPDATER_PUBKEY_B64,
     };
-    use crate::commands::{
-        fetch_latest_beta_release, parse_latest_beta_from_atom, AppUpdateMetadata,
-    };
+    use crate::commands::AppUpdateMetadata;
     use crate::net;
     use crate::types::UpdateChannel;
 
@@ -80,47 +78,33 @@ mod android_impl {
 
     pub async fn check_update(channel: UpdateChannel) -> Result<Option<AppUpdateMetadata>, String> {
         let arch = device_arch()?;
-        let urls = match channel {
-            UpdateChannel::Stable => stable_manifest_urls(arch),
-            UpdateChannel::Beta => {
-                let Some(latest) = fetch_latest_beta_release().await? else {
-                    return Err("尚未发布过 Beta 版本".to_string());
-                };
-                beta_manifest_urls(arch, &latest.tag_name)
-            }
-        };
+        // Manifests live on the project CDN; channel is a URL path, not a filename suffix, so
+        // there is no tag discovery and no GitHub dependency (see `crate::update_source`).
+        let url = crate::update_source::manifest_url(channel, "android", arch);
         let current = env!("CARGO_PKG_VERSION").to_string();
-        let mut last_err = String::new();
-        for url in urls {
-            match fetch_manifest(&url).await {
-                Ok(manifest) => {
-                    if !version_is_newer(&manifest.version, &current) {
-                        return Ok(None);
-                    }
-                    let raw_json = serde_json::json!({
-                        "version": manifest.version,
-                        "url": manifest.url,
-                        "signature": manifest.signature,
-                        "pubDate": manifest.pub_date,
-                        "notes": manifest.notes,
-                    });
-                    return Ok(Some(AppUpdateMetadata {
-                        rid: 0,
-                        current_version: current,
-                        version: manifest.version,
-                        date: manifest.pub_date,
-                        body: manifest.notes,
-                        raw_json,
-                    }));
+        match fetch_manifest(&url).await {
+            Ok(manifest) => {
+                if !version_is_newer(&manifest.version, &current) {
+                    return Ok(None);
                 }
-                Err(err) => last_err = err,
+                let raw_json = serde_json::json!({
+                    "version": manifest.version,
+                    "url": manifest.url,
+                    "signature": manifest.signature,
+                    "pubDate": manifest.pub_date,
+                    "notes": manifest.notes,
+                });
+                Ok(Some(AppUpdateMetadata {
+                    rid: 0,
+                    current_version: current,
+                    version: manifest.version,
+                    date: manifest.pub_date,
+                    body: manifest.notes,
+                    raw_json,
+                }))
             }
+            Err(err) => Err(err),
         }
-        Err(if last_err.is_empty() {
-            "无法获取更新清单".to_string()
-        } else {
-            last_err
-        })
     }
 
     fn verify_signature(apk_bytes: &[u8], signature_b64: &str) -> Result<(), String> {
@@ -206,11 +190,6 @@ mod android_impl {
             return Err(INSTALLER_NOT_OPENED_MSG.to_string());
         }
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn parse_beta_atom(body: &str) -> Option<crate::commands::LatestBetaRelease> {
-        parse_latest_beta_from_atom(body)
     }
 }
 

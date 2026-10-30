@@ -49,10 +49,15 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     return knob.getBoundingClientRect().left;
   });
-  const sampling = control.evaluate(async (element) => {
+  // Arm the sampling listeners and *wait* for them before clicking. `evaluate` only
+  // dispatches its function; the click is a separate protocol message and on a loaded CI
+  // runner it can reach the page first. When that happened the `transitionrun` listener was
+  // not attached yet, so `controlledXs` came back empty — "语音编辑 exposed its transform
+  // transition", which failed 6 of 43 CI runs across unrelated branches, beta included. The
+  // switch animated every one of those times; only the hook missed it.
+  await control.evaluate((element) => {
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
-    const finished: number[] = [];
-    const controlledXs: number[] = [];
+    const state = { finished: [] as number[], controlledXs: [] as number[] };
     const onRun = (event: TransitionEvent) => {
       if (event.target !== knob || event.propertyName !== 'transform') return;
       const transition = knob
@@ -72,31 +77,54 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       const currentTime = transition.currentTime;
       for (const fraction of [0.25, 0.5, 0.75]) {
         transition.currentTime = duration * fraction;
-        controlledXs.push(knob.getBoundingClientRect().left);
+        state.controlledXs.push(knob.getBoundingClientRect().left);
       }
       if (startTime !== null) transition.startTime = startTime;
       else transition.currentTime = currentTime;
     };
     const onEnd = (event: TransitionEvent) => {
       if (event.target === knob && event.propertyName === 'transform') {
-        finished.push(event.elapsedTime);
+        state.finished.push(event.elapsedTime);
       }
     };
     knob.addEventListener('transitionrun', onRun);
     knob.addEventListener('transitionend', onEnd);
+    const store = window as unknown as {
+      __switchMotion?: WeakMap<Element, { state: typeof state; stop: () => void }>;
+    };
+    store.__switchMotion ??= new WeakMap();
+    store.__switchMotion.set(element, {
+      state,
+      stop: () => {
+        knob.removeEventListener('transitionrun', onRun);
+        knob.removeEventListener('transitionend', onEnd);
+      },
+    });
+  });
+  await page.mouse.down();
+  await page.mouse.up();
+  // The frame loop starts *after* the click: 45 frames (~750ms) still covers the 180ms slide
+  // and settles, so `xs.at(-1)` is the resting position regardless of how long the click takes
+  // to arrive. Listening already started above, so a late click cannot lose the transition.
+  const { xs, controlledXs, finished } = await control.evaluate(async (element) => {
+    const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
+    const armed = (
+      window as unknown as {
+        __switchMotion: WeakMap<
+          Element,
+          { state: { finished: number[]; controlledXs: number[] }; stop: () => void }
+        >;
+      }
+    ).__switchMotion.get(element)!;
     const xs: number[] = [];
     for (let frame = 0; frame < 45; frame++) {
       await new Promise<number>(requestAnimationFrame);
       // A remount would leave this node detached and frozen: count it as a jump.
       xs.push(element.isConnected ? knob.getBoundingClientRect().left : Number.NaN);
     }
-    knob.removeEventListener('transitionrun', onRun);
-    knob.removeEventListener('transitionend', onEnd);
-    return { xs, controlledXs, finished };
+    armed.stop();
+    return { xs, controlledXs: armed.state.controlledXs, finished: armed.state.finished };
   });
-  await page.mouse.down();
-  await page.mouse.up();
-  const { xs, controlledXs, finished } = await sampling;
   const after = (await control.getAttribute('aria-checked')) ?? '';
   return { name, checked: [before, after], start, end: xs.at(-1)!, xs, controlledXs, finished };
 }

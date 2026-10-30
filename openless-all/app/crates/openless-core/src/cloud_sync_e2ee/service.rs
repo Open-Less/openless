@@ -245,9 +245,11 @@ impl EncryptedSyncService {
     }
 
     fn update(&self, update: impl FnOnce(&mut EncryptedSyncStatus)) {
+        let service_origin = self.remote_origin();
         let status = {
             let mut status = self.0.status.lock().unwrap_or_else(|e| e.into_inner());
             update(&mut status);
+            status.service_origin = service_origin;
             status.sequence = self
                 .0
                 .sequence
@@ -260,6 +262,7 @@ impl EncryptedSyncService {
             None,
             BackendEventKind::CloudSyncStateChanged(EncryptedSyncEvent {
                 sequence: status.sequence.clone(),
+                service_origin: status.service_origin.clone(),
                 account_id: status.account.as_ref().map(|v| v.github_id.clone()),
                 vault_id: status.vault_id.clone(),
                 task_id: status.task_id.clone(),
@@ -1739,6 +1742,7 @@ impl EncryptedSyncService {
                     .fetch_add(1, Ordering::AcqRel)
                     .saturating_add(1)
                     .to_string(),
+                service_origin: scope.service_origin.clone(),
                 account_id: scope.owner_github_id,
                 vault_id: scope.vault_id,
                 task_id: self.status().task_id,
@@ -1879,6 +1883,7 @@ impl EncryptedSyncService {
                         .fetch_add(1, Ordering::AcqRel)
                         .saturating_add(1)
                         .to_string(),
+                    service_origin: scope.service_origin.clone(),
                     account_id: scope.owner_github_id,
                     vault_id: scope.vault_id,
                     task_id: self.status().task_id,
@@ -2590,6 +2595,7 @@ impl EncryptedSyncService {
                     .fetch_add(1, Ordering::AcqRel)
                     .saturating_add(1)
                     .to_string(),
+                service_origin: scope.service_origin.clone(),
                 account_id: scope.owner_github_id.clone(),
                 vault_id: scope.vault_id.clone(),
                 task_id: self.status().task_id,

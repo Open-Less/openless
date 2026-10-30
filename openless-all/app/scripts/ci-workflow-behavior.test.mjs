@@ -118,7 +118,7 @@ case "$name" in
     exec "$TEST_SED" "$@"
     ;;
   python3) exec "$TEST_PYTHON" "$@" ;;
-  sleep) ;;
+  sleep) "$TEST_SLEEP" 0.02 ;;
   avdmanager)
     [ -n "$ANDROID_AVD_HOME" ] || { echo 'SDK tools and emulator require an explicit shared AVD registry' >&2; exit 1; }
     [ -s "$ANDROID_HOME/emulator/package.xml" ] || { echo 'Error: "emulator" package must be installed!' >&2; exit 1; }
@@ -127,6 +127,7 @@ case "$name" in
     printf 'path=%s\n' "$2" > "$ANDROID_AVD_HOME/openless-ci.ini"
     ;;
   timeout)
+    if [[ "$1" == --kill-after=* ]]; then shift; fi
     if [ "$1" = 10s ]; then shift; exec "$@"; fi
     [ "$1" = 600s ] || exit 99
     until [ -s "$RUNNER_TEMP/emulator.pid" ]; do "$TEST_SLEEP" 0.01; done
