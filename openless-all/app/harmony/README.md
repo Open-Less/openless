@@ -32,6 +32,29 @@ ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
 
 语音按钮使用 16 kHz / 单声道 / 16 位 PCM 录音。识别完成后直接写入当前绑定的输入框；写入失败保留结果供重试。取消、收起或解绑会释放麦克风，拒绝迟到结果；密码输入框禁用语音。扩展复用 Asset Store 凭据，并在新会话前读取已保存的渠道设置。主应用概览页提供应用内录音入口，与输入法复用 VoiceClient 和相同的音频/ASR/润色后端。开始、停止、取消、音量事件和结果预览已接通，结果可复制并刷新历史；页面离开或进入后台时取消录音，拒绝迟到结果，麦克风音量测试与录音互斥。真实联网识别仍需配置可用渠道后验收，不把模拟回归当作联网验收。普通和分离布局的空格键均支持 450ms 长按语音，短按/长按互斥，长按不额外输入空格。按住期间保留空格键以接收松开事件，松开后结束录音、识别并直接写入；准备阶段松开的操作也会保留，手势取消、解绑及过期结果不会写入。工具栏语音仍通过结束按钮停止，成功结果同样直接写入。
 
+## 原生 UI（一次开发，多端部署）
+
+主应用是一套 ArkUI 原生界面，不再是 WebView 外壳。手机、平板、PC（2in1）跑同一份页面代码，
+布局由**窗口尺寸**决定，旋转、分屏和 PC 自由窗口拉伸都走同一条路径（`common/Breakpoint.ets`
+读 `window.getWindowProperties()` 并订阅 `windowSizeChange`，不依赖 `mediaquery`）：
+
+| 尺寸类 | 判定 | 导航形态 |
+| --- | --- | --- |
+| `sm` | 窗口 < 600vp | 底部标签栏（概览/历史/词典/风格/设置 + 更多） |
+| `md` | 600–840vp | 图标侧栏 + 单列内容 |
+| `lg` | ≥ 840vp | 带文字侧边栏；概览、历史等页面自动两栏（列表 + 详情） |
+
+- 路由表在 `components/AppShell.ets`，导航状态放在 `AppStorage`（写入统一走 `common/Store.ets`，
+  因为 `setOrCreate` 对已存在的键是静默无效的）。
+- 页面：概览（听写主控 + 今日统计 + 12 周热力图 + 配置状态）、历史（搜索/详情/重转写/删除）、
+  词典、纠正规则、风格、风格市场、翻译、问答、速记、模型设置、设置。
+- 数据全部经 `data/Api.ets` → `HarmonyApi.invokeAsync` → `libopenless_harmony.so`，与 web/桌面同一份
+  `openless-core` 契约（camelCase JSON）；ArkTS 侧仍负责录音、麦克风枚举、剪贴板、文件与凭据。
+- 设计 token 在 `common/Tokens.ets`：品牌蓝 `#0A59F7` + HarmonyOS 中性色阶，浅/深色各一套
+  （`resources/base|dark/element/color.json`），圆角/间距按 8vp 栅格。
+- 启动参数即深链：`aa start -a EntryAbility -b openless.hm.com --ps route settings --ps layout sm`
+  可直接打开某个页面，`layout` 把尺寸类钉在 `sm|md|lg`，方便单机验收三端布局。
+
 参考：[IME Kit](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/ime-kit-V5)、[输入法插入与预上屏示例](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-ime-7)、[官方扩展能力模板（包含 Accessibility 和 InputMethod）](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-hmos-add-new-ability)。
 
 输入法扩展具有独立沙箱；主应用和输入法的 `filesDir` 字符串相同，也不代表共享配置文件。主应用启动和配置写入后，将白名单内的语音设置与渠道元数据发布到应用专属 Asset Store，键盘录音前导入自己的后端，再恢复既有安全凭据。快照分片遵守 Asset Store 单条 1024 字节限制，提交清单后才对读者可见；读取期间更新会重试，不接受混合版本。快照不包含 API Key、用户词库、历史或云同步配置。未改变的快照不会覆盖键盘单独选择的润色模式。首次使用须先打开主应用发布配置。`harmony-voice-configuration.test.mjs` 覆盖分片、并发更新和大小限制，原生测试以两个独立数据目录验证主应用多模态设置经导入后可启动键盘语音会话；它不代替真实联网识别验收。
@@ -39,7 +62,7 @@ ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
 从仓库根目录构建：
 
 ```bash
-bash openless-all/app/scripts/build-harmony-frontend.sh
+bash openless-all/app/scripts/build-harmony-app.sh
 ```
 
 依赖：已安装前端 npm 依赖、HarmonyOS Command Line Tools、Python 3。
@@ -47,7 +70,6 @@ bash openless-all/app/scripts/build-harmony-frontend.sh
 Rust 首次构建需要 `rustup target add aarch64-unknown-linux-ohos`。
 缓存默认 `/data-win/openless-cache`，可通过 `OPENLESS_CACHE_ROOT` 指定。
 
-- `harmony/web-dist`：React 离线资源，使用相对 URL。
 - `harmony/openless-project`：构建工程副本、项目缓存和 HAP。
 - `harmony/rust-target`：Rust 鸿蒙交叉编译产物。
 - `harmony/ohpm`：ohpm 下载缓存。
@@ -57,7 +79,7 @@ Rust 首次构建需要 `rustup target add aarch64-unknown-linux-ohos`。
 
 HAP 位于 `harmony/openless-project/entry/build/default/outputs/default/`。
 仓库只维护鸿蒙源文件，构建中间文件不写回鸿蒙源码工程。
-前端以 `VITE_OPENLESS_PLATFORM=harmony` 构建，采用移动端能力配置。
+`harmony/` 里只有原生工程：没有 ArkWeb 外壳，也没有 web 资源，HAP 里不再包含前端 bundle。
 
 包名 `openless.hm.com`，compatible API 12，target API 20，compile SDK 使用本机默认版本。
 先生成未签名 HAP；若本地签名目录证书与 Profile 齐全，则使用官方工具生成 `entry-default-signed.hap`。

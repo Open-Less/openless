@@ -644,10 +644,10 @@ struct InputMethodPanel {
   layoutOptions() {
     Column({ space: 0 }) {
       Row() {
-        ForEach([0, 1, 2, 3].slice(0, this.menuSplit(4)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString())
+        ForEach([0, 1, 2, 3, 4].slice(0, this.menuSplit(5)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString())
       }
-      if (this.menuSplit(4) < 4) {
-        Row() { ForEach([0, 1, 2, 3].slice(this.menuSplit(4)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString()) }
+      if (this.menuSplit(5) < 5) {
+        Row() { ForEach([0, 1, 2, 3, 4].slice(this.menuSplit(5)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString()) }
       }
     }.width('100%').padding({ top: 8, bottom: 8 })
   }
@@ -657,11 +657,23 @@ struct InputMethodPanel {
     if (index === 0) { this.menuTile($r('app.media.ime_split'), '拇指模式', () => { this.selectLayout('split'); }) }
     else if (index === 1) { this.menuTile($r('app.media.ime_standard'), '普通模式', () => { this.selectLayout('standard'); }) }
     else if (index === 2) { this.menuTile($r('app.media.ime_floating'), '悬浮模式', () => { this.selectLayout('floating'); }) }
-    else { this.menuTile($r('app.media.ime_onehand'), '单手模式', () => { this.selectLayout('onehand'); }) }
+    else if (index === 3) { this.menuTile($r('app.media.ime_onehand'), '单手模式', () => { this.selectLayout('onehand'); }) }
+    else { this.menuTile($r('app.media.ime_microphone'), '悬浮语音', () => { this.floatingVoice(); }) }
   }
 
   private menuSplit(count: number): number {
     return count * (this.menuTileSize() + 24) <= this.keyboardWidth ? count : Math.ceil(count / 2);
+  }
+
+  /** 悬浮语音键盘：缩成小窗并直接开麦，说完自动回关注入。 */
+  private floatingVoice(): void {
+    this.layer = 0;
+    this.expanded = false;
+    this.utility = 0;
+    panelLayout.select('voice');
+    if (this.voicePhase === 'idle' && this.connected && !this.password) {
+      inputSession.startVoice();
+    }
   }
 
   private selectLayout(mode: string): void {
@@ -946,8 +958,50 @@ struct InputMethodPanel {
     return this.status;
   }
 
+  /** Capsule shown in the floating voice layout: mic, level, live text, back to keyboard. */
+  @Builder
+  voiceCapsule() {
+    Column({ space: 10 }) {
+      Row({ space: 12 }) {
+        Button(this.voicePhase === 'recording' ? '■' : '🎙', { type: ButtonType.Circle })
+          .width(56).height(56).fontColor('#FFFFFF')
+          .backgroundColor(this.voicePhase === 'recording' ? ACCENT : KEY)
+          .focusable(false)
+          .onClick(() => {
+            if (this.voicePhase === 'idle') inputSession.startVoice();
+            else if (this.voicePhase === 'recording') inputSession.stopVoice();
+          })
+        Column({ space: 4 }) {
+          Text(this.voicePhase === 'recording' ? '正在听你说' :
+            this.voicePhase === 'processing' ? '正在识别…' :
+              this.voicePhase === 'review' ? '确认写入' : '点麦克风开始')
+            .fontSize(15).fontColor(INK).maxLines(1)
+          Text(this.voiceText.length > 0 ? this.voiceText : (this.voiceLevel > 0 ? '音量 ' + Math.round(this.voiceLevel * 100) + '%' : '悬浮语音'))
+            .fontSize(12).fontColor(MUTED).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button('键盘').focusable(false).fontSize(12).fontColor(ACCENT).backgroundColor(KEY)
+          .onClick(() => { this.selectLayout('standard'); })
+      }.width('100%').padding({ left: 12, right: 12 })
+      if (this.voicePhase === 'review' || this.voicePhase === 'inserting') {
+        Row({ space: 10 }) {
+          Button('重新输入').focusable(false).fontSize(13).fontColor(INK).backgroundColor(KEY)
+            .enabled(this.voicePhase === 'review')
+            .onClick(() => { inputSession.cancelVoice(); })
+          Button('写入').focusable(false).fontSize(13).fontColor('#FFFFFF').backgroundColor(ACCENT)
+            .enabled(this.voicePhase === 'review')
+            .onClick(() => { inputSession.confirmVoice(); })
+        }
+      }
+    }
+    .width('100%').height('100%').justifyContent(FlexAlign.Center)
+    .backgroundColor(BACKGROUND).borderRadius(16).clip(true)
+  }
+
   build() {
     Column({ space: 6 }) {
+      if (this.keyboardLayout === 'voice') {
+        this.voiceCapsule()
+      } else {
       if (this.keyboardLayout === 'floating') { this.floatingHandle() }
       Column({ space: 6 }) {
       Column({ space: 0 }) {
@@ -990,6 +1044,7 @@ struct InputMethodPanel {
           .layoutWeight(1).justifyContent(FlexAlign.End)
       }
       }.width(this.keyboardWidth).layoutWeight(1)
+      }
     }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 8 }).backgroundColor(BACKGROUND)
       .alignItems(this.keyboardLayout === 'onehand' ? HorizontalAlign.End : HorizontalAlign.Center)
       .borderRadius(this.keyboardLayout === 'floating' ? 12 : 0).clip(true)

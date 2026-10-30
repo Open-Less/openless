@@ -1,0 +1,237 @@
+import { KeyCode } from '@kit.InputKit';
+import { Glass } from './Material';
+import { Breakpoints } from '../common/Breakpoint';
+import { C, R, S, T } from '../common/Tokens';
+import { CredentialsPage } from '../pages/CredentialsPage';
+import { HistoryPage } from '../pages/HistoryPage';
+import { CorrectionsPage, MarketplacePage, StylePage, VocabPage } from '../pages/LibraryPages';
+import { OverviewPage } from '../pages/OverviewPage';
+import { SettingsPage } from '../pages/SettingsPage';
+import { LocalAsrPage, QaPage, QuickNotePage, TranslationPage } from '../pages/ToolPages';
+import { symbolOf } from './Icons';
+import { Nav, NavItem } from './Nav';
+
+/**
+ * Adaptive application shell (一次开发，多端部署).
+ *
+ *   < 840vp   bottom tab bar (five destinations)     phone portrait/landscape,
+ *                                                    tablet portrait
+ *   >= 840vp  labelled side bar                      tablet landscape, 2-in-1
+ *
+ * Only five destinations exist at this level. Secondary screens live inside 设置,
+ * which is what keeps a phone-sized tab bar readable and a tablet side bar short.
+ * Chrome is drawn on translucent material (`backgroundBlurStyle`) over the ambient
+ * glow painted by `Index`, i.e. the HarmonyOS immersive-material look.
+ */
+@Component
+export struct AppShell {
+  @StorageLink('bp') bp: string = 'md';
+  @StorageLink('route') route: string = 'overview';
+
+  build() {
+    Row() {
+      if (Breakpoints.isWide(this.bp)) {
+        this.sideBar()
+      }
+      Column() {
+        Column() {
+          // Secondary screens (工具页) live outside the five tabs, so they need an
+          // explicit way back; without it the tab bar only leads to a primary page.
+          if (Nav.isSecondary(this.route)) {
+            Row({ space: S.xs }) {
+              SymbolGlyph(symbolOf('chevron_left'))
+                .fontSize(20)
+                .fontColor([C.accent()])
+              Text(Nav.label(Nav.ownerOf(this.route)))
+                .fontSize(T.footnote)
+                .fontColor(C.accent())
+            }
+            .width('100%')
+            .height(44)
+            .padding({ left: S.md, right: S.md })
+            .hoverEffect(HoverEffect.Highlight)
+            .onClick(() => Nav.go(Nav.ownerOf(this.route)))
+          }
+          this.content()
+        }
+        .layoutWeight(1)
+        .width('100%')
+        // Column centers its children by default, so the capped column sits centred
+        // with equal side margins instead of hugging the left edge on a portrait tablet.
+        .constraintSize({ maxWidth: S.contentMax(this.bp) })
+
+        if (!Breakpoints.isWide(this.bp)) {
+          this.tabBar()
+        }
+      }
+      .layoutWeight(1)
+      .height('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .focusable(true)
+    .onKeyEvent((event: KeyEvent) => this.handleKey(event))
+  }
+
+  /** Ctrl/⌘ + 1..5 jumps to a primary destination (2-in-1 and tablets with keyboards). */
+  private handleKey(event: KeyEvent): void {
+    if (event.type !== KeyType.Down) return;
+    let withModifier: boolean = false;
+    if (event.getModifierKeyState !== undefined) {
+      try {
+        withModifier = event.getModifierKeyState(['Ctrl']) || event.getModifierKeyState(['Meta']);
+      } catch (error) {
+        withModifier = false;
+      }
+    }
+    if (!withModifier) return;
+    const slots: number[] = [KeyCode.KEYCODE_1, KeyCode.KEYCODE_2, KeyCode.KEYCODE_3,
+      KeyCode.KEYCODE_4, KeyCode.KEYCODE_5];
+    for (let index = 0; index < slots.length; index++) {
+      if (event.keyCode === slots[index]) {
+        Nav.go(Nav.PRIMARY[index]);
+        return;
+      }
+    }
+  }
+
+  /** Route table: navigation only rebuilds this slot, pages keep their own state. */
+  @Builder
+  content() {
+    if (this.route === Nav.HISTORY) {
+      HistoryPage()
+    } else if (this.route === Nav.STYLE) {
+      StylePage()
+    } else if (this.route === Nav.VOCAB) {
+      VocabPage()
+    } else if (this.route === Nav.SETTINGS) {
+      SettingsPage()
+    } else if (this.route === Nav.CREDENTIALS) {
+      CredentialsPage()
+    } else if (this.route === Nav.MARKETPLACE) {
+      MarketplacePage()
+    } else if (this.route === Nav.CORRECTIONS) {
+      CorrectionsPage()
+    } else if (this.route === Nav.TRANSLATION) {
+      TranslationPage()
+    } else if (this.route === Nav.QA) {
+      QaPage()
+    } else if (this.route === Nav.QUICKNOTE) {
+      QuickNotePage()
+    } else if (this.route === Nav.LOCALASR) {
+      LocalAsrPage()
+    } else {
+      OverviewPage()
+    }
+  }
+
+  @Builder
+  sideBar() {
+    Column() {
+      Row({ space: S.md }) {
+        Text('OL')
+          .fontSize(T.footnote)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(C.textOnAccent())
+          .width(32)
+          .height(32)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(C.accent())
+          .borderRadius(R.md)
+        Column({ space: 0 }) {
+          Text('OpenLess')
+            .fontSize(T.body)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(C.textPrimary())
+          Text('鸿蒙原生版')
+            .fontSize(T.caption)
+            .fontColor(C.textTertiary())
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: S.xl, bottom: S.xl, left: S.sm, right: S.sm })
+
+      ForEach(Nav.items(), (item: NavItem) => {
+        this.railItem(item)
+      }, (item: NavItem) => item.id)
+
+      Blank()
+
+      Text('v' + (AppStorage.get<string>('appVersion') ?? '—'))
+        .fontSize(T.caption)
+        .fontColor(C.textTertiary())
+        .padding({ left: S.md, bottom: S.lg })
+    }
+    .width(S.rail(this.bp))
+    .height('100%')
+    .padding({ left: S.sm, right: S.sm })
+    .backgroundColor(C.glass())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+    .border({ width: { right: 0.5 }, color: C.border() })
+  }
+
+  @Builder
+  railItem(item: NavItem) {
+    Row({ space: S.md }) {
+      SymbolGlyph(symbolOf(item.id))
+        .fontSize(20)
+        .fontColor([this.tabActive(item.id) ? C.accent() : C.iconSecondary()])
+      Text(item.label)
+        .fontSize(T.callout)
+        .fontColor(this.tabActive(item.id) ? C.accent() : C.textPrimary())
+        .fontWeight(this.tabActive(item.id) ? FontWeight.Medium : FontWeight.Regular)
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .height(S.rowSingle)
+    .padding({ left: S.md, right: S.md })
+    .margin({ bottom: S.xxs })
+    .backgroundColor(this.tabActive(item.id) ? C.accentSoft() : Color.Transparent)
+    .borderRadius(R.md)
+    // 2-in-1 / PC: pointer hover and keyboard focus must be visible before the click.
+    .hoverEffect(HoverEffect.Highlight)
+    .focusable(true)
+    .onClick(() => Nav.go(item.id))
+  }
+
+  @Builder
+  tabBar() {
+    Row() {
+      ForEach(Nav.PRIMARY, (id: string) => {
+        this.tabItem(id)
+      }, (id: string) => 'tab-' + id)
+    }
+    .width('100%')
+    .height(64)
+    .padding({ left: S.sm, right: S.sm, bottom: S.xs })
+    .backgroundColor(C.glassStrong())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+    .border({ width: { top: 0.5 }, color: C.border() })
+  }
+
+  @Builder
+  tabItem(id: string) {
+    Column({ space: S.xxs }) {
+      SymbolGlyph(symbolOf(id))
+        .fontSize(22)
+        .fontColor([this.tabActive(id) ? C.accent() : C.iconSecondary()])
+      Text(Nav.label(id))
+        .fontSize(T.caption)
+        .fontColor(this.tabActive(id) ? C.accent() : C.textSecondary())
+        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Regular)
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .hoverEffect(HoverEffect.Highlight)
+    .focusable(true)
+    .onClick(() => Nav.go(id))
+  }
+
+  /** A secondary page keeps its owner tab lit (风格市场 → 风格, 纠正规则 → 词典). */
+  private tabActive(id: string): boolean {
+    return Nav.ownerOf(this.route) === id;
+  }
+}

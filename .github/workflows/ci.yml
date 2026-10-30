@@ -483,10 +483,10 @@ jobs:
           node scripts/harmony-clipboard-history.test.mjs
           node scripts/harmony-symbol-gesture.test.mjs
           node scripts/harmony-rime-startup.test.mjs
-      # The ArkWeb bundle is not built here: `package-harmony-hap.sh` ->
-      # `build-harmony-frontend.sh` runs the same
-      # `npm run build -- --base=./ --outDir=…`, so building it twice only
-      # doubled the vite pass.
+          node scripts/harmony-native-ui.test.mjs
+      # No web bundle and no `npm ci` here any more: the HAP ships a native ArkUI
+      # UI, so `package-harmony-hap.sh` -> `build-harmony-app.sh` only needs the
+      # Rust core for `aarch64-unknown-linux-ohos` and the pinned SDK.
       - uses: dtolnay/rust-toolchain@stable
         with:
           # Tier-2 OHOS target; `rustup target list` above lists it for stable.

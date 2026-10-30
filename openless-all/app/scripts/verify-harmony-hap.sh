@@ -39,10 +39,17 @@ require_entry() {
 }
 require_entry module.json
 require_entry 'libs/arm64-v8a/libopenless_harmony.so'
-require_entry 'resources/rawfile/web/index.html'
-# The ArkWeb bundle is hashed on every build: a fixed name would hide a stale copy.
-grep -q '^resources/rawfile/web/assets/index-.*\.js$' <<< "$entries" \
-  || { echo "HAP has no hashed ArkWeb entry bundle" >&2; exit 1; }
+# The UI is native ArkUI now: no web bundle may be staged, and the NAPI module
+# must ship the Rust core it links against (`DT_NEEDED libopenless_harmony_host.so`),
+# otherwise the module fails to load at runtime and the app has no backend.
+require_entry 'libs/arm64-v8a/libopenless_harmony_host.so'
+if grep -q '^resources/rawfile/web/' <<< "$entries"; then
+  echo "HAP still carries the removed ArkWeb bundle" >&2
+  exit 1
+fi
+# The Rime data has to be there for the IME and for history re-transcription.
+grep -q '^resources/rawfile/rime/' <<< "$entries" \
+  || { echo "HAP has no Rime data" >&2; exit 1; }
 
 python3 - "$hap" "$version_name" "$version_code" <<'PY'
 import json
