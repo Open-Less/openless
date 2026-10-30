@@ -93,16 +93,17 @@ button:disabled {
 .ol-settings-content-pane {
   background: var(--ol-surface) !important;
 }
+/* Colours and hover come from .ol-settings-rail-link (global.css). */
 .ol-settings-return {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 36px;
   text-align: left;
-  color: var(--ol-ink-2);
   font-size: 13px;
   padding: 4px 8px;
   margin-bottom: 6px;
+  border-radius: 8px;
 }
 .ol-settings-sections {
   width: 100%;
@@ -193,12 +194,17 @@ button:disabled {
   margin: 2px 0;
   border-radius: 7px;
   font-size: 13px;
+  font-weight: var(--ol-font-weight-medium);
   text-align: left;
-  color: var(--ol-ink-2);
+  color: var(--ol-choice-idle-ink);
+  cursor: pointer;
+  transition:
+    color var(--ol-choice-motion),
+    background-color var(--ol-choice-motion);
 }
 .ol-shortcuts-filters button[aria-pressed='true'] {
-  background: var(--ol-surface-2);
-  color: var(--ol-ink);
+  background: var(--ol-choice-active-bg);
+  color: var(--ol-choice-active-ink);
   font-weight: var(--ol-font-weight-semibold);
 }
 .ol-shortcut-results {
@@ -347,8 +353,55 @@ button:disabled {
   background: var(--ol-surface) !important;
   box-shadow: var(--ol-shadow-md) !important;
 }
+/* One switch for every on/off control: the track colour fades and the knob slides on
+   transform with a single timing. The Base UI Toggle and custom role="switch" buttons
+   both mark the on state with data-checked; data-size="sm" only changes geometry. */
 .ol-switch {
+  --ol-switch-width: 36px;
+  --ol-switch-height: 20px;
+  --ol-switch-knob: 16px;
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-block;
+  width: var(--ol-switch-width);
+  min-width: var(--ol-switch-width);
+  max-width: var(--ol-switch-width);
+  height: var(--ol-switch-height);
+  border-radius: 999px;
+  background: var(--ol-toggle-off-bg);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
   touch-action: manipulation;
+  transition: background-color 160ms var(--ol-motion-quick);
+}
+.ol-switch[data-size='sm'] {
+  --ol-switch-width: 24px;
+  --ol-switch-height: 14px;
+  --ol-switch-knob: 10px;
+  box-shadow: none;
+}
+.ol-switch[data-checked] {
+  background: var(--ol-blue);
+}
+.ol-switch[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.ol-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: var(--ol-switch-knob);
+  height: var(--ol-switch-knob);
+  border-radius: 999px;
+  background: var(--ol-toggle-knob);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  transition: transform 180ms var(--ol-motion-spring);
+}
+.ol-switch[data-checked] .ol-switch-thumb {
+  transform: translateX(calc(var(--ol-switch-width) - var(--ol-switch-knob) - 4px));
 }
 .ol-choice-chips {
   display: flex;
@@ -366,9 +419,12 @@ button:disabled {
   border: 1px solid var(--ol-line);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
+  transition:
+    color var(--ol-choice-motion),
+    background-color var(--ol-choice-motion),
+    border-color var(--ol-choice-motion);
 }
 .ol-choice-chips button[aria-pressed='true'] {
-  padding-inline: 16px;
   color: var(--ol-blue);
   background: var(--ol-blue-soft);
   border-color: var(--ol-blue-ring);
@@ -620,9 +676,9 @@ button:disabled {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .ol-settings-return:hover,
-  .ol-shortcuts-filters button:hover {
-    background: var(--ol-surface-2);
+  .ol-shortcuts-filters button:not([aria-pressed='true']):hover {
+    color: var(--ol-choice-hover-ink);
+    background: var(--ol-choice-hover-bg);
   }
   .ol-shortcut-binding:hover {
     background: var(--ol-surface-2);
@@ -680,23 +736,19 @@ button:disabled {
 }
 html[data-ol-input='keyboard'] .ol-expandable-text-clip,
 html[data-ol-input='keyboard'] .ol-expandable-text svg,
-html[data-ol-input='keyboard'] .ol-settings-rail-thumb,
-html[data-ol-input='keyboard'] .ol-switch span {
+html[data-ol-input='keyboard'] .ol-switch-thumb {
   transition: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
   .ol-collapse,
   .ol-expandable-text-clip,
   .ol-expandable-text svg,
-  .ol-switch span {
+  .ol-switch-thumb {
     transition: none !important;
   }
   .ol-startup-mark span,
   .ol-skeleton::after {
     animation: none;
-  }
-  .ol-choice-chips button {
-    transform: none !important;
   }
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {

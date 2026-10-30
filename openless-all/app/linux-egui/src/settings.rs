@@ -126,6 +126,14 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         let Some(change) = &plan.hotkeys else {
             return Ok(());
         };
+        // Retiring the Core-only binding is not a native hotkey change.
+        if change.previous.coding_agent_voice != change.next.coding_agent_voice {
+            let mut previous = change.previous.clone();
+            previous.coding_agent_voice = change.next.coding_agent_voice.clone();
+            if previous == change.next {
+                return Ok(());
+            }
+        }
         if !receipt.applied.contains(&SettingsEffectKind::Hotkeys) {
             receipt.applied.push(SettingsEffectKind::Hotkeys);
         }
@@ -199,6 +207,8 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             "[fcitx] hotkey registration: {}",
             registration_summary(target)
         );
+        // 兼容无法重启的旧插件：先注销已删除功能的绑定，再注册普通快捷键。
+        tolerate_optional_fcitx_method(apply_action_hotkey("SetLessComputerHotkeyRaw", None))?;
         apply_dictation_hotkey(&target.dictation)?;
         // 宿主只把热键注册给插件，**从不改动输入法自己的配置**。曾短暂加过
         // 「检测到引擎占用主键就去清空拼音的快速短语触发键」，实测证明那是假象：
@@ -245,18 +255,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             }
         }
         tolerate_optional_fcitx_method(crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys))?;
-        let (symbol, states) = target
-            .coding_agent_voice
-            .as_ref()
-            // The configured binding survives a disabled feature, but the
-            // native hook must be removed until the user enables it again.
-            .filter(|_| target.coding_agent_enabled)
-            .map(registerable_raw)
-            .transpose()?
-            .unwrap_or((0, 0));
-        let result = crate::fcitx5::set_less_computer_hotkey_raw(symbol, states);
-        log_registration_result("SetLessComputerHotkeyRaw", (symbol, states), &result);
-        tolerate_optional_fcitx_method(result)
+        Ok(())
     }
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError> {
@@ -416,7 +415,7 @@ pub(crate) fn registration_summary(target: &HotkeyRuntimeTarget) -> String {
         }
     }
     format!(
-        "dictation={} qa={} selection_polish={} translation={} switch_style={} open_app={} style_packs={} less_computer={}",
+        "dictation={} qa={} selection_polish={} translation={} switch_style={} open_app={} style_packs={}",
         describe(Some(&target.dictation)),
         describe(target.qa.as_ref()),
         describe(target.selection_polish.as_ref()),
@@ -424,11 +423,6 @@ pub(crate) fn registration_summary(target: &HotkeyRuntimeTarget) -> String {
         describe(target.switch_style.as_ref()),
         describe(target.open_app.as_ref()),
         target.style_packs.len(),
-        if target.coding_agent_enabled {
-            describe(target.coding_agent_voice.as_ref())
-        } else {
-            "disabled".to_string()
-        },
     )
 }
 
@@ -467,10 +461,15 @@ fn binding_to_fcitx_key(binding: &ShortcutBinding) -> String {
 
 fn normalize_fcitx_primary(primary: &str) -> String {
     let trimmed = primary.trim();
-    if let Some(stripped) = trimmed.strip_prefix("Key") {
-        stripped.to_ascii_lowercase()
-    } else {
-        trimmed.to_ascii_lowercase()
+    let stripped = trimmed.strip_prefix("Key").unwrap_or(trimmed);
+    let lower = stripped.to_ascii_lowercase();
+    // fcitx5 的 Key::parse 按 X11 keysym 名做**大小写敏感**查表：实测
+    // `SetCustomDictationTrigger("Menu")` → sym=0xff67 有效，`("menu")` →
+    // invalid key（2026-10-22）。这里只把查表中确实首字母大写的名字还原，
+    // 其余继续交给小写（space / f5 / 单字符都已验证可用）。
+    match lower.as_str() {
+        "menu" => "Menu".to_string(),
+        _ => lower,
     }
 }
 
@@ -604,6 +603,28 @@ mod tests {
     }
 
     #[test]
+    fn menu_primary_keeps_the_case_fcitx_expects() {
+        // fcitx5 的 Key::parse 用 X11 keysym 名做大小写敏感查表：'Menu' 有效、
+        // 'menu' 被拒（2026-10-22 实测 SetCustomDictationTrigger 返回
+        // "invalid key"）。主键名统一小写的旧逻辑会让 Menu 键永远注不上。
+        let binding = ShortcutBinding {
+            primary: "Menu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&binding), "Menu");
+        let key_cased = ShortcutBinding {
+            primary: "KeyMenu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&key_cased), "Menu");
+        let space = ShortcutBinding {
+            primary: "Space".into(),
+            modifiers: vec!["ctrl".into(), "alt".into()],
+        };
+        assert_eq!(binding_to_fcitx_key(&space), "Control+Alt+space");
+    }
+
+    #[test]
     fn mouse_shortcuts_are_rejected_by_the_linux_host() {
         for primary in ["Mouse4", "Mouse5"] {
             let binding = ShortcutBinding {
@@ -695,6 +716,7 @@ mod tests {
     #[test]
     fn registration_summary_shows_modifier_triggers() {
         let target = HotkeyRuntimeTarget {
+            qa_companion_key: "Space".into(),
             dictation: ShortcutBinding {
                 primary: "A".into(),
                 modifiers: vec!["alt".into()],
@@ -727,10 +749,6 @@ mod tests {
         let summary = registration_summary(&target);
         assert!(summary.contains("dictation=alt+A"), "{summary}");
         assert!(summary.contains("qa=ctrl+shift+:"), "{summary}");
-        assert!(
-            summary.contains("less_computer=modifier(LeftControl)"),
-            "{summary}"
-        );
     }
 
     #[test]
@@ -757,7 +775,9 @@ mod tests {
 
     #[test]
     fn legacy_addon_may_omit_optional_extended_hotkey_methods() {
+        assert!(tolerate_optional_fcitx_method(Ok(())).is_ok());
         for message in [
+            "Unknown method SetLessComputerHotkeyRaw",
             "Unknown method SetSwitchStyleHotkeyRaw",
             "org.freedesktop.DBus.Error.UnknownMethod",
         ] {

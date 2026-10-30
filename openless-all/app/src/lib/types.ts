@@ -341,8 +341,19 @@ export interface StylePackRuntimeDiagnostics {
 }
 
 export type AudioDspStage =
-  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+  | 'acousticEchoCancellation'
+  | 'noiseReduction'
+  | 'dereverb'
+  | 'equalizer'
+  | 'amplifier'
+  | 'agc'
+  | 'vad';
 export interface AudioDspConfig {
+  /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
+  aecMode: 'off' | 'light' | 'model';
+  androidAecEnabled?: boolean;
+  androidNoiseSuppressionEnabled?: boolean;
+  androidAgcEnabled?: boolean;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
   noiseStrength: number;
   gainDb: number;
@@ -392,6 +403,8 @@ export interface UserPreferences {
   lowLatencyDictationEnabled: boolean;
   /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a local playback reference for optional echo cancellation. Off by default. */
+  echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
   lowMemoryBackgroundEnabled: boolean;
@@ -452,6 +465,7 @@ export interface UserPreferences {
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
+  qaCompanionKey: string;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
   /** Selection polish hotkey. null = disabled. */
@@ -591,6 +605,10 @@ export interface UserPreferences {
   /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
    *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
+  /** 调试录音：追加保存「处理后」的音频（主档案 `<session>.wav`）。 */
+  debugArchiveProcessed: boolean;
+  /** 调试录音：额外保存「处理前」的 `<session>.raw.wav`，用于 A/B 对照。 */
+  debugArchiveRaw: boolean;
   /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
    *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;
@@ -665,6 +683,7 @@ export interface MicrophoneDevice {
  *  v2 (issue #118 v2): multi-turn support; the backend sends the whole messages array each time (single source of truth).
  *  v2.1: enables `stream:true`, pushing LLM answer chunks to the frontend via `answer_delta` events for streaming render. */
 export type QaStateKind =
+  | 'activity'
   | 'idle'
   | 'recording'
   | 'loading'
@@ -682,7 +701,13 @@ export interface QaChatMessage {
   selectionText?: string;
 }
 
+export interface QaActivity {
+  kind: 'thinking' | 'searching_web' | 'reading_web' | 'using_tool';
+  toolName?: string;
+}
+
 export interface QaStatePayload {
+  activity?: QaActivity;
   kind: QaStateKind;
   /** Backend session token; the frontend uses it to drop stale late-turn events after close/reopen. */
   sessionId?: string;

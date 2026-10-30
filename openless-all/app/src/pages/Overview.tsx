@@ -414,7 +414,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
           gap: 12,
           flex: 1,
-          minHeight: 0,
+          // Keep the chart readable; when the window is too short the page scrolls instead.
+          minHeight: mobile ? 0 : 260,
         }}
       >
         <PeriodMetricsCard

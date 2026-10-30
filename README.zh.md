@@ -51,11 +51,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra 专注云服务器与物理裸机，节点覆盖香港、美国与游戏云，支持按需选配，为中小企业提供稳定可靠的算力。
 </p>
 
 <h2 align="center">开发者</h2>
@@ -110,6 +114,8 @@
 </table>
 
 OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
+
+原生 [iOS 应用与输入法](openless-all/ios/README.md) 位于 `openless-all/ios/`，支持中英文打字、语音优先与长按空格输入两种模式，以及语音翻译。源码构建和个人签名方式见 iOS 工程说明。
 
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 
@@ -241,7 +247,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
   - **旧款 32 位 ARM**:`OpenLess_<version>_armeabi-v7a.apk`
   - **64 位模拟器**:`OpenLess_<version>_x86_64.apk`
   - **32 位模拟器**:`OpenLess_<version>_x86.apk`
-  - 应用内更新（设置 → 关于）读取 `latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道。
+  - 应用内更新（设置 → 关于）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道，读取 `.../updates/beta/latest-android-{arch}-beta.json`。
   - 调试包:`OpenLess-android-debug-{abi}-*.apk`（workflow_dispatch 产物）。
   - 不确定时执行 `adb shell getprop ro.product.cpu.abi`，下载对应 ABI 的包。
 - **Linux**：原 Tauri/WebView 构建已退出 Linux 路线。基于共享 Core 2.0 服务的原生 `eframe` 宿主经 CI 和 Ubuntu 真实音频、输入、安装、升级、回滚验收后，随共用 Release 提供 deb/rpm 和 `SHA256SUMS`。要求 glibc ≥ 2.39（Ubuntu 24.04 或同等级发行版）；没有 AppImage 或应用内更新。
@@ -335,7 +341,16 @@ your fork / topic branch
 - **Beta 的工作不得泄漏到 Stable。** `main` 只接受来自 `beta` 的合并,由维护者在一次成功的双平台冒烟构建之后执行。不允许直接向 `main` 推送。
 - **Stable 发布从 `main` 切出**,通过推送 `v<version>-tauri` 标签完成——见下方的维护者发布清单。
 
-Beta 发布的分发(手动下载、可选加入):应用内的更新器始终读取 Stable 清单,因此普通用户绝不会通过自动更新拿到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于**,启用“加入 Beta 频道”,再从应用从 GitHub 获取的链接处手动下载最新的 Beta 安装包。标签约定:`v<version>-beta-tauri` 产出 Beta 发布(标记为 GitHub pre-release;清单写为 `latest-{tgt}-{arch}-beta.json`),而 `v<version>-tauri` 产出 Stable 发布。两份清单文件互不重叠,因此 Stable 用户的更新器源不会拾取到 Beta 发布。
+Beta 发布的分发(手动下载、可选加入):应用内更新器的 Stable 渠道只读 Stable 清单路径,因此普通用户绝不会通过自动更新拿到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于**,启用“加入 Beta 频道”,再从应用从 GitHub 获取的链接处手动下载最新的 Beta 安装包。标签约定:`v<version>-beta-tauri` 产出 Beta 发布(标记为 GitHub pre-release),而 `v<version>-tauri` 产出 Stable 发布。
+
+更新清单由项目 CDN 提供,每个平台/渠道一个滚动文件:
+
+```text
+https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+```
+
+渠道隔离就是 URL 路径(`/updates/stable/` vs `/updates/beta/`),Stable 客户端即使请求错地址也拿不到 Beta 清单。清单里的下载地址同样指向 CDN(`https://dl.aeoform.com/releases/{tag}/{asset}`),国内用户直接从这里下载。清单由发布 workflow 生成为运行产物(run artifact),**不再挂到 GitHub Release**;因此发版后需要维护者手动把清单上传到 CDN,见 `RELEASING.md`。改动前装的客户端读的是旧的 `releases/latest/download/latest-*.json`,因此无法自动更新到最后一个还带这些文件的版本之后,需要手动下载一次。
 
 ## 凭据
 

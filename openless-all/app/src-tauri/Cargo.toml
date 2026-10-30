@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.2-Beta.1+build.20261017"
+version = "2.0.2-Beta.3+build.20261026-c9f49c60"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -61,6 +61,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "system-proxy"] }
+rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 zip = "2"
 thiserror = "1"
 anyhow = "1"
@@ -76,7 +77,8 @@ bytes = "1"
 url = "2"
 raw-window-handle = "0.6"
 # Audio capture — shared across desktop and mobile.
-cpal = "0.15"
+# Keep Windows COM objects on their owning audio thread; see vendor/cpal/OPENLESS_PATCH.md.
+cpal = { version = "=0.15.3", path = "vendor/cpal" }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-fs = "2.7.1"
@@ -97,7 +99,6 @@ x509-parser = { version = "0.16", features = ["verify"] }
 time = "0.3"
 tempfile = "3"
 local-ip-address = "^0.6"
-rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "^0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 axum = { version = "^0.7", default-features = false, features = ["ws", "http1", "tokio", "query"] }
 hyper = { version = "^1", features = ["server", "http1"] }

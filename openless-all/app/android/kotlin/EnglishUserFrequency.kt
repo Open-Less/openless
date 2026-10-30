@@ -22,6 +22,7 @@ import kotlin.math.ln
 internal class EnglishUserFrequency(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(STORE, Context.MODE_PRIVATE)
     private val customWordsPrefs = context.applicationContext.getSharedPreferences(CUSTOM_STORE, Context.MODE_PRIVATE)
+    private val cache = FrequencyStampCache.of(context, STORE)
 
     // Tracks entry count without paying preferences.all's full-map-copy cost
     // on every record() — see trimIfNeeded(). -1 means "not yet known",
@@ -30,22 +31,19 @@ internal class EnglishUserFrequency(context: Context) {
     private var approxSize = -1
 
     fun score(word: String, now: Long = System.currentTimeMillis()): Double {
-        val value = preferences.getString(key(word), null) ?: return 0.0
-        val parts = value.split(',')
-        val count = parts.getOrNull(0)?.toDoubleOrNull() ?: return 0.0
-        val last = parts.getOrNull(1)?.toLongOrNull() ?: return 0.0
-        val ageDays = ((now - last).coerceAtLeast(0L)).toDouble() / MILLIS_PER_DAY
-        return ln(1.0 + count) * COUNT_WEIGHT + exp(-ageDays / RECENCY_HALF_LIFE_DAYS) * RECENCY_WEIGHT
+        val stamp = cache.get(key(word)) ?: return 0.0
+        val ageDays = ((now - stamp.lastUsedMs).coerceAtLeast(0L)).toDouble() / MILLIS_PER_DAY
+        return ln(1.0 + stamp.count) * COUNT_WEIGHT + exp(-ageDays / RECENCY_HALF_LIFE_DAYS) * RECENCY_WEIGHT
     }
 
     fun record(word: String) {
         if (word.isBlank()) return
         val entryKey = key(word)
         val isNewEntry = !preferences.contains(entryKey)
-        val old = preferences.getString(entryKey, null)?.split(',')
-        val count = (old?.getOrNull(0)?.toIntOrNull() ?: 0) + 1
+        val count = (cache.get(entryKey)?.count ?: 0) + 1
         val now = System.currentTimeMillis()
         preferences.edit().putString(entryKey, "$count,$now").apply()
+        cache.put(entryKey, FrequencyStampCache.Stamp(count, now))
         // Re-recording an existing word (by far the common case) never
         // touches preferences.all at all now — only a genuinely new word
         // can push the count past MAX_ENTRIES, so that's the only case
@@ -59,6 +57,7 @@ internal class EnglishUserFrequency(context: Context) {
 
     fun clear() {
         preferences.edit().clear().apply()
+        cache.invalidate()
         approxSize = 0
     }
 

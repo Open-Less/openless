@@ -13,6 +13,25 @@
 //!   `drop`ped inside that thread.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(target_os = "android")]
+#[path = "recorder/android_capture.rs"]
+pub(crate) mod android_capture;
+
+struct CaptureStream {
+    _cpal: Option<cpal::Stream>,
+    #[cfg(target_os = "android")]
+    _android: Option<android_capture::AndroidCapture>,
+}
+
+impl From<cpal::Stream> for CaptureStream {
+    fn from(stream: cpal::Stream) -> Self {
+        Self {
+            _cpal: Some(stream),
+            #[cfg(target_os = "android")]
+            _android: None,
+        }
+    }
+}
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySendError};
@@ -31,8 +50,12 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
-/// Maximum number of native callback blocks waiting for the processing worker.
-const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+/// Bound capture backlog by duration and memory, independently of callback size.
+const AUDIO_PROCESSING_MAX_QUEUED_US: u64 = 3_000_000;
+const AUDIO_PROCESSING_MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
+/// Shed optional enhancement before a temporary backlog can stop capture.
+const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
 static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
@@ -78,17 +101,29 @@ pub(crate) fn voice_diagnostic(
         });
         let writer = WRITER.get_or_init(|| {
             let (tx, rx) = sync_channel::<serde_json::Value>(4096);
-            std::thread::Builder::new().name("voice-1003-diagnostics".into()).spawn(move || {
-                let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
-                let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
-                    return;
-                };
-                for record in rx {
-                    let Ok(mut line) = serde_json::to_vec(&record) else { continue; };
-                    line.push(b'\n');
-                    if file.write_all(&line).is_err() { break; }
-                }
-            }).ok().map(|_| tx)
+            std::thread::Builder::new()
+                .name("voice-1003-diagnostics".into())
+                .spawn(move || {
+                    let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
+                    let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                    else {
+                        return;
+                    };
+                    for record in rx {
+                        let Ok(mut line) = serde_json::to_vec(&record) else {
+                            continue;
+                        };
+                        line.push(b'\n');
+                        if file.write_all(&line).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| tx)
         });
         if let Some(writer) = writer {
             let record = serde_json::json!({
@@ -101,7 +136,9 @@ pub(crate) fn voice_diagnostic(
                 "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default().as_millis().to_string(),
             });
-            if writer.try_send(record).is_err() { DROPPED.fetch_add(1, Ordering::Relaxed); }
+            if writer.try_send(record).is_err() {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     #[cfg(any(not(target_os = "windows"), test))]
@@ -120,6 +157,127 @@ pub(crate) fn warm_capture_enabled(
 fn voice_capture_key(generation: u64) -> u64 {
     generation | VOICE_CAPTURE_KEY_PREFIX
 }
+
+/// [DEBUG-ISSUE1223] Per-capture state shared by the two native stream roles.
+/// Only the first callback and callbacks immediately following errors are logged.
+struct CaptureDiagnostics {
+    run_id: u64,
+    microphone: StreamDiagnostics,
+    reference: StreamDiagnostics,
+}
+
+#[derive(Default)]
+struct StreamDiagnostics {
+    callbacks: AtomicUsize,
+    errors: AtomicUsize,
+    error_pending: AtomicBool,
+}
+
+impl StreamDiagnostics {
+    fn record_error(&self) -> usize {
+        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
+        self.error_pending.store(true, Ordering::Release);
+        count
+    }
+
+    fn record_callback(&self) -> (usize, bool) {
+        let count = self.callbacks.fetch_add(1, Ordering::Relaxed) + 1;
+        let after_error = self.error_pending.swap(false, Ordering::AcqRel);
+        (count, after_error)
+    }
+}
+
+impl CaptureDiagnostics {
+    fn new() -> Self {
+        static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+        Self {
+            run_id: NEXT_RUN.fetch_add(1, Ordering::Relaxed),
+            microphone: StreamDiagnostics::default(),
+            reference: StreamDiagnostics::default(),
+        }
+    }
+
+    /// Only code-controlled enums, booleans and numeric facts may enter the payload.
+    /// Use the existing logger; do not open files on native callback threads.
+    fn event(
+        &self,
+        probe_id: &str,
+        hypothesis_ids: &str,
+        event: &str,
+        outcome: &str,
+        safe_json: &str,
+    ) {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        log::info!(
+            "[DEBUG-ISSUE1223] {{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"s1223-20261019\",\"run_id\":\"pid-{}-capture-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{},\"ts\":{}}}",
+            std::process::id(),
+            self.run_id,
+            probe_id,
+            hypothesis_ids,
+            event,
+            outcome,
+            safe_json,
+            timestamp_ms,
+        );
+    }
+
+    fn data_callback(&self, reference: bool, accepting_audio: bool, frames: usize) {
+        let stream = if reference {
+            &self.reference
+        } else {
+            &self.microphone
+        };
+        let (count, after_error) = stream.record_callback();
+        if count == 1 || after_error {
+            self.event(
+                "P5",
+                "[\"H1\",\"H2\",\"H3\"]",
+                "data_callback",
+                if after_error { "after_error" } else { "first_callback" },
+                &format!(
+                    "{{\"stream_role\":\"{}\",\"accepting_audio\":{},\"callback_count\":{},\"error_count\":{},\"frames\":{}}}",
+                    if reference { "reference" } else { "microphone" },
+                    accepting_audio,
+                    count,
+                    stream.errors.load(Ordering::Relaxed),
+                    frames,
+                ),
+            );
+        }
+    }
+}
+
+fn handle_microphone_stream_error(
+    state: &StreamState,
+    error: cpal::StreamError,
+    runtime_error_tx: &Sender<RecorderError>,
+) {
+    if !state.accepting_audio.load(Ordering::Acquire) {
+        return;
+    }
+    let error_count = state.diagnostics.microphone.record_error();
+    // Vendored 0.15 does not turn CoreAudio overload notices into stream errors.
+    // Preserve its device-loss and backend-error contract.
+    let kind = match &error {
+        cpal::StreamError::DeviceNotAvailable => "device_not_available",
+        cpal::StreamError::BackendSpecific { .. } => "backend_error",
+    };
+    state.diagnostics.event(
+        "P2",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "microphone_stream_error",
+        "fatal_candidate",
+        &format!("{{\"error_kind\":\"{kind}\",\"error_count\":{error_count}}}"),
+    );
+    log::error!("[recorder] stream error: {error}");
+    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
+}
+
+#[path = "playback_reference.rs"]
+mod playback_reference;
 
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
@@ -258,6 +416,71 @@ impl WavArchiveWriter {
     }
 }
 
+/// 调试录音要落哪几份盘（与 egui 侧同名同义）。
+///
+/// - `processed`：主档案 `<session>.wav`，`write_processed` 时写降噪/增益之后的
+///   PCM，否则写原始 PCM（只勾「处理前」时用，回退/播放功能不变）。
+/// - `raw`：额外的 `<session>.raw.wav`，只在同时要两份时创建，用于 A/B 对照。
+#[derive(Clone, Default)]
+pub(crate) struct ArchiveTargets {
+    pub processed: Option<PathBuf>,
+    pub raw: Option<PathBuf>,
+    pub write_processed: bool,
+}
+
+impl ArchiveTargets {
+    pub(crate) fn processed_only(path: Option<PathBuf>) -> Self {
+        Self {
+            processed: path,
+            raw: None,
+            write_processed: true,
+        }
+    }
+
+    fn canonical(&self) -> Option<PathBuf> {
+        self.processed.clone().or_else(|| self.raw.clone())
+    }
+}
+
+/// 「处理前」音频的落盘通道：DSP 线程在处理每一帧之前先按这里落原始 PCM。
+#[derive(Clone)]
+pub(crate) struct RawTap {
+    /// 额外的 `<session>.raw.wav`（只在两份都要时存在）。
+    raw_writer: Option<Arc<WavArchiveWriter>>,
+    /// 主档案；`write_processed == false` 时原始 PCM 直接写进这里。
+    canonical: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
+}
+
+impl RawTap {
+    pub(crate) fn new(
+        canonical: Option<Arc<WavArchiveWriter>>,
+        raw_writer: Option<Arc<WavArchiveWriter>>,
+        write_processed: bool,
+    ) -> Self {
+        Self {
+            raw_writer,
+            canonical,
+            write_processed,
+        }
+    }
+
+    fn append_raw(&self, samples: &[f32]) {
+        if self.raw_writer.is_none() && self.write_processed {
+            return;
+        }
+        let pcm = openless_core::pcm_f32_to_i16_le(samples);
+        if let Some(raw) = self.raw_writer.as_ref() {
+            raw.append(&pcm);
+        }
+        if !self.write_processed {
+            if let Some(canonical) = self.canonical.as_ref() {
+                canonical.append(&pcm);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
@@ -277,9 +500,16 @@ struct CaptureSink {
     state: Mutex<CaptureSinkState>,
     delivery_gate: Mutex<()>,
     max_bytes: usize,
+    /// 处理前音频的落盘通道，由 `promote` 设置；DSP 线程每帧读一次。
+    raw_tap: Arc<Mutex<Option<Arc<RawTap>>>>,
 }
 
 impl CaptureSink {
+    /// DSP 线程用它读「处理前」落盘通道；`promote` 时写入。
+    fn raw_tap_slot(&self) -> Arc<Mutex<Option<Arc<RawTap>>>> {
+        Arc::clone(&self.raw_tap)
+    }
+
     fn new(max_bytes: usize) -> Arc<Self> {
         let max_bytes = (max_bytes.max(2) & !1).min(STAGED_CAPTURE_MAX_BYTES.max(2));
         Arc::new(Self {
@@ -288,6 +518,7 @@ impl CaptureSink {
             }),
             delivery_gate: Mutex::new(()),
             max_bytes,
+            raw_tap: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -303,7 +534,11 @@ impl CaptureSink {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archive: Option<Arc<WavArchiveWriter>>,
+        raw_tap: Option<Arc<RawTap>>,
     ) -> Result<(), RecorderError> {
+        // 只要处理前时，主档案由 DSP 线程写原始 PCM，这里就不能再写处理后。
+        let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        *self.raw_tap.lock() = raw_tap;
         let _delivery = self.delivery_gate.lock();
         let prefix = {
             let mut state = self.state.lock();
@@ -322,7 +557,7 @@ impl CaptureSink {
             *state = CaptureSinkState::Promoted(ForwardTarget {
                 consumer,
                 level_handler,
-                archive,
+                archive: if write_processed { archive } else { None },
             });
             prefix
         };
@@ -410,6 +645,8 @@ struct WarmCaptureSink {
     activation_fault_handler: Mutex<Option<(u64, Arc<dyn Fn(RecorderError) + Send + Sync>)>>,
     activation_vad: Mutex<ActivationVad>,
     max_bytes: usize,
+    /// 处理前音频通道：与 `CaptureSink` 同样的机制，热麦克风路径也要能落原始 PCM。
+    raw_tap: Arc<Mutex<Option<Arc<RawTap>>>>,
 }
 
 struct ActivationVadOutput {
@@ -516,6 +753,7 @@ impl WarmCaptureSink {
             activation_fault_handler: Mutex::new(None),
             activation_vad: Mutex::new(ActivationVad::default()),
             max_bytes,
+            raw_tap: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -527,7 +765,8 @@ impl WarmCaptureSink {
     }
 
     fn set_activation_consumer(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
-        self.activation_consumer_during_capture.store(false, Ordering::Release);
+        self.activation_consumer_during_capture
+            .store(false, Ordering::Release);
         *self.activation_consumer.lock() = consumer;
         self.activation_vad.lock().reset();
     }
@@ -588,7 +827,10 @@ impl WarmCaptureSink {
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let excess = buffer
+            .len()
+            .saturating_add(incoming.len())
+            .saturating_sub(max_bytes);
         let evictable_preroll = excess.min(*pre_roll_bytes);
         for _ in 0..(evictable_preroll / 2) {
             let _ = buffer.pop_front();
@@ -647,8 +889,10 @@ impl WarmCaptureSink {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archive: Option<Arc<WavArchiveWriter>>,
+        raw_tap: Option<Arc<RawTap>>,
     ) -> Result<(), RecorderError> {
         let _delivery = self.delivery_gate.lock();
+        *self.raw_tap.lock() = raw_tap;
         let (prefix, staged_level) = {
             let mut state = self.state.lock();
             let WarmCaptureSinkState::Ring { claims, .. } = &mut *state;
@@ -823,8 +1067,8 @@ impl AudioConsumer for WarmCaptureSink {
                 && self
                     .activation_consumer_during_capture
                     .load(Ordering::Acquire)))
-            .then(|| self.activation_consumer.lock().clone())
-            .flatten();
+        .then(|| self.activation_consumer.lock().clone())
+        .flatten();
         for target in targets {
             CaptureSink::deliver(&target, pcm);
         }
@@ -886,9 +1130,20 @@ impl WarmStagedRecorder {
         mut self,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        audio_archive_path: Option<PathBuf>,
+        archives: ArchiveTargets,
     ) -> Result<(WarmActiveCapture, Receiver<RecorderError>, bool), RecorderError> {
-        let archive_path = audio_archive_path;
+        let archive_path = archives.canonical();
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_writer = archive_path
             .as_ref()
             .and_then(|path| match WavArchiveWriter::create(path) {
@@ -898,12 +1153,18 @@ impl WarmStagedRecorder {
                     None
                 }
             });
+        let raw_tap = Some(Arc::new(RawTap::new(
+            archive_writer.clone(),
+            raw_writer,
+            archives.write_processed,
+        )));
         let archive_active = archive_writer.is_some();
         let result = self.hub.promote(
             self.press_id,
             consumer,
             level_handler,
             archive_writer.clone(),
+            raw_tap.clone(),
         );
         let runtime_errors = match result {
             Ok(runtime_errors) => runtime_errors,
@@ -1064,7 +1325,10 @@ impl WarmCaptureHub {
 
     pub(crate) fn clear_activation_fault_handler_if(&self, generation: u64) {
         let mut handler = self.sink.activation_fault_handler.lock();
-        if handler.as_ref().is_some_and(|(current, _)| *current == generation) {
+        if handler
+            .as_ref()
+            .is_some_and(|(current, _)| *current == generation)
+        {
             *handler = None;
         }
     }
@@ -1166,12 +1430,13 @@ impl WarmCaptureHub {
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) = Recorder::start_with_processing(
+        let (recorder, runtime_errors, _) = Recorder::start_with_archive_targets(
             device_name,
             consumer,
             level_handler,
-            None,
+            ArchiveTargets::default(),
             *self.processing_config.lock(),
+            Some(Arc::clone(&self.sink.raw_tap)),
         )?;
         let generation = self.stream_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *self.recorder.lock() = Some(recorder);
@@ -1228,12 +1493,13 @@ impl WarmCaptureHub {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archive: Option<Arc<WavArchiveWriter>>,
+        raw_tap: Option<Arc<RawTap>>,
     ) -> Result<Receiver<RecorderError>, RecorderError> {
         let _lifecycle = self.lifecycle_gate.lock();
         let (runtime_error_tx, runtime_error_rx) = channel();
         if let Err(error) = self
             .sink
-            .promote(press_id, consumer, level_handler, archive)
+            .promote(press_id, consumer, level_handler, archive, raw_tap)
         {
             let fallback_allowed = self.runtime_fallback_claims.lock().remove(&press_id);
             if !fallback_allowed
@@ -1556,6 +1822,26 @@ impl Recorder {
         audio_archive_path: Option<PathBuf>,
         processing: openless_core::AudioProcessingConfig,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
+        Self::start_with_archive_targets(
+            microphone_device_name,
+            consumer,
+            level_handler,
+            ArchiveTargets::processed_only(audio_archive_path),
+            processing,
+            None,
+        )
+    }
+
+    /// 由调用方决定主档案写哪份 PCM、是否额外写一份处理前的 `<session>.raw.wav`，
+    /// 以及 AEC 的扬声器参考来源。
+    pub fn start_with_archive_targets(
+        microphone_device_name: Option<String>,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        archives: ArchiveTargets,
+        processing: openless_core::AudioProcessingConfig,
+        raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
+    ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // Startup signal: the child thread reports the result via startup_tx once the Stream
         // is constructed.
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
@@ -1571,15 +1857,38 @@ impl Recorder {
         // immediately and passed to the caller to decide whether history marks
         // has_audio_recording. Failure only logs a warning, no error; the main path continues.
         let archive_writer =
-            audio_archive_path.and_then(|path| match WavArchiveWriter::create(&path) {
+            archives
+                .canonical()
+                .and_then(|path| match WavArchiveWriter::create(&path) {
+                    Ok(writer) => Some(Arc::new(writer)),
+                    Err(err) => {
+                        log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                        None
+                    }
+                });
+        // 只有两份都要时才创建第二份档案。
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
                 Ok(writer) => Some(Arc::new(writer)),
                 Err(err) => {
-                    log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {err}");
                     None
                 }
             });
+        let write_processed = archives.write_processed;
         let archive_active = archive_writer.is_some();
         let archive_for_thread = archive_writer.clone();
+        let raw_for_thread = raw_writer.clone();
+        // AEC 的扬声器参考：与录音同生命周期，Drop 时停流。
+        let far_end = (!processing.echo_cancellation_enabled
+            && processing.enhancement_enabled
+            && processing.dsp.aec_mode != openless_core::AecMode::Off)
+            .then(openless_core::FarEndQueue::default);
+        let far_end_for_thread = far_end.clone();
+        let raw_tap_slot_for_thread = raw_tap_slot.clone();
 
         let join_handle = match thread::Builder::new()
             .name("openless-recorder".into())
@@ -1589,6 +1898,10 @@ impl Recorder {
                     consumer,
                     level_handler,
                     archive_for_thread,
+                    raw_for_thread,
+                    write_processed,
+                    far_end_for_thread,
+                    raw_tap_slot_for_thread,
                     processing,
                     state_for_thread,
                     stop_for_thread,
@@ -1697,12 +2010,14 @@ impl Recorder {
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) = Self::start_with_processing(
+        let raw_tap_slot = sink.raw_tap_slot();
+        let (recorder, runtime_errors, _) = Recorder::start_with_archive_targets(
             microphone_device_name,
             consumer,
             level_handler,
-            None,
+            ArchiveTargets::default(),
             processing,
+            Some(raw_tap_slot),
         )?;
         Ok(StagedRecorder {
             recorder: Some(recorder),
@@ -1724,9 +2039,9 @@ impl StagedRecorder {
         mut self,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        audio_archive_path: Option<PathBuf>,
+        archives: ArchiveTargets,
     ) -> Result<(Recorder, Receiver<RecorderError>, bool), RecorderError> {
-        let archive_path = audio_archive_path;
+        let archive_path = archives.canonical();
         let archive_writer = archive_path
             .as_ref()
             .and_then(|path| match WavArchiveWriter::create(path) {
@@ -1736,10 +2051,26 @@ impl StagedRecorder {
                     None
                 }
             });
+        let raw_writer = archives
+            .raw
+            .as_ref()
+            .filter(|_| archives.processed.is_some())
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] raw archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
+        let raw_tap = Some(Arc::new(RawTap::new(
+            archive_writer.clone(),
+            raw_writer,
+            archives.write_processed,
+        )));
         let archive_active = archive_writer.is_some();
-        if let Err(error) = self
-            .sink
-            .promote(consumer, level_handler, archive_writer.clone())
+        if let Err(error) =
+            self.sink
+                .promote(consumer, level_handler, archive_writer.clone(), raw_tap)
         {
             if let Some(archive) = archive_writer {
                 archive.finish();
@@ -1809,6 +2140,94 @@ pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
     Ok(result)
 }
 
+/// 打开「扬声器回环」参考采集，供 AEC 使用。
+///
+/// 走的是宿主默认**输出**设备：Windows 的 WASAPI 允许在 render 设备上开 capture
+/// 流（loopback），Linux 的 PulseAudio/PipeWire 会把输出映射到 monitor 源，macOS
+/// 走 CoreAudio 的同一设备。没有可用回环源时返回错误，调用方记一条 warn 后继续
+/// 录音（AEC 退化为无参考），绝不让整次录音失败。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn start_reference_stream(
+    stop_flag: &Arc<AtomicBool>,
+    queue: &openless_core::FarEndQueue,
+) -> Result<cpal::Stream, RecorderError> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| RecorderError::EngineFailed("no default output device".into()))?;
+    let supported = device
+        .default_output_config()
+        .map_err(|error| RecorderError::EngineFailed(format!("default output config: {error}")))?;
+    let config = supported.config();
+    let channels = usize::from(config.channels);
+    let rate = config.sample_rate.0;
+    let device_name = device.name().unwrap_or_default();
+    let queue = queue.clone();
+    let stop_for_callback = Arc::clone(stop_flag);
+
+    macro_rules! make_reference_stream {
+        ($t:ty, $to_f32:expr) => {{
+            let queue = queue.clone();
+            let stop_for_callback = Arc::clone(&stop_for_callback);
+            device.build_input_stream(
+                &config,
+                move |data: &[$t], _: &cpal::InputCallbackInfo| {
+                    if stop_for_callback.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let samples: Vec<f32> = data.iter().copied().map($to_f32).collect();
+                    queue.push(&samples, channels, rate);
+                },
+                |error| log::warn!("[recorder] speaker reference stream error: {error}"),
+                None,
+            )
+        }};
+    }
+
+    let stream = match supported.sample_format() {
+        SampleFormat::F32 => make_reference_stream!(f32, |sample: f32| sample),
+        SampleFormat::I16 => {
+            make_reference_stream!(i16, |sample: i16| sample as f32 / i16::MAX as f32)
+        }
+        SampleFormat::I32 => {
+            make_reference_stream!(i32, |sample: i32| sample as f32 / i32::MAX as f32)
+        }
+        SampleFormat::I8 => make_reference_stream!(i8, |sample: i8| sample as f32 / i8::MAX as f32),
+        SampleFormat::U8 => {
+            make_reference_stream!(u8, |sample: u8| (sample as f32 - 128.0) / 128.0)
+        }
+        other => {
+            return Err(RecorderError::EngineFailed(format!(
+                "unsupported speaker reference sample format: {other:?}"
+            )))
+        }
+    }
+    .map_err(|error| {
+        RecorderError::EngineFailed(format!("build speaker reference stream: {error}"))
+    })?;
+    stream
+        .play()
+        .map_err(|error| RecorderError::EngineFailed(format!("play speaker reference: {error}")))?;
+    log::info!(
+        "[recorder] speaker reference capturing outputDevice={} rate={} channels={channels}",
+        device_name,
+        rate
+    );
+    Ok(stream)
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn start_reference_stream(
+    _stop_flag: &Arc<AtomicBool>,
+    _queue: &openless_core::FarEndQueue,
+) -> Result<cpal::Stream, RecorderError> {
+    Err(RecorderError::EngineFailed(
+        "speaker loopback is not available on mobile".into(),
+    ))
+}
+
 /// Audio thread body: build Stream -> report via startup_tx -> loop until stop_flag.
 /// `archiver` was already attempted by the caller on the synchronous path (Ok -> Some /
 /// failed -> None); this only threads it through to build_input_stream for the cpal callback.
@@ -1817,18 +2236,56 @@ fn run_audio_thread(
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archiver: Option<Arc<WavArchiveWriter>>,
+    raw_archiver: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
+    far_end: Option<openless_core::FarEndQueue>,
+    raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
     processing: openless_core::AudioProcessingConfig,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (processor, frame_tx) = match AudioProcessingWorker::start(
+    let far_end_for_reference = far_end.clone();
+    let (reference_stream, reference) = if processing.echo_cancellation_enabled {
+        match playback_reference::start(&stop_flag, &state.diagnostics) {
+            Ok((stream, buffer)) => (Some(stream), Some(buffer)),
+            Err(error) => {
+                log::warn!(
+                    "[recorder] playback reference unavailable; recording without AEC: {error}"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+    state.diagnostics.event(
+        "P1",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "reference_start",
+        if reference.is_some() {
+            "available"
+        } else {
+            "fallback"
+        },
+        &format!(
+            "{{\"aec_requested\":{},\"reference_available\":{}}}",
+            processing.echo_cancellation_enabled,
+            reference.is_some()
+        ),
+    );
+    *state.reference.lock() = reference;
+    let (processor, frame_tx) = match AudioProcessingWorker::start_with_targets(
         processing,
         consumer,
         level_handler,
         archiver,
+        raw_archiver,
         Arc::clone(&state),
+        write_processed,
+        far_end,
+        raw_tap_slot,
     ) {
         Ok(worker) => worker,
         Err(error) => {
@@ -1837,12 +2294,26 @@ fn run_audio_thread(
         }
     };
     *state.processor_sender.lock() = Some(frame_tx.clone());
+    // 扬声器回环参考：`cpal::Stream` 不是 Send，只能在音频线程里创建，
+    // 并随本线程结束一起释放（和麦克风流一样）。
+    let _reference_stream = far_end_for_reference.as_ref().and_then(|queue| {
+        match start_reference_stream(&stop_flag, queue) {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                log::warn!(
+                    "[recorder] speaker reference unavailable; continuing without AEC: {error}"
+                );
+                None
+            }
+        }
+    });
     let (stream, state) = match build_input_stream(
         microphone_device_name,
         frame_tx.clone(),
         Arc::clone(&state),
         Arc::clone(&stop_flag),
         runtime_error_tx.clone(),
+        processing,
     ) {
         Ok(s) => s,
         Err(err) => {
@@ -1930,6 +2401,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "callback_silent", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
@@ -1945,6 +2417,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
                             );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "first_callback_timeout", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
@@ -1973,10 +2446,13 @@ fn run_audio_thread(
     // backend it calls AudioOutputUnitStop directly, terminating the callback synchronously.
     // The subsequent drop handles dispose / resource release. If pause fails, warn only and
     // do not block the drop.
-    if let Err(err) = stream.pause() {
-        log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+    if let Some(cpal_stream) = &stream._cpal {
+        if let Err(err) = cpal_stream.pause() {
+            log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+        }
     }
     drop(stream);
+    drop(reference_stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
@@ -1992,11 +2468,53 @@ fn run_audio_thread(
 /// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
-) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    _processing: openless_core::AudioProcessingConfig,
+) -> Result<(CaptureStream, Arc<StreamState>), RecorderError> {
+    #[cfg(target_os = "android")]
+    if _processing.enhancement_enabled {
+        let config = _processing.dsp;
+        if config.android_aec_enabled
+            || config.android_noise_suppression_enabled
+            || config.android_agc_enabled
+        {
+            if microphone_device_name
+                .as_ref()
+                .is_some_and(|name| !name.trim().is_empty())
+            {
+                android_capture::record_failure(
+                    "System audio effects require the default Android input".into(),
+                );
+            } else {
+                match android_capture::AndroidCapture::start(
+                    config,
+                    frame_tx.clone(),
+                    Arc::clone(&state),
+                    runtime_error_tx.clone(),
+                ) {
+                    Ok(capture) => {
+                        return Ok((
+                            CaptureStream {
+                                _cpal: None,
+                                _android: Some(capture),
+                            },
+                            state,
+                        ))
+                    }
+                    Err(error) => {
+                        android_capture::record_failure(error.clone());
+                        if error.starts_with("busy:") {
+                            return Err(RecorderError::EngineFailed(error));
+                        }
+                        log::warn!("[android-audio] system effects unavailable; falling back to native capture: {error}");
+                    }
+                }
+            }
+        }
+    }
     let selecting_at = std::time::Instant::now();
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
@@ -2004,6 +2522,7 @@ fn build_input_stream(
     let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
         start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
+            .map(|(stream, state)| (stream.into(), state))
     };
     let initial_error = match start(&selected) {
         Ok(stream) => return Ok(stream),
@@ -2045,11 +2564,29 @@ fn try_input_candidates<T, U>(
 
 fn start_device_stream(
     device: &cpal::Device,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    // Android DSP and neural denoisers share a 48 kHz capture contract.
+    // Keep native fallback for devices that cannot open this rate.
+    #[cfg(target_os = "android")]
+    if let Ok(ranges) = device.supported_input_configs() {
+        for range in ranges.filter(|range| {
+            range.min_sample_rate().0 <= 48_000 && range.max_sample_rate().0 >= 48_000
+        }) {
+            let config = range.with_sample_rate(cpal::SampleRate(48_000));
+            match start_native_config(device, config, frame_tx, state, stop_flag, runtime_error_tx)
+            {
+                Ok(stream) => return Ok(stream),
+                Err(RecorderError::PermissionDenied) => {
+                    return Err(RecorderError::PermissionDenied)
+                }
+                Err(error) => log::warn!("[recorder] Android 48 kHz capture failed: {error}"),
+            }
+        }
+    }
     let mut default = None;
     let initial_error = match device.default_input_config() {
         Ok(config) => {
@@ -2105,7 +2642,7 @@ fn native_input_alternatives(
 fn start_native_config(
     device: &cpal::Device,
     supported: cpal::SupportedStreamConfig,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
@@ -2226,7 +2763,7 @@ fn build_stream_for_format(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     input_sr: u32,
@@ -2242,42 +2779,49 @@ fn build_stream_for_format(
             let runtime_error_for_error = runtime_error_tx.clone();
             let error_state = Arc::clone(&state);
             let err_cb = move |err| {
-                if !error_state.accepting_audio.load(Ordering::Acquire) {
-                    return;
-                }
-                log::error!("[recorder] stream error: {err}");
-                let _ = runtime_error_for_error
-                    .send(RecorderError::EngineFailed(format!("stream: {err}")));
+                handle_microphone_stream_error(&error_state, err, &runtime_error_for_error);
             };
             device
                 .build_input_stream::<$t, _, _>(
                     config,
-                    move |data: &[$t], _info| {
+                    move |data: &[$t], info| {
                         if !state.accepting_audio.load(Ordering::Acquire) {
                             return;
                         }
                         if !data.is_empty() {
                             state.note_first_pcm(false);
                         }
+                        let captured_at = playback_reference::capture_time(info);
+                        state.diagnostics.data_callback(false, true, data.len() / channels.max(1));
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
                         }
                         *state.last_callback_time.lock() = Some(std::time::Instant::now());
                         match frame_tx.try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                            captured_at,
                             samples: floats,
                             channels,
                             input_sample_rate: input_sr,
                         })) {
                             Ok(()) => {}
                             Err(TrySendError::Disconnected(_)) => {
+                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                                    let _ = runtime_error_for_callback.send(
+                                        RecorderError::EngineFailed("audio processing worker disconnected".into()),
+                                    );
+                                }
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                state.diagnostics.event("P4", "[\"H4\"]", "processing_backpressure", "queue_full", "{}");
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
-                                            "audio processing queue overflow".into(),
+                                            format!("audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
+                                                frame_tx.backlog.micros.load(Ordering::Acquire),
+                                                frame_tx.backlog.bytes.load(Ordering::Acquire),
+                                                data.len(), input_sr, channels),
                                         ),
                                     );
                                 }
@@ -2318,6 +2862,7 @@ fn build_stream_for_format(
 }
 
 struct RawAudioFrame {
+    captured_at: std::time::Instant,
     samples: Vec<f32>,
     channels: usize,
     input_sample_rate: u32,
@@ -2329,9 +2874,110 @@ enum AudioProcessingMessage {
     Shutdown,
 }
 
+#[derive(Default)]
+struct AudioProcessingBacklog {
+    micros: AtomicU64,
+    bytes: AtomicUsize,
+}
+
+struct AudioProcessingReservation {
+    backlog: Arc<AudioProcessingBacklog>,
+    micros: u64,
+    bytes: usize,
+}
+
+impl Drop for AudioProcessingReservation {
+    fn drop(&mut self) {
+        self.backlog.micros.fetch_sub(self.micros, Ordering::AcqRel);
+        self.backlog.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+struct QueuedAudioProcessingMessage {
+    message: AudioProcessingMessage,
+    _reservation: Option<AudioProcessingReservation>,
+}
+
+#[derive(Clone)]
+struct AudioProcessingSender {
+    sender: SyncSender<QueuedAudioProcessingMessage>,
+    backlog: Arc<AudioProcessingBacklog>,
+}
+
+impl AudioProcessingSender {
+    fn reserve(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<QueuedAudioProcessingMessage, AudioProcessingMessage> {
+        let reservation = if let AudioProcessingMessage::Frame(frame) = &message {
+            let rate = u64::from(frame.input_sample_rate) * frame.channels as u64;
+            if rate == 0 {
+                return Err(message);
+            }
+            let micros = (frame.samples.len() as u64 * 1_000_000).div_ceil(rate);
+            let bytes = frame.samples.len() * std::mem::size_of::<f32>();
+            if self
+                .backlog
+                .bytes
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_BYTES)
+                })
+                .is_err()
+            {
+                return Err(message);
+            }
+            if self
+                .backlog
+                .micros
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(micros)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_US)
+                })
+                .is_err()
+            {
+                self.backlog.bytes.fetch_sub(bytes, Ordering::AcqRel);
+                return Err(message);
+            }
+            Some(AudioProcessingReservation {
+                backlog: Arc::clone(&self.backlog),
+                micros,
+                bytes,
+            })
+        } else {
+            None
+        };
+        Ok(QueuedAudioProcessingMessage {
+            message,
+            _reservation: reservation,
+        })
+    }
+
+    fn try_send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), TrySendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(TrySendError::Full)?;
+        self.sender.try_send(queued).map_err(|error| match error {
+            TrySendError::Full(queued) => TrySendError::Full(queued.message),
+            TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.message),
+        })
+    }
+
+    fn send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(std::sync::mpsc::SendError)?;
+        self.sender
+            .send(queued)
+            .map_err(|error| std::sync::mpsc::SendError(error.0.message))
+    }
+}
+
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
-    shutdown: SyncSender<AudioProcessingMessage>,
+    shutdown: AudioProcessingSender,
 }
 
 impl AudioProcessingWorker {
@@ -2341,52 +2987,121 @@ impl AudioProcessingWorker {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archiver: Option<Arc<WavArchiveWriter>>,
         state: Arc<StreamState>,
-    ) -> Result<(Self, SyncSender<AudioProcessingMessage>), RecorderError> {
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
+        Self::start_with_targets(
+            processing,
+            consumer,
+            level_handler,
+            archiver,
+            None,
+            state,
+            true,
+            None,
+            None,
+        )
+    }
+
+    /// `write_processed = false` 时主档案写原始 PCM；`raw_archiver` 是额外的
+    /// 「处理前」档案（只在两份都要时给出）。`far_end` 是 AEC 的扬声器参考队列。
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_targets(
+        processing: openless_core::AudioProcessingConfig,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        archiver: Option<Arc<WavArchiveWriter>>,
+        raw_archiver: Option<Arc<WavArchiveWriter>>,
+        state: Arc<StreamState>,
+        write_processed: bool,
+        far_end: Option<openless_core::FarEndQueue>,
+        raw_tap_slot: Option<Arc<Mutex<Option<Arc<RawTap>>>>>,
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
-            sync_channel::<AudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let backlog = Arc::new(AudioProcessingBacklog::default());
+        let sender = AudioProcessingSender {
+            sender,
+            backlog: Arc::clone(&backlog),
+        };
         let join_handle = thread::Builder::new()
             .name("openless-audio-processor".into())
             .spawn(move || {
+                #[cfg(target_os = "android")]
+                android_capture::prioritize_current_thread();
                 let mut processor = openless_core::AudioProcessor::new(processing);
-                while let Ok(message) = receiver.recv() {
+                if let Some(queue) = far_end.clone() {
+                    processor.attach_far_end(queue);
+                }
+                let mut enhancement_enabled = processing.enhancement_enabled;
+                let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
+                    state.note_first_pcm(true);
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if write_processed {
+                        if let Some(archiver) = &archiver {
+                            archiver.append(&chunk.pcm_i16_le);
+                        }
+                    }
+                    level_handler(chunk.level);
+                    update_peak(&state.peak_output_rms_milli, chunk.level);
+                };
+                while let Ok(queued) = receiver.recv() {
+                    // Keep the reservation until downstream delivery completes.
+                    let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
-                            if let Some(chunk) = processor.process(
+                            #[cfg(target_os = "android")]
+                            processor.set_monitoring_enabled(android_capture::monitoring_enabled());
+                            // 「处理前」的原始帧：额外 raw 档案永远拿原始 PCM；
+                            // 只要处理前、不要处理后时，主档案也写原始 PCM，回退与
+                            // 播放继续可用，且不会多出一份重复文件。
+                            if raw_archiver.is_some() || !write_processed {
+                                let pcm = openless_core::pcm_f32_to_i16_le(&frame.samples);
+                                if let Some(raw) = &raw_archiver {
+                                    raw.append(&pcm);
+                                }
+                                if !write_processed {
+                                    if let Some(canonical) = &archiver {
+                                        canonical.append(&pcm);
+                                    }
+                                }
+                            }
+                            if let Some(slot) = raw_tap_slot.as_ref() {
+                                if let Some(tap) = slot.lock().clone() {
+                                    tap.append_raw(&frame.samples);
+                                }
+                            }
+                            let queued_us = backlog.micros.load(Ordering::Acquire);
+                            if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
+                                log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
+                                if let Some(tail) = processor.disable_enhancement() {
+                                    deliver(tail);
+                                }
+                                enhancement_enabled = false;
+                            }
+                            let reference = state.reference.lock().clone();
+                            let render = reference.and_then(|buffer| buffer.take_for_input_at(frame.samples.len()/frame.channels.max(1), frame.input_sample_rate, frame.captured_at));
+                            if let Some(chunk) = processor.process_with_reference(
                                 &frame.samples,
                                 frame.channels,
                                 frame.input_sample_rate,
+                                render.as_deref(),
                             ) {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
+                            #[cfg(target_os = "android")]
+                            android_capture::publish_monitor(&processor);
                         }
                         AudioProcessingMessage::Flush(done) => {
                             if let Some(chunk) = processor.finish() {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
-                            processor.reset();
+                            // A warm microphone reuses this worker across recording segments.
+                            processor = openless_core::AudioProcessor::new(processing);
+                            enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
                         AudioProcessingMessage::Shutdown => {
                             if let Some(chunk) = processor.finish() {
-                                state.note_first_pcm(true);
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
                             break;
                         }
@@ -2421,11 +3136,13 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    diagnostics: Arc<CaptureDiagnostics>,
+    reference: Mutex<Option<Arc<openless_core::ReferenceAudioBuffer>>>,
     capture_id: u64,
     created_at: std::time::Instant,
     first_raw_pcm_us: AtomicU64,
     first_output_pcm_us: AtomicU64,
-    processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
+    processor_sender: Mutex<Option<AudioProcessingSender>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
     resample_phase: Mutex<f64>,
@@ -2444,6 +3161,8 @@ impl StreamState {
     fn new() -> Self {
         Self {
             capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+            diagnostics: Arc::new(CaptureDiagnostics::new()),
+            reference: Mutex::new(None),
             created_at: std::time::Instant::now(),
             first_raw_pcm_us: AtomicU64::new(0),
             first_output_pcm_us: AtomicU64::new(0),
@@ -2792,6 +3511,181 @@ mod tests {
     }
 
     #[test]
+    fn audio_processing_budget_is_duration_based_and_released_on_disconnect() {
+        for samples in [48, 480, 4800] {
+            let (tx, rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            let sender = AudioProcessingSender {
+                sender: tx,
+                backlog: Arc::new(AudioProcessingBacklog::default()),
+            };
+            let frame = || {
+                AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
+                    samples: vec![0.25; samples],
+                    channels: 1,
+                    input_sample_rate: 48_000,
+                })
+            };
+            let frames = 3 * 48_000 / samples;
+            for _ in 0..frames {
+                assert!(sender.try_send(frame()).is_ok());
+            }
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Full(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 3_000_000);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 3 * 48_000 * 4);
+            drop(rx);
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Disconnected(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn audio_processing_budget_also_bounds_large_multichannel_frames() {
+        let (tx, _rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let sender = AudioProcessingSender {
+            sender: tx,
+            backlog: Arc::new(AudioProcessingBacklog::default()),
+        };
+        let frame = AudioProcessingMessage::Frame(RawAudioFrame {
+            captured_at: std::time::Instant::now(),
+            samples: vec![0.0; 48_000 * 64],
+            channels: 64,
+            input_sample_rate: 48_000,
+        });
+        assert!(matches!(sender.try_send(frame), Err(TrySendError::Full(_))));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn audio_processing_backlog_sheds_enhancement_without_losing_pcm() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (entered_tx, entered_rx) = channel();
+        let (resume_tx, resume_rx) = channel();
+        let resume_rx = Mutex::new(resume_rx);
+        let block_next_level = Arc::new(AtomicBool::new(false));
+        let block_for_level = Arc::clone(&block_next_level);
+        let level_handler = Arc::new(move |_| {
+            if block_for_level.swap(false, Ordering::AcqRel) {
+                entered_tx.send(()).unwrap();
+                resume_rx
+                    .lock()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+        });
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            level_handler,
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            block_next_level.store(true, Ordering::Release);
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
+                    samples: vec![0.25; 997],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            // One second of short callbacks exceeds the old 64-message limit.
+            for _ in 0..100 {
+                assert!(sender
+                    .try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                        captured_at: std::time::Instant::now(),
+                        samples: vec![0.5; 160],
+                        channels: 1,
+                        input_sample_rate: TARGET_SAMPLE_RATE,
+                    }))
+                    .is_ok());
+            }
+            resume_tx.send(()).unwrap();
+            let (done_tx, done_rx) = channel();
+            sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        worker.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let segment_samples = 997 + 160 * 100;
+        assert_eq!(delivered.len(), segment_samples * 2 * 2);
+        let decoded = decode_i16_le(&delivered);
+        assert_eq!(&decoded[..segment_samples], &decoded[segment_samples..]);
+        assert!(decoded[..997].iter().any(|sample| *sample != 8191));
+        assert!(decoded[997..segment_samples]
+            .iter()
+            .all(|sample| *sample == 16383));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn playback_reference_uses_capture_times_after_an_early_start() {
+        let epoch=std::time::Instant::now();
+        let state=Arc::new(StreamState::new());
+        let reference=Arc::new(openless_core::ReferenceAudioBuffer::new(16_000));
+        reference.push_interleaved_at(&[0.9;160],1,epoch);
+        reference.push_interleaved_at(&[0.0;1280],1,epoch+std::time::Duration::from_millis(10));
+        *state.reference.lock()=Some(reference);
+        let consumer=Arc::new(RecordingConsumer::default());
+        let (worker,sender)=AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {echo_cancellation_enabled:true,..Default::default()},
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,Arc::new(|_|{}),None,state,
+        ).unwrap();
+        for index in 1..=8 {
+            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at:epoch+std::time::Duration::from_millis(index*10),samples:vec![0.25;160],channels:1,input_sample_rate:16_000,
+            })).unwrap();
+        }
+        drop(sender);worker.finish();
+        let chunks=consumer.chunks.lock().unwrap();assert_eq!(chunks.len(),8);
+        assert!(chunks.iter().all(|chunk|decode_i16_le(chunk)==vec![8191;160]));
+    }
+
+    #[test]
+    fn diagnostics_and_microphone_errors_stay_capture_scoped() {
+        let first=StreamState::new();let second=StreamState::new();
+        assert_ne!(first.diagnostics.run_id,second.diagnostics.run_id);
+        let (sender,receiver)=channel();
+        first.accepting_audio.store(false,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(receiver.try_recv().is_err());assert_eq!(first.diagnostics.microphone.errors.load(Ordering::Relaxed),0);
+        first.accepting_audio.store(true,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(matches!(receiver.try_recv(),Ok(RecorderError::EngineFailed(_))));
+        assert_eq!(first.diagnostics.microphone.record_callback(),(1,true));
+        assert_eq!(first.diagnostics.reference.record_callback(),(1,false));
+        assert_eq!(second.diagnostics.microphone.record_callback(),(1,false));
+    }
+
+    #[test]
     fn audio_processing_worker_drains_accepted_frames_before_join() {
         let consumer = Arc::new(RecordingConsumer::default());
         let state = Arc::new(StreamState::new());
@@ -2808,6 +3702,7 @@ mod tests {
         .unwrap();
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![0.25, -0.25],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -2846,6 +3741,7 @@ mod tests {
         .unwrap();
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![0.15; 317],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -2868,6 +3764,7 @@ mod tests {
         );
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![-0.15; 211],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -2906,6 +3803,7 @@ mod tests {
         for _ in 0..8 {
             sender
                 .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
                     samples: vec![0.25, -0.25],
                     channels: 1,
                     input_sample_rate: TARGET_SAMPLE_RATE,
@@ -2956,6 +3854,7 @@ mod tests {
             Arc::clone(&formal) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
             None,
+            None,
         )
         .unwrap();
 
@@ -2978,6 +3877,7 @@ mod tests {
             8,
             Arc::clone(&formal) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
+            None,
             None,
         )
         .unwrap();
@@ -3308,6 +4208,7 @@ mod tests {
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(move |level| levels_for_handler.lock().unwrap().push(level)),
             None,
+            None,
         )
         .unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
@@ -3330,7 +4231,12 @@ mod tests {
         sink.consume_pcm_chunk(&[1, 2]);
         sink.discard();
         assert!(sink
-            .promote(consumer as Arc<dyn AudioConsumer>, Arc::new(|_| {}), None)
+            .promote(
+                consumer as Arc<dyn AudioConsumer>,
+                Arc::new(|_| {}),
+                None,
+                None
+            )
             .is_err());
         sink.consume_pcm_chunk(&[3, 4]);
         let is_discarded = matches!(&*sink.state.lock(), CaptureSinkState::Discarded);
@@ -3353,6 +4259,7 @@ mod tests {
             consumer.clone(),
             Arc::new(move |level| levels_for_handler.lock().unwrap().push(level)),
             None,
+            None,
         )
         .unwrap();
         sink.consume_pcm_chunk(&[11, 12]);
@@ -3374,8 +4281,14 @@ mod tests {
         sink.set_activation_consumer(None);
         sink.consume_pcm_chunk(&[5, 6]);
 
-        assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![1, 2, 3, 4]]);
-        assert!(matches!(&*sink.state.lock(), WarmCaptureSinkState::Ring { .. }));
+        assert_eq!(
+            consumer.chunks.lock().unwrap().as_slice(),
+            &[vec![1, 2, 3, 4]]
+        );
+        assert!(matches!(
+            &*sink.state.lock(),
+            WarmCaptureSinkState::Ring { .. }
+        ));
     }
 
     #[test]
@@ -3385,7 +4298,7 @@ mod tests {
         sink.arm(19, false).unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(19, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(19, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
         assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![5, 6]]);
     }
@@ -3398,7 +4311,7 @@ mod tests {
         sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
 
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
 
         assert_eq!(
@@ -3416,7 +4329,7 @@ mod tests {
         sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
 
         let consumer = Arc::new(RecordingConsumer::default());
-        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None)
+        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
 
         assert_eq!(
@@ -3436,7 +4349,7 @@ mod tests {
 
         let first = Arc::new(RecordingConsumer::default());
         let second = Arc::new(RecordingConsumer::default());
-        sink.promote(18, second.clone(), Arc::new(|_| {}), None)
+        sink.promote(18, second.clone(), Arc::new(|_| {}), None, None)
             .unwrap();
         sink.consume_pcm_chunk(&[5, 6]);
 
@@ -3445,7 +4358,9 @@ mod tests {
             second.chunks.lock().unwrap().as_slice(),
             &[vec![1, 2, 3, 4], vec![5, 6]]
         );
-        assert!(sink.promote(17, first, Arc::new(|_| {}), None).is_err());
+        assert!(sink
+            .promote(17, first, Arc::new(|_| {}), None, None)
+            .is_err());
     }
 
     fn complete_hub_operation(operation: impl FnOnce() + Send + 'static) {
@@ -3513,6 +4428,7 @@ mod tests {
                         press_id,
                         Arc::new(RecordingConsumer::default()),
                         Arc::new(|_| {}),
+                        None,
                         None,
                     )
                     .unwrap();

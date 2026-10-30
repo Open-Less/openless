@@ -7,6 +7,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
+import { Segmented } from '../../components/ui/Segmented';
 import { Collapsible } from '../_atoms';
 import { SettingRow, Toggle, inputStyle } from './shared';
 import {
@@ -172,29 +173,17 @@ export function RemoteInputSection() {
       </SettingRow>
 
       <SettingRow label={t('settings.remoteInput.defaultModeLabel')}>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {(['toggle', 'hold'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => updatePrefs({ ...prefs, remoteInputDefaultMode: m })}
-              style={{
-                padding: '5px 12px',
-                borderRadius: 8,
-                fontSize: 12.5,
-                cursor: 'pointer',
-                border: '0.5px solid var(--ol-line-strong)',
-                background: mode === m ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
-                color: mode === m ? '#fff' : 'var(--ol-ink)',
-              }}
-            >
-              {t(
-                m === 'toggle'
-                  ? 'settings.remoteInput.modeToggle'
-                  : 'settings.remoteInput.modeHold',
-              )}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          label={t('settings.remoteInput.defaultModeLabel')}
+          value={mode}
+          onChange={(m) => updatePrefs({ ...prefs, remoteInputDefaultMode: m })}
+          options={(['toggle', 'hold'] as const).map((m) => ({
+            value: m,
+            label: t(
+              m === 'toggle' ? 'settings.remoteInput.modeToggle' : 'settings.remoteInput.modeHold',
+            ),
+          }))}
+        />
       </SettingRow>
 
       {enabled && (viewState === 'running' || viewState === 'stale') && status && (

@@ -310,6 +310,8 @@ export const ja: typeof zhCN = {
     cancelled: 'キャンセルしました',
     error: 'エラーが発生しました',
     inserted: '{{count}} 文字を入力しました',
+    translateTo: '翻訳先',
+    translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
     selectionPolish: {
       polishing: '推敲中...',
@@ -339,6 +341,12 @@ export const ja: typeof zhCN = {
     cancel: 'キャンセル',
   },
   qa: {
+    activity: {
+      searchingWeb: 'ウェブを検索中',
+      readingWeb: 'ウェブページを読込中',
+      usingTool: '{{tool}} を使用中',
+      tool: 'ツール',
+    },
     compact: {
       closeError: '閉じられませんでした。再試行してください。',
       sendError: '送信できませんでした。入力は保持されています。再試行してください。',
@@ -492,7 +500,7 @@ export const ja: typeof zhCN = {
     style: 'スタイル',
     marketplace: 'マーケット',
     translation: '翻訳',
-    selectionAsk: '選択追問',
+    selectionAsk: '何でも質問',
     quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
@@ -1192,8 +1200,22 @@ export const ja: typeof zhCN = {
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
   },
+  askAnything: {
+    dictation: '音声入力',
+    translation: '翻訳',
+    question: '何でも質問',
+    dictationHint: '話した内容を文字にする',
+    translationHint: '録音中に翻訳先を選択',
+    questionHint: '文字を選択するか、そのまま質問',
+    description:
+      '組み合わせを押して質問し、もう一度押すと送信します。回答は画面下部に表示されます。',
+    auxiliaryKey: '質問の追加キー',
+    auxiliaryHint: '{{key}} と一緒に押します。録音キーの変更に追従します。',
+    selectionHint:
+      '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
+  },
   selectionAsk: {
-    title: '選択追問',
+    title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',
     guide: {
@@ -1487,7 +1509,6 @@ export const ja: typeof zhCN = {
       microphoneMonitorError: '入力レベルの監視に失敗：{{message}}',
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
-      capsuleStyleTypeless: 'Typeless コンパクトスタイル',
       capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
@@ -1504,7 +1525,7 @@ export const ja: typeof zhCN = {
         'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'Openless デフォルトスタイル',
+      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
@@ -1512,6 +1533,35 @@ export const ja: typeof zhCN = {
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'オフ',
+        aecLight: '軽量（低 CPU）',
+        aecModel: 'モデル（高精度）',
+        aecModelHint:
+          'モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。',
+        aecHint:
+          'スピーカー使用時の回り込みを抑えます。参照信号が必要なので、ヘッドホンならオフで構いません。',
+        buffer: '出力バッファ',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1539,6 +1589,9 @@ export const ja: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: '再生エコーキャンセル',
+      echoCancellationDesc:
+        '再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。',
       audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
         'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
@@ -1616,6 +1669,10 @@ export const ja: typeof zhCN = {
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
+      debugArchiveProcessedLabel: '処理後の音声を保存',
+      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveRawLabel: '処理前の音声も保存',
+      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
@@ -1695,6 +1752,7 @@ export const ja: typeof zhCN = {
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
       errModel: 'モデル',
+      errThinking: '思考をオンに',
       verify: '検証',
       verifyHint: '実際に API を1回呼んで、このチャネルが今使えるか確認します',
       errTimeout: 'タイムアウト',
@@ -1846,8 +1904,9 @@ export const ja: typeof zhCN = {
       volcengineAuthModeApiKey: '新版コンソール API Key',
       volcengineMappingNote:
         'Secret Key は現在不要。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '新版スピーチコンソールで作成した API Key で認証します（APP ID 不要）。API Key はスピーチコンソールの「API Key 管理」で作成：console.volcengine.com/speech/new/setting/apikeys。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 管理',
+      volcengineApiKeyNote: 'ここで作成した音声用 API Key で認証。Ark のキーは使えません。',
+      volcengineResourceIdNote: 'Resource ID のデフォルトは {{resourceId}} です。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -1922,6 +1981,8 @@ export const ja: typeof zhCN = {
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
       llmStreamError:
         'サーバーがストリームエラーを返しました。モデルとリクエスト設定を確認してください。',
+      llmThinkingRequired:
+        'このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。',
       saveProtocol: 'プロトコル設定を保存',
       thinkingModeHint:
         '選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。',

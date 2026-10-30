@@ -20,6 +20,9 @@ test('offscreen WebGL preview releases its animation clock and resumes only when
     };
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  // The default OpenLess preview is CSS-only; opt into the WebGL style under test.
+  await page.getByRole('combobox', { name: '胶囊样式' }).click();
+  await page.getByRole('option', { name: /Siri/ }).click();
   const draws = () => page.evaluate(() => (window as Window & { draws: number }).draws);
   await expect.poll(draws).toBeGreaterThan(5);
   await page.locator('.ol-settings-scroll').evaluate((element) => {

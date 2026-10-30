@@ -471,6 +471,13 @@ pub trait DictationEngine: Send + Sync + 'static {
         ))
     }
 
+    /// Retain an existing archive during fault cleanup. Availability must be
+    /// checked after cancellation has drained the recorder. This never enables
+    /// recording storage for a session whose policy did not already allow it.
+    fn retain_failed_recording(&self, _session_id: SessionId) -> Option<Arc<dyn RecordingArchive>> {
+        None
+    }
+
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>>;
 }
 

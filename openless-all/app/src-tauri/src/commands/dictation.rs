@@ -60,8 +60,14 @@ pub async fn cancel_dictation(
 #[tauri::command]
 pub async fn set_capsule_transcript_visible(
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
     visible: bool,
 ) -> Result<(), String> {
+    // The caller is injected by Tauri, not supplied in the IPC payload. Retained mirror
+    // webviews must not change the primary capsule's shared native layout state.
+    if window.label() != "capsule" {
+        return Ok(());
+    }
     let host = coord.tauri_host();
     let Some(capsule) = host.capsule_window() else {
         return Ok(());
@@ -118,4 +124,57 @@ pub async fn repolish(
         })
         .await
         .map_err(|error| error.to_string())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn get_dictation_translation_target(
+    core: CoreState<'_>,
+) -> Result<Option<openless_core::DictationTranslationTarget>, String> {
+    Ok(core.dictation_translation_target())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn select_dictation_translation_target(
+    core: CoreState<'_>,
+    session_id: openless_core::SessionId,
+    target_language: String,
+) -> Result<openless_core::DictationTranslationTarget, String> {
+    core.select_dictation_translation_target(session_id, target_language)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn set_capsule_language_menu(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+    open: bool,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+    if label != "capsule" && !label.starts_with("capsule-mirror-") {
+        return Err("capsule_window_required".into());
+    }
+    let core = coord.backend();
+    let capsule = coord
+        .tauri_host()
+        .capsule_window()
+        .ok_or("capsule_window_unavailable")?;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    capsule.run_on_main_thread(move |capsule| {
+        if open
+            && !core
+                .dictation_translation_target()
+                .is_some_and(|active| active.mutable && active.session_id == session_id)
+        {
+            let _ = send.send(Err("recording_translation_required".into()));
+            return;
+        }
+        let _ = send.send(capsule.set_translation_menu_open(label, session_id, open));
+    })?;
+    receive
+        .await
+        .map_err(|_| "capsule_menu_cancelled".to_string())?
 }

@@ -47,39 +47,56 @@
 
 .ol-classic-translation {
   display: inline-flex;
-  flex: 0 0 22px;
-  height: 22px;
+  flex: 0 0 28px;
+  height: 28px;
   box-sizing: border-box;
   align-items: center;
-  gap: 5px;
-  padding: 0 10px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: var(--ol-font-weight-semibold);
-  color: var(--ol-blue);
-  background: var(--ol-capsule-badge-bg);
-  border: 0.5px solid var(--ol-capsule-badge-border);
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #2563eb;
+  color-scheme: light;
+  background: #fff;
+  border: 1px solid #dbeafe;
   box-shadow:
-    0 4px 12px -4px rgb(37 99 235 / 25%),
-    0 0 0 0.5px rgb(0 0 0 / 4%);
-  letter-spacing: 0.02em;
+    0 2px 6px rgb(0 0 0 / 10%),
+    inset 0 -2px 4px rgb(37 99 235 / 12%);
   white-space: nowrap;
   transform-origin: center bottom;
-  transition:
-    opacity 0.24s ease-out,
-    transform 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
-
-.ol-classic-translation[data-visible='false'] {
-  opacity: 0;
-  transform: translateY(40px) scale(0.88);
+.ol-translation-language {
+  pointer-events: auto;
+  max-width: 174px;
 }
-
-.ol-classic-translation > span {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--ol-blue);
+.ol-translation-language .ol-select-trigger {
+  height: 22px;
+  min-width: 92px;
+  max-width: 174px;
+  width: auto;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.ol-translation-language[data-busy='true'] {
+  opacity: 0.6;
+}
+.ol-classic-translation[data-visible='false'] .ol-translation-language {
+  pointer-events: none;
+}
+.ol-translation-error {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 280px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #fff;
+  color: #dc2626;
+  font-size: 10px;
+  white-space: normal;
+  width: max-content;
 }
 
 .ol-capsule-transcript-overlay .ol-capsule-transcript-rail {

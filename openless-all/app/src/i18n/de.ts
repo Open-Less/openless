@@ -321,6 +321,8 @@ export const de: typeof zhCN = {
     cancelled: 'Abgebrochen',
     error: 'Ein Fehler ist aufgetreten',
     inserted: '{{count}} eingefügt',
+    translateTo: 'Übersetzen in',
+    translationChangeFailed: 'Sprache konnte nicht geändert werden. Bitte erneut auswählen.',
     translating: 'Wird übersetzt',
     selectionPolish: {
       polishing: 'Wird überarbeitet…',
@@ -351,6 +353,12 @@ export const de: typeof zhCN = {
     cancel: 'Abbrechen',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Web wird durchsucht',
+      readingWeb: 'Webseiten werden gelesen',
+      usingTool: '{{tool}} wird verwendet',
+      tool: 'Werkzeug',
+    },
     compact: {
       closeError: 'Schließen fehlgeschlagen. Erneut versuchen.',
       sendError: 'Senden fehlgeschlagen. Deine Eingabe bleibt erhalten. Erneut versuchen.',
@@ -1225,8 +1233,22 @@ export const de: typeof zhCN = {
         'Schlägt die Übersetzung fehl, wird stattdessen das ursprüngliche Transkript eingefügt.',
     },
   },
+  askAnything: {
+    dictation: 'Diktieren',
+    translation: 'Übersetzen',
+    question: 'Alles fragen',
+    dictationHint: 'Gedanken als Text eingeben',
+    translationHint: 'Sprache während der Aufnahme wählen',
+    questionHint: 'Text auswählen oder direkt fragen',
+    description:
+      'Kombination drücken, Frage sprechen und erneut drücken. Die Antwort erscheint unten auf dem Bildschirm.',
+    auxiliaryKey: 'Zusatztaste für Fragen',
+    auxiliaryHint: 'Zusammen mit {{key}} drücken. Änderungen der Aufnahmetaste werden übernommen.',
+    selectionHint:
+      'Ausgewählter Text dient als Kontext. Eine Auswahl ist optional. Jede Kombination beginnt eine neue Frage.',
+  },
   selectionAsk: {
-    title: 'Zum ausgewählten Text fragen',
+    title: 'Alles fragen',
     desc: 'Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.',
     shortcutSettings: 'Kurzbefehlseinstellungen',
     guide: {
@@ -1529,7 +1551,6 @@ export const de: typeof zhCN = {
       capsuleLabel: 'Aufnahmekapsel',
       capsuleDesc:
         'Zeigt während der Aufnahme eine halbtransparente Kapsel am unteren Bildschirmrand.',
-      capsuleStyleTypeless: 'Kompakter Typeless-Stil',
       capsuleTranscriptLabel: 'Live-Transkript anzeigen',
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
@@ -1554,6 +1575,35 @@ export const de: typeof zhCN = {
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'Aus',
+        aecLight: 'Leicht (wenig CPU)',
+        aecModel: 'Modell (stärker)',
+        aecModelHint:
+          'Das Modell unterdrückt mehr Echo, kostet aber rund 3x CPU; auf älteren Geräten besser Leicht.',
+        aecHint:
+          'Unterdrückt Lautsprecher-Rückkopplung. Braucht ein Referenzsignal; mit Kopfhörern aus lassen.',
+        buffer: 'Ausgabepuffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1581,6 +1631,9 @@ export const de: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Wiedergabe-Echounterdrückung',
+      echoCancellationDesc:
+        'Verwendet eine lokale Wiedergabereferenz, ohne die Wiedergabe stummzuschalten. macOS benötigt 14.6+ und die Berechtigung zur Systemaudioaufnahme. Nicht unterstützte Geräte, Bluetooth-Routen und Linux ALSA verwenden nur das Mikrofon. Gilt ab der nächsten Aufnahme.',
       audioEnhancementLabel: 'Sprachverbesserung',
       audioEnhancementDesc:
         'RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.',
@@ -1660,6 +1713,10 @@ export const de: typeof zhCN = {
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
+      debugArchiveProcessedLabel: 'Verarbeitetes Audio behalten',
+      debugArchiveProcessedDesc: 'Die Version nach Rauschunterdrückung und Verstärkung, weiterhin in der bisherigen Aufnahmedatei.',
+      debugArchiveRawLabel: 'Auch Audio vor der Verarbeitung behalten',
+      debugArchiveRawDesc: 'Schreibt zusätzlich <session>.raw.wav daneben. Ist nur dies aktiv, landet das Rohaudio in der Hauptdatei.',
       recordAudioForDebugLabel: 'Rohaufnahmen behalten (Diagnose)',
       recordAudioForDebugDesc:
         'Speichert das rohe Mikrofonaudio als WAV, um Erkennungsprobleme zu untersuchen.',
@@ -1744,6 +1801,7 @@ export const de: typeof zhCN = {
       nameHint:
         'Dieser Name unterscheidet Kanäle desselben Anbieters. Er beeinflusst weder Modell noch Verbindung.',
       errModel: 'Modell',
+      errThinking: 'Denkmodus einschalten',
       verify: 'Prüfen',
       verifyHint: 'Prüft diesen Kanal mit einem echten API-Aufruf auf aktuelle Funktionsfähigkeit',
       errTimeout: 'Zeitüberschreitung',
@@ -1898,8 +1956,10 @@ export const de: typeof zhCN = {
       volcengineAuthModeApiKey: 'API-Schlüssel (neue Konsole)',
       volcengineMappingNote:
         'Ein Secret Key wird derzeit nicht benötigt. Standard-Ressourcen-ID: volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · API-Schlüssel',
       volcengineApiKeyNote:
-        'Verwendet einen API-Schlüssel aus der neuen Sprachkonsole. Eine APP ID ist nicht erforderlich. Erstelle ihn in der API-Schlüsselverwaltung: console.volcengine.com/speech/new/setting/apikeys. Standard-Ressourcen-ID: volc.seedasr.sauc.duration.',
+        'Hier einen Sprach-API-Schlüssel erstellen; Ark-Schlüssel sind nicht gültig.',
+      volcengineResourceIdNote: 'Standard-Ressourcen-ID: {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API-Schlüssel',
       xfyunNote:
@@ -1973,6 +2033,8 @@ export const de: typeof zhCN = {
         'Messages setzt die Authentifizierungs- und Versionsheader automatisch. Entferne x-api-key und anthropic-version aus den zusätzlichen Headern.',
       llmStreamError:
         'Der Server hat einen Streamfehler gemeldet. Prüfe das Modell und die Anfrageparameter.',
+      llmThinkingRequired:
+        'Dieses Modell lässt sich nicht mit ausgeschaltetem Denkmodus nutzen. Schalte „Denkmodus“ neben dem Modell ein und prüfe erneut.',
       saveProtocol: 'Protokolleinstellungen speichern',
       thinkingModeHint:
         'Aktiviere, deaktiviere oder reduziere das Denken mit den vom Anfrageformat und Modell unterstützten Parametern. Dem Prompt werden keine Steueranweisungen hinzugefügt.',

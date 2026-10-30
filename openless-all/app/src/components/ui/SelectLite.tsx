@@ -31,6 +31,9 @@ interface SelectLiteProps {
   style?: CSSProperties;
   ariaLabel?: string;
   onOpenChange?: (open: boolean) => void;
+  open?: boolean;
+  side?: 'top' | 'bottom';
+  popupStyle?: CSSProperties;
   searchable?: boolean;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -45,6 +48,9 @@ export function SelectLite({
   style,
   ariaLabel,
   onOpenChange,
+  open: controlledOpen,
+  side = 'bottom',
+  popupStyle,
   searchable = false,
   searchPlaceholder = 'Search…',
   emptyMessage = 'No matching options',
@@ -77,6 +83,9 @@ export function SelectLite({
           ariaLabel,
           searchPlaceholder,
           emptyMessage,
+          open: controlledOpen,
+          side,
+          popupStyle,
         }}
         onOpenChange={handleOpenChange}
       />
@@ -84,7 +93,18 @@ export function SelectLite({
   }
   return (
     <Select
-      {...{ value, onChange, options, placeholder, disabled, style, ariaLabel }}
+      {...{
+        value,
+        onChange,
+        options,
+        placeholder,
+        disabled,
+        style,
+        ariaLabel,
+        open: controlledOpen,
+        side,
+        popupStyle,
+      }}
       onOpenChange={handleOpenChange}
     />
   );
@@ -101,6 +121,9 @@ function SearchableSelect({
   onOpenChange,
   searchPlaceholder,
   emptyMessage,
+  open,
+  side = 'bottom',
+  popupStyle,
 }: SelectLiteProps) {
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +148,7 @@ function SearchableSelect({
   const selected = optionMap.get(value);
   return (
     <Combobox.Root<string>
+      open={open}
       items={items}
       value={value}
       disabled={disabled}
@@ -151,13 +175,13 @@ function SearchableSelect({
         <Combobox.Positioner
           className="ol-select-positioner"
           positionMethod="fixed"
-          side="bottom"
+          side={side}
           collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
           align="start"
           sideOffset={8}
           collisionPadding={8}
         >
-          <Combobox.Popup className="ol-select-popup" initialFocus={inputRef}>
+          <Combobox.Popup className="ol-select-popup" initialFocus={inputRef} style={popupStyle}>
             <div className="ol-select-search">
               <Icon name="search" size={13} />
               <Combobox.Input

@@ -91,6 +91,15 @@ impl StreamingInsertState {
         self.pending.push_str(&suffix);
     }
 
+    /// Keep trailing ASCII spaces with the next delta, so an SSE boundary
+    /// cannot turn indentation into separate synthetic Space keystrokes.
+    /// Final reconciliation writes any remaining suffix, even if it is all spaces.
+    pub fn take_ready_prefix(&mut self) -> String {
+        let end = self.pending.trim_end_matches(' ').len();
+        let suffix = self.pending.split_off(end);
+        std::mem::replace(&mut self.pending, suffix)
+    }
+
     /// Flushes pending text through the host inserter. A partial Unicode write
     /// is retained as a typed prefix and becomes an explicit fallback.
     pub fn flush<F>(&mut self, mut insert: F) -> Result<usize, String>
@@ -320,6 +329,26 @@ mod tests {
         assert_eq!(
             stream.reconcile_final("新文本"),
             FinalReconciliation::CopyFallback("新文本".into())
+        );
+    }
+
+    #[test]
+    fn whitespace_split_across_deltas_stays_literal_and_final_tail_is_retained() {
+        let mut state = StreamingInsertState::default();
+        state.push_delta(0, "变更说明\n ");
+        let first = state.take_ready_prefix();
+        assert_eq!(first, "变更说明\n");
+        state.typed_text.push_str(&first);
+        state.push_delta(6, " ");
+        assert!(state.take_ready_prefix().is_empty());
+        state.push_delta(7, " (a) 保留  ");
+        let second = state.take_ready_prefix();
+        assert_eq!(second, "   (a) 保留");
+        state.typed_text.push_str(&second);
+        assert_eq!(state.pending, "  ");
+        assert_eq!(
+            state.reconcile_final("变更说明\n   (a) 保留  "),
+            FinalReconciliation::WriteTail("  ".into())
         );
     }
 

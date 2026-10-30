@@ -140,10 +140,11 @@ pub enum MacosNewlineMode {
 }
 
 /// Auto-update channel. Picks which manifest the background AutoUpdateGate
-/// fetches. `Stable` = `latest-android-{arch}.json` (or the desktop
-/// plugin-updater stable endpoints). `Beta` = `latest-android-{arch}-beta.json`
-/// (or the desktop beta endpoints). The Settings manual "check stable / check
-/// beta" buttons pass the channel explicitly and ignore this pref.
+/// fetches. `Stable` = `/updates/stable/latest-{target}-{arch}.json` on the CDN
+/// (`latest-android-{arch}.json` for the Android client). `Beta` = the
+/// `/updates/beta/` counterpart with a `-beta` filename suffix. The Settings
+/// manual "check stable / check beta" buttons pass the channel explicitly and
+/// ignore this pref.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -427,6 +428,9 @@ pub struct UserPreferences {
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,
+    /// Optional local playback-reference cancellation; independent of enhancement.
+    #[serde(default)]
+    pub echo_cancellation_enabled: bool,
     #[serde(default)]
     pub audio_dsp: crate::audio_dsp::AudioDspConfig,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
@@ -577,6 +581,9 @@ pub struct UserPreferences {
     /// Ctrl+Shift+; (Windows). See issue #118.
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
+    /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
+    #[serde(default = "default_qa_companion_key")]
+    pub qa_companion_key: String,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -822,16 +829,16 @@ pub struct UserPreferences {
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
-    /// **Default false, and must stay false.** When on, every dictation
+    /// **Default true.** When on, every dictation
     /// reads the front app's body and sends part of it to the LLM vendor —
     /// data the user never handed over voluntarily, so only they may opt in.
     /// When off, `host_document` issues zero AX calls and prompts are
     /// byte-identical to before this feature existed.
     ///
-    /// macOS-only today; Windows / Linux degrade gracefully to no context.
+    /// macOS, Windows and Android support it today; Linux degrades gracefully to no context.
     /// Password boxes / Secure Input / password managers / terminals are
     /// hard-blocked regardless of this switch.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub cursor_context_enabled: bool,
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
@@ -867,6 +874,20 @@ pub struct UserPreferences {
     /// policy as `history_retention_days`.
     #[serde(default)]
     pub record_audio_for_debug: bool,
+    /// 调试录音里保留「处理后」的音频（降噪/增益/AGC 之后）。占用现有档案名
+    /// `<session>.wav`，quick note 播放与本地 ASR 回退都用它。默认 false：
+    /// 只有显式选择才会落盘。
+    #[serde(default)]
+    pub debug_archive_processed: bool,
+    /// 调试录音里额外保留「处理前」的原始音频，写成同目录的
+    /// `<session>.raw.wav`，用于和 `debug_archive_processed` 的那份做 A/B 对照。
+    /// 只选它、不选处理后时，主档案直接存原始 PCM（功能不受影响）。
+    #[serde(default)]
+    pub debug_archive_raw: bool,
+    /// AEC 的扬声器参考源（回环/监听设备名）。空字符串 = 自动选默认扬声器的
+    /// 监听源；`"off"` = 不采集参考（AEC 退化为无参考）。
+    #[serde(default)]
+    pub aec_reference_device_name: String,
     /// How many recent wav files `recordings/` keeps (newest first by mtime).
     /// `None` = follow `HISTORY_CAP` (200); `Some(n)` clamps to 1..=200.
     /// Trimmed before each new session. Lets users tune combinations like
@@ -1025,6 +1046,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_enhancement_enabled: bool,
     #[serde(default)]
+    echo_cancellation_enabled: bool,
+    #[serde(default)]
     audio_dsp: crate::audio_dsp::AudioDspConfig,
     #[serde(default)]
     stable_transcription_enabled: bool,
@@ -1094,6 +1117,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     output_language_preference: OutputLanguagePreference,
     qa_hotkey: Option<ShortcutBinding>,
+    #[serde(default = "default_qa_companion_key")]
+    qa_companion_key: String,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1202,7 +1227,7 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
@@ -1219,6 +1244,12 @@ struct UserPreferencesWire {
     history_max_entries: Option<u32>,
     #[serde(default)]
     record_audio_for_debug: bool,
+    #[serde(default)]
+    debug_archive_processed: bool,
+    #[serde(default)]
+    debug_archive_raw: bool,
+    #[serde(default)]
+    aec_reference_device_name: String,
     #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
@@ -1309,6 +1340,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             audio_dsp: prefs.audio_dsp.normalized(),
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
@@ -1344,6 +1376,7 @@ impl Default for UserPreferencesWire {
             chinese_script_preference: prefs.chinese_script_preference,
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
+            qa_companion_key: prefs.qa_companion_key,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1411,6 +1444,9 @@ impl Default for UserPreferencesWire {
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
+            debug_archive_processed: prefs.debug_archive_processed,
+            debug_archive_raw: prefs.debug_archive_raw,
+            aec_reference_device_name: prefs.aec_reference_device_name.clone(),
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
@@ -1529,6 +1565,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
+            echo_cancellation_enabled: wire.echo_cancellation_enabled,
             audio_dsp: wire.audio_dsp.normalized(),
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
@@ -1572,7 +1609,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
-            qa_hotkey: wire.qa_hotkey,
+            qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
+            qa_companion_key: wire.qa_companion_key,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1647,6 +1685,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
+            debug_archive_processed: wire.debug_archive_processed,
+            debug_archive_raw: wire.debug_archive_raw,
+            aec_reference_device_name: wire.aec_reference_device_name,
             audio_recording_max_entries: wire.audio_recording_max_entries,
             quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
@@ -1791,8 +1832,10 @@ fn salvage_without_incomplete_legacy_hotkey(
 }
 
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
-    Some(ShortcutBinding::default_qa())
+    if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
 }
+
+fn default_qa_companion_key() -> String { "Space".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
@@ -1918,13 +1961,14 @@ impl Default for UserPreferences {
             custom_style_prompts: CustomStylePrompts::default(),
             launch_at_login: false,
             show_capsule: true,
-            capsule_style: CapsuleStyle::Siri,
+            capsule_style: CapsuleStyle::Classic,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_display_mode_v2: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
+            echo_cancellation_enabled: false,
             audio_dsp: Default::default(),
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
@@ -1960,6 +2004,7 @@ impl Default for UserPreferences {
             chinese_script_preference: ChineseScriptPreference::Auto,
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
+            qa_companion_key: default_qa_companion_key(),
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
@@ -2015,7 +2060,7 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
-            cursor_context_enabled: false,
+            cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
@@ -2024,6 +2069,9 @@ impl Default for UserPreferences {
             auto_update_check: true,
             history_max_entries: None,
             record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
+            aec_reference_device_name: String::new(),
             audio_recording_max_entries: None,
             quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),
@@ -2772,14 +2820,16 @@ impl CapsuleDisplayMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum CapsuleStyle {
-    /// SiriGL light-effect stage style (default).
-    #[default]
+    /// Optional spectral light-effect stage.
     Siri,
-    /// Openless default style: classic frosted-glass pill (volume bar +
-    /// cancel/confirm buttons).
+    /// OpenLess default: white pill, blue waveform and compact processing label.
+    /// Legacy style preferences migrate before native bounds are computed.
+    #[default]
+    #[serde(alias = "typeless")]
     Classic,
-    /// Classic dark capsule: blue waveform that narrows into a status hint
-    /// while processing.
+    /// Legacy wire variant retained for old native geometry contracts only.
+    /// It is no longer accepted as a distinct preference or exposed in the UI.
+    #[serde(skip_deserializing)]
     Typeless,
 }
 
@@ -3038,6 +3088,21 @@ mod translation_effective_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_companion_migrates_legacy_shortcuts_and_round_trips_custom_or_disabled_keys() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value.as_object_mut().unwrap().remove("qaCompanionKey");
+        value["qaHotkey"] = serde_json::json!({"primary":";", "modifiers":["cmd","shift"]});
+        let migrated: UserPreferences = serde_json::from_value(value).unwrap();
+        assert_eq!(migrated.qa_companion_key, "Space");
+        if !cfg!(target_os = "linux") { assert!(migrated.qa_hotkey.is_none()); }
+        for key in ["F9", ""] {
+            let mut prefs = migrated.clone(); prefs.qa_companion_key = key.into();
+            let restored: UserPreferences = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+            assert_eq!(restored.qa_companion_key, key);
+        }
+    }
 
     #[test]
     fn legacy_less_computer_settings_remain_sealed_until_device_opt_in() {
@@ -3413,15 +3478,16 @@ mod tests {
     }
 
     #[test]
-    fn capsule_style_pref_defaults_to_siri_and_round_trips_wire_key() {
-        // Old preferences.json has no capsuleStyle field -> falls back to the default Siri.
+    fn capsule_style_pref_defaults_to_openless_and_migrates_typeless() {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
-        assert_eq!(prefs.capsule_style, CapsuleStyle::Siri);
+        assert_eq!(prefs.capsule_style, CapsuleStyle::Classic);
+        let legacy: UserPreferences = serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
+        assert_eq!(legacy.capsule_style, CapsuleStyle::Classic);
+        assert_eq!(serde_json::to_value(legacy).unwrap()["capsuleStyle"], "classic");
 
         for (style, wire_name) in [
             (CapsuleStyle::Siri, "siri"),
             (CapsuleStyle::Classic, "classic"),
-            (CapsuleStyle::Typeless, "typeless"),
         ] {
             let preferences = UserPreferences {
                 capsule_style: style,
@@ -3672,6 +3738,17 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn cursor_context_defaults_to_enabled_and_round_trips() {
+        assert!(UserPreferences::default().cursor_context_enabled);
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(from_empty.cursor_context_enabled);
+
+        let disabled: UserPreferences =
+            serde_json::from_str(r#"{"cursorContextEnabled":false}"#).unwrap();
+        assert!(!disabled.cursor_context_enabled);
     }
 
     #[test]

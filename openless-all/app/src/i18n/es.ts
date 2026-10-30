@@ -319,6 +319,8 @@ export const es: typeof zhCN = {
     cancelled: 'Cancelado',
     error: 'Se ha producido un error',
     inserted: '{{count}} insertados',
+    translateTo: 'Traducir al',
+    translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
     selectionPolish: {
       polishing: 'Mejorando el texto…',
@@ -349,6 +351,12 @@ export const es: typeof zhCN = {
     cancel: 'Cancelar',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Buscando en la Web',
+      readingWeb: 'Leyendo páginas web',
+      usingTool: 'Usando {{tool}}',
+      tool: 'herramienta',
+    },
     compact: {
       closeError: 'No se pudo cerrar. Inténtalo de nuevo.',
       sendError: 'No se pudo enviar. Tu texto se conserva. Inténtalo de nuevo.',
@@ -1218,8 +1226,22 @@ export const es: typeof zhCN = {
       fallbackDesc: 'Si la traducción falla, se inserta la transcripción original.',
     },
   },
+  askAnything: {
+    dictation: 'Dictar',
+    translation: 'Traducir',
+    question: 'Pregunta lo que quieras',
+    dictationHint: 'Habla para introducir texto',
+    translationHint: 'Elige el idioma durante la grabación',
+    questionHint: 'Selecciona texto o pregunta directamente',
+    description:
+      'Pulsa la combinación para preguntar y otra vez para enviar. La respuesta aparece en la parte inferior.',
+    auxiliaryKey: 'Tecla adicional para preguntar',
+    auxiliaryHint: 'Púlsala junto con {{key}}. Sigue los cambios de la tecla de grabación.',
+    selectionHint:
+      'El texto seleccionado sirve de contexto. La selección es opcional. Cada combinación inicia una pregunta nueva.',
+  },
   selectionAsk: {
-    title: 'Preguntar sobre una selección',
+    title: 'Pregunta lo que quieras',
     desc: 'Selecciona texto y pregunta por voz, con preguntas de seguimiento.',
     shortcutSettings: 'Ajustes de atajos',
     guide: {
@@ -1520,7 +1542,6 @@ export const es: typeof zhCN = {
       microphoneMonitorError: 'No se pudo supervisar el nivel de entrada: {{message}}',
       capsuleLabel: 'Cápsula de grabación',
       capsuleDesc: 'Muestra una cápsula en la parte inferior de la pantalla mientras grabas.',
-      capsuleStyleTypeless: 'Estilo compacto Typeless',
       capsuleTranscriptLabel: 'Mostrar transcripción en directo',
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
@@ -1545,6 +1566,35 @@ export const es: typeof zhCN = {
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'Desactivado',
+        aecLight: 'Ligero (poca CPU)',
+        aecModel: 'Modelo (más potente)',
+        aecModelHint:
+          'El modelo cancela más pero cuesta unas 3x más CPU; en equipos antiguos usa Ligero.',
+        aecHint:
+          'Suprime la realimentación del altavoz. Necesita una señal de referencia; con auriculares puedes dejarlo apagado.',
+        buffer: 'Búfer de salida',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1572,6 +1622,9 @@ export const es: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Cancelación del eco de reproducción',
+      echoCancellationDesc:
+        'Usa una referencia local sin silenciar la reproducción. En macOS requiere 14.6+ y permiso para grabar audio del sistema. Los dispositivos, rutas Bluetooth o entornos Linux ALSA no compatibles usan solo el micrófono. Se aplica en la próxima captura.',
       audioEnhancementLabel: 'Mejora de voz',
       audioEnhancementDesc:
         'Reducción de ruido RNNoise o PureVox, ganancia automática y limitación. Desactivada por defecto; los cambios se aplican a la próxima grabación.',
@@ -1651,6 +1704,10 @@ export const es: typeof zhCN = {
       polishContextWindowLabel: 'Ventana de contexto para mejorar texto (minutos)',
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
+      debugArchiveProcessedLabel: 'Conservar el audio procesado',
+      debugArchiveProcessedDesc: 'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
+      debugArchiveRawLabel: 'Conservar también el audio sin procesar',
+      debugArchiveRawDesc: 'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
       recordAudioForDebugLabel: 'Conservar grabación original (depuración)',
       recordAudioForDebugDesc:
         'Guarda el audio original del micrófono en WAV para investigar problemas de reconocimiento.',
@@ -1734,6 +1791,7 @@ export const es: typeof zhCN = {
       nameHint:
         'El nombre permite distinguir canales del mismo proveedor. No afecta al modelo ni a la conexión.',
       errModel: 'Modelo',
+      errThinking: 'activa Razonamiento',
       verify: 'Verificar',
       verifyHint: 'Hace una llamada real a la API para comprobar si este canal funciona ahora',
       errTimeout: 'tiempo agotado',
@@ -1886,8 +1944,9 @@ export const es: typeof zhCN = {
       volcengineAuthModeApiKey: 'Clave API (consola nueva)',
       volcengineMappingNote:
         'Actualmente no se necesita Secret Key. El Resource ID predeterminado es volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Usa una clave API creada en la nueva consola de voz; no necesitas APP ID. Créala en Gestión de claves API: console.volcengine.com/speech/new/setting/apikeys. El Resource ID predeterminado es volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · Claves API',
+      volcengineApiKeyNote: 'Crea aquí una clave API de voz; las claves de Ark no son válidas.',
+      volcengineResourceIdNote: 'El Resource ID predeterminado es {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'Clave API',
       xfyunNote:
@@ -1960,6 +2019,8 @@ export const es: typeof zhCN = {
         'Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.',
       llmStreamError:
         'El servidor devolvió un error de transmisión. Comprueba el modelo y los parámetros de la solicitud.',
+      llmThinkingRequired:
+        'Este modelo no admite el razonamiento desactivado. Activa «Razonamiento» junto al modelo y vuelve a verificar.',
       saveProtocol: 'Guardar ajustes del protocolo',
       thinkingModeHint:
         'Activa, desactiva o reduce el razonamiento mediante los parámetros admitidos por el formato y el modelo. No se añaden instrucciones de control al prompt.',

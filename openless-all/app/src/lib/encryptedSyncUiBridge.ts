@@ -13,12 +13,19 @@ type UiPreferences = { locale?: string; fontScale?: string };
 type UiSnapshot = { preferences: UiPreferences | null; revision: string | null };
 type UiKey = 'locale' | 'fontScale';
 type Status = {
+  serviceOrigin: string;
   sequence: string;
   account: { githubId: string } | null;
   vaultId: string | null;
   consentVersion: string | null;
 };
-type Restored = { sequence: string; accountId: string; vaultId: string; taskId: string | null };
+type Restored = {
+  sequence: string;
+  serviceOrigin: string;
+  accountId: string;
+  vaultId: string;
+  taskId: string | null;
+};
 let installation: Promise<void> | null = null;
 let flushBridge: (() => Promise<void>) | null = null;
 
@@ -50,9 +57,13 @@ async function install(): Promise<void> {
   const readUi = () =>
     invokeOrMock<UiSnapshot>('cloud_sync_e2ee_get_ui_preferences_snapshot', undefined, unavailable);
   const sameScope = (a: Status, b: Status) =>
-    a.account?.githubId === b.account?.githubId && a.vaultId === b.vaultId;
+    a.serviceOrigin === b.serviceOrigin &&
+    a.account?.githubId === b.account?.githubId &&
+    a.vaultId === b.vaultId;
   const belongs = (state: Status, event: Restored) =>
-    state.account?.githubId === event.accountId && state.vaultId === event.vaultId;
+    state.serviceOrigin === event.serviceOrigin &&
+    state.account?.githubId === event.accountId &&
+    state.vaultId === event.vaultId;
   const failed = (error: unknown) =>
     window.dispatchEvent(new CustomEvent('openless:sync-ui-persistence-failed', { detail: error }));
   const enqueue = (work: () => Promise<void>): Promise<void> => {

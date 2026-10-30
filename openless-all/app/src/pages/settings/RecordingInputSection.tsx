@@ -1,9 +1,10 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CapsuleStylePreview } from '../../components/TypelessCapsule';
+import { CapsuleStylePreview } from '../../components/OpenLessCapsule';
+import { parseCapsuleStyle } from '../../lib/capsuleLayout';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
 import { defaultDictationHotkey } from '../../lib/hotkey';
@@ -40,10 +41,11 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { PresenceModal } from '../../components/ui/Modal';
+
 import { Card, Collapsible, Btn } from '../_atoms';
+import { Segmented } from '../../components/ui/Segmented';
 import { restartApp } from '../../lib/ipc';
-import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
+import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { AudioDspSettings } from './AudioDspSettings';
 import { detectOS, type OS } from '../../components/WindowChrome';
@@ -84,10 +86,6 @@ export function RecordingInputSection({
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
   const voiceActivationStateObservedRef = useRef(false);
-  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
-  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
-  const displayModeRestartTitleId = useId();
-  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -215,29 +213,9 @@ export function RecordingInputSection({
     [savePrefs, refresh, t],
   );
 
+  // Read from the cached platform capabilities so the recording controls don't
+  // disappear for a frame on return.
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
-  const modeTrackRef = useRef<HTMLDivElement | null>(null);
-  const modeButtonsRef = useRef(new Map<HotkeyMode, HTMLButtonElement>());
-  const [modeThumb, setModeThumb] = useState<{ left: number; width: number } | null>(null);
-  const activeMode = prefs?.hotkey.mode;
-  // Hooks must also run while preferences are loading. Read the cached platform
-  // capabilities on return so the recording controls don't disappear for a frame.
-  useLayoutEffect(() => {
-    const track = modeTrackRef.current;
-    if (!track) return;
-    const measure = () => {
-      const active = activeMode ? modeButtonsRef.current.get(activeMode) : undefined;
-      if (!active) return;
-      const next = { left: active.offsetLeft, width: active.offsetWidth };
-      setModeThumb((current) =>
-        current?.left === next.left && current.width === next.width ? current : next,
-      );
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(track);
-    return () => observer.disconnect();
-  }, [activeMode, showDesktopHotkey]);
 
   if (!prefs || !capability) {
     return (
@@ -258,30 +236,8 @@ export function RecordingInputSection({
       ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
       : 'cursorScreen';
 
-  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
-    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
-    const changeSequence = ++displayModeChangeSequenceRef.current;
-    await savePrefs({ ...prefs, capsuleDisplayMode: next });
-    if (
-      changeSequence === displayModeChangeSequenceRef.current &&
-      os === 'win' &&
-      previous === 'allScreens' &&
-      next !== 'allScreens'
-    ) {
-      setDisplayModeRestartPending(true);
-    }
-  };
-  const onRestartForDisplayMode = async () => {
-    setDisplayModeRestarting(true);
-    try {
-      await restartApp();
-      setDisplayModeRestartPending(false);
-    } catch (error) {
-      console.error('[settings] restart after capsule display mode change failed', error);
-    } finally {
-      setDisplayModeRestarting(false);
-    }
-  };
+  const onCapsuleDisplayModeChange = (next: UserPreferences['capsuleDisplayMode']) =>
+    savePrefs({ ...prefs, capsuleDisplayMode: next });
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -293,6 +249,8 @@ export function RecordingInputSection({
     savePrefs({ ...prefs, lowLatencyDictationEnabled });
   const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
     savePrefs({ ...prefs, audioEnhancementEnabled });
+  const onEchoCancellationChange = (echoCancellationEnabled: boolean) =>
+    savePrefs({ ...prefs, echoCancellationEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -401,55 +359,12 @@ export function RecordingInputSection({
             label={t('settings.recording.modeLabel')}
             desc={t('settings.recording.modeDesc')}
           >
-            <div ref={modeTrackRef} style={{ ...segmentedTrackStyle, position: 'relative' }}>
-              {/* Sliding thumb: carries the selected-state background/shadow and transitions
-                left/width smoothly on switch; the buttons only change text color. Not
-                rendered before measuring (before the first-frame layout effect); positioned
-                before paint, so no flash. */}
-              {modeThumb && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 2,
-                    bottom: 2,
-                    left: 0,
-                    width: 100,
-                    transformOrigin: 'left center',
-                    transform: `translate3d(${modeThumb.left}px, 0, 0) scaleX(${modeThumb.width / 100})`,
-                    borderRadius: 6,
-                    background: 'var(--ol-segmented-active-bg)',
-                    boxShadow: 'var(--ol-segmented-active-shadow)',
-                    transition: 'transform 0.18s var(--ol-motion-soft)',
-                    pointerEvents: 'none',
-                  }}
-                />
-              )}
-              {choices.map(([v, l]) => (
-                <button
-                  key={v}
-                  ref={(el) => {
-                    if (el) modeButtonsRef.current.set(v, el);
-                  }}
-                  onClick={() => onModeChange(v)}
-                  style={{
-                    padding: '5px 14px',
-                    fontSize: 12,
-                    fontWeight: 'var(--ol-font-weight-medium)',
-                    border: 0,
-                    borderRadius: 6,
-                    fontFamily: 'inherit',
-                    position: 'relative',
-                    zIndex: 1,
-                    background: 'transparent',
-                    color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                    cursor: 'default',
-                    transition: 'color 0.16s var(--ol-motion-quick)',
-                  }}
-                >
-                  {l}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              label={t('settings.recording.modeLabel')}
+              value={prefs.hotkey.mode}
+              onChange={onModeChange}
+              options={choices.map(([value, label]) => ({ value, label }))}
+            />
           </SettingRow>
         )}
         {showDesktopHotkey && (
@@ -545,6 +460,17 @@ export function RecordingInputSection({
             )}
           </div>
         </SettingRow>
+        {platformCaps?.platform === 'desktop' && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={onEchoCancellationChange}
+            />
+          </SettingRow>
+        )}
         <>
           <SettingRow
             label={t('settings.recording.audioEnhancementLabel')}
@@ -605,17 +531,16 @@ export function RecordingInputSection({
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
               <SelectLite
-                value={prefs.capsuleStyle ?? 'siri'}
+                value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
                 onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
                 options={[
-                  { value: 'siri', label: t('settings.recording.capsuleStyleSiri') },
                   { value: 'classic', label: t('settings.recording.capsuleStyleClassic') },
-                  { value: 'typeless', label: t('settings.recording.capsuleStyleTypeless') },
+                  { value: 'siri', label: t('settings.recording.capsuleStyleSiri') },
                 ]}
                 ariaLabel={t('settings.recording.capsuleStyleLabel')}
                 style={{ maxWidth: 220, minWidth: 200 }}
               />
-              <CapsuleStylePreview style={prefs.capsuleStyle ?? 'siri'} />
+              <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
             </div>
           </SettingRow>
         )}
@@ -1026,43 +951,6 @@ export function RecordingInputSection({
           </SettingRow>
         </Collapsible>
       )}
-      <PresenceModal
-        open={displayModeRestartPending}
-        onClose={() => {
-          if (!displayModeRestarting) setDisplayModeRestartPending(false);
-        }}
-        zIndex={1000}
-        width="min(420px, calc(100vw - 32px))"
-        style={{ padding: 18 }}
-        labelledBy={displayModeRestartTitleId}
-        render={() => (
-          <>
-            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
-              {t('settings.recording.capsuleDisplayModeRestartTitle')}
-            </h2>
-            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
-              {t('settings.recording.capsuleDisplayModeRestartDesc')}
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Btn
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => setDisplayModeRestartPending(false)}
-              >
-                {t('common.cancel')}
-              </Btn>
-              <Btn
-                variant="blue"
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => void onRestartForDisplayMode()}
-              >
-                {t('settings.about.updateDialog.restartNow')}
-              </Btn>
-            </div>
-          </>
-        )}
-      />
     </>
   );
 }

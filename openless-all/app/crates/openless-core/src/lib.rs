@@ -10,7 +10,7 @@ pub mod api;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
-pub use audio_dsp::{AudioDspConfig, AudioDspStage, NoiseReduction};
+pub use audio_dsp::{AecMode, AudioDspConfig, AudioDspStage, NoiseReduction};
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
@@ -220,14 +220,15 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
-    DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
+    LessComputerHotkeyAction, LessComputerVoiceFinish,
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
-    encode_dictation_wav, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
-    PcmNormalizer, DICTATION_SAMPLE_RATE,
+    encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
+    NormalizedPcmChunk, PcmNormalizer, ReferenceAudioBuffer, DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,

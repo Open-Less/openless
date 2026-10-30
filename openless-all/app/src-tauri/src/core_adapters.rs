@@ -150,6 +150,7 @@ pub(crate) fn backend_dependencies(
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
+                echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                 dsp: prefs.audio_dsp,
             },
         );
@@ -1605,13 +1606,6 @@ fn map_permission_state(
     }
 }
 
-fn current_permission_snapshot() -> openless_core::PermissionSnapshot {
-    openless_core::PermissionSnapshot {
-        microphone: map_permission_state(crate::permissions::check_microphone()),
-        accessibility: map_permission_state(crate::permissions::check_accessibility()),
-    }
-}
-
 impl openless_core::PlatformApi for TauriPlatformApi {
     fn capabilities(
         &self,
@@ -1649,13 +1643,26 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     fn microphone_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: map_permission_state(crate::permissions::check_microphone()),
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn accessibility_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        // Windows microphone checks open a temporary native input stream. The UI queries
+        // both permissions concurrently, so querying the microphone here would open a
+        // second stream solely to discard its result in check_accessibility_permission.
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: openless_core::PermissionState::Unknown,
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn request_microphone_permission(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -2001,6 +2008,7 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
             );
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences_snapshot.echo_cancellation_enabled,
                 dsp: preferences_snapshot.audio_dsp,
             };
             if let Some(wake_asr) = wake_asr.as_ref() {
@@ -2266,6 +2274,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                         .then(|| prefs.microphone_device_name.clone()),
                     openless_core::AudioProcessingConfig {
                         enhancement_enabled: prefs.audio_enhancement_enabled,
+                        echo_cancellation_enabled: prefs.echo_cancellation_enabled,
                         dsp: prefs.audio_dsp,
                     },
                 );
@@ -2958,13 +2967,13 @@ impl TauriStagedCapture {
         self,
         consumer: Arc<dyn LegacyAudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-        archive_path: Option<PathBuf>,
+        archives: crate::recorder::ArchiveTargets,
         processing: openless_core::AudioProcessingConfig,
     ) -> Result<TauriCommittedCapture, RecorderError> {
         match self {
             Self::Cold(staged) => {
                 let (recorder, runtime_errors, archive_active) =
-                    staged.commit(consumer, level_handler, archive_path)?;
+                    staged.commit(consumer, level_handler, archives)?;
                 Ok(TauriCommittedCapture::Cold {
                     recorder,
                     runtime_errors,
@@ -2977,8 +2986,8 @@ impl TauriStagedCapture {
                 let fallback_hub = staged.capture_hub();
                 let fallback_consumer = Arc::clone(&consumer);
                 let fallback_level_handler = Arc::clone(&level_handler);
-                let fallback_archive_path = archive_path.clone();
-                match staged.commit(consumer, level_handler, archive_path) {
+                let fallback_archives = archives.clone();
+                match staged.commit(consumer, level_handler, archives) {
                     Ok((capture, runtime_errors, archive_active)) => {
                         Ok(TauriCommittedCapture::Warm {
                             capture,
@@ -3016,7 +3025,7 @@ impl TauriStagedCapture {
                                 })
                                 .unwrap_or(fallback_consumer),
                             fallback_level_handler,
-                            fallback_archive_path,
+                            fallback_archives,
                         ) {
                             Ok(committed) => committed,
                             Err(error) => {
@@ -3095,10 +3104,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                 openless_core::DictationOutputTarget::QuickNote
                     | openless_core::DictationOutputTarget::Undecided
             );
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),
@@ -3122,6 +3128,15 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     })
                     .ok()
                     .flatten();
+                // 调试录音：主档案写处理后（或只勾处理前时写原始），需要对照时
+                // 同目录再存一份 `<session>.raw.wav`。
+                let archives = crate::recorder::ArchiveTargets {
+                    processed: archive_path.clone(),
+                    raw: (recording_plan.archive_raw && archive_path.is_some())
+                        .then(|| archive_path.as_ref().map(|path| path.with_extension("raw.wav")))
+                        .flatten(),
+                    write_processed: recording_plan.archive_processed,
+                };
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
@@ -3148,7 +3163,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                             .commit(
                                 consumer,
                                 level_handler,
-                                archive_path.clone(),
+                                archives.clone(),
                                 recording_plan.audio_processing,
                             )
                             .map_err(map_recorder_error)
@@ -3695,10 +3710,7 @@ impl AudioRecorder for TauriAudioRecorder {
             );
             // Undecided Android captures use the permanent quick-note spool
             // until the terminal tap/gesture classifies the session.
-            let archive_path = context
-                .recording
-                .archive_enabled
-                .then(|| {
+            let archive_path = context.recording.archive_enabled.then(|| {
                     if permanent_archive {
                         crate::persistence::quick_note_recording_path_for_session(
                             &session_id.to_string(),
@@ -3823,6 +3835,7 @@ impl AudioRecorder for TauriAudioRecorder {
 }
 
 fn map_recorder_error(error: RecorderError) -> BackendError {
+    log::error!("[recorder] capture failed: {error}");
     let code = match error {
         RecorderError::PermissionDenied => BackendErrorCode::PermissionDenied,
         RecorderError::NoInputDevice | RecorderError::EngineFailed(_) => BackendErrorCode::Platform,
@@ -4113,6 +4126,9 @@ impl CoreTextInserter for TauriTextInserter {
                 )
                 .await?;
                 previous_input_source = previous;
+                // Keep ABC asserted for every batch: reactivating the target
+                // can make macOS re-apply the document's CJK input source.
+                crate::unicode_keystroke::set_streaming_ascii_guard(Some(app_handle.clone()));
                 Some(worker)
             } else {
                 None
@@ -4841,6 +4857,8 @@ impl TauriTextInsertionSession {
     async fn restore_platform_state(&self) -> Result<(), BackendError> {
         #[cfg(target_os = "macos")]
         {
+            // Drop the guard first or it would fight the restore below.
+            crate::unicode_keystroke::set_streaming_ascii_guard::<tauri::Wry>(None);
             let previous_input_source = self.previous_input_source.lock().take();
             crate::unicode_keystroke::restore_input_source(&self.app, previous_input_source)
                 .await
@@ -5369,10 +5387,12 @@ impl HostActions for TauriHostActions {
             HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
             HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
             HostAction::ShowQa => {
+                self.qa_context.set_voice_surface_active(true);
                 self.qa_context.prepare_show();
                 crate::show_qa_window(&app, "idle");
             }
             HostAction::HideQa => {
+                self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }

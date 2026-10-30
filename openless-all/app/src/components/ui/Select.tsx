@@ -11,6 +11,9 @@ interface SelectProps {
   placeholder?: string;
   style?: CSSProperties;
   onOpenChange?: (open: boolean) => void;
+  open?: boolean;
+  side?: 'top' | 'bottom';
+  popupStyle?: CSSProperties;
 }
 
 /** Standard Base UI Select; keyboard navigation, typeahead and focus return stay upstream. */
@@ -23,9 +26,13 @@ export function Select({
   placeholder,
   style,
   onOpenChange,
+  open,
+  side = 'bottom',
+  popupStyle,
 }: SelectProps) {
   return (
     <BaseSelect.Root
+      open={open}
       value={value}
       items={options}
       disabled={disabled}
@@ -45,14 +52,14 @@ export function Select({
         <BaseSelect.Positioner
           className="ol-select-positioner"
           positionMethod="fixed"
-          side="bottom"
+          side={side}
           collisionAvoidance={{ side: 'flip', align: 'shift', fallbackAxisSide: 'none' }}
           align="start"
           sideOffset={8}
           collisionPadding={8}
           alignItemWithTrigger={false}
         >
-          <BaseSelect.Popup className="ol-select-popup">
+          <BaseSelect.Popup className="ol-select-popup" style={popupStyle}>
             <BaseSelect.List className="ol-select-list">
               {options.map((option) => (
                 <BaseSelect.Item

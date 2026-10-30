@@ -49,7 +49,9 @@ export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChrom
           position: 'relative',
           isolation: 'isolate',
           borderRadius: 'var(--ol-window-shell-radius)',
-          boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
+          // The shell fills the whole window, so a CSS shadow lands outside the viewport and
+          // is clipped; macOS/Windows draw the real window shadow natively.
+          boxShadow: os === 'win' || os === 'mac' ? 'none' : 'var(--ol-shadow-xl)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',

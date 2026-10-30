@@ -198,6 +198,20 @@ mod macos {
         }
     }
 
+    pub(super) fn reduce_motion() -> bool {
+        let Some(class) = AnyClass::get("NSWorkspace") else {
+            return false;
+        };
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
+            if workspace.is_null() {
+                return false;
+            }
+            let reduce: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+            reduce.as_bool()
+        }
+    }
+
     pub(super) unsafe fn configure(
         view: *mut AnyObject,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -211,6 +225,38 @@ mod macos {
         let _: () = msg_send![window, setHidesOnDeactivate: false];
         Ok(())
     }
+}
+
+/// The system "reduce motion" setting, as WebView's `prefers-reduced-motion`.
+pub fn reduce_motion() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::reduce_motion();
+    #[cfg(windows)]
+    return windows_reduce_motion();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    false
+}
+
+/// Chromium maps `prefers-reduced-motion` to "Show animations in Windows".
+#[cfg(windows)]
+fn windows_reduce_motion() -> bool {
+    use windows::Win32::{
+        Foundation::BOOL,
+        UI::WindowsAndMessaging::{
+            SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        },
+    };
+    let mut animate = BOOL(1);
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut animate as *mut BOOL as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok()
+        && !animate.as_bool()
 }
 
 pub fn place(window: &winit::window::Window, bounds: [i32; 4]) {

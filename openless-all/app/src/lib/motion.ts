@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
 
 import { keyboardInteraction } from './interactionMode';
 
@@ -7,7 +7,6 @@ const ENTER_MS = 240;
 const SETTINGS_ENTER_MS = 240;
 const SETTINGS_BACKDROP_MS = 220;
 const CONTENT_MS = 160;
-const CONTENT_EXIT_MS = 120;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 let media: MediaQueryList | undefined;
 
@@ -241,56 +240,36 @@ export function useSelectionMotion(
   }, [groupRef, indicatorRef, selection, underline, reduced]);
 }
 
-/** Keep the outgoing page alive for its fade. Rapid navigation always settles on
- * the latest destination; text is never scaled or translated during a page change. */
+/** Navigate immediately, then soften the new content without a fade-to-blank gap.
+ * No exit queue, translated text, or stale completion can delay a later choice. */
 export function usePageTransition<T extends string>(
   requested: T,
   ref: RefObject<HTMLElement>,
   _mobile: boolean,
 ) {
-  const [displayed, setDisplayed] = useState(requested);
-  const painted = useRef(displayed);
-  const interrupted = useRef<{ element: HTMLElement; frame: Frame } | null>(null);
+  const previous = useRef(requested);
   const reduced = useReducedMotion();
   useLayoutEffect(() => {
+    const changed = previous.current !== requested;
+    previous.current = requested;
     const element = ref.current;
-    const entering = displayed === requested;
-    const changed = painted.current !== displayed;
-    painted.current = displayed;
-    if (!element || reduced || typeof element.animate !== 'function') {
-      interrupted.current = null;
-      if (!entering) setDisplayed(requested);
+    if (
+      !changed ||
+      !element ||
+      reduced ||
+      keyboardInteraction() ||
+      typeof element.animate !== 'function'
+    )
       return;
-    }
-    const resume = interrupted.current?.element === element ? interrupted.current.frame : null;
-    interrupted.current = null;
-    if (entering && !changed && !resume) return;
     const motion = animate(
       element,
-      resume ?? (entering ? FADED : currentFrame(element)),
-      entering ? VISIBLE : FADED,
-      entering ? CONTENT_MS : CONTENT_EXIT_MS,
-      !entering,
+      { opacity: 0.6, transform: 'none' },
+      VISIBLE,
+      CONTENT_MS,
+      false,
     );
-    element.inert = !entering;
-    let cancelled = false;
-    void motion.animation.finished
-      .then(() => {
-        if (cancelled) return;
-        motion.releaseLayer();
-        if (entering) motion.cancel();
-        else setDisplayed(requested);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      interrupted.current =
-        motion.animation.playState === 'running' || motion.animation.playState === 'paused'
-          ? { element, frame: currentFrame(element) }
-          : null;
-      element.inert = false;
-      motion.cancel();
-    };
-  }, [requested, displayed, ref, reduced]);
-  return displayed;
+    void motion.animation.finished.then(motion.cancel).catch(() => {});
+    return motion.cancel;
+  }, [requested, ref, reduced]);
+  return requested;
 }

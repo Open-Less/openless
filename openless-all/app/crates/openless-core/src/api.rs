@@ -61,6 +61,16 @@ pub struct BackendSnapshot {
     pub credentials: CredentialsStatus,
 }
 
+/// Session-bound translation picker. Working languages come from the frozen recording context.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationTranslationTarget {
+    pub session_id: SessionId,
+    pub target_language: String,
+    pub working_languages: Vec<String>,
+    pub mutable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupSnapshot {
@@ -1783,6 +1793,7 @@ struct MutableState {
     dictation_destination_changed: bool,
     credentials: CredentialsStatus,
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
+    recording_fault_cleanup: Option<SessionId>,
     silence_monitor: Option<SilenceMonitor>,
 }
 
@@ -1998,7 +2009,15 @@ impl ActiveTextInsertion {
                     self.drained.notify_waiters();
                     return;
                 }
-                std::mem::take(&mut state.stream.pending)
+                let delta = state.stream.take_ready_prefix();
+                if delta.is_empty() {
+                    // Whitespace alone waits for another delta, not another timer
+                    // tick. Final reconciliation will flush a trailing suffix.
+                    state.scheduled = false;
+                    self.drained.notify_waiters();
+                    return;
+                }
+                delta
             };
             let expected = delta.chars().count();
             let result = if delta.is_empty() {
@@ -3332,6 +3351,7 @@ impl OpenLessBackend {
                 dictation_destination_changed: false,
                 credentials: CredentialsStatus::default(),
                 transcripts: HashMap::new(),
+                recording_fault_cleanup: None,
                 silence_monitor: None,
             })),
             phase_changed: Arc::new(tokio::sync::Notify::new()),
@@ -5248,7 +5268,13 @@ impl OpenLessBackend {
                 | DictationPhase::Failed => Ok(CliDispatchOutcome::Noop),
             },
             crate::cli::CliIntent::ToggleQa => {
-                self.deps.services.qa.toggle_recording().await?;
+                let qa = &self.deps.services.qa;
+                let snapshot = qa.snapshot().await?;
+                match (snapshot.phase, snapshot.session_id) {
+                    (crate::QaPhase::Recording, Some(session_id)) => qa.stop_recording(session_id).await?,
+                    (crate::QaPhase::Thinking | crate::QaPhase::AwaitingApproval, _) => return Ok(CliDispatchOutcome::Noop),
+                    _ => qa.start_question().await?,
+                }
                 Ok(CliDispatchOutcome::QaToggled)
             }
             crate::cli::CliIntent::CancelDictation => {
@@ -5295,6 +5321,7 @@ impl OpenLessBackend {
             pre_roll_ms: 500,
             audio_processing: crate::audio::AudioProcessingConfig {
                 enhancement_enabled: preferences.audio_enhancement_enabled,
+                echo_cancellation_enabled: preferences.echo_cancellation_enabled,
                 dsp: preferences.audio_dsp,
             },
         };
@@ -5592,6 +5619,38 @@ impl OpenLessBackend {
         }
     }
 
+    /// Transfer the recording-key prefix into a fresh voice question. Serialize
+    /// with physical dictation edges so a delayed prefix release cannot restart
+    /// dictation after QA has acquired the microphone.
+    pub async fn start_voice_question_from_recording_key(&self) -> Result<(), BackendError> {
+        let _dispatch = self.hotkey_dispatch_gate.lock().await;
+        let snapshot = self.snapshot().dictation;
+        if let Some(session_id) = snapshot.session_id {
+            if !matches!(snapshot.phase, DictationPhase::Starting | DictationPhase::Recording) {
+                return Err(BackendError::new(BackendErrorCode::Busy, "dictation is finalizing"));
+            }
+            if let Err(error) = self.cancel_dictation(Some(session_id)).await {
+                // The independent combo-abort bridge may have claimed this same
+                // prefix already. Its native cleanup still owns the voice lease.
+                if self.snapshot().dictation.session_id.is_some()
+                    || error.code != BackendErrorCode::InvalidState { return Err(error); }
+            }
+        }
+        let provisional = std::mem::take(&mut *self.pending_audio_captures.lock()
+            .expect("pending audio capture lock poisoned"));
+        for capture in provisional.into_values() { capture.discard().await?; }
+        self.hotkey.lock().expect("hotkey interpreter lock poisoned").reset();
+        // Logical cancellation can precede the final native cleanup hold. Never
+        // cancel another domain or open a second microphone during that interval.
+        for _ in 0..25 {
+            if self.voice_sessions.runtime_restore_idle() {
+                return self.deps.services.qa.start_question().await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        Err(BackendError::new(BackendErrorCode::Busy, "microphone is still being released"))
+    }
+
     /// Accept the only mutable dictation intent into the current session. The
     /// engine only uses it during final polish, so synchronize at the common
     /// stop boundary instead of racing engine registration during Starting.
@@ -5643,6 +5702,65 @@ impl OpenLessBackend {
             }
         }
         Ok(())
+    }
+
+    pub fn dictation_translation_target(&self) -> Option<DictationTranslationTarget> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        let context = state.dictation_context.as_ref()?;
+        Some(DictationTranslationTarget {
+            session_id: state.dictation.session_id?,
+            target_language: context.polish.translation_target_language.clone(),
+            working_languages: context.polish.working_languages.clone(),
+            mutable: state.running
+                && state.dictation.phase == DictationPhase::Recording
+                && context.polish.translation_active,
+        })
+    }
+
+    /// Explicitly retarget this recording and remember the choice. Ordinary settings
+    /// edits still leave an in-flight recording's frozen context untouched.
+    pub fn select_dictation_translation_target(
+        &self,
+        session_id: SessionId,
+        target_language: String,
+    ) -> Result<DictationTranslationTarget, BackendError> {
+        let target = crate::language_catalog::native_language_name(&target_language)
+            .ok_or_else(|| BackendError::new(BackendErrorCode::InvalidArgument, "unsupported translation language"))?;
+        let _write_guard = self.settings_write_gate.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.write().expect("backend state lock poisoned");
+        ensure_running(&state)?;
+        if state.dictation.session_id != Some(session_id)
+            || state.dictation.phase != DictationPhase::Recording
+        {
+            return Err(BackendError::new(BackendErrorCode::InvalidState,
+                "translation picker belongs to a recording that has ended"));
+        }
+        let context = state.dictation_context.as_ref().ok_or_else(||
+            BackendError::new(BackendErrorCode::InvalidState, "recording context is not ready"))?;
+        if !context.polish.translation_active
+            || !crate::shared_types::translation_effective(true, &target, &context.polish.working_languages)
+        {
+            return Err(BackendError::new(BackendErrorCode::InvalidArgument,
+                "translation is inactive or the target matches the only working language"));
+        }
+        let mut updated = (**context).clone();
+        updated.polish.translation_target_language = target.clone();
+        let result = DictationTranslationTarget {
+            session_id,
+            target_language: target.clone(),
+            working_languages: updated.polish.working_languages.clone(),
+            mutable: true,
+        };
+        // Keep finalization outside this critical section. A failed save changes neither
+        // the active target nor the remembered choice, and no other preference is overwritten.
+        self.preferences.update(|preferences| preferences.translation_target_language = target)?;
+        state.dictation_context = Some(Arc::new(updated));
+        // The common stop boundary must also send the changed context to a streaming engine.
+        state.dictation_translation_requested = Some(true);
+        drop(state);
+        self.publish_preferences_changed();
+        Ok(result)
     }
 
     pub fn siwc_service(&self) -> Result<Arc<crate::siwc::SiwcService>, BackendError> {
@@ -7692,6 +7810,17 @@ impl OpenLessBackend {
             context
         };
 
+        // 一次听写的起点。日志从「按下热键」到第一条识别结果之间原本是空白，
+        // 于是「按了没反应」与「录上了但没识别」在日志里长得一样。
+        log::info!(
+            "[dictation] start session_id={} target={:?} asr={} insert={} translate={} silence_after_ms={:?}",
+            session_id,
+            context.output_target,
+            context.asr.provider_type,
+            context.insertion.enabled,
+            context.polish.translation_active,
+            context.recording.silence_after_ms,
+        );
         if let Err(error) = self
             .deps
             .host_actions
@@ -8119,7 +8248,18 @@ impl OpenLessBackend {
                 let error = failure.error;
                 if error.code != BackendErrorCode::Cancelled {
                     self.mark_dictation_failed(session_id, &error);
-                    let raw_text = failure.raw_text.unwrap_or_default();
+                    let raw_text = failure
+                        .raw_text
+                        .filter(|text| !text.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            self.state
+                                .read()
+                                .expect("backend state lock poisoned")
+                                .transcripts
+                                .get(&session_id)
+                                .map(|transcript| transcript.text().to_owned())
+                                .unwrap_or_default()
+                        });
                     let (error_code, final_text, llm_used) = match failure.stage {
                         EngineFailureStage::Transcribing => {
                             ("transcribeFailed", String::new(), false)
@@ -8712,6 +8852,7 @@ impl OpenLessBackend {
         state.dictation_start_output_target = None;
         state.silence_monitor = None;
         state.transcripts.remove(&session_id);
+        state.recording_fault_cleanup = None;
         hotkey.terminal(std::time::Instant::now());
         self.phase_changed.notify_waiters();
         drop(state);
@@ -8905,8 +9046,8 @@ impl OpenLessBackend {
         session_id: SessionId,
         error: BackendError,
     ) -> Result<(), BackendError> {
-        let (context, duration_ms, already_failed) = {
-            let state = self.state.read().expect("backend state lock poisoned");
+        let (context, duration_ms, already_failed, raw_text) = {
+            let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_running(&state)?;
             if state.dictation.session_id != Some(session_id) {
                 return Err(BackendError::new(
@@ -8914,15 +9055,25 @@ impl OpenLessBackend {
                     "recording fault belongs to an inactive session",
                 ));
             }
+            if state.recording_fault_cleanup == Some(session_id) {
+                return Ok(());
+            }
+            let context = state.dictation_context.clone().ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    "active recording fault has no captured context",
+                )
+            })?;
+            state.recording_fault_cleanup = Some(session_id);
             (
-                state.dictation_context.clone().ok_or_else(|| {
-                    BackendError::new(
-                        BackendErrorCode::Internal,
-                        "active recording fault has no captured context",
-                    )
-                })?,
+                context,
                 state.dictation.elapsed_ms,
                 state.dictation.phase == DictationPhase::Failed,
+                state
+                    .transcripts
+                    .get(&session_id)
+                    .map(|transcript| transcript.text().to_owned())
+                    .unwrap_or_default(),
             )
         };
         // RecordingProgressForwarder marks the state Failed immediately so UI
@@ -8932,22 +9083,31 @@ impl OpenLessBackend {
         if !already_failed {
             self.mark_dictation_failed(session_id, &error);
         }
+        let archive = if context.output_target == DictationOutputTarget::CloudNote
+            || self.is_cloud_note(session_id)
+        {
+            None
+        } else {
+            self.deps
+                .dictation_engine
+                .retain_failed_recording(session_id)
+        };
+        let cancel_result = self.cancel_session_adapters(session_id).await;
         self.persist_failed_dictation(
             &context,
             session_id,
             "recordingFailed",
-            String::new(),
+            raw_text,
             String::new(),
             None,
             Some(duration_ms),
             None,
             None,
-            None,
+            archive.as_ref().map(|archive| archive.is_available()),
             false,
             None,
             None,
         );
-        let cancel_result = self.cancel_session_adapters(session_id).await;
         let _ = self.hide_dictation_feedback(session_id);
         self.reset_dictation_session(session_id);
         self.cleanup_voice_activation_after_dictation(session_id)
@@ -9220,6 +9380,13 @@ impl OpenLessBackend {
     }
 
     fn mark_dictation_failed(&self, session_id: SessionId, error: &BackendError) {
+        // 诊断：失败只写 errorCode 时无法定位是录音停止、转写还是插入哪一步出的错。
+        log::warn!(
+            "[dictation] session {} failed: code={:?} message={}",
+            session_id,
+            error.code,
+            error.message
+        );
         let mut state = self.state.write().expect("backend state lock poisoned");
         if state.dictation.session_id != Some(session_id) {
             return;
@@ -11291,12 +11458,17 @@ mod tests {
 
     #[derive(Default)]
     struct FakeQaControl {
+        starts: std::sync::atomic::AtomicUsize,
         stops: std::sync::atomic::AtomicUsize,
         cancels: std::sync::atomic::AtomicUsize,
         faults: std::sync::atomic::AtomicUsize,
     }
 
     impl crate::domains::QaApi for FakeQaControl {
+        fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.starts.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async { Ok(()) })
+        }
         fn show(&self) -> BoxFuture<'static, Result<(), BackendError>> {
             Box::pin(async { Ok(()) })
         }
@@ -13207,6 +13379,9 @@ mod tests {
         )
         .unwrap();
 
+        let mut preferences = backend.get_preferences();
+        preferences.cursor_context_enabled = false;
+        backend.set_preferences(preferences).unwrap();
         let context = backend
             .capture_host_dictation_context(DictationStartOptions::default())
             .await
@@ -13277,6 +13452,17 @@ mod tests {
         let (backend, _) = backend();
         backend.start().await.unwrap();
         let session_id = backend.start_dictation().await.unwrap();
+        backend
+            .engine_progress_sink()
+            .publish(
+                session_id,
+                EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                    text: "recognized draft".into(),
+                    offset: 0,
+                    is_final: false,
+                }),
+            )
+            .unwrap();
         let error = BackendError::new(BackendErrorCode::Platform, "device disconnected");
         backend
             .engine_progress_sink()
@@ -13292,6 +13478,13 @@ mod tests {
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].error_code.as_deref(), Some("recordingFailed"));
+        assert_eq!(history[0].raw_transcript, "recognized draft");
+        assert_eq!(
+            history[0].asr_transcript.as_deref(),
+            Some("recognized draft")
+        );
+        assert!(history[0].final_text.is_empty());
+        let next_session = backend.start_dictation().await.unwrap();
         assert_eq!(
             backend
                 .report_recording_fault(session_id, error)
@@ -13301,6 +13494,65 @@ mod tests {
             BackendErrorCode::InvalidState
         );
         assert_eq!(backend.list_history().unwrap().len(), 1);
+        assert_eq!(backend.snapshot().dictation.session_id, Some(next_session));
+        backend.cancel_dictation(Some(next_session)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recording_fault_preserves_draft_and_audio_but_explicit_cancel_discards_audio() {
+        let data_dir = TestDataDir::new("recording-fault-retention");
+        let engine = crate::PipelineDictationEngine::new(
+            Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                data_dir.path().join("recordings"),
+            )),
+            Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                "complete", 1000,
+            )),
+            Arc::new(crate::testing::FixtureTextPolisher::successful("complete")),
+        );
+        let backend =
+            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+        backend.start().await.unwrap();
+        let pcm = vec![1, 0, 2, 0];
+        let id = backend.start_external_dictation().await.unwrap();
+        backend.feed_external_pcm(id, &pcm).unwrap();
+        backend
+            .engine_progress_sink()
+            .publish(
+                id,
+                EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                    text: "unfinished draft".into(),
+                    offset: 0,
+                    is_final: false,
+                }),
+            )
+            .unwrap();
+        backend
+            .report_recording_fault(
+                id,
+                BackendError::new(BackendErrorCode::Platform, "fixture backlog"),
+            )
+            .await
+            .unwrap();
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, "unfinished draft");
+        assert!(history[0].final_text.is_empty());
+        assert_eq!(history[0].has_audio_recording, Some(true));
+        let wav =
+            std::fs::read(data_dir.path().join("recordings").join(format!("{id}.wav"))).unwrap();
+        assert_eq!(crate::audio::decode_dictation_wav(&wav).unwrap(), pcm);
+
+        let next = backend.start_external_dictation().await.unwrap();
+        backend.feed_external_pcm(next, &pcm).unwrap();
+        backend.cancel_dictation(Some(next)).await.unwrap();
+        assert!(!data_dir
+            .path()
+            .join("recordings")
+            .join(format!("{next}.wav"))
+            .exists());
+        assert_eq!(backend.list_history().unwrap().len(), 1);
+        backend.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -13326,6 +13578,7 @@ mod tests {
         .unwrap();
         let mut preferences = backend.get_preferences();
         preferences.vocabulary_learning_enabled = true;
+        preferences.cursor_context_enabled = false;
         assert!(
             !preferences.cursor_context_enabled,
             "learning must not require uploading cursor context"
@@ -13591,6 +13844,111 @@ mod tests {
             Some(&HostAction::ShowDictationFeedback)
         );
         backend.cancel_dictation(Some(second)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn question_prefix_handoff_cancels_dictation_and_discards_its_late_release() {
+        let data_dir = TestDataDir::new("question-prefix-handoff");
+        let engine = crate::testing::FixtureDictationEngine::successful("must not insert", "unused");
+        let qa = Arc::new(FakeQaControl::default());
+        let mut deps = BackendDependencies::unsupported();
+        deps.dictation_engine = Arc::new(engine.clone());
+        deps.host_actions = Arc::new(FakeHost::default());
+        deps.text_inserter = Arc::new(crate::testing::FixtureTextInserter::with_outcome(InsertOutcome::Inserted));
+        deps.credential_store = llm_configured_credentials();
+        deps.services.qa = qa.clone();
+        let backend = OpenLessBackend::new(BackendConfig {data_dir:data_dir.path().to_path_buf(), ..Default::default()}, deps).unwrap();
+        backend.start().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.hotkey.mode = crate::HotkeyMode::Hold;
+        backend.set_preferences(prefs).unwrap();
+        let at = std::time::Instant::now();
+        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed {press_id:7,at}).await.unwrap();
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Recording);
+        backend.start_voice_question_from_recording_key().await.unwrap();
+        assert_eq!(qa.starts.load(Ordering::Acquire), 1);
+        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {press_id:7,at:std::time::Instant::now()}).await.unwrap();
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+        assert!(backend.list_history().unwrap().is_empty());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn translation_picker_updates_current_engine_and_remembers_only_the_language() {
+        let data_dir = TestDataDir::new("translation-picker-current");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
+        let backend = backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
+        backend.start().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        prefs.microphone_device_name = "captured microphone".into();
+        backend.set_preferences(prefs).unwrap();
+        let session = backend.start_dictation_with_options(DictationStartOptions {
+            translation_requested: true, ..Default::default()
+        }).await.unwrap();
+        let mut changed = backend.get_preferences();
+        changed.microphone_device_name = "next microphone".into();
+        backend.set_preferences(changed).unwrap();
+        let selected = backend.select_dictation_translation_target(session, "ja".into()).unwrap();
+        assert_eq!(selected.target_language, "日本語");
+        assert_eq!(backend.get_preferences().translation_target_language, "日本語");
+        assert_eq!(backend.get_preferences().microphone_device_name, "next microphone");
+        backend.stop_dictation().await.unwrap();
+        let contexts = engine.contexts();
+        let last = contexts.last().unwrap();
+        assert_eq!(last.polish.translation_target_language, "日本語");
+        assert_eq!(last.recording.microphone_device_name.as_deref(), Some("captured microphone"));
+        assert!(last.polish.translation_active);
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn translation_picker_save_failure_keeps_active_and_saved_targets() {
+        let data_dir = TestDataDir::new("translation-picker-save-failure");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
+        let backend = backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+        backend.start().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        backend.set_preferences(prefs).unwrap();
+        let session = backend.start_dictation_with_options(DictationStartOptions {
+            translation_requested: true, ..Default::default()
+        }).await.unwrap();
+        let file = backend.preferences.persistence_path().to_path_buf();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(backend.select_dictation_translation_target(session, "日本語".into()).is_err());
+        assert_eq!(backend.dictation_translation_target().unwrap().target_language, "English");
+        assert_eq!(backend.get_preferences().translation_target_language, "English");
+        std::fs::remove_dir(&file).unwrap();
+        backend.cancel_dictation(Some(session)).await.unwrap();
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn translation_picker_rejects_stale_sessions_finalization_and_redundant_targets() {
+        let data_dir = TestDataDir::new("translation-picker-stale");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
+        let backend = backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+        backend.start().await.unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        backend.set_preferences(prefs).unwrap();
+        let options = DictationStartOptions { translation_requested: true, ..Default::default() };
+        let first = backend.start_dictation_with_options(options.clone()).await.unwrap();
+        backend.cancel_dictation(Some(first)).await.unwrap();
+        let second = backend.start_dictation_with_options(options).await.unwrap();
+        assert!(backend.select_dictation_translation_target(first, "日本語".into()).is_err());
+        assert!(backend.select_dictation_translation_target(second, "简体中文".into()).is_err());
+        assert!(backend.select_dictation_translation_target(second, "unknown".into()).is_err());
+        assert_eq!(backend.dictation_translation_target().unwrap().target_language, "English");
+        backend.stop_dictation().await.unwrap();
+        assert!(backend.select_dictation_translation_target(second, "日本語".into()).is_err());
+        assert_eq!(backend.get_preferences().translation_target_language, "English");
+        backend.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -14499,7 +14857,14 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_notes_never_retain_history_or_audio_on_success_failure_or_cancel() {
-        for outcome in ["success", "failure", "polish_failure", "empty", "cancel"] {
+        for outcome in [
+            "success",
+            "failure",
+            "polish_failure",
+            "empty",
+            "cancel",
+            "recording_fault",
+        ] {
             let data_dir =
                 std::env::temp_dir().join(format!("openless-cloud-note-{}", uuid::Uuid::new_v4()));
             let transcription = if outcome == "failure" {
@@ -14541,6 +14906,14 @@ mod tests {
             backend.set_dictation_cloud_note(id, true).unwrap();
             if outcome == "cancel" {
                 backend.cancel_dictation(Some(id)).await.unwrap();
+            } else if outcome == "recording_fault" {
+                backend
+                    .report_recording_fault(
+                        id,
+                        BackendError::new(BackendErrorCode::Platform, "fixture recording fault"),
+                    )
+                    .await
+                    .unwrap();
             } else {
                 let result = backend.stop_dictation_session(id).await;
                 assert_eq!(result.is_ok(), outcome == "success");
@@ -15600,6 +15973,17 @@ mod tests {
         backend.start().await.unwrap();
 
         let session_id = backend.start_dictation().await.unwrap();
+        backend
+            .engine_progress_sink()
+            .publish(
+                session_id,
+                EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                    text: "draft before provider failure".into(),
+                    offset: 0,
+                    is_final: false,
+                }),
+            )
+            .unwrap();
         let error = backend.stop_dictation().await.expect_err("ASR must fail");
 
         assert_eq!(error.code, BackendErrorCode::Provider);
@@ -15607,6 +15991,8 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, session_id.to_string());
         assert_eq!(history[0].error_code.as_deref(), Some("transcribeFailed"));
+        assert_eq!(history[0].raw_transcript, "draft before provider failure");
+        assert!(history[0].final_text.is_empty());
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
         assert!(backend.start_dictation().await.is_ok());
 
@@ -18130,18 +18516,19 @@ mod tests {
                         Some(stopping) => stopping.await,
                         None => backend.stop_dictation().await,
                     };
-                    if stop_fails {
-                        assert_eq!(result.unwrap_err().code, BackendErrorCode::Platform);
-                        assert_eq!(
-                            backend.list_history().unwrap()[0].error_code.as_deref(),
-                            Some("transcribeFailed")
-                        );
-                    } else {
-                        let result = result.unwrap();
-                        assert_eq!(result.session_id, session_id);
-                        assert_eq!(result.polished_text, "captured prefix");
-                        assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
-                    }
+                    // 录音流的 `stop()` 失败（蓝牙麦掉线、PipeWire 节点被挂起）不再
+                    // 中止这次听写：已经流进 ASR 的音频要照常转写并插入。断言因此
+                    // 与成功路径一致 —— 差别只剩「有没有打过那条 warn」，行为对
+                    // 用户不该有区别。
+                    let result = result.unwrap();
+                    assert_eq!(result.session_id, session_id);
+                    assert_eq!(result.polished_text, "captured prefix");
+                    assert_eq!(transcriber.pcm(), vec![1, 0, 2, 0]);
+                    assert_eq!(
+                        backend.list_history().unwrap()[0].error_code.as_deref(),
+                        None,
+                        "a dropped capture stream must not be recorded as a transcription failure",
+                    );
                     assert_eq!(recorder.stop_count(), 1);
                     assert!(archive.lock().unwrap().as_ref().unwrap().is_available());
                     assert_eq!(

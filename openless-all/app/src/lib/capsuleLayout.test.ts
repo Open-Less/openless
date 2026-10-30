@@ -114,9 +114,10 @@ for (const os of ['mac', 'win'] as const) {
     `${os}: typeless host stays compact when translation is hidden`,
   );
 }
-for (const style of ['siri', 'classic', 'typeless'] as const) {
+for (const style of ['siri', 'classic'] as const) {
   assertEqual(parseCapsuleStyle(style), style, `${style} is accepted from preferences and events`);
 }
+assertEqual(parseCapsuleStyle('typeless'), 'classic', 'legacy Typeless maps to OpenLess');
 assertEqual(getCapsuleTranscriptRailHeight('siri'), 40, 'Siri rail height matches native overlay');
 assertEqual(
   getCapsuleTranscriptRailHeight('classic'),
@@ -147,18 +148,18 @@ const classicExternalGeometry = getClassicCapsuleGeometry('win', true, true, fal
 assertEqual(classicExternalGeometry.hostHeight, 172, 'Classic external rail uses the 172px host');
 assertEqual(
   classicExternalGeometry.bodyTop,
-  104,
+  124,
   'Classic body is anchored at the bottom of the host',
 );
 assertEqual(
   classicExternalGeometry.railTop,
-  14,
+  28,
   'Classic external rail clears the translation badge lane',
 );
-assertEqual(classicExternalGeometry.badgeTop, 74, 'Classic external badge sits above the pill');
+assertEqual(classicExternalGeometry.badgeTop, 88, 'Classic external badge sits above the pill');
 assertEqual(
   classicExternalGeometry.badgeBottom,
-  96,
+  116,
   'Classic external badge leaves an 8px body gap',
 );
 if (
@@ -171,10 +172,10 @@ if (
 const classicSameWindowGeometry = getClassicCapsuleGeometry('win', true, true, true);
 assertEqual(
   classicSameWindowGeometry.railTop,
-  44,
+  64,
   'Classic same-window rail keeps the body rail anchor',
 );
-assertEqual(classicSameWindowGeometry.badgeBottom, 36, 'Classic same-window badge clears the rail');
+assertEqual(classicSameWindowGeometry.badgeBottom, 56, 'Classic same-window badge clears the rail');
 for (const os of ['mac', 'win'] as const) {
   const external = getClassicCapsuleGeometry(os, true, true, false);
   if (
@@ -206,24 +207,24 @@ assertEqual(
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', false, true)?.topOffset,
-  44,
+  64,
   'Classic compact external rail anchors to the 172px body content top',
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, true)?.topOffset,
-  14,
+  28,
   'Classic translation external rail clears the explicit badge lane',
 );
 const typelessCompactRail = getCapsuleTranscriptRailPosition('typeless', false, true);
 const typelessTranslationRail = getCapsuleTranscriptRailPosition('typeless', true, true);
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, false)?.height,
-  22,
+  28,
   'Classic translation remains in the click-through overlay with transcript disabled',
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, true)?.height,
-  82,
+  88,
   'Classic overlay includes both the rail and the translation badge',
 );
 assertClose(

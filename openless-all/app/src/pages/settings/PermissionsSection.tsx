@@ -102,8 +102,12 @@ export function PermissionsSection() {
     // issue #470: hotkey status became purely event-driven, removing the per-second poll and
     // relying on the focus/visibilitychange refreshes below. The microphone check briefly opens
     // an input stream, so per-second probing would flicker the privacy indicator.
-    const permissionId = window.setInterval(refreshPermissions, 10000);
-    const networkId = window.setInterval(refreshNetwork, 30000);
+    const permissionId = window.setInterval(() => {
+      if (!document.hidden) refreshPermissions();
+    }, 10000);
+    const networkId = window.setInterval(() => {
+      if (!document.hidden) refreshNetwork();
+    }, 30000);
     const refreshAll = () => {
       refreshPermissions();
       if (platformCaps?.supportsDesktopHotkey === true) {

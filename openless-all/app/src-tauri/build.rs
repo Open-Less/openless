@@ -19,6 +19,14 @@ fn main() {
         // Apple system recognition is independent of downloadable model runtimes.
         println!("cargo:rustc-link-lib=framework=Speech");
         link_macos_compiler_runtime();
+        println!("cargo:rerun-if-changed=src/playback_reference_macos.m");
+        cc::Build::new()
+            .file("src/playback_reference_macos.m")
+            .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=14.0")
+            .compile("openless_playback_reference");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=CoreAudio");
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         if target_arch == "aarch64" {
             build_experimental_gemma();

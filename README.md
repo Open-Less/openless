@@ -51,11 +51,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
 </p>
 
 <h2 align="center">Developers</h2>
@@ -105,6 +109,8 @@
 </table>
 
 OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+
+The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing.
 
 Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
 
@@ -234,7 +240,7 @@ Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
   - **Older 32-bit ARM**: `OpenLess_<version>_armeabi-v7a.apk`
   - **64-bit emulator**: `OpenLess_<version>_x86_64.apk`
   - **32-bit emulator**: `OpenLess_<version>_x86.apk`
-  - In-app updates (Settings → About) use `latest-android-{arch}.json` manifests; Beta users join Beta in Advanced settings.
+  - In-app updates (Settings → About) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
 - **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
@@ -328,7 +334,16 @@ Rules of thumb:
 - **Beta work must not leak to Stable.** `main` receives merges only from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
 - **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
 
-Beta release distribution (manual-download opt-in): the in-app updater always reads the Stable manifest, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release; manifest written as `latest-{tgt}-{arch}-beta.json`), while `v<version>-tauri` produces the Stable release. The two manifest files never overlap, so Stable users' updater feed cannot pick up Beta releases.
+Beta release distribution (manual-download opt-in): the in-app updater's Stable channel only ever reads the Stable manifest path, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release), while `v<version>-tauri` produces the Stable release.
+
+Updater manifests are served from the project CDN, one rolling file per platform and channel:
+
+```text
+https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+```
+
+The channel split is the URL path (`/updates/stable/` vs `/updates/beta/`), so a Stable client cannot reach a Beta manifest even if it asked for the wrong URL. Artifact URLs inside the manifest point at the same CDN (`https://dl.aeoform.com/releases/{tag}/{asset}`), which is what mainland-China users download from. The manifests are generated by the release workflows as run artifacts and are **not** attached to the GitHub Release, so maintainers must upload them to the CDN after a build — see `RELEASING.md`. Clients built before this switch read the old `releases/latest/download/latest-*.json` assets and therefore cannot auto-update past the last release that still carries them; they need one manual download.
 
 ## Credentials
 

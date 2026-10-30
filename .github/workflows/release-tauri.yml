@@ -531,15 +531,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           OPENLESS_UPDATE_TARGET: ${{ matrix.updater-target }}
           OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
-          OPENLESS_UPDATE_REPO: ${{ github.repository }}
-          OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
+          OPENLESS_UPDATE_CDN_BASE_URL: https://dl.aeoform.com
           # On the beta channel output latest-{tgt}-{arch}-beta.json; stable keeps the old filename.
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
-          # On the beta channel the script must write manifest.url as releases/download/<tag>/...
-          # rather than releases/latest (the latter is always = Stable, so beta users downloading
-          # via url would fetch the wrong file).
-          # On workflow_dispatch github.ref_name is not a tag — but then channel=stable and the
-          # script does not read this field, so it is safe.
+          # Manifest URLs use the CDN's tag-scoped `releases/<tag>/<asset>` path. Stable
+          # workflow validation without a release tag falls back to the CDN `latest` path.
           OPENLESS_RELEASE_TAG: ${{ env.OPENLESS_RELEASE_TAG }}
         run: node scripts/write-updater-manifest.mjs
 
@@ -704,8 +700,9 @@ jobs:
           # The administrator explicitly publishes the shared release afterwards.
           draft: true
           # Beta releases must be marked prerelease=true: GitHub UI collapses them and regular
-          # users do not see them; only latest-*-beta.json is uploaded, so stable users'
-          # endpoint (latest-*.json) is never overwritten and beta never leaks into stable.
+          # users do not see them. Channel isolation for the updater is a CDN URL path
+          # (`/updates/stable/` vs `/updates/beta/`, see src-tauri/src/update_source.rs), not a
+          # filename suffix in these assets.
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           # Non-leader jobs have OPENLESS_RELEASE_BODY_PATH as an empty string; softprops keeps
           # the existing content via the `body || existing.body` branch when body is empty.
@@ -715,6 +712,11 @@ jobs:
           body_path: ${{ env.OPENLESS_RELEASE_BODY_PATH }}
           # generate_release_notes also runs only on the leader, avoiding duplicates from matrix jobs.
           generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}
+          # `latest-*.json` is deliberately NOT attached: the in-app updater reads its manifests
+          # from the project CDN (`/updates/{stable,beta}/`, see src-tauri/src/update_source.rs),
+          # and cloning them here added fourteen near-identical files to every release. The
+          # manifests still leave the workflow through the `*-updater` artifacts above, which is
+          # where the CDN sync job picks them up.
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
@@ -723,5 +725,77 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-*.json
             openless-all/app/src-tauri/target/release/downloads/*
+
+  # ── Hand the finished tag to the platform workflows that ride the same Release ──
+  # `Release HarmonyOS` and `Release Linux egui` are dispatch-only on purpose: an
+  # unaccepted HAP or deb/rpm must never reach users because someone pushed a
+  # Tauri tag. Nothing used to link them to that tag, though, so both entry
+  # points had **zero runs in their entire history** and every 2.0.x Release
+  # shipped without a `.hap`, a `.deb` or a `.rpm` - the AppGallery upload never
+  # ran either, and the omission was silent. Dispatch them here, once the desktop
+  # matrix finished, so both find the Release they attach to (they wait only ten
+  # minutes for it, less than the desktop matrix needs) and a tag push produces
+  # one complete Release.
+  #
+  # `workflow_dispatch` is one of the two events `GITHUB_TOKEN` may still
+  # trigger, so this needs no PAT - only `actions: write` for this job. The
+  # downstream runs use the same release tag for their workflow definition and
+  # checkout, so the package, workflow and cache inputs stay on one immutable ref.
+  dispatch-platform-releases:
+    needs: build
+    # Independent of the desktop result: the HAP and the Linux packages only need
+    # the tag, so a Windows-only or notarization failure must not cost them their
+    # Release entry. A cancelled run still dispatches nothing.
+    if: >-
+      !cancelled() && github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      # Repository distribution path by default: the HAP is attached to the
+      # GitHub Release unsigned and nothing reaches AppGallery. Set the
+      # `HARMONY_AUTO_CHANNEL` repository variable to `release` (production) or
+      # `test` (test channel) to upload the signed package as the AGC candidate
+      # automatically - the upload never submits it for review, so that decision
+      # stays human either way.
+      HARMONY_CHANNEL: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
+    steps:
+      - name: Dispatch the HarmonyOS and Linux releases
+        run: |
+          set -euo pipefail
+          case "$HARMONY_CHANNEL" in
+            none | release | test) ;;
+            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test (got '$HARMONY_CHANNEL')"; exit 1 ;;
+          esac
+          gh workflow run release-harmony.yml \
+            --ref "$RELEASE_TAG" \
+            -f "tag=$RELEASE_TAG" \
+            -f "channel=$HARMONY_CHANNEL" \
+            -f publish=true \
+            -f upload_to_appgallery=true
+          gh workflow run release-linux-egui.yml \
+            --ref "$RELEASE_TAG" \
+            -f "tag=$RELEASE_TAG" \
+            -f publish=true
+
+      - name: Report the dispatched runs
+        # Both dispatches already returned a run id; this listing is the log line
+        # that makes the old silent miss visible, so a missing run must not fail
+        # the tag build after every asset is already published.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sleep 10
+          for workflow in release-harmony.yml release-linux-egui.yml; do
+            echo "### $workflow"
+            gh run list --workflow="$workflow" --limit 3 \
+              --json createdAt,status,conclusion,url \
+              --jq '.[] | "\(.createdAt) \(.status) \(.conclusion // "-") \(.url)"'
+          done

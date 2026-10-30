@@ -29,7 +29,7 @@ import {
   type TranscriptViewState,
 } from '../lib/backendEvent';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
-import { getCapsuleTranscriptRailHeight } from '../lib/capsuleLayout';
+import { getCapsuleTranscriptRailHeight, parseCapsuleStyle } from '../lib/capsuleLayout';
 import { getSettings } from '../lib/ipc/settings';
 import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
 import type {
@@ -42,15 +42,7 @@ import type {
 
 export type LiveTranscriptTone = 'frost' | 'dark';
 
-export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <div className="ol-classic-translation" data-visible={visible}>
-      <span />
-      {t('capsule.translating')}
-    </div>
-  );
-}
+export { CapsuleTranslationBadge } from './CapsuleTranslationBadge';
 
 export interface LiveTranscriptPillProps {
   text: string;
@@ -137,7 +129,7 @@ export function CapsuleTranscriptRail({
 export function CapsuleTranscriptOverlay() {
   const { t } = useTranslation();
   const [state, setState] = useState<CapsuleState>('idle');
-  const [style, setStyle] = useState<CapsuleStyle>('siri');
+  const [style, setStyle] = useState<CapsuleStyle>('classic');
   const [text, setText] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [fontSize, setFontSize] = useState(14);
@@ -153,29 +145,60 @@ export function CapsuleTranscriptOverlay() {
     let unlisten: (() => void) | undefined;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const stateHandle = await listen<CapsulePayload>('capsule:state', (event) => {
-        const payload = event.payload;
-        const previousState = stateRef.current;
-        const previousTranscript = transcriptRef.current;
-        const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
-        const sessionChanged = sessionTranscript !== previousTranscript;
-        transcriptRef.current = sessionTranscript;
-        stateRef.current = payload.state;
-        setState(payload.state);
-        if (payload.capsuleStyle) setStyle(payload.capsuleStyle);
-        setSelectionPolish(payload.selectionPolish === true);
-        setTranslation(payload.translation === true);
-        if (payload.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
-          transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
-          setText(transcriptRef.current.text);
-        } else if (sessionChanged) {
-          setText(sessionTranscript.text);
-        }
-        if (['idle', 'done', 'cancelled', 'error'].includes(payload.state)) {
-          transcriptRef.current = clearTranscriptText(transcriptRef.current);
-          setText('');
-        }
-      });
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      if (cancelled) return;
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot();
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptRef.current = next;
+        setText(next.text);
+      };
+      const stateHandle = await listen<CapsulePayload>(
+        'capsule:state',
+        (event) => {
+          const payload = event.payload;
+          const previousState = stateRef.current;
+          const previousTranscript = transcriptRef.current;
+          const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
+          const sessionChanged = sessionTranscript !== previousTranscript;
+          transcriptRef.current = sessionTranscript;
+          stateRef.current = payload.state;
+          setState(payload.state);
+          if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
+          setSelectionPolish(payload.selectionPolish === true);
+          setTranslation(payload.translation === true);
+          const sessionId = payload.sessionId;
+          const reactivatedSession =
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged &&
+            !previousTranscript.sessionStartObserved &&
+            sessionId != null &&
+            sessionTranscript.sessionId === sessionId;
+          if (reactivatedSession) {
+            void replayActiveSessionTranscript(sessionId);
+          } else if (
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged
+          ) {
+            transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
+            setText(transcriptRef.current.text);
+          } else if (sessionChanged) {
+            setText(sessionTranscript.text);
+          }
+          if (['idle', 'done', 'cancelled', 'error'].includes(payload.state)) {
+            transcriptRef.current = clearTranscriptText(transcriptRef.current);
+            setText('');
+          }
+        },
+        { target },
+      );
       const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
         const next = applyTranscriptEvent(transcriptRef.current, event.payload);
         transcriptRef.current = next;
@@ -184,7 +207,8 @@ export function CapsuleTranscriptOverlay() {
       const preferenceHandle = await listen<UserPreferences>('prefs:changed', (event) => {
         setEnabled(event.payload.capsuleTranscriptEnabled ?? true);
         setFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
-        if (event.payload.capsuleStyle) setStyle(event.payload.capsuleStyle);
+        if (event.payload.capsuleStyle)
+          setStyle(parseCapsuleStyle(event.payload.capsuleStyle) ?? 'classic');
       });
       const applySnapshot = (
         snapshot: CapsuleSnapshot,
@@ -202,7 +226,7 @@ export function CapsuleTranscriptOverlay() {
         const previousState = stateRef.current;
         stateRef.current = snapshot.state;
         setState(snapshot.state);
-        setStyle(snapshot.capsuleStyle ?? fallbackStyle);
+        setStyle(parseCapsuleStyle(snapshot.capsuleStyle ?? fallbackStyle) ?? 'classic');
         setSelectionPolish(snapshot.selectionPolish === true);
         setTranslation(snapshot.translation === true);
         if (snapshot.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
@@ -242,7 +266,7 @@ export function CapsuleTranscriptOverlay() {
         if (!cancelled) {
           setEnabled(preferences.capsuleTranscriptEnabled ?? true);
           setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
-          setStyle(preferences.capsuleStyle);
+          setStyle(parseCapsuleStyle(preferences.capsuleStyle) ?? 'classic');
           await replaySnapshot(preferences.capsuleStyle);
         }
       }
@@ -270,7 +294,6 @@ export function CapsuleTranscriptOverlay() {
         maxWidth={440}
         height={railHeight}
       />
-      {translation && !selectionPolish && style === 'classic' && <CapsuleTranslationBadge />}
       {translation && !selectionPolish && typeless && (
         <div className="ol-typeless-translation-row">
           <span className="ol-typeless-translation">{t('capsule.translating')}</span>

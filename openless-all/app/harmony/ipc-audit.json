@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 195,
+  "total": 200,
   "wired": 103,
-  "missing": 92,
+  "missing": 97,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -453,6 +453,13 @@
       "implementation": "rust"
     },
     {
+      "name": "get_android_audio_effects_status",
+      "calledFrom": [
+        "src/lib/ipc/android-audio.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "get_capsule_snapshot",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
@@ -472,6 +479,13 @@
         "src/lib/ipc/settings.ts"
       ],
       "implementation": "rust"
+    },
+    {
+      "name": "get_dictation_translation_target",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "get_hotkey_capability",
@@ -1048,6 +1062,13 @@
       "implementation": "rust"
     },
     {
+      "name": "select_dictation_translation_target",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "set_active_asr_provider",
       "calledFrom": [
         "src/lib/ipc/asr-credentials.ts"
@@ -1074,6 +1095,20 @@
         "src/lib/ipc/style-packs.ts"
       ],
       "implementation": "rust"
+    },
+    {
+      "name": "set_android_audio_monitoring",
+      "calledFrom": [
+        "src/lib/ipc/android-audio.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "set_capsule_language_menu",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "set_capsule_transcript_visible",

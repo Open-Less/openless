@@ -163,6 +163,7 @@ fn reconcile_hotkeys(
     target: openless_core::HotkeyRuntimeTarget,
 ) -> Result<(), BackendError> {
     *coord.inner.hotkey_runtime_target.lock() = target.clone();
+    crate::recording_companion::configure(target.dictation.clone(), target.qa_companion_key.clone());
     let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.dictation);
     let binding = crate::types::HotkeyBinding {
         trigger: trigger.unwrap_or(crate::types::HotkeyTrigger::Custom),

@@ -41,8 +41,12 @@ assert.ok(
 );
 
 assert.ok(
-  workflows.ci.includes("branches: ['**']"),
-  'CI must run on every branch push so branch changes receive the quality gate',
+  workflows.ci.includes('branches: [main, beta]'),
+  'CI must run on default-branch pushes (baseline evidence and the only cache writer)',
+);
+assert.ok(
+  !workflows.ci.includes("branches: ['**']"),
+  'CI must not spend a second full matrix on feature-branch pushes that their pull request already covers',
 );
 // Release workflows are tag-only: a per-branch push rebuilt a 1-2 GB cache entry
 // on every commit and evicted the beta scope, while `ci.yml` already builds the

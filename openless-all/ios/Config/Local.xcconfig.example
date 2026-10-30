@@ -1,0 +1,4 @@
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+// Register these IDs and an App Group for your own signing team.
+OL_BUNDLE_ID = app.openless.personal.yourname
+OL_APP_GROUP = group.app.openless.personal.yourname

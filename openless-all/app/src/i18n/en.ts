@@ -319,6 +319,8 @@ export const en: typeof zhCN = {
     cancelled: 'Cancelled',
     error: 'Something went wrong',
     inserted: 'Inserted {{count}}',
+    translateTo: 'Translate to',
+    translationChangeFailed: 'Could not change language. Please select it again.',
     translating: 'Translating',
     selectionPolish: {
       polishing: 'Polishing…',
@@ -348,6 +350,12 @@ export const en: typeof zhCN = {
     cancel: 'Cancel',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Searching the web',
+      readingWeb: 'Reading web pages',
+      usingTool: 'Using {{tool}}',
+      tool: 'tool',
+    },
     compact: {
       closeError: 'Could not close. Try again.',
       sendError: 'Could not send. Your draft is kept here; try again.',
@@ -1203,8 +1211,22 @@ export const en: typeof zhCN = {
       fallbackDesc: 'If translation fails, the raw transcript is inserted instead.',
     },
   },
+  askAnything: {
+    dictation: 'Dictate',
+    translation: 'Translate',
+    question: 'Ask anything',
+    dictationHint: 'Speak your thoughts into text',
+    translationHint: 'Choose a language while recording',
+    questionHint: 'Select text or simply ask a question',
+    description:
+      'Press the chord to ask, then again to submit. The answer appears at the bottom of your screen.',
+    auxiliaryKey: 'Ask companion key',
+    auxiliaryHint: 'Press with {{key}}. This follows changes to your recording key.',
+    selectionHint:
+      'Selected text becomes context. A selection is optional. Each shortcut starts a fresh question.',
+  },
   selectionAsk: {
-    title: 'Selection Ask',
+    title: 'Ask anything',
     desc: 'Select text and ask questions by voice, with multi-turn follow-ups.',
     shortcutSettings: 'Shortcut settings',
     guide: {
@@ -1499,7 +1521,6 @@ export const en: typeof zhCN = {
       microphoneMonitorError: 'Failed to monitor input level: {{message}}',
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording.',
-      capsuleStyleTypeless: 'Typeless compact style',
       capsuleTranscriptLabel: 'Show live transcript',
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
@@ -1524,6 +1545,35 @@ export const en: typeof zhCN = {
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'Off',
+        aecLight: 'Light (low CPU)',
+        aecModel: 'Model (stronger)',
+        aecModelHint:
+          'The model cancels more echo but costs about 3x the CPU; prefer Light on older machines.',
+        aecHint:
+          'Suppresses loudspeaker feedback while on speaker. It needs a speaker reference signal, so leave it off with headphones.',
+        buffer: 'Output buffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1551,6 +1601,9 @@ export const en: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Playback echo cancellation',
+      echoCancellationDesc:
+        'Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.',
       audioEnhancementLabel: 'Speech enhancement',
       audioEnhancementDesc:
         'Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.',
@@ -1628,6 +1681,10 @@ export const en: typeof zhCN = {
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
+      debugArchiveProcessedLabel: 'Keep processed audio',
+      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveRawLabel: 'Also keep pre-processing audio',
+      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',
@@ -1708,6 +1765,7 @@ export const en: typeof zhCN = {
       nameHint:
         'This name distinguishes channels from the same provider. It does not affect the model or connection.',
       errModel: 'Model',
+      errThinking: 'turn on Thinking',
       verify: 'Verify',
       verifyHint: 'Makes one real API call to check this channel works right now',
       errTimeout: 'timeout',
@@ -1859,8 +1917,9 @@ export const en: typeof zhCN = {
       volcengineAuthModeApiKey: 'API Key (new console)',
       volcengineMappingNote:
         'Secret Key is not required right now. Resource ID defaults to volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Authenticate with an API Key created in the new speech console — no APP ID needed. Create it under API Keys management: console.volcengine.com/speech/new/setting/apikeys. Resource ID defaults to volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · API Keys',
+      volcengineApiKeyNote: 'Create a Speech API key here; Ark keys cannot be used.',
+      volcengineResourceIdNote: 'Resource ID defaults to {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -1936,6 +1995,8 @@ export const en: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.',
       llmStreamError: 'The server returned a stream error. Check the model and request parameters.',
+      llmThinkingRequired:
+        'This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.',
       saveProtocol: 'Save protocol settings',
       thinkingModeHint:
         'Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.',

@@ -39,7 +39,7 @@ const factory = new Function(
   '__listen',
   'exports',
   'require',
-  `${compiled};return {QaPanel,Composer,MessageRow,ErrorContent};`,
+  `${compiled};return {QaPanel,Composer,EmbeddedComposer,MessageRow,ErrorContent};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -211,7 +211,7 @@ function context(native = true, embedded = false) {
   const emit = (name, payload) => {
     for (const fn of events.get(name) ?? []) fn({ payload });
   };
-  const composer = (tree) => find(tree, (n) => n.type === api.Composer).props;
+  const composer = (tree) => find(tree, (n) => n.type === api.EmbeddedComposer).props;
   return { api, hooks, render, emit, calls, pending, lifecycle, events, keys, composer };
 }
 let passed = 0,
@@ -317,30 +317,35 @@ await test('polish confirmation submits edited text and retains it after a faile
   assert.equal(c.calls.dismiss, 1);
   c.hooks.unmount();
 });
-await test('native text waits for expansion and excludes repeated clicks; keeps a newer draft', async () => {
+await test('text submission stays compact until a result, excludes repeats and keeps a newer draft', async () => {
   const c = context();
   c.render();
   await tick();
-  assert.deepEqual(c.calls.resize, [false]);
   c.composer(c.render()).onChange('question');
-  let p = c.composer(c.render());
-  const resize = deferred(),
+  const p = c.composer(c.render()),
     send = deferred();
-  c.pending.resize = (next) => (next ? resize.promise : undefined);
   c.pending.submit = send;
   const first = p.onSubmit();
   void p.onSubmit();
   c.render();
   await tick();
-  assert.deepEqual(c.calls.resize, [false, true]);
-  assert.deepEqual(c.calls.submit, []);
-  resize.resolve();
-  await tick();
+  assert.deepEqual(c.calls.resize, [false]);
   assert.deepEqual(c.calls.submit, ['question']);
   c.composer(c.render()).onChange('next draft');
   send.resolve();
   await first;
   assert.equal(c.composer(c.render()).value, 'next draft');
+  c.emit('qa:state', {
+    kind: 'answer',
+    sessionId: 'answer',
+    messages: [
+      { role: 'user', content: 'question' },
+      { role: 'assistant', content: 'answer' },
+    ],
+  });
+  c.render();
+  await tick();
+  assert.deepEqual(c.calls.resize, [false, true]);
   c.hooks.unmount();
 });
 await test('send failure preserves draft and exposes error without a fake user message', async () => {
@@ -362,11 +367,11 @@ await test('send failure preserves draft and exposes error without a fake user m
 });
 await test('cancel during resize prevents queued question and late layout failures do not overwrite reopened compact state', async () => {
   const c = context();
+  const d = deferred();
+  c.pending.resize = () => d.promise;
   c.render();
   await tick();
   c.composer(c.render()).onChange('do not send');
-  const d = deferred();
-  c.pending.resize = (next) => (next ? d.promise : undefined);
   const submission = c.composer(c.render()).onSubmit();
   c.render();
   await tick();
@@ -376,14 +381,15 @@ await test('cancel during resize prevents queued question and late layout failur
   c.lifecycle.closing = false;
   c.lifecycle.enterEpoch++;
   c.render();
-  assert.deepEqual(c.calls.resize, [false, true]);
+  assert.deepEqual(c.calls.resize, [false]);
+  c.pending.resize = undefined;
   d.reject(new Error('old geometry'));
   await submission;
   await tick();
   c.render();
   await tick();
   assert.deepEqual(c.calls.submit, []);
-  assert.deepEqual(c.calls.resize, [false, true, false]);
+  assert.deepEqual(c.calls.resize, [false, false]);
   assert.equal(c.composer(c.render()).status, 'idle');
   assert(!nodes(c.render()).some((n) => n.props.className === 'qa-layout-error'));
   c.hooks.unmount();
@@ -430,7 +436,7 @@ await test('recording level requires active session; no fake recording before ba
   c.hooks.unmount();
 });
 await test('stale answer is ignored and final answer replaces streaming buffer exactly once', async () => {
-  const c = context();
+  const c = context(true, true);
   c.render();
   await tick();
   c.emit('qa:state', {
@@ -631,12 +637,13 @@ await test('composer IME enter, WebKit 229 and form submission guards; genuine e
 
 await test('session drift during delayed native resize cancels old draft', async () => {
   const c = context();
+  const d = deferred();
+  c.pending.resize = () => d.promise;
   c.render();
   await tick();
   c.emit('qa:state', { kind: 'idle', sessionId: 'a', messages: [] });
   c.composer(c.render()).onChange('belongs to a');
-  const d = deferred();
-  c.pending.resize = (next) => (next ? d.promise : undefined);
+
   const result = c.composer(c.render()).onSubmit();
   await tick();
   c.emit('qa:state', { kind: 'idle', sessionId: 'b', messages: [] });

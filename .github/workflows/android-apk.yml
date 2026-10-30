@@ -515,8 +515,7 @@ jobs:
         working-directory: openless-all/app
         env:
           OPENLESS_UPDATE_APK_DIR: ${{ steps.stage.outputs.out_dir }}
-          OPENLESS_UPDATE_REPO: Open-Less/openless
-          OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
+          OPENLESS_UPDATE_CDN_BASE_URL: https://dl.aeoform.com
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
           OPENLESS_RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -526,7 +525,17 @@ jobs:
               node scripts/write-updater-manifest.mjs
           done
 
-      - name: Append release files (manifests + signatures)
+      # The manifests are not release assets any more (the in-app updater reads them from the
+      # project CDN), but they must still leave the run so the CDN sync can publish them.
+      - name: Upload Android updater manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-updater-manifests
+          if-no-files-found: error
+          path: |
+            ${{ steps.stage.outputs.out_dir }}/latest-android-*.json
+
+      - name: Append release files (signatures + aliases)
         id: release_assets
         shell: bash
         run: |
@@ -534,7 +543,7 @@ jobs:
           out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json "$out_dir"/OpenLess_android_*.apk; do
+            for f in "$out_dir"/*.apk.sig "$out_dir"/OpenLess_android_*.apk; do
               [ -e "$f" ] && echo "$f"
             done
           } > "$RUNNER_TEMP/android-release-files.txt"
@@ -555,8 +564,8 @@ jobs:
 
           ### Android 应用内更新
 
-          - Stable 用户检查 `latest-android-aarch64.json`（及 mirror 变体）。
-          - Beta 用户（设置 → 高级 → 加入 Beta）检查带 `-beta` 后缀的 manifest。
+          - 清单由项目 CDN 提供：Stable 读 `/updates/stable/latest-android-<arch>.json`，Beta 读 `/updates/beta/latest-android-<arch>-beta.json`。
+          - 应用内会自动检查并拉起系统安装器，无需手动下载清单。
           EOF
 
       - name: Attach Android assets to GitHub Release

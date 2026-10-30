@@ -12,15 +12,9 @@ import { defaultSelectionPolishShortcut, getHotkeyStartStopLabel } from '../../l
 import { openVoiceEditWindow, setSelectionPolishHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
+import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import {
-  SectionTitle,
-  SettingRow,
-  Toggle,
-  chipSelectedStyle,
-  inputStyle,
-  segmentedTrackStyle,
-} from './shared';
+import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 
 const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
   { value: 'directReplace' },
@@ -60,6 +54,20 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const voiceEnabled = prefs.selectionVoiceEnabled;
   const editPlanFormat = prefs.selectionVoiceEditPlanFormat ?? 'xml';
   const editSystemPrompt = prefs.selectionVoiceEditSystemPrompt ?? '';
+  const deliveryControl = (
+    <Segmented
+      label={t('settings.selectionWorkspace.polishDelivery')}
+      value={prefs.selectionPolishOutputMode}
+      onChange={(next) =>
+        void updatePrefs((current) => ({ ...current, selectionPolishOutputMode: next }))
+      }
+      options={outputOptions.map((option) => ({
+        value: option.value,
+        label: t(`settings.selectionPolish.${option.value}`),
+        title: t(`settings.selectionPolish.${option.value}Hint`),
+      }))}
+    />
+  );
 
   return (
     <Card>
@@ -81,8 +89,9 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
               disabled={!prefs.voiceEditEnabled}
               onClick={() => void openVoiceEditWindow()}
               style={{
-                ...chipSelectedStyle(false),
+                background: 'transparent',
                 border: '0.5px solid var(--ol-line)',
+                color: 'var(--ol-ink-3)',
                 borderRadius: 6,
                 padding: '6px 10px',
                 fontFamily: 'inherit',
@@ -120,37 +129,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
       )}
       {showDesktop && !voiceEnabled && (
         <SettingRow label={t('settings.selectionWorkspace.polishDelivery')}>
-          <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
-            {outputOptions.map((option) => {
-              const selected = prefs.selectionPolishOutputMode === option.value;
-              return (
-                <button
-                  key={option.value}
-                  title={t(`settings.selectionPolish.${option.value}Hint`)}
-                  onClick={() =>
-                    void updatePrefs((current) => ({
-                      ...current,
-                      selectionPolishOutputMode: option.value,
-                    }))
-                  }
-                  style={{
-                    ...chipSelectedStyle(selected),
-                    border: 0,
-                    borderRadius: 6,
-                    padding: '6px 10px',
-                    fontFamily: 'inherit',
-                    fontSize: 12,
-                    cursor: 'default',
-                    fontWeight: selected
-                      ? 'var(--ol-font-weight-semibold)'
-                      : 'var(--ol-font-weight-medium)',
-                  }}
-                >
-                  {t(`settings.selectionPolish.${option.value}`)}
-                </button>
-              );
-            })}
-          </div>
+          {deliveryControl}
         </SettingRow>
       )}
 
@@ -173,37 +152,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 label={t('settings.selectionWorkspace.polishDelivery')}
                 desc={t('settings.selectionWorkspace.voiceDeliveryDesc')}
               >
-                <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
-                  {outputOptions.map((option) => {
-                    const selected = prefs.selectionPolishOutputMode === option.value;
-                    return (
-                      <button
-                        key={option.value}
-                        title={t(`settings.selectionPolish.${option.value}Hint`)}
-                        onClick={() =>
-                          void updatePrefs((current) => ({
-                            ...current,
-                            selectionPolishOutputMode: option.value,
-                          }))
-                        }
-                        style={{
-                          ...chipSelectedStyle(selected),
-                          border: 0,
-                          borderRadius: 6,
-                          padding: '6px 10px',
-                          fontFamily: 'inherit',
-                          fontSize: 12,
-                          cursor: 'default',
-                          fontWeight: selected
-                            ? 'var(--ol-font-weight-semibold)'
-                            : 'var(--ol-font-weight-medium)',
-                        }}
-                      >
-                        {t(`settings.selectionPolish.${option.value}`)}
-                      </button>
-                    );
-                  })}
-                </div>
+                {deliveryControl}
               </SettingRow>
               <SettingRow
                 label={t('settings.selectionWorkspace.autoIntent')}
@@ -255,39 +204,22 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 label={t('settings.selectionWorkspace.editPlanFormat')}
                 desc={t('settings.selectionWorkspace.editPlanFormatDesc')}
               >
-                <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
-                  {editPlanFormatOptions.map((option) => {
-                    const selected = editPlanFormat === option.value;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() =>
-                          void updatePrefs((current) => ({
-                            ...current,
-                            selectionVoiceEditPlanFormat: option.value,
-                          }))
-                        }
-                        style={{
-                          ...chipSelectedStyle(selected),
-                          border: 0,
-                          borderRadius: 6,
-                          padding: '6px 10px',
-                          fontFamily: 'inherit',
-                          fontSize: 12,
-                          cursor: 'default',
-                          fontWeight: selected
-                            ? 'var(--ol-font-weight-semibold)'
-                            : 'var(--ol-font-weight-medium)',
-                        }}
-                      >
-                        {t(
-                          `settings.selectionWorkspace.editPlanFormat${option.value === 'xml' ? 'Xml' : 'Json'}`,
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+                <Segmented
+                  label={t('settings.selectionWorkspace.editPlanFormat')}
+                  value={editPlanFormat}
+                  onChange={(next) =>
+                    void updatePrefs((current) => ({
+                      ...current,
+                      selectionVoiceEditPlanFormat: next,
+                    }))
+                  }
+                  options={editPlanFormatOptions.map((option) => ({
+                    value: option.value,
+                    label: t(
+                      `settings.selectionWorkspace.editPlanFormat${option.value === 'xml' ? 'Xml' : 'Json'}`,
+                    ),
+                  }))}
+                />
               </SettingRow>
               <SettingRow
                 label={t('settings.selectionWorkspace.editSystemPrompt')}

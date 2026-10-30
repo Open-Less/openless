@@ -292,6 +292,8 @@ export const zhCN = {
     cancelled: '已取消',
     error: '出错了',
     inserted: '已插入 {{count}}',
+    translateTo: '翻译为',
+    translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
     selectionPolish: {
       polishing: '正在润色...',
@@ -321,6 +323,12 @@ export const zhCN = {
     cancel: '取消',
   },
   qa: {
+    activity: {
+      searchingWeb: '正在搜索网页',
+      readingWeb: '正在阅读网页',
+      usingTool: '正在使用 {{tool}}',
+      tool: '工具',
+    },
     compact: {
       closeError: '关闭失败，请重试。',
       sendError: '发送失败，输入已保留，请重试。',
@@ -333,7 +341,7 @@ export const zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '窗口展开失败，请关闭后重新打开。',
     },
-    title: '划词追问',
+    title: '问任何问题',
     headerHint: '随时提问',
     thinking: '思考中…',
     error: '出错了，请稍后再试。',
@@ -470,7 +478,7 @@ export const zhCN = {
     style: '风格',
     marketplace: '风格市场',
     translation: '翻译',
-    selectionAsk: '划词追问',
+    selectionAsk: '问任何问题',
     quickNote: '速记',
     corrections: '纠正规则',
     polishMode: '润色模式',
@@ -596,7 +604,7 @@ export const zhCN = {
       vocab: '词典：自定义热词，提升专有名词识别率',
       style: '润色风格：管理输出风格与自定义提示词',
       translation: '翻译：按住 Shift 说话，译成目标语言插入',
-      selectionAsk: '划词追问：选中文字后语音提问',
+      selectionAsk: '问任何问题：录音键配合附加键，选中文字可作为上下文',
       quickNote: '速记：保存录音并整理为可回看的记录',
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
@@ -1153,8 +1161,20 @@ export const zhCN = {
       fallbackDesc: '翻译失败时回退为插入原始转写，不会丢字。',
     },
   },
+  askAnything: {
+    dictation: '口述',
+    translation: '翻译',
+    question: '问任何问题',
+    dictationHint: '说出想法，直接输入文字',
+    translationHint: '录音时切换目标语言',
+    questionHint: '选中文字，或直接说出问题',
+    description: '按组合键开始提问，再按一次提交。回答会显示在屏幕下方。',
+    auxiliaryKey: '提问附加键',
+    auxiliaryHint: '与录音键 {{key}} 一起按下；修改录音键后会自动跟随。',
+    selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。每次组合键开启一个新问题。',
+  },
   selectionAsk: {
-    title: '划词追问',
+    title: '问任何问题',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',
     guide: {
@@ -1427,7 +1447,6 @@ export const zhCN = {
       microphoneMonitorError: '输入电平监听失败：{{message}}',
       capsuleLabel: '录音胶囊',
       capsuleDesc: '录音 / 转写时显示屏幕底部胶囊。',
-      capsuleStyleTypeless: 'Typeless 传统风格',
       capsuleTranscriptLabel: '显示流式原文',
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
@@ -1443,7 +1462,7 @@ export const zhCN = {
         '从所有屏幕显示切换需要重启软件，以清理之前的胶囊窗口。现在重启吗？',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
-      capsuleStyleClassic: 'Openless 默认风格',
+      capsuleStyleClassic: 'OpenLess 默认风格',
       stableTranscriptionLabel: '稳定模式（先录音后识别）',
       stableTranscriptionDesc:
         '开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。',
@@ -1451,6 +1470,35 @@ export const zhCN = {
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       dsp: {
+        aec: '系统回声消除',
+        systemNoise: '系统降噪',
+        systemAgc: '系统自动增益',
+        unavailable: '当前设备不支持',
+        androidEffectsHint:
+          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+        effectsActive: '本次录音已启用系统音效。',
+        spectrum: '输入／处理后频谱',
+        spectrumHint:
+          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+        spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
+        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        presets: '均衡器预设',
+        choosePreset: '选择预设',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人声',
+        preset_deepVoice: '低沉人声',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人声',
+        preset_warmVocal: '温暖人声',
+
+        aecOff: '关闭',
+        aecLight: '轻量（省 CPU）',
+        aecModel: '模型（更强）',
+        aecModelHint:
+          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
+        aecHint:
+          '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        buffer: '输出缓冲区',
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
         noise: '降噪算法',
@@ -1475,6 +1523,9 @@ export const zhCN = {
         down: '下移',
         reset: '恢复增强默认设置',
       },
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
         '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
@@ -1559,6 +1610,10 @@ export const zhCN = {
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
+      debugArchiveProcessedLabel: '保存处理后的音频',
+      debugArchiveProcessedDesc: '降噪与增益之后的版本，仍保存在原来的录制文件里。',
+      debugArchiveRawLabel: '另存一份处理前的音频',
+      debugArchiveRawDesc: '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
       recordAudioForDebugDesc: '保存原始麦克风音频为 wav，便于排查识别问题。',
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
@@ -1621,6 +1676,7 @@ export const zhCN = {
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
+      errThinking: '需开启思考',
       verify: '验证',
       verifyHint: '点一下真实调用一次接口，确认这张卡现在能用',
       errTimeout: '超时',
@@ -1764,8 +1820,9 @@ export const zhCN = {
       volcengineAuthModeApiKey: '新版控制台 API Key',
       volcengineMappingNote:
         'Secret Key 当前无需填写。Resource ID 默认使用 volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '使用新版语音控制台创建的 API Key 鉴权，无需 APP ID。API Key 在语音控制台「API Key 管理」中创建：console.volcengine.com/speech/new/setting/apikeys。Resource ID 默认使用 volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: '豆包语音 · API Key 管理',
+      volcengineApiKeyNote: '使用此处创建的 API Key 鉴权，勿用方舟密钥。',
+      volcengineResourceIdNote: 'Resource ID 默认使用 {{resourceId}}。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -1834,6 +1891,7 @@ export const zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
       llmStreamError: '服务端返回流式错误，请检查模型和请求参数。',
+      llmThinkingRequired: '该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。',
       saveProtocol: '保存协议设置',
       thinkingModeHint:
         '按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。',

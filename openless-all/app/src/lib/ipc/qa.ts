@@ -1,15 +1,39 @@
 import type { QaHotkeyBinding, QaStatePayload } from '../types';
 import { invokeOrMock } from './shared';
-import { formatComboLabel, defaultQaShortcut } from '../hotkey';
+import { formatComboLabel } from '../hotkey';
+import { mockSettings, mockSetSettings } from './mock-data';
 
 export function getQaHotkeyLabel(): Promise<string> {
   return invokeOrMock('get_qa_hotkey_label', undefined, () =>
-    formatComboLabel(defaultQaShortcut()),
+    mockSettings.qaCompanionKey
+      ? `${formatComboLabel(mockSettings.dictationHotkey)} + ${mockSettings.qaCompanionKey}`
+      : '',
   );
 }
 
 export function setQaHotkey(binding: QaHotkeyBinding | null): Promise<void> {
-  return invokeOrMock('set_qa_hotkey', { binding }, () => undefined);
+  return invokeOrMock('set_qa_hotkey', { binding }, () => {
+    if (binding?.modifiers.length) throw new Error('只需设置一个附加键');
+    const key = binding?.primary ?? '';
+    if (
+      [
+        'Escape',
+        'Fn',
+        'Shift',
+        'LeftShift',
+        'RightShift',
+        'LeftControl',
+        'RightControl',
+        'LeftAlt',
+        'RightAlt',
+        'LeftCommand',
+        'RightCommand',
+      ].includes(key) ||
+      (key !== '' && key === mockSettings.dictationHotkey.primary)
+    )
+      throw new Error('请选择与录音主键不同的普通键');
+    mockSetSettings({ ...mockSettings, qaHotkey: null, qaCompanionKey: key });
+  });
 }
 
 export function qaWindowDismiss(): Promise<void> {

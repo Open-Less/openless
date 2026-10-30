@@ -8,8 +8,12 @@ name: CI
 # macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
 
 on:
+  # Feature branches are covered by their pull request. Running both produced two full
+  # matrices for the same commit (measured: 8 of 42 CI runs were such duplicates).
+  # The default branches keep a push run because that run is the baseline evidence and
+  # the only writer of the Rust/Playwright caches.
   push:
-    branches: ['**']
+    branches: [main, beta]
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
@@ -19,6 +23,11 @@ on:
         type: choice
         options: [all, macos]
         default: all
+      macos_runner:
+        description: macOS runner (Intel fallback when hosted ARM capacity is unavailable)
+        type: choice
+        options: [macos-latest, macos-15-intel]
+        default: macos-latest
 
 # Cancel old runs when the same PR is pushed repeatedly; workflow_dispatch is isolated by run_id.
 concurrency:
@@ -38,9 +47,11 @@ jobs:
       msrv: ${{ steps.detect.outputs.msrv }}
       linux: ${{ steps.detect.outputs.linux }}
       harmony: ${{ steps.detect.outputs.harmony }}
-      # Only worth a macOS runner when the declared MSRV is actually older than
-      # the stable toolchain the other jobs already build with.
-      msrv_needed: ${{ steps.msrv.outputs.needed }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      android: ${{ steps.detect.outputs.android }}
+      capsule: ${{ steps.detect.outputs.capsule }}
+      # Validate the pinned minimum compiler whenever native sources can change.
+      msrv_needed: ${{ steps.detect.outputs.msrv }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,33 +65,21 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux harmony; do
+          for area in tauri msrv linux harmony frontend android capsule; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
-            echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+            decision=$( [ "$verdict" = 'false' ] && echo false || echo true )
+            # 打出来才能事后判断某次跳过是「够不到」还是「读不到差异」。
+            echo "$area=$decision"
+            echo "$area=$decision" >> "$GITHUB_OUTPUT"
           done
-      - name: Is the declared MSRV older than stable?
-        id: msrv
-        # `rust-version` is the promise; a dedicated compile only proves something
-        # while it is behind the toolchain the other jobs use. When they coincide
-        # (today: 1.99 vs stable 1.99.x) the macOS MSRV job is pure duplication.
-        run: |
-          set -euo pipefail
-          # The workspace manifest carries no `rust-version`; every member declares
-          # its own. `openless-core` is the shared one, so read it there.
-          declared=$(grep -m1 '^rust-version' openless-all/app/crates/openless-core/Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
-          stable=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+)\.[0-9]+.*/\1/')
-          echo "declared MSRV: ${declared:-none}, stable: $stable"
-          if [ -z "$declared" ] || [ "$declared" = "$stable" ]; then
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-          fi
 
   ui-motion:
     name: UI motion (Chromium + WebKit)
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    # Browser-rendered surface only: 15 minutes of Playwright on a change that
+    # cannot alter what Chromium/WebKit paints is pure cost.
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -128,7 +127,8 @@ jobs:
 
   android-check:
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    # Android compiles its own Rust graph: a bundle-only change cannot break it.
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -276,6 +276,9 @@ jobs:
           -x :app:rustBuildX86_64Debug
           --no-daemon
 
+      - name: Check Android emulator cleanup
+        run: bash scripts/android-emulator-cleanup.test.sh
+
       - name: Enable KVM for Android instrumentation tests
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -391,8 +394,17 @@ jobs:
             trap - EXIT
             if [ -n "$emulator_pid" ]; then
               if kill -0 "$emulator_pid" 2>/dev/null; then
-                timeout 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+                timeout --kill-after=5s 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
                 kill "$emulator_pid" 2>/dev/null || true
+                # The emulator can ignore SIGTERM while shutting down.
+                for attempt in {1..10}; do
+                  kill -0 "$emulator_pid" 2>/dev/null || break
+                  sleep 1
+                done
+                if kill -0 "$emulator_pid" 2>/dev/null; then
+                  echo 'Android emulator did not exit; sending SIGKILL'
+                  kill -KILL "$emulator_pid" 2>/dev/null || true
+                fi
               fi
               wait "$emulator_pid" 2>/dev/null || true
             fi
@@ -417,6 +429,8 @@ jobs:
           # Rime is staged for this emulator ABI; do not launch the Tauri Rust build.
           src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
             :app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon
+          # Regression evidence written by ImeAutoTextIntegrationTest (#1230).
+          adb -s emulator-5554 logcat -d -s Ime1230Evidence:I '*:S'
 
       - name: Upload Android emulator failure log
         if: failure()
@@ -567,15 +581,14 @@ jobs:
         run: node scripts/frontend-test-runner.mjs --platform-only windows
 
   native-capsule:
-    # The capsule crates compile into the desktop shells, so a break there would
-    # otherwise only surface inside the long Tauri matrix. They are checked on
-    # both desktop platforms inside this workflow rather than in a second
-    # workflow: one run per pull request, one `Changed areas` gate, one cache
-    # policy. Being a `push` job on the default branches is also what keeps the
-    # Rust cache warm - a pull-request-only workflow can never save a tree the
-    # next pull request is allowed to restore.
+    # The capsule crates compile into the desktop shells. They get their own macOS + Windows
+    # runners only because their `ui,host` feature set is not built anywhere else (the shells
+    # use `build:native-capsule:dev`), and that warm cache makes the job ~40 s. It is gated on
+    # its own area, so the common PR pays zero runners for it: measured on run 40510306688,
+    # moving these three commands into `cross-platform` cost 117 s on the critical-path Windows
+    # job, which is more than the two runners it saved.
     needs: [changes]
-    if: needs.changes.outputs.tauri != 'false'
+    if: needs.changes.outputs.capsule != 'false'
     name: Native capsule (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -617,7 +630,8 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
-    runs-on: ${{ matrix.os }}
+    # Dispatch-only fallback; push/PR runs keep the default matrix and all test gates.
+    runs-on: ${{ matrix.label == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.macos_runner || matrix.os }}
     timeout-minutes: 60
     env:
       # The shared Core and full Tauri test binary compile together; limit concurrency
@@ -767,6 +781,12 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
+      - name: Run Windows audio COM lifecycle tests
+        # These tests use independent processes for COM/enumerator lifetime checks and do not
+        # require a microphone. Device-dependent capture/playback tests remain explicitly ignored.
+        if: runner.os == 'Windows'
+        run: cargo test --locked --manifest-path src-tauri/vendor/cpal/Cargo.toml --lib --test windows_lifecycle
+
       - name: Check Tauri backend with Rust 1.99 MSRV
         if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml
@@ -820,13 +840,10 @@ jobs:
 
   macos-msrv:
     needs: [changes]
-    # Two conditions, both fail-open in the direction that matters: the change set
-    # must be able to reach Rust sources, and the declared MSRV must be older than
-    # the stable toolchain (otherwise `cross-platform` already compiles that code
-    # with stable, which is a superset of the MSRV promise).
-    if: needs.changes.outputs.msrv != 'false' && needs.changes.outputs.msrv_needed == 'true'
+    # Run the declared minimum toolchain even when stable has the same version.
+    if: needs.changes.outputs.msrv != 'false'
     name: macOS Rust 1.99 MSRV
-    runs-on: macos-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_runner || 'macos-latest' }}
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2

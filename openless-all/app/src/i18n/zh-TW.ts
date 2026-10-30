@@ -292,6 +292,8 @@ export const zhTW: typeof zhCN = {
     cancelled: '已取消',
     error: '出錯了',
     inserted: '已插入 {{count}}',
+    translateTo: '翻譯為',
+    translationChangeFailed: '語言切換失敗，請重新選擇。',
     translating: '正在翻譯',
     selectionPolish: {
       polishing: '正在潤色...',
@@ -321,6 +323,12 @@ export const zhTW: typeof zhCN = {
     cancel: '取消',
   },
   qa: {
+    activity: {
+      searchingWeb: '正在搜尋網頁',
+      readingWeb: '正在閱讀網頁',
+      usingTool: '正在使用 {{tool}}',
+      tool: '工具',
+    },
     compact: {
       closeError: '關閉失敗，請重試。',
       sendError: '傳送失敗，輸入已保留，請重試。',
@@ -333,7 +341,7 @@ export const zhTW: typeof zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '視窗展開失敗，請關閉後重新開啟。',
     },
-    title: '劃詞追問',
+    title: '問任何問題',
     headerHint: '隨時提問',
     thinking: '思考中…',
     error: '出錯了，請稍後再試。',
@@ -470,7 +478,7 @@ export const zhTW: typeof zhCN = {
     style: '風格',
     marketplace: '風格市場',
     translation: '翻譯',
-    selectionAsk: '劃詞追問',
+    selectionAsk: '問任何問題',
     quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
@@ -1154,8 +1162,20 @@ export const zhTW: typeof zhCN = {
       fallbackDesc: '翻譯失敗時回退為插入原始轉寫，不會丟字。',
     },
   },
+  askAnything: {
+    dictation: '口述',
+    translation: '翻譯',
+    question: '問任何問題',
+    dictationHint: '說出想法，直接輸入文字',
+    translationHint: '錄音時切換目標語言',
+    questionHint: '選取文字，或直接說出問題',
+    description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
+    auxiliaryKey: '提問附加鍵',
+    auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
+    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。每次組合鍵開始新問題。',
+  },
   selectionAsk: {
-    title: '劃詞追問',
+    title: '問任何問題',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
     guide: {
@@ -1429,7 +1449,6 @@ export const zhTW: typeof zhCN = {
       microphoneMonitorError: '輸入電平監聽失敗：{{message}}',
       capsuleLabel: '錄音膠囊',
       capsuleDesc: '錄音 / 轉寫時在螢幕底部顯示半透明膠囊。',
-      capsuleStyleTypeless: 'Typeless 傳統風格',
       capsuleTranscriptLabel: '顯示串流原文',
       capsuleTranscriptDesc:
         '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
@@ -1445,7 +1464,7 @@ export const zhTW: typeof zhCN = {
         '從所有螢幕顯示切換需要重新啟動軟體，才能清理先前的膠囊視窗。現在重新啟動嗎？',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
-      capsuleStyleClassic: 'Openless 預設風格',
+      capsuleStyleClassic: 'OpenLess 預設風格',
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
@@ -1453,6 +1472,35 @@ export const zhTW: typeof zhCN = {
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
       dsp: {
+        aec: '系統回聲消除',
+        systemNoise: '系統降噪',
+        systemAgc: '系統自動增益',
+        unavailable: '目前裝置不支援',
+        androidEffectsHint:
+          'Android 系統音效在軟體處理鏈之前生效。建議避免重複開啟同類效果。啟動不支援時退回一般擷取。',
+        effectsActive: '本次錄音已啟用系統音效。',
+        spectrum: '輸入／處理後頻譜',
+        spectrumHint:
+          '僅顯示目前增強錄音，不會啟動麥克風、儲存或上傳音訊。關閉面板或進入背景後停止監測。',
+        spectrumLegend: '灰色：輸入 · 彩色：處理後 · 20 Hz–24 kHz',
+        spectrumWaiting: '開啟語音增強並開始錄音後顯示頻譜。',
+        presets: '均衡器預設',
+        choosePreset: '選擇預設',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人聲',
+        preset_deepVoice: '低沉人聲',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人聲',
+        preset_warmVocal: '溫暖人聲',
+
+        aecOff: '關閉',
+        aecLight: '輕量（省 CPU）',
+        aecModel: '模型（更強）',
+        aecModelHint:
+          '模型版抑制更強，但約是輕量版的 3 倍 CPU；舊機器建議用輕量。',
+        aecHint:
+          '外放時壓掉揚聲器回授；需要揚聲器參考訊號，戴耳機可以關掉。',
+        buffer: '輸出緩衝區',
         title: '語音增強設定',
         description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
         noise: '降噪演算法',
@@ -1477,6 +1525,9 @@ export const zhTW: typeof zhCN = {
         down: '下移',
         reset: '恢復增強預設設定',
       },
+      echoCancellationLabel: '播放回聲抑制',
+      echoCancellationDesc:
+        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
       audioEnhancementLabel: '語音增強',
       audioEnhancementDesc:
         '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',
@@ -1547,6 +1598,10 @@ export const zhTW: typeof zhCN = {
         '轉寫不超過 N 個字（不計空白）時直接插入原文，不呼叫潤色模型。0 = 關閉。翻譯模式始終潤色。',
       polishContextWindowLabel: '對話上下文視窗（分鐘）',
       polishContextWindowDesc: '把最近 N 分鐘內已潤色的轉寫作為多輪上下文，0 = 關閉。',
+      debugArchiveProcessedLabel: '儲存處理後的音訊',
+      debugArchiveProcessedDesc: '降噪與增益之後的版本，仍存於原本的錄製檔案。',
+      debugArchiveRawLabel: '另存一份處理前的音訊',
+      debugArchiveRawDesc: '同一目錄下另存 <session>.raw.wav 便於對照；只開這一項時，原始音訊直接存進主檔案。',
       recordAudioForDebugLabel: '保留原始錄音（除錯）',
       recordAudioForDebugDesc: '儲存原始麥克風音訊為 wav，便於排查識別問題。',
       audioRecordingMaxEntriesLabel: '原始錄音保留條數',
@@ -1621,6 +1676,7 @@ export const zhTW: typeof zhCN = {
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
+      errThinking: '需開啟思考',
       verify: '驗證',
       verifyHint: '點一下會真實呼叫一次介面，確認這張卡現在可用',
       errTimeout: '逾時',
@@ -1764,8 +1820,9 @@ export const zhTW: typeof zhCN = {
       volcengineAuthModeApiKey: '新版控制檯 API Key',
       volcengineMappingNote:
         'Secret Key 當前無需填寫。Resource ID 預設使用 volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '使用新版語音控制檯建立的 API Key 鑑權，無需 APP ID。API Key 可在語音控制檯「API Key 管理」建立：console.volcengine.com/speech/new/setting/apikeys。Resource ID 預設使用 volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: '豆包語音 · API Key 管理',
+      volcengineApiKeyNote: '使用此處建立的 API Key 鑑權，請勿使用方舟金鑰。',
+      volcengineResourceIdNote: 'Resource ID 預設使用 {{resourceId}}。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -1834,6 +1891,7 @@ export const zhTW: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自動設定驗證與版本標頭，請移除額外 Headers 中的 x-api-key 與 anthropic-version。',
       llmStreamError: '伺服器回傳串流錯誤，請檢查模型和請求引數。',
+      llmThinkingRequired: '此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。',
       saveProtocol: '儲存協定設定',
       thinkingModeHint:
         '依所選請求格式與模型支援的引數啟用、關閉或降低思考，不在提示詞注入控制指令。',

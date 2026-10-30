@@ -171,6 +171,8 @@ pub struct DictationInsertionContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingPlan {
     pub microphone_device_name: Option<String>,
+    /// AEC 的扬声器参考源：空字符串 = 自动选默认监听源，`"off"` = 不采集参考。
+    pub aec_reference_device_name: String,
     /// The physical hotkey generation that owns a provisional capture, when
     /// this context is promoted from the native staging path.
     pub capture_generation: Option<u64>,
@@ -181,6 +183,11 @@ pub struct RecordingPlan {
     /// keep PCM in memory; successful-recording retention is a separate policy.
     pub archive_enabled: bool,
     pub archive_successful_recording: bool,
+    /// 主档案（`<session>.wav`）写「处理后」的 PCM。调试录音两个开关都关时为
+    /// false；quick note / undecided 这类功能必需档案永远为 true。
+    pub archive_processed: bool,
+    /// 额外再写一份「处理前」的 `<session>.raw.wav` 供 A/B 对照。
+    pub archive_raw: bool,
     /// A quick-note or undecided Android capture must not silently continue
     /// without a disk archive when its path cannot be created.
     pub archive_required: bool,
@@ -305,12 +312,21 @@ impl DictationContext {
             &asr,
             crate::shared_types::PlatformCapabilities::current().supports_local_asr,
         );
+        // 老版本只有总开关 `recordAudioForDebug`，两个子开关是后加的。升级后这两个
+        // 字段都是 false，如果直接按「两个都没开就不落盘」处理，已经打开调试录音的
+        // 用户会突然一段都录不到。所以两个子开关都没开时按「保存处理后」算。
+        let debug_both_off =
+            !preferences.debug_archive_processed && !preferences.debug_archive_raw;
+        let debug_keep_processed =
+            preferences.record_audio_for_debug && (preferences.debug_archive_processed || debug_both_off);
+        let debug_keep_raw = preferences.record_audio_for_debug && preferences.debug_archive_raw;
         Self {
             audio_source: options.audio_source,
             output_target: options.output_target,
             normal_archive_successful_recording: preferences.record_audio_for_debug,
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
+                aec_reference_device_name: preferences.aec_reference_device_name.clone(),
                 capture_generation: None,
                 mute_during_recording: preferences.mute_during_recording,
                 // TextStream is explicitly a live ASR module; do not let an old
@@ -321,7 +337,15 @@ impl DictationContext {
                 archive_successful_recording: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
-                ) || preferences.record_audio_for_debug,
+                ) || debug_keep_processed
+                    || debug_keep_raw,
+                // 功能必需档案（quick note / undecided）始终存处理后的 PCM；
+                // 调试录音则由两个开关决定，见上面 `debug_keep_*` 的迁移说明。
+                archive_processed: matches!(
+                    options.output_target,
+                    DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
+                ) || debug_keep_processed,
+                archive_raw: debug_keep_raw,
                 archive_required: matches!(
                     options.output_target,
                     DictationOutputTarget::QuickNote | DictationOutputTarget::Undecided
@@ -335,6 +359,7 @@ impl DictationContext {
                     .then(|| (preferences.silence_auto_stop_seconds * 1_000.0).round() as u64),
                 audio_processing: AudioProcessingConfig {
                     enhancement_enabled: preferences.audio_enhancement_enabled,
+                    echo_cancellation_enabled: preferences.echo_cancellation_enabled,
                     dsp: preferences.audio_dsp,
                 },
             },
@@ -416,11 +441,17 @@ impl DictationContext {
     pub fn with_output_target(&self, target: DictationOutputTarget) -> Self {
         let mut next = self.clone();
         next.output_target = target;
+        let normal_archive_processed = self.normal_archive_successful_recording
+            && (self.recording.archive_processed || !self.recording.archive_raw);
+        let normal_archive_raw =
+            self.normal_archive_successful_recording && self.recording.archive_raw;
         match target {
             DictationOutputTarget::CloudNote => {
                 next.insertion.enabled = false;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = false;
+                next.recording.archive_processed = false;
+                next.recording.archive_raw = false;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::Qa => {
@@ -429,6 +460,8 @@ impl DictationContext {
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording =
                     self.normal_archive_successful_recording;
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::VoiceEdit => {
@@ -436,12 +469,15 @@ impl DictationContext {
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording =
                     self.normal_archive_successful_recording;
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::QuickNote => {
                 next.insertion.enabled = false;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = true;
+                next.recording.archive_processed = true;
                 next.recording.archive_required = true;
             }
             DictationOutputTarget::ForegroundApp => {
@@ -451,12 +487,15 @@ impl DictationContext {
                 }
                 next.recording.archive_successful_recording =
                     next.normal_archive_successful_recording();
+                next.recording.archive_processed = normal_archive_processed;
+                next.recording.archive_raw = normal_archive_raw;
                 next.recording.archive_required = false;
             }
             DictationOutputTarget::Undecided => {
                 next.insertion.enabled = true;
                 next.insertion.streaming = false;
                 next.recording.archive_successful_recording = true;
+                next.recording.archive_processed = true;
                 next.recording.archive_required = true;
             }
         }
@@ -926,6 +965,76 @@ mod tests {
         let prompt = build_asr_prompt(&[over_budget, "OpenLess".to_string()]).unwrap();
         assert_eq!(prompt, "OpenLess.");
         assert!(prompt.chars().count() <= ASR_PROMPT_CHAR_BUDGET);
+    }
+
+    // 调试录音的两个开关独立生效：
+    // - 总开关关 → 不落盘
+    // - 总开关开、子开关都关（老版本只有总开关的配置）→ 主档案存处理后
+    // - 只开处理后 → 主档案存处理后
+    // - 只开处理前 → 主档案存原始（功能不减），不额外多一份
+    // - 都开 → 主档案 + `<session>.raw.wav`
+    // quick note 这类功能必需档案不受开关影响。
+    #[test]
+    fn debug_archive_switches_decide_what_the_host_writes() {
+        fn plan(processed: bool, raw: bool) -> (bool, bool, bool) {
+            let preferences = UserPreferences {
+                record_audio_for_debug: true,
+                debug_archive_processed: processed,
+                debug_archive_raw: raw,
+                ..UserPreferences::default()
+            };
+            let pack = builtin_style_pack_for_mode(preferences.default_mode);
+            let context = DictationContext::capture(
+                &preferences,
+                &pack,
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
+                    ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                    ProviderInvocation::for_provider("omni"),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
+            );
+            (
+                context.recording.archive_successful_recording,
+                context.recording.archive_processed,
+                context.recording.archive_raw,
+            )
+        }
+
+        // 老配置迁移：只有总开关，两个子开关都没开 → 仍然保存处理后。
+        assert_eq!(plan(false, false), (true, true, false));
+        assert_eq!(plan(true, false), (true, true, false));
+        assert_eq!(plan(false, true), (true, false, true));
+        assert_eq!(plan(true, true), (true, true, true));
+
+        // quick note 必须始终有处理后档案，否则播放与本地回退会失去 PCM。
+        let preferences = UserPreferences {
+            record_audio_for_debug: false,
+            debug_archive_processed: false,
+            debug_archive_raw: false,
+            ..UserPreferences::default()
+        };
+        let pack = builtin_style_pack_for_mode(preferences.default_mode);
+        let context = DictationContext::capture(
+            &preferences,
+            &pack,
+            DictationProviderInvocations::new(
+                ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
+                ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                ProviderInvocation::for_provider("omni"),
+            ),
+            Vec::new(),
+            Vec::new(),
+            &DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::QuickNote,
+                ..DictationStartOptions::default()
+            },
+        );
+        assert!(context.recording.archive_processed);
+        assert!(!context.recording.archive_raw);
     }
 
     #[test]

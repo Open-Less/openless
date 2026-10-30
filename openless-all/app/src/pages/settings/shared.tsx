@@ -165,51 +165,12 @@ export function Toggle({
         if (disabled) return;
         if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
       }}
-      style={{
-        position: 'relative',
-        // Previously hardcoded flex: 0 0 36px; in the column-direction settings row wrapper flex-basis
-        // applied to height, stretching the toggle into a 36×36 ball (the launch-at-login row).
-        // Width/height are locked explicitly; flex only prevents growing/shrinking.
-        flex: '0 0 auto',
-        width: 36,
-        minWidth: 36,
-        maxWidth: 36,
-        height: 20,
-        borderRadius: 999,
-        border: 0,
-        background: on ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
-        boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.06)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.45 : 1,
-        transition: 'background 0.16s var(--ol-motion-quick)',
-      }}
     >
-      <Switch.Thumb
-        style={{
-          position: 'absolute',
-          top: 2,
-          left: 2,
-          transform: on ? 'translateX(16px)' : 'translateX(0)',
-          width: 16,
-          height: 16,
-          borderRadius: 999,
-          background: 'var(--ol-toggle-knob)',
-          boxShadow: '0 1px 2px rgba(0,0,0,.25), 0 0 0 0.5px rgba(0,0,0,.04)',
-          transition: 'transform .18s var(--ol-motion-spring)',
-        }}
-      />
+      {/* Geometry, colours and motion live in .ol-switch (refinements.css). Width and
+          height are locked there, so a column-direction row can't stretch it into a ball. */}
+      <Switch.Thumb className="ol-switch-thumb" />
     </Switch.Root>
   );
-}
-
-export function chipSelectedStyle(selected: boolean): CSSProperties {
-  return {
-    background: selected ? 'var(--ol-pill-selected-bg)' : 'transparent',
-    border: selected
-      ? '0.5px solid var(--ol-pill-selected-border)'
-      : '0.5px solid var(--ol-line-strong)',
-    color: selected ? 'var(--ol-pill-selected-ink)' : 'var(--ol-ink-3)',
-  };
 }
 
 export const btnGhostStyle: CSSProperties = {
@@ -223,13 +184,6 @@ export const btnGhostStyle: CSSProperties = {
   fontFamily: 'inherit',
   maxWidth: '100%',
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
-};
-
-export const segmentedTrackStyle: CSSProperties = {
-  display: 'inline-flex',
-  padding: 2,
-  borderRadius: 8,
-  background: 'var(--ol-segmented-bg)',
 };
 
 export const inputStyle: CSSProperties = {

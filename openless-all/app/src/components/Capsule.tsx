@@ -1,20 +1,18 @@
-import { Icon } from './Icon';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
 import { warmUpSiriShaders } from './SiriGL';
+import { useReducedMotion } from '../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
-import { TypelessCapsule } from './TypelessCapsule';
+import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
 import {
   getCapsuleHostMetrics,
-  getCapsuleMessageLayout,
   getCapsulePillMetrics,
   getClassicCapsuleGeometry,
-  getClassicProcessingLabel,
   getCapsuleTranscriptRailHeight,
   parseCapsuleStyle,
 } from '../lib/capsuleLayout';
@@ -64,17 +62,7 @@ const CAPSULE_KEYFRAMES = `
   @keyframes selection-polish-spinner {
     to { transform: rotate(360deg); }
   }
-  /* Classic pill (Openless default style) only:
-     - cap-shine: blue light sweep over the "thinking" text during transcribe/polish;
-     - cap-state-enter: fade-in when state content switches. */
-  @keyframes cap-shine {
-    0%   { background-position: 200% center; }
-    100% { background-position: -200% center; }
-  }
-  @keyframes cap-state-enter {
-    from { opacity: 0; transform: translateY(2px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+
 `;
 
 if (typeof document !== 'undefined' && !document.getElementById('capsule-keyframes')) {
@@ -187,324 +175,8 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 }
 
 // ───────── Classic pill (Openless default style) ────────────────────────
-// Restored from the 1.3.14 capsule: frosted pill + volume bars + cancel/confirm
-// buttons. Sizes match the capsuleLayout constants of that release (the Siri orb
-// stage is full-bleed 460×180; the classic pill is a small centered pill).
-
-interface ClassicPillMetrics {
-  width: number;
-  height: number;
-  textWidth: number;
-}
-
-const CLASSIC_PILL_METRICS: ClassicPillMetrics = {
-  width: 176,
-  height: 42,
-  textWidth: 84,
-};
-const CLASSIC_PILL_METRICS_WIN: ClassicPillMetrics = {
-  width: 196,
-  height: 52,
-  textWidth: 104,
-};
-
-function classicPillMetrics(os: OS): ClassicPillMetrics {
-  return os === 'win' ? CLASSIC_PILL_METRICS_WIN : CLASSIC_PILL_METRICS;
-}
-
-function AudioBars({ level, compact = false }: { level: number; compact?: boolean }) {
-  const envelope = [0.55, 0.85, 1.0, 0.85, 0.55];
-  const base = 2;
-  const max = compact ? 16 : 24;
-  const voice = Math.min(1, Math.max(0, level));
-  const silenceGate = 0.012;
-  const responseCeiling = 0.34;
-  const gatedVoice = Math.min(
-    1,
-    Math.max(0, (voice - silenceGate) / (responseCeiling - silenceGate)),
-  );
-  const easedVoice = gatedVoice * gatedVoice * (3 - 2 * gatedVoice);
-  const visualVoice = Math.pow(easedVoice, 0.42);
-  return (
-    <div
-      className="ol-capsule-audio-bars"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: compact ? 2 : 3,
-        width: compact ? 24 : 42,
-        height: max,
-      }}
-    >
-      {envelope.map((env, i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-block',
-            width: compact ? 2 : 3,
-            height: base + (max - base) * visualVoice * env,
-            borderRadius: 999,
-            background: 'var(--ol-blue)',
-            opacity: 0.82,
-            transformOrigin: 'center',
-            // 0.08s is too fast at 60Hz audio-level updates: every re-render restarts
-            // the transition, reading as stepped jumps. 0.18s lets successive updates
-            // blend smoothly within the curve; easeOutExpo-like easing keeps the
-            // dot→bar morph natural.
-            transition: 'height 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-interface CenterTextProps {
-  os: OS;
-  kind: 'default' | 'processing' | 'error';
-  text: string;
-  color?: string;
-}
-
-function CenterText({ os, kind, text, color = 'var(--ol-capsule-center-ink)' }: CenterTextProps) {
-  const metrics = classicPillMetrics(os);
-  const layout = getCapsuleMessageLayout(os, kind);
-  return (
-    <span
-      style={{
-        fontSize: 11,
-        fontWeight: 'var(--ol-font-weight-medium)',
-        color,
-        width: '100%',
-        maxWidth: metrics.textWidth,
-        minWidth: 0,
-        textAlign: 'center',
-        lineHeight: layout.allowWrap ? 1.2 : 1,
-        whiteSpace: layout.allowWrap ? 'normal' : 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        display: '-webkit-box',
-        WebkitBoxOrient: 'vertical',
-        WebkitLineClamp: layout.lineClamp,
-      }}
-    >
-      {text}
-    </span>
-  );
-}
-
-interface CircleButtonProps {
-  variant: 'cancel' | 'confirm';
-  enabled: boolean;
-  onClick: () => void;
-}
-
-// memo: level changes every frame (~60Hz) while recording, re-rendering the pill; the
-// cancel/confirm SVG buttons don't depend on level, so memo + stable onClick lets them
-// skip re-renders during recording (only the volume bars actually update).
-const CircleButton = memo(function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
-  const { t } = useTranslation();
-  const isCancel = variant === 'cancel';
-  return (
-    <button
-      onClick={enabled ? onClick : undefined}
-      onMouseDown={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      aria-label={isCancel ? t('common.cancel') : t('settings.shortcuts.confirm')}
-      disabled={!enabled}
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: 999,
-        background: isCancel ? 'var(--ol-capsule-btn-bg)' : 'var(--ol-capsule-btn-bg-confirm)',
-        color: 'var(--ol-capsule-btn-ink)',
-        border: '0.8px solid var(--ol-capsule-btn-border)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: enabled ? 'default' : 'not-allowed',
-        opacity: enabled ? 1 : 0.42,
-        visibility: 'visible',
-        flexShrink: 0,
-        padding: 0,
-        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
-        transition:
-          'opacity 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
-      }}
-    >
-      <Icon name={isCancel ? 'close' : 'check'} size={13} strokeWidth={2.2} />
-    </button>
-  );
-});
-
-interface ClassicPillProps {
-  os: OS;
-  state: CapsuleState;
-  level: number;
-  insertedChars: number;
-  message?: string;
-  operating: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-function ClassicPill({
-  os,
-  state,
-  level,
-  insertedChars,
-  message,
-  operating,
-  onCancel,
-  onConfirm,
-}: ClassicPillProps) {
-  const { t } = useTranslation();
-  const metrics = classicPillMetrics(os);
-  const processingLayout = useMemo(() => getCapsuleMessageLayout(os, 'processing'), [os]);
-  const cancelEnabled = state === 'recording' || state === 'transcribing' || state === 'polishing';
-  const confirmEnabled = state === 'recording';
-
-  // Keep the original Classic processing treatment: the thinking/using label
-  // has its own entry and shine animation, while recording keeps the live bars.
-  const [shineFast, setShineFast] = useState(true);
-  useEffect(() => {
-    if (state === 'transcribing' || state === 'polishing') {
-      setShineFast(true);
-      const timer = setTimeout(() => setShineFast(false), 2000);
-      return () => clearTimeout(timer);
-    }
-    setShineFast(true);
-    return undefined;
-  }, [state]);
-
-  let center: ReactNode;
-  switch (state) {
-    case 'recording':
-      center = <AudioBars level={level} />;
-      break;
-    case 'transcribing':
-    case 'polishing':
-      center = (
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            padding: '0 2px',
-            width: '100%',
-            maxWidth: metrics.textWidth,
-            minWidth: 0,
-            justifyContent: 'center',
-            animation: 'cap-state-enter 220ms var(--ol-motion-soft) both',
-          }}
-        >
-          <AudioBars level={level} compact />
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 'var(--ol-font-weight-semibold)',
-              letterSpacing: 0.1,
-              paddingBlock: 2,
-              color: 'var(--ol-ink-2)',
-              backgroundImage:
-                'linear-gradient(100deg, var(--ol-ink) 0%, var(--ol-ink) 35%, var(--ol-blue) 50%, var(--ol-ink) 65%, var(--ol-ink) 100%)',
-              backgroundSize: '220% auto',
-              WebkitBackgroundClip: 'text',
-              backgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              animation: `cap-shine ${shineFast ? '0.9s' : '2.4s'} linear infinite`,
-              minWidth: 0,
-              textAlign: 'center',
-              lineHeight: processingLayout.allowWrap ? 1.3 : 1.25,
-              whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: processingLayout.lineClamp,
-            }}
-          >
-            {t(getClassicProcessingLabel(operating))}
-          </span>
-        </div>
-      );
-      break;
-    case 'done':
-      center = (
-        <CenterText
-          os={os}
-          kind="default"
-          text={message || t('capsule.inserted', { count: insertedChars })}
-        />
-      );
-      break;
-    case 'cancelled':
-      center = <CenterText os={os} kind="default" text={t('capsule.cancelled')} />;
-      break;
-    case 'error':
-      center = (
-        <CenterText
-          os={os}
-          kind="error"
-          text={message || t('capsule.error')}
-          color="var(--ol-err)"
-        />
-      );
-      break;
-    default:
-      center = <AudioBars level={0} />;
-  }
-
-  const ambient = state === 'recording' ? Math.min(1, Math.max(0, level)) : 0;
-  const scale = os === 'win' ? 1 : 1 + ambient * 0.018;
-  const shadowAlpha = 0.2 + ambient * 0.1;
-
-  return (
-    // Non-Linux uses fake frost; on Linux with transparent windows disabled, .ol-frost
-    // platform rules fall back to an opaque surface. No backdrop-filter: the webview
-    // can't blur the desktop behind a transparent window (Tauri upstream limitation).
-    <div
-      className="ol-frost ol-capsule-pill"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 4,
-        padding: '0 8px',
-        width: metrics.width,
-        height: metrics.height,
-        boxSizing: 'border-box',
-        borderRadius: 999,
-        border: '1px solid var(--ol-capsule-pill-border)',
-        boxShadow: `${os === 'win' ? `0 10px 24px -14px rgba(0, 0, 0, ${(0.24 + ambient * 0.06).toFixed(3)})` : `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)})`}, 0 0 0 0.5px rgba(0, 0, 0, 0.24), var(--ol-capsule-pill-inset)`,
-        color: 'var(--ol-capsule-center-ink)',
-        fontFamily: 'var(--ol-font-sans)',
-        transform: `scale(${scale.toFixed(4)})`,
-        transformOrigin: 'center',
-        transition:
-          'transform 0.08s var(--ol-motion-quick), box-shadow 0.08s var(--ol-motion-quick)',
-        willChange: 'transform, box-shadow',
-      }}
-    >
-      <CircleButton variant="cancel" enabled={cancelEnabled} onClick={onCancel} />
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {center}
-      </div>
-      <CircleButton variant="confirm" enabled={confirmEnabled} onClick={onConfirm} />
-    </div>
-  );
-}
+// Preserve the native Classic host/rail geometry; OpenLessPill owns the new
+// white-and-blue recording/processing surface inside that stable host.
 
 interface ClassicCapsuleProps {
   os: OS;
@@ -518,6 +190,8 @@ interface ClassicCapsuleProps {
   transcriptInSameWindow?: boolean;
   operating: boolean;
   translation: boolean;
+  leaving: boolean;
+  warming: boolean;
 }
 
 /**
@@ -537,6 +211,8 @@ function ClassicCapsule({
   transcriptInSameWindow = true,
   operating,
   translation,
+  leaving,
+  warming,
 }: ClassicCapsuleProps) {
   const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
   const onCancel = useCallback(() => {
@@ -560,19 +236,19 @@ function ClassicCapsule({
           (translateX(-50%)) with no animation; the inner layer only does vertical
           shift + fade. This avoids conflicting with translateX(-50%) and avoids
           keyframe vs inline transform overrides causing visual jumps. */}
-      {transcriptInSameWindow && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: classicGeometry.badgeBottomOffset,
-            transform: 'translateX(-50%)',
-            pointerEvents: 'none',
-          }}
-        >
-          <CapsuleTranslationBadge visible={translation} />
-        </div>
-      )}
+      {/* The language picker belongs to the interactive capsule, even when
+          Windows puts the transcript in a separate click-through rail. */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          bottom: classicGeometry.badgeBottomOffset,
+          transform: 'translateX(-50%)',
+          pointerEvents: 'none',
+        }}
+      >
+        <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+      </div>
       <div className="ol-classic-capsule-stack">
         {liveText && (
           <CapsuleTranscriptRail
@@ -584,13 +260,16 @@ function ClassicCapsule({
             height={getCapsuleTranscriptRailHeight('classic')}
           />
         )}
-        <ClassicPill
+        <OpenLessPill
           os={os}
           state={state}
           level={level}
           insertedChars={insertedChars}
           message={message}
           operating={operating}
+          translation={translation}
+          leaving={leaving}
+          warming={warming}
           onCancel={onCancel}
           onConfirm={onConfirm}
         />
@@ -601,10 +280,9 @@ function ClassicCapsule({
 
 // Must stay in sync with the @keyframes capsule-out duration — otherwise the timer
 // unmounts before the animation ends and the user sees it cut off mid-flight. Both
-// styles share the same capsule-in/out keyframes with different durations: Siri orb
-// 520ms (as-is), classic pill 360ms (matching 1.3.14).
+// The spectral renderer exits in 520ms; the default capsule contracts in 180ms.
 const EXIT_ANIM_MS_SIRI = 520;
-const EXIT_ANIM_MS_CLASSIC = 360;
+const EXIT_ANIM_MS_CLASSIC = DEFAULT_CAPSULE_EXIT_MS;
 
 // Average capsule warm→ready duration (ms), driving the predicted pace of the entry
 // expand animation (see SiriGL warmProgress): EMA-updated after each recording becomes
@@ -649,7 +327,7 @@ function getPreviewCapsulePayload() {
       translation: false,
       warming: false,
       selectionPolish: false,
-      style: 'siri' as CapsuleStyle,
+      style: 'classic' as CapsuleStyle,
       insertDemo: false,
     };
   }
@@ -668,7 +346,7 @@ function getPreviewCapsulePayload() {
     translation: params.get('translation') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
-    style: parseCapsuleStyle(params.get('style')) ?? 'siri',
+    style: parseCapsuleStyle(params.get('style')) ?? 'classic',
     insertDemo,
   };
 }
@@ -681,6 +359,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
   const os = forcedOs ?? detectOS();
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
+  const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(preview.state);
   const [level, setLevel] = useState<number>(preview.level);
@@ -705,7 +384,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
   const stylePreferenceReadyRef = useRef(false);
   const isClassic = capsuleStyle === 'classic';
-  const isTypeless = capsuleStyle === 'typeless';
   // Windows keeps the transcript in the dedicated capsule-rail HWND. The browser
   // preview and other platforms continue rendering the sibling rail in this tree.
   const splitTranscriptRail = isTauri && os === 'win';
@@ -774,17 +452,38 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
       if (cancelled) return;
       const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
-        const unlisten = await listen<T>(name, (event) => {
-          if (!cancelled) apply(event.payload);
-        });
+        // Tauri's default Any listener also receives emit_to(otherWindow). In particular,
+        // hiding a mirror sends it idle; that must never exit the primary capsule.
+        const unlisten = await listen<T>(
+          name,
+          (event) => {
+            if (!cancelled) apply(event.payload);
+          },
+          name === 'backend:event' ? undefined : { target },
+        );
         if (cancelled) {
           unlisten();
           return false;
         }
         unlisteners.push(unlisten);
         return true;
+      };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot().catch((error) => {
+          if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
+          return undefined;
+        });
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptViewRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptViewRef.current = next;
+        setLocalAsrText(next.text);
       };
       const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
@@ -805,7 +504,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         // Any new recording session must drop prior ASR text — including when
         // the previous capsule was still transcribing/polishing/done from
         // dictation (selection-voice Start used to keep the stale stream).
-        if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
+        const sessionId = p.sessionId;
+        const reactivatedSession =
+          p.state === 'recording' &&
+          previous !== 'recording' &&
+          !sessionChanged &&
+          !previousTranscript.sessionStartObserved &&
+          sessionId != null &&
+          nextTranscript.sessionId === sessionId;
+        if (reactivatedSession) {
+          void replayActiveSessionTranscript(sessionId);
+        } else if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
           nextTranscript = beginTranscriptGeneration(nextTranscript);
         }
         if (
@@ -1084,7 +793,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   }
 
   // Truly unmounted: state is idle and no exit animation is running.
-  if (state === 'idle' && !leaving) {
+  if (state === 'idle' && lastVisibleState === 'idle' && !leaving) {
     return <div style={{ width: 0, height: 0 }} />;
   }
 
@@ -1105,13 +814,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         background: preview.insertDemo
           ? 'radial-gradient(ellipse at 50% 35%, #4d9a4a 0%, #1a4a22 42%, #0e2414 100%)'
           : 'transparent',
-        animation: leaving
-          ? `capsule-out ${exitMs}ms cubic-bezier(.55,.06,.68,.19) forwards`
-          : // The .68s entry got "delay after keypress" feedback: cut to .38s with the
-            // curve keeping a slight bounce, so the orb appears almost immediately.
-            'capsule-in .38s cubic-bezier(.3,1.2,.4,1) both',
+        animation: reducedMotion
+          ? 'none'
+          : isClassic
+            ? 'none'
+            : leaving
+              ? `capsule-out ${exitMs}ms cubic-bezier(.55,.06,.68,.19) forwards`
+              : // The .68s entry got "delay after keypress" feedback: cut to .38s with the
+                // curve keeping a slight bounce, so the orb appears almost immediately.
+                'capsule-in .38s cubic-bezier(.3,1.2,.4,1) both',
         transformOrigin: 'center',
-        willChange: 'transform, opacity',
+        willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
       {!renderedSelectionPolish &&
@@ -1128,19 +841,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
-          />
-        ) : isTypeless ? (
-          <TypelessCapsule
-            state={renderedState}
-            level={leaving ? 0 : level}
-            insertedChars={insertedCharsRef.current}
-            message={renderedMessage}
-            transcript={splitTranscriptRail ? '' : liveTranscript}
-            transcriptFontSize={transcriptFontSize}
-            operating={operatingRef.current}
-            translation={translation}
-            translationInSameWindow={!splitTranscriptRail}
-            warming={!leaving && warming}
+            leaving={leaving}
+            warming={warming}
           />
         ) : (
           <>

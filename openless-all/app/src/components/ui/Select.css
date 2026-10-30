@@ -93,7 +93,7 @@
   background: var(--ol-select-option-hover-bg);
 }
 .ol-select-item[data-selected] {
-  color: var(--ol-blue);
+  color: var(--ol-choice-active-ink);
   font-weight: var(--ol-font-weight-semibold);
 }
 .ol-select-check {

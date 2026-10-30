@@ -21,11 +21,7 @@ import type {
   MicrophoneDevice,
 } from '../types';
 import { OL_DATA } from '../mockData';
-import {
-  defaultAppShortcutModifiers,
-  defaultQaShortcut,
-  defaultSelectionPolishShortcut,
-} from '../hotkey';
+import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
   hotkey: {
@@ -46,7 +42,7 @@ export let mockSettings: UserPreferences = {
   customStylePrompts: { raw: '', light: '', structured: '', formal: '' },
   launchAtLogin: false,
   showCapsule: true,
-  capsuleStyle: 'siri',
+  capsuleStyle: 'classic',
   capsuleDisplayMode: 'cursorScreen',
   capsuleTranscriptEnabled: true,
   capsuleTranscriptFontSize: 14,
@@ -55,6 +51,7 @@ export let mockSettings: UserPreferences = {
   lowLatencyDictationEnabled: false,
   lowMemoryBackgroundEnabled: false,
   audioEnhancementEnabled: false,
+  echoCancellationEnabled: false,
   voiceActivationEnabled: false,
   voiceActivationWakeEnabled: true,
   voiceActivationFinishEnabled: true,
@@ -83,7 +80,8 @@ export let mockSettings: UserPreferences = {
   windowsShowOpenlessInKeyboardList: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
-  qaHotkey: defaultQaShortcut(),
+  qaCompanionKey: 'Space',
+  qaHotkey: null,
   quickNoteHotkey: null,
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',
@@ -139,7 +137,7 @@ export let mockSettings: UserPreferences = {
   streamingInsertDefaultMigrated: true,
   streamingInsertSaveClipboard: true,
   windowsCompositionInput: false,
-  cursorContextEnabled: false,
+  cursorContextEnabled: true,
   vocabularyLearningEnabled: false,
   vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
   showOverviewActivityHeatmap: true,
@@ -148,6 +146,8 @@ export let mockSettings: UserPreferences = {
   autoUpdateCheck: true,
   historyMaxEntries: null,
   recordAudioForDebug: false,
+  debugArchiveProcessed: false,
+  debugArchiveRaw: false,
   audioRecordingMaxEntries: null,
   quickNoteExportDirectory: '',
   marketplaceBaseUrl: 'https://apic.openless.top',
