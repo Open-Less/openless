@@ -7,7 +7,8 @@
 | 事件 | 行为 |
 |---|---|
 | `pull_request` → `main` / `beta` | 按改动范围门控：改动够不到的平台直接跳过（见下） |
-| `push` → `main` / `beta` | 全量验证（合并后的基线必须有完整证据），不跳过任何 job |
+| `push` → `main` / `beta` | 全量验证（合并后的基线必须有完整证据），不跳过任何 job；也是 Rust / Playwright 缓存的唯一写入方 |
+| `push` → 其他分支 | **不跑**。feature 分支由它的 PR 覆盖；两边都跑等于同一个 commit 交两遍完整矩阵（实测 42 次 run 里有 8 次是这种重复，每次 ~86 VM-min、峰值 12 台 VM） |
 | tag `v*-tauri` | 发布 Tauri 桌面与 Android；Linux 包不随标签自动发布 |
 | `workflow_dispatch` | 全量；`platform=macos` 只跑 macOS（仅 macOS 验证入口） |
 
@@ -15,21 +16,22 @@
 
 ### 改动范围判定
 
-`openless-all/app/scripts/ci-changed-areas.sh` 对每个重平台 job 判定“改动物理上够不够得到它”，CI 的 `changes` job 调用它填 `changes.outputs.tauri` / `changes.outputs.msrv`：
+`openless-all/app/scripts/ci-impact.mjs`（由 `ci-changed-areas.sh` 调用）回答一个问题：**这份改动能不能被某个平台的编译过程看见**。
 
-| 区域 | 跳过条件（全部改动都命中才算跳过） | 覆盖的 job |
+Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo metadata --no-deps --offline` 给出每个 workspace 包、它的目录、仓库内部依赖边，以及每条边上的 `cfg(...)` 守卫（例如 `openless → openless-capsule` 带 `cfg(not(any(target_os = "android", target_os = "ios")))`）。从每个平台的根包出发走一遍闭包，就得到该平台真正会编译的 crate 集合；一个文件在范围内，当且仅当**拥有它的包**在该集合里。非 Rust 的树（前端 bundle、ArkTS、Xcode 工程、工具链脚本）由脚本里的显式规则覆盖。
+
+| 区域 | 覆盖的 job | 判定 |
 |---|---|---|
-| `tauri` | 仅 `linux-egui/**`（但**不含**它的 `Cargo.toml`，那会动全工作区 lock）、`app/scripts/linux-fcitx5-plugin/**`、`docs/**`、`*.md`、`LICENSE` | macOS / Windows 桌面检查、Android 检查、Chromium/WebKit UI 动效回归 |
-| `msrv` | 全部改动里没有任何 `.rs`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain*`、`.github/**` | macOS Rust 1.99 MSRV |
-| `linux` | 全部改动都是散文（`docs/**`、`*.md`、`LICENSE`、`NOTICE`） | Linux Core/egui 测试与 deb/rpm 打包链 |
+| `tauri` | macOS / Windows 桌面检查 | 改动能到达 `openless`（含 vendor 路径依赖）或桌面专属的 `openless-native-capsule` |
+| `android` | Android cargo check | 改动能到达 `openless` 的 Android 闭包，或影响 Android 项目生成/构建的 npm manifest；纯 bundle-only 改动不单独触发 |
+| `msrv` | macOS Rust 1.99 MSRV | 有任何 `.rs` / `Cargo.toml` / `Cargo.lock` / `rust-toolchain*` / `.github/**` |
+| `linux` | Linux Core/egui 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-egui` 的闭包。Linux 宿主是原生 egui，不读前端 `dist/` |
+| `harmony` | 鸿蒙 ArkTS 契约、Rust host、HAP | 改动能到达 `openless-harmony-host` 的闭包，或动了它要打包的前端 bundle |
+| `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`e2e/**`、样式与 vite/playwright 配置；`app/assets/**` / `app/public/**` 按 native consumer 处理 |
+| `capsule` | 胶囊 crates（macOS + Windows 双 runner） | 拥有改动文件的包是 `openless-capsule` / `openless-native-capsule`。它们的 `ui,host` feature 组合不在别处构建，所以保留独立 job，但常见 PR 不再为它付出两台 runner |
+| `ios-device` | iOS `device-build`（Xcode/Rime 与真实 device Core 编译） | 改动能到达 iOS Core 闭包，或动了 `openless-all/ios/**`；共享 Rust 代码也要保留 device target 证据 |
 
-规则是**失败即运行**，而且这一原则贯穿三层：
-
-1. 脚本层：没有基线提交（push / tag / 手动）、git 读取失败、diff 为空、区域名未知，一律返回 `true`。
-2. 工作流层：`changes` job 只把明确的 `false` 当作跳过依据，其余（含输出缺失）都算运行；`linux` 的 `scope` 输入默认 `full`。
-3. 契约层：`scripts/ci-changed-areas.test.mjs` 既驱动脚本对真实 git 差异做正反判定，也检查 ci.yml 是否把每个区域都发布成 job 输出、每个门控是否写成 fail-open、可复用工作流是否默认全量构建。区域名或输出接线写错会直接测试失败——这正是它抓到的一次真实故障（`linux` 输出漏写导致 Linux job 被误跳过）。
-
-跳过只允许是“改动可达性可证明”的结果，不允许是“读不到差异”或“接线漏了”的兜底。
+契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
 
 `linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链。独立 Linux 手动构建沿用完整检查，只上传 Actions 产物；管理员在产品验收后，针对已接受的现有 tag 构建并单独附加包，见 [发布规范](../RELEASING.md)。
 
@@ -83,7 +85,8 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 - `playwright` 与 `mobile-rime` 使用 restore/save 拆分；`swatinem/rust-cache` 用 `save-if` 达到同样效果。
 - `build-linux-egui` 保留 PR 内自写并开 `cache-on-failure: true`：失败的运行也会把依赖缓存存下来，下一次迭代仍然热；同时关掉 dev/test debug info，缓存更小、链接更快。
 - key 结构为 `v0-rust-<job>-<os>-<环境哈希>-<lockfile哈希>`：环境哈希含工具链与 `CARGO_PROFILE_*`，所以 stable / MSRV / release 天然分开，不要用跨平台 `shared-key` 混合。
-- 原生胶囊（`native-capsule` job）原本是一个独立的 `pull_request`-only workflow：缓存写在 `refs/pull/<n>/merge`，这个作用域此后再不会被恢复；而 beta 上没有任何 job 产出同 key 的树，所以 PR 永远冷编译。现在它已并入 `ci.yml`（同一个 `Changed areas` 门禁、同一次运行），用 `shared-key: native-capsule` + beta 门控的 `save-if`。
+- 原生胶囊（`native-capsule` job）原本是一个 `pull_request`-only workflow：缓存写在 `refs/pull/<n>/merge`，这个作用域此后再不会被恢复，而 beta 上没有 job 产出同 key 的树，所以 PR 永远冷编译。现在它在 `ci.yml` 里，用 `shared-key: native-capsule` + beta 门控的 `save-if`，并且由 `capsule` 区域门控——常见 PR 完全不会为它拉起 runner。
+  曾试过把它并进 `cross-platform`（省两台 VM），实测否决：run 40510306688 里那三个命令在 Windows 关键路径上花了 43+53+21 s，比它省下的两台 runner 更贵。要合并先要确认那套 `ui,host` feature 在桌面 job 的缓存里是热的。
 - `Cargo.lock` 变化时精确键失效，但 `restore-keys` 前缀回退会拿到同前缀的旧缓存，所以“锁变了”不等于“全冷”——前提是那份没被淘汰，这正是要守预算的原因。
 
 ## 4. 维护

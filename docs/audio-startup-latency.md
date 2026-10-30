@@ -11,8 +11,8 @@ PCM，而不是等待识别器后再开麦。缓冲按需增长、保留原有�
 capture，以及默认关闭的预热/预录选项；#1150 已在 2026-10-12 关闭。因此不能将
 讨论里的早期流程直接当作当前实现。
 
-仍有可移走的前置步骤：`PipelineDictationEngine::start` 在提交 provisional capture
-或调用普通 recorder 之前等待 `transcription.prepare()`。改为：
+这项前置等待已经移走：`PipelineDictationEngine::start` 会先提交 provisional
+capture 或启动普通 recorder，再并行准备 `transcription.prepare()`。当前流程为：
 
 ```text
 快捷键 / 正式启动
@@ -53,7 +53,9 @@ Tauri 录音日志增加 `[audio-startup]` 阶段，只有时间和录音/按键
 比较 `first_raw_pcm` 与 `first_output_pcm` 可以区分硬件等待与处理/分帧等待。
 Windows 快捷键日志使用 `press` 和 `capture` 关联；预热路线标记为 `warm_hub`。
 
-新增回归测试会故意阻塞识别器准备，验证麦克风已开始、开头 PCM 仍能顺序交付，
-并验证准备期间的取消无需等待准备完成即可释放麦克风。另验证准备失败清理。
+回归测试 `capture_starts_before_slow_preparation_and_cancellation_releases_it_promptly`
+会故意阻塞识别器准备，验证麦克风已开始、开头 PCM 仍能顺序交付，并验证准备期间
+的取消无需等待准备完成即可释放麦克风；另有准备失败清理和 Windows WASAPI
+资源生命周期测试。完整 `openless-core` 测试与 Windows CI 覆盖这些路径。
 
 本轮未在原生 Windows 麦克风上测量优化前后的 P50/P95，不报告未经测量的毫秒收益。

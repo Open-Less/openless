@@ -35,6 +35,7 @@ function context({ fresh = false, tauriInitially = true } = {}) {
   let preferences = fresh ? null : { locale, fontScale };
   let status = {
     sequence: '0',
+    serviceOrigin: 'https://sync.example',
     account: fresh ? null : { githubId: '1' },
     vaultId: fresh ? null : 'v1',
     consentVersion: fresh ? null : 'yes',
@@ -129,6 +130,7 @@ function context({ fresh = false, tauriInitially = true } = {}) {
       handlers.get('cloud-sync-e2ee:restored')({
         payload: {
           sequence,
+          serviceOrigin: status.serviceOrigin,
           accountId: status.account.githubId,
           vaultId: status.vaultId,
           taskId: 'restore',
@@ -177,7 +179,13 @@ await test('old mirror queued before restore cannot overwrite its native value',
   c.externalWrite({ locale: 'fr' });
   c.restore();
   await tick();
-  wait.resolve({ sequence: '2', account: { githubId: '1' }, vaultId: 'v1', consentVersion: 'yes' });
+  wait.resolve({
+    sequence: '2',
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '1' },
+    vaultId: 'v1',
+    consentVersion: 'yes',
+  });
   await drain();
   assert.equal(c.snapshot().preferences.locale, 'fr');
   assert.equal(c.snapshot().locale, 'fr');
@@ -191,7 +199,13 @@ await test('new choice after restore notification wins only its chosen field', a
   c.restore();
   await tick();
   await c.userLocale('de');
-  wait.resolve({ sequence: '2', account: { githubId: '1' }, vaultId: 'v1', consentVersion: 'yes' });
+  wait.resolve({
+    sequence: '2',
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '1' },
+    vaultId: 'v1',
+    consentVersion: 'yes',
+  });
   await drain();
   assert.deepEqual(c.snapshot().preferences, { locale: 'de', fontScale: 'large' });
   assert.equal(c.snapshot().locale, 'de');
@@ -259,7 +273,13 @@ await test('an equal-value restore invalidates an older unsent user choice', asy
   await tick();
   c.externalWrite({ locale: 'en' });
   c.restore();
-  wait.resolve({ sequence: '2', account: { githubId: '1' }, vaultId: 'v1', consentVersion: 'yes' });
+  wait.resolve({
+    sequence: '2',
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '1' },
+    vaultId: 'v1',
+    consentVersion: 'yes',
+  });
   await drain();
   assert.equal(c.snapshot().preferences.locale, 'en');
   await c.userLocale('fr');
@@ -286,13 +306,28 @@ await test('a late old-vault event cannot discard a new-account user choice', as
   await c.userLocale('de');
   await tick();
   c.restore('99', { accountId: '1', vaultId: 'v1' });
-  wait.resolve({ account: { githubId: '2' }, vaultId: 'v2', consentVersion: 'yes' });
+  wait.resolve({
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '2' },
+    vaultId: 'v2',
+    consentVersion: 'yes',
+  });
   await drain();
   assert.equal(c.snapshot().preferences.locale, 'de');
   c.externalWrite({ locale: 'fr' });
   c.restore('5');
   await drain();
   assert.equal(c.snapshot().locale, 'fr');
+});
+await test('a late event from an old sync origin cannot mutate the current mirror', async () => {
+  const c = context();
+  await c.install();
+  c.setStatus({ serviceOrigin: 'https://new.example' });
+  c.externalWrite({ locale: 'fr' });
+  c.restore('99', { serviceOrigin: 'https://old.example' });
+  await drain();
+  assert.equal(c.snapshot().locale, 'en');
+  assert.equal(c.snapshot().preferences.locale, 'fr');
 });
 await test('a failed old-scope notification read retains the newer local choice', async () => {
   const c = context();
@@ -304,7 +339,12 @@ await test('a failed old-scope notification read retains the newer local choice'
   await c.userLocale('de');
   await tick();
   c.restore('99', { accountId: '1', vaultId: 'v1' });
-  userStatus.resolve({ account: { githubId: '2' }, vaultId: 'v2', consentVersion: 'yes' });
+  userStatus.resolve({
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '2' },
+    vaultId: 'v2',
+    consentVersion: 'yes',
+  });
   await tick();
   restoreStatus.reject(new Error('transient native status failure'));
   await drain();
@@ -322,7 +362,12 @@ await test('overlapping valid and old-scope notifications preserve a later field
   await tick();
   await c.userLocale('de');
   c.restore('99', { accountId: '1', vaultId: 'v1' });
-  wait.resolve({ account: { githubId: '2' }, vaultId: 'v2', consentVersion: 'yes' });
+  wait.resolve({
+    serviceOrigin: 'https://sync.example',
+    account: { githubId: '2' },
+    vaultId: 'v2',
+    consentVersion: 'yes',
+  });
   await drain();
   assert.deepEqual(
     c.snapshot().preferences,

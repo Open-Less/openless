@@ -58,6 +58,7 @@ export interface RestorePreview {
 
 export interface EncryptedSyncEventScope {
   sequence: string;
+  serviceOrigin: string;
   accountId: string | null;
   vaultId: string | null;
   taskId: string | null;
@@ -171,6 +172,7 @@ export function matchesEncryptedSyncEvent(
     incoming !== null &&
     previous !== null &&
     incoming > previous &&
+    event.serviceOrigin === status.serviceOrigin &&
     event.accountId === (status.account?.githubId ?? null) &&
     event.vaultId === status.vaultId &&
     (!requireTask || event.taskId === status.taskId)

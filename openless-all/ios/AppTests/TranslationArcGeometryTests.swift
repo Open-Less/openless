@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 import OpenLessShared
 
-/// Call in an iOS test host on MainActor. Uses the actual patched UIView and UILabel sizes.
+/// Measures the rendered UIView and UILabel geometry on the main actor.
 /// Geometry uses the production view; only the irrelevant canvas color is supplied here.
 @MainActor
 enum TranslationArcGeometryChecks {

@@ -67,8 +67,8 @@ targets:
       path: Config/App-Info.plist
       properties:
         CFBundleDisplayName: OpenLess
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         OLAppGroupIdentifier: "$(OL_APP_GROUP)"
         NSMicrophoneUsageDescription: "仅在你点按或按住录音时采集声音，结束后立即释放麦克风。"
         NSSpeechRecognitionUsageDescription: "使用 Apple 语音识别将你主动录制的声音转换成文字。"
@@ -114,8 +114,8 @@ targets:
       path: Config/RecordingWidget-Info.plist
       properties:
         CFBundleDisplayName: OpenLess
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         OLAppGroupIdentifier: "$(OL_APP_GROUP)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
@@ -156,8 +156,8 @@ targets:
       path: Config/Keyboard-Info.plist
       properties:
         CFBundleDisplayName: OpenLess
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         OLAppGroupIdentifier: "$(OL_APP_GROUP)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.keyboard-service

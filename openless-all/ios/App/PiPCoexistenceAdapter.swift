@@ -1,5 +1,4 @@
-// Adapted from Yoroin/GlobalRefresh-PiP, commit 1b62341c1d62308962fb3656192d6783631aa00c.
-// Original PiP demo: CaiWanFeng/PiP. See Resources/Licenses/GlobalRefresh-PiP-NOTICE.txt.
+// Third-party source attribution is bundled in Resources/Licenses.
 import Foundation
 import ObjectiveC
 #if os(iOS)

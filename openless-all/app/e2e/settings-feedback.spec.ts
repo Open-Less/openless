@@ -189,3 +189,38 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
   await tabs.nth(0).click();
   await expect(page.locator('[data-ol-style-pack]').first()).toBeVisible();
 });
+
+test('Gemini Omni exposes the shared thinking setting and hides it for transcription models', async ({
+  page,
+}, testInfo) => {
+  await settings(page, 'AI 服务与模型');
+  await page.getByRole('button', { name: '多模态模式', exact: true }).click();
+  const card = page.locator('.ol-omni-settings');
+  await card.getByRole('combobox', { name: '供应商', exact: true }).click();
+  await page.getByRole('option', { name: 'Google Gemini', exact: true }).click();
+  const thinking = card.getByRole('switch', { name: '思考', exact: true });
+  await expect(thinking).toHaveAttribute('aria-checked', 'false');
+  await thinking.click();
+  await expect(thinking).toHaveAttribute('aria-checked', 'true');
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const { mockSettings } = await import('/src/lib/ipc/mock-data.ts');
+        return mockSettings.llmThinkingEnabled;
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('gemini-omni-desktop.png') });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(thinking).toBeInViewport({ ratio: 1 });
+  const model = card.getByLabel('模型', { exact: true });
+  await model.fill('gemini-3.5-transcribe');
+  await model.blur();
+  await expect(thinking).toHaveCount(0);
+  await model.fill('gemini-3.5-flash-lite');
+  await model.blur();
+  await expect(thinking).toHaveAttribute('aria-checked', 'true');
+  await thinking.click();
+  await expect(thinking).toHaveAttribute('aria-checked', 'false');
+});

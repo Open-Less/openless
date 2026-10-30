@@ -99,7 +99,17 @@ class Snapshots:
         if terminal:
             finalized = full
         if not full.startswith(finalized):
-            raise ValueError("decoder snapshot does not contain its finalized prefix")
+            # A decode may rewrite text that an earlier snapshot reported as
+            # stable (script or normalisation flips). The protocol carries whole
+            # previews, and the terminal snapshot is authoritative, so keep the
+            # authoritative text and re-commit only the prefix both agree on
+            # instead of failing the whole transcription.
+            agreed = 0
+            for previous, current in zip(finalized, full):
+                if previous != current:
+                    break
+                agreed += 1
+            finalized = finalized[:agreed]
         self.finalized, self.draft = finalized, full[len(finalized) :]
         self.sequence += 1
         return {

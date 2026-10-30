@@ -652,7 +652,7 @@ pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
         "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
         "atlascloud" => Some("qwen/qwen3.5-flash"),
         "openai" | "cometapi" => Some("gpt-4o"),
-        "gemini" => Some("gemini-2.5-flash"),
+        "gemini" => Some("gemini-3.5-flash-lite"),
         crate::polish::CODEX_OAUTH_PROVIDER_ID => Some(crate::polish::CODEX_DEFAULT_MODEL),
         "mimo" => Some("xiaomi/mimo-v2-flash"),
         "openrouterFree" => Some("qwen/qwen3-coder:free"),
@@ -746,7 +746,7 @@ pub fn default_omni_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_omni_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("gpt-4o-audio-preview"),
-        "gemini" => Some("gemini-2.5-flash"),
+        "gemini" => Some("gemini-3.5-flash-lite"),
         "dashscope-omni" => Some("qwen3-omni-flash"),
         _ => None,
     }
@@ -1357,7 +1357,7 @@ mod tests {
             "https://api.openai.com/v1/chat/completions/",
             default_llm_endpoint("openai").unwrap()
         ));
-        assert_eq!(default_llm_model("gemini"), Some("gemini-2.5-flash"));
+        assert_eq!(default_llm_model("gemini"), Some("gemini-3.5-flash-lite"));
         assert_eq!(
             default_omni_endpoint("dashscope-omni"),
             Some("https://dashscope.aliyuncs.com/compatible-mode/v1")

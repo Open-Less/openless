@@ -14,6 +14,11 @@ name: Release HarmonyOS
 #
 # Dispatch it after the tag exists; it rebuilds that tag, signs it with material
 # from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
+# `release-tauri.yml` dispatches it automatically once the desktop/Android assets
+# for a `v*-tauri` tag are published (see `dispatch-platform-releases`), so a tag
+# push ships the HAP instead of depending on somebody remembering this page. The
+# manual dispatch stays the repair path for a published tag, and the channel it
+# runs with is `vars.HARMONY_AUTO_CHANNEL` (default `none`) on the automatic one.
 on:
   workflow_dispatch:
     inputs:
@@ -112,6 +117,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # The HAP build shells out to `npm run build` for the ArkWeb bundle and to
+      # `cargo build --target aarch64-unknown-linux-ohos` for the Rust host, so it
+      # needs the app's `node_modules` and the Tier-2 OHOS target std. A hosted
+      # runner ships neither, and both gaps only surface minutes into the build -
+      # the first real dispatch of this workflow died with `can't find crate for
+      # `core`` (error[E0463]) after compiling the Rime/NDK tree. Install them up
+      # front, exactly like `ci.yml`'s `harmony-check` does.
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+
+      - name: Install frontend dependencies
+        working-directory: openless-all/app
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Tier-2 OHOS target; `rustup target list` lists it for stable.
+          targets: aarch64-unknown-linux-ohos
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          # Same key as `ci.yml`'s `harmony-check`: a tag build restores the tree
+          # that job already paid for, and a tag never writes to the cache.
+          key: harmony-host
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       # No toolchain cache here either: `prepare-harmony-sdk.sh` downloads the
       # checksum-pinned official tools in under two minutes, and a 1.77 GB entry
@@ -287,10 +319,15 @@ jobs:
         if: inputs.upload_to_appgallery && inputs.channel != 'none'
         working-directory: openless-all/app
         # A fork without AGC credentials still gets the GitHub Release; the step
-        # reports that it skipped instead of failing the whole release.
-        run: >-
-          # Only the signed package is uploaded; the unsigned one is what the
-          # GitHub Release distributes.
+        # reports that it skipped instead of failing the whole release. Only the
+        # signed package is uploaded - the Release carries the unsigned one.
+        #
+        # Keep this a literal block: a folded `>-` scalar starting with a comment
+        # swallowed the command line (`# ... node scripts/upload-appgallery.mjs`)
+        # and the step died with `--channel: command not found` (127) the first
+        # time it ever ran.
+        run: |
+          set -euo pipefail
           node scripts/upload-appgallery.mjs \
             --channel "${{ inputs.channel }}" \
             --file target/harmony-packages/OpenLess_harmony_arm64-signed.app \

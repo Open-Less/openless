@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/OpenLessCapsule';
 import { parseCapsuleStyle } from '../../lib/capsuleLayout';
@@ -41,7 +41,7 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { PresenceModal } from '../../components/ui/Modal';
+
 import { Card, Collapsible, Btn } from '../_atoms';
 import { Segmented } from '../../components/ui/Segmented';
 import { restartApp } from '../../lib/ipc';
@@ -86,10 +86,6 @@ export function RecordingInputSection({
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
   const voiceActivationStateObservedRef = useRef(false);
-  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
-  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
-  const displayModeRestartTitleId = useId();
-  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -240,30 +236,8 @@ export function RecordingInputSection({
       ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
       : 'cursorScreen';
 
-  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
-    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
-    const changeSequence = ++displayModeChangeSequenceRef.current;
-    await savePrefs({ ...prefs, capsuleDisplayMode: next });
-    if (
-      changeSequence === displayModeChangeSequenceRef.current &&
-      os === 'win' &&
-      previous === 'allScreens' &&
-      next !== 'allScreens'
-    ) {
-      setDisplayModeRestartPending(true);
-    }
-  };
-  const onRestartForDisplayMode = async () => {
-    setDisplayModeRestarting(true);
-    try {
-      await restartApp();
-      setDisplayModeRestartPending(false);
-    } catch (error) {
-      console.error('[settings] restart after capsule display mode change failed', error);
-    } finally {
-      setDisplayModeRestarting(false);
-    }
-  };
+  const onCapsuleDisplayModeChange = (next: UserPreferences['capsuleDisplayMode']) =>
+    savePrefs({ ...prefs, capsuleDisplayMode: next });
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -275,6 +249,8 @@ export function RecordingInputSection({
     savePrefs({ ...prefs, lowLatencyDictationEnabled });
   const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
     savePrefs({ ...prefs, audioEnhancementEnabled });
+  const onEchoCancellationChange = (echoCancellationEnabled: boolean) =>
+    savePrefs({ ...prefs, echoCancellationEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -484,6 +460,17 @@ export function RecordingInputSection({
             )}
           </div>
         </SettingRow>
+        {platformCaps?.platform === 'desktop' && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={onEchoCancellationChange}
+            />
+          </SettingRow>
+        )}
         <>
           <SettingRow
             label={t('settings.recording.audioEnhancementLabel')}
@@ -964,43 +951,6 @@ export function RecordingInputSection({
           </SettingRow>
         </Collapsible>
       )}
-      <PresenceModal
-        open={displayModeRestartPending}
-        onClose={() => {
-          if (!displayModeRestarting) setDisplayModeRestartPending(false);
-        }}
-        zIndex={1000}
-        width="min(420px, calc(100vw - 32px))"
-        style={{ padding: 18 }}
-        labelledBy={displayModeRestartTitleId}
-        render={() => (
-          <>
-            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
-              {t('settings.recording.capsuleDisplayModeRestartTitle')}
-            </h2>
-            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
-              {t('settings.recording.capsuleDisplayModeRestartDesc')}
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Btn
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => setDisplayModeRestartPending(false)}
-              >
-                {t('common.cancel')}
-              </Btn>
-              <Btn
-                variant="blue"
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => void onRestartForDisplayMode()}
-              >
-                {t('settings.about.updateDialog.restartNow')}
-              </Btn>
-            </div>
-          </>
-        )}
-      />
     </>
   );
 }

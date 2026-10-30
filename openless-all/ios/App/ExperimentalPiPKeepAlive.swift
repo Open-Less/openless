@@ -272,8 +272,7 @@ final class ExperimentalPiPKeepAlive: NSObject {
     onChange?()
   }
 
-  /// A low-frequency content update retains the reference's content-only path
-  /// without its 60 Hz animation. Device testing must establish long-run retention.
+  /// Refresh content once per second while PiP is active and unsuspended.
   private func updateContentRefresh() {
     let eligible = enabled && isActive && controller?.isPictureInPictureSuspended == false
       && !protectedDataUnavailable
@@ -283,8 +282,7 @@ final class ExperimentalPiPKeepAlive: NSObject {
       Task { @MainActor [weak self] in
         guard let self, self.isReady else { return }
         self.contentPhase.toggle()
-        // A nearly transparent layer mutation generates content work, without
-        // a visible video surface or an audio session. Never request 120 Hz.
+        // A transparent layer update avoids starting an audio or video engine.
         self.contentController?.view.layer.backgroundColor = UIColor(white: 0,
           alpha: self.contentPhase ? 0.001 : 0).cgColor
         self.contentController?.view.setNeedsDisplay()

@@ -152,11 +152,17 @@ if [ "$INSTALL" = "1" ]; then
   echo "▶ 装到 /Applications"
   pkill -f "OpenLess.app/Contents/MacOS/openless" 2> /dev/null || true
   sleep 1
-  # Reset TCC before every reinstall: the ad-hoc signing hash changes on each build, so old
-  # authorizations break immediately; without a reset, "checked in System Settings" silently
-  # stops working.
-  tccutil reset Accessibility com.openless.app 2> /dev/null || true
-  tccutil reset Microphone com.openless.app 2> /dev/null || true
+  # TCC grants are bound to the designated requirement. An ad-hoc signature pins the cdhash,
+  # which changes on each build, so old authorizations break immediately; without a reset,
+  # "checked in System Settings" silently stops working. A stable signing identity keeps the
+  # same requirement, so its grants survive the reinstall and are left alone.
+  OLD_REQUIREMENT="$(codesign -d -r- /Applications/OpenLess.app 2> /dev/null || true)"
+  NEW_REQUIREMENT="$(codesign -d -r- "$APP" 2> /dev/null || true)"
+  if [ -z "$NEW_REQUIREMENT" ] || [ "$OLD_REQUIREMENT" != "$NEW_REQUIREMENT" ]; then
+    echo "▶ 签名要求已变化，重置辅助功能 / 麦克风授权"
+    tccutil reset Accessibility com.openless.app 2> /dev/null || true
+    tccutil reset Microphone com.openless.app 2> /dev/null || true
+  fi
   rm -rf /Applications/OpenLess.app
   cp -R "$APP" /Applications/
   xattr -dr com.apple.quarantine /Applications/OpenLess.app 2> /dev/null || true

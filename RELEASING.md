@@ -7,7 +7,7 @@ day-to-day development.
 
 **Only repository administrators may create version tags and publish releases.**
 
-- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets require a separate accepted build and explicit administrator upload.
+- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets ride the same tag, but the L01-L12 device acceptance must be finished *before* the tag is cut.
 - Contributors (including AI agents) **must not** create release tags, publish
   releases, or trigger release automation. If a release is needed, **request an admin
   to cut it** — open an issue or ping a maintainer with the target version and the
@@ -43,18 +43,34 @@ component, which is a 16-bit field. The full version still appears in the app an
 updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
-These tags build the macOS, Windows, and Android Tauri hosts in parallel. Linux is
-triggered separately so an unaccepted package can never ride along with a desktop
-release: `.github/workflows/release-linux-egui.yml` is manual-only, requires the
-release tag as an input, checks it out, runs the same Core/host/deb/rpm
-verification as CI, and then **attaches the verified packages to that same
-Release automatically**. Nothing is uploaded by hand. Linux has no in-app updater
-manifest or AppImage.
+These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
-HarmonyOS rides in the same Release through `.github/workflows/release-harmony.yml`.
-It is manual-only as well and requires the same tag. It builds, signs and attaches
-`OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias, then uploads
-the same HAP to HUAWEI AppGallery Connect.
+Linux and HarmonyOS ride in the same Release through two dispatch-only entry
+points, `.github/workflows/release-linux-egui.yml` and
+`.github/workflows/release-harmony.yml`. Neither reacts to a `push:` event, so an
+arbitrary commit can never rebuild a package; `release-tauri.yml` dispatches both
+through `dispatch-platform-releases` as soon as the desktop/Android assets of a
+`v*-tauri` tag are published. That dispatch is what makes a tag push ship a
+complete Release: the two workflows only wait ten minutes for the Release to
+exist, less than the desktop matrix needs, which is why they cannot be triggered
+by the tag itself. To rebuild one platform for an already-published tag, dispatch
+it by hand on the same tag - that stays the repair path.
+
+Linux runs the same Core/host/deb/rpm verification as CI and **attaches the
+verified packages to that Release automatically**; nothing is uploaded by hand,
+and there is no in-app updater manifest or AppImage. Because the tag now ships
+Linux unattended, the device acceptance in
+[docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+is a **pre-tag** gate rather than a post-build one.
+
+HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
+`OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
+HUAWEI AppGallery Connect. The automatic dispatch uses `channel: none`, the
+repository path: the HAP is attached to the GitHub Release unsigned and nothing
+reaches the store. Set the repository variable `HARMONY_AUTO_CHANNEL` to
+`release` (production) or `test` (test channel) to have the signed package
+uploaded as the AGC candidate package automatically; the upload never submits it
+for review, so store submission remains a human decision either way.
 
 The build needs the official HarmonyOS command-line tools (SDK + hvigor + ohpm +
 bundled node). Huawei's download page wants an account, but the same archive is
@@ -248,6 +264,7 @@ candidate package.
 | Variable (optional) | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
 | Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
+| Variable (optional) | `HARMONY_AUTO_CHANNEL` | `none` (default) / `release` / `test` - the channel the automatic tag-build dispatch runs with; `release` or `test` upload the signed App Pack to AppGallery as the candidate package (never submitted for review) |
 
 The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
 `HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there

@@ -1,0 +1,1682 @@
+diff --git a/crates/openless-core/src/api.rs b/crates/openless-core/src/api.rs
+index ab3a2a08..b6e5305a 100644
+--- a/crates/openless-core/src/api.rs
++++ b/crates/openless-core/src/api.rs
+@@ -5753,7 +5753,13 @@ impl OpenLessBackend {
+         };
+         // Keep finalization outside this critical section. A failed save changes neither
+         // the active target nor the remembered choice, and no other preference is overwritten.
+-        self.preferences.update(|preferences| preferences.translation_target_language = target)?;
++        self.preferences.update(|preferences| {
++            if !preferences.translation_target_languages.contains(&target) {
++                preferences.translation_target_languages.push(target.clone());
++            }
++            preferences.translation_target_language = target;
++            preferences.translation_target_languages_present = true;
++        })?;
+         state.dictation_context = Some(Arc::new(updated));
+         // The common stop boundary must also send the changed context to a streaming engine.
+         state.dictation_translation_requested = Some(true);
+@@ -6589,6 +6595,146 @@ impl OpenLessBackend {
+         self.preferences.get()
+     }
+ 
++    /// Replace the ordered target choices. Removing the selection chooses the first
++    /// remaining target; an empty list clears/disables the legacy selected target.
++    pub fn set_translation_targets(
++        &self,
++        targets: Vec<String>,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.update_translation_targets(|preferences| {
++            preferences.translation_target_languages = targets;
++            let targets = crate::settings::ordered_translation_targets(
++                preferences.translation_target_languages.clone(),
++            );
++            if !targets.contains(&preferences.translation_target_language) {
++                preferences.translation_target_language =
++                    targets.first().cloned().unwrap_or_default();
++            }
++            Ok(())
++        })
++    }
++
++    /// Add a catalog target once, at the end. The first addition becomes selected.
++    pub fn add_translation_target(
++        &self,
++        target: String,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.update_translation_targets(|preferences| {
++            let target = crate::settings::canonical_translation_target(&target);
++            if target.is_empty() {
++                return Err(BackendError::new(
++                    BackendErrorCode::InvalidArgument,
++                    "empty translation target",
++                ));
++            }
++            if preferences.translation_target_languages.is_empty() {
++                preferences.translation_target_language = target.clone();
++            }
++            if !preferences.translation_target_languages.contains(&target) {
++                preferences.translation_target_languages.push(target);
++            }
++            Ok(())
++        })
++    }
++
++    /// Deletion is idempotent. Deleting the selection chooses the first remaining target.
++    pub fn delete_translation_target(
++        &self,
++        target: String,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.update_translation_targets(|preferences| {
++            let target = crate::settings::canonical_translation_target(&target);
++            preferences
++                .translation_target_languages
++                .retain(|value| value != &target);
++            if !target.is_empty() && preferences.translation_target_language == target {
++                preferences.translation_target_language = preferences
++                    .translation_target_languages
++                    .first()
++                    .cloned()
++                    .unwrap_or_default();
++            }
++            Ok(())
++        })
++    }
++
++    /// Reorder only: omissions, additions and duplicates are rejected atomically.
++    pub fn reorder_translation_targets(
++        &self,
++        targets: Vec<String>,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.update_translation_targets(|preferences| {
++            let ordered = crate::settings::ordered_translation_targets(targets.clone());
++            if ordered.len() != targets.len()
++                || ordered.len() != preferences.translation_target_languages.len()
++                || ordered
++                    .iter()
++                    .any(|target| !preferences.translation_target_languages.contains(target))
++            {
++                return Err(BackendError::new(
++                    BackendErrorCode::InvalidArgument,
++                    "translation target reorder must be an exact permutation",
++                ));
++            }
++            preferences.translation_target_languages = ordered;
++            Ok(())
++        })
++    }
++
++    /// Select a configured target, or disable legacy translation without erasing choices.
++    pub fn select_translation_target(
++        &self,
++        target: Option<String>,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.update_translation_targets(|preferences| {
++            preferences.translation_target_language = match target {
++                Some(target) => {
++                    crate::settings::validate_session_translation_target(preferences, &target)?
++                }
++                None => String::new(),
++            };
++            Ok(())
++        })
++    }
++
++    fn update_translation_targets(
++        &self,
++        update: impl FnOnce(&mut UserPreferences) -> Result<(), BackendError>,
++    ) -> Result<crate::SettingsUpdateOutcome, BackendError> {
++        self.ensure_runtime_ready()?;
++        let _write_guard = self
++            .settings_write_gate
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        let previous = self.preferences.get();
++        let mut preferences = previous.clone();
++        let (targets, selected) = crate::settings::migrate_translation_targets(
++            if preferences.translation_target_languages_present {
++                Some(preferences.translation_target_languages.clone())
++            } else {
++                None
++            },
++            &preferences.translation_target_language,
++        );
++        preferences.translation_target_languages = targets;
++        preferences.translation_target_language = selected;
++        preferences.translation_target_languages_present = true;
++        update(&mut preferences)?;
++        crate::settings::reconcile_translation_settings(&previous, &mut preferences)?;
++        // Own only these fields, not a potentially stale whole-document snapshot.
++        self.preferences.update(|current| {
++            current.translation_target_languages = preferences.translation_target_languages.clone();
++            current.translation_target_language = preferences.translation_target_language.clone();
++            current.translation_target_languages_present = true;
++        })?;
++        self.publish_preferences_changed();
++        Ok(crate::SettingsUpdateOutcome {
++            preferences: self.preferences.get(),
++            reconciled_hotkey_count: 0,
++            effects: crate::SettingsEffectPlan::default(),
++        })
++    }
++
+     /// Consumes the "first launch of this major version" splash PV marker:
+     /// returns false when the config's `splash_seen_version` matches the
+     /// given current major (no replay); on mismatch it writes back the major
+@@ -6716,6 +6862,7 @@ impl OpenLessBackend {
+             };
+         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
+         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
++        crate::settings::reconcile_translation_settings(&previous, &mut preferences)?;
+         // The splash marker may only advance via take_splash_playback: when a
+         // whole-document submit (old frontend, or a request that hasn't read
+         // the marker back) omits the field, serde's default would write the
+@@ -7700,10 +7847,42 @@ impl OpenLessBackend {
+         self.start_reserved_dictation(reservation, options).await
+     }
+ 
++    /// Capture using one explicitly registered native route and the unmodified
++    /// built-in Raw prompt. This never selects a cloud fallback or mutates styles.
++    pub async fn start_local_raw_dictation(
++        &self,
++        native_provider: &str,
++        insert_text: bool,
++    ) -> Result<SessionId, BackendError> {
++        let provider = crate::credentials::ProviderType::new(native_provider.to_string())?;
++        let options = DictationStartOptions {
++            insert_text,
++            ..Default::default()
++        };
++        let reservation =
++            self.reserve_dictation_session(insert_text, options.output_target, None)?;
++        self.start_reserved_dictation_with_raw_provider(
++            reservation,
++            options,
++            Some(provider.as_str()),
++        )
++        .await
++    }
++
+     async fn start_reserved_dictation(
+         &self,
+         reservation: DictationReservation,
+         options: DictationStartOptions,
++    ) -> Result<SessionId, BackendError> {
++        self.start_reserved_dictation_with_raw_provider(reservation, options, None)
++            .await
++    }
++
++    async fn start_reserved_dictation_with_raw_provider(
++        &self,
++        reservation: DictationReservation,
++        options: DictationStartOptions,
++        raw_provider: Option<&str>,
+     ) -> Result<SessionId, BackendError> {
+         let DictationReservation {
+             session_id,
+@@ -7720,14 +7899,25 @@ impl OpenLessBackend {
+                 return Err(error);
+             }
+         }
+-        let context = match self
+-            .capture_dictation_context_with_host(
+-                &options,
+-                DictationContextPurpose::Dictation,
+-                host_context.as_ref(),
+-            )
+-            .await
+-        {
++        let captured = match raw_provider {
++            Some(provider) => async {
++                let context = self.capture_local_raw_context(&options, provider)?;
++                // Resolve the explicit adapter before capture; this route has no fallback.
++                Arc::clone(&self.deps.dictation_engine)
++                    .prepare_transcription(session_id, Arc::new(context.clone()))
++                    .await?;
++                Ok(context)
++            }.await,
++            None => {
++                self.capture_dictation_context_with_host(
++                    &options,
++                    DictationContextPurpose::Dictation,
++                    host_context.as_ref(),
++                )
++                .await
++            }
++        };
++        let context = match captured {
+             Ok(context) => Arc::new(context),
+             Err(error) => {
+                 self.schedule_pending_audio_capture_discard(pending_capture.take());
+@@ -9177,6 +9367,36 @@ impl OpenLessBackend {
+         }
+     }
+ 
++    fn capture_local_raw_context(
++        &self,
++        options: &DictationStartOptions,
++        provider: &str,
++    ) -> Result<DictationContext, BackendError> {
++        let preferences = self.get_preferences();
++        let hotwords = self
++            .vocabulary
++            .list()?
++            .into_iter()
++            .filter(|entry| entry.enabled)
++            .map(|entry| entry.phrase)
++            .collect();
++        let style = crate::style_packs::builtin_style_pack_for_mode(crate::types::PolishMode::Raw);
++        let mut context = DictationContext::capture(
++            &preferences,
++            &style,
++            DictationProviderInvocations::new(
++                crate::dictation_context::ProviderInvocation::for_provider(provider),
++                crate::dictation_context::ProviderInvocation::for_provider("raw-unused-llm"),
++                crate::dictation_context::ProviderInvocation::for_provider("raw-unused-omni"),
++            ),
++            hotwords,
++            Vec::new(),
++            options,
++        );
++        context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
++        Ok(context)
++    }
++
+     async fn capture_dictation_context(
+         &self,
+         options: &DictationStartOptions,
+@@ -9198,6 +9418,11 @@ impl OpenLessBackend {
+     ) -> Result<DictationContext, BackendError> {
+         let preferences = self.get_preferences();
+         let mut captured_options = options.clone();
++        if let Some(target) = &options.translation_target_language {
++            captured_options.translation_target_language = Some(
++                crate::settings::validate_session_translation_target(&preferences, target)?,
++            );
++        }
+         if !preferences.cursor_context_enabled {
+             // This switch controls document text, including text supplied by
+             // callers. Front-application metadata is still needed for history,
+@@ -12189,6 +12414,285 @@ mod tests {
+         let _ = std::fs::remove_dir_all(data_dir);
+     }
+ 
++    #[test]
++    fn translation_targets_business_apis_persist_order_selection_and_events() {
++        let (backend, _) = backend();
++        let mut events = backend.subscribe();
++        let original = backend.get_preferences();
++        let outcome = backend
++            .set_translation_targets(vec![
++                "ja".into(),
++                "en".into(),
++                "EN".into(),
++                "fr".into(),
++                "de".into(),
++            ])
++            .unwrap();
++        assert_eq!(
++            outcome.preferences.translation_target_languages,
++            vec!["日本語", "English", "Français", "Deutsch"]
++        );
++        assert_eq!(outcome.preferences.translation_target_language, "日本語");
++        assert!(outcome.effects.is_empty());
++        assert_eq!(backend.snapshot().preferences_revision, 1);
++        assert!(matches!(
++            events.try_recv().unwrap().kind,
++            BackendEventKind::PreferencesChanged(PreferencesChange { revision: 1 })
++        ));
++        assert_eq!(events.try_recv(), Err(crate::events::EventRecvError::Empty));
++        backend.add_translation_target("en".into()).unwrap();
++        backend
++            .reorder_translation_targets(vec!["de".into(), "en".into(), "fr".into(), "ja".into()])
++            .unwrap();
++        backend
++            .select_translation_target(Some("fr".into()))
++            .unwrap();
++        backend.delete_translation_target("fr".into()).unwrap();
++        let preferences = backend.get_preferences();
++        assert_eq!(
++            preferences.translation_target_languages,
++            vec!["Deutsch", "English", "日本語"]
++        );
++        assert_eq!(preferences.translation_target_language, "Deutsch");
++        assert_eq!(
++            preferences.active_llm_provider,
++            original.active_llm_provider
++        );
++        assert_eq!(preferences.working_languages, original.working_languages);
++        let reloaded = crate::preferences::PreferencesStore::open(
++            backend._data_dir.path().join("preferences.json"),
++        )
++        .unwrap()
++        .get();
++        assert_eq!(
++            reloaded.translation_target_languages,
++            preferences.translation_target_languages
++        );
++        assert_eq!(reloaded.translation_target_language, "Deutsch");
++        backend.select_translation_target(None).unwrap();
++        backend.delete_translation_target("".into()).unwrap();
++        assert!(backend
++            .get_preferences()
++            .translation_target_language
++            .is_empty());
++        assert_eq!(
++            backend.get_preferences().translation_target_languages.len(),
++            3
++        );
++        backend.set_translation_targets(vec![]).unwrap();
++        assert!(backend
++            .get_preferences()
++            .translation_target_languages
++            .is_empty());
++        assert!(backend
++            .get_preferences()
++            .translation_target_language
++            .is_empty());
++    }
++
++    #[test]
++    fn translation_targets_invalid_mutations_are_atomic() {
++        let (backend, _) = backend();
++        backend
++            .set_translation_targets(vec!["en".into(), "ja".into()])
++            .unwrap();
++        let before = serde_json::to_value(backend.get_preferences()).unwrap();
++        let revision = backend.snapshot().preferences_revision;
++        for result in [
++            backend.add_translation_target("Unknown new language".into()),
++            backend.add_translation_target("  ".into()),
++            backend.set_translation_targets(vec!["fr".into(), "Unknown new language".into()]),
++            backend.reorder_translation_targets(vec!["en".into()]),
++            backend.reorder_translation_targets(vec!["en".into(), "EN".into()]),
++            backend.select_translation_target(Some("fr".into())),
++        ] {
++            assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidArgument);
++            assert_eq!(
++                serde_json::to_value(backend.get_preferences()).unwrap(),
++                before
++            );
++            assert_eq!(backend.snapshot().preferences_revision, revision);
++        }
++    }
++
++    #[test]
++    fn translation_targets_old_client_whole_settings_saves_preserve_choices() {
++        let (backend, _) = backend();
++        backend
++            .set_translation_targets(vec!["en".into(), "ja".into()])
++            .unwrap();
++        for (selected, expected, targets) in [
++            ("en", "English", vec!["English", "日本語"]),
++            ("ja", "日本語", vec!["English", "日本語"]),
++            ("fr", "Français", vec!["English", "日本語", "Français"]),
++            ("", "", vec!["English", "日本語", "Français"]),
++        ] {
++            let mut value = serde_json::to_value(backend.get_preferences()).unwrap();
++            value
++                .as_object_mut()
++                .unwrap()
++                .remove("translationTargetLanguages");
++            value["translationTargetLanguage"] = serde_json::json!(selected);
++            let legacy = serde_json::from_value(value).unwrap();
++            let outcome = backend
++                .update_settings(
++                    legacy,
++                    crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
++                    &crate::NoopSettingsRuntime,
++                )
++                .unwrap();
++            assert_eq!(outcome.preferences.translation_target_language, expected);
++            assert_eq!(outcome.preferences.translation_target_languages, targets);
++        }
++        let mut explicit = serde_json::to_value(backend.get_preferences()).unwrap();
++        explicit["translationTargetLanguages"] = serde_json::json!([]);
++        explicit["translationTargetLanguage"] = serde_json::json!("en");
++        let cleared = backend
++            .update_settings(
++                serde_json::from_value(explicit).unwrap(),
++                crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
++                &crate::NoopSettingsRuntime,
++            )
++            .unwrap();
++        assert!(cleared.preferences.translation_target_languages.is_empty());
++        assert!(cleared.preferences.translation_target_language.is_empty());
++    }
++
++    #[test]
++    fn translation_targets_legacy_scalar_edits_survive_roundtripping_the_new_list() {
++        let (backend, _) = backend();
++        backend
++            .set_translation_targets(vec!["en".into(), "ja".into()])
++            .unwrap();
++        // Older frontends may spread a preferences object including fields they do not edit.
++        let mut value = serde_json::to_value(backend.get_preferences()).unwrap();
++        value["translationTargetLanguage"] = serde_json::json!("fr");
++        let outcome = backend
++            .update_settings(
++                serde_json::from_value(value).unwrap(),
++                crate::SettingsUpdateOptions::SETTINGS_DOCUMENT,
++                &crate::NoopSettingsRuntime,
++            )
++            .unwrap();
++        assert_eq!(outcome.preferences.translation_target_language, "Français");
++        assert_eq!(
++            outcome.preferences.translation_target_languages,
++            vec!["English", "日本語", "Français"]
++        );
++    }
++
++    #[test]
++    fn translation_targets_historical_custom_name_can_be_retained_selected_and_removed() {
++        let data_dir = TestDataDir::new("translation-target-historical");
++        std::fs::create_dir_all(data_dir.path()).unwrap();
++        // A historical file is migration input, not a new addition via the business API.
++        std::fs::write(
++            data_dir.path().join("preferences.json"),
++            serde_json::to_vec(&serde_json::json!({
++                "translationTargetLanguage": "Historical custom language",
++            }))
++            .unwrap(),
++        )
++        .unwrap();
++        let migrated = backend_with_dictation_engine(
++            data_dir.path().to_path_buf(),
++            Arc::new(crate::testing::FixtureDictationEngine::successful(
++                "raw", "final",
++            )),
++        );
++        migrated.add_translation_target("en".into()).unwrap();
++        migrated
++            .reorder_translation_targets(vec!["en".into(), "Historical custom language".into()])
++            .unwrap();
++        migrated
++            .select_translation_target(Some("Historical custom language".into()))
++            .unwrap();
++        assert_eq!(
++            migrated.get_preferences().translation_target_language,
++            "Historical custom language"
++        );
++        migrated
++            .delete_translation_target("Historical custom language".into())
++            .unwrap();
++        assert_eq!(
++            migrated.get_preferences().translation_target_language,
++            "English"
++        );
++        assert_eq!(
++            migrated
++                .add_translation_target("Historical custom language".into())
++                .unwrap_err()
++                .code,
++            BackendErrorCode::InvalidArgument
++        );
++    }
++
++    #[tokio::test]
++    async fn translation_target_start_option_is_session_local_and_survives_settings_changes() {
++        let data_dir = TestDataDir::new("translation-target-session");
++        let engine = crate::testing::FixtureDictationEngine::successful("raw", "final");
++        let backend =
++            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
++        backend.start().await.unwrap();
++        backend
++            .set_translation_targets(vec!["en".into(), "ja".into()])
++            .unwrap();
++        let mut preferences = backend.get_preferences();
++        preferences.working_languages = vec!["简体中文".into()];
++        backend.set_preferences(preferences).unwrap();
++        let revision = backend.snapshot().preferences_revision;
++        backend
++            .start_external_dictation_with_options(DictationStartOptions {
++                translation_requested: true,
++                translation_target_language: Some("ja".into()),
++                ..Default::default()
++            })
++            .await
++            .unwrap();
++        assert_eq!(
++            backend.get_preferences().translation_target_language,
++            "English"
++        );
++        assert_eq!(backend.snapshot().preferences_revision, revision);
++        backend.set_translation_targets(vec!["fr".into()]).unwrap();
++        backend.stop_dictation().await.unwrap();
++        let contexts = engine.contexts();
++        let context = contexts.last().unwrap();
++        assert_eq!(context.polish.translation_target_language, "日本語");
++        assert!(context.polish.translation_target_explicit);
++        assert!(context.polish.translation_active);
++        assert!(context.effective_polish_system_prompt().contains("日本語"));
++        assert_eq!(
++            backend.get_preferences().translation_target_language,
++            "Français"
++        );
++        backend.shutdown().await.unwrap();
++    }
++
++    #[tokio::test]
++    async fn translation_target_start_option_rejects_unconfigured_or_empty_without_starting_engine()
++    {
++        let data_dir = TestDataDir::new("translation-target-invalid");
++        let engine = crate::testing::FixtureDictationEngine::successful("raw", "final");
++        let backend =
++            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
++        backend.start().await.unwrap();
++        backend.add_translation_target("en".into()).unwrap();
++        for target in ["", "  ", "ja", "Unknown target"] {
++            let error = backend
++                .start_external_dictation_with_options(DictationStartOptions {
++                    translation_requested: true,
++                    translation_target_language: Some(target.into()),
++                    ..Default::default()
++                })
++                .await
++                .unwrap_err();
++            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
++            assert!(engine.contexts().is_empty());
++        }
++        backend.shutdown().await.unwrap();
++    }
++
+     #[test]
+     fn focused_microphone_selection_persists_and_publishes_once() {
+         let (backend, _) = backend();
+@@ -13870,6 +14374,10 @@ mod tests {
+         let selected = backend.select_dictation_translation_target(session, "ja".into()).unwrap();
+         assert_eq!(selected.target_language, "日本語");
+         assert_eq!(backend.get_preferences().translation_target_language, "日本語");
++        assert_eq!(
++            backend.get_preferences().translation_target_languages,
++            vec!["English", "日本語"]
++        );
+         assert_eq!(backend.get_preferences().microphone_device_name, "next microphone");
+         backend.stop_dictation().await.unwrap();
+         let contexts = engine.contexts();
+@@ -13880,6 +14388,35 @@ mod tests {
+         backend.shutdown().await.unwrap();
+     }
+ 
++    #[tokio::test]
++    async fn translation_picker_remembers_target_after_configured_choices_are_cleared() {
++        let data_dir = TestDataDir::new("translation-picker-cleared-choices");
++        let engine = crate::testing::FixtureDictationEngine::successful("raw", "translated");
++        let backend = backend_with_dictation_engine(
++            data_dir.path().to_path_buf(),
++            Arc::new(engine),
++        );
++        backend.start().await.unwrap();
++        backend.add_translation_target("en".into()).unwrap();
++        let session = backend
++            .start_dictation_with_options(DictationStartOptions {
++                translation_requested: true,
++                ..Default::default()
++            })
++            .await
++            .unwrap();
++        backend.set_translation_targets(vec![]).unwrap();
++        backend.select_dictation_translation_target(session, "ja".into()).unwrap();
++        let saved = crate::preferences::PreferencesStore::open(
++            data_dir.path().join("preferences.json"),
++        ).unwrap().get();
++        assert_eq!(saved.translation_target_language, "日本語");
++        assert_eq!(saved.translation_target_languages, vec!["日本語"]);
++        assert_eq!(backend.get_preferences().translation_target_languages, vec!["日本語"]);
++        backend.cancel_dictation(Some(session)).await.unwrap();
++        backend.shutdown().await.unwrap();
++    }
++
+     #[tokio::test]
+     async fn translation_picker_save_failure_keeps_active_and_saved_targets() {
+         let data_dir = TestDataDir::new("translation-picker-save-failure");
+diff --git a/crates/openless-core/src/auxiliary.rs b/crates/openless-core/src/auxiliary.rs
+index 75c9c3c3..55a7de23 100644
+--- a/crates/openless-core/src/auxiliary.rs
++++ b/crates/openless-core/src/auxiliary.rs
+@@ -64,7 +64,106 @@ impl RetranscriptionFailure {
+     }
+ }
+ 
++/// A one-shot compose operation prepared before recording starts. The instruction
++/// is supplied only after real ASR completes; no editor selection is accepted.
++/// This auxiliary operation does not hold the global voice-session gate. Hosts
++/// must retain admission across their capture and this operation, including
++/// runtime restore/management probes, until completion or cancellation cleanup.
++pub struct PreparedVoiceCompose {
++    session_id: SessionId,
++    context: Arc<DictationContext>,
++    polisher: Arc<dyn TextPolisher>,
++    task_spawner: Arc<dyn TaskSpawner>,
++    abort: futures_util::future::AbortHandle,
++    registration: std::sync::Mutex<Option<futures_util::future::AbortRegistration>>,
++}
++
++#[derive(Debug, Clone, serde::Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct VoiceComposePreview {
++    pub text: String,
++    pub provider_type: String,
++    pub model: Option<String>,
++    pub prompt_kind: &'static str,
++}
++
++impl PreparedVoiceCompose {
++    pub fn cancel(&self) {
++        self.abort.abort();
++        let polisher = self.polisher.clone();
++        let session = self.session_id;
++        self.task_spawner.spawn(Box::pin(async move {
++            let _ = polisher.cancel(session).await;
++        }));
++    }
++
++    pub async fn compose(&self, instruction: String) -> Result<VoiceComposePreview, BackendError> {
++        if self.abort.is_aborted() {
++            return Err(BackendError::new(
++                BackendErrorCode::Cancelled,
++                "compose cancelled",
++            ));
++        }
++        let registration = self.registration.lock().unwrap().take().ok_or_else(|| {
++            BackendError::new(BackendErrorCode::InvalidState, "compose is one-shot")
++        })?;
++        if instruction.trim().is_empty() || instruction.len() > 128 * 1024 {
++            return Err(BackendError::new(
++                BackendErrorCode::InvalidArgument,
++                "invalid spoken instruction",
++            ));
++        }
++        let input = crate::prompts::voice_compose_user_prompt(&instruction, None);
++        let operation = self.polisher.polish(
++            self.session_id,
++            self.context.clone(),
++            input,
++            Arc::new(DiscardTextStream),
++        );
++        let output = futures_util::future::Abortable::new(operation, registration)
++            .await
++            .map_err(|_| BackendError::new(BackendErrorCode::Cancelled, "compose cancelled"))??;
++        if self.abort.is_aborted() {
++            return Err(BackendError::new(
++                BackendErrorCode::Cancelled,
++                "compose cancelled",
++            ));
++        }
++        let text =
++            crate::selection_voice_intent::clean_selection_voice_compose_output(&output.text);
++        if text.is_empty() || text.len() > 128 * 1024 {
++            return Err(BackendError::new(
++                BackendErrorCode::Provider,
++                "invalid compose output",
++            ));
++        }
++        Ok(VoiceComposePreview {
++            text,
++            provider_type: self.context.llm.provider_type.clone(),
++            model: self.context.llm.model.clone(),
++            prompt_kind: "voice_compose",
++        })
++    }
++}
++
++impl Drop for PreparedVoiceCompose {
++    fn drop(&mut self) {
++        self.cancel();
++    }
++}
++
+ pub trait AuxiliaryApi: Send + Sync {
++    fn prepare_voice_compose(
++        &self,
++    ) -> BoxFuture<'static, Result<Arc<PreparedVoiceCompose>, BackendError>> {
++        Box::pin(async {
++            Err(BackendError::new(
++                BackendErrorCode::Unsupported,
++                "voice compose is not configured",
++            ))
++        })
++    }
++
+     fn repolish(
+         &self,
+         request: RepolishRequest,
+@@ -212,6 +311,62 @@ impl AuxiliaryService {
+ }
+ 
+ impl AuxiliaryApi for AuxiliaryService {
++    fn prepare_voice_compose(
++        &self,
++    ) -> BoxFuture<'static, Result<Arc<PreparedVoiceCompose>, BackendError>> {
++        let service = self.clone_for_future();
++        Box::pin(async move {
++            let preferences = service.preferences.get();
++            let llm = crate::provider_resolution::resolve_session_provider(
++                &service.credential_store,
++                ProviderSlot::Llm,
++                &preferences.active_llm_provider,
++            )
++            .await?;
++            let style =
++                crate::style_packs::builtin_style_pack_for_mode(crate::types::PolishMode::Light);
++            let mut context = DictationContext::capture(
++                &preferences,
++                &style,
++                DictationProviderInvocations::new(
++                    ProviderInvocation::for_provider("compose-unused-asr"),
++                    llm,
++                    ProviderInvocation::for_provider("compose-unused-omni"),
++                ),
++                Vec::new(),
++                Vec::new(),
++                &DictationStartOptions {
++                    insert_text: false,
++                    ..Default::default()
++                },
++            );
++            context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
++            context.polish.style_system_prompt = crate::prompts::voice_compose_system_prompt();
++            context.polish.translation_active = false;
++            context.polish.translation_target_language.clear();
++            context.polish.hotwords.clear();
++            context.polish.cursor_context = None;
++            context.polish.front_app = None;
++            context.polish.context_window_minutes = 0;
++            context.polish.prior_turns.clear();
++            let context = Arc::new(context);
++            let polisher = service
++                .polisher
++                .prepare(context.clone())
++                .await?
++                .unwrap_or(service.polisher);
++            let (abort, registration) = futures_util::future::AbortHandle::new_pair();
++            Ok(Arc::new(PreparedVoiceCompose {
++                session_id: SessionId::new(),
++                context,
++                polisher,
++                task_spawner: service.task_spawner,
++                abort,
++                registration: std::sync::Mutex::new(Some(registration)),
++            }))
++        })
++    }
++
+     fn repolish(
+         &self,
+         request: RepolishRequest,
+@@ -474,6 +629,50 @@ mod tests {
+         }
+     }
+ 
++    #[tokio::test]
++    async fn voice_compose_is_lazy_one_shot_and_cancellation_prevents_provider_start() {
++        let polisher = Arc::new(FixtureTextPolisher::successful("draft"));
++        let (service, path) = service(
++            polisher.clone(),
++            Arc::new(FixtureTranscriptionEngine::successful("unused", 0)),
++        );
++        let prepared = service.prepare_voice_compose().await.unwrap();
++        assert!(polisher.inputs().is_empty());
++        let preview = prepared
++            .compose("Write an invitation".into())
++            .await
++            .unwrap();
++        assert_eq!(preview.text, "draft");
++        assert_eq!(preview.prompt_kind, "voice_compose");
++        assert_eq!(
++            polisher.inputs(),
++            vec![crate::prompts::voice_compose_user_prompt(
++                "Write an invitation",
++                None
++            )]
++        );
++        assert_eq!(
++            prepared
++                .compose("second instruction".into())
++                .await
++                .unwrap_err()
++                .code,
++            BackendErrorCode::InvalidState
++        );
++        let cancelled = service.prepare_voice_compose().await.unwrap();
++        cancelled.cancel();
++        assert_eq!(
++            cancelled
++                .compose("never sent".into())
++                .await
++                .unwrap_err()
++                .code,
++            BackendErrorCode::Cancelled
++        );
++        assert_eq!(polisher.inputs().len(), 1);
++        let _ = std::fs::remove_file(path);
++    }
++
+     #[tokio::test]
+     async fn untouched_builtin_raw_repolish_is_a_true_passthrough() {
+         let (service, path) = service(
+diff --git a/crates/openless-core/src/cloud_providers.rs b/crates/openless-core/src/cloud_providers.rs
+index 4c38be0f..bce7e393 100644
+--- a/crates/openless-core/src/cloud_providers.rs
++++ b/crates/openless-core/src/cloud_providers.rs
+@@ -1056,7 +1056,89 @@ enum CloudPolisherProvider {
+     Gemini(crate::llm_gemini::GeminiProvider),
+ }
+ 
++// Read-only, selected-channel request credentials. SecretValue zeroizes on drop;
++// no vault reference, serialization, diagnostics or mutation survives preparation.
++struct FrozenPolishCredentials(Vec<(CredentialKey, crate::SecretValue)>);
++impl FrozenPolishCredentials {
++    fn denied<T>() -> BoxFuture<'static, Result<T, BackendError>> {
++        Box::pin(async {
++            Err(BackendError::new(
++                BackendErrorCode::Unsupported,
++                "immutable polish credentials",
++            ))
++        })
++    }
++}
++impl CredentialStore for FrozenPolishCredentials {
++    fn status(
++        &self,
++        _: crate::UserPreferences,
++    ) -> BoxFuture<'static, Result<crate::CredentialsStatus, BackendError>> {
++        Self::denied()
++    }
++    fn read(
++        &self,
++        key: CredentialKey,
++    ) -> BoxFuture<'static, Result<Option<crate::SecretValue>, BackendError>> {
++        let value = self
++            .0
++            .iter()
++            .find(|(stored, _)| stored == &key)
++            .map(|(_, value)| value.clone());
++        Box::pin(async move { Ok(value) })
++    }
++    fn write(
++        &self,
++        _: CredentialKey,
++        _: crate::SecretValue,
++    ) -> BoxFuture<'static, Result<(), BackendError>> {
++        Self::denied()
++    }
++    fn remove(&self, _: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
++        Self::denied()
++    }
++}
++
+ impl TextPolisher for SharedCloudTextPolisher {
++    fn prepare(
++        &self,
++        context: Arc<DictationContext>,
++    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
++        let credentials = self.credentials.clone();
++        Box::pin(async move {
++            // OAuth resolves external runtime state and cannot promise an immutable
++            // delayed invocation through this credential-only seam.
++            if context.llm.provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
++                return Err(BackendError::new(
++                    BackendErrorCode::Unsupported,
++                    "OAuth delayed compose is unsupported",
++                ));
++            }
++            let mut values = Vec::new();
++            for account in [
++                LLM_API_KEY_ACCOUNT,
++                LLM_ENDPOINT_ACCOUNT,
++                LLM_EXTRA_HEADERS_ACCOUNT,
++                LLM_TEMPERATURE_ACCOUNT,
++            ]
++            .into_iter()
++            .chain(crate::llm_protocol::CONFIG_ACCOUNTS)
++            {
++                let key = CredentialKey::new(
++                    CredentialNamespace::Llm,
++                    Some(context.llm.provider_id.clone()),
++                    account,
++                )?;
++                if let Some(value) = credentials.read(key.clone()).await? {
++                    values.push((key, value));
++                }
++            }
++            Ok(Some(Arc::new(SharedCloudTextPolisher::new(Arc::new(
++                FrozenPolishCredentials(values),
++            ))) as Arc<dyn TextPolisher>))
++        })
++    }
++
+     fn polish(
+         &self,
+         session_id: SessionId,
+diff --git a/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs b/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
+index 3b7e806c..66a16066 100644
+--- a/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
++++ b/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
+@@ -368,6 +368,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
+         shape: PreferenceShape::TextList,
+         reason: "portable_setting",
+     },
++    PreferenceField {
++        rust_name: "translation_target_languages",
++        key: "translationTargetLanguages",
++        class: PreferenceClass::Portable,
++        shape: PreferenceShape::TextList,
++        reason: "portable_setting",
++    },
+     PreferenceField {
+         rust_name: "translation_target_language",
+         key: "translationTargetLanguage",
+diff --git a/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs b/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
+index d3d9688c..eb2e6ccb 100644
+--- a/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
++++ b/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
+@@ -108,6 +108,22 @@ fn all_current_preference_fields_have_an_explicit_registration() {
+                 .map(|(name, _)| name)
+         })
+         .collect();
++    // Wire-presence metadata is not persisted or synced. Verify the explicit
++    // exception against actual serialization rather than exempting new fields.
++    let metadata = ["translation_target_languages_present", "translation_target_language_input"];
++    let prefs = crate::shared_types::UserPreferences {
++        translation_target_languages_present: true,
++        translation_target_language_input: Some("en".into()),
++        ..Default::default()
++    };
++    let serialized = serde_json::to_value(prefs).unwrap();
++    assert!(serialized.get("translationTargetLanguagesPresent").is_none());
++    assert!(serialized.get("translationTargetLanguageInput").is_none());
++    assert!(metadata.iter().all(|name| serialized.get(*name).is_none()));
++    let names: std::collections::BTreeSet<_> = names
++        .into_iter()
++        .filter(|name| !metadata.contains(name))
++        .collect();
+     let registered: std::collections::BTreeSet<_> = registry::PREFERENCE_FIELDS
+         .iter()
+         .map(|field| field.rust_name)
+diff --git a/crates/openless-core/src/dictation_context.rs b/crates/openless-core/src/dictation_context.rs
+index b82b76a0..495952a7 100644
+--- a/crates/openless-core/src/dictation_context.rs
++++ b/crates/openless-core/src/dictation_context.rs
+@@ -43,6 +43,9 @@ pub enum DictationOutputTarget {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct DictationStartOptions {
+     pub translation_requested: bool,
++    /// Configured target for this session only; None uses the legacy selected target.
++    /// Selecting a target does not request translation or enable any provider.
++    pub translation_target_language: Option<String>,
+     pub audio_source: DictationAudioSource,
+     pub insert_text: bool,
+     pub output_target: DictationOutputTarget,
+@@ -55,6 +58,7 @@ impl Default for DictationStartOptions {
+     fn default() -> Self {
+         Self {
+             translation_requested: false,
++            translation_target_language: None,
+             audio_source: DictationAudioSource::Microphone,
+             insert_text: true,
+             output_target: DictationOutputTarget::ForegroundApp,
+@@ -128,6 +132,8 @@ pub struct DictationPolishContext {
+     pub hotwords: Vec<String>,
+     pub working_languages: Vec<String>,
+     pub translation_target_language: String,
++    /// True when the start options explicitly selected the snapshotted target.
++    pub translation_target_explicit: bool,
+     pub translation_active: bool,
+     pub edit_plan_input: bool,
+     /// Selected text uses its own prompt envelope, separate from voice transcripts.
+@@ -252,8 +258,12 @@ impl DictationContext {
+             omni,
+         } = providers;
+         let hotwords = normalize_hotwords(hotwords);
+-        let translation_target_language =
+-            preferences.translation_target_language.trim().to_string();
++        let translation_target_language = crate::settings::canonical_translation_target(
++            options
++                .translation_target_language
++                .as_deref()
++                .unwrap_or(&preferences.translation_target_language),
++        );
+         let translation_active = translation_effective(
+             options.translation_requested,
+             &translation_target_language,
+@@ -357,6 +367,7 @@ impl DictationContext {
+                 hotwords,
+                 working_languages: preferences.working_languages.clone(),
+                 translation_target_language,
++                translation_target_explicit: options.translation_target_language.is_some(),
+                 translation_active,
+                 edit_plan_input: false,
+                 selection_input: false,
+@@ -813,6 +824,56 @@ mod tests {
+         assert_eq!(local_asr_fallback(&no_model, &cloud_asr(), true), None);
+     }
+ 
++    #[test]
++    fn explicit_translation_target_preserves_working_language_suppression_and_raw_mode() {
++        let preferences = UserPreferences {
++            default_mode: PolishMode::Raw,
++            working_languages: vec!["English".into()],
++            translation_target_language: "日本語".into(),
++            ..Default::default()
++        };
++        let capture = |requested, target| {
++            DictationContext::capture(
++                &preferences,
++                &builtin_style_pack_for_mode(PolishMode::Raw),
++                DictationProviderInvocations::new(
++                    ProviderInvocation::for_provider("local-qwen3"),
++                    ProviderInvocation::for_provider("original-llm"),
++                    ProviderInvocation::for_provider("original-omni"),
++                ),
++                vec![],
++                vec![],
++                &DictationStartOptions {
++                    translation_requested: requested,
++                    translation_target_language: target,
++                    ..Default::default()
++                },
++            )
++        };
++        let suppressed = capture(true, Some("en".into()));
++        assert_eq!(suppressed.polish.translation_target_language, "English");
++        assert!(suppressed.polish.translation_target_explicit);
++        assert!(!suppressed.polish.translation_active);
++        assert!(!suppressed.uses_llm_polisher());
++        assert!(
++            !suppressed
++                .with_translation_requested(true)
++                .polish
++                .translation_active
++        );
++        let selected_only = capture(false, Some("ja".into()));
++        assert!(!selected_only.uses_llm_polisher());
++        let translated = capture(true, Some("ja".into()));
++        assert!(translated.polish.translation_active);
++        assert!(translated.uses_llm_polisher());
++        assert_eq!(translated.asr.provider_id, "local-qwen3");
++        assert_eq!(translated.llm.provider_id, "original-llm");
++        let legacy = capture(true, None);
++        assert!(!legacy.polish.translation_target_explicit);
++        assert_eq!(legacy.polish.translation_target_language, "日本語");
++        assert!(legacy.polish.translation_active);
++    }
++
+     #[test]
+     fn selection_polish_uses_the_selected_text_envelope() {
+         let mut context = DictationContext::default();
+diff --git a/crates/openless-core/src/dictation_engine.rs b/crates/openless-core/src/dictation_engine.rs
+index f8d3d58e..d4f95155 100644
+--- a/crates/openless-core/src/dictation_engine.rs
++++ b/crates/openless-core/src/dictation_engine.rs
+@@ -1011,6 +1011,13 @@ impl DictationEngine for PipelineDictationEngine {
+             let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
+             // Optional polish may be skipped after fallback; an explicit translation is still required.
+             let translation_active = context.polish.translation_active;
++            // Explicit per-session translation must not succeed with untransformed text.
++            let require_translation = translation_active && context.polish.translation_target_explicit;
++            let policy = if require_translation {
++                PolishFailurePolicy::Fail
++            } else {
++                policy
++            };
+             let uses_polisher = context.uses_llm_polisher()
+                 && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+                 && !skips_polish_for_short_text
+@@ -1063,6 +1070,16 @@ impl DictationEngine for PipelineDictationEngine {
+                         )
+                         .await
+                 };
++                let output = output.and_then(|value| {
++                    if require_translation && value.text.trim().is_empty() {
++                        Err(BackendError::new(
++                            BackendErrorCode::Provider,
++                            "translation returned empty text",
++                        ))
++                    } else {
++                        Ok(value)
++                    }
++                });
+                 let result = match output {
+                     Ok(text) => (text, false),
+                     // Offline after local recognition: the raw transcript is the
+@@ -3810,6 +3827,37 @@ mod tests {
+         assert_eq!(result.polished_text, "raw text");
+     }
+ 
++    #[tokio::test]
++    async fn requested_translation_failure_never_becomes_successful_source_text() {
++        for output in [
++            Err(BackendError::new(
++                BackendErrorCode::Provider,
++                "fixture HTTP 500",
++            )),
++            Ok(crate::ports::PolishOutput::text("   ")),
++        ] {
++            let fixture = fixture_engine(false, output, None, None);
++            let id = SessionId::new();
++            let mut context = DictationContext::default();
++            context.polish.translation_active = true;
++            context.polish.translation_target_language = "English".into();
++            context.polish.translation_target_explicit = true;
++            fixture
++                .engine
++                .start(id, Arc::new(context), fixture.progress.clone())
++                .await
++                .unwrap();
++            let failure = fixture
++                .engine
++                .finish(id, fixture.progress.clone())
++                .await
++                .unwrap_err();
++            assert_eq!(failure.error.code, BackendErrorCode::Provider);
++            assert_eq!(failure.raw_text.as_deref(), Some("raw text"));
++            assert!(fixture.engine.sessions.lock().unwrap().is_empty());
++        }
++    }
++
+     #[tokio::test]
+     async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
+         use crate::testing::{
+diff --git a/crates/openless-core/src/language_catalog.rs b/crates/openless-core/src/language_catalog.rs
+index 6bcfcf27..b8ac2f0c 100644
+--- a/crates/openless-core/src/language_catalog.rs
++++ b/crates/openless-core/src/language_catalog.rs
+@@ -43,6 +43,14 @@ pub fn language_code(value: &str) -> Option<String> {
+     language(value).map(|language| language.code.clone())
+ }
+ 
++/// Ordered catalog choices; provider support is checked separately.
++pub fn translation_language_names() -> Vec<String> {
++    LANGUAGES
++        .iter()
++        .map(|language| language.native_name.clone())
++        .collect()
++}
++
+ pub fn asr_language_code(native_name: &str) -> Option<String> {
+     language(native_name).map(|language| language.asr_code.clone())
+ }
+@@ -55,6 +63,22 @@ pub fn apple_speech_locale(native_name: &str) -> Option<String> {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn translation_names_and_aliases_share_the_existing_catalog() {
++        let names = translation_language_names();
++        assert!(names.len() > 3);
++        for (index, name) in names.iter().enumerate() {
++            assert!(!names[..index].contains(name));
++            assert_eq!(native_language_name(name).as_ref(), Some(name));
++        }
++        assert_eq!(native_language_name(" EN ").as_deref(), Some("English"));
++        assert_eq!(
++            native_language_name("繁體中文").as_deref(),
++            Some("繁体中文")
++        );
++        assert_eq!(native_language_name("unknown"), None);
++    }
++
+     #[test]
+     fn extended_names_route_to_iso_and_apple_identifiers() {
+         for (name, code, locale) in [
+diff --git a/crates/openless-core/src/ports.rs b/crates/openless-core/src/ports.rs
+index 66dfa69f..e5c8e58f 100644
+--- a/crates/openless-core/src/ports.rs
++++ b/crates/openless-core/src/ports.rs
+@@ -780,6 +780,15 @@ impl<T: DictationEngine + ?Sized> PreparedTranscription for DeferredDictationPre
+ }
+ 
+ pub trait TextPolisher: Send + Sync {
++    /// Freeze request credentials/options for a delayed operation without provider network I/O.
++    /// Adapters with no mutable request configuration may keep their runtime.
++    fn prepare(
++        &self,
++        _context: Arc<DictationContext>,
++    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
++        Box::pin(async { Ok(None) })
++    }
++
+     fn polish(
+         &self,
+         session_id: SessionId,
+diff --git a/crates/openless-core/src/preference_patch.rs b/crates/openless-core/src/preference_patch.rs
+index 411a4b5f..07e176ec 100644
+--- a/crates/openless-core/src/preference_patch.rs
++++ b/crates/openless-core/src/preference_patch.rs
+@@ -18,7 +18,9 @@ pub fn patch_preferences(
+     if let Some(mode) = edits.get("/capsuleDisplayMode") {
+         document["capsuleDisplayModeV2"] = mode.clone();
+     }
+-    serde_json::from_value(document).map_err(invalid)
++    let mut patched = serde_json::from_value(document).map_err(invalid)?;
++    crate::settings::reconcile_translation_settings(current, &mut patched)?;
++    Ok(patched)
+ }
+ 
+ fn invalid(error: impl std::fmt::Display) -> BackendError {
+@@ -52,6 +54,24 @@ pub fn update_fields(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn translation_drafts_survive_rebasing_and_serialization_before_save() {
++        let current = UserPreferences::default();
++        let edits = BTreeMap::from([("/translationTargetLanguage".into(), Value::from("ko"))]);
++        let draft = patch_preferences(&current, &edits).unwrap();
++        assert_eq!(draft.translation_target_language, "한국어");
++        assert_eq!(draft.translation_target_languages, vec!["한국어"]);
++        let loaded: UserPreferences = serde_json::from_value(serde_json::to_value(&draft).unwrap()).unwrap();
++        assert_eq!(loaded.translation_target_language, draft.translation_target_language);
++        assert_eq!(loaded.translation_target_languages, draft.translation_target_languages);
++        let cleared = patch_preferences(&loaded, &BTreeMap::from([
++            ("/translationTargetLanguages".into(), serde_json::json!([])),
++        ])).unwrap();
++        assert!(cleared.translation_target_language.is_empty());
++        assert!(cleared.translation_target_languages.is_empty());
++    }
++
+     #[test]
+     fn capsule_display_edits_establish_v2_without_opt_in_from_unrelated_edits() {
+         let mut current = UserPreferences::default();
+diff --git a/crates/openless-core/src/preferences.rs b/crates/openless-core/src/preferences.rs
+index 817d7663..129f2a33 100644
+--- a/crates/openless-core/src/preferences.rs
++++ b/crates/openless-core/src/preferences.rs
+@@ -266,6 +266,7 @@ impl PreferencesStore {
+     }
+ 
+     pub fn set(&self, mut preferences: UserPreferences) -> Result<(), BackendError> {
++        crate::settings::reconcile_translation_settings(&self.get(), &mut preferences)?;
+         self.update(|current| {
+             // The sync transaction owns this field; stale whole-document saves cannot reroute its token.
+             preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
+@@ -370,6 +371,7 @@ impl PreferencesStore {
+         &self,
+         mut preferences: UserPreferences,
+     ) -> Result<(), BackendError> {
++        crate::settings::reconcile_translation_settings(&self.get(), &mut preferences)?;
+         self.update(|current| {
+             preferences.preserve_style_preferences_from(current);
+             preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
+diff --git a/crates/openless-core/src/provider_registry.rs b/crates/openless-core/src/provider_registry.rs
+index 3f5c973b..1112e0fe 100644
+--- a/crates/openless-core/src/provider_registry.rs
++++ b/crates/openless-core/src/provider_registry.rs
+@@ -136,6 +136,17 @@ impl TextPolisherRouter {
+ }
+ 
+ impl TextPolisher for TextPolisherRouter {
++    fn prepare(
++        &self,
++        context: Arc<DictationContext>,
++    ) -> BoxFuture<'static, Result<Option<Arc<dyn TextPolisher>>, BackendError>> {
++        let provider = match self.resolve(&context.llm.provider_type) {
++            Ok(provider) => provider,
++            Err(error) => return Box::pin(async move { Err(error) }),
++        };
++        Box::pin(async move { Ok(Some(provider.prepare(context).await?.unwrap_or(provider))) })
++    }
++
+     fn polish(
+         &self,
+         session_id: SessionId,
+diff --git a/crates/openless-core/src/settings.rs b/crates/openless-core/src/settings.rs
+index 51600f8d..ad33194b 100644
+--- a/crates/openless-core/src/settings.rs
++++ b/crates/openless-core/src/settings.rs
+@@ -19,6 +19,125 @@ pub(crate) fn ensure_testing_features_enabled(
+     }
+ }
+ 
++/// Preserve historical custom names on load, while canonicalizing catalog aliases.
++pub(crate) fn canonical_translation_target(value: &str) -> String {
++    crate::language_catalog::native_language_name(value).unwrap_or_else(|| value.trim().to_string())
++}
++
++pub(crate) fn ordered_translation_targets(values: Vec<String>) -> Vec<String> {
++    let mut targets = Vec::new();
++    for value in values {
++        let value = canonical_translation_target(&value);
++        if !value.is_empty() && !targets.contains(&value) {
++            targets.push(value);
++        }
++    }
++    targets
++}
++
++pub(crate) fn migrate_translation_targets(
++    targets: Option<Vec<String>>,
++    selected: &str,
++) -> (Vec<String>, String) {
++    let selected = canonical_translation_target(selected);
++    let mut targets =
++        ordered_translation_targets(targets.unwrap_or_else(|| vec![selected.clone()]));
++    // A nonempty legacy selection remains authoritative when an older client
++    // round-trips a newly introduced list it does not know how to update.
++    if !targets.is_empty() && !selected.is_empty() && !targets.contains(&selected) {
++        targets.push(selected.clone());
++    }
++    let selected = if targets.is_empty() {
++        String::new()
++    } else {
++        selected
++    };
++    (targets, selected)
++}
++
++/// A missing list is a legacy scalar-only update, not permission to erase targets.
++/// Unknown names already stored by an older client remain usable, but cannot be newly added.
++pub(crate) fn reconcile_translation_settings(
++    previous: &UserPreferences,
++    next: &mut UserPreferences,
++) -> Result<(), BackendError> {
++    let (previous_targets, previous_selected) = migrate_translation_targets(
++        if previous.translation_target_languages.is_empty()
++            && !previous.translation_target_languages_present
++        {
++            None
++        } else {
++            Some(previous.translation_target_languages.clone())
++        },
++        &previous.translation_target_language,
++    );
++    // A legacy client can echo the initially empty list while selecting its first language.
++    // An empty list replacing stored choices remains an explicit deletion.
++    let input = if previous_targets.is_empty() && next.translation_target_languages.is_empty() {
++        next.translation_target_language_input.as_deref()
++            .unwrap_or(&next.translation_target_language)
++    } else {
++        &next.translation_target_language
++    };
++    let selected = canonical_translation_target(input);
++    let mut targets = if next.translation_target_languages_present {
++        ordered_translation_targets(next.translation_target_languages.clone())
++    } else {
++        previous_targets.clone()
++    };
++    // Scalar-only clients (including existing Rust callers editing a snapshot) select
++    // a target without replacing the ordered collection. Explicit [] always clears.
++    if (!next.translation_target_languages_present
++        || (targets == previous_targets && selected != previous_selected))
++        && !selected.is_empty()
++        && !targets.contains(&selected)
++    {
++        targets.push(selected.clone());
++    }
++    for target in &targets {
++        if crate::language_catalog::native_language_name(target).is_none()
++            && !previous_targets.contains(target)
++        {
++            return Err(BackendError::new(
++                crate::errors::BackendErrorCode::InvalidArgument,
++                format!("unknown translation target: {target}"),
++            ));
++        }
++    }
++    let selected = if !selected.is_empty() && !targets.contains(&selected) {
++        targets.first().cloned().unwrap_or_default()
++    } else {
++        selected
++    };
++    let (targets, selected) = migrate_translation_targets(Some(targets), &selected);
++    next.translation_target_languages = targets;
++    next.translation_target_language = selected;
++    next.translation_target_languages_present = true;
++    next.translation_target_language_input = None;
++    Ok(())
++}
++
++pub(crate) fn validate_session_translation_target(
++    preferences: &UserPreferences,
++    target: &str,
++) -> Result<String, BackendError> {
++    let target = canonical_translation_target(target);
++    let mut targets = ordered_translation_targets(preferences.translation_target_languages.clone());
++    if !preferences.translation_target_languages_present {
++        let legacy = canonical_translation_target(&preferences.translation_target_language);
++        if !legacy.is_empty() && !targets.contains(&legacy) {
++            targets.push(legacy);
++        }
++    }
++    if target.is_empty() || !targets.contains(&target) {
++        return Err(BackendError::new(
++            crate::errors::BackendErrorCode::InvalidArgument,
++            "session translation target must be a configured nonempty target",
++        ));
++    }
++    Ok(target)
++}
++
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+ pub enum SettingsCollisionPolicy {
+@@ -292,3 +411,141 @@ mod tests {
+         assert!(!tsf_with_hidden_pref.windows_show_openless_in_keyboard_list);
+     }
+ }
++
++#[cfg(test)]
++mod translation_targets_tests {
++    use super::*;
++    use serde_json::json;
++
++    #[test]
++    fn empty_list_roundtrip_allows_the_first_legacy_selection_but_explicit_clear_still_wins() {
++        let previous = UserPreferences::default();
++        let mut document = serde_json::to_value(&previous).unwrap();
++        document["translationTargetLanguage"] = json!("ko");
++        let mut next: UserPreferences = serde_json::from_value(document).unwrap();
++        reconcile_translation_settings(&previous, &mut next).unwrap();
++        assert_eq!(next.translation_target_language, "한국어");
++        assert_eq!(next.translation_target_languages, vec!["한국어"]);
++        let previous = next;
++        let mut document = serde_json::to_value(&previous).unwrap();
++        document["translationTargetLanguages"] = json!([]);
++        let mut cleared: UserPreferences = serde_json::from_value(document).unwrap();
++        reconcile_translation_settings(&previous, &mut cleared).unwrap();
++        assert!(cleared.translation_target_language.is_empty());
++        assert!(cleared.translation_target_languages.is_empty());
++    }
++
++    #[test]
++    fn legacy_selected_target_seeds_list_and_preserves_custom_names() {
++        for (input, expected) in [
++            (" en ", "English"),
++            (" My historical language ", "My historical language"),
++        ] {
++            let preferences: UserPreferences = serde_json::from_value(json!({
++                "translationTargetLanguage": input,
++            }))
++            .unwrap();
++            assert_eq!(preferences.translation_target_languages, vec![expected]);
++            assert_eq!(preferences.translation_target_language, expected);
++            assert!(!preferences.translation_target_languages_present);
++        }
++        let defaults: UserPreferences = serde_json::from_value(json!({})).unwrap();
++        assert!(defaults.translation_target_languages.is_empty());
++        assert!(defaults.translation_target_language.is_empty());
++    }
++
++    #[test]
++    fn explicit_targets_canonicalize_dedupe_keep_order_and_validate_selection() {
++        let preferences: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguages": ["ja", " en ", "English", "", "繁體中文", "zh-TW"],
++            "translationTargetLanguage": "en",
++        }))
++        .unwrap();
++        assert_eq!(
++            preferences.translation_target_languages,
++            vec!["日本語", "English", "繁体中文"]
++        );
++        assert_eq!(preferences.translation_target_language, "English");
++        assert!(preferences.translation_target_languages_present);
++        let invalid_selection: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguages": ["ja", "en"],
++            "translationTargetLanguage": "fr",
++        }))
++        .unwrap();
++        assert_eq!(invalid_selection.translation_target_language, "Français");
++        assert_eq!(
++            invalid_selection.translation_target_languages,
++            vec!["日本語", "English", "Français"]
++        );
++    }
++
++    #[test]
++    fn explicit_empty_list_clears_selected_target_and_marker_is_not_wire_data() {
++        let preferences: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguages": [],
++            "translationTargetLanguage": "en",
++            "translationTargetLanguagesPresent": false,
++        }))
++        .unwrap();
++        assert!(preferences.translation_target_languages_present);
++        assert!(preferences.translation_target_languages.is_empty());
++        assert!(preferences.translation_target_language.is_empty());
++        let value = serde_json::to_value(preferences).unwrap();
++        assert!(value.get("translationTargetLanguagesPresent").is_none());
++        let forged: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguage": "en",
++            "translationTargetLanguagesPresent": true,
++        }))
++        .unwrap();
++        assert!(!forged.translation_target_languages_present);
++    }
++
++    #[test]
++    fn unknown_new_additions_fail_but_historical_targets_survive() {
++        let previous: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguage": "Historical custom target",
++        }))
++        .unwrap();
++        let mut next = previous.clone();
++        reconcile_translation_settings(&previous, &mut next).unwrap();
++        assert_eq!(
++            next.translation_target_languages,
++            vec!["Historical custom target"]
++        );
++        assert_eq!(
++            validate_session_translation_target(&next, "Historical custom target").unwrap(),
++            "Historical custom target"
++        );
++        next.translation_target_languages
++            .push("Unknown new target".into());
++        assert_eq!(
++            reconcile_translation_settings(&previous, &mut next)
++                .unwrap_err()
++                .code,
++            crate::errors::BackendErrorCode::InvalidArgument
++        );
++    }
++
++    #[test]
++    fn old_client_scalar_updates_preserve_order_and_disabled_selection() {
++        let previous: UserPreferences = serde_json::from_value(json!({
++            "translationTargetLanguages": ["en", "ja"],
++            "translationTargetLanguage": "en",
++        }))
++        .unwrap();
++        for (scalar, selected, targets) in [
++            ("en", "English", vec!["English", "日本語"]),
++            ("ja", "日本語", vec!["English", "日本語"]),
++            ("fr", "Français", vec!["English", "日本語", "Français"]),
++            ("", "", vec!["English", "日本語"]),
++        ] {
++            let mut next: UserPreferences = serde_json::from_value(json!({
++                "translationTargetLanguage": scalar,
++            }))
++            .unwrap();
++            reconcile_translation_settings(&previous, &mut next).unwrap();
++            assert_eq!(next.translation_target_languages, targets);
++            assert_eq!(next.translation_target_language, selected);
++        }
++    }
++}
+diff --git a/crates/openless-core/src/shared_types.rs b/crates/openless-core/src/shared_types.rs
+index ddb570f9..f2ad5f27 100644
+--- a/crates/openless-core/src/shared_types.rs
++++ b/crates/openless-core/src/shared_types.rs
+@@ -551,12 +551,21 @@ pub struct UserPreferences {
+     /// model knows which languages the user works in. See issue #4.
+     #[serde(default = "default_working_languages")]
+     pub working_languages: Vec<String>,
+-    /// Translation output target language (single-select, native name).
+-    /// Empty = translation mode off (Shift combos are inert). The frontend
+-    /// picks from the built-in language list; the backend just splices the
+-    /// native name into the prompt. See issue #4.
++    /// Legacy selected translation target (canonical native name, or a preserved custom name).
++    /// Empty disables legacy translation gestures without erasing configured choices.
+     #[serde(default)]
+     pub translation_target_language: String,
++    /// Ordered, duplicate-free translation choices, separate from working/ASR/UI languages.
++    #[serde(default)]
++    pub translation_target_languages: Vec<String>,
++    /// Wire presence distinguishes an old client's whole-document save from explicit deletion.
++    #[doc(hidden)]
++    #[serde(skip)]
++    pub translation_target_languages_present: bool,
++    /// Retains the submitted scalar until an empty list can be reconciled with stored choices.
++    #[doc(hidden)]
++    #[serde(skip)]
++    pub translation_target_language_input: Option<String>,
+     /// Chinese output script preference (not exposed as a UI switch):
+     /// - Simplified: prefer simplified for Chinese output
+     /// - Traditional: prefer traditional for Chinese output
+@@ -1093,6 +1102,8 @@ struct UserPreferencesWire {
+     windows_show_openless_in_keyboard_list: bool,
+     working_languages: Vec<String>,
+     translation_target_language: String,
++    #[serde(default)]
++    translation_target_languages: Option<Vec<String>>,
+     chinese_script_preference: ChineseScriptPreference,
+     #[serde(default)]
+     output_language_preference: OutputLanguagePreference,
+@@ -1346,6 +1357,7 @@ impl Default for UserPreferencesWire {
+             windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
+             working_languages: prefs.working_languages,
+             translation_target_language: prefs.translation_target_language,
++            translation_target_languages: None,
+             chinese_script_preference: prefs.chinese_script_preference,
+             output_language_preference: prefs.output_language_preference,
+             qa_hotkey: prefs.qa_hotkey,
+@@ -1470,6 +1482,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
+                 selection_polish_hotkey = None;
+             }
+         }
++        let translation_target_languages_present = wire.translation_target_languages.is_some();
++        let translation_target_language_input = wire.translation_target_languages.as_ref()
++            .filter(|targets| targets.is_empty())
++            .map(|_| wire.translation_target_language.clone());
++        let (translation_target_languages, translation_target_language) =
++            crate::settings::migrate_translation_targets(
++                wire.translation_target_languages,
++                &wire.translation_target_language,
++            );
+         let streaming_insert_default_migrated = wire.streaming_insert_default_migrated;
+         let streaming_insert = if streaming_insert_default_migrated {
+             wire.streaming_insert
+@@ -1575,7 +1596,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
+             ),
+             windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
+             working_languages: wire.working_languages,
+-            translation_target_language: wire.translation_target_language,
++            translation_target_language,
++            translation_target_languages,
++            translation_target_languages_present,
++            translation_target_language_input,
+             chinese_script_preference: wire.chinese_script_preference,
+             output_language_preference: wire.output_language_preference,
+             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
+@@ -1966,6 +1990,9 @@ impl Default for UserPreferences {
+             windows_show_openless_in_keyboard_list: true,
+             working_languages: default_working_languages(),
+             translation_target_language: String::new(),
++            translation_target_languages: Vec::new(),
++            translation_target_languages_present: false,
++            translation_target_language_input: None,
+             chinese_script_preference: ChineseScriptPreference::Auto,
+             output_language_preference: OutputLanguagePreference::Auto,
+             qa_hotkey: default_qa_hotkey(),

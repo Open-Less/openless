@@ -2,6 +2,10 @@
 
 This directory contains the cross-platform OpenLess application. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
+## Native iOS app and keyboard
+
+[`ios/`](ios/README.md) contains the native iPhone app, Chinese/English keyboard extension, and recording widget. Settings offer a voice-focused layout or a single keyboard with hold-space dictation, translation, and send/cancel gestures. The app and keyboard target iOS 16; the recording widget requires iOS 18. The iOS guide covers the shared version configuration, input engines, source build, signing, and unsigned IPA packaging.
+
 ## App Directory
 
 The runnable sources live in `app/`:

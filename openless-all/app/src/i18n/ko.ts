@@ -1520,6 +1520,35 @@ export const ko: typeof zhCN = {
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: '끄기',
+        aecLight: '경량(저 CPU)',
+        aecModel: '모델(강화)',
+        aecModelHint:
+          '모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.',
+        aecHint:
+          '스피커 사용 시 되먹임을 줄입니다. 참조 신호가 필요하므로 헤드폰이면 꺼 두세요.',
+        buffer: '출력 버퍼',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1547,6 +1576,9 @@ export const ko: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: '재생 에코 제거',
+      echoCancellationDesc:
+        '재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.',
       audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
         'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',
@@ -1624,6 +1656,10 @@ export const ko: typeof zhCN = {
       polishContextWindowLabel: '대화 컨텍스트 윈도(분)',
       polishContextWindowDesc:
         '최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.',
+      debugArchiveProcessedLabel: '처리된 오디오 저장',
+      debugArchiveProcessedDesc: '노이즈 감소와 게인 적용 후의 오디오로, 기존 녹음 파일에 저장됩니다.',
+      debugArchiveRawLabel: '처리 전 오디오도 저장',
+      debugArchiveRawDesc: '같은 폴더에 <session>.raw.wav를 함께 저장합니다. 이것만 켜면 원본이 기본 파일에 저장됩니다.',
       recordAudioForDebugLabel: '원본 녹음 보관(디버그)',
       recordAudioForDebugDesc: '원시 마이크 오디오를 wav 로 저장하여 인식 문제 진단.',
       audioRecordingMaxEntriesLabel: '원본 녹음 보관 개수',
@@ -1704,6 +1740,7 @@ export const ko: typeof zhCN = {
       nameHint:
         '같은 제공업체의 여러 채널을 구분하는 이름입니다. 모델이나 연결에는 영향을 주지 않습니다.',
       errModel: '모델',
+      errThinking: '사고 켜기 필요',
       verify: '검증',
       verifyHint: '실제로 API를 한 번 호출해 이 채널이 지금 되는지 확인합니다',
       errTimeout: '시간 초과',
@@ -1928,6 +1965,8 @@ export const ko: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.',
       llmStreamError: '서버가 스트림 오류를 반환했습니다. 모델과 요청 설정을 확인하세요.',
+      llmThinkingRequired:
+        '이 모델은 사고를 끌 수 없습니다. 모델 옆의 "사고"를 켠 뒤 다시 검증하세요.',
       saveProtocol: '프로토콜 설정 저장',
       thinkingModeHint:
         '선택한 요청 형식과 모델이 지원하는 매개변수로 사고를 켜거나 끄거나 줄입니다. 프롬프트에 제어 지시를 추가하지 않습니다.',

@@ -33,6 +33,6 @@
 - 目前不建议拆 Core：这些条件编译只覆盖少量输入格式/供应商差异，服务、策略和契约仍平台中立；Linux 的 DBus、录音、fcitx5、桌面窗口和远程输入适配器已经位于 `linux-egui`。
 - 无边框窗口拖动的触摸屏限制来自 Wayland 拖动协议所需的指针按键 serial，winit 丢弃触摸 serial；升级 egui 不能改变该协议条件。桌面侧可用 KWin 的 **Alt+F7** 移动窗口（键盘移动后用触摸板/方向键定位）；若当前会话是 X11，可由窗口管理器移动。此项目不在应用内伪造拖动实现。
 - 词汇纠正卡片在 Linux 上**不产生数据源**（宿主未接 `EditObservationAdapter`），原因与补法见 [`linux-egui-known-gaps.md`](../linux-egui-known-gaps.md) 的 G01。
-- 依赖升级与 Vulkan 后端切换已落入源码；版本面与升级约束见 [`dependency-audit.md`](../dependency-audit.md)。设备图形路径仍需在真实 GPU/Wayland/X11 主机验收。
+- 依赖升级与 Vulkan 后端切换已落入源码；各独立 workspace 继续使用自己的 `Cargo.lock`，CI 统一以 `--locked` 验证。设备图形路径仍需在真实 GPU/Wayland/X11 主机验收。
 
 记录格式：`ID / commit / 实现效果 / 自动证据 / 设备证据 / 剩余限制`。

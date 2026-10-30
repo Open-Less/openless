@@ -5,6 +5,7 @@ use crate::{AudioDspConfig, NoiseReduction};
 fn config(algorithm: NoiseReduction) -> AudioProcessingConfig {
     AudioProcessingConfig {
         enhancement_enabled: true,
+        echo_cancellation_enabled: false,
         dsp: AudioDspConfig {
             noise_reduction: algorithm,
             agc_enabled: false,
@@ -154,7 +155,7 @@ fn partial_preferences_migrate_and_invalid_controls_are_bounded() {
     config.noise_strength = 255;
     config.processing_order.fill(crate::AudioDspStage::Agc);
     let normalized = config.normalized();
-    assert_eq!(normalized.gain_db, 30);
+    assert_eq!(normalized.gain_db, 50);
     assert_eq!(normalized.noise_strength, 100);
     assert_eq!(
         normalized.processing_order,
@@ -174,6 +175,7 @@ fn default_agc_does_not_amplify_denoised_room_noise_back_to_original_level() {
     for algorithm in [NoiseReduction::Rnnoise, NoiseReduction::Purevox] {
         let config = AudioProcessingConfig {
             enhancement_enabled: true,
+            echo_cancellation_enabled: false,
             dsp: AudioDspConfig {
                 noise_reduction: algorithm,
                 ..Default::default()
@@ -194,4 +196,101 @@ fn default_agc_does_not_amplify_denoised_room_noise_back_to_original_level() {
             output_power / input_power
         );
     }
+}
+
+#[test]
+fn native_48k_capture_preserves_input_filter_for_every_denoiser() {
+    for algorithm in [
+        NoiseReduction::Off,
+        NoiseReduction::Rnnoise,
+        NoiseReduction::Spectral,
+        NoiseReduction::Purevox,
+    ] {
+        let mut processor = AudioProcessor::new(config(algorithm));
+        processor.process(&signal(960), 1, 48_000);
+        let stream = processor.enhanced.as_ref().expect("enhanced stream");
+        assert_eq!(stream.work_rate, 48_000);
+        assert_eq!(stream.hop, 480);
+        assert!(stream.input_resampler.is_some());
+        assert!(stream.output_resampler.is_some());
+    }
+}
+
+/// 老 preferences 里 `processingOrder` 只有 6 个阶段（没有 AEC）。数组长度从 6
+/// 变 7 之后必须仍能反序列化，缺的 AEC 补在默认位置，否则升级后用户的增强配置
+/// 会被整个丢掉。
+#[test]
+fn legacy_six_stage_processing_order_still_deserializes() {
+    let legacy = r#"{
+        "noiseReduction": "rnnoise",
+        "noiseStrength": 80,
+        "gainDb": 4,
+        "agcEnabled": true,
+        "agcTarget": 35,
+        "agcAttack": 50,
+        "agcDecay": 50,
+        "vadEnabled": false,
+        "vadThresholdDb": -50,
+        "dereverbLevel": 0,
+        "equalizerEnabled": false,
+        "equalizerPreampDb": 0,
+        "equalizerBandsDb": [0,0,0,0,0,0,0,0,0,0],
+        "processingOrder": ["noiseReduction","dereverb","equalizer","amplifier","agc","vad"]
+    }"#;
+    let config: crate::AudioDspConfig = serde_json::from_str(legacy).unwrap();
+    assert_eq!(config.aec_mode, crate::AecMode::Off, "AEC 默认关");
+    assert_eq!(config.gain_db, 4, "老配置里的值必须保留");
+    assert_eq!(
+        config.processing_order,
+        [
+            // AEC 补到最前，老配置的 6 级顺序原样保留。
+            crate::AudioDspStage::AcousticEchoCancellation,
+            crate::AudioDspStage::NoiseReduction,
+            crate::AudioDspStage::Dereverb,
+            crate::AudioDspStage::Equalizer,
+            crate::AudioDspStage::Amplifier,
+            crate::AudioDspStage::Agc,
+            crate::AudioDspStage::Vad,
+        ],
+        "老配置的 6 级顺序必须保留，AEC 前置补齐"
+    );
+}
+
+#[test]
+fn aec_reaches_the_dsp_settings() {
+    let config = crate::AudioDspConfig {
+        aec_mode: crate::AecMode::Model,
+        ..Default::default()
+    };
+    let settings = config.settings();
+    assert!(settings.aec_enabled, "只有 Model 模式才走 MicYou 的 aec7");
+}
+
+/// 参考队列限长：AEC 只关心最近的扬声器信号，堆积只会把 AEC 拖慢。
+#[test]
+fn far_end_queue_drops_oldest_frames_beyond_the_limit() {
+    let queue = crate::FarEndQueue::default();
+    // 每帧 48 kHz 单声道 1 秒 = 48000 样本；塞 3 秒应当留下最近 2 秒。
+    for _ in 0..3 {
+        queue.push(&vec![0.1_f32; 48_000], 1, 48_000);
+    }
+    let frames = queue.drain();
+    let total: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    assert!(total <= 96_000, "队列长度应被限制在 2 秒内，实际 {total}");
+    assert_eq!(frames.len(), 2, "最旧的一秒应当被丢弃");
+}
+
+/// 空帧/非法采样率不该进队列；非有限值被清洗成 0。
+#[test]
+fn far_end_queue_rejects_empty_and_cleans_non_finite_samples() {
+    let queue = crate::FarEndQueue::default();
+    queue.push(&[], 1, 48_000);
+    queue.push(&[0.0; 8], 0, 48_000);
+    queue.push(&[0.0; 8], 1, 0);
+    assert!(queue.is_empty(), "空帧与零通道/零采样率必须被拒绝");
+
+    queue.push(&[f32::NAN, f32::INFINITY, 0.5], 1, 48_000);
+    let frames = queue.drain();
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].samples.iter().all(|sample| sample.is_finite()));
 }

@@ -1,13 +1,18 @@
 name: Release Linux egui
 
-# Linux ships in the same GitHub Release as the desktop and Android assets.
+# Linux ships in the same GitHub Release as the desktop, Android and HarmonyOS
+# assets.
 #
-# The entry point stays manual: the tag is created by an administrator after the
-# Linux host/UI acceptance in docs/linux-egui-handoff/07-acceptance.md, and this
-# workflow only rebuilds that already-reviewed tag. It never reacts to Tauri
-# tags, so a desktop release can never ship an unaccepted Linux package by
-# accident; but once dispatched, the packages are attached to the Release
-# automatically instead of being uploaded by hand.
+# The entry point is dispatch-only (never a `push:` trigger), so nothing can
+# rebuild Linux packages from an arbitrary commit: `release-tauri.yml` dispatches
+# it automatically for a `v*-tauri` tag once the desktop assets are published,
+# and an administrator keeps the manual dispatch as the repair path. Packaging
+# runs the same Core/host/deb/rpm verification as CI and then attaches the
+# verified packages to that Release automatically - nothing is uploaded by hand.
+#
+# Because the tag now ships Linux unattended, the L01-L12 device acceptance in
+# docs/linux-egui-handoff/07-acceptance.md is a **pre-tag** gate: a tag must not
+# be cut for a Linux state that has not been accepted on real hardware.
 on:
   workflow_dispatch:
     inputs:

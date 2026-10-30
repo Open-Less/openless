@@ -35,9 +35,6 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (460, 228);
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
 /// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
 pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
-/// Less Computer panel size — Tauri `less-computer` is 420×540, the same
-/// footprint as the selection-ask panel.
-pub const LESS_COMPUTER_WINDOW_SIZE: (u32, u32) = (420, 540);
 // 旧的独立润色预览窗口（Tauri `selection-polish-preview` 640×440 / min 480×320）
 // 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线，Tauri 侧的独立窗口也已
 // 删除：润色结果现在由选区助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
@@ -48,7 +45,6 @@ pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
     match kind {
         PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
         PopupKind::Qa => QA_WINDOW_SIZE,
-        PopupKind::LessComputer => LESS_COMPUTER_WINDOW_SIZE,
     }
 }
 
@@ -69,7 +65,6 @@ pub fn popup_position(
     match kind {
         PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
         PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
-        PopupKind::LessComputer => environment.centred_for(LESS_COMPUTER_WINDOW_SIZE),
     }
 }
 
@@ -1020,12 +1015,6 @@ mod tests {
         assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
         assert_eq!(CAPSULE_WINDOW_SIZE, (460, 228));
         assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
-        // Tauri 的 `less-computer` 窗口与 qa 同为 420×540。
-        assert_eq!(
-            popup_size(PopupKind::LessComputer),
-            LESS_COMPUTER_WINDOW_SIZE
-        );
-        assert_eq!(LESS_COMPUTER_WINDOW_SIZE, (420, 540));
     }
 
     /// The capsule hugs the bottom edge of the work area, centred.

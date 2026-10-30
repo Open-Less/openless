@@ -15,6 +15,7 @@ openless-src/                     Git 仓库、分支与发布边界
 ├── scripts/                      仓库级辅助脚本（版本号同步等）
 └── openless-all/
     ├── README.md                全平台总览
+    ├── ios/                    原生 iPhone App、键盘扩展与录音组件
     └── app/                     npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
         ├── crates/openless-core/  共享业务 Rust crate
@@ -48,6 +49,7 @@ openless-src/                     Git 仓库、分支与发布边界
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| iOS 应用与输入法 | `../ios/App/`、`../ios/Keyboard/`、`../ios/RecordingWidget/` | SwiftUI/UIKit 界面、独立 Rust Host、共享版本配置；见 [iOS 工程](../openless-all/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。

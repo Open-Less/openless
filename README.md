@@ -51,11 +51,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
 </p>
 
 <h2 align="center">Developers</h2>
@@ -105,6 +109,8 @@
 </table>
 
 OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+
+The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing.
 
 Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
 

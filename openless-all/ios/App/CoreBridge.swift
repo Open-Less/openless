@@ -190,7 +190,7 @@ final class CoreBridge {
     let id = UUID().uuidString
     return try await withCheckedThrowingContinuation { continuation in
       controls[id] = continuation
-      let reads: Set<String> = ["snapshot", "library", "searchHistory", "historyDetail", "audioAsset", "vocabulary", "styleLibrary", "styleDetail", "capabilitySnapshot", "translationConfiguration", "marketplaceList", "marketplaceDetail", "listModels", "validate"]
+      let reads: Set<String> = ["audioSettings", "snapshot", "library", "searchHistory", "historyDetail", "audioAsset", "vocabulary", "styleLibrary", "styleDetail", "capabilitySnapshot", "translationConfiguration", "marketplaceList", "marketplaceDetail", "listModels", "validate"]
       if let name = action["action"] as? String {
         let nested = (action["request"] as? [String: Any])?["command"] as? String
         let localRead = (name == "vocabularyBridge" && ["snapshot", "proposals"].contains(nested ?? ""))

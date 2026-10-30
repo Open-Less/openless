@@ -725,3 +725,76 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
             openless-all/app/src-tauri/target/release/downloads/*
+
+  # ── Hand the finished tag to the platform workflows that ride the same Release ──
+  # `Release HarmonyOS` and `Release Linux egui` are dispatch-only on purpose: an
+  # unaccepted HAP or deb/rpm must never reach users because someone pushed a
+  # Tauri tag. Nothing used to link them to that tag, though, so both entry
+  # points had **zero runs in their entire history** and every 2.0.x Release
+  # shipped without a `.hap`, a `.deb` or a `.rpm` - the AppGallery upload never
+  # ran either, and the omission was silent. Dispatch them here, once the desktop
+  # matrix finished, so both find the Release they attach to (they wait only ten
+  # minutes for it, less than the desktop matrix needs) and a tag push produces
+  # one complete Release.
+  #
+  # `workflow_dispatch` is one of the two events `GITHUB_TOKEN` may still
+  # trigger, so this needs no PAT - only `actions: write` for this job. The
+  # downstream runs use the same release tag for their workflow definition and
+  # checkout, so the package, workflow and cache inputs stay on one immutable ref.
+  dispatch-platform-releases:
+    needs: build
+    # Independent of the desktop result: the HAP and the Linux packages only need
+    # the tag, so a Windows-only or notarization failure must not cost them their
+    # Release entry. A cancelled run still dispatches nothing.
+    if: >-
+      !cancelled() && github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      # Repository distribution path by default: the HAP is attached to the
+      # GitHub Release unsigned and nothing reaches AppGallery. Set the
+      # `HARMONY_AUTO_CHANNEL` repository variable to `release` (production) or
+      # `test` (test channel) to upload the signed package as the AGC candidate
+      # automatically - the upload never submits it for review, so that decision
+      # stays human either way.
+      HARMONY_CHANNEL: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
+    steps:
+      - name: Dispatch the HarmonyOS and Linux releases
+        run: |
+          set -euo pipefail
+          case "$HARMONY_CHANNEL" in
+            none | release | test) ;;
+            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test (got '$HARMONY_CHANNEL')"; exit 1 ;;
+          esac
+          gh workflow run release-harmony.yml \
+            --ref "$RELEASE_TAG" \
+            -f "tag=$RELEASE_TAG" \
+            -f "channel=$HARMONY_CHANNEL" \
+            -f publish=true \
+            -f upload_to_appgallery=true
+          gh workflow run release-linux-egui.yml \
+            --ref "$RELEASE_TAG" \
+            -f "tag=$RELEASE_TAG" \
+            -f publish=true
+
+      - name: Report the dispatched runs
+        # Both dispatches already returned a run id; this listing is the log line
+        # that makes the old silent miss visible, so a missing run must not fail
+        # the tag build after every asset is already published.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sleep 10
+          for workflow in release-harmony.yml release-linux-egui.yml; do
+            echo "### $workflow"
+            gh run list --workflow="$workflow" --limit 3 \
+              --json createdAt,status,conclusion,url \
+              --jq '.[] | "\(.createdAt) \(.status) \(.conclusion // "-") \(.url)"'
+          done

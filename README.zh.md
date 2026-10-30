@@ -51,11 +51,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra 专注云服务器与物理裸机，节点覆盖香港、美国与游戏云，支持按需选配，为中小企业提供稳定可靠的算力。
 </p>
 
 <h2 align="center">开发者</h2>
@@ -110,6 +114,8 @@
 </table>
 
 OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
+
+原生 [iOS 应用与输入法](openless-all/ios/README.md) 位于 `openless-all/ios/`，支持中英文打字、语音优先与长按空格输入两种模式，以及语音翻译。源码构建和个人签名方式见 iOS 工程说明。
 
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 

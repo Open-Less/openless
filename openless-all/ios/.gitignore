@@ -3,6 +3,10 @@
 .vendor/
 DerivedData*/
 Artifacts/
+*.ipa
+*.xcarchive/
+*.xcresult/
+*.log
 __pycache__/
 Config/Local.xcconfig
 *.xcuserstate
@@ -17,6 +21,7 @@ Resources/SenseVoice/*.download
 Resources/Rime/build/
 Resources/Rime/user.yaml
 Resources/Prediction/*.sqlite3
+Resources/Prediction/*.building.sqlite3
 !OpenLess.xcodeproj/
 !OpenLess.xcodeproj/project.pbxproj
 !OpenLess.xcodeproj/xcshareddata/
