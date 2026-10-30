@@ -254,7 +254,6 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
-            native_capsule::native_capsule_set_locale,
             get_capsule_auxiliary_snapshot,
             commands::get_capsule_snapshot,
             commands::get_dictation_translation_target,
