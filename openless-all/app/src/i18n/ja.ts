@@ -1699,16 +1699,6 @@ export const ja: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'タイムアウトで停止',
       voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
-      lowMemoryBackgroundLabel: '省メモリバックグラウンドモード',
-      lowMemoryBackgroundDesc:
-        '再起動後に適用。メイン画面を閉じると解放し、録音時のみネイティブカプセルを表示します。待機中のマイク事前起動を無効にします。ローカルモデルの解放設定は維持されます。',
-      lowMemoryRestartLabel: '再起動後に適用',
-      lowMemoryRestartDesc:
-        '低メモリバックグラウンドモードの設定を保存しました。実行モードの切り替えにはアプリの再起動が必要です。',
-      lowMemoryRestartNow: '今すぐ再起動',
-      lowMemoryCapsuleErrorLabel: 'ネイティブカプセル利用不可',
-      lowMemoryCapsuleErrorDesc:
-        'ディクテーションは引き続き利用できますが、フローティングカプセルは表示されません。ヘルパーが見つからないかブロックされている可能性があります。アプリを再インストールしてください。',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',

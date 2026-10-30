@@ -1626,15 +1626,6 @@ export const zhCN = {
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
       audioRecordingMaxEntriesDesc: '本地保留 wav 文件数上限，留空 = 200。',
       startupGroupTitle: '启动',
-      lowMemoryBackgroundLabel: '低内存后台模式',
-      lowMemoryBackgroundDesc:
-        '重启后生效。关闭主界面时释放窗口，录音时按需显示原生胶囊；空闲时关闭麦克风预热。本地模型仍按原有设置释放。',
-      lowMemoryRestartLabel: '重启后生效',
-      lowMemoryRestartDesc: '低内存后台模式的开关已保存，重启应用后才会切换运行模式。',
-      lowMemoryRestartNow: '立即重启',
-      lowMemoryCapsuleErrorLabel: '原生胶囊不可用',
-      lowMemoryCapsuleErrorDesc:
-        '听写仍可进行，但不会显示悬浮胶囊。辅助程序可能缺失或被系统拦截，请重新安装应用。',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
       autoUpdateCheckLabel: '自动检查更新',

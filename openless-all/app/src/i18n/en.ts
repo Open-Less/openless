@@ -1712,16 +1712,6 @@ export const en: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Stop after timeout',
       voiceActivationTimeoutSeconds: 'Timeout (seconds)',
       startupGroupTitle: 'Startup',
-      lowMemoryBackgroundLabel: 'Low-memory background mode',
-      lowMemoryBackgroundDesc:
-        'Applies after restart. Release the main window on close and show a native capsule on demand. Disable microphone prewarming while idle. Local models keep their existing release settings.',
-      lowMemoryRestartLabel: 'Applies after restart',
-      lowMemoryRestartDesc:
-        'The low-memory background switch is saved; the running mode changes after the app restarts.',
-      lowMemoryRestartNow: 'Restart now',
-      lowMemoryCapsuleErrorLabel: 'Native capsule unavailable',
-      lowMemoryCapsuleErrorDesc:
-        'Dictation still works, but the floating capsule will not appear. The helper may be missing or blocked; reinstall the app.',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
       autoUpdateCheckLabel: 'Auto-check for updates',

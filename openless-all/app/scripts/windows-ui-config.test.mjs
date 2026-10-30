@@ -68,16 +68,6 @@ assertMatch(
   /CapsuleState::Recording[\s\S]*?CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!self\.state\.foreground_target_matches_session\(session_id\)[\s\S]*?self\.capture_foreground_monitor\(\)[\s\S]*?begin_foreground_target_capture\(session_id, monitor\)/,
   'WebView capsules must capture the shared foreground target once per recording session',
 );
-const nativeCapsuleRs = await readFile(
-  new URL('../src-tauri/src/native_capsule.rs', import.meta.url),
-  'utf-8',
-);
-const nativeRefreshLayout = nativeCapsuleRs.match(/fn refresh_layout\b[\s\S]*?\n    }/)?.[0] ?? '';
-assertMatch(
-  nativeRefreshLayout,
-  /CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!latest\.foreground_captured[\s\S]*?frame\.state\.phase == "recording"[\s\S]*?capsule\.capture_foreground_monitor\(\)[\s\S]*?latest\.foreground_captured = true/,
-  'low-memory capsules must capture the same foreground target once per recording session',
-);
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
   'utf-8',

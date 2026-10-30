@@ -25,10 +25,8 @@ import {
   VOICE_ACTIVATION_MODEL_ALIAS,
   type VoiceActivationStateSnapshot,
 } from '../../lib/voiceActivation';
-import { getNativeCapsuleStatus } from '../../lib/ipc/settings';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
-  NativeCapsuleStatus,
   CapsuleStyle,
   HotkeyMode,
   MicrophoneDevice,
@@ -44,7 +42,6 @@ import { SelectLite } from '../../components/ui/SelectLite';
 
 import { Card, Collapsible, Btn } from '../_atoms';
 import { Segmented } from '../../components/ui/Segmented';
-import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { AudioDspSettings } from './AudioDspSettings';
@@ -931,18 +928,6 @@ export function RecordingInputSection({
       {showDesktopStartup && (
         <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
-          <SettingRow
-            label={t('settings.recording.lowMemoryBackgroundLabel')}
-            desc={t('settings.recording.lowMemoryBackgroundDesc')}
-          >
-            <Toggle
-              on={prefs.lowMemoryBackgroundEnabled ?? false}
-              onToggle={(lowMemoryBackgroundEnabled) =>
-                savePrefs({ ...prefs, lowMemoryBackgroundEnabled })
-              }
-            />
-          </SettingRow>
-          <LowMemoryRuntimeNotice enabled={prefs.lowMemoryBackgroundEnabled ?? false} />
           <SettingRow label={t('settings.recording.startMinimizedLabel')}>
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
@@ -955,82 +940,7 @@ export function RecordingInputSection({
   );
 }
 
-// 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist /
-// windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
-// 低内存模式只在启动时读取一次开关；此处对比运行态与已保存的开关值，
-// 不一致时提示重启，并顺带显示 sidecar 启动及运行失败的健康告警。
-function LowMemoryRuntimeNotice({ enabled }: { enabled: boolean }) {
-  const { t } = useTranslation();
-  const [runtime, setRuntime] = useState<NativeCapsuleStatus | null>(null);
-  useEffect(() => {
-    if (!isTauri) return;
-    let cancelled = false;
-    let revision = 0;
-    let unlisten: (() => void) | undefined;
-    const refresh = async () => {
-      const current = ++revision;
-      try {
-        const status = await getNativeCapsuleStatus();
-        if (!cancelled && current === revision) setRuntime(status);
-      } catch (error) {
-        if (!cancelled) console.error('[low-memory] status failed', error);
-      }
-    };
-    void import('@tauri-apps/api/event')
-      .then(async ({ listen }) => {
-        const dispose = await listen('native-capsule:health-changed', () => void refresh());
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-        await refresh();
-      })
-      .catch((error: unknown) => console.error('[low-memory] health listener failed', error));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [enabled]);
-  if (!runtime) return null;
-  const needsRestart = runtime.active !== enabled;
-  const capsuleBroken = runtime.active && !runtime.available;
-  if (!needsRestart && !capsuleBroken) return null;
-  return (
-    <>
-      {needsRestart ? (
-        <SettingRow
-          label={t('settings.recording.lowMemoryRestartLabel')}
-          desc={t('settings.recording.lowMemoryRestartDesc')}
-        >
-          <Btn variant="blue" size="sm" onClick={restartApp}>
-            {t('settings.recording.lowMemoryRestartNow')}
-          </Btn>
-        </SettingRow>
-      ) : null}
-      {capsuleBroken ? (
-        <SettingRow
-          label={t('settings.recording.lowMemoryCapsuleErrorLabel')}
-          desc={t('settings.recording.lowMemoryCapsuleErrorDesc')}
-        >
-          {runtime.error ? (
-            <span
-              style={{
-                fontSize: 11,
-                color: 'var(--ol-ink-3)',
-                maxWidth: 220,
-                wordBreak: 'break-all',
-              }}
-            >
-              {runtime.error}
-            </span>
-          ) : null}
-        </SettingRow>
-      ) : null}
-    </>
-  );
-}
-
+// Autostart state is owned by the operating system; it is intentionally not mirrored in prefs.
 function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);

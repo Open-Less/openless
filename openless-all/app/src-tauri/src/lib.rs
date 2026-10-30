@@ -254,10 +254,8 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
-            desktop_resources::desktop_low_memory_active,
             native_capsule::native_capsule_set_locale,
             get_capsule_auxiliary_snapshot,
-            native_capsule_status,
             commands::get_capsule_snapshot,
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
@@ -836,7 +834,7 @@ fn run_desktop() {
     let mut context = tauri::generate_context!();
     desktop_resources::configure(
         &mut context,
-        core_backend.get_preferences().low_memory_background_enabled,
+        false,
     );
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
@@ -930,7 +928,7 @@ fn run_desktop() {
             // system traffic lights; Windows disables native chrome so the React
             // WinTitleBar takes over.
             // Set the native appearance before showing any window, including
-            // low-memory launches where the main WebView does not exist yet.
+            // launches where the main WebView does not exist yet.
             #[cfg(target_os = "macos")]
             app.set_theme(match coordinator.backend().get_preferences().theme_mode {
                 types::ThemeMode::System => None,
@@ -1775,9 +1773,8 @@ fn restart_app(app: AppHandle) {
 }
 
 /// `AppHandle::restart` from a command thread routes through
-/// `ExitRequested { code: None }`, which the low-memory background policy
-/// deliberately prevents; hopping to the main thread takes tauri's direct
-/// spawn-and-exit path instead.
+/// `ExitRequested { code: None }` can be intercepted by the desktop lifecycle;
+/// hopping to the main thread takes Tauri's direct spawn-and-exit path instead.
 fn restart_on_main_thread(app: AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || handle.restart());
@@ -4356,21 +4353,5 @@ fn get_capsule_auxiliary_snapshot(
     serde_json::json!({
         "suggestions": coord.backend().pending_corrections(),
         "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
-    })
-}
-
-/// Runtime health of the disposable native capsule, for the settings page:
-/// `active` mirrors the launch-time low-memory switch, `available` is false
-/// when the sidecar helper is missing or failed to initialize.
-#[cfg(not(mobile))]
-#[tauri::command]
-fn native_capsule_status(
-    coord: tauri::State<'_, Arc<coordinator::Coordinator>>,
-) -> serde_json::Value {
-    let (available, error) = coord.tauri_host().native_capsule_status();
-    serde_json::json!({
-        "active": crate::desktop_resources::active(),
-        "available": available,
-        "error": error,
     })
 }

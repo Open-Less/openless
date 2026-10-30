@@ -1905,11 +1905,6 @@ pub(crate) struct TauriCoordinatorHost {
     capsule: Arc<CapsuleWindowState>,
     #[cfg(not(mobile))]
     native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
-    /// Last sidecar init failure, surfaced by `native_capsule_status` so the
-    /// settings page can explain a missing recording overlay instead of
-    /// failing silently.
-    #[cfg(not(mobile))]
-    native_capsule_error: Arc<Mutex<Option<String>>>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
@@ -1923,8 +1918,6 @@ impl TauriCoordinatorHost {
             capsule: Arc::new(CapsuleWindowState::default()),
             #[cfg(not(mobile))]
             native: Arc::new(Mutex::new(None)),
-            #[cfg(not(mobile))]
-            native_capsule_error: Arc::new(Mutex::new(None)),
             qa_context,
         }
     }
@@ -1938,11 +1931,9 @@ impl TauriCoordinatorHost {
             match crate::native_capsule::NativeCapsule::new(app.clone()) {
                 Ok(native) => {
                     *self.native.lock() = Some(Arc::new(native));
-                    *self.native_capsule_error.lock() = None;
                 }
                 Err(error) => {
                     log::error!("[native-capsule] {error}; dictation remains available");
-                    *self.native_capsule_error.lock() = Some(error.to_string());
                 }
             }
         }
@@ -1969,17 +1960,6 @@ impl TauriCoordinatorHost {
         if let Some(app) = self.app.lock().as_ref() {
             let _ = app.run_on_main_thread(task);
         }
-    }
-
-    /// `(available, last_error)` for the disposable capsule sidecar.
-    #[cfg(not(mobile))]
-    pub(crate) fn native_capsule_status(&self) -> (bool, Option<String>) {
-        let native = self.native.lock();
-        let error = native
-            .as_ref()
-            .and_then(|native| native.last_error())
-            .or_else(|| self.native_capsule_error.lock().clone());
-        (native.is_some() && error.is_none(), error)
     }
 
     #[cfg(not(mobile))]

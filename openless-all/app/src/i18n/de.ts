@@ -1745,16 +1745,6 @@ export const de: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Nach Zeitüberschreitung stoppen',
       voiceActivationTimeoutSeconds: 'Zeitüberschreitung (Sekunden)',
       startupGroupTitle: 'Startverhalten',
-      lowMemoryBackgroundLabel: 'Speichersparender Hintergrundmodus',
-      lowMemoryBackgroundDesc:
-        'Nach einem Neustart: Hauptfenster beim Schließen freigeben, native Kapsel bei Bedarf anzeigen und Mikrofonvorwärmung im Leerlauf deaktivieren. Die Freigabeeinstellungen lokaler Modelle bleiben erhalten.',
-      lowMemoryRestartLabel: 'Wird nach Neustart wirksam',
-      lowMemoryRestartDesc:
-        'Der Schalter für den speichersparenden Hintergrundmodus ist gespeichert; der aktive Modus wechselt erst nach einem Neustart der App.',
-      lowMemoryRestartNow: 'Jetzt neu starten',
-      lowMemoryCapsuleErrorLabel: 'Native Kapsel nicht verfügbar',
-      lowMemoryCapsuleErrorDesc:
-        'Diktieren funktioniert weiterhin, aber die schwebende Kapsel wird nicht angezeigt. Das Hilfsprogramm fehlt möglicherweise oder wird blockiert; installiere die App neu.',
       startMinimizedLabel: 'Minimiert starten (ohne Hauptfenster)',
       startMinimizedDesc:
         'Zeigt bei keinem Startweg das Hauptfenster an. Nur Menüleiste / Infobereich.',

@@ -443,6 +443,8 @@
   height: 40px;
   padding: 4px 6px;
   border-radius: 999px;
+  overflow: hidden;
+  isolation: isolate;
   box-sizing: border-box;
   will-change: left, width;
 }

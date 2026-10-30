@@ -133,8 +133,8 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-/// How long a low-memory close keeps the hidden WebView alive before the
-/// real destroy, so accidental close/reopen cycles lose nothing.
+/// How long a hidden WebView remains alive before a real destroy, so accidental
+/// close/reopen cycles preserve unsaved state.
 #[cfg(not(mobile))]
 pub(crate) const MAIN_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -234,9 +234,4 @@ pub(crate) fn hide_capsule_window<R: tauri::Runtime>(
         window.destroy()?;
     }
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) fn desktop_low_memory_active() -> bool {
-    active()
 }

@@ -126,7 +126,6 @@ fn strip_local_only_preferences(value: &mut serde_json::Value) {
         object.remove("lowLatencyDictationEnabled");
         object.remove("echoCancellationEnabled");
         object.remove("audioDsp");
-        object.remove("lowMemoryBackgroundEnabled");
     }
 }
 

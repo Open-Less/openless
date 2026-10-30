@@ -1687,16 +1687,6 @@ export const ko: typeof zhCN = {
       voiceActivationTimeoutEnabled: '시간 초과 후 중지',
       voiceActivationTimeoutSeconds: '시간 초과(초)',
       startupGroupTitle: '시작',
-      lowMemoryBackgroundLabel: '저메모리 백그라운드 모드',
-      lowMemoryBackgroundDesc:
-        '재시작 후 적용됩니다. 메인 창을 닫으면 해제하고 녹음 시에만 네이티브 캡슐을 표시합니다. 대기 중 마이크 사전 실행을 끕니다. 로컬 모델 해제 설정은 유지됩니다.',
-      lowMemoryRestartLabel: '재시작 후 적용',
-      lowMemoryRestartDesc:
-        '저메모리 백그라운드 모드 설정이 저장되었습니다. 실행 모드는 앱을 재시작해야 전환됩니다.',
-      lowMemoryRestartNow: '지금 재시작',
-      lowMemoryCapsuleErrorLabel: '네이티브 캡슐을 사용할 수 없음',
-      lowMemoryCapsuleErrorDesc:
-        '받아쓰기는 계속 사용할 수 있지만 플로팅 캡슐이 표시되지 않습니다. 헬퍼가 없거나 차단되었을 수 있습니다. 앱을 다시 설치해 주세요.',
       startMinimizedLabel: '시작 시 메인 창 숨기기',
       startMinimizedDesc:
         '모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.',

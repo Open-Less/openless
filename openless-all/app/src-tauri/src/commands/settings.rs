@@ -244,7 +244,6 @@ pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
     warm_hub.configure(
         crate::recorder::warm_capture_enabled(
             prefs.low_latency_dictation_enabled,
-            crate::desktop_resources::active(),
             warm_hub.activation_is_active(),
         ),
         (!prefs.microphone_device_name.trim().is_empty())

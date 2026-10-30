@@ -502,8 +502,7 @@ pub(crate) fn native_capsule_set_locale(app: tauri::AppHandle, locale: String) {
     ) {
         return;
     }
-    // Save even in regular mode: enabling low-memory mode then restarting
-    // silently must keep the UI language chosen before the restart.
+    // Persist the helper locale so it survives app restarts.
     if let Ok(directory) = app.path().app_config_dir() {
         if std::fs::create_dir_all(&directory).is_ok() {
             let temporary = directory.join("native-capsule.locale.tmp");

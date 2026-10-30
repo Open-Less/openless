@@ -33,9 +33,7 @@
     "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"assets/remote-input/*.{js,css,html}\"",
-    "test:ui-motion": "playwright test",
-    "build:native-capsule": "node scripts/build-native-capsule.mjs",
-    "build:native-capsule:dev": "node scripts/build-native-capsule.mjs --debug"
+    "test:ui-motion": "playwright test"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
