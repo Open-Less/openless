@@ -188,6 +188,18 @@ try {
   expect('contract suite', every('true'));
   reset();
 
+  // The impact classifier and its shell wrapper define the platform gates. A
+  // change to either must fail open and run every platform check.
+  commit(
+    {
+      'openless-all/app/scripts/ci-impact.mjs': 'console.log(1);\n',
+      'openless-all/app/scripts/ci-changed-areas.sh': '#!/usr/bin/env bash\n',
+    },
+    'CI impact tooling',
+  );
+  expect('CI impact tooling', every('true'));
+  reset();
+
   // Native resources have both bundle and direct native consumers.
   commit({ 'openless-all/app/assets/vocab-presets.json': '{}\n' }, 'native asset');
   expect('native asset', every('true'));

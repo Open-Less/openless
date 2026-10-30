@@ -221,6 +221,7 @@ const workflowOrTooling = (file) =>
   file.endsWith('/Cargo.lock') ||
   /(^|\/)rust-toolchain(\.toml)?$/.test(file) ||
   file.startsWith('openless-all/app/contract/') ||
+  file.startsWith('openless-all/app/scripts/ci-') ||
   file.startsWith('scripts/');
 
 /**
