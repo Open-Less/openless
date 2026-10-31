@@ -1874,6 +1874,9 @@ export const zhCN = {
       thinkingBudgetLabel: '思考预算 tokens',
       serviceTierLabel: '方舟低延迟推理（fast）',
       serviceTierHint: '仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。',
+      openaiServiceTierLabel: 'OpenAI Fast 模式',
+      openaiServiceTierHint:
+        'Fast 模式费用更高，详见 https://developers.openai.com/api/docs/pricing。不支持的模型或地区会返回错误。',
       responsesThinkingHint: '部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。',
       messagesThinkingHint:
         '旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。',
