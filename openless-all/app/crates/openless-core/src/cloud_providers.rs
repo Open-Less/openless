@@ -1953,6 +1953,8 @@ fn validate_omni_context(
 /// Validate an Omni provider using the same construction and request path as
 /// dictation. Dedicated transcription uses synthetic silence; general-purpose
 /// models use a text probe, which does not prove audio support (issue #1118).
+/// Models that reject text-only input (OpenAI `gpt-audio-*`, issue #1305) are
+/// probed again with the same synthetic silence.
 pub async fn validate_shared_omni_provider(
     credentials: Arc<dyn CredentialStore>,
     context: Arc<DictationContext>,
@@ -1961,28 +1963,51 @@ pub async fn validate_shared_omni_provider(
     let provider =
         build_omni_provider_with_task_spawner(credentials.as_ref(), context.as_ref(), task_spawner)
             .await?;
+    let silence = || crate::asr::wav::encode_wav_16k_mono(&vec![0; 8_000]);
     if provider.is_transcription_only() {
-        let wav = crate::asr::wav::encode_wav_16k_mono(&vec![0; 8_000]);
         provider
-            .complete("", "", Some(&wav))
+            .complete("", "", Some(&silence()))
             .await
             .map_err(map_omni_error)?;
         // Completed silence legitimately produces no transcript.
         return Ok(());
     }
-    let result = provider
-        .complete("验证连接", "ping", None)
+    let label = provider.call_label();
+    // OpenAI audio chat models (`gpt-audio-*`, `gpt-4o-audio-preview`) reject
+    // text-only input, so they get the silence probe right away.
+    let audio_model =
+        label.provider == "openai" && label.model.to_ascii_lowercase().contains("audio");
+    if !audio_model {
+        match provider.complete("验证连接", "ping", None).await {
+            // Other models that need audio are recognized by how they refuse text.
+            Err(crate::polish::LLMError::InvalidResponse { status, body })
+                if rejects_text_only_input(status, &body) => {}
+            result => {
+                if result.map_err(map_omni_error)?.trim().is_empty() {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "Omni provider returned empty validation output",
+                    ));
+                }
+                return Ok(());
+            }
+        }
+    }
+    provider
+        .complete("验证连接", "ping", Some(&silence()))
         .await
         .map_err(map_omni_error)?;
-
-    if result.trim().is_empty() {
-        return Err(BackendError::new(
-            BackendErrorCode::Provider,
-            "Omni provider returned empty validation output",
-        ));
-    }
-
+    // As above, a reply to silence may legitimately be empty.
     Ok(())
+}
+
+/// A text-only request refused because the model needs audio input, e.g. OpenAI's
+/// "This model requires that either input content or output modality contain audio."
+fn rejects_text_only_input(status: u16, body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    (400..500).contains(&status)
+        && !matches!(status, 401 | 403 | 404 | 429)
+        && (body.contains("audio") || body.contains("音频"))
 }
 
 /// First-stage Omni for Selection Voice / Less Computer (#1119 product B):
@@ -3691,6 +3716,146 @@ mod tests {
         assert_eq!(error.code, BackendErrorCode::Busy);
         engine.feed_audio(session_id, &[0, 0]).unwrap();
         engine.cancel(session_id).await.unwrap();
+    }
+
+    /// Answers consecutive requests (one connection each) with `responses`; returns
+    /// the endpoint and the JSON bodies received so far.
+    async fn serve_omni_responses(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (
+        String,
+        Arc<Mutex<Vec<serde_json::Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let received = Arc::clone(&bodies);
+        let server = tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 8192];
+                let json = loop {
+                    let read = socket.read(&mut buf).await.unwrap();
+                    assert_ne!(read, 0, "request ended before body");
+                    request.extend_from_slice(&buf[..read]);
+                    let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|length| length.trim().parse().ok())
+                        .unwrap();
+                    if request.len() >= end + 4 + length {
+                        break serde_json::from_slice::<serde_json::Value>(
+                            &request[end + 4..end + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                };
+                received.lock().push(json);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (endpoint, bodies, server)
+    }
+
+    async fn openai_omni_fixture(
+        endpoint: &str,
+        model: &str,
+    ) -> (Arc<dyn CredentialStore>, Arc<DictationContext>) {
+        let store = Arc::new(InMemoryCredentialStore::default());
+        for (account, value) in [
+            (OMNI_API_KEY_ACCOUNT, "omni-secret"),
+            (OMNI_ENDPOINT_ACCOUNT, endpoint),
+        ] {
+            write_channel_secret(
+                store.as_ref(),
+                CredentialNamespace::Omni,
+                "openai",
+                account,
+                value,
+            )
+            .await;
+        }
+        let mut omni = ProviderInvocation::new("openai", "openai");
+        omni.model = Some(model.to_string());
+        let context = DictationContext {
+            omni,
+            ..DictationContext::default()
+        };
+        (store, Arc::new(context))
+    }
+
+    const AUDIO_REQUIRED: &str = r#"{"error":{"message":"This model requires that either input content or output modality contain audio.","type":"invalid_request_error","param":"model","code":"invalid_value"}}"#;
+    const EMPTY_REPLY: &str = r#"{"choices":[{"message":{"content":""}}]}"#;
+
+    #[tokio::test]
+    async fn omni_verify_probes_openai_audio_models_with_silence() {
+        let (endpoint, bodies, server) = serve_omni_responses(vec![("200 OK", EMPTY_REPLY)]).await;
+        let (credentials, context) = openai_omni_fixture(&endpoint, "gpt-audio-1.5").await;
+
+        validate_shared_omni_provider(credentials, context, Arc::new(TokioTaskSpawner))
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        let bodies = bodies.lock();
+        assert_eq!(bodies.len(), 1);
+        let parts = bodies[0]["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "input_audio");
+        assert_eq!(parts[1]["text"], "ping");
+    }
+
+    #[tokio::test]
+    async fn omni_verify_probes_with_silence_when_text_is_refused_for_audio() {
+        let (endpoint, bodies, server) = serve_omni_responses(vec![
+            ("400 Bad Request", AUDIO_REQUIRED),
+            ("200 OK", EMPTY_REPLY),
+        ])
+        .await;
+        let (credentials, context) = openai_omni_fixture(&endpoint, "relay-voice-model").await;
+
+        validate_shared_omni_provider(credentials, context, Arc::new(TokioTaskSpawner))
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        let bodies = bodies.lock();
+        assert_eq!(bodies[0]["messages"][1]["content"], "ping");
+        let parts = bodies[1]["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "input_audio");
+    }
+
+    #[tokio::test]
+    async fn omni_verify_reports_other_bad_requests_without_retrying() {
+        // A retry would get the second, successful response and pass validation.
+        let (endpoint, bodies, server) = serve_omni_responses(vec![
+            (
+                "400 Bad Request",
+                r#"{"error":{"message":"Unsupported value: 'temperature'"}}"#,
+            ),
+            ("200 OK", EMPTY_REPLY),
+        ])
+        .await;
+        let (credentials, context) = openai_omni_fixture(&endpoint, "gpt-4o").await;
+
+        let error = validate_shared_omni_provider(credentials, context, Arc::new(TokioTaskSpawner))
+            .await
+            .unwrap_err();
+
+        assert!(error.message.contains("status 400"), "{}", error.message);
+        assert_eq!(bodies.lock().len(), 1);
+        server.abort();
     }
 
     #[tokio::test]
