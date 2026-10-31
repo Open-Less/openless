@@ -30,6 +30,7 @@ mod android_credentials;
 mod android_storage;
 mod correction;
 mod credentials;
+mod desktop_onboarding;
 mod dictionary;
 mod history;
 mod paths;
@@ -40,6 +41,7 @@ mod style_pack;
 pub use activity::*;
 pub use correction::*;
 pub use credentials::*;
+pub use desktop_onboarding::*;
 pub use dictionary::*;
 pub use history::*;
 pub(crate) use openless_core::{

@@ -588,14 +588,10 @@ for (const overlay of [false, true]) {
   };
   vm.runInNewContext(compile(`globalThis.effect = (${cueEffect});`), scope);
   const cleanup = scope.effect();
-  await until(() => bus.size === 1);
-  bus.emit('main', 'capsule:state', { state: 'recording' });
-  bus.emit('capsule-mirror-0', 'capsule:state', { state: 'idle' });
-  bus.emit('main', 'capsule:state', { state: 'recording' });
-  assert.equal(plays, 1, 'hidden mirror cleanup must not replay the recording cue');
+  await tick();
+  assert.equal(bus.size, 0, 'main window must not subscribe to capsule recording cues');
+  assert.equal(plays, 0, 'opening the main window must not play the recording cue');
   assert.equal(stops, 0);
-  bus.emit('main', 'capsule:state', { state: 'idle' });
-  assert.equal(stops, 1);
   cleanup();
   assert.equal(bus.size, 0);
 }
