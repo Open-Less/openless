@@ -8297,7 +8297,13 @@ impl OpenLessBackend {
             if let Some(commands) = context.voice_activation.as_ref() {
                 engine_result.raw_text = commands.clean(&engine_result.raw_text);
                 engine_result.polished_text = commands.clean(&engine_result.polished_text);
-                if let Some(text) = engine_result.asr_transcript.as_mut() {
+                for text in [
+                    engine_result.asr_transcript.as_mut(),
+                    engine_result.polish_source.as_mut(),
+                ]
+                .into_iter()
+                .flatten()
+                {
                     *text = commands.clean(text);
                 }
             }
