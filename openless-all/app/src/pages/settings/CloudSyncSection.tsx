@@ -731,17 +731,22 @@ export function CloudSyncSection() {
           />
         </div>
         {loading && <p role="status">{t('cloudSyncE2ee.loading')}</p>}
-        {!loading && !customServerConfigured && !syncSignedIn && !authSignedIn && (
-          <Btn
-            variant="primary"
-            icon="user"
-            disabled={!isTauriNow() || !available || working}
-            onClick={() => setShowLogin(true)}
-          >
-            {t('cloudSyncE2ee.signIn')}
-          </Btn>
-        )}
-        {syncSignedIn && (
+        {!loading &&
+          !customServerConfigured &&
+          !syncSignedIn &&
+          (!authSignedIn ||
+            status?.syncState === 'sign_in_required' ||
+            status?.authState === 'expired') && (
+            <Btn
+              variant="primary"
+              icon="user"
+              disabled={!isTauriNow() || !available || working}
+              onClick={() => setShowLogin(true)}
+            >
+              {t('cloudSyncE2ee.signIn')}
+            </Btn>
+          )}
+        {(syncSignedIn || authSignedIn) && (
           <div className="ol-cloud-sync-account">
             <Icon name="user" size={16} />
             <span>{t('cloudSyncE2ee.account')}</span>
