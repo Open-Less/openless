@@ -1520,6 +1520,7 @@ export const ko: typeof zhCN = {
         '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
+      capsuleStyleSiriEnhanced: '오로라',
       capsuleStyleClassic: '기본 스타일',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:

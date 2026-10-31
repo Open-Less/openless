@@ -1471,6 +1471,7 @@ export const zhTW: typeof zhCN = {
         '從所有螢幕顯示切換需要重新啟動軟體，才能清理先前的膠囊視窗。現在重新啟動嗎？',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
+      capsuleStyleSiriEnhanced: '極光',
       capsuleStyleClassic: '預設風格',
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:

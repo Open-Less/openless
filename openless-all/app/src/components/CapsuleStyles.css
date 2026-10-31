@@ -147,6 +147,19 @@
   height: 40px;
 }
 
+/* Siri enhanced: the host widens this HWND to half of the screen. Span all of it so the
+   pill and the text track are laid out in the same frame (a fixed 460px overlay inside the
+   wider window put the text off the pill). */
+.ol-capsule-transcript-overlay[data-enhanced='true'] {
+  width: 100%;
+}
+
+/* Siri enhanced band is a third taller (54px, SIRI_ENHANCED_RAIL_HEIGHT). */
+.ol-capsule-transcript-overlay[data-style='siri'][data-enhanced='true'],
+.ol-capsule-transcript-overlay[data-style='siri'][data-enhanced='true'] .ol-capsule-transcript-rail {
+  height: 54px;
+}
+
 .ol-capsule-transcript-overlay--typeless {
   width: 460px;
   zoom: 0.447;
@@ -454,6 +467,36 @@
   background: var(--ol-capsule-pill-bg);
   border: 0.5px solid var(--ol-capsule-pill-border);
   box-shadow: var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset);
+}
+
+/* Siri enhanced: no solid band at all, just a heavily blurred blue -> violet -> pink glow behind
+   the words so the eye stays on the text. Only the background layer lives on the pill; the glyph
+   track is a sibling and is forced to white (with a soft shadow) in every theme. */
+.ol-live-transcript-pill[data-tone='frost'][data-enhanced='true'] {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.ol-live-transcript-pill[data-tone='frost'][data-enhanced='true']::before {
+  content: '';
+  position: absolute;
+  inset: 6px 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    rgb(37 99 235 / 80%),
+    rgb(109 40 217 / 80%) 50%,
+    rgb(190 24 93 / 80%)
+  );
+  filter: blur(12px);
+  pointer-events: none;
+}
+
+.ol-live-transcript-stage:has(> .ol-live-transcript-pill[data-enhanced='true'])
+  .ol-live-transcript-track {
+  color: #fff;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 45%);
 }
 
 .ol-live-transcript-pill[data-tone='dark'] {

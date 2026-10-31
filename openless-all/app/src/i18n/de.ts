@@ -1575,6 +1575,7 @@ export const de: typeof zhCN = {
         'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
+      capsuleStyleSiriEnhanced: 'Aurora',
       capsuleStyleClassic: 'Standardstil',
       stableTranscriptionLabel: 'Stabiler Modus (erst aufnehmen, dann transkribieren)',
       stableTranscriptionDesc:

@@ -1,9 +1,17 @@
-import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  animate,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  useTransform,
+  type Easing,
+} from 'framer-motion';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './CapsuleStyles.css';
 import {
   INSERT_TEXT_MOTION,
+  SIRI_ENHANCED_GLYPH_MOTION,
   appendedBirthAdvance,
   clampInsertContentWidth,
   diffInsertWindowUnits,
@@ -28,8 +36,14 @@ import {
   type BackendEvent,
   type TranscriptViewState,
 } from '../lib/backendEvent';
-import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
+import {
+  capsuleTranscriptBandPresent,
+  capsuleTranscriptFontSize,
+  visibleCapsuleTranscript,
+} from '../lib/capsuleTranscript';
 import { getCapsuleTranscriptRailHeight, parseCapsuleStyle } from '../lib/capsuleLayout';
+import { planBirthDelays } from '../lib/typewriterText';
+import { useTranscriptLinger } from '../lib/useTranscriptLinger';
 import { getSettings } from '../lib/ipc/settings';
 import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
 import type {
@@ -59,9 +73,27 @@ export interface LiveTranscriptPillProps {
   confirmLabel?: string;
   controlSize?: number;
   fontSize?: number;
+  /**
+   * Siri enhanced: a centred band that starts at the capsule's width, widens ahead of the text up
+   * to `maxWidth`, then scrolls the text through it like a marquee.
+   */
+  fixedWidth?: boolean;
+  /** Siri enhanced: the transcript has gone; collapse the band into its centre. */
+  closing?: boolean;
+  /** Siri enhanced: ink-wash glyph focus-in, with each burst's new glyphs entering in order. */
+  enhancedMotion?: boolean;
+  /**
+   * Siri enhanced: speech has ended and the text is being finalised / polished; the line loops
+   * blur-together then focus left to right until the rail goes away.
+   */
+  settled?: boolean;
 }
 
 const FONT_SIZE = 16;
+/** Matches the horizontal feather of the enhanced pill in CapsuleStyles.css. */
+const SIRI_ENHANCED_FEATHER_PX = 40;
+/** Siri enhanced band height: the 40px Siri rail plus a third. */
+const SIRI_ENHANCED_RAIL_HEIGHT = 54;
 const FONT_WEIGHT = 500;
 const DEFAULT_PILL_HEIGHT = 40;
 
@@ -94,6 +126,14 @@ export interface CapsuleTranscriptRailProps {
   maxWidth: number;
   height?: number;
   fontSize?: number;
+  /** Siri enhanced presentation (fixed-length marquee, ink-wash glyphs). */
+  enhanced?: boolean;
+  /** Speech has ended (transcribing / polishing). */
+  settled?: boolean;
+  /** The transcript has gone and the enhanced band is collapsing. */
+  closing?: boolean;
+  /** Siri enhanced: show the band even before there is any text (recording has started). */
+  present?: boolean;
 }
 
 /** Transcript is deliberately a sibling rail: the capsule body remains responsible for audio feedback and controls. */
@@ -104,9 +144,13 @@ export function CapsuleTranscriptRail({
   maxWidth,
   height = DEFAULT_PILL_HEIGHT,
   fontSize = FONT_SIZE,
+  enhanced = false,
+  settled = false,
+  closing = false,
+  present = false,
 }: CapsuleTranscriptRailProps) {
   const liveText = text.trim();
-  if (!liveText) return null;
+  if (!liveText && !(enhanced && present)) return null;
   return (
     <div className="ol-capsule-transcript-rail" data-tone={tone} data-transcript-rail="true">
       <LiveTranscriptPill
@@ -116,6 +160,10 @@ export function CapsuleTranscriptRail({
         maxWidth={maxWidth}
         height={height}
         fontSize={fontSize}
+        fixedWidth={enhanced}
+        enhancedMotion={enhanced}
+        settled={enhanced && settled}
+        closing={enhanced && closing}
       />
     </div>
   );
@@ -133,8 +181,20 @@ export function CapsuleTranscriptOverlay() {
   const [text, setText] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [fontSize, setFontSize] = useState(14);
+  const [siriEnhanced, setSiriEnhanced] = useState(false);
+  // Siri enhanced: the host sizes this HWND to 1/2.7 of the screen; follow it.
+  const [railWidth, setRailWidth] = useState(() =>
+    typeof window === 'undefined' ? 460 : window.innerWidth,
+  );
+  useEffect(() => {
+    const onResize = () => setRailWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const [selectionPolish, setSelectionPolish] = useState(false);
   const [translation, setTranslation] = useState(false);
+  // Microphone not producing audio yet (the orb's standby form); the enhanced band waits for it.
+  const [warming, setWarming] = useState(false);
   const transcriptRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const stateRef = useRef<CapsuleState>('idle');
   const snapshotRetryDelays = [0, 16, 32, 64, 128, 256] as const;
@@ -172,6 +232,7 @@ export function CapsuleTranscriptOverlay() {
           if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
           setSelectionPolish(payload.selectionPolish === true);
           setTranslation(payload.translation === true);
+          setWarming(payload.warming === true);
           const sessionId = payload.sessionId;
           const reactivatedSession =
             payload.state === 'recording' &&
@@ -207,6 +268,7 @@ export function CapsuleTranscriptOverlay() {
       const preferenceHandle = await listen<UserPreferences>('prefs:changed', (event) => {
         setEnabled(event.payload.capsuleTranscriptEnabled ?? true);
         setFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
+        setSiriEnhanced(event.payload.capsuleSiriEnhanced ?? false);
         if (event.payload.capsuleStyle)
           setStyle(parseCapsuleStyle(event.payload.capsuleStyle) ?? 'classic');
       });
@@ -229,6 +291,7 @@ export function CapsuleTranscriptOverlay() {
         setStyle(parseCapsuleStyle(snapshot.capsuleStyle ?? fallbackStyle) ?? 'classic');
         setSelectionPolish(snapshot.selectionPolish === true);
         setTranslation(snapshot.translation === true);
+        setWarming(snapshot.warming === true);
         if (snapshot.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
           transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
           setText(transcriptRef.current.text);
@@ -266,6 +329,7 @@ export function CapsuleTranscriptOverlay() {
         if (!cancelled) {
           setEnabled(preferences.capsuleTranscriptEnabled ?? true);
           setFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+          setSiriEnhanced(preferences.capsuleSiriEnhanced ?? false);
           setStyle(parseCapsuleStyle(preferences.capsuleStyle) ?? 'classic');
           await replaySnapshot(preferences.capsuleStyle);
         }
@@ -277,22 +341,42 @@ export function CapsuleTranscriptOverlay() {
     };
   }, []);
 
-  const liveText = visibleCapsuleTranscript(text, enabled, state, selectionPolish);
+  const enhanced = style === 'siri' && siriEnhanced;
+  // Enhanced: the band shows from the start of recording, and outlives the session for its
+  // collapse (Capsule keeps the rail shown for both).
+  const visibleText = visibleCapsuleTranscript(text, enabled, state, selectionPolish);
+  const linger = useTranscriptLinger(
+    visibleText,
+    enhanced
+      ? capsuleTranscriptBandPresent(enabled, state, selectionPolish, warming)
+      : Boolean(visibleText),
+    enhanced,
+    SIRI_ENHANCED_GLYPH_MOTION.closeMs,
+  );
+  const liveText = linger.text;
   const typeless = style === 'typeless';
-  const railHeight = getCapsuleTranscriptRailHeight(style);
+  // Enhanced: a third taller band; must match SIRI_ENHANCED_RAIL_HEIGHT in the Tauri host.
+  const railHeight = enhanced ? SIRI_ENHANCED_RAIL_HEIGHT : getCapsuleTranscriptRailHeight(style);
+  // Enhanced: the overlay spans the whole (wider) HWND so the pill and the text share one frame.
+  const stageWidth = enhanced ? Math.max(460, railWidth) : 460;
   return (
     <div
       className={`ol-capsule-transcript-overlay${typeless ? ' ol-typeless-capsule-wrap ol-capsule-transcript-overlay--typeless' : ''}`}
       data-style={style}
-      data-transcript-visible={liveText ? 'true' : 'false'}
+      data-enhanced={enhanced ? 'true' : undefined}
+      data-transcript-visible={linger.visible ? 'true' : 'false'}
     >
       <CapsuleTranscriptRail
         text={liveText}
         fontSize={typeless ? fontSize / 0.447 : fontSize}
         tone={typeless ? 'dark' : 'frost'}
-        stageWidth={460}
-        maxWidth={440}
+        stageWidth={stageWidth}
+        maxWidth={stageWidth - 20}
         height={railHeight}
+        enhanced={enhanced}
+        settled={state === 'transcribing' || state === 'polishing'}
+        closing={linger.closing}
+        present={linger.visible}
       />
       {translation && !selectionPolish && typeless && (
         <div className="ol-typeless-translation-row">
@@ -318,16 +402,33 @@ export function LiveTranscriptPill({
   confirmLabel,
   controlSize = 28,
   fontSize = FONT_SIZE,
+  fixedWidth = false,
+  enhancedMotion = false,
+  settled = false,
+  closing = false,
 }: LiveTranscriptPillProps) {
   const reduceMotion = useReducedMotion();
   const hasControls = Boolean(onCancel || onConfirm);
-  const padX = INSERT_TEXT_MOTION.padX + (hasControls ? controlSize + 6 : 0);
+  // The enhanced pill feathers its outer 40px; keep the glyphs inside the solid part.
+  const padX =
+    (fixedWidth ? SIRI_ENHANCED_FEATHER_PX : INSERT_TEXT_MOTION.padX) +
+    (hasControls ? controlSize + 6 : 0);
   const pillMinWidth = hasControls ? Math.max(minWidth, controlSize * 2 + 72) : minWidth;
-  const [units, setUnits] = useState<InsertUnit[]>(() => diffInsertWindowUnits([], text));
+  // The wide fixed marquee needs more glyphs than the default window to stay filled.
+  const windowOptions = useMemo(
+    () =>
+      fixedWidth
+        ? { ...INSERT_TEXT_RENDER_WINDOW, maxUnits: SIRI_ENHANCED_GLYPH_MOTION.maxUnits }
+        : INSERT_TEXT_RENDER_WINDOW,
+    [fixedWidth],
+  );
+  const [units, setUnits] = useState<InsertUnit[]>(() =>
+    diffInsertWindowUnits([], text, windowOptions),
+  );
   const [seenText, setSeenText] = useState(text);
   if (text !== seenText) {
     setSeenText(text);
-    setUnits((prev) => diffInsertWindowUnits(prev, text));
+    setUnits((prev) => diffInsertWindowUnits(prev, text, windowOptions));
   }
 
   const renderWindow = useMemo(
@@ -337,9 +438,9 @@ export function LiveTranscriptPill({
         (glyph) => measureGlyphWidth(glyph, fontSize),
         maxWidth,
         padX,
-        INSERT_TEXT_RENDER_WINDOW,
+        windowOptions,
       ),
-    [units, fontSize, maxWidth, padX],
+    [units, fontSize, maxWidth, padX, windowOptions],
   );
   const renderUnits = renderWindow.units;
   const widths = renderWindow.widths;
@@ -364,21 +465,67 @@ export function LiveTranscriptPill({
     () => planCharDelays(widths, originIndex, insertedCount),
     [widths, originIndex, insertedCount],
   );
-  const plan = useMemo(
-    () =>
-      planCapsuleInsertMotion({
-        stageWidth,
-        contentWidth,
-        originX,
-        minWidth: pillMinWidth,
-        maxWidth,
-        padX,
-      }),
-    [stageWidth, contentWidth, originX, pillMinWidth, maxWidth, padX],
+  // Enhanced: layout still moves once per ASR burst; the burst's new glyphs then ink in in order.
+  const birthDelays = useMemo(
+    () => (enhancedMotion ? planBirthDelays(renderUnits.map((unit) => unit.born)) : null),
+    [enhancedMotion, renderUnits],
   );
+  // Enhanced, polishing: each cycle the line blurs together, then glyphs focus left to right so
+  // the last one is sharp settleSweepMs after the first starts.
+  const settleStepMs = useMemo(() => {
+    const ink = SIRI_ENHANCED_GLYPH_MOTION;
+    const count = renderUnits.length;
+    return count > 1 ? (ink.settleSweepMs - ink.settleFocusMs) / (count - 1) : 0;
+  }, [renderUnits.length]);
+  const plan = useMemo(() => {
+    if (fixedWidth) {
+      // Centred band: capsule-wide at first, then a few glyphs ahead of the text up to maxWidth;
+      // closing collapses it into a small blob at the centre before it sinks.
+      const ink = SIRI_ENHANCED_GLYPH_MOTION;
+      const grown = contentWidth + padX * 2 + fontSize * ink.lookaheadEm;
+      const width = closing
+        ? Math.min(ink.closeWidth, maxWidth)
+        : Math.min(maxWidth, Math.max(Math.min(ink.minWidth, maxWidth), grown));
+      const left = (stageWidth - width) / 2;
+      return { width, left, rightEdge: left + width, widthDelayMs: 0, recenterDelayMs: 0 };
+    }
+    return planCapsuleInsertMotion({
+      stageWidth,
+      contentWidth,
+      originX,
+      minWidth: pillMinWidth,
+      maxWidth,
+      padX,
+    });
+  }, [
+    fixedWidth,
+    closing,
+    fontSize,
+    stageWidth,
+    contentWidth,
+    originX,
+    pillMinWidth,
+    maxWidth,
+    padX,
+  ]);
 
-  const widthMv = useMotionValue(pillMinWidth);
-  const rightEdgeMv = useMotionValue(stageWidth / 2 + pillMinWidth / 2);
+  // The enhanced band opens from its centre: it starts as a small blob (so the point it grows from
+  // is visible) and spreads out to the capsule's width in step with its rise.
+  const initialWidth = fixedWidth
+    ? Math.min(SIRI_ENHANCED_GLYPH_MOTION.closeWidth, maxWidth)
+    : pillMinWidth;
+  const openedAtRef = useRef(performance.now());
+  const widthMv = useMotionValue(initialWidth);
+  const rightEdgeMv = useMotionValue(stageWidth / 2 + initialWidth / 2);
+  // The host widens the enhanced rail HWND when it shows it, and the new size reaches this page a
+  // moment later. Re-centre the band at once when the stage width changes, so it never appears
+  // off to one side and slides over to the middle.
+  const seenStageWidthRef = useRef(stageWidth);
+  useLayoutEffect(() => {
+    const shift = (stageWidth - seenStageWidthRef.current) / 2;
+    seenStageWidthRef.current = stageWidth;
+    if (fixedWidth && shift !== 0) rightEdgeMv.set(rightEdgeMv.get() + shift);
+  }, [fixedWidth, stageWidth, rightEdgeMv]);
   // Delayed recentering may otherwise push a large batch beyond the native
   // WebView's left edge. Constrain the rendered frame, not spring momentum.
   const visibleRightMv = useTransform([rightEdgeMv, widthMv], ([right, width]) =>
@@ -388,7 +535,26 @@ export function LiveTranscriptPill({
     [visibleRightMv, widthMv],
     ([right, width]) => Number(right) - Number(width),
   );
-  const trackRightMv = useTransform(visibleRightMv, (right) => stageWidth - Number(right) + padX);
+  // Siri enhanced: while the line is shorter than the band, shift the right-anchored track left by
+  // half the free space so the text sits centred and grows outward both ways; once the band is at
+  // maxWidth and full, the offset reaches 0 and the line scrolls as a marquee.
+  const centerOffset = fixedWidth ? Math.max(0, (plan.width - padX * 2 - contentWidth) / 2) : 0;
+  const centerOffsetMv = useMotionValue(centerOffset);
+  useEffect(() => {
+    if (reduceMotion) {
+      centerOffsetMv.set(centerOffset);
+      return undefined;
+    }
+    const anim = animate(centerOffsetMv, centerOffset, {
+      type: 'spring',
+      ...INSERT_TEXT_MOTION.shiftSpring,
+    });
+    return () => anim.stop();
+  }, [centerOffset, centerOffsetMv, reduceMotion]);
+  const trackRightMv = useTransform(
+    [visibleRightMv, centerOffsetMv],
+    ([right, offset]) => stageWidth - Number(right) + padX + Number(offset),
+  );
 
   const trackWidthMv = useTransform(widthMv, (width) => Math.max(1, width - padX * 2));
 
@@ -398,16 +564,45 @@ export function LiveTranscriptPill({
       rightEdgeMv.set(plan.rightEdge);
       return undefined;
     }
-    const widthAnim = animate(widthMv, plan.width, {
-      type: 'spring',
-      ...INSERT_TEXT_MOTION.widthSpring,
-      delay: plan.widthDelayMs / 1000,
-    });
-    const rightAnim = animate(rightEdgeMv, plan.rightEdge, {
-      type: 'spring',
-      ...INSERT_TEXT_MOTION.recenterSpring,
-      delay: plan.recenterDelayMs / 1000,
-    });
+    // Closing is a short ease-in toward the centre, not a spring, so it ends cleanly.
+    const collapse = {
+      duration: SIRI_ENHANCED_GLYPH_MOTION.collapseMs / 1000,
+      ease: [0.4, 0, 1, 1] as Easing,
+    };
+    // While the enhanced band is still rising, spread it on the same curve so it finishes with the
+    // rise instead of reaching full width while it is still a small dot.
+    const openLeftMs = fixedWidth
+      ? SIRI_ENHANCED_GLYPH_MOTION.openMs - (performance.now() - openedAtRef.current)
+      : 0;
+    const unfold =
+      !closing && openLeftMs > 0
+        ? {
+            duration: openLeftMs / 1000,
+            ease: [...SIRI_ENHANCED_GLYPH_MOTION.openEase] as Easing,
+          }
+        : null;
+    const widthAnim = animate(
+      widthMv,
+      plan.width,
+      closing
+        ? collapse
+        : (unfold ?? {
+            type: 'spring',
+            ...INSERT_TEXT_MOTION.widthSpring,
+            delay: plan.widthDelayMs / 1000,
+          }),
+    );
+    const rightAnim = animate(
+      rightEdgeMv,
+      plan.rightEdge,
+      closing
+        ? collapse
+        : (unfold ?? {
+            type: 'spring',
+            ...INSERT_TEXT_MOTION.recenterSpring,
+            delay: plan.recenterDelayMs / 1000,
+          }),
+    );
     return () => {
       widthAnim.stop();
       rightAnim.stop();
@@ -417,23 +612,78 @@ export function LiveTranscriptPill({
     plan.rightEdge,
     plan.widthDelayMs,
     plan.recenterDelayMs,
+    closing,
     reduceMotion,
     rightEdgeMv,
     widthMv,
   ]);
 
+  // Siri enhanced: the band grows out of the centre of the Siri wave as it opens, and moves back
+  // into it, shrinking, as it closes.
+  const rises = fixedWidth && !reduceMotion;
+  const rise = SIRI_ENHANCED_GLYPH_MOTION;
+  const stageYMv = useMotionValue(rises ? rise.riseY : 0);
+  const stageScaleMv = useMotionValue(rises ? rise.riseScale : 1);
+  // Fully visible from the first frame, so the dot is seen at the wave's centre at once.
+  const stageOpacityMv = useMotionValue(1);
+  useEffect(() => {
+    if (!rises) {
+      stageYMv.set(0);
+      stageScaleMv.set(1);
+      stageOpacityMv.set(1);
+      return undefined;
+    }
+    const anims = closing
+      ? (() => {
+          const sink = {
+            duration: rise.sinkMs / 1000,
+            ease: [0.4, 0, 1, 1] as Easing,
+            delay: rise.sinkDelayMs / 1000,
+          };
+          return [
+            animate(stageYMv, rise.riseY, sink),
+            animate(stageScaleMv, rise.riseScale, sink),
+            animate(stageOpacityMv, 0, sink),
+          ];
+        })()
+      : (() => {
+          const unfold = { duration: rise.openMs / 1000, ease: [...rise.openEase] as Easing };
+          return [
+            animate(stageYMv, 0, unfold),
+            animate(stageScaleMv, 1, unfold),
+            animate(stageOpacityMv, 1, { duration: 0 }),
+          ];
+        })();
+    return () => {
+      for (const anim of anims) anim.stop();
+    };
+  }, [rises, closing, rise, stageYMv, stageScaleMv, stageOpacityMv]);
+
   const overflowing = contentWidth + padX * 2 >= maxWidth - 0.5;
 
   return (
-    <div
+    <motion.div
       className="ol-live-transcript-stage"
       data-tone={tone}
       data-controls={hasControls ? 'true' : 'false'}
-      style={{ width: '100%', height, maxWidth: stageWidth }}
+      style={{
+        width: '100%',
+        height,
+        maxWidth: stageWidth,
+        ...(fixedWidth
+          ? {
+              y: stageYMv,
+              scale: stageScaleMv,
+              opacity: stageOpacityMv,
+              transformOrigin: '50% 50%',
+            }
+          : {}),
+      }}
     >
       <motion.div
         className="ol-live-transcript-pill"
         data-tone={tone}
+        data-enhanced={enhancedMotion ? 'true' : undefined}
         style={{
           left: leftMv,
           width: widthMv,
@@ -498,8 +748,10 @@ export function LiveTranscriptPill({
           >
             <TranscriptGlyph
               text={unit.text}
-              delay={delays[index] ?? 0}
+              delay={birthDelays && unit.born ? (birthDelays[index] ?? 0) : (delays[index] ?? 0)}
               reduceMotion={Boolean(reduceMotion)}
+              enhanced={enhancedMotion}
+              settleFocusAt={enhancedMotion && settled ? index * settleStepMs : null}
             />
           </motion.span>
         ))}
@@ -507,7 +759,7 @@ export function LiveTranscriptPill({
       <span className="ol-live-transcript-sr" role="status" aria-live="polite">
         {text}
       </span>
-    </div>
+    </motion.div>
   );
 }
 
@@ -516,12 +768,53 @@ function TranscriptGlyph({
   text,
   delay,
   reduceMotion,
+  enhanced = false,
+  settleFocusAt = null,
 }: {
   text: string;
   delay: number;
   reduceMotion: boolean;
+  enhanced?: boolean;
+  /** Siri enhanced, polishing: ms after the line has blurred when this glyph starts to focus. */
+  settleFocusAt?: number | null;
 }) {
   const [birthDelay] = useState(delay);
+  const ink = SIRI_ENHANCED_GLYPH_MOTION;
+  if (enhanced && !reduceMotion && settleFocusAt !== null) {
+    // One breath: all glyphs slowly blur together, rest, focus in their left-to-right turn, stay
+    // sharp until the cycle ends. Every glyph shares the cycle length, so the loop stays in step.
+    const blurredAt = ink.settleBlurInMs + ink.settleBlurHoldMs;
+    const cycle = blurredAt + ink.settleSweepMs + ink.settleHoldMs;
+    const focusStart = blurredAt + settleFocusAt;
+    const focusEnd = focusStart + ink.settleFocusMs;
+    const sine = [...ink.settleEase] as Easing;
+    const settle = {
+      duration: cycle / 1000,
+      times: [0, ink.settleBlurInMs / cycle, focusStart / cycle, focusEnd / cycle, 1],
+      ease: [sine, 'linear', sine, 'linear'] as Easing[],
+      repeat: Infinity,
+    };
+    const blurred = `blur(${ink.settleBlurPx}px)`;
+    return (
+      <motion.span
+        className="ol-live-transcript-char"
+        animate={{
+          opacity: 1,
+          y: 0,
+          filter: ['blur(0px)', blurred, blurred, 'blur(0px)', 'blur(0px)'],
+          scale: [1, ink.settleScale, ink.settleScale, 1, 1],
+        }}
+        transition={{
+          opacity: { duration: 0.2 },
+          y: { duration: 0.2 },
+          filter: settle,
+          scale: settle,
+        }}
+      >
+        {text === ' ' ? ' ' : text}
+      </motion.span>
+    );
+  }
   return (
     <motion.span
       className="ol-live-transcript-char"
@@ -530,26 +823,37 @@ function TranscriptGlyph({
           ? false
           : {
               opacity: 0,
-              y: INSERT_TEXT_MOTION.bornY,
-              filter: `blur(${INSERT_TEXT_MOTION.bornBlurPx}px)`,
+              y: enhanced ? ink.bornY : INSERT_TEXT_MOTION.bornY,
+              filter: `blur(${enhanced ? ink.bornBlurPx : INSERT_TEXT_MOTION.bornBlurPx}px)`,
+              ...(enhanced ? { scale: ink.bornScale } : {}),
             }
       }
-      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      animate={{ opacity: 1, y: 0, filter: 'blur(0px)', ...(enhanced ? { scale: 1 } : {}) }}
       transition={
         reduceMotion
           ? { duration: 0 }
           : {
               opacity: {
-                duration: INSERT_TEXT_MOTION.bornFadeMs / 1000,
+                duration: (enhanced ? ink.fadeMs : INSERT_TEXT_MOTION.bornFadeMs) / 1000,
                 ease: [0.22, 0.61, 0.36, 1],
                 delay: birthDelay / 1000,
               },
               y: { type: 'spring', ...INSERT_TEXT_MOTION.charSpring, delay: birthDelay / 1000 },
               filter: {
-                duration: INSERT_TEXT_MOTION.bornFadeMs / 1000,
-                ease: [0.22, 0.61, 0.36, 1],
+                duration: (enhanced ? ink.focusMs : INSERT_TEXT_MOTION.bornFadeMs) / 1000,
+                ease: enhanced ? [...ink.focusEase] : [0.22, 0.61, 0.36, 1],
                 delay: birthDelay / 1000,
               },
+              // Ink settles: the oversized blur contracts to the glyph as it comes into focus.
+              ...(enhanced
+                ? {
+                    scale: {
+                      duration: ink.focusMs / 1000,
+                      ease: [...ink.focusEase],
+                      delay: birthDelay / 1000,
+                    },
+                  }
+                : {}),
             }
       }
     >
