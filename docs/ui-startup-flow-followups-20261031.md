@@ -37,7 +37,7 @@ This checklist turns the outstanding UI and startup feedback into observable wor
   - Lock numeric readouts to `tabular-nums`.
   - Keep snapping over-damped and positive feedback under-damped.
 - [partial] **Control selection rules**
-  - Theme now uses a three-option segmented control; language now uses a searchable single-select popup.
+  - Theme and capsule style now use segmented controls; language now uses a searchable single-select popup.
   - Use segmented buttons for two or three fixed choices.
   - Use switches for booleans.
   - Use searchable, grouped single-select popups for large lists.

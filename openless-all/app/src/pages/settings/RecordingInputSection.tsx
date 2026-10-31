@@ -527,15 +527,14 @@ export function RecordingInputSection({
         {!isAndroid && (
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
-              <SelectLite
-                value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
-                onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
+              <Segmented
                 options={[
                   { value: 'classic', label: t('settings.recording.capsuleStyleClassic') },
                   { value: 'siri', label: t('settings.recording.capsuleStyleSiri') },
                 ]}
-                ariaLabel={t('settings.recording.capsuleStyleLabel')}
-                style={{ maxWidth: 220, minWidth: 200 }}
+                value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
+                onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
+                label={t('settings.recording.capsuleStyleLabel')}
               />
               <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
             </div>
