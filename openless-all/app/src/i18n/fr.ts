@@ -1586,7 +1586,7 @@ export const fr: typeof zhCN = {
         'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
-      capsuleStyleClassic: 'Style par défaut d’OpenLess',
+      capsuleStyleClassic: 'Style par défaut',
       stableTranscriptionLabel: 'Mode stable (enregistrer puis transcrire)',
       stableTranscriptionDesc:
         'Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.',

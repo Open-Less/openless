@@ -1520,7 +1520,7 @@ export const ko: typeof zhCN = {
         '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
-      capsuleStyleClassic: 'OpenLess 기본 스타일',
+      capsuleStyleClassic: '기본 스타일',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',

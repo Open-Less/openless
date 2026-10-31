@@ -1575,7 +1575,7 @@ export const de: typeof zhCN = {
         'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
-      capsuleStyleClassic: 'OpenLess-Standardstil',
+      capsuleStyleClassic: 'Standardstil',
       stableTranscriptionLabel: 'Stabiler Modus (erst aufnehmen, dann transkribieren)',
       stableTranscriptionDesc:
         'Wenn aktiviert, verbindet sich ASR erst nach dem Aufnahmestopp und erhält die gesamte Aufnahme. Das Ergebnis erscheint später, aber Verbindungsaufbau und Netzwerkschwankungen während der Aufnahme stören die Aufzeichnung nicht.',
