@@ -44,6 +44,11 @@ assert.equal(
   'explicit deferral is not a startup permission gate',
 );
 assert.equal(
+  needsDesktopGuide(newGuideProgress(), { ...credentials, asrConfigured: false }, true),
+  false,
+  'native completion marker survives a recreated main webview',
+);
+assert.equal(
   needsDesktopGuide(null, {
     ...credentials,
     pipelineMode: 'multimodal',

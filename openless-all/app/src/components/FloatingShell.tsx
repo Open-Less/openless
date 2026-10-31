@@ -16,7 +16,6 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
-import { AudioCueListener } from './AudioCue';
 import { SettingsModal, type SettingsSectionId } from './SettingsModal';
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
@@ -678,8 +677,6 @@ function FloatingShellBody({
         }
         onSetup={() => openSettings('privacy')}
       />
-      <AudioCueListener />
-
       {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
       <style>{`
         /* Sidebar nav speaks the shared selection language (tokens.css --ol-choice-*),

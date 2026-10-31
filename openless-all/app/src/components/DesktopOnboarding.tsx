@@ -24,6 +24,7 @@ import type { CredentialsStatus, PermissionStatus } from '../lib/types';
 import {
   DESKTOP_ONBOARDING_KEY,
   deferPostGuidePrompts,
+  setDesktopOnboardingFinished,
   guideSteps,
   newGuideProgress,
   readGuideProgress,
@@ -171,9 +172,9 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
   };
   const leaveGuide = (finished: boolean) =>
     run(async () => {
-      // The parent's handoff prepares the main bundle before removing this surface.
+      // Persist before the parent swaps surfaces; the main WebView may be destroyed after the
+      // handoff, so completion cannot depend on a post-handoff localStorage write.
       deferPostGuidePrompts();
-      await onComplete();
       const next = { ...progress, name: name.trim().slice(0, 40), finished };
       const hasProgress = Boolean(next.name || Object.keys(next.answers).length);
       if (finished || hasProgress) {
@@ -185,6 +186,8 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
           setStorageError(true);
         }
       }
+      if (isTauri) await setDesktopOnboardingFinished(finished);
+      await onComplete();
     });
   const finish = () => leaveGuide(true);
   const exploreFirst = () => leaveGuide(false);
@@ -196,15 +199,16 @@ export function DesktopOnboarding({ onComplete }: { onComplete: () => void | Pro
         else setAccessibility('granted');
         return;
       }
-      const status = mic ? microphone : accessibility;
-      if ((mic && os === 'win') || status === 'denied' || status === 'restricted') {
-        await openSystemSettings(mic ? 'microphone' : 'accessibility');
+      if (mic && os === 'win') {
+        await openSystemSettings('microphone');
       } else {
+        // Accessibility authorization can remain stale after an ad-hoc update. The native
+        // request command resets this app's TCC row before asking macOS to show its prompt;
+        // only fall back to System Settings when the prompt did not grant access.
         const next = await (mic ? requestMicrophonePermission() : requestAccessibilityPermission());
         if (mic) setMicrophone(next);
         else setAccessibility(next);
-        if (next === 'denied' || next === 'restricted')
-          await openSystemSettings(mic ? 'microphone' : 'accessibility');
+        if (next !== 'granted') await openSystemSettings(mic ? 'microphone' : 'accessibility');
       }
       await refreshPermissions();
     });

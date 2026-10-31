@@ -1,10 +1,30 @@
 import type { CredentialsStatus } from './types';
+import { invokeOrMock } from './ipc/shared';
 import { areProvidersConfigured, PROVIDER_SETUP_PROMPT_DEFERRED_KEY } from './providerSetup';
 import { HOTKEY_MODE_MIGRATION_DEFERRED_KEY } from './hotkeyMigration';
 
 export const DESKTOP_ONBOARDING_KEY = 'ol.desktopOnboarding.v1';
 export const REOPEN_ONBOARDING_EVENT = 'openless:reopen-onboarding';
 export const ONBOARDING_SESSION_KEY = 'ol.onboardingFinishedThisSession';
+
+export interface DesktopOnboardingState {
+  finished: boolean;
+}
+
+export function getDesktopOnboardingState(): Promise<DesktopOnboardingState> {
+  return invokeOrMock<unknown>('get_desktop_onboarding_state', undefined, () => ({
+    finished: false,
+  })).then((value) => ({
+    finished:
+      typeof value === 'object' && value !== null && 'finished' in value
+        ? (value as { finished?: unknown }).finished === true
+        : false,
+  }));
+}
+
+export function setDesktopOnboardingFinished(finished: boolean): Promise<void> {
+  return invokeOrMock('set_desktop_onboarding_finished', { finished }, () => undefined);
+}
 export const GUIDE_STEPS = [
   'welcome',
   'microphone',
@@ -74,7 +94,9 @@ export function guideSteps(mac: boolean, multimodal: boolean): GuideStep[] {
 export function needsDesktopGuide(
   progress: GuideProgress | null,
   credentials: CredentialsStatus,
+  persistedFinished = false,
 ): boolean {
+  if (persistedFinished) return false;
   // Existing configured installations retain their normal startup. An unfinished
   // guide resumes even when credentials were configured during an earlier step.
   return progress ? !progress.finished : !areProvidersConfigured(credentials);
