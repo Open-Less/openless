@@ -24,6 +24,7 @@
       },
       {
         "label": "capsule",
+        "create": false,
         "url": "index.html?window=capsule",
         "title": "OpenLess Capsule",
         "width": 460,
@@ -41,6 +42,7 @@
       },
       {
         "label": "capsule-rail",
+        "create": false,
         "url": "index.html?window=capsule-rail&os=win",
         "title": "OpenLess Transcript Rail",
         "width": 460,

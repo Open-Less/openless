@@ -910,7 +910,7 @@ pub(crate) struct TauriCapsuleWindow {
 
 impl TauriCapsuleWindow {
     fn window(&self) -> Option<tauri::WebviewWindow> {
-        self.app.get_webview_window("capsule")
+        crate::desktop_resources::ensure_capsule_window(&self.app).ok()
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -986,8 +986,16 @@ impl TauriCapsuleWindow {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn rail_window(&self) -> Option<tauri::WebviewWindow> {
-        self.app.get_webview_window("capsule-rail")
+        crate::desktop_resources::ensure_capsule_rail_window(&self.app)
+            .ok()
+            .flatten()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn rail_window(&self) -> Option<tauri::WebviewWindow> {
+        None
     }
 
     fn hide_transcript_overlay(&self) {
@@ -2121,7 +2129,17 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn cache_capsule_style(&self, style: CapsuleStyle) {
         self.capsule.cache_style(style);
-        if let Some(capsule) = self.capsule_window() {
+        if let Some(app) = self.app() {
+            if app.get_webview_window("capsule").is_none() {
+                return;
+            }
+            let capsule = TauriCapsuleWindow {
+                app,
+                #[cfg(target_os = "windows")]
+                host: self.clone(),
+                state: Arc::clone(&self.capsule),
+                qa_context: Arc::clone(&self.qa_context),
+            };
             let _ = capsule.run_on_main_thread(|capsule| capsule.refresh_style());
         }
     }

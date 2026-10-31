@@ -832,6 +832,34 @@ fn permission_requires_visible_start(
 }
 
 #[cfg(not(mobile))]
+pub(crate) fn initialize_capsule_window<R: Runtime>(capsule: &tauri::WebviewWindow<R>) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+        use tauri_nspanel::WebviewWindowExt;
+        match capsule.to_panel() {
+            Ok(panel) => {
+                const NS_NONACTIVATING_PANEL_MASK: i32 = 1 << 7;
+                panel.set_style_mask(NS_NONACTIVATING_PANEL_MASK);
+                panel.set_level(25);
+                panel.set_collection_behaviour(
+                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
+                );
+            }
+            Err(error) => log::warn!("[capsule] to_panel failed: {error:?}"),
+        }
+    }
+    if let Err(error) = capsule.set_ignore_cursor_events(true) {
+        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+    }
+    if let Err(error) = position_capsule_bottom_center(capsule, false) {
+        log::warn!("[capsule] position failed: {error}");
+    }
+    let _ = capsule.hide();
+}
+
+#[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
     init_file_logger();
@@ -883,48 +911,10 @@ fn run_desktop() {
         .setup(move |app| {
             log::info!("=== OpenLess 启动 ===");
 
-            // Position the capsule at the bottom-center of the screen and hide it at
-            // startup; the coordinator shows it on demand. Same semantics as Swift
-            // `CapsuleWindowController.repositionToBottomCenter`.
+            // The recording capsule is created lazily. When it is created, the shared
+            // initializer is applied before the first presentation.
             if let Some(capsule) = app.get_webview_window("capsule") {
-                // macOS: convert to a non-activating NSPanel, otherwise the capsule cannot
-                // overlay other apps' fullscreen Spaces (a plain NSWindow cannot do this
-                // with collectionBehavior alone — tauri#9556 / #11488).
-                #[cfg(target_os = "macos")]
-                {
-                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                    use tauri_nspanel::WebviewWindowExt;
-                    match capsule.to_panel() {
-                        Ok(panel) => {
-                            // Non-activating: showing/clicking never activates this app
-                            // or switches the current (incl. fullscreen) Space.
-                            const NS_NONACTIVATING_PANEL_MASK: i32 = 1 << 7;
-                            panel.set_style_mask(NS_NONACTIVATING_PANEL_MASK);
-                            // Above the menu bar (24).
-                            panel.set_level(25);
-                            // Join all Spaces + appear as an auxiliary window over
-                            // fullscreen app Spaces.
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
-                            );
-                        }
-                        Err(e) => log::warn!("[capsule] to_panel failed: {e:?}"),
-                    }
-                }
-                // 纯光效舞台没有任何可点元素（✕/✓ 按钮已移除），而窗口放大到 460×180
-                // 盖住屏幕底部中央 —— 必须鼠标穿透，否则会挡住底下应用的点击。
-                let cursor_passthrough_ready = true;
-
-                if cursor_passthrough_ready {
-                    if let Err(e) = capsule.set_ignore_cursor_events(true) {
-                        log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
-                    }
-                }
-                if let Err(e) = position_capsule_bottom_center(&capsule, false) {
-                    log::warn!("[capsule] position failed: {e}");
-                }
-                let _ = capsule.hide();
+                initialize_capsule_window(&capsule);
             }
 
             // QA / Less Computer windows are lazily created (not eagerly declared in

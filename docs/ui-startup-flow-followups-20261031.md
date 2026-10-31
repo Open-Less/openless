@@ -49,9 +49,9 @@ This checklist turns the outstanding UI and startup feedback into observable wor
 
 ## P2 — performance and cleanup
 
-- [ ] **Memory measurement**
-  - Capture a repeatable cold-start and steady-state baseline before optimizing.
-  - Optimize only after identifying a measurable allocation or resident-memory source.
+- [partial] **Memory measurement**
+  - Baseline captured in `docs/memory-baseline-20261031.md`: the idle app was about 545 MB across Rust, WebKit WebContent and GPU helpers; the hidden capsule WebView accounted for a second WebContent process.
+  - Capsule and Windows transcript rail creation now happen lazily; remeasure the delivered build before further cache changes.
 - [partial] **Regression coverage**
   - Capsule radius, settings flash, page transitions, permission gate, translation popup, and motion reduction now have focused contracts or cloud UI coverage.
   - Add focused tests for the capsule radius, settings first-open, page transitions, permission gate, popup placement, and motion reduction.

@@ -223,6 +223,52 @@ pub(crate) fn ensure_card_window<R: tauri::Runtime>(
     Ok(())
 }
 
+/// Create the recording capsule only when the first capsule presentation needs it.
+/// Keeping the hidden WebView out of startup removes one WebKit content process from the
+/// steady-state desktop footprint.
+#[cfg(not(mobile))]
+pub(crate) fn ensure_capsule_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<tauri::WebviewWindow<R>> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("capsule") {
+        return Ok(window);
+    }
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "capsule")
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    let window = tauri::WebviewWindowBuilder::from_config(app, config)?.build()?;
+    crate::initialize_capsule_window(&window);
+    Ok(window)
+}
+
+#[cfg(not(mobile))]
+pub(crate) fn ensure_capsule_rail_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<Option<tauri::WebviewWindow<R>>> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("capsule-rail") {
+        return Ok(Some(window));
+    }
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "capsule-rail")
+    else {
+        return Ok(None);
+    };
+    let window = tauri::WebviewWindowBuilder::from_config(app, config)?.build()?;
+    window.set_ignore_cursor_events(true)?;
+    window.hide()?;
+    Ok(Some(window))
+}
+
 /// Release disposable card content after every dismissal. Shared with the
 /// macOS lifecycle fixture so it exercises the production hide/destroy path.
 #[cfg(not(mobile))]
