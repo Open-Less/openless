@@ -909,8 +909,14 @@ pub(crate) struct TauriCapsuleWindow {
 }
 
 impl TauriCapsuleWindow {
+    #[cfg(not(mobile))]
     fn window(&self) -> Option<tauri::WebviewWindow> {
         crate::desktop_resources::ensure_capsule_window(&self.app).ok()
+    }
+
+    #[cfg(mobile)]
+    fn window(&self) -> Option<tauri::WebviewWindow> {
+        self.app.get_webview_window("capsule")
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
