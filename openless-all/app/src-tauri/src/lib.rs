@@ -72,6 +72,8 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;

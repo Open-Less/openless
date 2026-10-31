@@ -219,10 +219,26 @@ pub fn export_style_pack_to_zip(
     target_path: String,
 ) -> Result<String, String> {
     log::info!(
-        "[style-pack] command export requested id={} target_path={}",
-        id,
-        target_path
+        "[style-pack] command export requested target_kind={}",
+        if target_path.starts_with("content://") {
+            "content-uri"
+        } else {
+            "file-path"
+        }
     );
+    #[cfg(target_os = "android")]
+    {
+        crate::style_zip_transfer::export_zip(
+            &target_path,
+            || core.export_style_pack_bytes(&id).map_err(|error| error.to_string()),
+            crate::android::jni::android::write_content_uri,
+            || {
+                core.export_style_pack_path(&id, std::path::Path::new(&target_path))
+                    .map_err(|error| error.to_string())
+            },
+        )?;
+    }
+    #[cfg(not(target_os = "android"))]
     core.export_style_pack_path(&id, std::path::Path::new(&target_path))
         .map_err(|e| e.to_string())?;
     Ok(target_path)
