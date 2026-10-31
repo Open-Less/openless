@@ -214,73 +214,119 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
-/// JSON keys audio models used for the polished text and the translation when they
-/// wrapped a plain-text reply (issue #1304), in priority order. Compared
-/// case-insensitively after trimming `[`/`]`, so the reply markers count as keys,
-/// and also matched as a `_` suffix (`final_translation`).
-const ENVELOPE_TRANSLATION_KEYS: &[&str] = &[
-    "translated_text",
-    "translation",
-    "translated",
-    "openless_translation",
-];
-const ENVELOPE_TEXT_KEYS: &[&str] = &[
+/// JSON keys audio models used when they wrapped a reply despite the plain-text
+/// format (issue #1304), in priority order. Compared case-insensitively after
+/// trimming `[`/`]`, so the reply markers count as keys. The `STRICT` keys are
+/// distinctive enough to unwrap even inside the requested format, where any other
+/// JSON was dictated; the generic ones only count when the whole reply is JSON.
+const STRICT_TEXT_KEYS: &[&str] = &["final_text", "polished_text", "openless_text"];
+const TEXT_KEYS: &[&str] = &[
     "final_text",
-    "final",
     "polished_text",
     "openless_text",
+    "final",
     "text",
     "raw_transcript",
 ];
+const STRICT_TRANSLATION_KEYS: &[&str] = &[
+    "translated_text",
+    "final_translation",
+    "openless_translation",
+];
+const TRANSLATION_KEYS: &[&str] = &[
+    "translated_text",
+    "final_translation",
+    "openless_translation",
+    "translation",
+    "translated",
+];
+/// Where a JSON-wrapped translation kept the polished source.
+const SOURCE_KEYS: &[&str] = &[
+    "openless_polished_source",
+    "final_source",
+    "polished_source",
+    "source_text",
+    "source",
+    "original_text",
+    "final_text",
+    "polished_text",
+    "text",
+];
+
+/// Parses content that is entirely one JSON value, tolerating the raw line breaks
+/// models write inside strings.
+pub(crate) fn parse_json_reply(content: &str) -> Option<serde_json::Value> {
+    let trimmed = content.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str(&escape_json_string_controls(trimmed)).ok()
+}
+
+fn envelope_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    keys.iter().find_map(|wanted| {
+        object
+            .iter()
+            .find(|(key, _)| key.trim_matches(['[', ']']).eq_ignore_ascii_case(wanted))
+            .and_then(|(_, value)| value.as_str())
+    })
+}
 
 /// Plain text that a model returned as a JSON object (`{"final_text": "…"}`)
 /// although it was asked for plain text (issue #1304). Returns `None` unless the
 /// whole content is such an envelope, so ordinary text, including text that merely
 /// contains braces, is left alone; `Some("")` means an envelope without text.
 ///
-/// Only the known keys above are taken, translation keys first when
-/// `prefer_translation`. `lenient` also takes an object whose only field is a
-/// string and one quoted string in braces (`{"…"}`, not valid JSON): shapes seen
-/// when the whole reply is the wrapper, but also what dictated JSON looks like.
-pub(crate) fn unwrap_json_text_envelope(
-    content: &str,
-    prefer_translation: bool,
-    lenient: bool,
-) -> Option<String> {
+/// Strict callers (content inside the requested format) only take the distinctive
+/// keys. `lenient` also takes generic keys, an object whose only field is a string
+/// and one quoted string in braces (`{"…"}`, not valid JSON): shapes seen when the
+/// whole reply is the wrapper, but also what dictated JSON looks like.
+pub(crate) fn unwrap_json_text_envelope(content: &str, lenient: bool) -> Option<String> {
     let trimmed = content.trim();
     let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
-    let text = match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-        &escape_json_string_controls(trimmed),
-    ) {
-        Ok(object) => {
-            let field = |keys: &[&str]| {
-                keys.iter().find_map(|wanted| {
-                    object
-                        .iter()
-                        .find(|(key, _)| {
-                            let key = key.trim_matches(['[', ']']).to_ascii_lowercase();
-                            key == *wanted || key.ends_with(&format!("_{wanted}"))
-                        })
-                        .and_then(|(_, value)| value.as_str())
-                })
-            };
+    let text = match parse_json_reply(trimmed) {
+        Some(serde_json::Value::Object(object)) => {
+            let keys = if lenient { TEXT_KEYS } else { STRICT_TEXT_KEYS };
             let only = match object.values().collect::<Vec<_>>().as_slice() {
                 [value] if lenient => value.as_str(),
                 _ => None,
             };
-            prefer_translation
-                .then(|| field(ENVELOPE_TRANSLATION_KEYS))
-                .flatten()
-                .or_else(|| field(ENVELOPE_TEXT_KEYS))
-                .or(only)?
-                .to_string()
+            envelope_field(&object, keys).or(only)?.to_string()
         }
-        Err(_) if lenient => {
+        Some(_) => return None,
+        None if lenient => {
             serde_json::from_str::<String>(&escape_json_string_controls(inner.trim())).ok()?
         }
-        Err(_) => return None,
+        None => return None,
     };
     Some(text.trim().to_string())
+}
+
+/// Translation and polished source from a reply wrapped in a JSON object
+/// (`{"final_text": "你好", "translated_text": "Hello"}`). Returns `None` unless
+/// the whole content is a JSON object; an object without a translation field
+/// yields an empty translation, so the source is never taken for it.
+pub(crate) fn unwrap_json_translation_envelope(
+    content: &str,
+    lenient: bool,
+) -> Option<(String, Option<String>)> {
+    let Some(serde_json::Value::Object(object)) = parse_json_reply(content) else {
+        return None;
+    };
+    let keys = if lenient {
+        TRANSLATION_KEYS
+    } else {
+        STRICT_TRANSLATION_KEYS
+    };
+    let translation = envelope_field(&object, keys).unwrap_or_default();
+    let source = envelope_field(&object, SOURCE_KEYS)
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+        .map(str::to_string);
+    Some((translation.trim().to_string(), source))
 }
 
 /// Models write real line breaks and tabs inside JSON strings, which JSON forbids.
@@ -589,7 +635,7 @@ mod tests {
 
     #[test]
     fn json_text_envelope_unwraps_shapes_returned_by_audio_models() {
-        let unwrap = |content: &str| unwrap_json_text_envelope(content, false, true);
+        let unwrap = |content: &str| unwrap_json_text_envelope(content, true);
         assert_eq!(
             unwrap(r#"{"final_text": "你好。"}"#).as_deref(),
             Some("你好。")
@@ -631,39 +677,9 @@ mod tests {
         );
         // A recognized envelope without text is reported as empty, not left as JSON.
         assert_eq!(unwrap(r#"{"final_text": "  "}"#).as_deref(), Some(""));
-        let both = r#"{"final_text": "中文", "translated_text": "English"}"#;
-        assert_eq!(unwrap(both).as_deref(), Some("中文"));
-        assert_eq!(
-            unwrap_json_text_envelope(both, true, false).as_deref(),
-            Some("English")
-        );
-        assert_eq!(
-            unwrap_json_text_envelope(
-                r#"{"final_source": "你好", "final_translation": "Hello"}"#,
-                true,
-                false
-            )
-            .as_deref(),
-            Some("Hello")
-        );
-        assert_eq!(
-            unwrap_json_text_envelope(
-                r#"{"translated_from": "zh", "translation": "Hello"}"#,
-                true,
-                false
-            )
-            .as_deref(),
-            Some("Hello")
-        );
-        assert_eq!(
-            unwrap_json_text_envelope(
-                r#"{"[[OPENLESS_POLISHED_SOURCE]]": "你好", "[[OPENLESS_TRANSLATION]]": "Hello"}"#,
-                true,
-                false
-            )
-            .as_deref(),
-            Some("Hello")
-        );
+        // Inside the requested format only distinctive keys count.
+        let strict = |content: &str| unwrap_json_text_envelope(content, false);
+        assert_eq!(strict(r#"{"final_text": "你好"}"#).as_deref(), Some("你好"));
     }
 
     #[test]
@@ -677,19 +693,50 @@ mod tests {
             r#"{"a": "一", "b": "二"}"#,
             "{}",
         ] {
-            assert_eq!(
-                unwrap_json_text_envelope(content, false, true),
-                None,
-                "{content}"
-            );
+            assert_eq!(unwrap_json_text_envelope(content, true), None, "{content}");
         }
-        // Strict mode keeps dictated JSON that does not use a known key.
-        for content in [r#"{"name": "Alice"}"#, r#"{"apple"}"#] {
-            assert_eq!(
-                unwrap_json_text_envelope(content, false, false),
-                None,
-                "{content}"
-            );
+        // Strict mode keeps dictated JSON, including generic or suffixed keys.
+        for content in [
+            r#"{"name": "Alice"}"#,
+            r#"{"apple"}"#,
+            r#"{"text": "hello"}"#,
+            r#"{"display_text": "hello"}"#,
+        ] {
+            assert_eq!(unwrap_json_text_envelope(content, false), None, "{content}");
         }
+    }
+
+    #[test]
+    fn json_translation_envelope_keeps_the_source_and_never_substitutes_it() {
+        let unwrap = |content: &str| unwrap_json_translation_envelope(content, true);
+        let pair = |translation: &str, source: Option<&str>| {
+            Some((translation.to_string(), source.map(str::to_string)))
+        };
+        assert_eq!(
+            unwrap(r#"{"final_text": "你好", "translated_text": "Hello"}"#),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(r#"{"final_source": "你好", "final_translation": "Hello"}"#),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(
+                r#"{"[[OPENLESS_POLISHED_SOURCE]]": "你好", "[[OPENLESS_TRANSLATION]]": "Hello"}"#
+            ),
+            pair("Hello", Some("你好"))
+        );
+        assert_eq!(
+            unwrap(r#"{"translated_from": "zh", "translation": "Hello"}"#),
+            pair("Hello", None)
+        );
+        // Without a translation field the source is not used as the translation.
+        assert_eq!(unwrap(r#"{"raw_transcript": "你好"}"#), pair("", None));
+        assert_eq!(unwrap(r#"{"final_text": "你好"}"#), pair("", Some("你好")));
+        assert_eq!(
+            unwrap_json_translation_envelope(r#"{"translation": "Hello"}"#, false),
+            pair("", None)
+        );
+        assert_eq!(unwrap("Hello"), None);
     }
 }

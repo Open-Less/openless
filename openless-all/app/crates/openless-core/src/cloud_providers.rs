@@ -4,7 +4,7 @@
 //! account routing, protocol defaults, cancellation and output semantics stay
 //! in core so Tauri and Linux cannot drift.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -2534,8 +2534,10 @@ impl DictationEngine for SharedOmniDictationEngine {
                     *stream_error.lock() = Some(error);
                 }
             };
+            let echo = Arc::new(PromptEcho::new(&[&system_prompt, &user_text]));
             let stream = Arc::new(Mutex::new(OmniDictationStream::new(
                 context.polish.translation_active,
+                Arc::clone(&echo),
             )));
             let on_delta = {
                 let publish_live = publish_live.clone();
@@ -2588,7 +2590,12 @@ impl DictationEngine for SharedOmniDictationEngine {
                 if transcription_only {
                     (live_text.unwrap_or_else(|| output.trim().to_string()), None)
                 } else {
-                    finalize_omni_output(&output, context.polish.translation_active, live_text)
+                    finalize_omni_output(
+                        &output,
+                        context.polish.translation_active,
+                        live_text,
+                        &echo,
+                    )
                 }
             });
             let (output, source_text) = match result {
@@ -2823,17 +2830,73 @@ fn build_omni_prompts(context: &DictationContext) -> (String, String) {
     )
 }
 
+/// The request's own prompt. Given a recording without words, audio models replied
+/// with the instruction sent beside it or a style example instead of nothing (issue
+/// #1304); such replies are recognized and not inserted.
+struct PromptEcho {
+    trigrams: HashSet<[char; 3]>,
+}
+
+/// Shortest reply judged against the prompt; shorter ones ("好。") occur in any prompt.
+const ECHO_MIN_CHARS: usize = 8;
+/// Plain text is held back until this much of it shows whether it repeats the prompt.
+const ECHO_PREFIX_CHARS: usize = 12;
+
+impl PromptEcho {
+    fn new(prompts: &[&str]) -> Self {
+        let trigrams = prompts
+            .iter()
+            .flat_map(|prompt| {
+                echo_chars(prompt)
+                    .windows(3)
+                    .map(|window| [window[0], window[1], window[2]])
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Self { trigrams }
+    }
+
+    /// Whether `text` repeats the prompt: at least 80% of its letter and digit
+    /// trigrams (punctuation and spacing aside) occur in the prompt.
+    fn repeats(&self, text: &str) -> bool {
+        let chars = echo_chars(text);
+        if chars.len() < ECHO_MIN_CHARS || self.trigrams.is_empty() {
+            return false;
+        }
+        let windows = chars.len() - 2;
+        let found = chars
+            .windows(3)
+            .filter(|window| self.trigrams.contains(&[window[0], window[1], window[2]]))
+            .count();
+        found * 5 >= windows * 4
+    }
+}
+
+fn echo_chars(text: &str) -> Vec<char> {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 /// Live text for multimodal dictation. Translation shows only the target section,
 /// as in Traditional mode; plain dictation drops reply markers wherever they
-/// appear. A reply that opens like a JSON object or code fence is held back:
-/// audio models sometimes answer `{"final_text": …}`, and wrapper characters
-/// already typed into the foreground app cannot be taken back. Published text is
-/// final as typed, so streaming insertion always matches the result.
+/// appear. Text is held back while it may still be a wrapper (a reply opening like
+/// a JSON object or code fence) or a repeat of the prompt (the first characters of
+/// plain text, the source section of a translation), because characters typed into
+/// the foreground app cannot be taken back. Published text is final as typed, so
+/// streaming insertion always matches the result.
 struct OmniDictationStream {
     markers: Option<MarkerFilter>,
     sections: crate::prompt_compose::PolishTranslationStream,
+    echo: Arc<PromptEcho>,
+    translation_active: bool,
     opened: bool,
     state: OmniStreamState,
+    /// Translation: the reply so far, to judge its source section.
+    raw: String,
+    /// Plain dictation text held until it shows whether it repeats the prompt.
+    pending: String,
     published: String,
 }
 
@@ -2845,7 +2908,7 @@ enum OmniStreamState {
 }
 
 impl OmniDictationStream {
-    fn new(translation_active: bool) -> Self {
+    fn new(translation_active: bool, echo: Arc<PromptEcho>) -> Self {
         Self {
             markers: (!translation_active).then(|| MarkerFilter::new(&OMNI_REPLY_MARKERS)),
             sections: if translation_active {
@@ -2853,8 +2916,12 @@ impl OmniDictationStream {
             } else {
                 crate::prompt_compose::PolishTranslationStream::plain()
             },
+            echo,
+            translation_active,
             opened: false,
             state: OmniStreamState::Undecided,
+            raw: String::new(),
+            pending: String::new(),
             published: String::new(),
         }
     }
@@ -2872,24 +2939,27 @@ impl OmniDictationStream {
         if self.state == OmniStreamState::Holding {
             return String::new();
         }
+        if self.translation_active {
+            self.raw.push_str(delta);
+        }
         let text = match self.markers.as_mut() {
             Some(markers) => markers.push(delta),
             None => delta.to_owned(),
         };
-        self.publish(&text)
+        self.publish(&text, false)
     }
 
-    /// Text held back as a possible marker when the reply ended.
+    /// Text still held back when the reply ended.
     fn finish(&mut self) -> String {
+        if self.state == OmniStreamState::Holding {
+            return String::new();
+        }
         let tail = self
             .markers
             .as_mut()
             .map(MarkerFilter::finish)
             .unwrap_or_default();
-        if tail.is_empty() || self.state == OmniStreamState::Holding {
-            return String::new();
-        }
-        self.publish(&tail)
+        self.publish(&tail, true)
     }
 
     /// The final text when the reply was streamed live.
@@ -2897,19 +2967,37 @@ impl OmniDictationStream {
         (self.state == OmniStreamState::Passing).then(|| self.published.clone())
     }
 
-    fn publish(&mut self, text: &str) -> String {
+    fn publish(&mut self, text: &str, ended: bool) -> String {
         let text = self.sections.push(text);
-        // The section stream drops leading whitespace, so the first text decides.
-        if self.state == OmniStreamState::Undecided && !text.is_empty() {
-            self.state = if text.starts_with(['{', '`']) {
-                OmniStreamState::Holding
-            } else {
-                OmniStreamState::Passing
-            };
-        }
-        if self.state != OmniStreamState::Passing {
-            return String::new();
-        }
+        let text = match self.state {
+            OmniStreamState::Passing => text,
+            OmniStreamState::Holding => return String::new(),
+            OmniStreamState::Undecided => {
+                self.pending.push_str(&text);
+                if self.pending.is_empty()
+                    || (!self.translation_active
+                        && !ended
+                        && echo_chars(&self.pending).len() < ECHO_PREFIX_CHARS)
+                {
+                    return String::new();
+                }
+                // The section stream drops leading whitespace, and a translation
+                // only starts once its source section is complete.
+                let judged = if self.translation_active {
+                    source_section(&self.raw)
+                } else {
+                    self.pending.clone()
+                };
+                let held = self.pending.starts_with(['{', '`']) || self.echo.repeats(&judged);
+                let text = std::mem::take(&mut self.pending);
+                if held {
+                    self.state = OmniStreamState::Holding;
+                    return String::new();
+                }
+                self.state = OmniStreamState::Passing;
+                text
+            }
+        };
         self.published.push_str(&text);
         text
     }
@@ -2965,50 +3053,104 @@ impl MarkerFilter {
 
 /// Final dictation text and, with translation, the polished source. Text that
 /// streamed live is final as typed, like Traditional streaming. A reply that was
-/// held back gets the Traditional polish cleanup, a whole-reply JSON envelope is
-/// unwrapped (issue #1304), and reply markers never reach the text. A reply that
-/// began the translation format without a translation yields no text, so the
-/// dictation fails instead of inserting the source as the translation (issue
-/// #1306); a reply without any marker is used as the translation.
+/// held back gets the Traditional polish cleanup, a JSON wrapper is unwrapped
+/// (issue #1304), and reply markers never reach the text. A reply that repeats the
+/// prompt, or a translation reply without a translation, yields no text, so the
+/// dictation fails instead of inserting it or the source (issue #1306).
 fn finalize_omni_output(
     raw: &str,
     translation_active: bool,
     live_text: Option<String>,
+    echo: &PromptEcho,
 ) -> (String, Option<String>) {
-    use crate::output_cleaning::unwrap_json_text_envelope;
     if let Some(text) = live_text {
         let source = translation_active
-            .then(|| crate::split_polish_translate_output(raw).and_then(|(source, _)| source))
-            .flatten();
+            .then(|| source_section(raw))
+            .filter(|source| !source.is_empty());
         return (text.trim().to_string(), source);
     }
     let cleaned = crate::polish::clean_polish_output(raw);
-    if let Some(text) = unwrap_json_text_envelope(&cleaned, translation_active, true) {
-        return (strip_omni_markers(&text), None);
+    if let Some(reply) = marked_reply_in_json(&cleaned) {
+        return finalize_omni_output(&reply, translation_active, None, echo);
     }
-    // A model that followed the format wrote this section, so JSON in it is only
-    // unwrapped under the known keys; other JSON was dictated.
-    let section = |text: &str, prefer_translation: bool| {
-        let text = crate::polish::clean_polish_output(&strip_omni_markers(text));
-        unwrap_json_text_envelope(&text, prefer_translation, false).unwrap_or(text)
+    let (text, source) = if translation_active {
+        translation_output(&cleaned)
+    } else {
+        let text = crate::output_cleaning::unwrap_json_text_envelope(&cleaned, true)
+            .map(|text| strip_omni_markers(&text))
+            .unwrap_or_else(|| omni_section(&cleaned, false));
+        (text, None)
     };
-    if translation_active {
-        if let Some((source, target)) = crate::split_polish_translate_output(&cleaned) {
-            return (
-                section(&target, true),
-                source.map(|source| section(&source, false)),
-            );
-        }
-        if OMNI_REPLY_MARKERS
-            .iter()
-            .any(|marker| cleaned.contains(marker))
-        {
-            log::warn!("[omni] polish+translate response without a translation section");
-            return (String::new(), None);
-        }
-        log::warn!("[omni] polish+translate response without markers; using it as the translation");
+    if echo.repeats(&text) || source.as_deref().is_some_and(|source| echo.repeats(source)) {
+        log::warn!("[omni] reply repeats the prompt; nothing is inserted");
+        return (String::new(), None);
     }
-    (section(&cleaned, translation_active), None)
+    (text, source)
+}
+
+fn translation_output(reply: &str) -> (String, Option<String>) {
+    if let Some((text, source)) =
+        crate::output_cleaning::unwrap_json_translation_envelope(reply, true)
+    {
+        return (
+            strip_omni_markers(&text),
+            source.map(|source| strip_omni_markers(&source)),
+        );
+    }
+    if let Some((source, target)) = crate::split_polish_translate_output(reply) {
+        return (
+            omni_section(&target, true),
+            source.map(|source| omni_section(&source, false)),
+        );
+    }
+    if OMNI_REPLY_MARKERS
+        .iter()
+        .any(|marker| reply.contains(marker))
+    {
+        log::warn!("[omni] polish+translate response without a translation section");
+        return (String::new(), None);
+    }
+    log::warn!("[omni] polish+translate response without markers; using it as the translation");
+    (omni_section(reply, true), None)
+}
+
+/// A section the model wrote inside the requested format: JSON in it is only
+/// unwrapped under the distinctive wrapper keys, since other JSON was dictated.
+fn omni_section(text: &str, translation: bool) -> String {
+    use crate::output_cleaning::{unwrap_json_text_envelope, unwrap_json_translation_envelope};
+    let text = crate::polish::clean_polish_output(&strip_omni_markers(text));
+    translation
+        .then(|| unwrap_json_translation_envelope(&text, false).map(|(translation, _)| translation))
+        .flatten()
+        .filter(|translation| !translation.is_empty())
+        .or_else(|| unwrap_json_text_envelope(&text, false))
+        .unwrap_or(text)
+}
+
+/// A marked reply inside a JSON wrapper, e.g. one imitating an API response.
+fn marked_reply_in_json(reply: &str) -> Option<String> {
+    fn find(value: &serde_json::Value) -> Option<&str> {
+        match value {
+            serde_json::Value::String(text) => OMNI_REPLY_MARKERS
+                .iter()
+                .any(|marker| text.contains(marker))
+                .then_some(text.as_str()),
+            serde_json::Value::Array(items) => items.iter().find_map(find),
+            serde_json::Value::Object(object) => object.values().find_map(find),
+            _ => None,
+        }
+    }
+    let value = crate::output_cleaning::parse_json_reply(reply)?;
+    find(&value).map(str::to_owned)
+}
+
+/// The polished source of a translation reply: the text before its translation marker.
+fn source_section(reply: &str) -> String {
+    let before = reply
+        .split(crate::prompt_compose::POLISH_TRANSLATE_TGT_MARKER)
+        .next()
+        .unwrap_or_default();
+    strip_omni_markers(before)
 }
 
 fn strip_omni_markers(text: &str) -> String {
@@ -4085,8 +4227,12 @@ mod tests {
     }
 
     /// Streams `deltas`, returning the live text and the final live text, if any.
-    fn stream_omni(translation: bool, deltas: &[&str]) -> (String, Option<String>) {
-        let mut stream = OmniDictationStream::new(translation);
+    fn stream_omni(
+        translation: bool,
+        echo: &Arc<PromptEcho>,
+        deltas: &[&str],
+    ) -> (String, Option<String>) {
+        let mut stream = OmniDictationStream::new(translation, Arc::clone(echo));
         let mut streamed = deltas
             .iter()
             .map(|delta| stream.push(delta))
@@ -4099,8 +4245,9 @@ mod tests {
     fn omni_stream_drops_markers_and_holds_back_wrappers() {
         use crate::prompt_compose::{POLISH_TRANSLATE_SRC_MARKER, POLISH_TRANSLATE_TGT_MARKER};
         let marker = crate::prompts::OMNI_TEXT_MARKER;
+        let no_prompt = Arc::new(PromptEcho::new(&[]));
         let live = |translation: bool, deltas: &[&str]| {
-            let (streamed, live) = stream_omni(translation, deltas);
+            let (streamed, live) = stream_omni(translation, &no_prompt, deltas);
             // Whatever streamed is exactly the final text.
             assert_eq!(
                 live.as_deref(),
@@ -4163,10 +4310,69 @@ mod tests {
     }
 
     #[test]
+    fn omni_replies_repeating_the_prompt_are_neither_streamed_nor_inserted() {
+        use crate::prompt_compose::{POLISH_TRANSLATE_SRC_MARKER, POLISH_TRANSLATE_TGT_MARKER};
+        let marker = crate::prompts::OMNI_TEXT_MARKER;
+        let mut context = DictationContext::default();
+        context.polish.mode = crate::types::PolishMode::Light;
+        context.polish.style_system_prompt =
+            crate::style_packs::default_style_system_prompt_for_mode(
+                crate::types::PolishMode::Light,
+            );
+        let (system, user) = build_omni_prompts(&context);
+        let echo = Arc::new(PromptEcho::new(&[&system, &user]));
+        let dropped = |translation: bool, reply: &str| {
+            let (streamed, live) = stream_omni(translation, &echo, &[reply]);
+            assert_eq!(streamed, "", "{reply}");
+            assert_eq!(live, None, "{reply}");
+            assert_eq!(
+                finalize_omni_output(reply, translation, None, &echo),
+                (String::new(), None),
+                "{reply}"
+            );
+        };
+        // Given a recording without words, models replied with the instruction
+        // (sometimes with other quotes) or a style example.
+        dropped(false, &format!("{marker}\n{user}"));
+        dropped(
+            false,
+            &format!("{marker}\n{}", user.replace("「输出格式」", "“输出格式”")),
+        );
+        let example = "目前没什么大问题，缓存策略需要调整。另外，Token 也需要重新申请。";
+        dropped(false, &format!("{marker}\n{example}"));
+        dropped(
+            true,
+            &format!(
+                "{POLISH_TRANSLATE_SRC_MARKER}\n{example}\n{POLISH_TRANSLATE_TGT_MARKER}\nNo major issues for now."
+            ),
+        );
+
+        // Ordinary dictation, short words included, streams and is kept.
+        for text in [
+            "好。",
+            "我刚刚跟客户聊完，他说下周三可以给反馈。",
+            "帮我看几个问题：第一个是翻译没有生效，第二个是输出带了大括号。",
+            "你可以再次启动项目，现在 .env 文件已经完整了。",
+        ] {
+            let reply = format!("{marker}\n{text}");
+            let (streamed, live) = stream_omni(false, &echo, &[&reply]);
+            assert_eq!(streamed, text);
+            assert_eq!(live.as_deref(), Some(text));
+            assert_eq!(
+                finalize_omni_output(&reply, false, None, &echo),
+                (text.to_string(), None)
+            );
+        }
+    }
+
+    #[test]
     fn omni_final_text_drops_json_wrappers_and_keeps_translation_source() {
         use crate::prompt_compose::{POLISH_TRANSLATE_SRC_MARKER, POLISH_TRANSLATE_TGT_MARKER};
-        let held = |raw: &str, translation: bool| finalize_omni_output(raw, translation, None);
+        let no_prompt = PromptEcho::new(&[]);
+        let held =
+            |raw: &str, translation: bool| finalize_omni_output(raw, translation, None, &no_prompt);
         let plain = |text: &str| (text.to_string(), None);
+        let translated = |text: &str, source: &str| (text.to_string(), Some(source.to_string()));
         let marker = crate::prompts::OMNI_TEXT_MARKER;
         assert_eq!(
             held(&format!("\r\n{marker}\n你好，世界。\n"), false),
@@ -4177,10 +4383,12 @@ mod tests {
             plain("你好")
         );
         // JSON the user dictated inside the format is kept.
-        assert_eq!(
-            held(&format!("{marker}\n{{\"name\": \"Alice\"}}"), false),
-            plain("{\"name\": \"Alice\"}")
-        );
+        for dictated in ["{\"name\": \"Alice\"}", "{\"display_text\": \"hello\"}"] {
+            assert_eq!(
+                held(&format!("{marker}\n{dictated}"), false),
+                plain(dictated)
+            );
+        }
         assert_eq!(
             held("{\"final_text\": \"你好\\n世界\"}", false),
             plain("你好\n世界")
@@ -4195,40 +4403,48 @@ mod tests {
             plain("原话")
         );
         assert_eq!(held(marker, false), plain(""));
+        // A marked reply nested in a wrapper imitating an API response.
+        assert_eq!(
+            held(
+                &format!("{{\"id\": \"openless\", \"output\": \"{marker}\\n你好\"}}"),
+                false
+            ),
+            plain("你好")
+        );
 
         let marked = format!(
             "{POLISH_TRANSLATE_SRC_MARKER}\n{{\"final_text\": \"你好\"}}\n{POLISH_TRANSLATE_TGT_MARKER}\n{{\"translated_text\": \"Hello\"}}"
         );
-        assert_eq!(
-            held(&marked, true),
-            ("Hello".to_string(), Some("你好".to_string()))
-        );
+        assert_eq!(held(&marked, true), translated("Hello", "你好"));
         let fenced = format!(
             "{POLISH_TRANSLATE_SRC_MARKER}\n你好\n{POLISH_TRANSLATE_TGT_MARKER}\n```json\n{{\"translated_text\": \"Hello\"}}\n```"
         );
-        assert_eq!(
-            held(&fenced, true),
-            ("Hello".to_string(), Some("你好".to_string()))
-        );
+        assert_eq!(held(&fenced, true), translated("Hello", "你好"));
+        // JSON-wrapped translations keep their source.
         let keyed = format!(
             "{{\"{POLISH_TRANSLATE_SRC_MARKER}\": \"你好\", \"{POLISH_TRANSLATE_TGT_MARKER}\": \"Hello\"}}"
         );
-        assert_eq!(held(&keyed, true), plain("Hello"));
+        assert_eq!(held(&keyed, true), translated("Hello", "你好"));
         assert_eq!(
             held(
                 "{\"final_text\": \"你好\", \"translated_text\": \"Hello\"}",
                 true
             ),
-            plain("Hello")
+            translated("Hello", "你好")
         );
         assert_eq!(
             held(
                 "{\"final_source\": \"你好\", \"final_translation\": \"Hello\"}",
                 true
             ),
-            plain("Hello")
+            translated("Hello", "你好")
         );
-        // Silence answered in JSON inserts nothing.
+        let nested = format!(
+            "{{\"id\": \"chatcmpl-1\", \"choices\": [{{\"message\": {{\"content\": \"{POLISH_TRANSLATE_SRC_MARKER}\\n你好\\n{POLISH_TRANSLATE_TGT_MARKER}\\nHello\"}}}}]}}"
+        );
+        assert_eq!(held(&nested, true), translated("Hello", "你好"));
+        // A JSON reply without a translation is not inserted as one.
+        assert_eq!(held("{\"raw_transcript\": \"你好\"}", true), plain(""));
         assert_eq!(
             held(
                 "{\"final_source\": \"\", \"final_translation\": \"\"}",
@@ -4256,7 +4472,8 @@ mod tests {
             finalize_omni_output(
                 "以下是整理后的内容：你好",
                 false,
-                Some("以下是整理后的内容：你好".into())
+                Some("以下是整理后的内容：你好".into()),
+                &no_prompt
             ),
             plain("以下是整理后的内容：你好")
         );
@@ -4266,9 +4483,10 @@ mod tests {
                     "{POLISH_TRANSLATE_SRC_MARKER}\n你好\n{POLISH_TRANSLATE_TGT_MARKER}\nHello"
                 ),
                 true,
-                Some("Hello".into())
+                Some("Hello".into()),
+                &no_prompt
             ),
-            ("Hello".to_string(), Some("你好".to_string()))
+            translated("Hello", "你好")
         );
     }
 
