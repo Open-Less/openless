@@ -535,6 +535,7 @@ export function RecordingInputSection({
                 value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
                 onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
                 label={t('settings.recording.capsuleStyleLabel')}
+                className="ol-capsule-style-segmented"
               />
               <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
             </div>
