@@ -12,15 +12,12 @@ import {
 } from 'react';
 import { afterPaint } from '../lib/startupMetrics';
 import { guideFinishedThisSession } from '../lib/desktopOnboarding';
-import { PageSkeleton } from './ui/PageSkeleton';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { AudioCueListener } from './AudioCue';
-const SettingsModal = lazy(() =>
-  import('./SettingsModal').then((m) => ({ default: m.SettingsModal })),
-);
+import { SettingsModal, type SettingsSectionId } from './SettingsModal';
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
 const History = lazy(() => import('../pages/History').then((m) => ({ default: m.History })));
@@ -53,7 +50,6 @@ import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
-import { type SettingsSectionId } from './SettingsModal';
 import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileStyleSheet } from './MobileStyleSheet';
 import { subItemLabelKey } from '../lib/navLabels';
@@ -642,11 +638,9 @@ function FloatingShellBody({
       {/* Settings modal — rendered inside this window; settingsMount gates the exit animation */}
       {settingsMount.mounted && (
         <Suspense
-          fallback={
-            <div className="ol-settings-placeholder">
-              <PageSkeleton rows={5} />
-            </div>
-          }
+          // SettingsModal is eagerly loaded so the first open cannot flash a
+          // different placeholder surface while the settings chunk resolves.
+          fallback={<div className="ol-settings-placeholder" aria-hidden="true" />}
         >
           <SettingsModal
             key={settingsInitialSection ?? 'default'}

@@ -814,6 +814,23 @@ fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _
     show_main_window(app);
 }
 
+fn permission_requires_visible_start(
+    accessibility: permissions::PermissionStatus,
+    microphone: permissions::PermissionStatus,
+) -> bool {
+    let accessibility_missing = !matches!(
+        accessibility,
+        permissions::PermissionStatus::Granted | permissions::PermissionStatus::NotApplicable
+    );
+    let microphone_missing = !matches!(
+        microphone,
+        permissions::PermissionStatus::Granted
+            | permissions::PermissionStatus::NotApplicable
+            | permissions::PermissionStatus::NoDevice
+    );
+    accessibility_missing || microphone_missing
+}
+
 #[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
@@ -936,6 +953,18 @@ fn run_desktop() {
             });
             if let Some(main) = app.get_webview_window("main") {
                 desktop_resources::initialize_main(&main);
+                #[cfg(target_os = "macos")]
+                let permission_recovery_required = permission_requires_visible_start(
+                    permissions::check_accessibility(),
+                    permissions::check_microphone(),
+                );
+                #[cfg(not(target_os = "macos"))]
+                let permission_recovery_required = false;
+                if permission_recovery_required {
+                    log::info!(
+                        "[main] permission recovery required → showing main window despite start_minimized"
+                    );
+                }
                 // Silent-start switch: prefs.start_minimized = true → don't pop the main
                 // window; the user reaches it from the menu bar / tray. Especially useful
                 // with autostart to avoid the main window on every login.
@@ -944,7 +973,8 @@ fn run_desktop() {
                 let force_show =
                     std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
                 let suppress_show = !force_show && coordinator.startup_error().is_none()
-                    && coordinator.backend().get_preferences().start_minimized;
+                    && coordinator.backend().get_preferences().start_minimized
+                    && !permission_recovery_required;
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
@@ -1851,7 +1881,7 @@ fn is_beta_build() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn reset_tcc_service_for_restart(service: &str, reason: &str) {
+pub(crate) fn reset_tcc_service_for_restart(service: &str, reason: &str) {
     match std::process::Command::new("/usr/bin/tccutil")
         .args(["reset", service, OPENLESS_BUNDLE_ID])
         .status()
@@ -3825,6 +3855,7 @@ mod tests {
         parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
         tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
         LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
+        permission_requires_visible_start,
     };
     #[cfg(target_os = "macos")]
     use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
@@ -3832,6 +3863,28 @@ mod tests {
         builtin_style_pack_for_mode, CapsuleStyle, PolishMode, StylePack, StylePackKind,
     };
     use std::io::Write;
+
+    #[test]
+    fn missing_mac_permissions_override_silent_start() {
+        use crate::permissions::PermissionStatus;
+
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Denied,
+            PermissionStatus::Granted,
+        ));
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NoDevice,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotApplicable,
+        ));
+    }
 
     #[test]
     fn tray_style_menu_is_windows_only() {

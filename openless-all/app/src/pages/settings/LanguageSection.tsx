@@ -50,6 +50,8 @@ export function LanguageSection() {
           onChange={(next) => apply(next as SupportedLocale | typeof FOLLOW_SYSTEM)}
           options={options}
           ariaLabel={t('settings.language.label')}
+          searchable
+          searchPlaceholder={t('modal.searchPlaceholder')}
           style={{ maxWidth: 220, minWidth: 200 }}
         />
       </SettingRow>

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
-import { SelectLite } from '../../components/ui/SelectLite';
+import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
 import { SettingRow, Toggle } from './shared';
 import { readThemePreference, setThemePreference, type ThemePreference } from '../../lib/themeMode';
@@ -41,12 +41,11 @@ export function ThemeSection() {
         {t('settings.theme.title')}
       </div>
       <SettingRow label={t('settings.theme.label')}>
-        <SelectLite
-          value={pref}
-          onChange={(next) => void apply(next as ThemePreference)}
+        <Segmented
           options={options}
-          ariaLabel={t('settings.theme.label')}
-          style={{ maxWidth: 220, minWidth: 200 }}
+          value={pref}
+          onChange={(next) => void apply(next)}
+          label={t('settings.theme.label')}
         />
       </SettingRow>
       {/* 概览页年度活动热力图开关：关闭只隐藏卡片，活动计数照常记录。 */}

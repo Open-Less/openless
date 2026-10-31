@@ -778,6 +778,18 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   min-height: 0;
   overflow: hidden;
 }
+.ol-transition-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  background: color-mix(in srgb, var(--ol-surface) 18%, transparent);
+  transition: opacity 120ms var(--ol-motion-quick);
+}
+.ol-transition-viewport[aria-busy='true'] .ol-transition-mask {
+  opacity: 1;
+}
 .ol-main-arrival {
   width: 100%;
   height: 100%;
@@ -807,6 +819,9 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   opacity: 0.72;
 }
 @media (prefers-reduced-motion: reduce) {
+  .ol-transition-mask {
+    transition: none;
+  }
   .ol-main-arrival {
     animation: none;
   }
