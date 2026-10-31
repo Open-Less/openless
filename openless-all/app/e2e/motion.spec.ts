@@ -268,8 +268,10 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   // OpenLess is now the default; opt into the optional WebGL style for this probe.
-  await page.getByRole('combobox', { name: '胶囊样式' }).click();
-  await page.getByRole('option', { name: /Siri/ }).click();
+  await page
+    .getByRole('group', { name: '胶囊样式' })
+    .getByRole('button', { name: /Siri/ })
+    .click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws))
     .toBeGreaterThan(5);
