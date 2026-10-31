@@ -7,16 +7,16 @@ This checklist turns the outstanding UI and startup feedback into observable wor
 
 ## P0 — visible defects and startup correctness
 
-- [x] **Streaming transcript capsule geometry** *(source fix complete; cloud UI verification pending)*
+- [x] **Streaming transcript capsule geometry** *(source fix and cloud UI verification complete)*
   - Remove the left-edge clipping/sharpening source in the transcript rail and streaming pill.
   - Verify all capsule styles in light and dark themes, including the Windows rail.
-- [ ] **Translation target interaction**
+- [x] **Translation target interaction** *(shared capsule popup regression covered by PR #1309 and cloud UI motion)*
   - Low-memory mode was removed in PR #1296; do not recreate a separate low-memory path.
   - Verify the remaining translation target control opens a usable popup from the capsule and keeps the selected target visible after selection.
-- [x] **Settings first-open flash** *(source fix complete; first-open browser verification pending)*
+- [x] **Settings first-open flash** *(source fix and cloud motion verification complete)*
   - Prevent the previous settings surface or a blank/full-window frame from painting before the current settings surface is ready.
   - Verify first open, close, and second open on macOS and Windows.
-- [x] **macOS first launch and missing-permission flow** *(source fix and contract test complete; macOS runtime verification pending)*
+- [partial] **macOS first launch and missing-permission flow** *(source and contract coverage complete; physical reinstall/TCC runtime exercise remains)*
   - If microphone or Accessibility permission is missing on first launch/reinstall, show the main window even when `start_minimized` is enabled.
   - Enter the guided permission step automatically, re-check after returning from System Settings, and keep the step retryable.
   - Keep silent start for already-authorized installations.
@@ -24,14 +24,15 @@ This checklist turns the outstanding UI and startup feedback into observable wor
 
 ## P1 — motion and visual system
 
-- [x] **Page transition mask and timing** *(mask source fix complete; motion suite verification pending)*
+- [x] **Page transition mask and timing** *(source fix and cloud UI motion verification complete)*
   - Keep outgoing content covered until the next page has its first useful frame.
   - Use the normal 0.2–0.3s transition and a slower first-load path only when required.
   - Verify no flash, jump, or double paint during settings/category navigation.
-- [x] **Streaming text motion** *(per-glyph blur timing tuned; long-stream verification pending)*
+- [x] **Streaming text motion** *(per-glyph blur timing tuned and cloud motion suite passed)*
   - Apply per-glyph blur/opacity reveal without causing layout jumps.
   - Verify reduced-motion behavior and long transcript performance.
-- [ ] **High-definition UI tokens**
+- [partial] **High-definition UI tokens**
+  - Dark-mode weights already use the reduced 460/560 tokens; capsule surfaces now use hairline borders and numeric surfaces already use `tabular-nums`.
   - Replace strong 1px borders with micro-contrast surfaces.
   - Reduce dark-mode weights by 40 where the current token is too heavy.
   - Lock numeric readouts to `tabular-nums`.
@@ -41,8 +42,8 @@ This checklist turns the outstanding UI and startup feedback into observable wor
   - Use segmented buttons for two or three fixed choices.
   - Use switches for booleans.
   - Use searchable, grouped single-select popups for large lists.
-  - Keep popups within the viewport and report the result after selection.
-- [ ] **Toast and alert hierarchy**
+  - Keep popups within the viewport and report the result after selection; the shared Base UI popup already flips and shifts within collision padding.
+- [x] **Toast and alert hierarchy** *(existing SavedToast and role=alert paths match the requested 0.8s routine feedback / persistent failure split)*
   - Auto-dismiss routine setting feedback after about 0.8s.
   - Keep sync failures and maintenance notices as persistent Alerts.
 
@@ -51,9 +52,10 @@ This checklist turns the outstanding UI and startup feedback into observable wor
 - [ ] **Memory measurement**
   - Capture a repeatable cold-start and steady-state baseline before optimizing.
   - Optimize only after identifying a measurable allocation or resident-memory source.
-- [ ] **Regression coverage**
+- [partial] **Regression coverage**
+  - Capsule radius, settings flash, page transitions, permission gate, translation popup, and motion reduction now have focused contracts or cloud UI coverage.
   - Add focused tests for the capsule radius, settings first-open, page transitions, permission gate, popup placement, and motion reduction.
-- [ ] **Cloud validation and delivery**
+- [x] **Cloud validation and delivery** *(PRs #1307, #1308, and #1309 merged with green cloud gates; final ARM64 build remains)*
   - Push a dedicated PR from this branch.
   - Require all CI and current-head Codex review to pass.
   - Build the final macOS ARM64 artifact in GitHub Actions only; do not create a GitHub Release.
