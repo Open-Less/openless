@@ -214,6 +214,110 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
+/// JSON keys audio models used for the polished text and the translation when they
+/// wrapped a plain-text reply (issue #1304), in priority order. Compared
+/// case-insensitively after trimming `[`/`]`, so the reply markers count as keys,
+/// and also matched as a `_` suffix (`final_translation`).
+const ENVELOPE_TRANSLATION_KEYS: &[&str] = &[
+    "translated_text",
+    "translation",
+    "translated",
+    "openless_translation",
+];
+const ENVELOPE_TEXT_KEYS: &[&str] = &[
+    "final_text",
+    "final",
+    "polished_text",
+    "openless_text",
+    "text",
+    "raw_transcript",
+];
+
+/// Plain text that a model returned as a JSON object (`{"final_text": "…"}`)
+/// although it was asked for plain text (issue #1304). Returns `None` unless the
+/// whole content is such an envelope, so ordinary text, including text that merely
+/// contains braces, is left alone; `Some("")` means an envelope without text.
+///
+/// Only the known keys above are taken, translation keys first when
+/// `prefer_translation`. `lenient` also takes an object whose only field is a
+/// string and one quoted string in braces (`{"…"}`, not valid JSON): shapes seen
+/// when the whole reply is the wrapper, but also what dictated JSON looks like.
+pub(crate) fn unwrap_json_text_envelope(
+    content: &str,
+    prefer_translation: bool,
+    lenient: bool,
+) -> Option<String> {
+    let trimmed = content.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let text = match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+        &escape_json_string_controls(trimmed),
+    ) {
+        Ok(object) => {
+            let field = |keys: &[&str]| {
+                keys.iter().find_map(|wanted| {
+                    object
+                        .iter()
+                        .find(|(key, _)| {
+                            let key = key.trim_matches(['[', ']']).to_ascii_lowercase();
+                            key == *wanted || key.ends_with(&format!("_{wanted}"))
+                        })
+                        .and_then(|(_, value)| value.as_str())
+                })
+            };
+            let only = match object.values().collect::<Vec<_>>().as_slice() {
+                [value] if lenient => value.as_str(),
+                _ => None,
+            };
+            prefer_translation
+                .then(|| field(ENVELOPE_TRANSLATION_KEYS))
+                .flatten()
+                .or_else(|| field(ENVELOPE_TEXT_KEYS))
+                .or(only)?
+                .to_string()
+        }
+        Err(_) if lenient => {
+            serde_json::from_str::<String>(&escape_json_string_controls(inner.trim())).ok()?
+        }
+        Err(_) => return None,
+    };
+    Some(text.trim().to_string())
+}
+
+/// Models write real line breaks and tabs inside JSON strings, which JSON forbids.
+fn escape_json_string_controls(json: &str) -> Cow<'_, str> {
+    if !json.contains(['\n', '\r', '\t']) {
+        return Cow::Borrowed(json);
+    }
+    let mut escaped = String::with_capacity(json.len());
+    let (mut in_string, mut after_backslash) = (false, false);
+    for character in json.chars() {
+        if in_string {
+            match character {
+                _ if after_backslash => after_backslash = false,
+                '\\' => after_backslash = true,
+                '"' => in_string = false,
+                '\n' => {
+                    escaped.push_str("\\n");
+                    continue;
+                }
+                '\r' => {
+                    escaped.push_str("\\r");
+                    continue;
+                }
+                '\t' => {
+                    escaped.push_str("\\t");
+                    continue;
+                }
+                _ => {}
+            }
+        } else if character == '"' {
+            in_string = true;
+        }
+        escaped.push(character);
+    }
+    Cow::Owned(escaped)
+}
+
 /// Strip model reasoning blocks so only the final polished text is inserted.
 ///
 /// Thinking-capable OpenAI-compatible models commonly return their reasoning in
@@ -481,5 +585,111 @@ mod tests {
             sentence_like_segments("The price is 3.14. Next sentence."),
             ["The price is 3.14.", "Next sentence."]
         );
+    }
+
+    #[test]
+    fn json_text_envelope_unwraps_shapes_returned_by_audio_models() {
+        let unwrap = |content: &str| unwrap_json_text_envelope(content, false, true);
+        assert_eq!(
+            unwrap(r#"{"final_text": "你好。"}"#).as_deref(),
+            Some("你好。")
+        );
+        assert_eq!(
+            unwrap("{\"final_text\":\"标题：\\n\\n1. 第一项\"}").as_deref(),
+            Some("标题：\n\n1. 第一项")
+        );
+        // Real line breaks inside the string are not valid JSON but still a wrapper.
+        assert_eq!(
+            unwrap("{\n  \"final_text\": \"第一行\n第二行\"\n}").as_deref(),
+            Some("第一行\n第二行")
+        );
+        assert_eq!(
+            unwrap(r#" {"raw_transcript": "原话"} "#).as_deref(),
+            Some("原话")
+        );
+        assert_eq!(
+            unwrap(r#"{"original_text": "原文", "final_text": "整理后"}"#).as_deref(),
+            Some("整理后")
+        );
+        // Known keys win regardless of key order or other metadata keys.
+        assert_eq!(
+            unwrap(r#"{"final_output_language": "简体中文", "final_text": "你好"}"#).as_deref(),
+            Some("你好")
+        );
+        assert_eq!(
+            unwrap(r#"{"final": "整理后", "confidence": 0.55}"#).as_deref(),
+            Some("整理后")
+        );
+        assert_eq!(
+            unwrap(r#"{"项目启动请求": "请再次启动项目。"}"#).as_deref(),
+            Some("请再次启动项目。")
+        );
+        // Braces around one quoted string are not valid JSON but are still a wrapper.
+        assert_eq!(
+            unwrap(r#"{"现在 .env 文件已经完整了。"}"#).as_deref(),
+            Some("现在 .env 文件已经完整了。")
+        );
+        // A recognized envelope without text is reported as empty, not left as JSON.
+        assert_eq!(unwrap(r#"{"final_text": "  "}"#).as_deref(), Some(""));
+        let both = r#"{"final_text": "中文", "translated_text": "English"}"#;
+        assert_eq!(unwrap(both).as_deref(), Some("中文"));
+        assert_eq!(
+            unwrap_json_text_envelope(both, true, false).as_deref(),
+            Some("English")
+        );
+        assert_eq!(
+            unwrap_json_text_envelope(
+                r#"{"final_source": "你好", "final_translation": "Hello"}"#,
+                true,
+                false
+            )
+            .as_deref(),
+            Some("Hello")
+        );
+        assert_eq!(
+            unwrap_json_text_envelope(
+                r#"{"translated_from": "zh", "translation": "Hello"}"#,
+                true,
+                false
+            )
+            .as_deref(),
+            Some("Hello")
+        );
+        assert_eq!(
+            unwrap_json_text_envelope(
+                r#"{"[[OPENLESS_POLISHED_SOURCE]]": "你好", "[[OPENLESS_TRANSLATION]]": "Hello"}"#,
+                true,
+                false
+            )
+            .as_deref(),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn json_text_envelope_leaves_other_text_alone() {
+        for content in [
+            "普通文本",
+            r#"{"env"} 文件就是环境配置文件。"#,
+            "{\"这里面\"这部分不太通顺，整理如下：}\n\n正文",
+            r#"{"steps": ["a", "b"]}"#,
+            r#"{"final_text": 1}"#,
+            r#"{"a": "一", "b": "二"}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                unwrap_json_text_envelope(content, false, true),
+                None,
+                "{content}"
+            );
+        }
+        // Strict mode keeps dictated JSON that does not use a known key.
+        for content in [r#"{"name": "Alice"}"#, r#"{"apple"}"#] {
+            assert_eq!(
+                unwrap_json_text_envelope(content, false, false),
+                None,
+                "{content}"
+            );
+        }
     }
 }

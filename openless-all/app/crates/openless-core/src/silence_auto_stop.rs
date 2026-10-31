@@ -67,9 +67,51 @@ impl SilenceAutoStop {
     }
 }
 
+/// Whether recorded 16 kHz mono PCM contains speech by the rule above:
+/// [`MIN_SPEECH_BLOCKS`] consecutive 100 ms blocks at [`SPEECH_LEVEL_THRESHOLD`],
+/// on the recorder's level scale (RMS × 4, as the capsule shows it).
+pub(crate) fn pcm_contains_speech(pcm: &[u8]) -> bool {
+    const BLOCK_BYTES: usize = 3_200;
+    const LEVEL_RMS_GAIN: f32 = 4.0;
+    let mut consecutive = 0;
+    pcm.chunks(BLOCK_BYTES).any(|block| {
+        if crate::external_audio::pcm_i16_le_rms(block) * LEVEL_RMS_GAIN >= SPEECH_LEVEL_THRESHOLD {
+            consecutive += 1;
+        } else {
+            consecutive = 0;
+        }
+        consecutive >= MIN_SPEECH_BLOCKS
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tone(milliseconds: usize, amplitude: f64) -> Vec<u8> {
+        (0..milliseconds * 16)
+            .flat_map(|index| {
+                let phase = index as f64 * 2.0 * std::f64::consts::PI * 220.0 / 16_000.0;
+                ((phase.sin() * amplitude) as i16).to_le_bytes()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recorded_speech_needs_consecutive_blocks_above_the_auto_stop_level() {
+        assert!(!pcm_contains_speech(&[]));
+        assert!(!pcm_contains_speech(&tone(2_000, 0.0)));
+        // Room tone around -55 dBFS stays below the threshold.
+        assert!(!pcm_contains_speech(&tone(2_000, 60.0)));
+        // A single 100 ms click is not speech.
+        let mut click = tone(500, 0.0);
+        click.extend(tone(100, 8_000.0));
+        click.extend(tone(500, 0.0));
+        assert!(!pcm_contains_speech(&click));
+        // Quiet speech around -40 dBFS counts.
+        assert!(pcm_contains_speech(&tone(400, 460.0)));
+        assert!(pcm_contains_speech(&tone(2_000, 8_000.0)));
+    }
 
     fn feed(
         detector: &mut SilenceAutoStop,
