@@ -55,10 +55,10 @@ This checklist turns the outstanding UI and startup feedback into observable wor
 - [partial] **Regression coverage**
   - Capsule radius, settings flash, page transitions, permission gate, translation popup, and motion reduction now have focused contracts or cloud UI coverage.
   - Add focused tests for the capsule radius, settings first-open, page transitions, permission gate, popup placement, and motion reduction.
-- [x] **Cloud validation and delivery** *(PRs #1307, #1308, and #1309 merged with green cloud gates; final ARM64 build remains)*
+- [x] **Cloud validation and delivery** *(PRs #1307, #1308, #1309, and #1313 merged; final ARM64 build completed in workflow 41174727437)*
   - Push a dedicated PR from this branch.
   - Require all CI and current-head Codex review to pass.
-  - Build the final macOS ARM64 artifact in GitHub Actions only; do not create a GitHub Release.
+  - Build the final macOS ARM64 artifact in GitHub Actions only; do not create a GitHub Release. Completed: ARM64 DMG delivered to the Desktop.
 
 ## Explicitly out of scope
 
