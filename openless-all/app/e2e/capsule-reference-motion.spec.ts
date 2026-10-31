@@ -111,6 +111,26 @@ test('translation strip settles above the pill and exits when processing starts'
   await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '80px');
 });
 
+test('translation target popup stays interactive during a recording session', async ({ page }) => {
+  await page.goto(fixture);
+  await patch(page, { state: 'recording', translation: true });
+  const badge = page.locator('.ol-classic-translation');
+  const trigger = badge.getByRole('combobox', { name: '翻译目标语言' });
+  await expect(trigger).toBeEnabled();
+  await trigger.click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  const japanese = page.getByRole('option').filter({ hasText: /日语|日本語/ }).first();
+  await expect(japanese).toBeVisible();
+  await japanese.click();
+  await expect(trigger).toContainText(/日语|日本語/);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.targetChanges.length))
+    .toBe(1);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).fixture.menuChanges.at(-1)?.open))
+    .toBe(false);
+});
+
 test('QA records in a pill, reveals a wide result, retains content on exit and reopens', async ({
   page,
 }, info) => {
