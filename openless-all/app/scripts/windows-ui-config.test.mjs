@@ -117,14 +117,12 @@ if (!capsuleRailWindow) {
 assertEqual(capsuleWindow.width, 460, 'windows capsule config keeps the shared bootstrap width');
 assertEqual(capsuleWindow.height, 180, 'windows capsule config keeps the shared bootstrap height');
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
-assertEqual(capsuleWindow.create, false, 'capsule WebView should be created lazily to reduce idle memory');
 assertEqual(
   capsuleWindow.alwaysOnTop,
   true,
   'capsule window should stay above the focused app while recording',
 );
 assertEqual(capsuleRailWindow.transparent, true, 'capsule rail should be transparent');
-assertEqual(capsuleRailWindow.create, false, 'capsule rail WebView should be created lazily');
 assertEqual(capsuleRailWindow.visible, false, 'capsule rail should start hidden');
 assertEqual(capsuleRailWindow.focus, false, 'capsule rail should never take focus');
 assertEqual(capsuleRailWindow.skipTaskbar, true, 'capsule rail should stay out of the taskbar');

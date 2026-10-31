@@ -32,7 +32,6 @@
       },
       {
         "label": "capsule",
-        "create": false,
         "url": "index.html?window=capsule",
         "title": "OpenLess Capsule",
         "width": 460,
