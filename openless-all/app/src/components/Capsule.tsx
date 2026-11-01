@@ -6,7 +6,11 @@ import { useReducedMotion } from '../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
-import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
+import {
+  capsuleTranscriptBandPresent,
+  capsuleTranscriptFontSize,
+  visibleCapsuleTranscript,
+} from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
 import {
@@ -17,6 +21,8 @@ import {
   parseCapsuleStyle,
 } from '../lib/capsuleLayout';
 import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
+import { SIRI_ENHANCED_GLYPH_MOTION } from '../lib/insertTextAnimation';
+import { useTranscriptLinger } from '../lib/useTranscriptLinger';
 import type {
   CapsulePayload,
   CapsuleState,
@@ -375,6 +381,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         : Number(new URLSearchParams(window.location.search).get('fontSize') || 14),
     ),
   );
+  const [siriEnhanced, setSiriEnhanced] = useState(false);
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
@@ -631,6 +638,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const handle = await listen<UserPreferences>('prefs:changed', (event) => {
         setTranscriptEnabled(event.payload.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
+        setSiriEnhanced(event.payload.capsuleSiriEnhanced ?? false);
         preferenceRevision += 1;
         const next = parseCapsuleStyle(event.payload?.capsuleStyle);
         if (next) {
@@ -649,6 +657,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (!cancelled && revisionAtRead === preferenceRevision && next) {
         setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+        setSiriEnhanced(preferences.capsuleSiriEnhanced ?? false);
         stylePreferenceReadyRef.current = true;
         setCapsuleStyle(next);
       }
@@ -756,7 +765,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     renderedState,
     renderedSelectionPolish,
   );
-  const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
+  // Siri enhanced shows the rail from the start of recording, before any words, and keeps it up
+  // briefly after the session for its collapse (CapsuleTranscriptOverlay plays both).
+  const enhancedRail = splitTranscriptRail && capsuleStyle === 'siri' && siriEnhanced;
+  const railLinger = useTranscriptLinger(
+    liveTranscript,
+    enhancedRail
+      ? capsuleTranscriptBandPresent(transcriptEnabled, state, selectionPolish, warming)
+      : liveTranscript.length > 0,
+    enhancedRail,
+    SIRI_ENHANCED_GLYPH_MOTION.closeMs,
+  );
+  const showLiveTranscript = state !== 'idle' && railLinger.visible;
   const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
 
   useEffect(() => {

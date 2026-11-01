@@ -124,6 +124,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_siri_enhanced",
+        key: "capsuleSiriEnhanced",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_visual_effect",
+    },
+    PreferenceField {
         rust_name: "capsule_transcript_font_size",
         key: "capsuleTranscriptFontSize",
         class: PreferenceClass::Portable,

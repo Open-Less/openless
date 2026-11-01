@@ -1586,6 +1586,7 @@ export const fr: typeof zhCN = {
         'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
+      capsuleStyleSiriEnhanced: 'Aurore',
       capsuleStyleClassic: 'Style par défaut',
       stableTranscriptionLabel: 'Mode stable (enregistrer puis transcrire)',
       stableTranscriptionDesc:

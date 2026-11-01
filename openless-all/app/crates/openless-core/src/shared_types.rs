@@ -421,6 +421,10 @@ pub struct UserPreferences {
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     pub capsule_transcript_font_size: u8,
+    /// "Siri enhanced" presentation of the Siri capsule (fixed-length marquee transcript with
+    /// ink-wash glyphs). Device-local: other devices keep plain `capsule_style = Siri`.
+    #[serde(default)]
+    pub capsule_siri_enhanced: bool,
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -1039,6 +1043,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_capsule_transcript_font_size")]
     capsule_transcript_font_size: u8,
     #[serde(default)]
+    capsule_siri_enhanced: bool,
+    #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
     audio_enhancement_enabled: bool,
@@ -1333,6 +1339,7 @@ impl Default for UserPreferencesWire {
             capsule_display_mode_v2: prefs.capsule_display_mode_v2,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
+            capsule_siri_enhanced: prefs.capsule_siri_enhanced,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             echo_cancellation_enabled: prefs.echo_cancellation_enabled,
@@ -1557,6 +1564,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
+            capsule_siri_enhanced: wire.capsule_siri_enhanced,
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
             echo_cancellation_enabled: wire.echo_cancellation_enabled,
@@ -1959,6 +1967,7 @@ impl Default for UserPreferences {
             capsule_display_mode_v2: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
+            capsule_siri_enhanced: false,
             mute_during_recording: false,
             audio_enhancement_enabled: false,
             echo_cancellation_enabled: false,
