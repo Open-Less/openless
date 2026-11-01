@@ -18,12 +18,14 @@ mod dictation_feedback;
 mod fcitx5;
 pub mod frame_stats;
 mod host_actions;
+pub mod host_context;
 mod hotkeys;
 mod i18n;
 pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
 pub mod omni_settings;
+pub mod update_check;
 mod popup;
 mod popup_layer;
 mod popup_window;
@@ -73,7 +75,8 @@ pub use fcitx5::{
     copy_to_clipboard as fcitx5_copy_to_clipboard,
     ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_fcitx5_if_plugin_updated,
     reload_running_fcitx5, selection_text as fcitx5_selection_text,
-    set_hotkeys as set_fcitx5_hotkeys, Fcitx5TextInserter, FcitxPluginInstallPlan,
+    set_hotkeys as set_fcitx5_hotkeys, surrounding_text as fcitx5_surrounding_text,
+    Fcitx5TextInserter, FcitxPluginInstallPlan, SurroundingText,
     FcitxPluginStatus,
 };
 pub use host_actions::LinuxHostActions;

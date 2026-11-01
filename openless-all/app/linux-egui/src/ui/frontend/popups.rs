@@ -501,9 +501,27 @@ pub fn selection_ask(
                                     ui.add_space(10.0);
                                 }
                                 if thinking_row {
+                                    // Tauri 的 `qa.activity.*`：模型在搜索/读网页/用工具时
+                                    // 明确说在干什么，而不是一律「思考中」。
+                                    let label = match state.activity.as_deref() {
+                                        Some("searching_web") => {
+                                            tr_l10n(lang, "qa.activity.searching_web").to_string()
+                                        }
+                                        Some("reading_web") => {
+                                            tr_l10n(lang, "qa.activity.reading_web").to_string()
+                                        }
+                                        Some("using_tool") => {
+                                            let tool = state
+                                                .activity_tool
+                                                .as_deref()
+                                                .unwrap_or(tr_l10n(lang, "qa.activity.tool"));
+                                            fmt_l10n(lang, "qa.activity.using_tool", &[&tool])
+                                        }
+                                        _ => tr_l10n(lang, "qa.thinking").to_string(),
+                                    };
                                     assistant_row(ui, |ui| {
                                         ui.label(
-                                            egui::RichText::new(tr_l10n(lang, "qa.thinking"))
+                                            egui::RichText::new(label)
                                                 .size(12.0)
                                                 .color(theme::INK_3),
                                         );
@@ -628,7 +646,13 @@ pub fn selection_ask(
                             color_to_f32(theme::INK)
                         };
                         let drive = siri_wgpu::SiriDrive {
-                            level: 0.0,
+                            // 录音时环跟着麦克风电平呼吸（Tauri 的 olchat-ring 同源）。
+                            // 电平来自 Core 的 `QaLevel` 事件；没收到就是 0。
+                            level: if recording {
+                                state.audio_level.unwrap_or(0.0)
+                            } else {
+                                0.0
+                            },
                             resolved: if recording { 1.0 } else { 0.0 },
                             // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
                             speed: if recording { 1.0 } else { 1.45 },
@@ -827,10 +851,38 @@ fn message_row(
                 },
             );
         });
-        let _ = lang;
+        message_copy_row(ui, &message.content, lang);
         return;
     }
     assistant_row(ui, |ui| render_markdown(ui, &message.content));
+    message_copy_row(ui, &message.content, lang);
+}
+
+/// 逐条消息的「复制」按钮（Tauri `CopyMessage`）。
+///
+/// 注意与**插入兜底**的区别：这里只做用户显式点击的复制，不参与听写插入
+/// （Linux 的插入走 fcitx5 提交，失败就报错，不往剪贴板里塞文字）。
+fn copy_message_button(ui: &mut egui::Ui, text: &str, lang: Lang) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let response = icon_button(ui, icons::IconName::Copy, theme::INK_4)
+        .on_hover_text(tr_l10n(lang, "common.copy"));
+    if response.clicked() {
+        match openless_linux_egui::fcitx5_copy_to_clipboard(text) {
+            Ok(()) => log::info!("[qa] copied {} chars", text.chars().count()),
+            Err(error) => log::warn!("[qa] copy failed: {error}"),
+        }
+    }
+}
+
+/// 助理消息下方右对齐的复制按钮。
+fn message_copy_row(ui: &mut egui::Ui, text: &str, lang: Lang) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            copy_message_button(ui, text, lang);
+        });
+    });
 }
 
 /// 助手行：深色思考头像 + 内容（内容由调用方渲染在头像右侧）。
@@ -869,50 +921,21 @@ fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
         .show(ui, contents);
 }
 
-/// 用户头像：已登录 GitHub 时画真实头像（`github.com/{login}.png`，圆形裁切），
-/// 未登录 / 取图失败回落 GitHub 图标（Tauri `UserAvatar`）。
-fn user_avatar(ui: &mut egui::Ui, avatar: Option<&egui::TextureHandle>) {
+/// 用户头像：麦克风图标。
+///
+/// Tauri 在这次面板重写里把 GitHub 头像换成了 `MicIcon` —— 这条消息本来就是
+/// 用户**说**出来的，画头像反而误导（头像属于身份，不属于说话方式）。
+fn user_avatar(ui: &mut egui::Ui, _avatar: Option<&egui::TextureHandle>) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
         egui::Sense::hover(),
     );
     let radius = (ROUND_BUTTON + 4.0) / 2.0;
-    match avatar {
-        Some(texture) => {
-            textured_circle(ui, rect.center(), radius, texture);
-        }
-        None => {
-            ui.painter()
-                .circle_filled(rect.center(), radius, theme::SURFACE_2);
-            icons::draw_icon(ui, rect.center(), icons::IconName::Github, theme::INK_2);
-        }
-    }
+    ui.painter()
+        .circle_filled(rect.center(), radius, theme::SURFACE_2);
+    icons::draw_icon(ui, rect.center(), icons::IconName::Mic, theme::INK_2);
 }
 
-/// 把一张方形贴图画成圆形：以中心为扇形顶点、UV 按圆周比例展开。
-fn textured_circle(ui: &egui::Ui, center: egui::Pos2, radius: f32, texture: &egui::TextureHandle) {
-    const SEGMENTS: usize = 48;
-    let mut mesh = egui::Mesh::with_texture(texture.id());
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: center,
-        uv: egui::pos2(0.5, 0.5),
-        color: egui::Color32::WHITE,
-    });
-    for index in 0..=SEGMENTS {
-        let angle = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos,
-            uv: egui::pos2(0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5),
-            color: egui::Color32::WHITE,
-        });
-        if index > 0 {
-            mesh.indices
-                .extend_from_slice(&[0, index as u32, index as u32 + 1]);
-        }
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
 
 /// 输入区上方的整宽次级按钮（Tauri `Button variant="outline"`）。
 fn wide_button(ui: &mut egui::Ui, label: &str) -> bool {
@@ -2429,6 +2452,9 @@ mod tests {
             ],
             selection_preview: Some("selected source".to_string()),
             streaming_answer: String::new(),
+            audio_level: None,
+            activity: None,
+            activity_tool: None,
             error: Some("network error".to_string()),
             edit_instruction_mode: false,
             edit_apply_available: false,

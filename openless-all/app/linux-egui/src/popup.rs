@@ -72,6 +72,17 @@ pub enum HostToPopup {
         selection_preview: Option<String>,
         #[serde(default)]
         streaming_answer: String,
+        /// 录音电平（0..1）：Tauri 的 QA 面板在录音时画实时电平条，
+        /// 数据来自 Core 的 `BackendEventKind::QaLevel`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_level: Option<f32>,
+        /// 正在做什么（思考 / 搜索网页 / 阅读网页 / 使用工具）。
+        /// Tauri 的 `qa.activity.*` 就靠它把「思考中」换成具体动作。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<String>,
+        /// `activity` 是 `using_tool` 时的工具名。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity_tool: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         /// 「编辑指令」勾选框状态（Core `QaSnapshot.edit_instruction_mode`）。
@@ -120,6 +131,17 @@ pub enum HostToPopup {
         session_id: String,
         sequence: u64,
     },
+    /// 选区助手录音时的实时电平（`BackendEventKind::QaLevel`）。
+    ///
+    /// 电平是**高频**消息（每秒十几次），所以单独一条轻量消息，不走快照：
+    /// 快照会重建整段对话，按电平频率发会把面板的滚动和输入框拖卡。
+    /// 它也不参与序号排序 —— 迟到的电平只值一帧，没有覆盖旧状态的危害。
+    QaLevel {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        level: f32,
+    },
     /// 本地热键匹配所需的配置（见 `crate::local_hotkeys` 的模块文档）。
     ///
     /// 面板有焦点时 fcitx5 收不到按键，所以面板自己按这份配置匹配，命中后
@@ -145,6 +167,7 @@ impl HostToPopup {
             Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::QaLevel { sequence, .. }
             | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence = value,
@@ -156,6 +179,7 @@ impl HostToPopup {
             Self::PolishPreview { version, .. }
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
+            | Self::QaLevel { version, .. }
             | Self::Hotkeys { version, .. }
             | Self::Hide { version, .. }
             | Self::Shutdown { version, .. } => *version,
@@ -167,6 +191,7 @@ impl HostToPopup {
             Self::PolishPreview { session_id, .. }
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
+            | Self::QaLevel { session_id, .. }
             | Self::Hotkeys { session_id, .. }
             | Self::Hide { session_id, .. }
             | Self::Shutdown { session_id, .. } => session_id,
@@ -178,6 +203,7 @@ impl HostToPopup {
             Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::QaLevel { sequence, .. }
             | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence,
@@ -192,7 +218,7 @@ impl HostToPopup {
             Self::Capsule { .. } => Some(PopupKind::Capsule),
             // 配置不属于任何一种面板内容，
             // 不能拿它当“这个帧是给谁的”。
-            Self::Hotkeys { .. } => None,
+            Self::QaLevel { .. } | Self::Hotkeys { .. } => None,
             Self::Hide { .. } | Self::Shutdown { .. } => None,
         }
     }
@@ -601,6 +627,10 @@ pub struct QaPopupState {
     pub messages: Vec<PopupChatMessage>,
     pub selection_preview: Option<String>,
     pub streaming_answer: String,
+    pub audio_level: Option<f32>,
+    /// 见 `HostToPopup::QaSnapshot::activity`。
+    pub activity: Option<String>,
+    pub activity_tool: Option<String>,
     pub error: Option<String>,
     pub edit_instruction_mode: bool,
     /// 润色结果模式：Some = 正在编辑润色结果（替代原来的独立预览窗口）。
@@ -688,6 +718,15 @@ impl PopupState {
         }
         let session_id = message.session_id().to_owned();
         let sequence = message.sequence();
+        // 电平只跟随当前会话，不推进序号：见 `QaLevel` 的文档。
+        if let HostToPopup::QaLevel { level, .. } = message {
+            if self.session_id.as_deref() == Some(session_id.as_str())
+                || self.session_id.is_none()
+            {
+                self.qa.audio_level = Some(level.clamp(0.0, 1.0));
+            }
+            return ApplyOutcome::Applied;
+        }
         if let Some(current) = self.session_id.as_deref() {
             if current == session_id {
                 if sequence <= self.last_sequence {
@@ -723,6 +762,9 @@ impl PopupState {
                 messages,
                 selection_preview,
                 streaming_answer,
+                audio_level,
+                activity,
+                activity_tool,
                 error,
                 edit_instruction_mode,
                 edit_apply_available,
@@ -737,6 +779,9 @@ impl PopupState {
                     messages,
                     selection_preview,
                     streaming_answer,
+                    audio_level,
+                    activity,
+                    activity_tool,
                     error,
                     edit_instruction_mode,
                     edit_apply_available,
@@ -775,8 +820,8 @@ impl PopupState {
                 self.shutdown_requested = true;
                 return ApplyOutcome::Shutdown;
             }
-            // 上面已提前收下：热键配置不参与会话与序号排序。
-            HostToPopup::Hotkeys { .. } => {}
+            // 上面已提前收下：热键配置与电平不参与会话与序号排序。
+            HostToPopup::QaLevel { .. } | HostToPopup::Hotkeys { .. } => {}
         }
         ApplyOutcome::Applied
     }
@@ -819,7 +864,9 @@ pub enum PopupSendError {
 }
 
 enum SupervisorCommand {
-    Send(HostToPopup),
+    /// Boxed: `HostToPopup` 现在有 20 多个变体、最大的快照有 240 B，
+    /// 直接内联会让通道里每条消息都按最大变体占内存（clippy 也会报）。
+    Send(Box<HostToPopup>),
     Shutdown,
 }
 
@@ -916,7 +963,7 @@ impl PopupSupervisor {
 
     /// Queue a message without ever waiting in an egui frame.
     pub fn try_send(&self, message: HostToPopup) -> Result<(), PopupSendError> {
-        match self.commands.try_send(SupervisorCommand::Send(message)) {
+        match self.commands.try_send(SupervisorCommand::Send(Box::new(message))) {
             Ok(()) => Ok(()),
             Err(tokio_mpsc::error::TrySendError::Full(_)) => Err(PopupSendError::Full),
             Err(tokio_mpsc::error::TrySendError::Closed(_)) => Err(PopupSendError::Closed),
@@ -1019,7 +1066,7 @@ async fn supervise(
             command = commands.recv() => {
                 match command {
                     Some(SupervisorCommand::Send(message)) => {
-                        match serde_json::to_vec(&message) {
+                        match serde_json::to_vec(message.as_ref()) {
                             Ok(encoded) if encoded.len() <= MAX_JSONL_LINE_BYTES => {
                                 if let Err(error) = stdin.write_all(&encoded).await {
                                     let _ = events.try_send(PopupSupervisorEvent::ProtocolError(
@@ -1332,6 +1379,9 @@ mod tests {
             messages: Vec::new(),
             selection_preview: None,
             streaming_answer: String::new(),
+            audio_level: None,
+            activity: None,
+            activity_tool: None,
             error: None,
             edit_instruction_mode: true,
             edit_apply_available: true,

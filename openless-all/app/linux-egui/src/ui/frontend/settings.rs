@@ -8,7 +8,7 @@ use super::view_model::{
     FrontendAction, FrontendViewModel, SettingsActionField, SettingsChannelProvider,
     SettingsComboField, SettingsField, SettingsProviderAuth, SettingsProviderEditor,
     SettingsProviderField, SettingsSection, SettingsTextField, ShortcutField, StylePack,
-    StylePackHotkeyRow,
+    StylePackHotkeyRow, UpdateState,
 };
 
 const RAIL_WIDTH: f32 = 214.0;
@@ -772,49 +772,10 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         },
     );
 
-    // 插入与剪贴板（Tauri：可折叠分组，含流式输入）
-    card_group(
-        ui,
-        tr_l10n(lang, "settings.recording.insert_group_title"),
-        |ui| {
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.recording.restore_clipboard_label"),
-                tr_l10n(lang, "settings.recording.restore_clipboard_desc"),
-                vm.settings.restore_clipboard,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::RestoreClipboard,
-                    ));
-                },
-            );
-            toggle_row(
-                ui,
-                tr_l10n(lang, "settings.advanced.streaming_insert_label"),
-                tr_l10n(lang, "settings.advanced.streaming_insert_desc"),
-                vm.settings.streaming_insert,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StreamingInsert,
-                    ));
-                },
-            );
-            toggle_row(
-                ui,
-                tr_l10n(
-                    lang,
-                    "settings.advanced.streaming_insert_save_clipboard_label",
-                ),
-                "",
-                vm.settings.streaming_save_clipboard,
-                || {
-                    actions.push(FrontendAction::SettingsToggle(
-                        SettingsField::StreamingSaveClipboard,
-                    ));
-                },
-            );
-        },
-    );
+    // 插入分组在 Linux 上没有可画的项，所以整组不画：
+    // - 剪贴板写入/恢复：用户决定 Linux 不做
+    // - 流式插入：Core 先问 `TextInsertionSession::supports_streaming()`，
+    //   fcitx5 的插入会话只实现整段提交，没有增量替换通道
 
     // 启动（Tauri `RecordingInputSection` 的 startup 折叠组，顺序一致：
     // 开机自启 → 启动时静默运行 → 自动检查更新）
@@ -833,6 +794,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             );
             toggle_row(
                 ui,
+                tr_l10n(lang, "settings.recording.auto_update_check_label"),
+                "",
+                vm.settings.auto_update,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::AutoUpdate,
+                    ));
+                },
+            );
+            toggle_row(
+                ui,
                 tr_l10n(lang, "settings.recording.start_minimized_label"),
                 tr_l10n(lang, "settings.recording.start_minimized_desc"),
                 vm.settings.start_minimized,
@@ -842,9 +814,8 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
-            // Tauri 也画了「自动检查更新」，但 Linux 版本没有任何更新器
-            // （`supports_auto_update == false`，`auto_update_check` 存下来后没人读），
-            // 画一个点了没反应的开关不算对齐。等真有更新通道再加回来。
+            // Tauri 的启动分组里还有「自动检查更新」。Linux 现在也会读这个偏好
+            // （启动时 + 每 60 分钟查一次 GitHub Releases），所以这一行是真的。
         },
     );
 
@@ -3057,6 +3028,17 @@ fn privacy_data(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec
                 ));
             },
         );
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.data_storage.cursor_context_label"),
+            tr_l10n(lang, "settings.data_storage.cursor_context_desc"),
+            vm.settings.cursor_context,
+            || {
+                actions.push(FrontendAction::SettingsToggle(
+                    SettingsField::CursorContext,
+                ));
+            },
+        );
         text_edit_row(
             ui,
             tr_l10n(lang, "settings.recording.polish_skip_max_chars_label"),
@@ -3085,7 +3067,79 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
             tr_l10n(lang, "settings.debug.title"),
             tr_l10n(lang, "modal.advanced_pages.debug"),
         ),
+        (
+            4,
+            SettingsIcon::Sparkle,
+            tr_l10n(lang, "settings.vocabulary_learning.title"),
+            tr_l10n(lang, "settings.vocabulary_learning.description"),
+        ),
     ];
+    if vm.advanced_open == 4 {
+        card(ui, "", "", |ui| {
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.enabled"),
+                tr_l10n(lang, "settings.vocabulary_learning.description"),
+                vm.settings.vocabulary_learning,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::VocabularyLearning,
+                    ));
+                },
+            );
+            if !vm.settings.vocabulary_learning {
+                return;
+            }
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.observation_seconds"),
+                tr_l10n(lang, "settings.vocabulary_learning.observation_seconds_hint"),
+                &mut vm.settings.vocab_observation_seconds,
+                "60",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabObservationSeconds,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.suggestion_seconds"),
+                tr_l10n(lang, "settings.vocabulary_learning.suggestion_seconds_hint"),
+                &mut vm.settings.vocab_suggestion_seconds,
+                "10",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabSuggestionSeconds,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.max_phrase_chars"),
+                tr_l10n(lang, "settings.vocabulary_learning.max_phrase_chars_hint"),
+                &mut vm.settings.vocab_max_phrase_chars,
+                "12",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::VocabMaxPhraseChars,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            action_row(
+                ui,
+                tr_l10n(lang, "settings.vocabulary_learning.reset"),
+                "",
+                tr_l10n(lang, "settings.vocabulary_learning.reset"),
+                SettingsActionField::ResetVocabularyLearning,
+                actions,
+            );
+        });
+        return;
+    }
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| {
                 toggle_row(
@@ -3271,6 +3325,92 @@ fn about(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fronte
         );
         if let Some(notice) = &vm.settings_notice {
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::BLUE));
+        }
+    });
+    // 更新（Tauri About 页的「检查更新 + Beta 频道」，Linux 只检测不安装）。
+    ui.add_space(-8.0);
+    card(ui, tr_l10n(lang, "settings.about.beta_channel_label"), "", |ui| {
+        toggle_row(
+            ui,
+            tr_l10n(lang, "settings.about.beta_channel_toggle_label"),
+            tr_l10n(lang, "settings.about.beta_channel_desc"),
+            vm.settings.update_beta_channel,
+            || {
+                actions.push(FrontendAction::SettingsToggle(
+                    SettingsField::BetaUpdateChannel,
+                ));
+            },
+        );
+        let checking = matches!(vm.settings.update_state, UpdateState::Checking);
+        // 两个标签各自用字面量查表，词条同步脚本只认字面量。
+        let check_label = if vm.settings.update_beta_channel {
+            tr_l10n(lang, "settings.about.check_beta_update_btn")
+        } else {
+            tr_l10n(lang, "settings.about.check_stable_update_btn")
+        };
+        row_desc(ui, "", "", |ui| {
+            if checking {
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(
+                        egui::RichText::new(tr_l10n(lang, "settings.about.checking_update")).size(11.5),
+                    )
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(0.0, 26.0)),
+                );
+            } else if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(check_label).size(11.5),
+                    )
+                    .fill(theme::SURFACE_2)
+                    .stroke(egui::Stroke::new(0.8, theme::LINE))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(0.0, 26.0)),
+                )
+                .clicked()
+            {
+                actions.push(FrontendAction::SettingsAction(
+                    SettingsActionField::CheckUpdate,
+                ));
+            }
+            if let UpdateState::Available { version, .. } = &vm.settings.update_state {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr_l10n(lang, "settings.about.open_releases"))
+                                .size(11.5)
+                                .color(theme::BLUE),
+                        )
+                        .fill(theme::SURFACE)
+                        .stroke(egui::Stroke::new(0.8, theme::BLUE_SOFT))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .min_size(egui::vec2(0.0, 26.0)),
+                    )
+                    .on_hover_text(format!("v{version}"))
+                    .clicked()
+                {
+                    actions.push(FrontendAction::SettingsAction(
+                        SettingsActionField::OpenUpdatePage,
+                    ));
+                }
+            }
+        });
+        match &vm.settings.update_state {
+            UpdateState::Idle | UpdateState::Checking => {}
+            UpdateState::UpToDate => {
+                hint_line(ui, tr_l10n(lang, "settings.about.up_to_date"));
+            }
+            UpdateState::Available { version, .. } => {
+                hint_line(
+                    ui,
+                    &fmt_l10n(lang, "settings.about.update_available", &[version]),
+                );
+            }
+            UpdateState::Failed { message } => {
+                hint_line(ui, tr_l10n(lang, "settings.about.update_error"));
+                ui.label(egui::RichText::new(message).size(11.0).color(theme::ERR));
+            }
         }
     });
     // The Tauri link card groups documentation links above a divider.

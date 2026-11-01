@@ -19,6 +19,14 @@
  *    GetSelectionText() -> s             — 读取**当前** PRIMARY 选区文本：探针可用时以合成器为准，
  *                                          当前选区没有 text mime 时返回空，而不是 clipboard
  *                                          addon 里那份可能过期的缓存（见 primary_selection.h）
+ *    GetSurroundingText() -> s           — 焦点输入上下文的光标上下文：
+ *                                          text=应用自报的全文，cursor/anchor=字符偏移，
+ *                                          valid=应用是否支持 surrounding text，
+ *                                          program=应用程序名（用于敏感应用门禁）。
+ *                                          Linux 的光标上下文与自动学词都以它为准，
+ *                                          不支持 surrounding text 的应用返回 valid=0。
+ *                                          编码：`valid\x1fprogram\x1fcursor\x1fanchor\x1ftext`
+ *                                          （偏移是字符数，text 在最后一段，可含任意字符）。
  *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
@@ -706,6 +714,36 @@ public:
         return selectionCacheReader_();
     }
 
+    /// 焦点输入上下文的 surrounding text。应用不支持时 `valid=false`。
+    ///
+    /// 为什么走 IME 而不是 AT-SPI：我们本来就在输入链路里（提交文字用的就是这个
+    /// input context），应用自报的光标位置比遍历无障碍树可靠得多，也不需要额外权限。
+    std::string getSurroundingText() {
+        auto *ic = savedIc_;
+        if (!ic) {
+            auto &mgr = instance_->inputContextManager();
+            mgr.foreachFocused([&](InputContext *focusedIc) {
+                ic = focusedIc;
+                return false;
+            });
+        }
+        constexpr char kSep = '\x1f';
+        if (!ic) {
+            return std::string("0") + kSep + std::string() + kSep + "0" + kSep + "0" + kSep;
+        }
+        const std::string program = ic->program();
+        const auto &surrounding = ic->surroundingText();
+        const bool valid = surrounding.isValid();
+        if (!valid) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSurroundingText: invalid for program=" << program;
+            return std::string("0") + kSep + program + kSep + "0" + kSep + "0" + kSep;
+        }
+        return std::string("1") + kSep + program + kSep +
+               std::to_string(surrounding.cursor()) + kSep +
+               std::to_string(surrounding.anchor()) + kSep + surrounding.text();
+    }
+
     bool setClipboardText(const std::string &text) {
         auto *clipboard = instance_->addonManager().addon("clipboard");
         if (!clipboard) {
@@ -737,6 +775,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(getSurroundingText, "GetSurroundingText", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
