@@ -118,9 +118,10 @@ export interface InsertTextWindowOptions {
   overflowBufferUnits?: number;
 }
 
-function normalizedInsertTextWindowLimit(
-  options: InsertTextWindowOptions = {},
-): { maxUnits: number; targetUnits: number } {
+function normalizedInsertTextWindowLimit(options: InsertTextWindowOptions = {}): {
+  maxUnits: number;
+  targetUnits: number;
+} {
   const maxUnits = Math.max(1, Math.floor(options.maxUnits ?? INSERT_TEXT_RENDER_WINDOW.maxUnits));
   const overflowBufferUnits = Math.max(
     0,
@@ -169,7 +170,7 @@ function selectInsertTextWindowSlice(
     const safeSegments = start === 0 ? segmented : segmented.slice(1);
     if (safeSegments.length >= targetUnits || start === 0) {
       const windowSegments = safeSegments.slice(-targetUnits);
-      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const safeStartOffset = start + (start === 0 ? 0 : (segmented[0]?.length ?? 0));
       const discardedUnits = safeSegments.length - windowSegments.length;
       let windowStartOffset = safeStartOffset;
       for (let i = 0; i < discardedUnits; i += 1) {
@@ -186,7 +187,7 @@ function selectInsertTextWindowSlice(
     const nextProbeLength = Math.min(text.length, Math.max(probeLength + 32, probeLength * 2));
     if (nextProbeLength === probeLength) {
       const windowSegments = safeSegments.slice(-targetUnits);
-      const safeStartOffset = start + (start === 0 ? 0 : segmented[0]?.length ?? 0);
+      const safeStartOffset = start + (start === 0 ? 0 : (segmented[0]?.length ?? 0));
       const discardedUnits = safeSegments.length - windowSegments.length;
       let windowStartOffset = safeStartOffset;
       for (let i = 0; i < discardedUnits; i += 1) {

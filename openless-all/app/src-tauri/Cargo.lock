@@ -4456,7 +4456,7 @@ dependencies = [
  "winreg 0.52.0",
  "x509-parser",
  "zeroize",
- "zip 2.6.1",
+ "zip 9.0.5",
 ]
 
 [[package]]

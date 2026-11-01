@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const source = await readFile(new URL('../src-tauri/src/desktop_resources.rs', import.meta.url), 'utf8');
+const source = await readFile(
+  new URL('../src-tauri/src/desktop_resources.rs', import.meta.url),
+  'utf8',
+);
 const closeMain = source.match(/pub\(crate\) fn close_main[\s\S]*?\n}\n/)?.[0] ?? '';
 assert.match(closeMain, /window\.hide\(\)/);
 assert.match(closeMain, /window\.eval\("window\.stop\(\); location\.replace\('about:blank'\);"\)/);

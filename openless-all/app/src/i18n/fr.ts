@@ -1734,9 +1734,11 @@ export const fr: typeof zhCN = {
       polishContextWindowDesc:
         'Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.',
       debugArchiveProcessedLabel: 'Conserver l’audio traité',
-      debugArchiveProcessedDesc: 'La version après réduction de bruit et gain, toujours dans le fichier d’enregistrement existant.',
+      debugArchiveProcessedDesc:
+        'La version après réduction de bruit et gain, toujours dans le fichier d’enregistrement existant.',
       debugArchiveRawLabel: 'Conserver aussi l’audio avant traitement',
-      debugArchiveRawDesc: 'Écrit aussi <session>.raw.wav à côté. Si seule cette option est active, l’audio brut va dans l’archive principale.',
+      debugArchiveRawDesc:
+        'Écrit aussi <session>.raw.wav à côté. Si seule cette option est active, l’audio brut va dans l’archive principale.',
       recordAudioForDebugLabel: 'Conserver l’enregistrement brut (débogage)',
       recordAudioForDebugDesc:
         'Enregistre l’audio brut du microphone en WAV pour diagnostiquer les problèmes de reconnaissance.',

@@ -1689,9 +1689,11 @@ export const en: typeof zhCN = {
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
       debugArchiveProcessedLabel: 'Keep processed audio',
-      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveProcessedDesc:
+        'The version after noise reduction and gain, stored in the existing recording file.',
       debugArchiveRawLabel: 'Also keep pre-processing audio',
-      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
+      debugArchiveRawDesc:
+        'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',

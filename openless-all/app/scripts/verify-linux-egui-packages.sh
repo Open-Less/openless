@@ -33,8 +33,14 @@ check_elf() {
   local binary=$1 deps
   file -L "$binary" | grep -q 'ELF 64-bit.*x86-64'
   deps=$(ldd "$binary")
-  if grep -q 'not found' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
-  if grep -Eqi 'webkit|wry|tauri' <<< "$deps"; then printf '%s\n' "$deps"; return 1; fi
+  if grep -q 'not found' <<< "$deps"; then
+    printf '%s\n' "$deps"
+    return 1
+  fi
+  if grep -Eqi 'webkit|wry|tauri' <<< "$deps"; then
+    printf '%s\n' "$deps"
+    return 1
+  fi
 }
 check_elf "$TARGET_DIR/release/openless-linux-egui"
 
@@ -67,7 +73,7 @@ grep -Fq 'fcitx5' <<< "$DEB_DEPENDS"
 grep -Fq 'libpipewire-0.3-0' <<< "$DEB_DEPENDS"
 
 mkdir -p "$WORK/rpm"
-( cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet )
+(cd "$WORK/rpm" && rpm2cpio "${rpms[0]}" | cpio -idm --quiet)
 test -x "$WORK/rpm/usr/bin/openless"
 test -s "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
 test -s "$WORK/rpm/usr/share/fcitx5/addon/openless.conf"

@@ -75,7 +75,9 @@ const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
 console.log(`[appgallery] ${fileName} ${size} bytes sha256=${digest} channel=${channel}`);
 
 if (dryRun) {
-  console.log(`[appgallery] dry run: would upload to app ${appId} (releaseType=${releaseType}, releasePhase=${releasePhase})`);
+  console.log(
+    `[appgallery] dry run: would upload to app ${appId} (releaseType=${releaseType}, releasePhase=${releasePhase})`,
+  );
   process.exit(0);
 }
 
@@ -114,7 +116,12 @@ const serviceAccountAssertion = (account, audience) => {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: account.key_id }));
   const payload = base64url(
-    JSON.stringify({ iss: account.sub_account, aud: audience ?? account.token_uri, iat: now, exp: now + 3600 }),
+    JSON.stringify({
+      iss: account.sub_account,
+      aud: audience ?? account.token_uri,
+      iat: now,
+      exp: now + 3600,
+    }),
   );
   const signer = createSign('RSA-SHA256');
   signer.update(`${header}.${payload}`);
@@ -140,20 +147,30 @@ if (hasServiceAccount) {
   });
   accessToken = token.body?.access_token;
   if (!accessToken) {
-    console.error(`[appgallery] service account token failed: HTTP ${token.status} ${token.text.slice(0, 400)}`);
+    console.error(
+      `[appgallery] service account token failed: HTTP ${token.status} ${token.text.slice(0, 400)}`,
+    );
     process.exit(1);
   }
-  console.log(`[appgallery] authenticated with the service account for project ${account.project_id}`);
+  console.log(
+    `[appgallery] authenticated with the service account for project ${account.project_id}`,
+  );
 } else {
   clientHeader = clientId;
   const token = await request('/api/oauth2/v1/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'cache-control': 'no-cache' },
-    body: JSON.stringify({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }),
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
   });
   accessToken = token.body?.access_token;
   if (!accessToken) {
-    console.error(`[appgallery] token request failed: HTTP ${token.status} ${token.text.slice(0, 400)}`);
+    console.error(
+      `[appgallery] token request failed: HTTP ${token.status} ${token.text.slice(0, 400)}`,
+    );
     process.exit(1);
   }
 }
@@ -166,7 +183,9 @@ const uploadUrl = await request(
 );
 const urlInfo = uploadUrl.body?.urlInfo;
 if (uploadUrl.body?.ret?.code !== 0 || !urlInfo?.url || !urlInfo?.objectId) {
-  console.error(`[appgallery] upload-url failed: HTTP ${uploadUrl.status} ${uploadUrl.text.slice(0, 400)}`);
+  console.error(
+    `[appgallery] upload-url failed: HTTP ${uploadUrl.status} ${uploadUrl.text.slice(0, 400)}`,
+  );
   process.exit(1);
 }
 
@@ -176,7 +195,9 @@ const put = await fetch(urlInfo.url, {
   body: readFileSync(file),
 });
 if (!put.ok) {
-  console.error(`[appgallery] object upload failed: HTTP ${put.status} ${(await put.text()).slice(0, 400)}`);
+  console.error(
+    `[appgallery] object upload failed: HTTP ${put.status} ${(await put.text()).slice(0, 400)}`,
+  );
   process.exit(1);
 }
 
@@ -189,7 +210,9 @@ const apply = await request(
   },
 );
 if (apply.body?.ret?.code !== 0) {
-  console.error(`[appgallery] app-package-info failed: HTTP ${apply.status} ${apply.text.slice(0, 400)}`);
+  console.error(
+    `[appgallery] app-package-info failed: HTTP ${apply.status} ${apply.text.slice(0, 400)}`,
+  );
   process.exit(1);
 }
 

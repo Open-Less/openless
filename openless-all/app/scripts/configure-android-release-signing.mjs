@@ -51,7 +51,10 @@ function ensureBuildTypeSigning(content, buildType) {
 
   const openRe = new RegExp(`getByName\\("${buildType}"\\)\\s*\\{`);
   if (openRe.test(content)) {
-    return content.replace(openRe, `getByName("${buildType}") {\n            ${SIGNING_ASSIGNMENT}`);
+    return content.replace(
+      openRe,
+      `getByName("${buildType}") {\n            ${SIGNING_ASSIGNMENT}`,
+    );
   }
 
   if (/buildTypes\s*\{/.test(content)) {
@@ -73,7 +76,9 @@ function main() {
   requireEnv('ANDROID_KEY_ALIAS');
   requireEnv('ANDROID_KEY_PASSWORD');
   const signDebug = ['1', 'true', 'yes'].includes(
-    String(process.env.OPENLESS_SIGN_DEBUG || '').trim().toLowerCase(),
+    String(process.env.OPENLESS_SIGN_DEBUG || '')
+      .trim()
+      .toLowerCase(),
   );
 
   if (!existsSync(gradlePath)) {

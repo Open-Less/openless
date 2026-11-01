@@ -1722,9 +1722,11 @@ export const de: typeof zhCN = {
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
       debugArchiveProcessedLabel: 'Verarbeitetes Audio behalten',
-      debugArchiveProcessedDesc: 'Die Version nach Rauschunterdrückung und Verstärkung, weiterhin in der bisherigen Aufnahmedatei.',
+      debugArchiveProcessedDesc:
+        'Die Version nach Rauschunterdrückung und Verstärkung, weiterhin in der bisherigen Aufnahmedatei.',
       debugArchiveRawLabel: 'Auch Audio vor der Verarbeitung behalten',
-      debugArchiveRawDesc: 'Schreibt zusätzlich <session>.raw.wav daneben. Ist nur dies aktiv, landet das Rohaudio in der Hauptdatei.',
+      debugArchiveRawDesc:
+        'Schreibt zusätzlich <session>.raw.wav daneben. Ist nur dies aktiv, landet das Rohaudio in der Hauptdatei.',
       recordAudioForDebugLabel: 'Rohaufnahmen behalten (Diagnose)',
       recordAudioForDebugDesc:
         'Speichert das rohe Mikrofonaudio als WAV, um Erkennungsprobleme zu untersuchen.',
