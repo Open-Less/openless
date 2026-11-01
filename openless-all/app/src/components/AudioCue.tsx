@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from 'react';
 import { isAndroid, isTauri } from '../lib/ipc';
-import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
+import { disposeAudioCue, playRecordStartCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
 
 interface CapsulePayload {
@@ -29,7 +29,10 @@ export function AudioCueListener() {
       try {
         const { getSettings } = await import('../lib/ipc');
         const prefs = await getSettings();
-        if (!cancelled) audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
+        if (!cancelled) {
+          audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
+          if (!audioCueEnabledRef.current) disposeAudioCue();
+        }
       } catch {
         // Read failure: keep the default true
       }
@@ -48,7 +51,10 @@ export function AudioCueListener() {
       const { listen } = await import('@tauri-apps/api/event');
       listen<UserPreferences>('prefs:changed', (event) => {
         const next = event.payload;
-        if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+        if (next) {
+          audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+          if (!audioCueEnabledRef.current) disposeAudioCue();
+        }
       })
         .then((fn) => {
           if (cancelled) fn();
@@ -62,10 +68,10 @@ export function AudioCueListener() {
     };
   }, [audioCueRuntimeEnabled]);
 
-  // Prime the AudioContext
+  // Do not prime on mount: even a silent running context holds the output device open.
+  // Dispose pending resumes as well as active voices when the owner changes or unmounts.
   useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    primeAudioCue();
+    return () => disposeAudioCue();
   }, [audioCueRuntimeEnabled]);
 
   // Listen for capsule state edges
