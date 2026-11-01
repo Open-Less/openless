@@ -61,6 +61,23 @@ pub(crate) use android_storage::{android_log_dir, android_openless_log_candidate
 const HISTORY_CAP: usize = 200;
 const PREFERENCES_FILE: &str = "preferences.json";
 
+/// Bundle identifier; also the system credential store service name. A personal
+/// side-by-side build sets `OPENLESS_BUNDLE_ID` at compile time (matching its Tauri
+/// identifier) so its permissions and credentials never mix with the official app's.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub(crate) const BUNDLE_ID: &str = match option_env!("OPENLESS_BUNDLE_ID") {
+    Some(id) => id,
+    None => "com.openless.app",
+};
+
+/// Per-user data and log directory name, overridden by `OPENLESS_APP_DIR_NAME` the
+/// same way.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub(crate) const APP_DIR_NAME: &str = match option_env!("OPENLESS_APP_DIR_NAME") {
+    Some(name) => name,
+    None => "OpenLess",
+};
+
 pub(crate) fn data_dir() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -68,27 +85,27 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("OpenLess"))
+            .join(APP_DIR_NAME))
     }
 
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").context("APPDATA not set")?;
-        Ok(PathBuf::from(appdata).join("OpenLess"))
+        Ok(PathBuf::from(appdata).join(APP_DIR_NAME))
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             if !xdg.is_empty() {
-                return Ok(PathBuf::from(xdg).join("OpenLess"));
+                return Ok(PathBuf::from(xdg).join(APP_DIR_NAME));
             }
         }
         let home = std::env::var("HOME").context("HOME not set")?;
         Ok(PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("OpenLess"))
+            .join(APP_DIR_NAME))
     }
 
     #[cfg(target_os = "android")]
