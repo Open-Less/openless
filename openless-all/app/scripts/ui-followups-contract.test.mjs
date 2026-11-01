@@ -11,7 +11,10 @@ const transitionViewport = readFileSync(
 const capsuleStyles = readFileSync(resolve(root, 'src/components/CapsuleStyles.css'), 'utf8');
 const insertMotion = readFileSync(resolve(root, 'src/lib/insertTextAnimation.ts'), 'utf8');
 const themeSection = readFileSync(resolve(root, 'src/pages/settings/ThemeSection.tsx'), 'utf8');
-const languageSection = readFileSync(resolve(root, 'src/pages/settings/LanguageSection.tsx'), 'utf8');
+const languageSection = readFileSync(
+  resolve(root, 'src/pages/settings/LanguageSection.tsx'),
+  'utf8',
+);
 const recordingSection = readFileSync(
   resolve(root, 'src/pages/settings/RecordingInputSection.tsx'),
   'utf8',

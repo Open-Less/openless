@@ -153,7 +153,11 @@ assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
 // This entry point is dispatch-only, so the Tauri tag build has to hand the tag
 // over explicitly. Without that hand-off the workflow sits at zero runs and every
 // Release ships without a HAP - which is exactly what happened to 2.0.x.
-assert.match(tauriRelease, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+assert.match(
+  tauriRelease,
+  /^  dispatch-platform-releases:$/m,
+  'release-tauri.yml must hand the tag to this workflow',
+);
 assert.match(
   tauriRelease,
   /gh workflow run release-harmony\.yml[\s\S]{0,300}-f "tag=\$RELEASE_TAG"/,

@@ -1501,10 +1501,8 @@ export const zhCN = {
         aecOff: '关闭',
         aecLight: '轻量（省 CPU）',
         aecModel: '模型（更强）',
-        aecModelHint:
-          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
-        aecHint:
-          '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        aecModelHint: '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
+        aecHint: '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
         buffer: '输出缓冲区',
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
@@ -1620,7 +1618,8 @@ export const zhCN = {
       debugArchiveProcessedLabel: '保存处理后的音频',
       debugArchiveProcessedDesc: '降噪与增益之后的版本，仍保存在原来的录制文件里。',
       debugArchiveRawLabel: '另存一份处理前的音频',
-      debugArchiveRawDesc: '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
+      debugArchiveRawDesc:
+        '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
       recordAudioForDebugDesc: '保存原始麦克风音频为 wav，便于排查识别问题。',
       audioRecordingMaxEntriesLabel: '原始录音保留条数',

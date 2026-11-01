@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 
 const appRoot = resolve(new URL('..', import.meta.url).pathname);
 const lib = readFileSync(resolve(appRoot, 'src-tauri/src/lib.rs'), 'utf8');
-const permissions = readFileSync(resolve(appRoot, 'src-tauri/src/commands/permissions_cmds.rs'), 'utf8');
+const permissions = readFileSync(
+  resolve(appRoot, 'src-tauri/src/commands/permissions_cmds.rs'),
+  'utf8',
+);
 
 assert.match(
   lib,

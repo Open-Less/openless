@@ -1554,8 +1554,7 @@ export const ko: typeof zhCN = {
         aecModel: '모델(강화)',
         aecModelHint:
           '모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.',
-        aecHint:
-          '스피커 사용 시 되먹임을 줄입니다. 참조 신호가 필요하므로 헤드폰이면 꺼 두세요.',
+        aecHint: '스피커 사용 시 되먹임을 줄입니다. 참조 신호가 필요하므로 헤드폰이면 꺼 두세요.',
         buffer: '출력 버퍼',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1665,9 +1664,11 @@ export const ko: typeof zhCN = {
       polishContextWindowDesc:
         '최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.',
       debugArchiveProcessedLabel: '처리된 오디오 저장',
-      debugArchiveProcessedDesc: '노이즈 감소와 게인 적용 후의 오디오로, 기존 녹음 파일에 저장됩니다.',
+      debugArchiveProcessedDesc:
+        '노이즈 감소와 게인 적용 후의 오디오로, 기존 녹음 파일에 저장됩니다.',
       debugArchiveRawLabel: '처리 전 오디오도 저장',
-      debugArchiveRawDesc: '같은 폴더에 <session>.raw.wav를 함께 저장합니다. 이것만 켜면 원본이 기본 파일에 저장됩니다.',
+      debugArchiveRawDesc:
+        '같은 폴더에 <session>.raw.wav를 함께 저장합니다. 이것만 켜면 원본이 기본 파일에 저장됩니다.',
       recordAudioForDebugLabel: '원본 녹음 보관(디버그)',
       recordAudioForDebugDesc: '원시 마이크 오디오를 wav 로 저장하여 인식 문제 진단.',
       audioRecordingMaxEntriesLabel: '원본 녹음 보관 개수',

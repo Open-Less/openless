@@ -63,10 +63,7 @@ try {
   expectFailure('missing key', writeFixture('missing-key.plist', ''));
   expectFailure(
     'empty string',
-    writeFixture(
-      'empty-string.plist',
-      '<key>NSMicrophoneUsageDescription</key><string></string>',
-    ),
+    writeFixture('empty-string.plist', '<key>NSMicrophoneUsageDescription</key><string></string>'),
   );
   expectFailure(
     'whitespace-only string',

@@ -107,7 +107,10 @@ if [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/ml
   exit 1
 fi
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
-  test -f "${APP}.tar.gz" || { echo "✗ 未找到 Tauri updater archive"; exit 1; }
+  test -f "${APP}.tar.gz" || {
+    echo "✗ 未找到 Tauri updater archive"
+    exit 1
+  }
 fi
 
 HAS_DEVELOPER_ID=0

@@ -15,7 +15,10 @@ toolchain=${2:-${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}
 version_name=${3:-}
 version_code=${4:-}
 
-[ -f "$hap" ] || { echo "missing HAP: $hap" >&2; exit 1; }
+[ -f "$hap" ] || {
+  echo "missing HAP: $hap" >&2
+  exit 1
+}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -24,7 +27,10 @@ trap 'rm -rf "$work"' EXIT
 # signature when the signing tool is available.
 if [ "${hap##*.}" = "app" ]; then
   inner=$(unzip -Z1 "$hap" | grep -E '\.hap$' | head -1)
-  [ -n "$inner" ] || { echo "App Pack contains no HAP" >&2; exit 1; }
+  [ -n "$inner" ] || {
+    echo "App Pack contains no HAP" >&2
+    exit 1
+  }
   unzip -q -o "$hap" "$inner" -d "$work"
   echo "App Pack: $hap (inner $inner)"
   # The pack carries the signature; sign-app was run on the `.app`, not on the
@@ -35,16 +41,22 @@ fi
 
 entries=$(unzip -Z1 "$hap")
 require_entry() {
-  grep -qx "$1" <<< "$entries" || { echo "HAP is missing $1" >&2; exit 1; }
+  grep -qx "$1" <<< "$entries" || {
+    echo "HAP is missing $1" >&2
+    exit 1
+  }
 }
 require_entry module.json
 require_entry 'libs/arm64-v8a/libopenless_harmony.so'
 require_entry 'resources/rawfile/web/index.html'
 # The ArkWeb bundle is hashed on every build: a fixed name would hide a stale copy.
 grep -q '^resources/rawfile/web/assets/index-.*\.js$' <<< "$entries" \
-  || { echo "HAP has no hashed ArkWeb entry bundle" >&2; exit 1; }
+  || {
+    echo "HAP has no hashed ArkWeb entry bundle" >&2
+    exit 1
+  }
 
-python3 - "$hap" "$version_name" "$version_code" <<'PY'
+python3 - "$hap" "$version_name" "$version_code" << 'PY'
 import json
 import subprocess
 import sys
@@ -69,7 +81,7 @@ elif [ -f "$jar" ] && command -v java > /dev/null 2>&1; then
   # verify-app exits non-zero on a tampered or unsigned package; keep its output
   # terse because a valid run prints several informational lines.
   if out=$(java -jar "$jar" verify-app -inFile "${signature_target:-$hap}" -outCertChain "$hap.cer" \
-      -outProfile "$hap.p7b" 2>&1); then
+    -outProfile "$hap.p7b" 2>&1); then
     echo "signature verified"
   else
     echo "$out" >&2

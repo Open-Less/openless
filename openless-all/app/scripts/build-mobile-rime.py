@@ -130,7 +130,8 @@ def main():
     (prefix / 'lib').mkdir(parents=True, exist_ok=True)
     (prefix / 'include').mkdir(exist_ok=True)
     common = cross + ['-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
-                      '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
+                      '-DCMAKE_POLICY_VERSION_MINIMUM=3.5', '-DBUILD_SHARED_LIBS=OFF',
+                      '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
                       '-DCMAKE_PREFIX_PATH=' + str(prefix)]
 
     def build(name, extra, target=None, install=True):

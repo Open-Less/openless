@@ -22,8 +22,14 @@ toolchain=${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}
 # `current` is a symlink into a versioned directory; tar would archive the link
 # itself, so pack the real target.
 [ -d "$toolchain" ] && toolchain=$(readlink -f "$toolchain")
-[ -d "$toolchain/sdk" ] || { echo "no toolchain at $toolchain" >&2; exit 1; }
-[ -x "$toolchain/bin/hvigorw" ] || { echo "$toolchain/bin/hvigorw is missing" >&2; exit 1; }
+[ -d "$toolchain/sdk" ] || {
+  echo "no toolchain at $toolchain" >&2
+  exit 1
+}
+[ -x "$toolchain/bin/hvigorw" ] || {
+  echo "$toolchain/bin/hvigorw is missing" >&2
+  exit 1
+}
 
 output=${1:-$PWD/harmony-toolchain.tar.zst}
 mkdir -p "$(dirname "$output")"
@@ -38,8 +44,8 @@ done
 
 echo "packing $toolchain (${#members[@]} top-level entries)"
 tar_args=(-cf - -C "$(dirname "$toolchain")"
-  --exclude="$name/emulator"
-  --exclude='node_modules/.cache')
+--exclude="$name/emulator"
+--exclude='node_modules/.cache')
 if command -v zstd > /dev/null 2>&1; then
   tar "${tar_args[@]}" "${members[@]}" | zstd -10 -T0 --quiet -f -o "$output"
 else

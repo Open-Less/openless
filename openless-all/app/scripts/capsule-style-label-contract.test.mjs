@@ -8,6 +8,10 @@ for (const locale of locales) {
   const source = readFileSync(resolve(root, `src/i18n/${locale}.ts`), 'utf8');
   const match = source.match(/capsuleStyleClassic:\s*['"]([^'"]+)['"]/);
   assert.ok(match, `${locale} must define capsuleStyleClassic`);
-  assert.doesNotMatch(match[1], /OpenLess/i, `${locale} default style label must not repeat the product name`);
+  assert.doesNotMatch(
+    match[1],
+    /OpenLess/i,
+    `${locale} default style label must not repeat the product name`,
+  );
 }
 console.log('capsule default style labels omit the redundant product name');

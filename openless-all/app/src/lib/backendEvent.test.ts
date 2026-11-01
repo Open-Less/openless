@@ -180,7 +180,10 @@ lateRecordingState = applyTranscriptEvent(lateRecordingState, {
 });
 lateRecordingState = beginTranscriptGeneration(lateRecordingState);
 assertState(lateRecordingState, '已确认', 31);
-if (lateRecordingState.awaitingSessionStart || lateRecordingState.sessionId !== 'late-recording-session') {
+if (
+  lateRecordingState.awaitingSessionStart ||
+  lateRecordingState.sessionId !== 'late-recording-session'
+) {
   throw new Error('late recording edge must preserve the already-started session transcript');
 }
 
@@ -201,21 +204,33 @@ replayState = applyTranscriptEvent(replayState, {
   kind: { type: 'transcript_delta', payload: { text: '更新后的原文', offset: 0, isFinal: false } },
 });
 const staleReplay = applyTranscriptSnapshot(replayState, {
-  transcript: '旧快照', sessionId: 'replay-session', sequence: 40, revision: 40,
+  transcript: '旧快照',
+  sessionId: 'replay-session',
+  sequence: 40,
+  revision: 40,
 });
 assertState(staleReplay, '更新后的原文', 41);
 const tornReplay = applyTranscriptSnapshot(replayState, {
-  transcript: '撕裂帧', sessionId: 'replay-session', sequence: 42, revision: 42,
+  transcript: '撕裂帧',
+  sessionId: 'replay-session',
+  sequence: 42,
+  revision: 42,
   payloadRevision: 41,
 });
 assertState(tornReplay, '更新后的原文', 41);
 if (
   !shouldRetryTranscriptSnapshot(replayState, {
-    transcript: '撕裂帧', sessionId: 'replay-session', sequence: 42, revision: 42,
+    transcript: '撕裂帧',
+    sessionId: 'replay-session',
+    sequence: 42,
+    revision: 42,
     payloadRevision: 41,
   }) ||
   !isTranscriptSnapshotCoherent({
-    transcript: '一致帧', sessionId: 'replay-session', sequence: 42, revision: 42,
+    transcript: '一致帧',
+    sessionId: 'replay-session',
+    sequence: 42,
+    revision: 42,
     payloadRevision: 42,
   })
 ) {
@@ -227,17 +242,26 @@ if (
 // 3. the matching payload commit at the same revision is accepted and must
 //    not permanently lose a legal first frame.
 const payloadBeforeBackend = applyTranscriptSnapshot(replayState, {
-  transcript: 'payload先提交', sessionId: 'replay-session', sequence: 60, revision: 60,
+  transcript: 'payload先提交',
+  sessionId: 'replay-session',
+  sequence: 60,
+  revision: 60,
   payloadRevision: 60,
 });
 assertState(payloadBeforeBackend, 'payload先提交', 60);
 const backendBeforeQueuedPayload = applyTranscriptSnapshot(payloadBeforeBackend, {
-  transcript: 'backend先到', sessionId: 'replay-session', sequence: 61, revision: 61,
+  transcript: 'backend先到',
+  sessionId: 'replay-session',
+  sequence: 61,
+  revision: 61,
   payloadRevision: 60,
 });
 assertState(backendBeforeQueuedPayload, 'payload先提交', 60);
 const queuedPayloadCommit = applyTranscriptSnapshot(backendBeforeQueuedPayload, {
-  transcript: 'backend先到', sessionId: 'replay-session', sequence: 61, revision: 61,
+  transcript: 'backend先到',
+  sessionId: 'replay-session',
+  sequence: 61,
+  revision: 61,
   payloadRevision: 61,
 });
 assertState(queuedPayloadCommit, 'backend先到', 61);
@@ -304,7 +328,9 @@ if (
   sameStateNewSession.generation !== firstGeneration + 1 ||
   sameStateNewSession.sessionId !== 'second-session'
 ) {
-  throw new Error('Recording -> Recording with a new sessionId must start a new transcript generation');
+  throw new Error(
+    'Recording -> Recording with a new sessionId must start a new transcript generation',
+  );
 }
 sameStateNewSession = applyTranscriptEvent(sameStateNewSession, {
   sequence: 83,
@@ -319,7 +345,10 @@ sameStateNewSession = applyTranscriptEvent(sameStateNewSession, {
 });
 assertState(sameStateNewSession, '新文本', 84);
 const currentReplay = applyTranscriptSnapshot(replayState, {
-  transcript: '完整原文回放', sessionId: 'replay-session', sequence: 42, revision: 42,
+  transcript: '完整原文回放',
+  sessionId: 'replay-session',
+  sequence: 42,
+  revision: 42,
 });
 assertState(currentReplay, '完整原文回放', 42);
 if (
@@ -371,7 +400,8 @@ assertState(selectionReplay, '选区语音后续', 52);
 let cloudState: TranscriptViewState = createTranscriptViewState();
 for (const [index, text] of ['你', '你好', '您好', '您好。', '您好。世界'].entries()) {
   cloudState = applyTranscriptEvent(cloudState, {
-    sequence: index + 1, sessionId: 'cloud',
+    sequence: index + 1,
+    sessionId: 'cloud',
     kind: { type: 'transcript_delta', payload: { text, offset: 0, isFinal: false } },
   });
   assertState(cloudState, text, index + 1);

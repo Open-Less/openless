@@ -1677,9 +1677,11 @@ export const ja: typeof zhCN = {
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
       debugArchiveProcessedLabel: '処理後の音声を保存',
-      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveProcessedDesc:
+        'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
       debugArchiveRawLabel: '処理前の音声も保存',
-      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
+      debugArchiveRawDesc:
+        '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',

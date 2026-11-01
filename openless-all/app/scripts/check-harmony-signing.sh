@@ -88,15 +88,15 @@ fi
 # CA + leaf). The leaf is identified by its public key, because the first
 # certificate in the file is the CA.
 keytool -exportcert -rfc -keystore "$signing/$prefix.p12" -storetype PKCS12 \
-  -storepass "$password" -alias "$alias" > "$work/keystore.pem" 2> /dev/null ||
-  bad "cannot export the certificate of alias '$alias'"
+  -storepass "$password" -alias "$alias" > "$work/keystore.pem" 2> /dev/null \
+  || bad "cannot export the certificate of alias '$alias'"
 
 if [ -s "$work/keystore.pem" ]; then
   # The helper reads a certificate chain and reports what it found; it never
   # exits non-zero, so the bash-level failure counter stays authoritative.
   python3 "$APP_ROOT/scripts/harmony-signing-report.py" \
-    "$signing/$prefix.cer" "$work/keystore.pem" "$signing/$prefix.p7b" ||
-    failures=$((failures + 1))
+    "$signing/$prefix.cer" "$work/keystore.pem" "$signing/$prefix.p7b" \
+    || failures=$((failures + 1))
 fi
 
 # 5. Profile matches the application -----------------------------------------
@@ -104,8 +104,8 @@ if openssl cms -verify -noverify -inform DER -in "$signing/$prefix.p7b" \
   -out "$work/profile.json" 2> "$work/cms.err"; then
   ok "profile opens"
   python3 "$APP_ROOT/scripts/harmony-profile-report.py" \
-    "$work/profile.json" "$APP_ROOT/harmony/AppScope/app.json5" "$prefix" ||
-    failures=$((failures + 1))
+    "$work/profile.json" "$APP_ROOT/harmony/AppScope/app.json5" "$prefix" \
+    || failures=$((failures + 1))
 else
   bad "cannot read $prefix.p7b ($(tail -1 "$work/cms.err" | tr -d '\r'))"
 fi

@@ -47,7 +47,10 @@ const coordinatorRs =
   '\n' +
   (await readFile(new URL('../src-tauri/src/capsule_snapshot.rs', import.meta.url), 'utf-8')) +
   '\n' +
-  (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')) +
+  (await readFile(
+    new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url),
+    'utf-8',
+  )) +
   '\n' +
   capsuleHitTestRs;
 const tauriEventsRs = await readFile(

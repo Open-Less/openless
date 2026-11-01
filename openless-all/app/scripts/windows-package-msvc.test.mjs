@@ -143,7 +143,7 @@ assert.match(
 assert.match(imeBuild, /\/p:OutDir=/, 'IME build should pass OutDir to MSBuild');
 assert.match(imeBuild, /\/p:IntDir=/, 'IME build should pass IntDir to MSBuild');
 assert.ok(
-  imeInstallSmoke.includes("OpenLessIme-.+\\.dll"),
+  imeInstallSmoke.includes('OpenLessIme-.+\\.dll'),
   'install smoke should verify a versioned registered IME DLL path',
 );
 assert.match(imeRegister, /windows-ime-build\.ps1/, 'IME register should build before registering');
@@ -469,9 +469,7 @@ assert.match(
   /stage_x64_begin[\s\S]*stage_x64_complete[\s\S]*stage_x86_begin[\s\S]*stage_x86_complete/,
   'NSIS should mark both IME staging boundaries in order',
 );
-const stageMacro = nsisHook.match(
-  /!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/,
-)?.[0];
+const stageMacro = nsisHook.match(/!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/)?.[0];
 assert.ok(stageMacro, 'NSIS IME staging macro should exist');
 assert.match(
   stageMacro,

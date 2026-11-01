@@ -33,7 +33,10 @@ case "$CHANNEL" in
     SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/local-test}"
     ;;
   none) SIGN_PREFIX="" ;;
-  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test, debug or none' >&2; exit 1 ;;
+  *)
+    echo 'OPENLESS_HARMONY_CHANNEL must be release, test, debug or none' >&2
+    exit 1
+    ;;
 esac
 SIGNING_DIR="${SIGNING_DIR:-${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}}"
 CACHE_ROOT="${OPENLESS_CACHE_ROOT:-$APP_ROOT/target/harmony-cache}"
@@ -59,7 +62,10 @@ fi
 APP_JSON="$APP_ROOT/harmony/AppScope/app.json5"
 VERSION="${OPENLESS_HARMONY_VERSION:-$(node -p "require('$APP_ROOT/package.json').version" | sed 's/[-+].*//')}"
 VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$APP_ROOT/linux-egui/package-revision")}"
-[ -n "$VERSION" ] || { echo "cannot resolve the HarmonyOS versionName" >&2; exit 1; }
+[ -n "$VERSION" ] || {
+  echo "cannot resolve the HarmonyOS versionName" >&2
+  exit 1
+}
 case "$VERSION_CODE" in
   '' | *[!0-9]*)
     echo "versionCode must be a positive integer, got '$VERSION_CODE'" >&2
@@ -72,9 +78,12 @@ esac
 # the duration of the build and restore it afterwards, including on failure.
 BACKUP="$(mktemp)"
 cp "$APP_JSON" "$BACKUP"
-restore_app_json() { cp "$BACKUP" "$APP_JSON"; rm -f "$BACKUP"; }
+restore_app_json() {
+  cp "$BACKUP" "$APP_JSON"
+  rm -f "$BACKUP"
+}
 trap restore_app_json EXIT
-python3 - "$APP_JSON" "$VERSION" "$VERSION_CODE" <<'PY'
+python3 - "$APP_JSON" "$VERSION" "$VERSION_CODE" << 'PY'
 import re, sys
 path, version, code = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path).read()
@@ -98,17 +107,20 @@ if [ -z "$HVIGOR_BIN" ] && ! command -v hvigorw > /dev/null 2>&1; then
 fi
 
 HVIGOR_JS="$HVIGOR_BIN" \
-OPENLESS_CACHE_ROOT="$CACHE_ROOT" \
-OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
-OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
-OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
-OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
+  OPENLESS_CACHE_ROOT="$CACHE_ROOT" \
+  OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
+  OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
+  OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
+  OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
   bash "$APP_ROOT/scripts/build-harmony-frontend.sh"
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 OUT_DIR="$BUILD_PROJECT/entry/build/default/outputs/default"
-UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2>/dev/null | head -1)
-[ -n "$UNSIGNED" ] || { echo "hvigor produced no unsigned HAP in $OUT_DIR" >&2; exit 1; }
+UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2> /dev/null | head -1)
+[ -n "$UNSIGNED" ] || {
+  echo "hvigor produced no unsigned HAP in $OUT_DIR" >&2
+  exit 1
+}
 
 SIGNED=""
 APP_PACK=""
@@ -122,12 +134,15 @@ if [ -n "$SIGN_PREFIX" ]; then
       --prefix "$SIGN_PREFIX" --skip-hap
   fi
   SIGNED="$OUT_DIR/entry-default-signed.hap"
-  [ -f "$SIGNED" ] || { echo "expected a signed HAP at $SIGNED" >&2; exit 1; }
+  [ -f "$SIGNED" ] || {
+    echo "expected a signed HAP at $SIGNED" >&2
+    exit 1
+  }
 
   # AppGallery rejects a bare HAP ("The suffix name of the software package is
   # incorrect", code 204144641), so the store channels ship the signed App Pack.
   APP_OUT="$BUILD_PROJECT/build/outputs/default"
-  APP_PACK=$(ls "$APP_OUT"/*-signed.app 2>/dev/null | head -1 || true)
+  APP_PACK=$(ls "$APP_OUT"/*-signed.app 2> /dev/null | head -1 || true)
   [ -n "$APP_PACK" ] || {
     echo "store channel produced no signed .app App Pack in $APP_OUT (AppGallery requirement)" >&2
     exit 1
@@ -153,6 +168,6 @@ if [ -n "$SIGNED" ]; then
   cp "$SIGNED" "$OUTPUT/OpenLess_harmony_arm64-signed.hap"
 fi
 # SHA256SUMS belongs to the GitHub Release, which contains only the unsigned HAP pair.
-( cd "$OUTPUT" && sha256sum ./OpenLess_harmony_arm64.hap ./OpenLess_harmony.hap > SHA256SUMS )
+(cd "$OUTPUT" && sha256sum ./OpenLess_harmony_arm64.hap ./OpenLess_harmony.hap > SHA256SUMS)
 echo "HAP packages ready in $OUTPUT"
 ls -l "$OUTPUT"

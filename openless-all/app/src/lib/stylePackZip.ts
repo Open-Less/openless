@@ -27,7 +27,10 @@ export async function pickStylePackZipTargetPath(
   defaultFileName: string,
   nativeApp: boolean,
 ): Promise<string | null> {
-  if (isHarmonyHost) return invokeHarmony<string | null>('pick_style_pack_zip_target', { fileName: defaultFileName });
+  if (isHarmonyHost)
+    return invokeHarmony<string | null>('pick_style_pack_zip_target', {
+      fileName: defaultFileName,
+    });
   if (!nativeApp) return `~/Downloads/${defaultFileName}`;
 
   try {

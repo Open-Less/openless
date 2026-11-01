@@ -1713,9 +1713,11 @@ export const es: typeof zhCN = {
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
       debugArchiveProcessedLabel: 'Conservar el audio procesado',
-      debugArchiveProcessedDesc: 'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
+      debugArchiveProcessedDesc:
+        'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
       debugArchiveRawLabel: 'Conservar también el audio sin procesar',
-      debugArchiveRawDesc: 'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
+      debugArchiveRawDesc:
+        'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
       recordAudioForDebugLabel: 'Conservar grabación original (depuración)',
       recordAudioForDebugDesc:
         'Guarda el audio original del micrófono en WAV para investigar problemas de reconocimiento.',
