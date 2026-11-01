@@ -1976,6 +1976,9 @@ export const en: typeof zhCN = {
       serviceTierLabel: 'Ark low-latency inference (fast)',
       serviceTierHint:
         'Only supported Ark models can use this option; unsupported models may return 400.',
+      openaiServiceTierLabel: 'OpenAI Fast mode',
+      openaiServiceTierHint:
+        'Fast mode costs more. See https://developers.openai.com/api/docs/pricing. Unsupported models or regions return an error.',
       responsesThinkingHint:
         'Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.',
       messagesThinkingHint:

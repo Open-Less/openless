@@ -4944,12 +4944,23 @@ fn provider_protocol_block(
                 .color(theme::INK_4),
         );
     }
-    if editor.provider_type == "ark" {
+    let service_tier_copy = match editor.provider_type.as_str() {
+        "ark" => Some((
+            "settings.providers.serviceTierLabel",
+            "settings.providers.serviceTierHint",
+        )),
+        "openai" => Some((
+            "settings.providers.openaiServiceTierLabel",
+            "settings.providers.openaiServiceTierHint",
+        )),
+        _ => None,
+    };
+    if let Some((label_key, hint_key)) = service_tier_copy {
         let mut changed = false;
         toggle_row(
             ui,
-            tr_l10n(lang, "settings.providers.serviceTierLabel"),
-            tr_l10n(lang, "settings.providers.serviceTierHint"),
+            tr_l10n(lang, label_key),
+            tr_l10n(lang, hint_key),
             draft.values[4] == "fast",
             || changed = true,
         );

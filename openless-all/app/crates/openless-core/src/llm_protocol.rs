@@ -228,11 +228,40 @@ impl LlmProtocolConfig {
         Ok(())
     }
 
+    /// Ark accepts Fast on every format. Official OpenAI accepts it only on
+    /// Chat Completions and Responses; Messages and every other provider omit it.
     pub(crate) fn apply_service_tier(&self, provider_id: &str, body: &mut Value) {
-        if provider_id.trim() == "ark" && self.service_tier == LlmServiceTier::Fast {
+        if self.service_tier != LlmServiceTier::Fast {
+            return;
+        }
+        let provider_id = provider_id.trim();
+        let allowed = provider_id == "ark"
+            || (provider_id == "openai"
+                && matches!(
+                    self.format,
+                    LlmRequestFormat::ChatCompletions | LlmRequestFormat::Responses
+                ));
+        if allowed {
             body["service_tier"] = json!("fast");
         }
     }
+}
+
+/// Last non-empty tier from an SSE object: top-level `service_tier`, else `response.service_tier`.
+pub(crate) fn observed_response_service_tier(value: &Value) -> Option<&str> {
+    non_empty_tier(value.get("service_tier")).or_else(|| {
+        non_empty_tier(
+            value
+                .get("response")
+                .and_then(|response| response.get("service_tier")),
+        )
+    })
+}
+
+fn non_empty_tier(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|tier| !tier.is_empty())
 }
 
 fn positive_tokens(value: &str) -> Result<u32, BackendError> {
@@ -410,6 +439,8 @@ pub(crate) struct TextEventStream {
     pub done: bool,
     siwc: bool,
     request_id: Option<String>,
+    /// Last non-empty `service_tier` seen on a parsed SSE object.
+    pub(crate) response_service_tier: Option<String>,
 }
 
 impl TextEventStream {
@@ -422,6 +453,7 @@ impl TextEventStream {
             done: false,
             siwc: false,
             request_id: None,
+            response_service_tier: None,
         }
     }
 
@@ -463,6 +495,9 @@ impl TextEventStream {
             }
             Err(_) => return Err(response_error("invalid LLM SSE JSON")),
         };
+        if let Some(tier) = observed_response_service_tier(&value) {
+            self.response_service_tier = Some(tier.to_string());
+        }
         let kind = value["type"]
             .as_str()
             .or_else(|| {
@@ -789,7 +824,15 @@ mod tests {
     #[test]
     fn service_tier_is_validated_and_applied_only_to_ark_requests() {
         let mut protocol = LlmProtocolConfig::default();
-        assert!(protocol.apply(SERVICE_TIER_ACCOUNT, "invalid").is_err());
+        assert!(protocol.apply(SERVICE_TIER_ACCOUNT, "").is_ok());
+        assert_eq!(protocol.service_tier, LlmServiceTier::Off);
+        assert_eq!(
+            protocol
+                .apply(SERVICE_TIER_ACCOUNT, "invalid")
+                .unwrap_err()
+                .message,
+            "llmServiceTierInvalid"
+        );
         protocol.apply(SERVICE_TIER_ACCOUNT, "fast").unwrap();
         assert_eq!(protocol.service_tier, LlmServiceTier::Fast);
 
@@ -812,8 +855,78 @@ mod tests {
 
             config.provider_id = "openai".into();
             let body = request_body(&config, false, messages.clone());
-            assert!(body.get("service_tier").is_none());
+            if format == LlmRequestFormat::Responses {
+                assert_eq!(body["service_tier"], "fast");
+            } else {
+                assert!(body.get("service_tier").is_none());
+            }
+
+            for provider in ["custom", "opencode", "openai-compatible"] {
+                config.provider_id = provider.into();
+                let body = request_body(&config, false, messages.clone());
+                assert!(
+                    body.get("service_tier").is_none(),
+                    "{provider} {format:?} must not send service_tier"
+                );
+            }
         }
+
+        let config = OpenAICompatibleConfig::new(
+            "openai",
+            "test",
+            "https://api.openai.com/v1",
+            "key",
+            "gpt-5.4",
+        )
+        .with_protocol(LlmProtocolConfig {
+            format: LlmRequestFormat::Responses,
+            service_tier: LlmServiceTier::Off,
+            ..Default::default()
+        });
+        assert!(request_body(&config, false, messages)
+            .get("service_tier")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn fast_service_tier_loads_and_unknown_tier_is_rejected() {
+        let store = InMemoryCredentialStore::default();
+        let key = CredentialKey::new(
+            CredentialNamespace::Llm,
+            Some("openai-channel".into()),
+            SERVICE_TIER_ACCOUNT,
+        )
+        .unwrap();
+        store
+            .write(key.clone(), SecretValue::new("fast"))
+            .await
+            .unwrap();
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "openai-channel", "openai")
+                .await
+                .unwrap()
+                .service_tier,
+            LlmServiceTier::Fast
+        );
+        store
+            .write(key.clone(), SecretValue::new("turbo"))
+            .await
+            .unwrap();
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "openai-channel", "openai")
+                .await
+                .unwrap_err()
+                .message,
+            "llmServiceTierInvalid"
+        );
+        store.write(key, SecretValue::new("")).await.unwrap();
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "openai-channel", "openai")
+                .await
+                .unwrap()
+                .service_tier,
+            LlmServiceTier::Off
+        );
     }
 
     #[test]

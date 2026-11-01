@@ -1949,6 +1949,9 @@ export const ko: typeof zhCN = {
       serviceTierLabel: 'Ark 저지연 추론(fast)',
       serviceTierHint:
         '지원되는 Ark 모델에서만 사용할 수 있으며, 지원되지 않는 모델은 400을 반환할 수 있습니다.',
+      openaiServiceTierLabel: 'OpenAI Fast 모드',
+      openaiServiceTierHint:
+        'Fast 모드는 요금이 더 높습니다. https://developers.openai.com/api/docs/pricing 를 참고하세요. 지원하지 않는 모델이나 지역은 오류를 반환합니다.',
       responsesThinkingHint:
         '일부 모델은 사고를 줄일 수만 있으며 완전히 끌 수 없습니다. 추론 요청에는 온도를 보내지 않습니다.',
       messagesThinkingHint:
