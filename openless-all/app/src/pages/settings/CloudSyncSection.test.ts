@@ -220,6 +220,7 @@ const dependencies: Record<string, any> = {
   },
   cloudSyncE2eeSignInWithToken: async () => update({ authState: 'signed_in', syncState: 'ready' }),
   cloudSyncE2eeSignOut: async () => {
+    calls.push(['signOut']);
     savedToken = null;
     return update({ authState: 'signed_out', syncState: 'disabled', account: null });
   },
@@ -273,6 +274,64 @@ Object.defineProperty(globalThis, 'window', {
 });
 
 try {
+  // A stale Marketplace token must not hide the recovery controls after sync auth fails.
+  server = { ...initial, syncState: 'sign_in_required' };
+  mockMarketplaceSignedIn = true;
+  const recoveryHooks = new Hooks();
+  const recovery = () => recoveryHooks.render(() => components.CloudSyncSection());
+  recovery();
+  await settle();
+  let tree = recovery();
+  const signIn = () => find(tree, (node) => node.props.children === 'cloudSyncE2ee.signIn');
+  const signOut = () => find(tree, (node) => node.props.children === 'cloudSyncE2ee.signOut');
+  signIn().props.onClick();
+  tree = recovery();
+  assert(
+    find(tree, (node) => node.type === 'login'),
+    're-login must open the GitHub login flow',
+  );
+  find(tree, (node) => node.type === 'login').props.onClose();
+  tree = recovery();
+  signOut().props.onClick();
+  await settle();
+  assert(
+    calls.some(([name]) => name === 'signOut'),
+    'recovery logout must use cloud-sync sign-out',
+  );
+  recoveryHooks.unmount();
+  await settle();
+
+  server = { ...initial, authState: 'signed_out', syncState: 'disabled', account: null };
+  mockMarketplaceSignedIn = false;
+  const signedOutHooks = new Hooks();
+  const signedOut = () => signedOutHooks.render(() => components.CloudSyncSection());
+  signedOut();
+  await settle();
+  tree = signedOut();
+  assert.equal(
+    nodes(tree).filter((node) => node.props.children === 'cloudSyncE2ee.signIn').length,
+    1,
+  );
+  assert(!nodes(tree).some((node) => node.props.children === 'cloudSyncE2ee.signOut'));
+  signedOutHooks.unmount();
+  await settle();
+
+  server = { ...initial, syncState: 'ready' };
+  mockMarketplaceSignedIn = true;
+  const healthyHooks = new Hooks();
+  const healthy = () => healthyHooks.render(() => components.CloudSyncSection());
+  healthy();
+  await settle();
+  tree = healthy();
+  assert(find(tree, (node) => node.props.children === 'cloudSyncE2ee.account'));
+  assert(find(tree, (node) => node.props.children === 'cloudSyncE2ee.signOut'));
+  assert(!nodes(tree).some((node) => node.props.children === 'cloudSyncE2ee.signIn'));
+  healthyHooks.unmount();
+  await settle();
+
+  server = { ...initial };
+  calls.length = 0;
+  mockMarketplaceSignedIn = true;
   for (const mode of ['create', 'unlock', 'password'] as const) {
     const hooks = new Hooks(['LongFixture1Aa', 'LongFixture1Aa', 'OldFixture1Aa', true]);
     let submitted = 0;
@@ -353,7 +412,7 @@ try {
   const render = () => hooks.render(() => components.CloudSyncSection());
   render();
   await settle();
-  let tree = render();
+  tree = render();
   const syncSwitch = (view: unknown) => find(view, (node) => node.type === 'toggle');
   assert.equal(syncSwitch(tree).props.on, false);
   assert.deepEqual(calls, [], 'mount must not enable, upload or consent');
