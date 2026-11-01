@@ -83,8 +83,8 @@ text = re.sub(r'"versionName":\s*"[^"]*"', '"versionName": "' + version + '"', t
 open(path, 'w').write(text)
 PY
 
-# build-harmony-frontend.sh builds the Rust cdylib, the ArkWeb bundle, runs
-# hvigor and (when debug material is present) signs. We sign again below with the
+# build-harmony-app.sh builds the Rust cdylib, stages the Rime data, runs hvigor
+# and (when debug material is present) signs. We sign again below with the
 # release material so the artifact matches what AppGallery accepts.
 # On a hosted runner there is no DevEco install, so `hvigorw` does not exist:
 # scripts/prepare-harmony-sdk.sh installs hvigor next to the SDK instead.
@@ -103,7 +103,7 @@ OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
 OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
 OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
 OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
-  bash "$APP_ROOT/scripts/build-harmony-frontend.sh"
+  bash "$APP_ROOT/scripts/build-harmony-app.sh"
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 OUT_DIR="$BUILD_PROJECT/entry/build/default/outputs/default"
