@@ -1,0 +1,65 @@
+%% OpenLess 客户端架构图：界面、桌面宿主与外部服务边界
+flowchart LR
+    subgraph UI[WebView 界面]
+        APP[App.tsx\n窗口路由]
+        MAIN[主界面\n设置与业务页面]
+        GUIDE[桌面首次引导\nDesktopOnboarding]
+        CAP[语音胶囊\n常驻交互面]
+        RAIL[胶囊轨道与镜像]
+        IPC[前端 IPC\nTauri 桥接门面]
+        APP --> MAIN
+        APP --> GUIDE
+        APP --> CAP
+        CAP --> RAIL
+        MAIN --> IPC
+        GUIDE --> IPC
+        CAP --> IPC
+    end
+
+    subgraph HOST[Tauri 桌面与 Android 宿主]
+        LIB[src-tauri/src/lib.rs\n命令与窗口生命周期]
+        COORD[Coordinator\n快捷键与会话所有权]
+        EVENTS[tauri_events.rs\n语义事件与胶囊状态]
+        DESKTOP[desktop_resources.rs\n主窗口生命周期]
+        HOSTIPC[commands/*\n设置、权限与凭据]
+        REC[recorder.rs\n麦克风采集]
+        CORE[openless-core\n听写引擎与服务策略]
+        PERSIST[persistence\n偏好、凭据与历史]
+        NATIVE[原生胶囊与平台适配]
+        LIB --> COORD
+        LIB --> DESKTOP
+        LIB --> HOSTIPC
+        COORD --> CORE
+        COORD --> REC
+        COORD --> EVENTS
+        COORD --> NATIVE
+        HOSTIPC --> PERSIST
+        CORE --> PERSIST
+    end
+
+    subgraph OTHER[其他平台宿主]
+        LINUX[Linux egui 宿主\nOpenLessBackend / 原生界面]
+        ANDROID[Android 原生服务\nJNI / Kotlin / 输入法]
+        HARMONY[HarmonyOS 宿主\nArkTS / Rust 桥接]
+        LINUX --> CORE
+        ANDROID --> CORE
+        HARMONY --> CORE
+    end
+
+    subgraph EXT[外部系统]
+        ASR[语音识别服务\n云端或本地运行时]
+        LLM[大语言模型与润色服务]
+        SYNC[加密云同步]
+        MARKET[风格包市场]
+        TCC[macOS TCC / Windows 权限]
+    end
+
+    IPC --> LIB
+    EVENTS --> CAP
+    EVENTS --> MAIN
+    REC --> CORE
+    CORE --> ASR
+    CORE --> LLM
+    HOSTIPC --> TCC
+    PERSIST -. 可选同步 .-> SYNC
+    MAIN -. 风格包目录 .-> MARKET
