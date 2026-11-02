@@ -315,6 +315,7 @@ export const ja: typeof zhCN = {
     translateTo: '翻訳先',
     translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
+    recordingCountdown: '{{time}} 後に停止します',
     selectionPolish: {
       polishing: '推敲中...',
       replaced: '置き換えました',

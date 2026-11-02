@@ -297,6 +297,7 @@ export const zhCN = {
     translateTo: '翻译为',
     translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
+    recordingCountdown: '录音将在 {{time}} 后自动停止',
     selectionPolish: {
       polishing: '正在润色...',
       replaced: '已替换',

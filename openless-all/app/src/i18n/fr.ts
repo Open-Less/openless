@@ -329,6 +329,7 @@ export const fr: typeof zhCN = {
     translateTo: 'Traduire en',
     translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
     translating: 'Traduction',
+    recordingCountdown: 'Arrêt dans {{time}}',
     selectionPolish: {
       polishing: 'Amélioration du texte…',
       replaced: 'Remplacé',

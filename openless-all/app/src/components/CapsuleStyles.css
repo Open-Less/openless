@@ -149,6 +149,69 @@
   width: max-content;
 }
 
+/* "Time left" chip for the final recording minute. Shares the translation badge's
+   frosted lane so the two never look like different products, and reserves the same
+   28px row in the Classic layout. */
+.ol-recording-countdown {
+  --ol-countdown-ink: #4b5563;
+  --ol-countdown-dot: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-family: var(--ol-font-sans);
+  font-size: 11.5px;
+  font-weight: var(--ol-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--ol-countdown-ink);
+  background: var(--ol-capsule-badge-bg);
+  border: 1px solid var(--ol-capsule-badge-border);
+  box-shadow: 0 3px 10px var(--ol-capsule-pill-shadow);
+  pointer-events: none;
+}
+[data-ol-theme='dark'] .ol-recording-countdown {
+  --ol-countdown-ink: #d6e2f5;
+  --ol-countdown-dot: #74b7ff;
+}
+.ol-recording-countdown[data-urgent='true'] {
+  --ol-countdown-ink: #c92d36;
+  --ol-countdown-dot: #e5484d;
+  border-color: rgba(229, 72, 77, 0.42);
+}
+[data-ol-theme='dark'] .ol-recording-countdown[data-urgent='true'] {
+  --ol-countdown-ink: #ff9b99;
+  --ol-countdown-dot: #ff6f6b;
+  border-color: rgba(255, 111, 107, 0.45);
+}
+.ol-recording-countdown-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--ol-countdown-dot);
+  box-shadow: 0 0 8px var(--ol-countdown-dot);
+}
+.ol-recording-countdown[data-urgent='true'] .ol-recording-countdown-dot {
+  animation: ol-countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes ol-countdown-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-recording-countdown[data-urgent='true'] .ol-recording-countdown-dot {
+    animation: none;
+  }
+}
+
 .ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
   height: 52px;
 }

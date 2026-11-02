@@ -211,6 +211,16 @@ fn emit_capsule_with_context_locked(
             )
             && !dictation.recording_ready,
         selection_polish,
+        countdown_seconds: (!selection_polish
+            && state == CapsuleState::Recording
+            && matches!(
+                dictation.phase,
+                openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+            ))
+        .then(|| {
+            openless_core::recording_limit::recording_limit_remaining_seconds(dictation.elapsed_ms)
+        })
+        .flatten(),
         capsule_style: inner.host.cached_capsule_style(),
     };
     let captured_revision = inner.host.capsule_revision();
@@ -516,6 +526,7 @@ mod tests {
             operating: false,
             warming: false,
             selection_polish: false,
+            countdown_seconds: None,
             capsule_style: CapsuleStyle::Siri,
         }
     }

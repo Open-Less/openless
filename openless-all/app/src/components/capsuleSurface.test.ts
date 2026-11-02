@@ -1,3 +1,4 @@
+// @ts-nocheck — Node-only stylesheet guard; production UI remains strictly typed.
 // The recording pill's top edge must read as a soft sheen, not a 1px hard line.
 //
 // Regression guard: `.ol-default-capsule::before` used to carry

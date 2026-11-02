@@ -2869,6 +2869,11 @@ pub struct CapsulePayload {
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    /// Seconds left before the hard recording cap, only present during the final
+    /// minute of a recording (see `recording_limit`). The frontend renders it as
+    /// a countdown badge so the user can wrap up before the session auto-stops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub countdown_seconds: Option<u32>,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know

@@ -6,6 +6,7 @@ import { useReducedMotion } from '../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import { RecordingCountdownBadge } from './RecordingCountdownBadge';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
@@ -192,6 +193,7 @@ interface ClassicCapsuleProps {
   translation: boolean;
   leaving: boolean;
   warming: boolean;
+  countdownSeconds?: number | null;
 }
 
 /**
@@ -213,6 +215,7 @@ function ClassicCapsule({
   translation,
   leaving,
   warming,
+  countdownSeconds = null,
 }: ClassicCapsuleProps) {
   const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
   const onCancel = useCallback(() => {
@@ -228,6 +231,11 @@ function ClassicCapsule({
     translation,
     transcriptInSameWindow,
   );
+  const showTranslationBadge = translation && state === 'recording' && !leaving;
+  // The backend only publishes the countdown during the final minute, so presence
+  // alone decides visibility — never the clock in the webview, which would drift
+  // from the recorder's monotonic elapsed time.
+  const showCountdown = !leaving && state === 'recording' && countdownSeconds != null;
 
   return (
     <>
@@ -237,17 +245,31 @@ function ClassicCapsule({
           shift + fade. This avoids conflicting with translateX(-50%) and avoids
           keyframe vs inline transform overrides causing visual jumps. */}
       {/* The language picker belongs to the interactive capsule, even when
-          Windows puts the transcript in a separate click-through rail. */}
+          Windows puts the transcript in a separate click-through rail. The recording
+          countdown shares this lane: both are 28px chips above the pill, so they sit
+          side by side instead of overlapping during the final minute of a translation
+          recording. The picker stays mounted while hidden so its fade-out still runs, but
+          it is taken out of the flex flow so an invisible chip cannot push the countdown
+          off centre. */}
       <div
         style={{
           position: 'absolute',
           left: '50%',
           bottom: classicGeometry.badgeBottomOffset,
           transform: 'translateX(-50%)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
           pointerEvents: 'none',
         }}
       >
-        <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
+        {/* The picker keeps its own fade while it is on screen. When it is hidden and the
+            countdown is the only chip left, it is not rendered at all: an invisible 28px
+            chip would push the countdown off centre. */}
+        {(showTranslationBadge || !showCountdown) && (
+          <CapsuleTranslationBadge visible={showTranslationBadge} />
+        )}
+        {showCountdown && <RecordingCountdownBadge seconds={countdownSeconds} />}
       </div>
       <div className="ol-classic-capsule-stack">
         {liveText && (
@@ -327,6 +349,7 @@ function getPreviewCapsulePayload() {
       translation: false,
       warming: false,
       selectionPolish: false,
+      countdownSeconds: null,
       style: 'classic' as CapsuleStyle,
       insertDemo: false,
     };
@@ -339,6 +362,8 @@ function getPreviewCapsulePayload() {
     : 'recording';
   const previewLevel = Number(params.get('level') ?? 0.6);
   const insertDemo = params.get('insertDemo') === '1';
+  // Browser preview knob for the countdown badge: ?countdown=42 shows 0:42.
+  const previewCountdown = Number(params.get('countdown'));
   return {
     state: insertDemo ? ('recording' as CapsuleState) : previewState,
     level: Number.isFinite(previewLevel) ? Math.min(1, Math.max(0, previewLevel)) : 0.6,
@@ -346,6 +371,10 @@ function getPreviewCapsulePayload() {
     translation: params.get('translation') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
+    countdownSeconds:
+      params.has('countdown') && Number.isFinite(previewCountdown)
+        ? Math.max(0, Math.floor(previewCountdown))
+        : null,
     style: parseCapsuleStyle(params.get('style')) ?? 'classic',
     insertDemo,
   };
@@ -379,6 +408,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
+  // Seconds left before the hard recording cap. Only the final minute carries a value
+  // (see openless_core::recording_limit); null hides the badge.
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(
+    preview.countdownSeconds ?? null,
+  );
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
@@ -533,6 +567,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
+        // The backend omits the countdown outside the final minute; keeping the last
+        // value would freeze the badge at 0:01 after the cap fired.
+        setCountdownSeconds(p.countdownSeconds ?? null);
         const style = parseCapsuleStyle(p.capsuleStyle);
         if (style && !stylePreferenceReadyRef.current) setCapsuleStyle(style);
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
@@ -758,6 +795,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   );
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
   const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
+  // Same rule as the Classic badge: the backend only publishes the countdown during the
+  // final minute, so presence of the value decides visibility.
+  const siriCountdownVisible =
+    !leaving && !renderedSelectionPolish && renderedState === 'recording' && countdownSeconds != null;
 
   useEffect(() => {
     if (!isTauri) return;
@@ -843,6 +884,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             translation={translation}
             leaving={leaving}
             warming={warming}
+            countdownSeconds={countdownSeconds}
           />
         ) : (
           <>
@@ -857,42 +899,50 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                 left: '50%',
                 bottom: `${badgeBottom}px`,
                 transform: 'translateX(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
                 pointerEvents: 'none',
               }}
             >
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 10.5,
-                  fontWeight: 'var(--ol-font-weight-semibold)',
-                  color: 'var(--ol-capsule-center-ink)',
-                  background: 'var(--ol-capsule-badge-bg)',
-                  border: '1px solid var(--ol-capsule-pill-border)',
-                  borderRadius: 999,
-                  padding: '4px 10px',
-                  letterSpacing: '0.02em',
-                  whiteSpace: 'nowrap',
-                  // Hidden: starts just below the orb; shown: settles above the orb.
-                  opacity: translation ? 1 : 0,
-                  transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
-                  transformOrigin: 'center bottom',
-                  transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
-                  willChange: 'opacity, transform',
-                }}
-              >
-                <span
+              {(translation || !siriCountdownVisible) && (
+                <div
                   style={{
-                    width: 5,
-                    height: 5,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    fontSize: 10.5,
+                    fontWeight: 'var(--ol-font-weight-semibold)',
+                    color: 'var(--ol-capsule-center-ink)',
+                    background: 'var(--ol-capsule-badge-bg)',
+                    border: '1px solid var(--ol-capsule-pill-border)',
                     borderRadius: 999,
-                    background: 'rgba(150, 185, 255, 0.95)',
-                    boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
+                    padding: '4px 10px',
+                    letterSpacing: '0.02em',
+                    whiteSpace: 'nowrap',
+                    // Hidden: starts just below the orb; shown: settles above the orb.
+                    opacity: translation ? 1 : 0,
+                    transform: translation
+                      ? 'translateY(0) scale(1)'
+                      : 'translateY(40px) scale(.88)',
+                    transformOrigin: 'center bottom',
+                    transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
+                    willChange: 'opacity, transform',
                   }}
-                />
-                {t('capsule.translating')}
-              </div>
+                >
+                  <span
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: 'rgba(150, 185, 255, 0.95)',
+                      boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
+                    }}
+                  />
+                  {t('capsule.translating')}
+                </div>
+              )}
+              {siriCountdownVisible && <RecordingCountdownBadge seconds={countdownSeconds} />}
             </div>
             <div className="ol-siri-capsule-stack">
               {showLiveTranscript && !splitTranscriptRail && (

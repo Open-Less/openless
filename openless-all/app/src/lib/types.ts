@@ -818,6 +818,11 @@ export interface CapsulePayload {
    * the original voice/QA capsule behavior is kept, for compatibility with older backend payloads.
    */
   selectionPolish?: boolean;
+  /**
+   * Seconds left before the hard recording cap. Only present during the final minute of a recording — the backend
+   * omits it earlier and stops emitting it once the cap fires, so absence means "no countdown to show".
+   */
+  countdownSeconds?: number | null;
 }
 
 /**

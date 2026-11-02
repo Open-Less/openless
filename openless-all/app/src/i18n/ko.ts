@@ -309,6 +309,7 @@ export const ko: typeof zhCN = {
     translateTo: '번역 언어',
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
+    recordingCountdown: '{{time}} 후에 중지됩니다',
     selectionPolish: {
       polishing: '다듬는 중...',
       replaced: '교체됨',

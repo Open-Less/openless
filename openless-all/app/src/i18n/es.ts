@@ -324,6 +324,7 @@ export const es: typeof zhCN = {
     translateTo: 'Traducir al',
     translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
+    recordingCountdown: 'Se detiene en {{time}}',
     selectionPolish: {
       polishing: 'Mejorando el texto…',
       replaced: 'Reemplazado',
