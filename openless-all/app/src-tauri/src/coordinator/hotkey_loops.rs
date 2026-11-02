@@ -5,6 +5,7 @@
 //! parent-module items via `use super::*;`. Visibility is `pub(super)` so the
 //! parent `coordinator` module can call them through `use hotkey_loops::*;`.
 
+use crate::issue1266_debug::{Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation, Outcome as DebugOutcome, Probe as DebugProbe};
 use super::*;
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
@@ -91,7 +92,7 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::MainHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -188,7 +189,7 @@ pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::QaHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -324,7 +325,7 @@ pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::SelectionHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -625,7 +626,7 @@ pub(super) fn coding_agent_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::CodingHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1401,7 +1402,7 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ComboHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1495,7 +1496,7 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::TranslationHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1622,7 +1623,7 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ActionHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1657,10 +1658,15 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
         let (init_tx, init_rx) =
             mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(0);
         let binding_for_main = binding.clone();
+        let debug_registration = DebugOperation::new(DebugProbe::P2);
+        debug_registration.mark(DebugEvent::Requested);
         if inner
             .host
             .run_on_main_thread(move || {
+                debug_registration.mark(DebugEvent::Entered);
                 let result = ComboHotkeyMonitor::start(binding_for_main, tx);
+                debug_registration.record(DebugEvent::Returned,
+                    if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
                 let _ = init_tx.send(result);
             })
             .is_err()
@@ -1670,9 +1676,14 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
             continue;
         }
 
+        debug_registration.mark(DebugEvent::AckWait);
         let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
+            Ok(r) => {
+                debug_registration.mark(DebugEvent::AckReceived);
+                r
+            },
             Err(_) => {
+                debug_registration.mark(DebugEvent::AckTimedOut);
                 drop(init_rx);
                 attempts += 1;
                 if attempts <= 3 || attempts % 10 == 0 {
@@ -1948,7 +1959,7 @@ pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = inner.settings_host_gate.lock();
+        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::StyleHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -2177,6 +2188,14 @@ pub(super) async fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
 
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
+        let debug_operation = DebugOperation::new(DebugProbe::P3);
+        debug_operation.record(DebugEvent::Consumed, DebugOutcome::Observed, DebugFacts {
+            kind: match &evt {
+                HotkeyEvent::Pressed { .. } => DebugKind::Pressed,
+                HotkeyEvent::Released { .. } => DebugKind::Released,
+                _ => DebugKind::OtherEdge,
+            }, ..DebugFacts::default()
+        });
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             // Recording mode: forward only the "record Fn" event to the
             // frontend (the recorder detects Fn presses while capturing;
@@ -2187,6 +2206,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             if matches!(evt, HotkeyEvent::FnRecordingPressed) {
                 emit_fn_recording_pressed(&inner);
             }
+            debug_operation.record(DebugEvent::Returned, DebugOutcome::Skipped, DebugFacts::default());
             continue;
         }
         let inner_cloned = Arc::clone(&inner);
@@ -2206,32 +2226,50 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // bridge immediately recv's Released → end_session. Correct
             // behavior, only a brief stop delay.
             HotkeyEvent::Pressed { at, press_id } => {
-                if matches!(
+                let hold = matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                );
+                debug_operation.record(DebugEvent::Requested, DebugOutcome::Observed,
+                    DebugFacts { flag: hold, ..DebugFacts::default() });
+                if hold {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
+                        let _handler_scope = debug_operation.scope();
+                        debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_pressed_edge(&task_inner, at, press_id).await;
+                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
                     });
                 } else {
                     inner.host.block_on(async {
+                        let _handler_scope = debug_operation.scope();
+                        debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_pressed_edge(&inner_cloned, at, press_id).await;
+                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
                     });
                 }
             }
             HotkeyEvent::Released { at, press_id } => {
-                if matches!(
+                let hold = matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                );
+                debug_operation.record(DebugEvent::Requested, DebugOutcome::Observed,
+                    DebugFacts { flag: hold, ..DebugFacts::default() });
+                if hold {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
+                        let _handler_scope = debug_operation.scope();
+                        debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_released_edge(&task_inner, at, press_id).await;
+                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
                     });
                 } else {
                     inner.host.block_on(async {
+                        let _handler_scope = debug_operation.scope();
+                        debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_released_edge(&inner_cloned, at, press_id).await;
+                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
                     });
                 }
             }

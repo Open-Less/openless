@@ -1,3 +1,4 @@
+import { settleNavigation } from './support/navigation';
 import { expect, test, type ElementHandle, type Locator, type Page } from '@playwright/test';
 
 // Every switch the user can reach in Settings (plus the services channel lists and the
@@ -148,6 +149,7 @@ function expectAnimated(sample: Sample) {
 }
 
 async function exerciseVisibleSwitches(scope: Locator, label: string) {
+  await settleNavigation(scope.page());
   const page = scope.page();
   // Handles, not positions: flipping a channel can move its row within the list.
   const switches = await scope.locator('[role="switch"]').elementHandles();
@@ -174,7 +176,9 @@ async function exerciseVisibleSwitches(scope: Locator, label: string) {
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await expect(dialog).toHaveCSS('opacity', '1');
+  await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
+  await expect(page.locator('.ol-settings-workspace')).toHaveCSS('transform', 'none');
+  await settleNavigation(dialog);
   return dialog;
 }
 
@@ -183,6 +187,7 @@ async function openSection(dialog: Locator, name: string) {
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name, exact: true })
     .click();
+  await settleNavigation(dialog);
 }
 
 test('every settings switch slides between on and off', async ({ page }) => {
@@ -220,6 +225,7 @@ test('every settings switch slides between on and off', async ({ page }) => {
         await inside?.();
         await dialog.locator('.ol-settings-back').click();
         await expect(entries.first()).toBeVisible();
+        await settleNavigation(dialog);
       };
       for (const id of await visibleEntries()) {
         await visit(id, async () => {

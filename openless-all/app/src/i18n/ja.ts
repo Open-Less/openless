@@ -1,3 +1,4 @@
+import { desktopGuideJa as desktopGuide } from './desktopGuide';
 import { siwcJa as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
@@ -10,6 +11,7 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1269,6 +1271,11 @@ export const ja: typeof zhCN = {
       unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
     },
     selectionWorkspace: {
+      extraControls: '追加設定',
+      extraControlsDesc: '質問と編集の判定、モデル出力形式を調整します。通常は変更不要です。',
+      openExtraControls: 'その他',
+      extraControlsSaveHint: '変更は自動保存されます。',
+      extraControlsDone: '完了',
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
       polishHotkey: '選択範囲アシスタントのショートカット',
@@ -1525,7 +1532,7 @@ export const ja: typeof zhCN = {
         'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
+      capsuleStyleClassic: 'デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
@@ -1670,9 +1677,11 @@ export const ja: typeof zhCN = {
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
       debugArchiveProcessedLabel: '処理後の音声を保存',
-      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveProcessedDesc:
+        'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
       debugArchiveRawLabel: '処理前の音声も保存',
-      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
+      debugArchiveRawDesc:
+        '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
@@ -1692,16 +1701,6 @@ export const ja: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'タイムアウトで停止',
       voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
-      lowMemoryBackgroundLabel: '省メモリバックグラウンドモード',
-      lowMemoryBackgroundDesc:
-        '再起動後に適用。メイン画面を閉じると解放し、録音時のみネイティブカプセルを表示します。待機中のマイク事前起動を無効にします。ローカルモデルの解放設定は維持されます。',
-      lowMemoryRestartLabel: '再起動後に適用',
-      lowMemoryRestartDesc:
-        '低メモリバックグラウンドモードの設定を保存しました。実行モードの切り替えにはアプリの再起動が必要です。',
-      lowMemoryRestartNow: '今すぐ再起動',
-      lowMemoryCapsuleErrorLabel: 'ネイティブカプセル利用不可',
-      lowMemoryCapsuleErrorDesc:
-        'ディクテーションは引き続き利用できますが、フローティングカプセルは表示されません。ヘルパーが見つからないかブロックされている可能性があります。アプリを再インストールしてください。',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
@@ -1752,6 +1751,7 @@ export const ja: typeof zhCN = {
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
       errModel: 'モデル',
+      errThinking: '思考をオンに',
       verify: '検証',
       verifyHint: '実際に API を1回呼んで、このチャネルが今使えるか確認します',
       errTimeout: 'タイムアウト',
@@ -1977,6 +1977,8 @@ export const ja: typeof zhCN = {
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
       llmStreamError:
         'サーバーがストリームエラーを返しました。モデルとリクエスト設定を確認してください。',
+      llmThinkingRequired:
+        'このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。',
       saveProtocol: 'プロトコル設定を保存',
       thinkingModeHint:
         '選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。',

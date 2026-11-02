@@ -6,13 +6,7 @@ export type AndroidOverlayActivationMode = 'tap' | 'long_press';
 export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
 export type AndroidOverlayCancelSwipeDirection = 'up' | 'down';
 export type AndroidOverlayGestureAction =
-  | 'none'
-  | 'quick_note'
-  | 'translation'
-  | 'style_pack'
-  | 'cancel'
-  | 'qa'
-  | 'voice_edit';
+  'none' | 'quick_note' | 'translation' | 'style_pack' | 'cancel' | 'qa' | 'voice_edit';
 
 export interface AndroidOverlayGestureActions {
   up: AndroidOverlayGestureAction;

@@ -1,10 +1,6 @@
 // General → Selection Assistant: merges selection polish and selection voice editing so users don't confuse the two jobs.
 
-import type {
-  EditPlanFormat,
-  PlatformCapabilities,
-  SelectionPolishOutputMode,
-} from '../../lib/types';
+import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -14,22 +10,19 @@ import { getPlatformCapabilities } from '../../lib/platform';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
+import { SectionTitle, SettingRow, Toggle } from './shared';
+import { SelectionWorkspaceExtraControlsDialog } from './SelectionWorkspaceExtraControlsDialog';
 
 const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
   { value: 'directReplace' },
   { value: 'previewConfirm' },
 ];
 
-const editPlanFormatOptions: Array<{ value: EditPlanFormat }> = [
-  { value: 'xml' },
-  { value: 'json' },
-];
-
 export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcut?: boolean }) {
   const { t } = useTranslation();
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [extraControlsOpen, setExtraControlsOpen] = useState(false);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -155,127 +148,40 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 {deliveryControl}
               </SettingRow>
               <SettingRow
-                label={t('settings.selectionWorkspace.autoIntent')}
-                desc={t('settings.selectionWorkspace.autoIntentDesc')}
+                label={t('settings.selectionWorkspace.extraControls')}
+                desc={t('settings.selectionWorkspace.extraControlsDesc')}
               >
-                <Toggle
-                  on={autoIntent}
-                  onToggle={(next) =>
-                    void updatePrefs((current) => ({
-                      ...current,
-                      selectionVoiceIntentMode: next ? 'auto' : 'heuristic',
-                    }))
-                  }
-                />
-              </SettingRow>
-              {!autoIntent && (
-                <SettingRow
-                  label={t('settings.selectionWorkspace.editKeywords')}
-                  desc={t('settings.selectionWorkspace.editKeywordsDesc')}
+                <button
+                  type="button"
+                  onClick={() => setExtraControlsOpen(true)}
+                  aria-haspopup="dialog"
+                  style={{
+                    border: '0.5px solid var(--ol-line-strong)',
+                    borderRadius: 7,
+                    background: 'var(--ol-control-solid)',
+                    color: 'var(--ol-ink-2)',
+                    padding: '7px 12px',
+                    fontSize: 12,
+                    fontFamily: 'inherit',
+                    cursor: 'pointer',
+                  }}
                 >
-                  <textarea
-                    aria-label={t('settings.selectionWorkspace.editKeywords')}
-                    value={keywordsText}
-                    onChange={(event) => {
-                      const lines = event.target.value
-                        .split(/\n/)
-                        .map((line) => line.trim())
-                        .filter(Boolean);
-                      void updatePrefs((current) => ({
-                        ...current,
-                        selectionVoiceEditKeywords: lines,
-                        selectionVoiceIntentMode: 'heuristic',
-                      }));
-                    }}
-                    rows={6}
-                    style={{
-                      ...inputStyle,
-                      width: '100%',
-                      minWidth: 220,
-                      minHeight: 120,
-                      resize: 'vertical',
-                      lineHeight: 1.5,
-                      fontFamily: 'inherit',
-                    }}
-                  />
-                </SettingRow>
-              )}
-              <SettingRow
-                label={t('settings.selectionWorkspace.editPlanFormat')}
-                desc={t('settings.selectionWorkspace.editPlanFormatDesc')}
-              >
-                <Segmented
-                  label={t('settings.selectionWorkspace.editPlanFormat')}
-                  value={editPlanFormat}
-                  onChange={(next) =>
-                    void updatePrefs((current) => ({
-                      ...current,
-                      selectionVoiceEditPlanFormat: next,
-                    }))
-                  }
-                  options={editPlanFormatOptions.map((option) => ({
-                    value: option.value,
-                    label: t(
-                      `settings.selectionWorkspace.editPlanFormat${option.value === 'xml' ? 'Xml' : 'Json'}`,
-                    ),
-                  }))}
-                />
-              </SettingRow>
-              <SettingRow
-                label={t('settings.selectionWorkspace.editSystemPrompt')}
-                desc={t('settings.selectionWorkspace.editSystemPromptDesc')}
-              >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
-                  <textarea
-                    aria-label={t('settings.selectionWorkspace.editSystemPrompt')}
-                    value={editSystemPrompt}
-                    placeholder={t('settings.selectionWorkspace.editSystemPromptPlaceholder')}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      void updatePrefs((current) => ({
-                        ...current,
-                        selectionVoiceEditSystemPrompt: next,
-                      }));
-                    }}
-                    rows={8}
-                    style={{
-                      ...inputStyle,
-                      width: '100%',
-                      minWidth: 220,
-                      minHeight: 140,
-                      resize: 'vertical',
-                      lineHeight: 1.5,
-                      fontFamily: 'inherit',
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void updatePrefs((current) => ({
-                        ...current,
-                        selectionVoiceEditSystemPrompt: '',
-                      }))
-                    }
-                    style={{
-                      alignSelf: 'flex-start',
-                      border: '0.5px solid var(--ol-line)',
-                      borderRadius: 6,
-                      background: 'transparent',
-                      color: 'var(--ol-ink-3)',
-                      padding: '4px 10px',
-                      fontSize: 12,
-                      fontFamily: 'inherit',
-                      cursor: 'default',
-                    }}
-                  >
-                    {t('settings.selectionWorkspace.editSystemPromptReset')}
-                  </button>
-                </div>
+                  {t('settings.selectionWorkspace.openExtraControls')}
+                </button>
               </SettingRow>
             </>
           )}
         </>
       )}
+      <SelectionWorkspaceExtraControlsDialog
+        open={extraControlsOpen}
+        autoIntent={autoIntent}
+        keywordsText={keywordsText}
+        editPlanFormat={editPlanFormat}
+        editSystemPrompt={editSystemPrompt}
+        updatePrefs={updatePrefs}
+        onClose={() => setExtraControlsOpen(false)}
+      />
     </Card>
   );
 }

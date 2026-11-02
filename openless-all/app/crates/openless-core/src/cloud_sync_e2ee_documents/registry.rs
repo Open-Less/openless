@@ -173,13 +173,6 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
-        rust_name: "low_memory_background_enabled",
-        key: "lowMemoryBackgroundEnabled",
-        class: PreferenceClass::DeviceProfile,
-        shape: PreferenceShape::Boolean,
-        reason: "device_bound",
-    },
-    PreferenceField {
         rust_name: "low_latency_dictation_enabled",
         key: "lowLatencyDictationEnabled",
         class: PreferenceClass::Excluded,

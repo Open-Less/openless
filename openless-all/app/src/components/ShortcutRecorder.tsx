@@ -272,18 +272,16 @@ export function ShortcutRecorder({
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
-    width: '100%',
-    // The shortcut recorder in settings rows no longer spans the full row (previously
-    // the value hugged left and the chevron flew to the far edge); capped to the input
-    // width, sitting compactly after the label column.
-    maxWidth: 360,
+    width: 'fit-content',
+    maxWidth: '100%',
   };
   const recorderRowStyle: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
-    width: '100%',
+    width: 'fit-content',
+    maxWidth: '100%',
   };
   const menuButtonStyle: CSSProperties = {
     fontSize: 12,
@@ -317,8 +315,13 @@ export function ShortcutRecorder({
             disabled={disabled}
             onClick={startRecording}
             aria-label={t('settings.recording.comboRecordBtn')}
+            title={t('settings.recording.comboRecordBtn')}
           >
-            {assigned && value ? <KbdGroup keys={formatComboParts(value)} /> : <span>＋</span>}
+            {assigned && value ? (
+              <KbdGroup keys={formatComboParts(value).map((key) => key.replace('⌃', 'Ctrl'))} />
+            ) : (
+              <span>＋</span>
+            )}
           </Popover.Trigger>
           {onReset && (
             <button

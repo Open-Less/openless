@@ -31,6 +31,7 @@ import type {
   WindowsImeStatus,
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
+import { REOPEN_ONBOARDING_EVENT } from '../../lib/desktopOnboarding';
 import { Btn, Card, Pill } from '../_atoms';
 import { SettingRow } from './shared';
 
@@ -172,6 +173,15 @@ export function PermissionsSection() {
         <div style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}>
           {t('settings.permissions.title')}
         </div>
+        {platformCaps?.platform === 'desktop' && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => window.dispatchEvent(new Event(REOPEN_ONBOARDING_EVENT))}
+          >
+            {t('desktopGuide.reopen')}
+          </Btn>
+        )}
         {platformCaps?.platform === 'android' && (
           <Btn
             variant="ghost"

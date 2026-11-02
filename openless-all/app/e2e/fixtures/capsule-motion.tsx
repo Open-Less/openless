@@ -1,7 +1,7 @@
 // Real production components with an isolated native event/geometry adapter.
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { CapsuleState } from '../../src/lib/types';
+import type { CapsuleState, ThemeMode } from '../../src/lib/types';
 import '../../src/styles/tokens.css';
 import '../../src/styles/global.css';
 
@@ -12,6 +12,13 @@ let callbackId = 0;
 const qa = new URLSearchParams(location.search).has('qa');
 const params = new URLSearchParams(location.search);
 const windowLabel = params.get('label') ?? (qa ? 'qa' : 'capsule');
+const themeSync = params.has('themeSync');
+const holdThemeRead = params.has('holdThemeRead');
+let releaseThemeRead: (() => void) | undefined;
+let themeReadStarted!: () => void;
+const firstThemeRead = new Promise<void>((resolve) => {
+  themeReadStarted = resolve;
+});
 const bridge = {
   emit(event: string, payload: unknown) {
     for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
@@ -26,6 +33,14 @@ const bridge = {
   transcriptVisibility: [] as boolean[],
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
   setCapsule: (_: Record<string, unknown>) => {},
+  theme: 'light' as ThemeMode,
+  themeReads: 0,
+  nativeThemeWrites: [] as unknown[],
+  releaseThemeRead: () => releaseThemeRead?.(),
+  setTheme(themeMode: ThemeMode) {
+    bridge.theme = themeMode;
+    bridge.emit('prefs:changed', { themeMode });
+  },
   sizes: [] as boolean[],
   target: {
     sessionId: 'recording-a',
@@ -68,14 +83,33 @@ window.__TAURI_INTERNALS__ = {
     }
     if (command === 'get_startup_snapshot')
       return { contractVersion: '2.0.0', backend: { running: true } };
-    if (command === 'get_settings')
-      return {
+    if (command === 'get_settings') {
+      const settings = {
         translationTargetLanguage: bridge.target.targetLanguage,
         capsuleStyle: 'classic',
         capsuleTranscriptEnabled: params.has('transcript'),
+        ...(themeSync ? { themeMode: bridge.theme } : {}),
       };
+      if (themeSync && ++bridge.themeReads === 1) {
+        themeReadStarted();
+        if (holdThemeRead) {
+          await new Promise<void>((resolve) => {
+            releaseThemeRead = resolve;
+          });
+        }
+      }
+      return settings;
+    }
+    if (command === 'plugin:app|set_app_theme') {
+      bridge.nativeThemeWrites.push(args);
+      return;
+    }
     if (command === 'set_capsule_transcript_visible') {
       bridge.transcriptVisibility.push(args.visible);
+      return;
+    }
+    if (command === 'plugin:app|set_app_theme') {
+      bridge.nativeThemeWrites.push(args);
       return;
     }
     if (command === 'get_dictation_translation_target') return { ...bridge.target };
@@ -122,6 +156,13 @@ const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
   await import('../../src/components/LiveTranscriptPill');
 const { QaPanel } = await import('../../src/pages/QaPanel');
 const { Capsule } = await import('../../src/components/Capsule');
+if (themeSync) {
+  localStorage.setItem('ol.theme', 'light');
+  const { initThemeMode } = await import('../../src/lib/themeMode');
+  initThemeMode();
+  initThemeMode();
+  await firstThemeRead;
+}
 function CapsuleFixture() {
   const [state, set] = useState({
     state: 'recording' as CapsuleState,

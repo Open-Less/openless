@@ -1,29 +1,19 @@
 // Onboarding.tsx — first-run permission and service setup.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import {
   checkAndroidMicrophoneAccess,
   requestAndroidMicrophoneAccess,
 } from '@android/lib/androidMicrophonePermission';
-import {
-  checkAccessibilityPermission,
-  checkMicrophonePermission,
-  getPlatformCapabilities,
-  openSystemSettings,
-  requestAccessibilityPermission,
-  requestMicrophonePermission,
-  resetAccessibilityPermissionAndRestartApp,
-} from '../lib/ipc';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getPlatformCapabilities, openSystemSettings } from '../lib/ipc';
 import type { PermissionStatus, PlatformCapabilities } from '../lib/types';
-import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { ProvidersSection } from '../pages/settings/ChannelList';
-import { CloudSyncWelcome } from './CloudSyncSetupPrompt';
+import { DesktopOnboarding } from './DesktopOnboarding';
 
 interface OnboardingProps {
-  onComplete: () => void;
+  onComplete: () => void | Promise<void>;
 }
 
 type AndroidStepId =
@@ -45,12 +35,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     return <AndroidOnboarding onComplete={onComplete} />;
   }
 
-  return (
-    <>
-      <DesktopOnboarding onComplete={onComplete} platformCaps={platformCaps} />
-      <CloudSyncWelcome />
-    </>
-  );
+  return <DesktopOnboarding onComplete={onComplete} />;
 }
 
 function AndroidOnboarding({ onComplete }: OnboardingProps) {
@@ -304,223 +289,6 @@ function AndroidMicrophoneStep() {
   );
 }
 
-function DesktopOnboarding({
-  onComplete,
-  platformCaps: _platformCaps,
-}: OnboardingProps & { platformCaps: PlatformCapabilities }) {
-  const { t } = useTranslation();
-  const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
-  const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
-  const [busy, setBusy] = useState(false);
-  // Distinguish "TCC dialog never shown yet" from "TCC already denied".
-  const [tccPromptShown, setTccPromptShown] = useState(false);
-  const refreshTimeoutRef = useRef<number | null>(null);
-  const { capability } = useHotkeySettings();
-
-  const requiresAccessibility = !!capability?.requiresAccessibilityPermission;
-
-  const refresh = async () => {
-    const [a, m] = await Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]);
-    setAccessibility(a);
-    setMicrophone(m);
-    // Gate on the real permission status — macOS returns granted/denied, other
-    // platforms return notApplicable. This must NOT depend on the hotkey
-    // capability flag: it is null while it loads, so trusting it let mic-only
-    // onboarding finish before we knew macOS needs Accessibility, dropping users
-    // into the app with a dead hotkey. Mirrors the gate in App.tsx.
-    const aOk = a === 'granted' || a === 'notApplicable';
-    // noDevice = no microphone device present; not a permission issue, don't block
-    // entering the app.
-    const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
-    if (aOk && mOk) {
-      onComplete();
-    }
-  };
-
-  useEffect(() => {
-    void refresh();
-    // issue #470: purely event-driven, no per-second polling. Granting always goes
-    // through the System Settings app, so returning to OpenLess always fires
-    // focus/visibilitychange.
-    const onFocus = () => {
-      void refresh();
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibility);
-      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
-    };
-  }, [requiresAccessibility]);
-
-  const onGrantAccessibility = async () => {
-    setBusy(true);
-    try {
-      const result = await requestAccessibilityPermission();
-      setTccPromptShown(true);
-      // If the user allowed in the TCC dialog, the permission is already granted and
-      // System Settings isn't needed. Open System Settings only when TCC was denied
-      // or previously denied (it won't re-prompt), to guide manual enabling.
-      if (result !== 'granted') {
-        await openSystemSettings('accessibility');
-      }
-    } finally {
-      setBusy(false);
-    }
-    void refresh();
-    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
-    refreshTimeoutRef.current = window.setTimeout(refresh, 800);
-  };
-
-  const onRequestMicrophone = async () => {
-    setBusy(true);
-    try {
-      if (microphone === 'denied') {
-        await openSystemSettings('microphone');
-      } else {
-        const status = await requestMicrophonePermission();
-        setMicrophone(status);
-        if (status === 'denied' || status === 'restricted') {
-          await openSystemSettings('microphone');
-        }
-      }
-    } finally {
-      setBusy(false);
-    }
-    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
-    refreshTimeoutRef.current = window.setTimeout(refresh, 800);
-  };
-
-  return (
-    <OnboardingSurface>
-      <div
-        style={{
-          width: 'min(520px, 100%)',
-          padding: 32,
-          boxSizing: 'border-box',
-          background: 'var(--ol-surface)',
-          borderRadius: 14,
-          border: '0.5px solid var(--ol-line)',
-          boxShadow: 'var(--ol-shadow-lg)',
-        }}
-      >
-        <BrandHeader title={t('onboarding.welcome')} desc={t('onboarding.intro')} />
-
-        {(requiresAccessibility || accessibility === 'denied') && (
-          <>
-            <PermissionStep
-              index={1}
-              title={
-                capability?.requiresAccessibilityPermission
-                  ? t('onboarding.accessibilityTitle')
-                  : t('onboarding.hotkeyTitle')
-              }
-              desc={
-                capability?.requiresAccessibilityPermission
-                  ? t('onboarding.accessibilityDesc', {
-                      trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]),
-                    })
-                  : (capability?.statusHint ?? t('onboarding.hotkeyDesc'))
-              }
-              status={accessibility}
-              actionLabel={
-                !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
-                  ? t('onboarding.actionNotApplicable')
-                  : accessibility === 'granted'
-                    ? t('onboarding.actionGranted')
-                    : accessibility === 'denied' && tccPromptShown
-                      ? t('onboarding.actionOpenSystem')
-                      : t('onboarding.actionGrant')
-              }
-              onAction={onGrantAccessibility}
-              disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
-              hint={
-                capability?.requiresAccessibilityPermission
-                  ? t('onboarding.accessibilityHint')
-                  : undefined
-              }
-            />
-            {accessibility === 'denied' && tccPromptShown && (
-              <div
-                style={{
-                  marginTop: 10,
-                  paddingTop: 10,
-                  borderTop: '0.5px solid var(--ol-line-soft)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetAccessibilityPermissionAndRestartApp().catch(console.error);
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '8px 14px',
-                    fontSize: 12.5,
-                    fontWeight: 'var(--ol-font-weight-medium)',
-                    fontFamily: 'inherit',
-                    border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 8,
-                    background: 'var(--ol-surface)',
-                    color: 'var(--ol-ink-2)',
-                    cursor: 'default',
-                  }}
-                >
-                  {t('onboarding.actionRestart')}
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
-        <PermissionStep
-          index={requiresAccessibility || accessibility === 'denied' ? 2 : 1}
-          title={t('onboarding.micTitle')}
-          desc={t('onboarding.micDesc')}
-          status={microphone}
-          actionLabel={
-            microphone === 'granted'
-              ? t('onboarding.actionGranted')
-              : microphone === 'noDevice'
-                ? t('common.retry')
-                : microphone === 'denied'
-                  ? t('onboarding.actionOpenSystem')
-                  : t('onboarding.actionRequestMic')
-          }
-          onAction={microphone === 'noDevice' ? refresh : onRequestMicrophone}
-          disabled={busy || microphone === 'granted'}
-          hint={microphone === 'noDevice' ? t('onboarding.micNoDeviceHint') : undefined}
-        />
-
-        <div style={footerHintStyle}>{t('onboarding.footerHint')}</div>
-        <button
-          type="button"
-          onClick={onComplete}
-          style={{
-            width: '100%',
-            marginTop: 12,
-            padding: '9px 14px',
-            fontSize: 12.5,
-            fontWeight: 'var(--ol-font-weight-medium)',
-            fontFamily: 'inherit',
-            border: '0.5px solid var(--ol-line-strong)',
-            borderRadius: 8,
-            background: 'var(--ol-surface)',
-            color: 'var(--ol-ink-2)',
-            cursor: 'pointer',
-          }}
-        >
-          {t('onboarding.continueToSettings')}
-        </button>
-      </div>
-    </OnboardingSurface>
-  );
-}
-
 function OnboardingLoading({ label }: { label: string }) {
   return (
     <div
@@ -635,99 +403,6 @@ function StatusBadge({ granted, label }: { granted: boolean; label: string }) {
   );
 }
 
-interface StepProps {
-  index: number;
-  title: string;
-  desc: string;
-  status: PermissionStatus;
-  actionLabel: string;
-  onAction: () => void;
-  disabled: boolean;
-  hint?: string;
-}
-
-function PermissionStep({
-  index,
-  title,
-  desc,
-  status,
-  actionLabel,
-  onAction,
-  disabled,
-  hint,
-}: StepProps) {
-  const granted = status === 'granted' || status === 'notApplicable';
-  return (
-    <div
-      style={{
-        padding: '14px 0',
-        borderTop: '0.5px solid var(--ol-line-soft)',
-        display: 'flex',
-        gap: 14,
-        alignItems: 'flex-start',
-      }}
-    >
-      <div
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 999,
-          background: granted ? 'var(--ol-blue)' : 'rgba(0,0,0,0.06)',
-          color: granted ? '#fff' : 'var(--ol-ink-3)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 11,
-          fontWeight: 'var(--ol-font-weight-semibold)',
-          flexShrink: 0,
-        }}
-      >
-        {granted ? '✓' : index}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 'var(--ol-font-weight-semibold)' }}>{title}</div>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 3, lineHeight: 1.5 }}>
-          {desc}
-        </div>
-        {hint && (
-          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4, lineHeight: 1.5 }}>
-            {hint.split('**').map((seg, i) =>
-              i % 2 === 0 ? (
-                seg
-              ) : (
-                <b key={i} style={{ color: 'var(--ol-ink-2)' }}>
-                  {seg}
-                </b>
-              ),
-            )}
-          </div>
-        )}
-      </div>
-      <button
-        onClick={disabled ? undefined : onAction}
-        disabled={disabled}
-        style={{
-          flexShrink: 0,
-          padding: '7px 14px',
-          fontSize: 12.5,
-          fontWeight: 'var(--ol-font-weight-medium)',
-          fontFamily: 'inherit',
-          border: 0,
-          borderRadius: 8,
-          background: granted ? 'var(--ol-surface-2)' : 'var(--ol-primary-solid-bg)',
-          color: granted ? 'var(--ol-ink-3)' : 'var(--ol-primary-solid-ink)',
-          cursor: disabled ? 'not-allowed' : 'default',
-          opacity: disabled && !granted ? 0.6 : 1,
-          transition:
-            'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), opacity 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
-        }}
-      >
-        {actionLabel}
-      </button>
-    </div>
-  );
-}
-
 const primaryButtonStyle = {
   flex: 1,
   minHeight: 42,
@@ -767,14 +442,4 @@ const plainButtonStyle = {
   background: 'transparent',
   color: 'var(--ol-ink-4)',
   cursor: 'default',
-} as const;
-
-const footerHintStyle = {
-  marginTop: 18,
-  padding: '12px 14px',
-  borderRadius: 8,
-  background: 'var(--ol-surface-2)',
-  fontSize: 11.5,
-  color: 'var(--ol-ink-3)',
-  lineHeight: 1.6,
 } as const;

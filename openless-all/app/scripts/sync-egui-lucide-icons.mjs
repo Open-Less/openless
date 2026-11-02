@@ -12,19 +12,49 @@ const dest = resolve(root, 'linux-egui/assets/lucide');
 // Names match src/components/Icon.tsx. Stop/Send/Pin/Chat are popup
 // controls and use the corresponding Lucide shape from the same version.
 export const icons = {
-  Overview: 'ChartNoAxesColumn', History: 'History', Vocab: 'BookOpenText',
-  Style: 'SlidersHorizontal', SelectionAsk: 'MessageSquareText', Settings: 'Settings',
-  Mic: 'Mic', Sparkle: 'Sparkles', Hash: 'Hash', Clock: 'Clock3', Bolt: 'Zap',
-  Copy: 'Copy', Search: 'Search', Trash: 'Trash2', Refresh: 'RefreshCw',
-  Download: 'Download', Upload: 'Upload', Plus: 'Plus', Play: 'Play',
-  Stop: 'Square', Close: 'X', Check: 'Check', Send: 'ArrowUp', Pin: 'Pin',
-  Chat: 'MessageSquare', More: 'Ellipsis', ChevronRight: 'ChevronRight',
+  Overview: 'ChartNoAxesColumn',
+  History: 'History',
+  Vocab: 'BookOpenText',
+  Style: 'SlidersHorizontal',
+  SelectionAsk: 'MessageSquareText',
+  Settings: 'Settings',
+  Mic: 'Mic',
+  Sparkle: 'Sparkles',
+  Hash: 'Hash',
+  Clock: 'Clock3',
+  Bolt: 'Zap',
+  Copy: 'Copy',
+  Search: 'Search',
+  Trash: 'Trash2',
+  Refresh: 'RefreshCw',
+  Download: 'Download',
+  Upload: 'Upload',
+  Plus: 'Plus',
+  Play: 'Play',
+  Stop: 'Square',
+  Close: 'X',
+  Check: 'Check',
+  Send: 'ArrowUp',
+  Pin: 'Pin',
+  Chat: 'MessageSquare',
+  More: 'Ellipsis',
+  ChevronRight: 'ChevronRight',
   ChevronLeft: 'ChevronLeft',
-  Feather: 'Feather', Layout: 'PanelLeft', Doc: 'FileText', Pencil: 'Pencil',
-  Cloud: 'Cloud', Shield: 'ShieldCheck', Info: 'Info', Help: 'CircleHelp',
-  External: 'ExternalLink', Monitor: 'Monitor', Grip: 'GripVertical',
+  Feather: 'Feather',
+  Layout: 'PanelLeft',
+  Doc: 'FileText',
+  Pencil: 'Pencil',
+  Cloud: 'Cloud',
+  Shield: 'ShieldCheck',
+  Info: 'Info',
+  Help: 'CircleHelp',
+  External: 'ExternalLink',
+  Monitor: 'Monitor',
+  Grip: 'GripVertical',
 };
-const version = JSON.parse(readFileSync(resolve(root, 'node_modules/lucide-react/package.json'), 'utf8')).version;
+const version = JSON.parse(
+  readFileSync(resolve(root, 'node_modules/lucide-react/package.json'), 'utf8'),
+).version;
 const check = process.argv.includes('--check');
 if (!check) mkdirSync(dest, { recursive: true });
 for (const [name, component] of Object.entries(icons)) {
@@ -34,7 +64,8 @@ for (const [name, component] of Object.entries(icons)) {
   const svg = `${renderToStaticMarkup(createElement(lucide[component], { size: 24, color: '#ffffff', strokeWidth: 1.75 }))}\n`;
   const path = resolve(dest, `${name}.svg`);
   if (check) {
-    if (readFileSync(path, 'utf8') !== svg) throw new Error(`${name}.svg differs from lucide-react ${version}`);
+    if (readFileSync(path, 'utf8') !== svg)
+      throw new Error(`${name}.svg differs from lucide-react ${version}`);
   } else {
     writeFileSync(path, svg);
   }

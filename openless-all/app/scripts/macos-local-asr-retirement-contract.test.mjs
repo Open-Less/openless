@@ -27,7 +27,10 @@ const sherpaCfg = buildScript.slice(
   buildScript.indexOf('rustc-check-cfg=cfg(local_asr_sherpa)'),
   buildScript.indexOf('cargo:rustc-cfg=local_asr_sherpa'),
 );
-assert.match(sherpaCfg, /cargo_target_os == "windows" \|\| \(target_os == "android" && target_arch == "aarch64"\)/);
+assert.match(
+  sherpaCfg,
+  /cargo_target_os == "windows" \|\| \(target_os == "android" && target_arch == "aarch64"\)/,
+);
 assert.doesNotMatch(sherpaCfg, /macos/);
 const availability = adapters.slice(
   adapters.indexOf('impl openless_core::ModelRuntimeAdapter'),

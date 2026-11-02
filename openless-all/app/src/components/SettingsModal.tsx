@@ -41,7 +41,8 @@ import {
   ExperimentalAsrGuidance,
 } from '../pages/settings/ExperimentalAsrSection';
 import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
-import { usePageTransition, useOverlayMotion } from '../lib/motion';
+import { useOverlayMotion } from '../lib/motion';
+import { TransitionViewport } from './ui/TransitionViewport';
 
 export type { SettingsSectionId } from '../pages/settings/navigation';
 
@@ -94,16 +95,11 @@ export function SettingsModal({
   const savedToast = useSavedToastListener();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  // A settings destination, not a dialog floating inside another framed surface.
-  // Fade the entire workspace, including its opaque background. Fading only the
-  // child left a solid sheet that disappeared in a single frame on unmount.
+  // Animate the opaque workspace as one surface so its backdrop follows the
+  // same interrupted entry and exit lifecycle as the settings content.
   useOverlayMotion(overlayRef, closing, 'backdrop', true, 'settings');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const destination = usePageTransition(
-    `${requestedSection}:${requestedAdvancedPage ?? ''}`,
-    scrollRef,
-    mobile,
-  );
+  const destination = `${requestedSection}:${requestedAdvancedPage ?? ''}`;
   const [sectionKey, advancedKey] = destination.split(':');
   const section = sectionKey as SettingsSectionId;
   const advancedPage = (advancedKey || null) as AdvancedPageId | null;
@@ -586,8 +582,9 @@ export function SettingsModal({
                       </p>
                     )}
                   </div>
-                  <div
-                    ref={scrollRef}
+                  <TransitionViewport
+                    scrollRef={scrollRef}
+                    contentKey={`${destination}:${searching ? 'search' : 'content'}`}
                     className={[
                       'ol-thinscroll ol-settings-scroll',
                       conservative ? 'ol-conservative-scope' : '',
@@ -679,7 +676,9 @@ export function SettingsModal({
                         gap: 16,
                       }}
                     >
-                      {section === 'general' && <GeneralTab os={os} onOpenLocalModels={openLocalModels} />}
+                      {section === 'general' && (
+                        <GeneralTab os={os} onOpenLocalModels={openLocalModels} />
+                      )}
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}
@@ -702,7 +701,7 @@ export function SettingsModal({
                       {section === 'about' && <AboutTab />}
                     </div>
                     {mobile && !searching && <HelpLinks />}
-                  </div>
+                  </TransitionViewport>
                 </div>
               </ChannelEditorHostContext.Provider>
             </div>

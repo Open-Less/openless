@@ -106,7 +106,15 @@ jobs:
           # Browser revisions follow Playwright, not unrelated npm lock changes.
           key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
       - name: Install Playwright system dependencies
-        run: npx playwright install-deps chromium webkit
+        timeout-minutes: 8
+        run: |
+          # Keep regional mirror stalls from blocking browser validation indefinitely.
+          printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
+            sudo tee /etc/apt/apt.conf.d/80-openless-ci-network >/dev/null
+          while IFS= read -r -d '' apt_source; do
+            sudo sed -i -E 's#https?://azure[.]archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
+          done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+          npx playwright install-deps chromium webkit
       - name: Install Playwright browsers on cache miss
         if: steps.playwright_cache.outputs.cache-hit != 'true'
         run: npx playwright install chromium webkit
@@ -276,12 +284,25 @@ jobs:
           -x :app:rustBuildX86_64Debug
           --no-daemon
 
+      - name: Check Android emulator cleanup
+        run: bash scripts/android-emulator-cleanup.test.sh
+
       - name: Enable KVM for Android instrumentation tests
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
+      - name: Free disk space before Android emulator restore
+        shell: bash
+        run: |
+          # This runner only builds Android; .NET and Haskell are unused.
+          sudo rm -rf /usr/share/dotnet /usr/local/.ghcup
+          # JNI libraries and dictionaries are already staged in the app, and
+          # beta saved the Rime build cache before compiling the test APK.
+          rm -rf -- "${RUNNER_TEMP:?}/openless-cache/mobile-rime"
+          df -h "$RUNNER_TEMP"
 
       - name: Restore the pinned Android emulator and system image
         id: emulator_cache
@@ -391,8 +412,17 @@ jobs:
             trap - EXIT
             if [ -n "$emulator_pid" ]; then
               if kill -0 "$emulator_pid" 2>/dev/null; then
-                timeout 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+                timeout --kill-after=5s 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
                 kill "$emulator_pid" 2>/dev/null || true
+                # The emulator can ignore SIGTERM while shutting down.
+                for attempt in {1..10}; do
+                  kill -0 "$emulator_pid" 2>/dev/null || break
+                  sleep 1
+                done
+                if kill -0 "$emulator_pid" 2>/dev/null; then
+                  echo 'Android emulator did not exit; sending SIGKILL'
+                  kill -KILL "$emulator_pid" 2>/dev/null || true
+                fi
               fi
               wait "$emulator_pid" 2>/dev/null || true
             fi
@@ -570,8 +600,8 @@ jobs:
 
   native-capsule:
     # The capsule crates compile into the desktop shells. They get their own macOS + Windows
-    # runners only because their `ui,host` feature set is not built anywhere else (the shells
-    # use `build:native-capsule:dev`), and that warm cache makes the job ~40 s. It is gated on
+    # runners only because their `ui,host` feature set is not built anywhere else, and that
+    # warm cache makes the job ~40 s. It is gated on
     # its own area, so the common PR pays zero runners for it: measured on run 40510306688,
     # moving these three commands into `cross-platform` cost 117 s on the critical-path Windows
     # job, which is more than the two runners it saved.
@@ -716,10 +746,6 @@ jobs:
         if: runner.os == 'macOS'
         run: npm test
 
-      # Direct Cargo checks do not execute Tauri beforeBuildCommand.
-      - name: Build native capsule for Tauri checks
-        run: npm run build:native-capsule:dev
-
       - name: Install pinned Codex CLI for sandbox contract
         if: runner.os == 'macOS'
         run: npm install --global @openai/codex@0.146.0
@@ -756,6 +782,24 @@ jobs:
         # provide: `cargo check` writes metadata, so the following codegen pass
         # recompiled the whole dependency graph anyway (measured: 6.4 min of it).
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run
+
+      # Feature-on production cfg must compile too; standalone tests below actually run
+      # the sink on Windows/macOS without optional Tauri runtime DLL entrypoints.
+      - name: Compile opt-in Windows hang diagnostics host
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1266-diagnostics
+
+      - name: Run isolated Windows hang diagnostics tests (off/on)
+        run: python scripts/test-windows-hang-diagnostics.py
+
+      - name: Run owner-thread target ownership tests
+        run: python scripts/test-windows-runtime-target.py
+
+      - name: Run real Windows runtime ownership lifecycle
+        if: runner.os == 'Windows'
+        run: python scripts/test-windows-runtime-target.py --runtime
+
+      - name: Run Windows symbol-pair format tests
+        run: python scripts/windows-symbol-pair.test.py
 
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
@@ -860,8 +904,6 @@ jobs:
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
-      - name: Build native capsule for Tauri checks
-        run: npm run build:native-capsule:dev
       - name: Check Tauri backend with Rust 1.99 MSRV
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Compile backend tests with Rust 1.99 MSRV

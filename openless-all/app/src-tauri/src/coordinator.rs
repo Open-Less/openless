@@ -1706,8 +1706,8 @@ impl Coordinator {
         Ok(())
     }
 
-    pub(crate) fn lock_settings_host(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.inner.settings_host_gate.lock()
+    pub(crate) fn lock_settings_host(&self) -> crate::issue1266_debug::HostGuard<'_> {
+        crate::issue1266_debug::lock_host(&self.inner.settings_host_gate, crate::issue1266_debug::Kind::Settings)
     }
 
     pub(crate) async fn dismiss_less_computer(&self) -> Result<(), String> {

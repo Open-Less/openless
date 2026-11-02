@@ -468,6 +468,16 @@ pub const CATALOG: &[Msg] = &[
             "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
         ),
     },
+    Msg {
+        key: "settings.providers.llmThinkingRequired",
+        text: row(
+            "该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。",
+            "此模型不接受關閉思考。請開啟模型旁的「思考」開關後重新驗證。",
+            "This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.",
+            "このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。",
+            "이 모델은 사고를 끌 수 없습니다. 모델 옆의 \"사고\"를 켠 뒤 다시 검증하세요.",
+        ),
+    },
     // ---- Shell / navigation ------------------------------------------------
 
     Msg {
@@ -7997,6 +8007,15 @@ pub fn tr_catalog<L: IntoLang>(lang: L, key: &'static str) -> &'static str {
     tr(CATALOG, lang, key)
 }
 
+/// Localize provider guidance at display time; stored validation codes stay unchanged.
+pub fn provider_error_text(lang: Lang, message: &str) -> &str {
+    if message == "llmThinkingRequired" || message.ends_with(": llmThinkingRequired") {
+        tr_catalog(lang, "settings.providers.llmThinkingRequired")
+    } else {
+        message
+    }
+}
+
 /// Global formatted lookup against [`CATALOG`].
 pub fn fmt_catalog<L: IntoLang>(lang: L, key: &str, args: &[&dyn Display]) -> String {
     fmt(CATALOG, lang, key, args)
@@ -8048,6 +8067,24 @@ mod tests {
         assert_eq!(tr(TEST_CATALOG, Lang::ZhCn, "k.missing_en"), "来源");
         // Fully translated keys return their own locale.
         assert_eq!(tr(TEST_CATALOG, Lang::En, "k.full"), "Full");
+    }
+
+    #[test]
+    fn thinking_required_provider_errors_are_localized_without_changing_other_errors() {
+        for lang in LANGS {
+            let expected = tr_catalog(lang, "settings.providers.llmThinkingRequired");
+            assert_ne!(expected, "settings.providers.llmThinkingRequired");
+            for message in [
+                "llmThinkingRequired",
+                "Provider: llmThinkingRequired",
+                "LLM provider failed: parse error: llmThinkingRequired",
+            ] {
+                assert_eq!(provider_error_text(lang, message), expected);
+            }
+            for message in ["providerHttpStatus:401", "notllmThinkingRequired"] {
+                assert_eq!(provider_error_text(lang, message), message);
+            }
+        }
     }
 
     #[test]

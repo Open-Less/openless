@@ -1,0 +1,40 @@
+%% OpenLess client data flow — recording, streaming, persistence, and optional remote services
+flowchart TD
+    HOTKEY[Global hotkey / app action]
+    COORD[Coordinator\npress / release / session owner]
+    REC[Recorder\nPCM capture + bounded buffer]
+    ENGINE[openless-core dictation engine]
+    PREP[Provider preparation\nASR / LLM / local runtime]
+    ASR[ASR provider]
+    DELTA[Transcript deltas\nbackend:event]
+    CAPSULE[Capsule WebView\nlevel / transcript / state]
+    POLISH[LLM polish / translation]
+    INSERT[Host insertion\nclipboard / accessibility / TSF]
+    HISTORY[History + activity persistence]
+    PREFS[Preferences + credential vault]
+    SYNC[Encrypted sync\noptional]
+    MARKET[Marketplace\nstyle pack fetch/import]
+    MAIN[Main WebView\nsettings / history / style]
+
+    HOTKEY --> COORD
+    COORD -->|start / stop / cancel| ENGINE
+    COORD -->|recording state| CAPSULE
+    ENGINE --> REC
+    ENGINE --> PREP
+    REC -->|ordered PCM| ASR
+    PREP --> ASR
+    ASR -->|partial / final text| ENGINE
+    ENGINE --> DELTA
+    DELTA --> CAPSULE
+    ENGINE --> POLISH
+    POLISH -->|streaming output| DELTA
+    POLISH --> INSERT
+    ENGINE --> INSERT
+    INSERT --> HISTORY
+    ENGINE --> HISTORY
+    MAIN --> PREFS
+    PREFS --> COORD
+    PREFS -. sync settings / credentials .-> SYNC
+    MAIN -. list / install style packs .-> MARKET
+    MARKET -. imported pack .-> PREFS
+    HISTORY --> MAIN

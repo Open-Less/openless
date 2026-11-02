@@ -183,6 +183,7 @@ function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation
   if (message === 'llmModelMissing' || message === 'asrModelMissing') {
     return t('settings.channels.errModel');
   }
+  if (message === 'llmThinkingRequired') return t('settings.channels.errThinking');
   return t('settings.channels.errGeneric');
 }
 
@@ -909,7 +910,7 @@ export function ProvidersSection({
 }
 
 /**
- * Add and edit share the same form. Mounted as a right-side subpage in settings, or a standalone dialog in onboarding.
+ * Add and edit share the same credential form inside a bounded modal or its setup host.
  * Creating a channel first obtains the ID the credentials belong to; on close only blank drafts that never saw user action are recycled.
  */
 function ChannelModal({
@@ -946,8 +947,11 @@ function ChannelModal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameId = useId();
   const editorHost = useContext(ChannelEditorHostContext);
-  const embedded = Boolean(editorHost?.container && editorHost.background);
+  const embedded = Boolean(
+    editorHost?.presentation === 'inline' && editorHost.container && editorHost.background,
+  );
   useOverlayMotion(dialogRef, closing, 'drawer', embedded);
+  const openerRef = useRef(document.activeElement);
   const closeRequestedRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -961,25 +965,26 @@ function ChannelModal({
   };
 
   useEffect(() => {
-    const opener = document.activeElement;
+    const opener = openerRef.current;
     const dialog = dialogRef.current;
     const parentDialog =
       opener instanceof HTMLElement ? opener.closest<HTMLElement>('[role="dialog"]') : null;
     const background = embedded
       ? editorHost?.background
-      : parentDialog !== dialog
+      : parentDialog && !parentDialog.contains(dialog)
         ? parentDialog
         : null;
     const wasInert = background?.inert ?? false;
     (
       dialog?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ?? dialog
     )?.focus({ preventScroll: true });
-    // Keep body-portaled provider menus accessible while disabling the covered
-    // settings surface. aria-modal would hide those existing sibling portals.
+    // Capture the opener before the portal's focus effect; never make our own
+    // dialog ancestor inert. Body-portaled provider menus remain accessible.
+    // Disable only the covered settings surface. aria-modal would hide those existing sibling portals.
     if (background) background.inert = true;
-    if (embedded) editorHost?.registerClose(requestClose);
+    editorHost?.registerClose(requestClose);
     return () => {
-      if (embedded) editorHost?.registerClose(null);
+      editorHost?.registerClose(null);
       if (background) background.inert = wasInert;
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };

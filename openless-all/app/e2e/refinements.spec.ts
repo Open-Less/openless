@@ -1,3 +1,4 @@
+import { settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
@@ -5,6 +6,7 @@ async function openShortcuts(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
+  await settleNavigation(page);
 }
 
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({
@@ -35,17 +37,17 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
   await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
 });
 
-test('native scrolling has no JS wheel interception and is stable when stopped', async ({
+test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
   page,
 }) => {
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
-  const content = page.locator('.ol-settings-scroll');
+  const content = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
-  await expect(content).toHaveCSS('scrollbar-gutter', 'stable');
+  await expect(content).toHaveCSS('scrollbar-width', 'none');
   await content.evaluate((el) => {
-    const event = new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true });
+    const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     el.dispatchEvent(event);
     el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
   });
@@ -156,17 +158,20 @@ test('every main destination and settings category stays readable on desktop and
   await page.goto('/');
   for (const name of ['历史', '词典']) {
     await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
+    await settleNavigation(page);
+    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '风格', exact: true }).click();
   for (const name of ['润色模式', '风格市场']) {
     await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
+    await settleNavigation(page);
+    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '工具', exact: true }).click();
   for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
     await page.getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('main h1')).toBeVisible();
+    await settleNavigation(page);
+    await expect(page.locator('main [data-transition-phase="settled"] h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '设置', exact: true }).click();
   for (const name of [
@@ -191,7 +196,8 @@ test('every main destination and settings category stays readable on desktop and
   }
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  const scroll = page.locator('.ol-settings-scroll');
+  await settleNavigation(page);
+  const scroll = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   expect(await scroll.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: 'test-results/refinements-mobile.png' });
   expect(errors).toEqual([]);
@@ -286,12 +292,10 @@ test('text height grows with contents and chips give the selection actual layout
     'aria-pressed',
     'true',
   );
-  const selected = await page
-    .getByRole('button', { name: 'Two', exact: true })
-    .evaluate((el) => ({
-      x: (el as HTMLElement).offsetLeft,
-      width: (el as HTMLElement).offsetWidth,
-    }));
+  const selected = await page.getByRole('button', { name: 'Two', exact: true }).evaluate((el) => ({
+    x: (el as HTMLElement).offsetLeft,
+    width: (el as HTMLElement).offsetWidth,
+  }));
   const last = await page
     .getByRole('button', { name: 'Three', exact: true })
     .evaluate((el) => (el as HTMLElement).offsetLeft);

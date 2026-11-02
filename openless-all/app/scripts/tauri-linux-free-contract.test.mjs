@@ -26,7 +26,7 @@ async function collect(dir, extensions, { skip = () => false } = {}) {
     if (entry.name === 'target' || entry.name === 'node_modules') continue;
     const child = join(dir, entry.name);
     if (skip(child)) continue;
-    if (entry.isDirectory()) files.push(...await collect(child, extensions, { skip }));
+    if (entry.isDirectory()) files.push(...(await collect(child, extensions, { skip })));
     else if (extensions.has(extname(entry.name))) files.push(child);
   }
   return files;
@@ -40,9 +40,10 @@ for (const file of rustFiles) {
   lines.forEach((line, index) => {
     const normalized = line.trim();
     if (!normalized.includes('target_os = "linux"')) return;
-    const isGuard = basename(file) === 'lib.rs'
-      && /^#\[cfg\(target_os = "linux"\)\]$/.test(normalized)
-      && lines.slice(index, index + 3).some((entry) => entry.includes('compile_error!'));
+    const isGuard =
+      basename(file) === 'lib.rs' &&
+      /^#\[cfg\(target_os = "linux"\)\]$/.test(normalized) &&
+      lines.slice(index, index + 3).some((entry) => entry.includes('compile_error!'));
     if (!isGuard) failures.push(`${file}:${index + 1}: Linux cfg branch`);
   });
   if (/#!?\[cfg_attr\(target_os = "linux"/.test(source)) {
@@ -55,10 +56,24 @@ const manifest = await readFile(new URL('../src-tauri/Cargo.toml', import.meta.u
 if (/\[target\..*cfg\(target_os = "linux"\)/.test(manifest)) {
   failures.push('src-tauri/Cargo.toml: declares a Linux target dependency table');
 }
-for (const forbidden of ['wayland-scanner', 'linux-native-sync-persistent', '[patch.crates-io]']) {
+for (const forbidden of ['wayland-scanner', 'linux-native-sync-persistent']) {
   if (manifest.includes(forbidden)) {
     failures.push(`src-tauri/Cargo.toml: still references ${forbidden}`);
   }
+}
+// Allow only the Windows target ownership patch, not the retired Linux stack.
+let inPatch = false;
+const patchEntries = [];
+for (const raw of manifest.split('\n')) {
+  const line = raw.trim();
+  if (line.startsWith('[')) inPatch = line === '[patch.crates-io]';
+  else if (inPatch && line && !line.startsWith('#')) patchEntries.push(line);
+}
+if (
+  patchEntries.length !== 1 ||
+  patchEntries[0] !== 'tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }'
+) {
+  failures.push('src-tauri/Cargo.toml: unapproved crates.io patch');
 }
 try {
   await access(new URL('../src-tauri/vendor/wayland-scanner', import.meta.url), constants.F_OK);

@@ -1040,8 +1040,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   line-height: 1.5;
 }
 .ol-service-inactive-tag,
-.ol-provider-result,
-.ol-channel-model-tools[data-populated='true'] {
+.ol-provider-result {
   animation: ol-feedback-in 200ms var(--ol-motion-spring) both;
 }
 @keyframes ol-feedback-in {
@@ -1423,8 +1422,8 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   outline: none;
 }
 .ol-channel-dialog :is(input, button, [role='combobox']):focus-visible {
-  outline: 2px solid var(--ol-blue) !important;
-  outline-offset: 3px;
+  outline: 2px solid var(--ol-ink-3);
+  outline-offset: 2px;
 }
 .ol-channel-dialog button:disabled {
   opacity: 0.55;
@@ -1526,12 +1525,6 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   font-size: 12px;
   line-height: 1.7;
   color: var(--ol-ink-3);
-}
-.ol-channel-dialog .ol-channel-model-tools[data-populated='true'] {
-  padding: 12px;
-  border: 1px solid var(--ol-line);
-  border-radius: 10px;
-  background: var(--ol-bg-base);
 }
 .ol-channel-dialog .ol-channel-validation-heading {
   display: flex;
@@ -1867,4 +1860,120 @@ html:lang(de) {
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Model retrieval and validation never insert new rows into a live form. */
+.ol-channel-model-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 36%);
+  gap: 16px;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  min-height: 36px;
+}
+.ol-channel-model-fetch,
+.ol-channel-validation-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ol-channel-model-fetch > button,
+.ol-channel-validation-actions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ol-provider-status-slot {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+}
+.ol-provider-result.ol-provider-result-inline {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ol-provider-result-inline > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ol-provider-result.ol-provider-result-inline[data-status='success'] {
+  background: transparent;
+  color: var(--ol-ok);
+}
+.ol-provider-result.ol-provider-result-inline[data-status='error'] {
+  background: transparent;
+  color: var(--ol-warn);
+}
+.ol-channel-validation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ol-channel-validation-actions {
+  flex: 0 1 50%;
+  justify-content: flex-end;
+}
+.ol-omni-tools .ol-channel-validation-heading {
+  margin-top: 12px;
+}
+@media (max-width: 700px) {
+  .ol-channel-model-tools {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .ol-channel-validation-heading {
+    flex-wrap: wrap;
+  }
+  .ol-channel-validation-actions {
+    flex-basis: 100%;
+  }
+}
+
+.ol-omni-tools-actions > .ol-channel-model-tools {
+  flex: 1;
+  width: auto;
+  grid-template-columns: minmax(110px, 1fr) minmax(140px, 1fr);
+}
+.ol-omni-tools-actions {
+  flex-wrap: nowrap;
+}
+.ol-omni-tools-hint {
+  min-height: 20px;
+}
+@media (max-width: 700px) {
+  .ol-omni-tools-actions {
+    flex-wrap: wrap;
+  }
+  .ol-omni-tools-actions > .ol-channel-model-tools {
+    flex-basis: 100%;
+  }
+}
+
+.ol-omni-tools {
+  padding-top: 4px;
+  margin-top: 4px;
+}
+.ol-settings-sections[data-section='services'] {
+  height: 100%;
+  min-height: 0;
+}
+.ol-services-page {
+  flex: 1;
+  min-height: 0;
 }
