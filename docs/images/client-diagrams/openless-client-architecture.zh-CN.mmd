@@ -16,7 +16,7 @@ flowchart LR
         CAP --> IPC
     end
 
-    subgraph HOST[Tauri 桌面宿主]
+    subgraph HOST[Tauri 桌面与 Android 宿主]
         LIB[src-tauri/src/lib.rs\n命令与窗口生命周期]
         COORD[Coordinator\n快捷键与会话所有权]
         EVENTS[tauri_events.rs\n语义事件与胶囊状态]
@@ -35,6 +35,15 @@ flowchart LR
         COORD --> NATIVE
         HOSTIPC --> PERSIST
         CORE --> PERSIST
+    end
+
+    subgraph OTHER[其他平台宿主]
+        LINUX[Linux egui 宿主\nOpenLessBackend / 原生界面]
+        ANDROID[Android 原生服务\nJNI / Kotlin / 输入法]
+        HARMONY[HarmonyOS 宿主\nArkTS / Rust 桥接]
+        LINUX --> CORE
+        ANDROID --> CORE
+        HARMONY --> CORE
     end
 
     subgraph EXT[外部系统]

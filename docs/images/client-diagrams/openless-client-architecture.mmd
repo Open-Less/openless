@@ -16,7 +16,7 @@ flowchart LR
         CAP --> IPC
     end
 
-    subgraph HOST[Tauri desktop host]
+    subgraph HOST[Tauri desktop and Android hosts]
         LIB[src-tauri/src/lib.rs\nwindow lifecycle / commands]
         COORD[Coordinator\nhotkeys / session ownership]
         EVENTS[tauri_events.rs\nbackend:event / capsule:state]
@@ -35,6 +35,15 @@ flowchart LR
         COORD --> NATIVE
         HOSTIPC --> PERSIST
         CORE --> PERSIST
+    end
+
+    subgraph OTHER[Other platform hosts]
+        LINUX[Linux egui host\nOpenLessBackend / native UI]
+        ANDROID[Android native services\nJNI / Kotlin / IME]
+        HARMONY[HarmonyOS host\nArkTS / Rust bridge]
+        LINUX --> CORE
+        ANDROID --> CORE
+        HARMONY --> CORE
     end
 
     subgraph EXT[External systems]
