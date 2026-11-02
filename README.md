@@ -414,6 +414,30 @@ The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Wi
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
+### Client architecture and flows
+
+The diagrams below are generated from the current `beta` client boundaries. Each rendered PNG is accompanied by an editable Mermaid source and an SVG version.
+
+#### Architecture
+
+![OpenLess client architecture](docs/images/client-diagrams/openless-client-architecture.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-architecture.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.svg) · [中文图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg)
+
+#### Data flow
+
+![OpenLess client data flow](docs/images/client-diagrams/openless-client-data-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-data-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg)
+
+#### Startup, permissions, and recording
+
+![OpenLess startup, permissions, and recording flow](docs/images/client-diagrams/openless-client-startup-recording-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
+
+The dependency and module review that accompanies these diagrams is in [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md).
+
 See [Contributing workflow](#contributing-workflow) and [Releasing](RELEASING.md) for contribution and release rules, and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
 ## Roadmap
