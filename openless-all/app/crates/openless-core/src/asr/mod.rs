@@ -2,6 +2,7 @@
 
 pub mod bailian;
 pub mod dashscope_multimodal;
+pub mod decode_threads;
 pub mod elevenlabs;
 mod frame;
 pub mod gemini;
