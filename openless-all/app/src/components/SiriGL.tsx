@@ -19,6 +19,7 @@
 
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
 import { useReducedMotion } from '../lib/motion';
+import { mapVoiceLevel } from '../lib/capsuleSensitivity';
 
 export type SiriGLMode = 'wave' | 'orb';
 
@@ -26,6 +27,8 @@ interface SiriGLProps {
   mode: SiriGLMode;
   /** wave only: raw RMS level 0..1; gated and smoothed (fast attack, slow release) internally. */
   level?: number;
+  /** wave only: sensitivity multiplier (0.5..2.5, default 1.0) scaling response to quiet speech. */
+  sensitivity?: number;
   /** wave only: true = wave expanded (recording), false = converged into a breathing orb (thinking). */
   resolved?: boolean;
   /**
@@ -287,18 +290,10 @@ export function warmUpSiriShaders(): void {
   }
 }
 
-/** Same psychoacoustic mapping as AudioBars: noise gate + smoothstep + pow to boost low-level response. */
-function visualVoice(raw: number): number {
-  const gate = 0.012;
-  const ceiling = 0.34;
-  const gated = Math.min(1, Math.max(0, (raw - gate) / (ceiling - gate)));
-  const eased = gated * gated * (3 - 2 * gated);
-  return Math.pow(eased, 0.42);
-}
-
 export function SiriGL({
   mode,
   level,
+  sensitivity,
   resolved,
   warming,
   warmupMs,
@@ -313,12 +308,14 @@ export function SiriGL({
   // 60Hz level updates go through a ref bridge: render only syncs the value and the
   // draw loop reads it in rAF, so the GL pipeline is never rebuilt for prop changes.
   const levelRef = useRef(0);
+  const sensitivityRef = useRef(1);
   const resolvedRef = useRef(1);
   const speedRef = useRef(1);
   const mergingRef = useRef(0);
   const warmingRef = useRef(0);
   const warmupMsRef = useRef(150);
   levelRef.current = Math.min(1, Math.max(0, level ?? 0));
+  sensitivityRef.current = sensitivity ?? 1;
   resolvedRef.current = resolved === false ? 0 : 1;
   speedRef.current = speed ?? 1;
   mergingRef.current = merging === true ? 1 : 0;
@@ -327,7 +324,7 @@ export function SiriGL({
 
   useLayoutEffect(() => {
     if (reducedMotion) redrawRef.current?.();
-  }, [level, resolved, warming, warmupMs, speed, merging, reducedMotion]);
+  }, [level, sensitivity, resolved, warming, warmupMs, speed, merging, reducedMotion]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -438,7 +435,7 @@ export function SiriGL({
       if (!inViewport || document.hidden) return;
       const dt = reducedMotion ? 0 : Math.min(0.05, (now - last) / 1000);
       if (reducedMotion) {
-        smoothLevel = visualVoice(levelRef.current);
+        smoothLevel = mapVoiceLevel(levelRef.current, sensitivityRef.current);
         smoothResolved = warmingRef.current > 0.5 ? WARMING_RESOLVED : resolvedRef.current;
         warmProgress = warmingRef.current > 0.5 ? 0 : 1;
         gather = mergingRef.current > 0.5 ? 1 : 0;
@@ -459,7 +456,7 @@ export function SiriGL({
         ? 0.12 + 0.06 * Math.sin(t * 3.0)
         : thinking
           ? 0.14 + 0.07 * Math.sin(t * 2.2)
-          : visualVoice(levelRef.current);
+          : mapVoiceLevel(levelRef.current, sensitivityRef.current);
       const attack = target > smoothLevel ? 14 : 5;
       smoothLevel += (target - smoothLevel) * (1 - Math.exp(-dt * attack));
       // Predicted expand: the entrance no longer dead-waits for the ready signal (that

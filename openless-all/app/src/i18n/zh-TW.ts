@@ -1473,6 +1473,8 @@ export const zhTW: typeof zhCN = {
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: '預設風格',
+      capsuleSensitivityLabel: '靈敏度',
+      capsuleSensitivityTooltip: '動畫響應靈敏度（連按兩下重設為 1.0×）',
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',

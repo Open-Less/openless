@@ -382,6 +382,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
+  /** Recording capsule animation sensitivity multiplier (0.5..2.5, default 1.0). */
+  capsuleSensitivity?: number;
   capsuleDisplayMode: 'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens';
   capsuleDisplayModeV2?: UserPreferences['capsuleDisplayMode'];
   capsuleTranscriptEnabled: boolean;
@@ -813,6 +815,10 @@ export interface CapsulePayload {
    * 'siri' when missing, for compatibility with older backend payloads.
    */
   capsuleStyle?: CapsuleStyle;
+  /**
+   * Recording capsule animation sensitivity multiplier (0.5..2.5, default 1.0).
+   */
+  capsuleSensitivity?: number;
   /**
    * Selection polish reuses the capsule's focus-free native window but renders a lightweight status hint; when missing,
    * the original voice/QA capsule behavior is kept, for compatibility with older backend payloads.

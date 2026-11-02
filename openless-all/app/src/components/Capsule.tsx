@@ -183,6 +183,7 @@ interface ClassicCapsuleProps {
   os: OS;
   state: CapsuleState;
   level: number;
+  sensitivity?: number;
   insertedChars: number;
   message?: string;
   transcript?: string;
@@ -205,6 +206,7 @@ function ClassicCapsule({
   os,
   state,
   level,
+  sensitivity,
   insertedChars,
   message,
   transcript,
@@ -286,6 +288,7 @@ function ClassicCapsule({
           os={os}
           state={state}
           level={level}
+          sensitivity={sensitivity}
           insertedChars={insertedChars}
           message={message}
           operating={operating}
@@ -416,6 +419,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
+  const [capsuleSensitivity, setCapsuleSensitivity] = useState<number>(1.0);
   const stylePreferenceReadyRef = useRef(false);
   const isClassic = capsuleStyle === 'classic';
   // Windows keeps the transcript in the dedicated capsule-rail HWND. The browser
@@ -572,6 +576,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setCountdownSeconds(p.countdownSeconds ?? null);
         const style = parseCapsuleStyle(p.capsuleStyle);
         if (style && !stylePreferenceReadyRef.current) setCapsuleStyle(style);
+        if (typeof p.capsuleSensitivity === 'number') {
+          setCapsuleSensitivity(p.capsuleSensitivity);
+        }
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
       };
@@ -668,6 +675,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const handle = await listen<UserPreferences>('prefs:changed', (event) => {
         setTranscriptEnabled(event.payload.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
+        if (typeof event.payload?.capsuleSensitivity === 'number') {
+          setCapsuleSensitivity(event.payload.capsuleSensitivity);
+        }
         preferenceRevision += 1;
         const next = parseCapsuleStyle(event.payload?.capsuleStyle);
         if (next) {
@@ -686,6 +696,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (!cancelled && revisionAtRead === preferenceRevision && next) {
         setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
+        if (typeof preferences.capsuleSensitivity === 'number') {
+          setCapsuleSensitivity(preferences.capsuleSensitivity);
+        }
         stylePreferenceReadyRef.current = true;
         setCapsuleStyle(next);
       }
@@ -874,6 +887,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             os={os}
             state={renderedState}
             level={leaving ? 0 : level}
+            sensitivity={capsuleSensitivity}
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
@@ -965,6 +979,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   os={os}
                   state={renderedState}
                   level={leaving ? 0 : level}
+                  sensitivity={capsuleSensitivity}
                   warming={!leaving && warming}
                   warmupMs={warmupMs}
                   message={renderedMessage}
