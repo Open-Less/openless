@@ -5187,14 +5187,14 @@ pub const CATALOG: &[Msg] = &[
             "녹음 캡슐",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_style_classic",
         text: row(
-            "OpenLess 默认风格",
-            "OpenLess 預設風格",
-            "OpenLess default style",
-            "OpenLess デフォルトスタイル",
-            "OpenLess 기본 스타일",
+            "默认风格",
+            "預設風格",
+            "Default style",
+            "デフォルトスタイル",
+            "기본 스타일",
         ),
     },
     Msg {

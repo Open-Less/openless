@@ -14,7 +14,9 @@
 // the Rust `fmt_catalog` expects, and array values (weekday/month label lists)
 // are joined with `|`, which is the encoding the egui pages split on.
 //
-// Run with: node scripts/sync-egui-i18n.mjs [--check]
+// Run with: node --import ./scripts/register-ts-loader.mjs scripts/sync-egui-i18n.mjs [--check]
+//   (the Tauri catalogs import each other with extension-less specifiers, so the
+//    TypeScript resolve hook has to be registered or Node cannot load them)
 //   --check  report drift and exit non-zero instead of rewriting the catalog
 
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
