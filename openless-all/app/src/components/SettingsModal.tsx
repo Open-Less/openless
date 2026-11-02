@@ -50,6 +50,7 @@ interface SettingsModalProps {
   os: OS;
   onClose: () => void;
   initialSettingsSection?: SettingsSectionId;
+  initialServiceView?: ServiceViewId;
   /** Keeps the closing surface mounted until its exit finishes. */
   closing?: boolean;
 }
@@ -63,6 +64,7 @@ export function SettingsModal({
   os,
   onClose,
   initialSettingsSection,
+  initialServiceView,
   closing = false,
 }: SettingsModalProps) {
   const { t } = useTranslation();
@@ -75,7 +77,9 @@ export function SettingsModal({
     initialSettingsSection ?? 'general',
   );
   const [requestedAdvancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
-  const [requestedServiceView, setRequestedServiceView] = useState<ServiceViewId | undefined>();
+  const [requestedServiceView, setRequestedServiceView] = useState<ServiceViewId | undefined>(
+    initialServiceView,
+  );
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const experimentalAsr = useExperimentalAsr(platformCaps?.platform === 'desktop' && os === 'mac');
