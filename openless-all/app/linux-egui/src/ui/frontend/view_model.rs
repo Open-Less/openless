@@ -387,9 +387,7 @@ pub enum ShortcutField {
 }
 
 /// 关于页「检查更新」的状态。Linux 只做检测与跳转，不做自安装（deb/rpm 无法自替换）。
-#[derive(
-    Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UpdateState {
     #[default]
@@ -657,6 +655,8 @@ pub enum SettingsActionField {
     OpenUpdatePage,
     /// 把自动学词的三个参数恢复出厂值。
     ResetVocabularyLearning,
+    /// 请系统弹出钥匙串解锁窗口（Secret Service `Prompt`）。
+    UnlockKeyring,
 }
 
 // ── Vocab types ─────────────────────────────────────────────────────────────

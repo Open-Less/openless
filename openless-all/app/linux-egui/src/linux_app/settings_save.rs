@@ -284,7 +284,10 @@ impl OpenLessEguiApp {
     ) {
         // AEC 参考源是 Core 偏好里的字符串（空 = 自动，"off" = 不采集），
         // 界面用下标表达，这里换算回去。
-        if matches!(field, frontend::view_model::SettingsComboField::AecReference) {
+        if matches!(
+            field,
+            frontend::view_model::SettingsComboField::AecReference
+        ) {
             let value = match index {
                 0 => String::new(),
                 1 => "off".to_string(),
@@ -719,6 +722,46 @@ impl OpenLessEguiApp {
                     self.refresh_linux_access();
                     self.load_microphones();
                 }
+            }
+            frontend::view_model::SettingsActionField::UnlockKeyring => {
+                // 真正弹出系统密码框的是 Secret Service 的 Prompt；这件事必须离开
+                // UI 线程，而且用户可能要花时间输密码，所以给足上限并立刻把状态
+                // 标成「检查中」，让按钮变成等待态。
+                if self.frontend_vm.linux_access.checking {
+                    return;
+                }
+                self.frontend_vm.linux_access.checking = true;
+                self.frontend_vm.linux_access.keyring =
+                    openless_linux_egui::linux_access::KeyringState::Locked;
+                let tx = self.tx.clone();
+                let lang = self.lang;
+                let tokio = self.tokio.clone();
+                tokio.spawn(async move {
+                    let outcome = tokio::task::spawn_blocking(|| {
+                        openless_linux_egui::linux_access::unlock_default_vault(
+                            openless_linux_egui::linux_access::VAULT_UNLOCK_TIMEOUT,
+                        )
+                    })
+                    .await;
+                    let notice = match outcome {
+                        Ok(Ok(())) => Some(
+                            openless_linux_egui::tr_l10n(
+                                lang,
+                                "settings.linux_privacy.keyring_unlock_done",
+                            )
+                            .to_string(),
+                        ),
+                        Ok(Err(error)) => Some(error.message),
+                        Err(_) => Some(
+                            openless_linux_egui::tr_l10n(
+                                lang,
+                                "settings.linux_privacy.keyring_unlock_failed",
+                            )
+                            .to_string(),
+                        ),
+                    };
+                    let _ = tx.send(UiResult::KeyringUnlockFinished(notice));
+                });
             }
             frontend::view_model::SettingsActionField::RetrySave => {
                 self.settings_save.error = None;

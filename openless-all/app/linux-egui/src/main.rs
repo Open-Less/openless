@@ -32,8 +32,8 @@ mod linux_app {
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
-        DictationPhase, HostAction, QaStateEvent, QaStateKind,
-        SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
+        DictationPhase, HostAction, QaStateEvent, QaStateKind, SelectionPhase, SelectionSnapshot,
+        TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
         capsule_hide_delay, capsule_hide_is_still_current, capsule_needs_fallback_dismissal,
@@ -89,6 +89,8 @@ mod linux_app {
         CapsuleDismissDue {
             session_id: String,
         },
+        /// 用户点了「解锁钥匙串」：结果回写状态行，并立刻重探一次钥匙串状态。
+        KeyringUnlockFinished(Option<String>),
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers {
             kind: openless_core::ChannelKind,
@@ -852,7 +854,7 @@ mod linux_app {
                         hydrate_text_fields: true,
                         overview: OverviewState::Loading,
                         microphones: Vec::new(),
-                    aec_reference_devices: Vec::new(),
+                        aec_reference_devices: Vec::new(),
                         microphone_error: None,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
@@ -3400,7 +3402,8 @@ mod linux_app {
             else {
                 return;
             };
-            static SIWC_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            static SIWC_REQUEST: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(1);
             form.siwc_request = SIWC_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let request = form.siwc_request;
             let channel = form.channel_id.clone();
@@ -3413,8 +3416,17 @@ mod linux_app {
                         .await
                         .map_err(|e| e.to_string())?;
                     let mut message = None;
-                    if matches!(action.as_str(), "sign_in" | "add_account" | "enable_usage" | "select" | "disconnect") {
-                        backend.invalidate_channel_test(openless_core::ChannelKind::Llm, channel.clone()).await.map_err(|e| e.to_string())?;
+                    if matches!(
+                        action.as_str(),
+                        "sign_in" | "add_account" | "enable_usage" | "select" | "disconnect"
+                    ) {
+                        backend
+                            .invalidate_channel_test(
+                                openless_core::ChannelKind::Llm,
+                                channel.clone(),
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
                     }
                     match action.as_str() {
                         "sign_in" | "add_account" | "enable_usage" => {
@@ -3822,11 +3834,12 @@ mod linux_app {
                         let detail = status
                             .message
                             .clone()
-                            .or_else(|| status.last_error.as_ref().map(|error| format!("{error:?}")))
+                            .or_else(|| {
+                                status.last_error.as_ref().map(|error| format!("{error:?}"))
+                            })
                             .unwrap_or_else(|| "hotkey registration failed".to_string());
                         log::warn!("[hotkey] status failed: {detail}");
-                        self.status =
-                            fmt_l10n(self.lang, "status.hotkey_failed", &[&detail]);
+                        self.status = fmt_l10n(self.lang, "status.hotkey_failed", &[&detail]);
                     }
                 }
                 BackendEventKind::InsertFallback(fallback) => {
@@ -4641,6 +4654,14 @@ mod linux_app {
                     UiResult::LinuxAccess(snapshot) => {
                         self.frontend_vm.linux_access = snapshot;
                         self.linux_access_last_check = Some(std::time::Instant::now());
+                    }
+                    UiResult::KeyringUnlockFinished(notice) => {
+                        self.frontend_vm.linux_access.checking = false;
+                        if let Some(notice) = notice {
+                            self.frontend_vm.settings_notice = Some(notice);
+                        }
+                        // 解锁成功与否都以重新探测为准：状态行不替服务撒谎。
+                        self.refresh_linux_access();
                     }
                     UiResult::Message(message) => self.status = message,
                     UiResult::QaAction {

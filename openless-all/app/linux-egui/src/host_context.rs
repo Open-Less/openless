@@ -95,7 +95,9 @@ pub fn cursor_context_from(surrounding: &SurroundingText) -> Option<String> {
     let split = window.cursor.min(window.text.chars().count());
     let before: String = window.text.chars().take(split).collect();
     let after: String = window.text.chars().skip(split).collect();
-    Some(openless_core::prompts::cursor_context_input(&before, &after))
+    Some(openless_core::prompts::cursor_context_input(
+        &before, &after,
+    ))
 }
 
 /// 注入式宿主上下文适配器。
@@ -138,7 +140,9 @@ impl HostContextAdapter for LinuxHostContextAdapter {
                     )
                 })??;
             let Some(surrounding) = surrounding else {
-                log::debug!("[cursor-context] status=none (application reports no surrounding text)");
+                log::debug!(
+                    "[cursor-context] status=none (application reports no surrounding text)"
+                );
                 return Ok(openless_core::HostContextCapture::default());
             };
             if is_sensitive_program(&surrounding.program) {
@@ -228,11 +232,7 @@ impl EditObservationAdapter for LinuxEditObservationAdapter {
     }
 
     fn disarm(&self) {
-        let previous = self
-            .armed
-            .lock()
-            .expect("observation slot poisoned")
-            .take();
+        let previous = self.armed.lock().expect("observation slot poisoned").take();
         if let Some(stop) = previous {
             stop.store(true, Ordering::Release);
         }
@@ -261,7 +261,9 @@ fn observe_loop(
             return;
         }
         let current = match reader.read() {
-            Ok(Some(surrounding)) if !is_sensitive_program(&surrounding.program) => surrounding.text,
+            Ok(Some(surrounding)) if !is_sensitive_program(&surrounding.program) => {
+                surrounding.text
+            }
             Ok(_) => return,
             Err(error) => {
                 log::debug!("[vocab] observer stopped reading: {error}");

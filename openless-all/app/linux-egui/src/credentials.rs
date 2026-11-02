@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use openless_core::credentials::{
@@ -757,6 +759,41 @@ fn persist_metadata(path: &Path, state: &PersistedCredentialMetadata) -> Result<
     })
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod vault_timeout_tests {
+    use super::*;
+
+    /// 钥匙串在等用户输密码时不会返回：调用方必须先拿到一句「已锁定」而不是
+    /// 一起挂住。这里用一个永不返回的闭包验证超时会被翻译成 retryable 错误。
+    #[test]
+    fn a_hung_secret_service_operation_times_out_into_a_locked_error() {
+        let started = std::time::Instant::now();
+        let result = run_with_vault_timeout_for::<(), _>(
+            "contract-hang",
+            Duration::from_millis(120),
+            || {
+                std::thread::sleep(Duration::from_secs(30));
+                Ok(())
+            },
+        );
+        let error = result.expect_err("a hung vault operation must not report success");
+        assert_eq!(error.message, crate::linux_access::VAULT_LOCKED_MESSAGE);
+        assert!(error.retryable, "a locked vault is recoverable, not fatal");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the caller must return promptly instead of waiting for the vault"
+        );
+    }
+
+    #[test]
+    fn a_fast_operation_returns_its_own_result() {
+        let value =
+            run_with_vault_timeout_for::<u8, _>("contract-fast", Duration::from_secs(5), || Ok(7))
+                .expect("a fast operation passes straight through");
+        assert_eq!(value, 7);
+    }
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn require_committed_value(
     value: Option<SecretValue>,
@@ -765,6 +802,60 @@ fn require_committed_value(
         BackendErrorCode::Persistence,
         "A saved credential is missing from the active Secret Service vault. Restore the original wallet before editing this channel; its metadata has been retained.",
     ))
+}
+
+/// 单次 Secret Service 操作的硬上限。
+///
+/// zbus / `secret_service` 在「钥匙串在等用户输密码」时**不会**返回：`Unlock` 会
+/// 一直等 prompt 的 `Completed` 信号。以前这个等待没有任何上限，于是开机后钥匙串
+/// 没解锁时，凭据相关的调用会挂在那里，用户看到的却是「什么都没发生」——没有报错、
+/// 也没有解锁窗口。
+///
+/// 这里把操作丢进独立线程并限时等待：到点就报「钥匙串已锁定」（retryable），
+/// 让上层把这句话显示出来，用户去设置页点「解锁钥匙串」。
+#[cfg(target_os = "linux")]
+const VAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[cfg(target_os = "linux")]
+fn run_with_vault_timeout<T, F>(label: &'static str, work: F) -> Result<T, BackendError>
+where
+    F: FnOnce() -> Result<T, BackendError> + Send + 'static,
+    T: Send + 'static,
+{
+    run_with_vault_timeout_for(label, VAULT_OPERATION_TIMEOUT, work)
+}
+
+#[cfg(target_os = "linux")]
+fn run_with_vault_timeout_for<T, F>(
+    label: &'static str,
+    timeout: Duration,
+    work: F,
+) -> Result<T, BackendError>
+where
+    F: FnOnce() -> Result<T, BackendError> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name(format!("openless-vault-{label}"))
+        .spawn(move || {
+            let _ = tx.send(work());
+        });
+    if spawned.is_err() {
+        return Err(BackendError::new(
+            BackendErrorCode::Internal,
+            "failed to start the credential vault worker",
+        ));
+    }
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => {
+            log::warn!(
+                "Secret Service did not answer within {timeout:?} (likely locked); surfacing a locked-vault error"
+            );
+            Err(crate::linux_access::vault_locked_error())
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -787,11 +878,11 @@ fn read_legacy_secret(account: &str) -> Result<Option<SecretValue>, BackendError
         account,
     )
     .map_err(keyring_error)?;
-    match entry.get_password() {
+    run_with_vault_timeout("legacy-read", move || match entry.get_password() {
         Ok(value) => Ok(Some(SecretValue::new(value))),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(keyring_error(error)),
-    }
+    })
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -809,26 +900,30 @@ fn read_legacy_file(home_dir: &Path) -> Result<Option<SecretValue>, BackendError
 
 #[cfg(target_os = "linux")]
 fn read_secret(key: &CredentialKey) -> Result<Option<SecretValue>, BackendError> {
-    match keyring_entry(key)?.get_password() {
+    let entry = keyring_entry(key)?;
+    run_with_vault_timeout("read", move || match entry.get_password() {
         Ok(value) => Ok(Some(SecretValue::new(value))),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(keyring_error(error)),
-    }
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn write_secret(key: &CredentialKey, value: &SecretValue) -> Result<(), BackendError> {
-    keyring_entry(key)?
-        .set_password(value.expose_secret())
-        .map_err(keyring_error)
+    let entry = keyring_entry(key)?;
+    let secret = value.expose_secret().to_string();
+    run_with_vault_timeout("write", move || {
+        entry.set_password(&secret).map_err(keyring_error)
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn remove_secret(key: &CredentialKey) -> Result<(), BackendError> {
-    match keyring_entry(key)?.delete_credential() {
+    let entry = keyring_entry(key)?;
+    run_with_vault_timeout("remove", move || match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(keyring_error(error)),
-    }
+    })
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -16,8 +16,7 @@ use eframe::egui;
 
 use super::{capsule_motion, icons, layout, siri_wgpu, theme};
 use openless_linux_egui::{
-    fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage,
-    QaPolishState, QaPopupState,
+    fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage, QaPolishState, QaPopupState,
 };
 
 /// Result of rendering the polish-result mode inside the selection-ask panel.
@@ -935,7 +934,6 @@ fn user_avatar(ui: &mut egui::Ui, _avatar: Option<&egui::TextureHandle>) {
         .circle_filled(rect.center(), radius, theme::SURFACE_2);
     icons::draw_icon(ui, rect.center(), icons::IconName::Mic, theme::INK_2);
 }
-
 
 /// 输入区上方的整宽次级按钮（Tauri `Button variant="outline"`）。
 fn wide_button(ui: &mut egui::Ui, label: &str) -> bool {

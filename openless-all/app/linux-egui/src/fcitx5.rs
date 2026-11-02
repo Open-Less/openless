@@ -968,7 +968,6 @@ pub(crate) fn rekey_selection_target(_: &str, _: &str) -> Result<(), BackendErro
     ))
 }
 
-
 /// 焦点输入上下文自报的 surrounding text。
 ///
 /// Linux 的光标上下文（给润色的前后文）与自动学词（观察用户是否改了刚插入的

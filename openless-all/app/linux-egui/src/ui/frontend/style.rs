@@ -861,7 +861,10 @@ fn editor_overlay(
     );
     // 卡片实际落点写进 memory，供测试查询（Area 覆盖整个 body，面积已不等于卡片）.
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::unique("openless-style-editor-card-rect"), card_rect)
+        data.insert_temp(
+            egui::Id::unique("openless-style-editor-card-rect"),
+            card_rect,
+        )
     });
     // 遮罩、点击拦截与卡片必须同属**一个** `Area`（同一个 LayerId）：各自独立 Area 时，
     // egui 会在按下后把被点到的 Area 抬到同层最上（`move_to_top`），遮罩被抬起就会盖住
@@ -1091,7 +1094,10 @@ fn drawer_body(
         });
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
-        data.insert_temp(egui::Id::unique("style-editor-scroll-rect"), scroll.inner_rect);
+        data.insert_temp(
+            egui::Id::unique("style-editor-scroll-rect"),
+            scroll.inner_rect,
+        );
         data.insert_temp(
             egui::Id::unique("style-editor-scroll-content-height"),
             scroll.content_size.y,

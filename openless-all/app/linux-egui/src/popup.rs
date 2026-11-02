@@ -720,8 +720,7 @@ impl PopupState {
         let sequence = message.sequence();
         // 电平只跟随当前会话，不推进序号：见 `QaLevel` 的文档。
         if let HostToPopup::QaLevel { level, .. } = message {
-            if self.session_id.as_deref() == Some(session_id.as_str())
-                || self.session_id.is_none()
+            if self.session_id.as_deref() == Some(session_id.as_str()) || self.session_id.is_none()
             {
                 self.qa.audio_level = Some(level.clamp(0.0, 1.0));
             }
@@ -963,7 +962,10 @@ impl PopupSupervisor {
 
     /// Queue a message without ever waiting in an egui frame.
     pub fn try_send(&self, message: HostToPopup) -> Result<(), PopupSendError> {
-        match self.commands.try_send(SupervisorCommand::Send(Box::new(message))) {
+        match self
+            .commands
+            .try_send(SupervisorCommand::Send(Box::new(message)))
+        {
             Ok(()) => Ok(()),
             Err(tokio_mpsc::error::TrySendError::Full(_)) => Err(PopupSendError::Full),
             Err(tokio_mpsc::error::TrySendError::Closed(_)) => Err(PopupSendError::Closed),

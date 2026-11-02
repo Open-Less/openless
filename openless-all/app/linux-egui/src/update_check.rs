@@ -8,7 +8,6 @@
 //! 标签约定：`v<版本>-tauri`（例如 `v2.0.2-Beta.3-tauri`）。Linux 包挂在同一个 release
 //! 上，所以不需要另开清单。
 
-
 /// 发布页（与 About 页的「发布说明」同一个链接）。
 pub const RELEASES_URL: &str = "https://github.com/Open-Less/openless/releases";
 const RELEASES_ATOM: &str = "https://github.com/Open-Less/openless/releases.atom";
@@ -47,7 +46,6 @@ pub struct UpdateCheck {
     pub newer: bool,
 }
 
-
 /// 从 atom 里取发布列表（保持源顺序，GitHub 是新的在前）。
 ///
 /// 标签从 `<id>tag:github.com,2008:Repository/<repo>/v2.0.2-Beta.3-tauri</id>` 里取
@@ -68,11 +66,7 @@ pub fn parse_releases(atom: &str) -> Vec<Release> {
         let Some(version) = release_version(&tag) else {
             continue;
         };
-        releases.push(Release {
-            tag,
-            version,
-            url,
-        });
+        releases.push(Release { tag, version, url });
     }
     releases
 }

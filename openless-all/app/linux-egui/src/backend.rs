@@ -329,8 +329,7 @@ mod tests {
         FixtureAudioRecorder, FixtureTextInserter, FixtureTextPolisher, FixtureTranscriptionEngine,
     };
     use openless_core::{
-        BackendErrorCode, InMemoryCredentialStore,
-        InsertOutcome, ProviderKind, ProviderRequest,
+        BackendErrorCode, InMemoryCredentialStore, InsertOutcome, ProviderKind, ProviderRequest,
     };
 
     use super::*;

@@ -2545,6 +2545,54 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.linux_privacy.keyring_locked_message",
+        text: row(
+            "钥匙串已锁定：凭据暂时读不到也存不了。点「解锁钥匙串」在系统弹窗里输入密码后重试；已有的密钥没有被删除。",
+            "保管庫已鎖定：憑證暫時讀不到也存不了。點「解鎖保管庫」在系統視窗輸入密碼後重試；既有金鑰沒有被刪除。",
+            "The keyring is locked, so credentials cannot be read or saved right now. Unlock it in the system dialog and retry; saved keys were not deleted.",
+            "保管庫がロック中のため、資格情報を読み書きできません。システムの画面で解除してから再試行してください。既存のキーは削除されていません。",
+            "보관소가 잠겨 있어 자격 증명을 읽거나 저장할 수 없습니다. 시스템 창에서 잠금을 해제한 뒤 다시 시도하세요. 기존 키는 삭제되지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unlock_cancelled_message",
+        text: row(
+            "钥匙串仍未解锁（已取消或等待超时）。语音输入要读云端渠道的密钥，解锁后再试一次即可，已有密钥没有丢失。",
+            "保管庫仍未解鎖（已取消或等待逾時）。語音輸入需要讀取雲端通道的金鑰，解鎖後再試一次即可，既有金鑰沒有遺失。",
+            "The keyring is still locked (cancelled or timed out). Voice input needs the cloud channel keys, so unlock and retry; saved keys were not lost.",
+            "保管庫はまだロック中です（キャンセルまたはタイムアウト）。音声入力にはクラウド側のキーが必要なので、解除してから再試行してください。既存のキーは失われていません。",
+            "보관소가 아직 잠겨 있습니다(취소 또는 시간 초과). 음성 입력에는 클라우드 채널 키가 필요하니 잠금 해제 후 다시 시도하세요. 기존 키는 사라지지 않았습니다.",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unlock",
+        text: row("解锁钥匙串", "解鎖保管庫", "Unlock keyring", "保管庫を解除", "보관소 잠금 해제"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unlock_hint",
+        text: row(
+            "点上面的按钮会弹出系统的钥匙串密码框；输完密码后 OpenLess 会自动重新检查，不用重启。",
+            "點上面的按鈕會彈出系統的保管庫密碼框；輸入密碼後 OpenLess 會自動重新檢查，不必重新啟動。",
+            "The button above opens the system keyring password dialog. Once you enter it, OpenLess re-checks automatically; no restart needed.",
+            "上のボタンでシステムの保管庫パスワード画面が開きます。入力後は OpenLess が自動で再確認します（再起動は不要）。",
+            "위 버튼을 누르면 시스템 보관소 암호 창이 열립니다. 입력하면 OpenLess가 자동으로 다시 확인합니다(재시작 불필요).",
+        ),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unlock_done",
+        text: row("钥匙串已解锁", "保管庫已解鎖", "Keyring unlocked", "保管庫を解除しました", "보관소 잠금 해제됨"),
+    },
+    Msg {
+        key: "settings.linux_privacy.keyring_unlock_failed",
+        text: row(
+            "没能解锁钥匙串（已取消或等待超时），可以再试一次。",
+            "沒能解鎖保管庫（已取消或等待逾時），可以再試一次。",
+            "The keyring was not unlocked (cancelled or timed out). You can try again.",
+            "保管庫を解除できませんでした（キャンセルまたはタイムアウト）。もう一度お試しください。",
+            "보관소 잠금을 해제하지 못했습니다(취소 또는 시간 초과). 다시 시도할 수 있습니다.",
+        ),
+    },
+    Msg {
         key: "settings.linux_privacy.storage_desc",
         text: row(
             "历史、偏好、词库与已保存的录音位于应用数据目录。API 密钥使用 Keyring 存储，不写入 credential-metadata.json；录音留存设置不清除保险库。",
@@ -8273,6 +8321,13 @@ pub fn tr_catalog<L: IntoLang>(lang: L, key: &'static str) -> &'static str {
 pub fn provider_error_text(lang: Lang, message: &str) -> &str {
     if message == "llmThinkingRequired" || message.ends_with(": llmThinkingRequired") {
         tr_catalog(lang, "settings.providers.llmThinkingRequired")
+    } else if message == crate::linux_access::VAULT_LOCKED_MESSAGE {
+        tr_catalog(lang, "settings.linux_privacy.keyring_locked_message")
+    } else if message == crate::linux_access::VAULT_UNLOCK_CANCELLED_MESSAGE {
+        tr_catalog(
+            lang,
+            "settings.linux_privacy.keyring_unlock_cancelled_message",
+        )
     } else {
         message
     }
@@ -8312,12 +8367,12 @@ mod tests {
     use super::*;
 
     const TEST_CATALOG: &[Msg] = &[
-    Msg {
+        Msg {
             key: "k.full",
             text: row("完整", "完整", "Full", "完全", "전체"),
         },
         // `k.missing_en` deliberately leaves `en` empty to exercise fallback.
-    Msg {
+        Msg {
             key: "k.missing_en",
             text: row("来源", "來源", "", "ソース", "출처"),
         },

@@ -25,7 +25,6 @@ pub mod linux_access;
 pub mod local_hotkeys;
 mod logging;
 pub mod omni_settings;
-pub mod update_check;
 mod popup;
 mod popup_layer;
 mod popup_window;
@@ -43,6 +42,7 @@ mod siwc;
 mod tray;
 pub mod typography;
 mod ui_state;
+pub mod update_check;
 pub mod wgpu_device;
 
 // Shared by the eframe windows and the native Wayland layer-shell renderer so
@@ -76,8 +76,7 @@ pub use fcitx5::{
     ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_fcitx5_if_plugin_updated,
     reload_running_fcitx5, selection_text as fcitx5_selection_text,
     set_hotkeys as set_fcitx5_hotkeys, surrounding_text as fcitx5_surrounding_text,
-    Fcitx5TextInserter, FcitxPluginInstallPlan, SurroundingText,
-    FcitxPluginStatus,
+    Fcitx5TextInserter, FcitxPluginInstallPlan, FcitxPluginStatus, SurroundingText,
 };
 pub use host_actions::LinuxHostActions;
 
