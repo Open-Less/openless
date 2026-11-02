@@ -4,7 +4,16 @@
   --ol-pill-scheme: light;
   --ol-pill-fill: rgb(255 255 255 / 86%);
   --ol-pill-border: rgb(79 91 115 / 24%);
-  --ol-pill-highlight: rgb(255 255 255 / 82%);
+  /* Soft top sheen. A single `inset 0 1px 0 <white>` reads as a drawn hairline
+     across the capsule; a multi-stop gradient falls off like light on glass. */
+  --ol-pill-sheen: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 92%) 0%,
+    rgb(255 255 255 / 62%) 6%,
+    rgb(255 255 255 / 26%) 16%,
+    rgb(255 255 255 / 8%) 30%,
+    rgb(255 255 255 / 0%) 48%
+  );
   --ol-pill-ink: #1d4ed8;
   --ol-pill-sweep: rgb(147 197 253 / 28%);
   --ol-pill-cancel: rgb(102 116 139 / 10%);
@@ -20,7 +29,14 @@
   --ol-pill-scheme: dark;
   --ol-pill-fill: rgb(28 34 45 / 88%);
   --ol-pill-border: rgb(218 231 255 / 26%);
-  --ol-pill-highlight: rgb(235 244 255 / 13%);
+  --ol-pill-sheen: linear-gradient(
+    to bottom,
+    rgb(235 244 255 / 22%) 0%,
+    rgb(235 244 255 / 14%) 6%,
+    rgb(235 244 255 / 6%) 16%,
+    rgb(235 244 255 / 2%) 30%,
+    rgb(235 244 255 / 0%) 48%
+  );
   --ol-pill-ink: #a7c7ff;
   --ol-pill-sweep: rgb(90 145 240 / 22%);
   --ol-pill-cancel: rgb(225 235 255 / 10%);
@@ -91,13 +107,11 @@
   font-size: 11px;
   color: var(--ol-pill-ink);
   color-scheme: var(--ol-pill-scheme);
-  background: var(--ol-pill-fill);
+  background: var(--ol-pill-sheen), var(--ol-pill-fill);
   border: 0.5px solid var(--ol-pill-border);
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
-  box-shadow:
-    0 3px 10px var(--ol-pill-shadow),
-    inset 0 1px 0 var(--ol-pill-highlight);
+  box-shadow: 0 3px 10px var(--ol-pill-shadow);
   white-space: nowrap;
   transform-origin: center bottom;
 }
