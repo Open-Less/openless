@@ -196,7 +196,9 @@ try {
   );
   check(
     'prune kept the branch scope beyond the pull requests',
-    deleted.some((line) => line.includes('key=v0-rust-cross-platform-Windows_NT-x64-3619e479-a77d3f83')),
+    deleted.some((line) =>
+      line.includes('key=v0-rust-cross-platform-Windows_NT-x64-3619e479-a77d3f83'),
+    ),
     false,
   );
   check(
@@ -208,12 +210,24 @@ try {
 
   // Family pruning: keep the two newest entries of one (branch, family) pair.
   rmSync(deleteLog, { force: true });
-  const family = run(['--prune', '--keep-family', '2', '--repo', 'example/openless', '--limit-gb', '99']);
+  const family = run([
+    '--prune',
+    '--keep-family',
+    '2',
+    '--repo',
+    'example/openless',
+    '--limit-gb',
+    '99',
+  ]);
   check('family prune exits 0 inside budget', family.code, 0);
   const familyDeleted = readFileSync(deleteLog, 'utf8').trim().split('\n').filter(Boolean);
   // Two closed/merged pull request scopes go as well; exactly one branch
   // sibling of the android family is beyond the keep window.
-  check('family prune deleted the two dead pull request scopes plus one sibling', familyDeleted.length, 3);
+  check(
+    'family prune deleted the two dead pull request scopes plus one sibling',
+    familyDeleted.length,
+    3,
+  );
   check(
     'family prune deleted the 2026-09-01 generation',
     familyDeleted.some((line) => line.includes('aa0001')),

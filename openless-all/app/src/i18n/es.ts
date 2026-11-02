@@ -1,3 +1,4 @@
+import { desktopGuideEs as desktopGuide } from './desktopGuide';
 import { siwcEs as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
@@ -5,6 +6,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const es: typeof zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1296,6 +1298,12 @@ export const es: typeof zhCN = {
       unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
     },
     selectionWorkspace: {
+      extraControls: 'Controles avanzados',
+      extraControlsDesc:
+        'Configura la decisión entre pregunta y edición y el formato de salida del modelo.',
+      openExtraControls: 'Más',
+      extraControlsSaveHint: 'Los cambios se guardan automáticamente.',
+      extraControlsDone: 'Listo',
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',
@@ -1558,7 +1566,7 @@ export const es: typeof zhCN = {
         'Cambiar del modo de todas las pantallas requiere reiniciar para cerrar las cápsulas anteriores. ¿Reiniciar ahora?',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
-      capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
+      capsuleStyleClassic: 'Estilo predeterminado',
       stableTranscriptionLabel: 'Modo estable (grabar y luego transcribir)',
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
@@ -1705,9 +1713,11 @@ export const es: typeof zhCN = {
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
       debugArchiveProcessedLabel: 'Conservar el audio procesado',
-      debugArchiveProcessedDesc: 'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
+      debugArchiveProcessedDesc:
+        'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
       debugArchiveRawLabel: 'Conservar también el audio sin procesar',
-      debugArchiveRawDesc: 'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
+      debugArchiveRawDesc:
+        'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
       recordAudioForDebugLabel: 'Conservar grabación original (depuración)',
       recordAudioForDebugDesc:
         'Guarda el audio original del micrófono en WAV para investigar problemas de reconocimiento.',
@@ -1729,16 +1739,6 @@ export const es: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Detener al agotarse el tiempo',
       voiceActivationTimeoutSeconds: 'Tiempo de espera (segundos)',
       startupGroupTitle: 'Inicio',
-      lowMemoryBackgroundLabel: 'Modo de fondo con poca memoria',
-      lowMemoryBackgroundDesc:
-        'Se aplica al reiniciar. Libera la ventana principal al cerrarla y muestra la cápsula nativa cuando se necesita. Desactiva el precalentamiento del micrófono en reposo. Conserva la configuración de descarga de los modelos locales.',
-      lowMemoryRestartLabel: 'Se aplica tras reiniciar',
-      lowMemoryRestartDesc:
-        'El cambio del modo de fondo de baja memoria está guardado; el modo en ejecución cambia al reiniciar la aplicación.',
-      lowMemoryRestartNow: 'Reiniciar ahora',
-      lowMemoryCapsuleErrorLabel: 'Cápsula nativa no disponible',
-      lowMemoryCapsuleErrorDesc:
-        'El dictado sigue funcionando, pero no se mostrará la cápsula flotante. Puede que falte el programa auxiliar o esté bloqueado; reinstala la app.',
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:
         'Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.',
@@ -1791,6 +1791,7 @@ export const es: typeof zhCN = {
       nameHint:
         'El nombre permite distinguir canales del mismo proveedor. No afecta al modelo ni a la conexión.',
       errModel: 'Modelo',
+      errThinking: 'activa Razonamiento',
       verify: 'Verificar',
       verifyHint: 'Hace una llamada real a la API para comprobar si este canal funciona ahora',
       errTimeout: 'tiempo agotado',
@@ -2015,6 +2016,8 @@ export const es: typeof zhCN = {
         'Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.',
       llmStreamError:
         'El servidor devolvió un error de transmisión. Comprueba el modelo y los parámetros de la solicitud.',
+      llmThinkingRequired:
+        'Este modelo no admite el razonamiento desactivado. Activa «Razonamiento» junto al modelo y vuelve a verificar.',
       saveProtocol: 'Guardar ajustes del protocolo',
       thinkingModeHint:
         'Activa, desactiva o reduce el razonamiento mediante los parámetros admitidos por el formato y el modelo. No se añaden instrucciones de control al prompt.',

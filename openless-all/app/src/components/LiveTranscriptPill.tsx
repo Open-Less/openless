@@ -145,29 +145,60 @@ export function CapsuleTranscriptOverlay() {
     let unlisten: (() => void) | undefined;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const stateHandle = await listen<CapsulePayload>('capsule:state', (event) => {
-        const payload = event.payload;
-        const previousState = stateRef.current;
-        const previousTranscript = transcriptRef.current;
-        const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
-        const sessionChanged = sessionTranscript !== previousTranscript;
-        transcriptRef.current = sessionTranscript;
-        stateRef.current = payload.state;
-        setState(payload.state);
-        if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
-        setSelectionPolish(payload.selectionPolish === true);
-        setTranslation(payload.translation === true);
-        if (payload.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
-          transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
-          setText(transcriptRef.current.text);
-        } else if (sessionChanged) {
-          setText(sessionTranscript.text);
-        }
-        if (['idle', 'done', 'cancelled', 'error'].includes(payload.state)) {
-          transcriptRef.current = clearTranscriptText(transcriptRef.current);
-          setText('');
-        }
-      });
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      if (cancelled) return;
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot();
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptRef.current = next;
+        setText(next.text);
+      };
+      const stateHandle = await listen<CapsulePayload>(
+        'capsule:state',
+        (event) => {
+          const payload = event.payload;
+          const previousState = stateRef.current;
+          const previousTranscript = transcriptRef.current;
+          const sessionTranscript = applyTranscriptSessionId(previousTranscript, payload.sessionId);
+          const sessionChanged = sessionTranscript !== previousTranscript;
+          transcriptRef.current = sessionTranscript;
+          stateRef.current = payload.state;
+          setState(payload.state);
+          if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
+          setSelectionPolish(payload.selectionPolish === true);
+          setTranslation(payload.translation === true);
+          const sessionId = payload.sessionId;
+          const reactivatedSession =
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged &&
+            !previousTranscript.sessionStartObserved &&
+            sessionId != null &&
+            sessionTranscript.sessionId === sessionId;
+          if (reactivatedSession) {
+            void replayActiveSessionTranscript(sessionId);
+          } else if (
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged
+          ) {
+            transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
+            setText(transcriptRef.current.text);
+          } else if (sessionChanged) {
+            setText(sessionTranscript.text);
+          }
+          if (['idle', 'done', 'cancelled', 'error'].includes(payload.state)) {
+            transcriptRef.current = clearTranscriptText(transcriptRef.current);
+            setText('');
+          }
+        },
+        { target },
+      );
       const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
         const next = applyTranscriptEvent(transcriptRef.current, event.payload);
         transcriptRef.current = next;

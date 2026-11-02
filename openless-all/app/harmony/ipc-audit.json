@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
-  "total": 200,
+  "total": 199,
   "wired": 103,
-  "missing": 97,
+  "missing": 96,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -836,13 +836,6 @@
         "src/lib/ipc/marketplace.ts"
       ],
       "implementation": "rust"
-    },
-    {
-      "name": "native_capsule_status",
-      "calledFrom": [
-        "src/lib/ipc/settings.ts"
-      ],
-      "implementation": "unimplemented"
     },
     {
       "name": "open_android_local_migration",

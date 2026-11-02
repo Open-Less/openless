@@ -1,0 +1,65 @@
+%% OpenLess client architecture — generated from beta c9350455 / defd6924 boundaries
+flowchart LR
+    subgraph UI[WebView UI]
+        APP[App.tsx\nwindow router]
+        MAIN[FloatingShell\nsettings / pages]
+        GUIDE[DesktopOnboarding\nstartup guide]
+        CAP[Capsule\nresident voice surface]
+        RAIL[Capsule rail / mirrors]
+        IPC[src/lib/ipc\nTauri bridge barrel]
+        APP --> MAIN
+        APP --> GUIDE
+        APP --> CAP
+        CAP --> RAIL
+        MAIN --> IPC
+        GUIDE --> IPC
+        CAP --> IPC
+    end
+
+    subgraph HOST[Tauri desktop and Android hosts]
+        LIB[src-tauri/src/lib.rs\nwindow lifecycle / commands]
+        COORD[Coordinator\nhotkeys / session ownership]
+        EVENTS[tauri_events.rs\nbackend:event / capsule:state]
+        DESKTOP[desktop_resources.rs\nmain WebView lifecycle]
+        HOSTIPC[commands/*\nsettings / permissions / credentials]
+        REC[recorder.rs\nmicrophone capture]
+        CORE[openless-core\ndictation engine / provider policy]
+        PERSIST[persistence\npreferences / credentials / history]
+        NATIVE[native capsule / platform adapters]
+        LIB --> COORD
+        LIB --> DESKTOP
+        LIB --> HOSTIPC
+        COORD --> CORE
+        COORD --> REC
+        COORD --> EVENTS
+        COORD --> NATIVE
+        HOSTIPC --> PERSIST
+        CORE --> PERSIST
+    end
+
+    subgraph OTHER[Other platform hosts]
+        LINUX[Linux egui host\nOpenLessBackend / native UI]
+        ANDROID[Android native services\nJNI / Kotlin / IME]
+        HARMONY[HarmonyOS host\nArkTS / Rust bridge]
+        LINUX --> CORE
+        ANDROID --> CORE
+        HARMONY --> CORE
+    end
+
+    subgraph EXT[External systems]
+        ASR[ASR providers\ncloud / local runtime]
+        LLM[LLM / polish providers]
+        SYNC[Encrypted cloud sync]
+        MARKET[Style pack marketplace]
+        TCC[macOS TCC / Windows permissions]
+    end
+
+    IPC --> LIB
+    EVENTS --> CAP
+    EVENTS --> MAIN
+    REC --> CORE
+    CORE --> ASR
+    CORE --> LLM
+    HOSTIPC --> TCC
+    PERSIST -. optional sync .-> SYNC
+    MAIN -. style packs .-> MARKET

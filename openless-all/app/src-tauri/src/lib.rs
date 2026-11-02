@@ -71,6 +71,9 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+mod issue1266_debug;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -116,6 +119,7 @@ mod unicode_keystroke;
 #[cfg(mobile)]
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
+mod update_source;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;
@@ -204,6 +208,7 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    issue1266_debug::initialize();
     tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
     // system credential vault, but exercises the actual shared/native engines.
@@ -253,10 +258,7 @@ macro_rules! app_invoke_handler_desktop {
     () => {
         tauri::generate_handler![
             commands::get_startup_snapshot,
-            desktop_resources::desktop_low_memory_active,
-            native_capsule::native_capsule_set_locale,
             get_capsule_auxiliary_snapshot,
-            native_capsule_status,
             commands::get_capsule_snapshot,
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
@@ -276,6 +278,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::app_check_update_with_channel,
             commands::check_network,
             commands::take_splash_playback,
+            commands::get_desktop_onboarding_state,
+            commands::set_desktop_onboarding_finished,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::set_shortcut_recording_active,
@@ -547,6 +551,8 @@ macro_rules! app_invoke_handler_desktop {
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            issue1266_health,
             set_windows_caption_theme,
         ]
     };
@@ -568,6 +574,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_settings,
             $crate::commands::check_network,
             $crate::commands::take_splash_playback,
+            $crate::commands::get_desktop_onboarding_state,
+            $crate::commands::set_desktop_onboarding_finished,
             $crate::commands::get_platform_capabilities,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
@@ -792,6 +800,12 @@ macro_rules! app_invoke_handler_mobile {
     };
 }
 
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+#[tauri::command]
+fn issue1266_health() -> issue1266_debug::Health {
+    issue1266_debug::health()
+}
+
 #[cfg(not(mobile))]
 fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _cwd: String) {
     if let Some(intent) = cli::parse_cli_intent(&argv) {
@@ -816,6 +830,23 @@ fn single_instance_callback<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _
     show_main_window(app);
 }
 
+fn permission_requires_visible_start(
+    accessibility: permissions::PermissionStatus,
+    microphone: permissions::PermissionStatus,
+) -> bool {
+    let accessibility_missing = !matches!(
+        accessibility,
+        permissions::PermissionStatus::Granted | permissions::PermissionStatus::NotApplicable
+    );
+    let microphone_missing = !matches!(
+        microphone,
+        permissions::PermissionStatus::Granted
+            | permissions::PermissionStatus::NotApplicable
+            | permissions::PermissionStatus::NoDevice
+    );
+    accessibility_missing || microphone_missing
+}
+
 #[cfg(not(mobile))]
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
@@ -835,7 +866,7 @@ fn run_desktop() {
     let mut context = tauri::generate_context!();
     desktop_resources::configure(
         &mut context,
-        core_backend.get_preferences().low_memory_background_enabled,
+        false,
     );
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
@@ -929,7 +960,7 @@ fn run_desktop() {
             // system traffic lights; Windows disables native chrome so the React
             // WinTitleBar takes over.
             // Set the native appearance before showing any window, including
-            // low-memory launches where the main WebView does not exist yet.
+            // launches where the main WebView does not exist yet.
             #[cfg(target_os = "macos")]
             app.set_theme(match coordinator.backend().get_preferences().theme_mode {
                 types::ThemeMode::System => None,
@@ -938,6 +969,18 @@ fn run_desktop() {
             });
             if let Some(main) = app.get_webview_window("main") {
                 desktop_resources::initialize_main(&main);
+                #[cfg(target_os = "macos")]
+                let permission_recovery_required = permission_requires_visible_start(
+                    permissions::check_accessibility(),
+                    permissions::check_microphone(),
+                );
+                #[cfg(not(target_os = "macos"))]
+                let permission_recovery_required = false;
+                if permission_recovery_required {
+                    log::info!(
+                        "[main] permission recovery required → showing main window despite start_minimized"
+                    );
+                }
                 // Silent-start switch: prefs.start_minimized = true → don't pop the main
                 // window; the user reaches it from the menu bar / tray. Especially useful
                 // with autostart to avoid the main window on every login.
@@ -946,7 +989,8 @@ fn run_desktop() {
                 let force_show =
                     std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1");
                 let suppress_show = !force_show && coordinator.startup_error().is_none()
-                    && coordinator.backend().get_preferences().start_minimized;
+                    && coordinator.backend().get_preferences().start_minimized
+                    && !permission_recovery_required;
                 if suppress_show {
                     log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
                 } else {
@@ -1054,7 +1098,10 @@ fn run_desktop() {
         .invoke_handler(app_invoke_handler_desktop!())
         .build(context)
         .expect("error while building tauri application")
-        .run(|app, event| match event {
+        .run(|app, event| {
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            observe_issue1266_lifecycle(&event);
+            match event {
             RunEvent::Ready => {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.start_hotkey_supervisors_when_ready();
@@ -1107,7 +1154,35 @@ fn run_desktop() {
                 });
             }
             _ => {}
+            }
         });
+}
+
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+fn observe_issue1266_lifecycle(event: &RunEvent) {
+    use issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
+    let (event, kind) = match event {
+        RunEvent::Ready => (Event::Ready, Kind::None),
+        RunEvent::ExitRequested { .. } => (Event::ExitRequested, Kind::None),
+        RunEvent::Exit => (Event::Exit, Kind::None),
+        RunEvent::WindowEvent { label, event, .. } => {
+            let event = match event {
+                tauri::WindowEvent::CloseRequested { .. } => Event::CloseRequested,
+                tauri::WindowEvent::Destroyed => Event::Destroyed,
+                _ => return,
+            };
+            let kind = match label.as_str() {
+                "main" => Kind::MainWindow,
+                "qa" => Kind::QaWindow,
+                "capsule" => Kind::CapsuleWindow,
+                "less-computer" => Kind::LessWindow,
+                _ => Kind::OtherWindow,
+            };
+            (event, kind)
+        }
+        _ => return,
+    };
+    Operation::new(Probe::P6).record(event, Outcome::Observed, Facts { kind, ..Facts::default() });
 }
 
 #[cfg(not(mobile))]
@@ -1774,9 +1849,8 @@ fn restart_app(app: AppHandle) {
 }
 
 /// `AppHandle::restart` from a command thread routes through
-/// `ExitRequested { code: None }`, which the low-memory background policy
-/// deliberately prevents; hopping to the main thread takes tauri's direct
-/// spawn-and-exit path instead.
+/// `ExitRequested { code: None }` can be intercepted by the desktop lifecycle;
+/// hopping to the main thread takes Tauri's direct spawn-and-exit path instead.
 fn restart_on_main_thread(app: AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || handle.restart());
@@ -1854,7 +1928,7 @@ fn is_beta_build() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn reset_tcc_service_for_restart(service: &str, reason: &str) {
+pub(crate) fn reset_tcc_service_for_restart(service: &str, reason: &str) {
     match std::process::Command::new("/usr/bin/tccutil")
         .args(["reset", service, OPENLESS_BUNDLE_ID])
         .status()
@@ -2067,10 +2141,11 @@ pub(crate) fn request_microphone_from_foreground<R: Runtime>(
 
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(mobile))]
-    if desktop_resources::active() {
-        // Hide now, destroy after a short grace so accidental close/reopen
-        // cycles keep the WebView (and its form state) alive.
-        desktop_resources::hide_main_with_grace(app);
+    {
+        // The main editor is an infrequent surface. Destroy its WebView when the
+        // user closes it so WebKit can release its content process and memory;
+        // tray/menu actions recreate it through ensure_main on the next open.
+        desktop_resources::close_main(app);
         let app_for_preview = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             if let Some(state) = app_for_preview.try_state::<commands::MicrophoneMonitorState>() {
@@ -3828,6 +3903,7 @@ mod tests {
         parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
         tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
         LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
+        permission_requires_visible_start,
     };
     #[cfg(target_os = "macos")]
     use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
@@ -3835,6 +3911,28 @@ mod tests {
         builtin_style_pack_for_mode, CapsuleStyle, PolishMode, StylePack, StylePackKind,
     };
     use std::io::Write;
+
+    #[test]
+    fn missing_mac_permissions_override_silent_start() {
+        use crate::permissions::PermissionStatus;
+
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Denied,
+            PermissionStatus::Granted,
+        ));
+        assert!(permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NoDevice,
+        ));
+        assert!(!permission_requires_visible_start(
+            PermissionStatus::Granted,
+            PermissionStatus::NotApplicable,
+        ));
+    }
 
     #[test]
     fn tray_style_menu_is_windows_only() {
@@ -4355,21 +4453,5 @@ fn get_capsule_auxiliary_snapshot(
     serde_json::json!({
         "suggestions": coord.backend().pending_corrections(),
         "fallback": coord.tauri_host().auxiliary_fallback_snapshot(),
-    })
-}
-
-/// Runtime health of the disposable native capsule, for the settings page:
-/// `active` mirrors the launch-time low-memory switch, `available` is false
-/// when the sidecar helper is missing or failed to initialize.
-#[cfg(not(mobile))]
-#[tauri::command]
-fn native_capsule_status(
-    coord: tauri::State<'_, Arc<coordinator::Coordinator>>,
-) -> serde_json::Value {
-    let (available, error) = coord.tauri_host().native_capsule_status();
-    serde_json::json!({
-        "active": crate::desktop_resources::active(),
-        "available": available,
-        "error": error,
     })
 }

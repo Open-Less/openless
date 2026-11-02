@@ -1,3 +1,4 @@
+import { desktopGuideZhCN as desktopGuide } from './desktopGuide';
 import { siwcZhCN as siwc } from './siwc';
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
@@ -6,6 +7,7 @@ import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
 
 export const zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1228,6 +1230,11 @@ export const zhCN = {
       unavailable: '当前平台暂无可用的测试功能。',
     },
     selectionWorkspace: {
+      extraControls: '额外控件',
+      extraControlsDesc: '配置提问与编辑判断及模型输出格式；普通使用无需调整。',
+      openExtraControls: '更多',
+      extraControlsSaveHint: '修改后自动保存。',
+      extraControlsDone: '完成',
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
       polishHotkey: '选区助手快捷键',
@@ -1462,7 +1469,7 @@ export const zhCN = {
         '从所有屏幕显示切换需要重启软件，以清理之前的胶囊窗口。现在重启吗？',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
-      capsuleStyleClassic: 'OpenLess 默认风格',
+      capsuleStyleClassic: '默认风格',
       stableTranscriptionLabel: '稳定模式（先录音后识别）',
       stableTranscriptionDesc:
         '开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。',
@@ -1494,10 +1501,8 @@ export const zhCN = {
         aecOff: '关闭',
         aecLight: '轻量（省 CPU）',
         aecModel: '模型（更强）',
-        aecModelHint:
-          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
-        aecHint:
-          '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        aecModelHint: '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
+        aecHint: '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
         buffer: '输出缓冲区',
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
@@ -1613,21 +1618,13 @@ export const zhCN = {
       debugArchiveProcessedLabel: '保存处理后的音频',
       debugArchiveProcessedDesc: '降噪与增益之后的版本，仍保存在原来的录制文件里。',
       debugArchiveRawLabel: '另存一份处理前的音频',
-      debugArchiveRawDesc: '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
+      debugArchiveRawDesc:
+        '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
       recordAudioForDebugDesc: '保存原始麦克风音频为 wav，便于排查识别问题。',
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
       audioRecordingMaxEntriesDesc: '本地保留 wav 文件数上限，留空 = 200。',
       startupGroupTitle: '启动',
-      lowMemoryBackgroundLabel: '低内存后台模式',
-      lowMemoryBackgroundDesc:
-        '重启后生效。关闭主界面时释放窗口，录音时按需显示原生胶囊；空闲时关闭麦克风预热。本地模型仍按原有设置释放。',
-      lowMemoryRestartLabel: '重启后生效',
-      lowMemoryRestartDesc: '低内存后台模式的开关已保存，重启应用后才会切换运行模式。',
-      lowMemoryRestartNow: '立即重启',
-      lowMemoryCapsuleErrorLabel: '原生胶囊不可用',
-      lowMemoryCapsuleErrorDesc:
-        '听写仍可进行，但不会显示悬浮胶囊。辅助程序可能缺失或被系统拦截，请重新安装应用。',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
       autoUpdateCheckLabel: '自动检查更新',
@@ -1676,6 +1673,7 @@ export const zhCN = {
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
+      errThinking: '需开启思考',
       verify: '验证',
       verifyHint: '点一下真实调用一次接口，确认这张卡现在能用',
       errTimeout: '超时',
@@ -1887,6 +1885,7 @@ export const zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
       llmStreamError: '服务端返回流式错误，请检查模型和请求参数。',
+      llmThinkingRequired: '该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。',
       saveProtocol: '保存协议设置',
       thinkingModeHint:
         '按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。',

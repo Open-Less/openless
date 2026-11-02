@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/OpenLessCapsule';
 import { parseCapsuleStyle } from '../../lib/capsuleLayout';
@@ -25,10 +25,8 @@ import {
   VOICE_ACTIVATION_MODEL_ALIAS,
   type VoiceActivationStateSnapshot,
 } from '../../lib/voiceActivation';
-import { getNativeCapsuleStatus } from '../../lib/ipc/settings';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
-  NativeCapsuleStatus,
   CapsuleStyle,
   HotkeyMode,
   MicrophoneDevice,
@@ -41,10 +39,9 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { PresenceModal } from '../../components/ui/Modal';
+
 import { Card, Collapsible, Btn } from '../_atoms';
 import { Segmented } from '../../components/ui/Segmented';
-import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { AudioDspSettings } from './AudioDspSettings';
@@ -86,10 +83,6 @@ export function RecordingInputSection({
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
   const voiceActivationStateObservedRef = useRef(false);
-  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
-  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
-  const displayModeRestartTitleId = useId();
-  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -240,30 +233,8 @@ export function RecordingInputSection({
       ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
       : 'cursorScreen';
 
-  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
-    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
-    const changeSequence = ++displayModeChangeSequenceRef.current;
-    await savePrefs({ ...prefs, capsuleDisplayMode: next });
-    if (
-      changeSequence === displayModeChangeSequenceRef.current &&
-      os === 'win' &&
-      previous === 'allScreens' &&
-      next !== 'allScreens'
-    ) {
-      setDisplayModeRestartPending(true);
-    }
-  };
-  const onRestartForDisplayMode = async () => {
-    setDisplayModeRestarting(true);
-    try {
-      await restartApp();
-      setDisplayModeRestartPending(false);
-    } catch (error) {
-      console.error('[settings] restart after capsule display mode change failed', error);
-    } finally {
-      setDisplayModeRestarting(false);
-    }
-  };
+  const onCapsuleDisplayModeChange = (next: UserPreferences['capsuleDisplayMode']) =>
+    savePrefs({ ...prefs, capsuleDisplayMode: next });
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -556,15 +527,15 @@ export function RecordingInputSection({
         {!isAndroid && (
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
-              <SelectLite
-                value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
-                onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
+              <Segmented
                 options={[
                   { value: 'classic', label: t('settings.recording.capsuleStyleClassic') },
                   { value: 'siri', label: t('settings.recording.capsuleStyleSiri') },
                 ]}
-                ariaLabel={t('settings.recording.capsuleStyleLabel')}
-                style={{ maxWidth: 220, minWidth: 200 }}
+                value={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
+                onChange={(next) => savePrefs({ ...prefs, capsuleStyle: next as CapsuleStyle })}
+                label={t('settings.recording.capsuleStyleLabel')}
+                className="ol-capsule-style-segmented"
               />
               <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
             </div>
@@ -957,18 +928,6 @@ export function RecordingInputSection({
       {showDesktopStartup && (
         <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
-          <SettingRow
-            label={t('settings.recording.lowMemoryBackgroundLabel')}
-            desc={t('settings.recording.lowMemoryBackgroundDesc')}
-          >
-            <Toggle
-              on={prefs.lowMemoryBackgroundEnabled ?? false}
-              onToggle={(lowMemoryBackgroundEnabled) =>
-                savePrefs({ ...prefs, lowMemoryBackgroundEnabled })
-              }
-            />
-          </SettingRow>
-          <LowMemoryRuntimeNotice enabled={prefs.lowMemoryBackgroundEnabled ?? false} />
           <SettingRow label={t('settings.recording.startMinimizedLabel')}>
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
@@ -977,123 +936,11 @@ export function RecordingInputSection({
           </SettingRow>
         </Collapsible>
       )}
-      <PresenceModal
-        open={displayModeRestartPending}
-        onClose={() => {
-          if (!displayModeRestarting) setDisplayModeRestartPending(false);
-        }}
-        zIndex={1000}
-        width="min(420px, calc(100vw - 32px))"
-        style={{ padding: 18 }}
-        labelledBy={displayModeRestartTitleId}
-        render={() => (
-          <>
-            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
-              {t('settings.recording.capsuleDisplayModeRestartTitle')}
-            </h2>
-            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
-              {t('settings.recording.capsuleDisplayModeRestartDesc')}
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Btn
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => setDisplayModeRestartPending(false)}
-              >
-                {t('common.cancel')}
-              </Btn>
-              <Btn
-                variant="blue"
-                size="sm"
-                disabled={displayModeRestarting}
-                onClick={() => void onRestartForDisplayMode()}
-              >
-                {t('settings.about.updateDialog.restartNow')}
-              </Btn>
-            </div>
-          </>
-        )}
-      />
     </>
   );
 }
 
-// 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist /
-// windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
-// 低内存模式只在启动时读取一次开关；此处对比运行态与已保存的开关值，
-// 不一致时提示重启，并顺带显示 sidecar 启动及运行失败的健康告警。
-function LowMemoryRuntimeNotice({ enabled }: { enabled: boolean }) {
-  const { t } = useTranslation();
-  const [runtime, setRuntime] = useState<NativeCapsuleStatus | null>(null);
-  useEffect(() => {
-    if (!isTauri) return;
-    let cancelled = false;
-    let revision = 0;
-    let unlisten: (() => void) | undefined;
-    const refresh = async () => {
-      const current = ++revision;
-      try {
-        const status = await getNativeCapsuleStatus();
-        if (!cancelled && current === revision) setRuntime(status);
-      } catch (error) {
-        if (!cancelled) console.error('[low-memory] status failed', error);
-      }
-    };
-    void import('@tauri-apps/api/event')
-      .then(async ({ listen }) => {
-        const dispose = await listen('native-capsule:health-changed', () => void refresh());
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-        await refresh();
-      })
-      .catch((error: unknown) => console.error('[low-memory] health listener failed', error));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [enabled]);
-  if (!runtime) return null;
-  const needsRestart = runtime.active !== enabled;
-  const capsuleBroken = runtime.active && !runtime.available;
-  if (!needsRestart && !capsuleBroken) return null;
-  return (
-    <>
-      {needsRestart ? (
-        <SettingRow
-          label={t('settings.recording.lowMemoryRestartLabel')}
-          desc={t('settings.recording.lowMemoryRestartDesc')}
-        >
-          <Btn variant="blue" size="sm" onClick={restartApp}>
-            {t('settings.recording.lowMemoryRestartNow')}
-          </Btn>
-        </SettingRow>
-      ) : null}
-      {capsuleBroken ? (
-        <SettingRow
-          label={t('settings.recording.lowMemoryCapsuleErrorLabel')}
-          desc={t('settings.recording.lowMemoryCapsuleErrorDesc')}
-        >
-          {runtime.error ? (
-            <span
-              style={{
-                fontSize: 11,
-                color: 'var(--ol-ink-3)',
-                maxWidth: 220,
-                wordBreak: 'break-all',
-              }}
-            >
-              {runtime.error}
-            </span>
-          ) : null}
-        </SettingRow>
-      ) : null}
-    </>
-  );
-}
-
+// Autostart state is owned by the operating system; it is intentionally not mirrored in prefs.
 function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);

@@ -42,7 +42,8 @@ import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, Toggle, ExperimentalSectionTitle } from './shared';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import { usePageTransition, useSelectionMotion } from '../../lib/motion';
+import { useSelectionMotion } from '../../lib/motion';
+import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
   availableServiceViews,
   isTestingFeaturePage,
@@ -148,7 +149,7 @@ export function ServicesTab({
     voiceActivationModels,
   );
   const contentRef = useRef<HTMLDivElement>(null);
-  const selectedView = usePageTransition(requestedView, contentRef, false);
+  const selectedView = requestedView;
   const navigationRef = useRef<HTMLDivElement>(null);
   const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
   useSelectionMotion(
@@ -317,7 +318,12 @@ export function ServicesTab({
             );
           })}
         </div>
-        <div key={selectedView} ref={contentRef} className="ol-service-content">
+        <TransitionViewport
+          contentKey={selectedView}
+          scrollRef={contentRef}
+          className="ol-service-content ol-thinscroll"
+          style={{ overflow: 'auto' }}
+        >
           {/* The LocalModelPicker inside the channel editor jumps to this view through this context. */}
           <LocalModelsNavContext.Provider
             value={
@@ -351,7 +357,7 @@ export function ServicesTab({
               {t('settings.providers.credentialStorageNotice')}
             </p>
           )}
-        </div>
+        </TransitionViewport>
       </div>
     </>
   );

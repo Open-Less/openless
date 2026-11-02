@@ -4,13 +4,18 @@
 #
 #   ci-changed-areas.sh <area> [base-sha]
 #
-# Areas:
-#   tauri   macOS / Windows desktop Tauri builds and the Android build that
-#           shares the same dependency graph.
-#   msrv    The Rust 1.88 minimum-supported-toolchain compile.
-#   linux   The Linux host build, its tests and the deb/rpm package chain.
-#   harmony The HarmonyOS host: ArkTS contracts, the ArkWeb bundle and the HAP
-#           release path.
+# Areas: tauri | msrv | linux | harmony | frontend | android | capsule | ios-device
+#
+# The decision is made by scripts/ci-impact.mjs, which walks Cargo's own package
+# graph (`cargo metadata`) from each platform's root package: a file is in scope
+# for a platform only when the crate that owns it is reachable from that
+# platform's root. Non-Rust trees (frontend bundle, ArkTS, Xcode project,
+# tooling) are covered by explicit rules there.
+#
+# This wrapper exists for two reasons only: it keeps the shell entry point that
+# ci.yml and the contract test use, and it re-asserts the fail-open rule on top
+# of the script — if the decision cannot be computed at all (node missing, the
+# script crashing, unparsable output), the answer is "run".
 #
 # Prints "true" when the check must run and "false" only when every changed file
 # is provably out of scope for that area. Anything unknown - no base revision
@@ -19,69 +24,22 @@
 # cannot reach it, never of a failure to read the change set.
 set -uo pipefail
 
-area=${1:?usage: ci-changed-areas.sh <tauri|msrv|linux|harmony> [base-sha]}
+area=${1:?usage: ci-changed-areas.sh <tauri|msrv|linux|harmony|frontend|android|capsule|ios-device> [base-sha]}
 base=${2:-}
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+script="$repo_root/openless-all/app/scripts/ci-impact.mjs"
 
 run() {
   echo true
   exit 0
 }
 
-case "$area" in
-  tauri | msrv | linux | harmony) ;;
-  *)
-    echo "unknown area: $area" >&2
-    run
-    ;;
+command -v node > /dev/null 2>&1 || run
+[ -f "$script" ] || run
+
+verdict=$(node "$script" "$area" "$base" 2> /dev/null) || run
+
+case "$verdict" in
+  true | false) echo "$verdict" ;;
+  *) run ;;
 esac
-
-# Push, tag and manual runs verify every platform.
-[ -n "$base" ] || run
-
-files=$(git diff --name-only "${base}...HEAD" 2> /dev/null) || run
-[ -n "$files" ] || run
-
-while IFS= read -r file; do
-  [ -n "$file" ] || continue
-  case "$area" in
-    tauri)
-      # Only the Linux host, its fcitx5 plugin and prose are out of scope for
-      # the desktop Tauri build. The Linux host manifest stays in scope: it is
-      # part of the shared workspace and moves Cargo.lock for every platform.
-      case "$file" in
-        openless-all/app/linux-egui/Cargo.toml) run ;;
-        openless-all/app/linux-egui/*) ;;
-        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
-        docs/* | *.md | LICENSE* | NOTICE*) ;;
-        *) run ;;
-      esac
-      ;;
-    msrv)
-      # The 1.88 promise is about Rust sources and their dependency graph;
-      # only change sets that contain neither may skip that compile.
-      case "$file" in
-        *.rs | *Cargo.toml | *Cargo.lock | *rust-toolchain* | .github/*) run ;;
-        *) ;;
-      esac
-      ;;
-    linux)
-      # Prose cannot change what the host builds, tests or packages.
-      case "$file" in
-        docs/* | *.md | LICENSE* | NOTICE*) ;;
-        *) run ;;
-      esac
-      ;;
-    harmony)
-      # The HarmonyOS job builds the shared frontend bundle and the Rust host, so
-      # only prose and the Linux-only trees are provably out of reach.
-      case "$file" in
-        docs/* | *.md | LICENSE* | NOTICE*) ;;
-        openless-all/app/linux-egui/*) ;;
-        openless-all/app/scripts/linux-fcitx5-plugin/*) ;;
-        *) run ;;
-      esac
-      ;;
-  esac
-done <<< "$files"
-
-echo false

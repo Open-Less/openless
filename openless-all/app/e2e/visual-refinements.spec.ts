@@ -1,6 +1,8 @@
+import { settleNavigation } from './support/navigation';
 import { test, expect, type Locator } from '@playwright/test';
 
 async function expectReadableLayout(dialog: Locator) {
+  await settleNavigation(dialog);
   const scroll = dialog.locator('.ol-settings-scroll');
   expect(
     await scroll.evaluate((element) => element.scrollWidth - element.clientWidth),

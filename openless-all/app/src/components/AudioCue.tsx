@@ -3,7 +3,7 @@
 // Web Audio 输出会被某些桌面音频栈当作 sink-input，启动/退出时触发音量 OSD；
 // Android 也可能因 Web Audio 输出切换录音输入路由，因此这两个平台禁用。
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { isAndroid, isTauri } from '../lib/ipc';
 import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
@@ -19,26 +19,7 @@ interface CapsulePayload {
 export function AudioCueListener() {
   const audioCueEnabledRef = useRef<boolean>(true);
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
-  const [nativeCueOwner, setNativeCueOwner] = useState<boolean | null>(isTauri ? null : false);
-  useEffect(() => {
-    if (!isTauri || isAndroid()) {
-      setNativeCueOwner(false);
-      return;
-    }
-    let cancelled = false;
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke<boolean>('desktop_low_memory_active'))
-      .then((active) => {
-        if (!cancelled) setNativeCueOwner(active);
-      })
-      .catch(() => {
-        if (!cancelled) setNativeCueOwner(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const audioCueRuntimeEnabled = !isAndroid() && nativeCueOwner === false;
+  const audioCueRuntimeEnabled = !isAndroid();
 
   // Read settings (enabled by default)
   useEffect(() => {
@@ -94,16 +75,29 @@ export function AudioCueListener() {
     let cancelled = false;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      listen<CapsulePayload>('capsule:state', (event) => {
-        const state = event.payload.state;
-        const prev = prevStateRef.current;
-        prevStateRef.current = state;
-        if (state === 'recording' && prev !== 'recording') {
-          if (audioCueEnabledRef.current) playRecordStartCue();
-        } else if (state !== 'recording' && prev === 'recording') {
-          stopAudioCue();
-        }
-      })
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      if (cancelled) return;
+      const currentWindow = getCurrentWebviewWindow();
+      // The cue belongs to the resident recording capsule only. The main window must not
+      // prime an AudioContext or replay the current recording edge when it is opened during
+      // an active session.
+      if (currentWindow.label !== 'capsule') return;
+      const target = { kind: 'WebviewWindow' as const, label: currentWindow.label };
+      listen<CapsulePayload>(
+        'capsule:state',
+        (event) => {
+          if (cancelled) return;
+          const state = event.payload.state;
+          const prev = prevStateRef.current;
+          prevStateRef.current = state;
+          if (state === 'recording' && prev !== 'recording') {
+            if (audioCueEnabledRef.current) playRecordStartCue();
+          } else if (state !== 'recording' && prev === 'recording') {
+            stopAudioCue();
+          }
+        },
+        { target },
+      )
         .then((fn) => {
           if (cancelled) fn();
           else unlisten = fn;
@@ -113,6 +107,7 @@ export function AudioCueListener() {
     return () => {
       cancelled = true;
       unlisten?.();
+      stopAudioCue();
     };
   }, [audioCueRuntimeEnabled]);
 

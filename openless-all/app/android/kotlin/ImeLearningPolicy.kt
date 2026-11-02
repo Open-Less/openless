@@ -6,8 +6,8 @@ import android.view.inputmethod.EditorInfo
 
 internal object ImeLearningPolicy {
     const val PRIVACY_VERSION = 1
-    private val stores = listOf("openless_english_frequency", "openless_english_custom_words",
-        "openless_pinyin_frequency", "openless_pinyin_learned_phrases")
+    // LitePinyin's two stores are deleted outright by OpenLessRime.initialize().
+    private val stores = listOf("openless_english_frequency", "openless_english_custom_words")
 
     fun isPassword(inputType: Int): Boolean {
         val kind = inputType and InputType.TYPE_MASK_CLASS

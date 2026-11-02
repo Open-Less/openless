@@ -14,12 +14,18 @@ SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/
 export OPENLESS_HARMONY_CLIPBOARD_ACCESS="${OPENLESS_HARMONY_CLIPBOARD_ACCESS:-0}"
 export OPENLESS_HARMONY_STARTUP_PROBES="${OPENLESS_HARMONY_STARTUP_PROBES:-0}"
 case "$OPENLESS_HARMONY_CLIPBOARD_ACCESS" in
-  0|1) ;;
-  *) echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2; exit 1 ;;
+  0 | 1) ;;
+  *)
+    echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2
+    exit 1
+    ;;
 esac
 case "$OPENLESS_HARMONY_STARTUP_PROBES" in
-  0|1) ;;
-  *) echo 'OPENLESS_HARMONY_STARTUP_PROBES must be 0 or 1' >&2; exit 1 ;;
+  0 | 1) ;;
+  *)
+    echo 'OPENLESS_HARMONY_STARTUP_PROBES must be 0 or 1' >&2
+    exit 1
+    ;;
 esac
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 WEB_DIST="$CACHE_ROOT/harmony/web-dist"
@@ -32,7 +38,7 @@ bash "$APP_ROOT/scripts/build-harmony-backend.sh"
 cd "$APP_ROOT"
 npm run build -- --base=./ --outDir="$WEB_DIST"
 # Build a disposable copy so every Hvigor intermediate stays in the shared cache.
-python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$WEB_DIST" "$SIGNING_DIR" <<'PY'
+python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$WEB_DIST" "$SIGNING_DIR" << 'PY'
 from pathlib import Path
 import json, os, shutil, sys
 source, target, web, signing = map(Path, sys.argv[1:])

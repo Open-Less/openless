@@ -51,11 +51,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.knin.net" target="_blank" rel="noopener">
-    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">
+    <img alt="Mivra" src="https://www.mivra.dev/web/mivra/assets/logo/site/header-logo.png" height="52" />
   </a>
   <br/>
-  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 · Youwu Cloud Data (knin.net)</a>
+  <a href="https://www.mivra.dev/" target="_blank" rel="noopener">Mivra (mivra.dev)</a>
+</p>
+
+<p align="center">
+  Mivra 专注云服务器与物理裸机，节点覆盖香港、美国与游戏云，支持按需选配，为中小企业提供稳定可靠的算力。
 </p>
 
 <h2 align="center">开发者</h2>
@@ -195,6 +199,10 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - 流程是:语音 → 转写 → 清理 → 插入到光标,失败时回退到剪贴板。
 - 其余的一切(模式、词典、历史、菜单栏、首页报告)都为这唯一的路径服务。
 
+## 稳定性冻结
+
+OpenLess 当前进入稳定性阶段，项目暂不接受新增产品功能或扩展现有能力的 PR。接下来的工作只聚焦于把现有版本稳定下来：漏洞修复、回归修复、安全修复、文档、测试、兼容性和发布维护可以继续提交。新的功能提案和新功能实现 PR 会暂缓或直接关闭，直到稳定性阶段结束。
+
 ## 对比
 
 | 工具 | 形态 | OpenLess 的不同之处 |
@@ -243,7 +251,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
   - **旧款 32 位 ARM**:`OpenLess_<version>_armeabi-v7a.apk`
   - **64 位模拟器**:`OpenLess_<version>_x86_64.apk`
   - **32 位模拟器**:`OpenLess_<version>_x86.apk`
-  - 应用内更新（设置 → 关于）读取 `latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道。
+  - 应用内更新（设置 → 关于）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户在高级设置加入 Beta 渠道，读取 `.../updates/beta/latest-android-{arch}-beta.json`。
   - 调试包:`OpenLess-android-debug-{abi}-*.apk`（workflow_dispatch 产物）。
   - 不确定时执行 `adb shell getprop ro.product.cpu.abi`，下载对应 ABI 的包。
 - **Linux**：原 Tauri/WebView 构建已退出 Linux 路线。基于共享 Core 2.0 服务的原生 `eframe` 宿主经 CI 和 Ubuntu 真实音频、输入、安装、升级、回滚验收后，随共用 Release 提供 deb/rpm 和 `SHA256SUMS`。要求 glibc ≥ 2.39（Ubuntu 24.04 或同等级发行版）；没有 AppImage 或应用内更新。
@@ -337,7 +345,16 @@ your fork / topic branch
 - **Beta 的工作不得泄漏到 Stable。** `main` 只接受来自 `beta` 的合并,由维护者在一次成功的双平台冒烟构建之后执行。不允许直接向 `main` 推送。
 - **Stable 发布从 `main` 切出**,通过推送 `v<version>-tauri` 标签完成——见下方的维护者发布清单。
 
-Beta 发布的分发(手动下载、可选加入):应用内的更新器始终读取 Stable 清单,因此普通用户绝不会通过自动更新拿到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于**,启用“加入 Beta 频道”,再从应用从 GitHub 获取的链接处手动下载最新的 Beta 安装包。标签约定:`v<version>-beta-tauri` 产出 Beta 发布(标记为 GitHub pre-release;清单写为 `latest-{tgt}-{arch}-beta.json`),而 `v<version>-tauri` 产出 Stable 发布。两份清单文件互不重叠,因此 Stable 用户的更新器源不会拾取到 Beta 发布。
+Beta 发布的分发(手动下载、可选加入):应用内更新器的 Stable 渠道只读 Stable 清单路径,因此普通用户绝不会通过自动更新拿到 Beta 构建。想尝试 Beta 的用户打开 **设置 → 关于**,启用“加入 Beta 频道”,再从应用从 GitHub 获取的链接处手动下载最新的 Beta 安装包。标签约定:`v<version>-beta-tauri` 产出 Beta 发布(标记为 GitHub pre-release),而 `v<version>-tauri` 产出 Stable 发布。
+
+更新清单由项目 CDN 提供,每个平台/渠道一个滚动文件:
+
+```text
+https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+```
+
+渠道隔离就是 URL 路径(`/updates/stable/` vs `/updates/beta/`),Stable 客户端即使请求错地址也拿不到 Beta 清单。清单里的下载地址同样指向 CDN(`https://dl.aeoform.com/releases/{tag}/{asset}`),国内用户直接从这里下载。清单由发布 workflow 生成为运行产物(run artifact),**不再挂到 GitHub Release**;因此发版后需要维护者手动把清单上传到 CDN,见 `RELEASING.md`。改动前装的客户端读的是旧的 `releases/latest/download/latest-*.json`,因此无法自动更新到最后一个还带这些文件的版本之后,需要手动下载一次。
 
 ## 凭据
 
@@ -416,6 +433,30 @@ egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux egui deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
+
+### 客户端架构与流程图
+
+下面的图来自当前 `beta` 客户端边界。每张渲染图都保留了可编辑的 Mermaid 源文件和 SVG 版本，便于后续更新与审查。
+
+#### 客户端架构
+
+![OpenLess 客户端架构图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-architecture.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-architecture.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-architecture.svg)
+
+#### 客户端数据流
+
+![OpenLess 客户端数据流图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-data-flow.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-data-flow.svg)
+
+#### 启动、权限与录音流程
+
+![OpenLess 启动、权限与录音流程图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-startup-recording-flow.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg)
+
+配套的依赖与模块审查记录见 [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md)。
 
 贡献与发布规则见[贡献流程](#贡献流程)和[发布规范](RELEASING.md)，模块职责与接线见[架构文档](docs/architecture.md)。
 

@@ -1,6 +1,6 @@
 //! Draws the default recording capsule, translation target, transcript rail and
 //! selection notice, anchored to the bottom of the helper window.
-use crate::motion::{Spring, Tween, EASE, EASE_IN_OUT, LINEAR, MORPH};
+use crate::motion::{Spring, Tween, EASE, LINEAR, MORPH};
 use crate::renderer::CapsuleAction;
 use crate::{icons, shapes, Frame};
 use egui::emath::TSTransform;
@@ -32,17 +32,61 @@ const RAIL_MAX_WIDTH: f32 = 444.0;
 const RAIL_TAIL_CHARS: usize = 160;
 
 const BLUE: Color32 = Color32::from_rgb(0x25, 0x63, 0xeb);
-const BLUE_HOVER: Color32 = Color32::from_rgb(0x1d, 0x4e, 0xd8);
 const BORDER: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
-const SWEEP: Color32 = Color32::from_rgb(0xdb, 0xea, 0xfe);
-const CANCEL_BG: Color32 = Color32::from_rgb(0xf0, 0xf0, 0xf2);
-const CANCEL_HOVER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
-const CANCEL_INK: Color32 = Color32::from_rgb(0x52, 0x52, 0x5b);
-const ERROR: Color32 = Color32::from_rgb(0xdc, 0x26, 0x26);
 
-/// `tokens.css` values for the parts that follow the app theme. The pill and
-/// the badge shell are `color-scheme: light` and never change.
+struct PillPalette {
+    fill: Color32,
+    border: Color32,
+    highlight: Color32,
+    ink: Color32,
+    sweep: Color32,
+    cancel: Color32,
+    cancel_hover: Color32,
+    cancel_ink: Color32,
+    confirm: Color32,
+    confirm_hover: Color32,
+    error: Color32,
+    shadow: Color32,
+}
+
+fn pill_palette(dark: bool) -> PillPalette {
+    let rgba = Color32::from_rgba_unmultiplied;
+    if dark {
+        PillPalette {
+            fill: rgba(28, 34, 45, 224),
+            border: rgba(218, 231, 255, 66),
+            highlight: rgba(235, 244, 255, 33),
+            ink: Color32::from_rgb(167, 199, 255),
+            sweep: rgba(90, 145, 240, 56),
+            cancel: rgba(225, 235, 255, 26),
+            cancel_hover: rgba(225, 235, 255, 46),
+            cancel_ink: Color32::from_rgb(226, 234, 247),
+            confirm: Color32::from_rgb(57, 121, 243),
+            confirm_hover: Color32::from_rgb(82, 142, 255),
+            error: Color32::from_rgb(255, 155, 153),
+            shadow: Color32::from_black_alpha(97),
+        }
+    } else {
+        PillPalette {
+            fill: rgba(255, 255, 255, 219),
+            border: rgba(79, 91, 115, 61),
+            highlight: rgba(255, 255, 255, 209),
+            ink: Color32::from_rgb(29, 78, 216),
+            sweep: rgba(147, 197, 253, 71),
+            cancel: rgba(102, 116, 139, 26),
+            cancel_hover: rgba(102, 116, 139, 46),
+            cancel_ink: Color32::from_rgb(82, 93, 110),
+            confirm: BLUE,
+            confirm_hover: Color32::from_rgb(29, 78, 216),
+            error: Color32::from_rgb(201, 45, 54),
+            shadow: rgba(15, 23, 42, 46),
+        }
+    }
+}
+
+/// App-theme surfaces shared with the WebView pill, badge and transcript rail.
 struct Tokens {
+    pill: PillPalette,
     surface: Color32,
     line: Color32,
     shadow: Color32,
@@ -60,6 +104,7 @@ fn tokens(dark: bool) -> Tokens {
     let rgba = Color32::from_rgba_unmultiplied;
     if dark {
         Tokens {
+            pill: pill_palette(dark),
             surface: Color32::from_rgb(0x1b, 0x22, 0x2c),
             line: rgba(226, 232, 240, 31),
             shadow: rgba(0, 0, 0, 122),
@@ -68,13 +113,13 @@ fn tokens(dark: bool) -> Tokens {
             ink: Color32::from_rgb(0xf4, 0xf7, 0xfb),
             medium: 460.0,
             semibold: 560.0,
-            // rgba(24, 24, 27, .98) over the white badge.
             control: Color32::from_rgb(29, 29, 32),
             control_line: Color32::from_rgb(0x3f, 0x3f, 0x46),
             control_ink: Color32::from_rgb(0xfa, 0xfa, 0xfa),
         }
     } else {
         Tokens {
+            pill: pill_palette(dark),
             surface: Color32::from_rgb(0xfa, 0xfa, 0xfa),
             line: rgba(0, 0, 0, 26),
             shadow: rgba(15, 17, 22, 41),
@@ -345,6 +390,7 @@ impl Rail {
 }
 
 pub struct DefaultCapsule {
+    glass: Option<(Rect, f32)>,
     started: bool,
     width: Tween,
     opacity: Tween,
@@ -366,10 +412,11 @@ pub struct DefaultCapsule {
 impl Default for DefaultCapsule {
     fn default() -> Self {
         Self {
+            glass: None,
             started: false,
             width: Tween::at(COMPACT_WIDTH),
             opacity: Tween::at(0.0),
-            lift: Tween::at(8.0),
+            lift: Tween::at(6.0),
             layer: Tween::at(0.0),
             actions: Tween::at(0.0),
             status: Tween::at(0.0),
@@ -421,8 +468,13 @@ fn status_label(frame: &Frame) -> String {
 }
 
 impl DefaultCapsule {
+    /// The platform material follows the painted pill, never the transparent host rectangle.
+    pub fn glass_surface(&self) -> Option<(Rect, f32)> {
+        self.glass
+    }
+
     /// Draws the capsule for `frame` and reports a clicked control. `dark`
-    /// is the resolved app theme; the pill itself is theme independent.
+    /// is the resolved app theme for the pill and every companion surface.
     pub fn show(
         &mut self,
         ui: &egui::Ui,
@@ -434,6 +486,7 @@ impl DefaultCapsule {
         let now = ui.input(|input| input.time);
         let stage = ui.max_rect();
         let tokens = tokens(dark);
+        self.glass = None;
         if frame.state.selection_polish {
             if notice(&painter, stage, frame, &tokens, now) && !reduced {
                 ui.ctx().request_repaint();
@@ -448,7 +501,7 @@ impl DefaultCapsule {
         let processing = matches!(phase, "transcribing" | "polishing");
         let leaving = frame.leaving;
         let label = status_label(frame);
-        let label_format = format(12.0, 500.0, 18.0, if phase == "failed" { ERROR } else { BLUE });
+        let label_format = format(12.0, 500.0, 18.0, if phase == "failed" { tokens.pill.error } else { tokens.pill.ink });
         let label_width = painter
             .layout_job(LayoutJob::single_section(label.clone(), label_format.clone()))
             .size()
@@ -481,16 +534,16 @@ impl DefaultCapsule {
         self.opacity.set(
             now,
             if leaving { 0.0 } else { 1.0 },
-            time(if leaving { 0.16 } else { 0.1 }),
+            time(if leaving { 0.18 } else { 0.24 }),
             0.0,
-            EASE_IN_OUT,
+            MORPH,
         );
         self.lift.set(
             now,
-            if leaving { 7.0 } else { 0.0 },
-            time(if leaving { 0.18 } else { 0.22 }),
+            if leaving { 5.0 } else { 0.0 },
+            time(if leaving { 0.18 } else { 0.24 }),
             0.0,
-            EASE_IN_OUT,
+            MORPH,
         );
         // CSS opacity transitions of the layers inside the shell.
         let layer_visible = recording || warming;
@@ -536,6 +589,7 @@ impl DefaultCapsule {
             pos2(center_x - width / 2.0, body_top + lift),
             pos2(center_x + width / 2.0, body_bottom + lift),
         );
+        self.glass = Some((shell, opacity));
         let outline = shapes::stadium(shell);
         let cancel_center = pos2(center_x - BUTTON_OFFSET, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
@@ -655,7 +709,7 @@ impl DefaultCapsule {
             }
         }
 
-        // The pill: shadow, paper, translation tint, border, processing sweep.
+        // The pill keeps a translucent material, a lit rim and readable controls in both themes.
         let fade = |color: Color32| color.gamma_multiply(opacity);
         let pixels_per_point = ui.ctx().pixels_per_point();
         painter.add(
@@ -663,11 +717,15 @@ impl DefaultCapsule {
                 offset: [0, 2],
                 blur: 8,
                 spread: 0,
-                color: fade(Color32::from_black_alpha(36)),
+                color: fade(tokens.pill.shadow),
             }
             .as_shape(shell, RADIUS),
         );
-        painter.rect_filled(shell, RADIUS, fade(Color32::WHITE));
+        painter.rect_filled(shell, RADIUS, fade(tokens.pill.fill));
+        painter.add(shapes::inset_shadow(
+            shell.shrink(1.0), HEIGHT / 2.0 - 1.0, pixels_per_point,
+            1.0, 1.0, 0.0, fade(tokens.pill.highlight),
+        ));
         if state.translation_active && layer_visible {
             painter.add(shapes::inset_shadow(
                 shell.shrink(1.0),
@@ -679,12 +737,12 @@ impl DefaultCapsule {
                 fade(Color32::from_rgba_unmultiplied(37, 99, 235, 166)),
             ));
         }
-        painter.rect_stroke(shell, RADIUS, Stroke::new(1.0, fade(BORDER)), StrokeKind::Inside);
+        painter.rect_stroke(shell, RADIUS, Stroke::new(1.0, fade(tokens.pill.border)), StrokeKind::Inside);
         if let Some(since) = self.sweep_since.filter(|_| !reduced) {
             // `ol-capsule-sweep`: −100% → 0 over 85% of 2.4s, linear, then hold.
             let progress = (((now - since) % 2.4) / (2.4 * 0.85)).min(1.0) as f32;
             let sweep = shapes::stadium(shell.translate(vec2(-width * (1.0 - progress), 0.0)));
-            painter.add(shapes::fill_clipped(&sweep, &outline, fade(SWEEP)));
+            painter.add(shapes::fill_clipped(&sweep, &outline, fade(tokens.pill.sweep)));
         }
 
         // Recording layer: waveform and the two buttons, clipped by the shell.
@@ -701,7 +759,7 @@ impl DefaultCapsule {
                 painter.rect_filled(
                     Rect::from_center_size(pos2(x, shell.center().y), vec2(1.5, height)),
                     1,
-                    BLUE.gamma_multiply(layer),
+                    tokens.pill.ink.gamma_multiply(layer),
                 );
             }
             let actions = layer * self.actions.value(now);
@@ -711,8 +769,8 @@ impl DefaultCapsule {
                     (
                         Target::Cancel,
                         cancel_center,
-                        lerp_color(CANCEL_BG, CANCEL_HOVER, self.cancel_hover.value(now)),
-                        CANCEL_INK,
+                        lerp_color(tokens.pill.cancel, tokens.pill.cancel_hover, self.cancel_hover.value(now)),
+                        tokens.pill.cancel_ink,
                         icons::IconName::Close,
                         15.0,
                         1.8,
@@ -720,7 +778,7 @@ impl DefaultCapsule {
                     (
                         Target::Confirm,
                         confirm_center,
-                        lerp_color(BLUE, BLUE_HOVER, self.confirm_hover.value(now)),
+                        lerp_color(tokens.pill.confirm, tokens.pill.confirm_hover, self.confirm_hover.value(now)),
                         Color32::WHITE,
                         icons::IconName::Check,
                         17.0,
@@ -805,7 +863,7 @@ fn badge(
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
         frame.labels.translate_to.clone(),
-        format(11.0, 400.0, 16.5, BLUE),
+        format(11.0, 400.0, 16.5, tokens.pill.ink),
     ));
     let target = frame
         .state
@@ -848,7 +906,7 @@ fn badge(
         }
         .as_shape(rect, 6)
         .into(),
-        egui::epaint::RectShape::filled(rect, 6, fade(Color32::WHITE)).into(),
+        egui::epaint::RectShape::filled(rect, 6, fade(tokens.pill.fill)).into(),
         shapes::inset_shadow(
             rect.shrink(1.0),
             5.0,
@@ -861,7 +919,7 @@ fn badge(
         egui::epaint::RectShape::stroke(
             rect,
             6,
-            Stroke::new(1.0, fade(SWEEP)),
+            Stroke::new(1.0, fade(tokens.pill.sweep)),
             StrokeKind::Inside,
         )
         .into(),
@@ -1018,6 +1076,27 @@ fn notice(painter: &Painter, stage: Rect, frame: &Frame, tokens: &Tokens, now: f
 mod tests {
     use super::*;
     use crate::{CapsuleLabels, CapsulePopupState, ThemeMode};
+
+    #[test]
+    fn both_pill_themes_keep_status_text_readable_over_light_and_dark_desktops() {
+        let luminance = |rgb: [f32; 3]| {
+            let linear = rgb.map(|c| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) });
+            0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        };
+        for dark in [false, true] {
+            let palette = pill_palette(dark);
+            let fill = palette.fill.to_srgba_unmultiplied();
+            assert_eq!(fill[0] < 128, dark, "the pill must follow the selected theme");
+            for desktop in [0.0, 1.0] {
+                let alpha = fill[3] as f32 / 255.0;
+                let background = [0, 1, 2].map(|i| fill[i] as f32 / 255.0 * alpha + desktop * (1.0 - alpha));
+                let ink = palette.ink.to_srgba_unmultiplied();
+                let foreground = [0, 1, 2].map(|i| ink[i] as f32 / 255.0);
+                let (a, b) = (luminance(background), luminance(foreground));
+                assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+            }
+        }
+    }
 
     fn frame(phase: &str) -> Frame {
         Frame {

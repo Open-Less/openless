@@ -5,7 +5,7 @@ import { keyboardInteraction } from './interactionMode';
 export const OVERLAY_EXIT_MS = 180;
 const ENTER_MS = 240;
 const SETTINGS_ENTER_MS = 240;
-const SETTINGS_BACKDROP_MS = 220;
+const SETTINGS_BACKDROP_MS = 280;
 const CONTENT_MS = 160;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 let media: MediaQueryList | undefined;
@@ -94,7 +94,9 @@ export function useOverlayMotion(
     const settingsEntrance = entrance === 'settings';
     const hidden =
       variant === 'backdrop'
-        ? FADED
+        ? settingsEntrance
+          ? { opacity: 0, transform: 'translate3d(0, 10px, 0) scale(0.965)' }
+          : FADED
         : {
             opacity: 0,
             transform:
@@ -104,7 +106,7 @@ export function useOverlayMotion(
                   ? 'translate3d(0, 16px, 0)'
                   : settingsEntrance
                     ? 'translate3d(0, 20px, 0) scale(0.96)'
-                    : 'translate3d(0, 8px, 0) scale(0.985)',
+                    : 'translate3d(0, 10px, 0) scale(0.95)',
           };
     const from =
       interrupted.current?.element === element
@@ -238,38 +240,4 @@ export function useSelectionMotion(
       motion?.cancel();
     };
   }, [groupRef, indicatorRef, selection, underline, reduced]);
-}
-
-/** Navigate immediately, then soften the new content without a fade-to-blank gap.
- * No exit queue, translated text, or stale completion can delay a later choice. */
-export function usePageTransition<T extends string>(
-  requested: T,
-  ref: RefObject<HTMLElement>,
-  _mobile: boolean,
-) {
-  const previous = useRef(requested);
-  const reduced = useReducedMotion();
-  useLayoutEffect(() => {
-    const changed = previous.current !== requested;
-    previous.current = requested;
-    const element = ref.current;
-    if (
-      !changed ||
-      !element ||
-      reduced ||
-      keyboardInteraction() ||
-      typeof element.animate !== 'function'
-    )
-      return;
-    const motion = animate(
-      element,
-      { opacity: 0.6, transform: 'none' },
-      VISIBLE,
-      CONTENT_MS,
-      false,
-    );
-    void motion.animation.finished.then(motion.cancel).catch(() => {});
-    return motion.cancel;
-  }, [requested, ref, reduced]);
-  return requested;
 }

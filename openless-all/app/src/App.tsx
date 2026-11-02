@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
 import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
@@ -10,6 +10,7 @@ import {
   getHotkeyStatus,
   getStartupSnapshot,
   getVoiceEditState,
+  getCredentials,
   getSettings,
   getPlatformCapabilities,
   handleWindowHotkeyEvent,
@@ -20,7 +21,19 @@ import { cancelAndCloseVoiceEditSession } from './lib/ipc/voice-edit-session';
 import type { PlatformCapabilities } from './lib/types';
 import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
 import { markStartup } from './lib/startupMetrics';
+import { withStartupDeadline } from './lib/startupProbe';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
+import {
+  needsDesktopGuide,
+  newGuideProgress,
+  readGuideProgress,
+  REOPEN_ONBOARDING_EVENT,
+  getDesktopOnboardingState,
+  saveGuideProgress,
+  setDesktopOnboardingFinished,
+} from './lib/desktopOnboarding';
+import { useReducedMotion } from './lib/motion';
+import { AudioCueListener } from './components/AudioCue';
 
 // Lazy-load pages per WebView by window purpose to cut resident memory. The capsule
 // gives instant recording feedback — small and first-frame-latency sensitive — so it
@@ -120,7 +133,12 @@ function ReadyApp({
     return <CapsuleTranscriptOverlay />;
   }
   if (isCapsule) {
-    return <Capsule os={forcedOs} />;
+    return (
+      <>
+        <Capsule os={forcedOs} />
+        <AudioCueListener />
+      </>
+    );
   }
   if (isQa) {
     return (
@@ -160,18 +178,49 @@ function ReadyApp({
 
   const os = forcedOs ?? detectOS();
   // Windows startup must not block the first screen on permission probes.
-  const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
+  const [gate, setGate] = useState<Gate>(
+    isTauri
+      ? 'checking'
+      : new URLSearchParams(location.search).get('onboarding') === '1'
+        ? 'onboarding'
+        : 'ready',
+  );
+  const [onboardingHandoff, setOnboardingHandoff] = useState(false);
+  const reducedMotion = useReducedMotion();
   const [startupError, setStartupError] = useState<string | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [mobileQaOpen, setMobileQaOpen] = useState(false);
   const [mobileVoiceEditOpen, setMobileVoiceEditOpen] = useState(false);
   const [mobileVoiceEditCloseError, setMobileVoiceEditCloseError] = useState('');
-  const completeOnboarding = () => {
+  const completeOnboarding = async () => {
     if (platformCaps?.platform === 'android') {
       localStorage.setItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY, '1');
+    } else {
+      await import('./components/FloatingShell');
     }
-    setGate('ready');
+    startTransition(() => {
+      setOnboardingHandoff(platformCaps?.platform !== 'android' && !reducedMotion);
+      setGate('ready');
+    });
   };
+  useEffect(() => {
+    if (!onboardingHandoff) return;
+    const timer = window.setTimeout(() => setOnboardingHandoff(false), reducedMotion ? 0 : 280);
+    return () => window.clearTimeout(timer);
+  }, [onboardingHandoff, reducedMotion]);
+  useEffect(() => {
+    const reopen = () => {
+      if (isTauri) {
+        saveGuideProgress(newGuideProgress());
+        void setDesktopOnboardingFinished(false).catch((error) =>
+          console.warn('[onboarding] clear persisted completion failed', error),
+        );
+      }
+      setGate('onboarding');
+    };
+    window.addEventListener(REOPEN_ONBOARDING_EVENT, reopen);
+    return () => window.removeEventListener(REOPEN_ONBOARDING_EVENT, reopen);
+  }, []);
   useEffect(() => {
     if (!isTauri) return;
     void getStartupSnapshot()
@@ -326,6 +375,7 @@ function ReadyApp({
   useEffect(() => {
     if (!isTauri || !platformCaps) return;
     let cancelled = false;
+    const startupProbe = new AbortController();
 
     void (async () => {
       const caps = platformCaps;
@@ -344,6 +394,20 @@ function ReadyApp({
         return;
       }
 
+      const progress = readGuideProgress();
+      const [credentials, persistedOnboarding] = await Promise.all([
+        withStartupDeadline(getCredentials(), startupProbe.signal),
+        withStartupDeadline(getDesktopOnboardingState(), startupProbe.signal).catch((error) => {
+          console.warn('[startup] persisted onboarding state unavailable', error);
+          return { finished: false };
+        }),
+      ]);
+      if (cancelled) return;
+      if (needsDesktopGuide(progress, credentials, persistedOnboarding.finished)) {
+        setGate('onboarding');
+        return;
+      }
+
       if (os === 'win') {
         // Timeout guard: 50 × 200ms = 10s. If the hotkey hook stays "starting" forever
         // (blocked by anti-cheat / EDR / UAC), don't deadlock the UI on a gray screen;
@@ -357,6 +421,15 @@ function ReadyApp({
           const status = await getHotkeyStatus();
           if (cancelled) return;
           if (status.state !== 'starting') {
+            if (status.state === 'failed') {
+              saveGuideProgress({
+                ...(progress ?? newGuideProgress()),
+                step: 'shortcut',
+                finished: false,
+              });
+              setGate('onboarding');
+              return;
+            }
             setGate('ready');
             return;
           }
@@ -381,16 +454,25 @@ function ReadyApp({
       // onboarding; let them in and show the clear "no microphone detected" notice on
       // the permissions page. See issue #779.
       const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
-      setGate(aOk && mOk ? 'ready' : 'onboarding');
-    })().catch((error) => {
-      console.warn('[startup] permission gate failed', error);
-      if (!cancelled) {
+      if (aOk && mOk) {
         setGate('ready');
+      } else {
+        saveGuideProgress({
+          ...(progress ?? newGuideProgress()),
+          step: !aOk && os === 'mac' ? 'accessibility' : 'microphone',
+          finished: false,
+        });
+        setGate('onboarding');
       }
+    })().catch((error) => {
+      if (cancelled) return;
+      console.warn('[startup] permission gate failed', error);
+      setGate('ready');
     });
 
     return () => {
       cancelled = true;
+      startupProbe.abort();
     };
   }, [os, platformCaps]);
 
@@ -468,13 +550,27 @@ function ReadyApp({
             />
           </div>
         )}
-        {!mobileQaOpen &&
-          !mobileVoiceEditOpen &&
-          (gate === 'onboarding' ? (
-            <Onboarding onComplete={completeOnboarding} />
-          ) : (
-            <FloatingShell os={os} />
-          ))}
+        {!mobileQaOpen && !mobileVoiceEditOpen && (
+          <div style={{ width: '100%', height: '100%', minWidth: 0, position: 'relative' }}>
+            {gate === 'ready' && (
+              <div className="ol-main-arrival">
+                <FloatingShell os={os} />
+              </div>
+            )}
+            {(gate === 'onboarding' || onboardingHandoff) && (
+              <div
+                className="ol-onboarding-layer"
+                data-leaving={onboardingHandoff || undefined}
+                aria-hidden={onboardingHandoff || undefined}
+                ref={(element) => {
+                  if (element) element.inert = onboardingHandoff;
+                }}
+              >
+                <Onboarding onComplete={completeOnboarding} />
+              </div>
+            )}
+          </div>
+        )}
         {gate === 'ready' && platformCaps?.supportsAutoUpdate === true && <AutoUpdateGate />}
       </HotkeySettingsProvider>
     </Suspense>

@@ -15,7 +15,7 @@ export AR_aarch64_unknown_linux_ohos="$NATIVE/llvm/bin/llvm-ar"
 # generated for the previous one, and the build dies assembling x86_64 sources
 # for aarch64. Rebuild only that crate when the toolchain moves.
 marker="$CARGO_TARGET_DIR/ohos-toolchain-path"
-if [ "$(cat "$marker" 2>/dev/null)" != "$TOOLCHAIN" ]; then
+if [ "$(cat "$marker" 2> /dev/null)" != "$TOOLCHAIN" ]; then
   rm -rf "$CARGO_TARGET_DIR"/aarch64-unknown-linux-ohos/release/build/aws-lc-sys-*
   mkdir -p "$CARGO_TARGET_DIR"
   printf '%s\n' "$TOOLCHAIN" > "$marker"

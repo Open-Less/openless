@@ -102,7 +102,10 @@ test('Apple system recognition remains selectable without local-model controls',
   await expect(form.locator('.ol-channel-local-hint')).toHaveCount(0);
   await expect(form.locator('.ol-local-model-picker')).toHaveCount(0);
   await expect(form.getByRole('textbox', { name: /API Key|Base URL/ })).toHaveCount(0);
-  await form.getByRole('button', { name: '返回渠道列表', exact: true }).click();
+  await form
+    .locator('.ol-channel-dialog-footer')
+    .getByRole('button', { name: '关闭', exact: true })
+    .click();
   const card = page.locator('[data-channel-provider="apple-speech"]');
   await expect(card).toHaveCount(1);
   await expect(card).not.toHaveAttribute('data-retired-local-asr', 'true');

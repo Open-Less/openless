@@ -94,15 +94,21 @@ assert.match(linux, /cargo build --locked --release -p openless-linux-egui/);
 assert.match(linuxRelease, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(linuxRelease, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
-// The capsule crates used to run in their own pull-request-only workflow: it
-// wrote a dependency tree under `refs/pull/<n>/merge` (never restored again)
-// while beta produced nothing to restore. It now lives here, behind the same
-// `Changed areas` verdict, and saves only from beta.
+// The capsule crates used to run in a pull-request-only workflow that wrote a
+// dependency tree under `refs/pull/<n>/merge` (never restored again) while beta
+// produced nothing to restore. They now live in `ci.yml` behind their own area
+// gate and save only from beta, so a run costs ~40 s and the common PR pays no
+// runner for them at all.
 {
   const capsuleJob = ci.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
   assert.ok(capsuleJob, 'ci.yml must run the capsule crates as the native-capsule job');
   assert.match(capsuleJob, /shared-key: native-capsule/);
   assert.match(capsuleJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta'/);
+  assert.match(
+    capsuleJob,
+    /if: needs\.changes\.outputs\.capsule != 'false'/,
+    'the capsule job must be gated on its own area, not run for every desktop change',
+  );
   assert.ok(
     !existsSync(join(root, '.github/workflows/native-capsule.yml')),
     'native-capsule.yml must stay merged into ci.yml',

@@ -1,3 +1,4 @@
+import { desktopGuideEn as desktopGuide } from './desktopGuide';
 import { siwcEn as siwc } from './siwc';
 // English resources — translated from zh-CN.ts. Keep keys in sync.
 
@@ -8,6 +9,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const en: typeof zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1280,6 +1282,11 @@ export const en: typeof zhCN = {
       unavailable: 'No testing features are available on this platform yet.',
     },
     selectionWorkspace: {
+      extraControls: 'Advanced controls',
+      extraControlsDesc: 'Configure question/edit routing and model output only when needed.',
+      openExtraControls: 'More',
+      extraControlsSaveHint: 'Changes save automatically.',
+      extraControlsDone: 'Done',
       title: 'Selection Assistant',
       hint: 'With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.',
       polishHotkey: 'Selection assistant shortcut',
@@ -1537,7 +1544,7 @@ export const en: typeof zhCN = {
         'Switching from all-screen display requires a restart to clear the previous capsule windows. Restart now?',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
-      capsuleStyleClassic: 'OpenLess default style',
+      capsuleStyleClassic: 'Default style',
       stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',
@@ -1682,9 +1689,11 @@ export const en: typeof zhCN = {
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
       debugArchiveProcessedLabel: 'Keep processed audio',
-      debugArchiveProcessedDesc: 'The version after noise reduction and gain, stored in the existing recording file.',
+      debugArchiveProcessedDesc:
+        'The version after noise reduction and gain, stored in the existing recording file.',
       debugArchiveRawLabel: 'Also keep pre-processing audio',
-      debugArchiveRawDesc: 'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
+      debugArchiveRawDesc:
+        'Writes <session>.raw.wav next to it so you can compare. With only this enabled the raw audio goes into the main archive.',
       recordAudioForDebugLabel: 'Keep raw recording (debug)',
       recordAudioForDebugDesc:
         'Save raw microphone audio as wav for diagnosing recognition issues.',
@@ -1705,16 +1714,6 @@ export const en: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Stop after timeout',
       voiceActivationTimeoutSeconds: 'Timeout (seconds)',
       startupGroupTitle: 'Startup',
-      lowMemoryBackgroundLabel: 'Low-memory background mode',
-      lowMemoryBackgroundDesc:
-        'Applies after restart. Release the main window on close and show a native capsule on demand. Disable microphone prewarming while idle. Local models keep their existing release settings.',
-      lowMemoryRestartLabel: 'Applies after restart',
-      lowMemoryRestartDesc:
-        'The low-memory background switch is saved; the running mode changes after the app restarts.',
-      lowMemoryRestartNow: 'Restart now',
-      lowMemoryCapsuleErrorLabel: 'Native capsule unavailable',
-      lowMemoryCapsuleErrorDesc:
-        'Dictation still works, but the floating capsule will not appear. The helper may be missing or blocked; reinstall the app.',
       startMinimizedLabel: 'Start minimized (no main window)',
       startMinimizedDesc: 'No main window on any launch path — menu bar / tray only.',
       autoUpdateCheckLabel: 'Auto-check for updates',
@@ -1765,6 +1764,7 @@ export const en: typeof zhCN = {
       nameHint:
         'This name distinguishes channels from the same provider. It does not affect the model or connection.',
       errModel: 'Model',
+      errThinking: 'turn on Thinking',
       verify: 'Verify',
       verifyHint: 'Makes one real API call to check this channel works right now',
       errTimeout: 'timeout',
@@ -1991,6 +1991,8 @@ export const en: typeof zhCN = {
       llmProtocolHeaderConflict:
         'Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.',
       llmStreamError: 'The server returned a stream error. Check the model and request parameters.',
+      llmThinkingRequired:
+        'This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.',
       saveProtocol: 'Save protocol settings',
       thinkingModeHint:
         'Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.',

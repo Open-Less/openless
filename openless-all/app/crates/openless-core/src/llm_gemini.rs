@@ -319,21 +319,58 @@ impl GeminiProvider {
         })
     }
 
-    async fn send_unary(&self, url: &str, body: &Value) -> Result<String, LLMError> {
+    async fn post(
+        &self,
+        url: &str,
+        body: &Value,
+        sse: bool,
+    ) -> Result<reqwest::Response, LLMError> {
         let mut request = self
             .client
             .post(url)
             .header("Content-Type", "application/json");
+        if sse {
+            request = request.header("Accept", "text/event-stream");
+        }
         if !self.config.api_key.trim().is_empty() {
             request = request.header("x-goog-api-key", self.config.api_key.as_str());
         }
-        let request = request.json(body);
+        request
+            .json(body)
+            .send()
+            .await
+            .map_err(llm_error_from_reqwest)
+    }
 
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => return Err(llm_error_from_reqwest(e)),
+    /// Whether a 400 came from the thinking-off config: Gemini rejects it
+    /// with the generic "Request contains an invalid argument."
+    /// (gemini-3.5-flash-lite), so only re-sending the request without
+    /// `thinkingConfig` tells it apart from other bad arguments.
+    async fn rejects_thinking_off(
+        &self,
+        url: &str,
+        status: reqwest::StatusCode,
+        body: &Value,
+        sse: bool,
+    ) -> bool {
+        let Some(probe_body) = body_without_thinking_config(status, body) else {
+            return false;
         };
+        let rejected = self
+            .post(url, &probe_body, sse)
+            .await
+            .is_ok_and(|probe| probe.status().is_success());
+        if rejected {
+            log::warn!(
+                "[llm] gemini model={} rejects thinking turned off; the channel needs thinking on",
+                self.config.model
+            );
+        }
+        rejected
+    }
 
+    async fn send_unary(&self, url: &str, body: &Value) -> Result<String, LLMError> {
+        let response = self.post(url, body, false).await?;
         let status = response.status();
         let body_text = response.text().await.map_err(llm_error_from_reqwest)?;
 
@@ -342,6 +379,9 @@ impl GeminiProvider {
         log::info!("[llm] HTTP {} body={}", status.as_u16(), preview);
 
         if !status.is_success() {
+            if self.rejects_thinking_off(url, status, body, false).await {
+                return Err(thinking_required_error());
+            }
             return Err(LLMError::InvalidResponse {
                 status: status.as_u16(),
                 body: preview.to_string(),
@@ -362,34 +402,31 @@ impl GeminiProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let mut request = self
-            .client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream");
-        if !self.config.api_key.trim().is_empty() {
-            request = request.header("x-goog-api-key", self.config.api_key.as_str());
-        }
-        let request = request.json(body);
-
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => return Err(llm_error_from_reqwest(e)),
-        };
-
+        let mut response = self.post(url, body, true).await?;
         let status = response.status();
         if !status.is_success() {
             let body_text = response.text().await.map_err(llm_error_from_reqwest)?;
-            let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
-            let preview = safe_str_slice(&body_text, preview_end);
-            log::error!("[llm] HTTP {} body={}", status.as_u16(), preview);
-            return Err(LLMError::InvalidResponse {
-                status: status.as_u16(),
-                body: preview.to_string(),
-            });
+            let error = http_failure(status, &body_text);
+            if should_cancel() {
+                return Err(LLMError::Network("cancelled".into()));
+            }
+            // Match the shared streaming client's cancellation while waiting on network data.
+            let cancellation = async {
+                while !should_cancel() {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            };
+            let thinking_required = tokio::select! {
+                biased;
+                _ = cancellation => return Err(LLMError::Network("cancelled".into())),
+                rejected = self.rejects_thinking_off(url, status, body, true) => rejected,
+            };
+            if thinking_required {
+                return Err(thinking_required_error());
+            }
+            return Err(error);
         }
 
-        let mut response = response;
         // Byte-level buffering — `reqwest::chunk()` may split in the middle
         // of a multi-byte UTF-8 character (CJK / emoji); calling from_utf8 on
         // each chunk independently would treat a valid SSE stream as
@@ -464,6 +501,16 @@ impl GeminiProvider {
 }
 
 // ─────────────────────── internal helpers ───────────────────────
+
+fn http_failure(status: reqwest::StatusCode, body_text: &str) -> LLMError {
+    let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
+    let preview = safe_str_slice(body_text, preview_end);
+    log::error!("[llm] HTTP {} body={}", status.as_u16(), preview);
+    LLMError::InvalidResponse {
+        status: status.as_u16(),
+        body: preview.to_string(),
+    }
+}
 
 fn user_content(text: &str) -> Value {
     json!({ "role": "user", "parts": [{ "text": text }] })
@@ -585,11 +632,49 @@ fn qa_messages_to_contents(messages: &[QaChatMessage]) -> Vec<Value> {
 ///
 /// OpenLess keeps no per-model adaptation table: when thinking is enabled,
 /// no thinkingConfig is sent; when disabled, it sends the official
-/// `thinkingBudget = 0` that expresses "no thinking". If a specific model
-/// doesn't support the field or can't fully disable thinking, the Gemini API
-/// itself handles that.
+/// `thinkingBudget = 0` that expresses "no thinking". A model that rejects
+/// it (Gemini 3+ models only take `thinkingLevel`, some can't stop thinking)
+/// fails with `llmThinkingRequired`, which asks the user to turn thinking
+/// on — see `GeminiProvider::rejects_thinking_off`.
 fn disabled_thinking_config() -> Value {
     json!({ "thinkingBudget": 0 })
+}
+
+/// The same request with `thinkingConfig` dropped, to probe a 400. `None`
+/// when the failure is anything else or the request carried no
+/// thinkingConfig.
+fn body_without_thinking_config(
+    status: reqwest::StatusCode,
+    request_body: &Value,
+) -> Option<Value> {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return None;
+    }
+    request_body["generationConfig"].get("thinkingConfig")?;
+    let mut probe_body = request_body.clone();
+    probe_body["generationConfig"]
+        .as_object_mut()?
+        .remove("thinkingConfig");
+    Some(probe_body)
+}
+
+/// Shown by the provider settings as "turn thinking on"
+/// (`settings.providers.llmThinkingRequired`).
+fn thinking_required_error() -> LLMError {
+    LLMError::ParseError("llmThinkingRequired".to_string())
+}
+
+/// Base path with the API version defaulted like model listing and Gemini
+/// ASR (`asr::gemini::endpoint_url`): a bare
+/// `https://generativelanguage.googleapis.com` would otherwise POST to
+/// `/models/...` and 404.
+fn api_base_path(url: &reqwest::Url) -> String {
+    let path = url.path().trim_end_matches('/');
+    if path.is_empty() {
+        "/v1beta".to_owned()
+    } else {
+        path.to_owned()
+    }
 }
 
 fn generate_content_url(base_url: &str, model: &str) -> String {
@@ -598,7 +683,7 @@ fn generate_content_url(base_url: &str, model: &str) -> String {
         let fallback = trimmed.trim_end_matches('/');
         return format!("{fallback}/models/{model}:generateContent");
     };
-    let path = url.path().trim_end_matches('/');
+    let path = api_base_path(&url);
     url.set_path(&format!("{path}/models/{model}:generateContent"));
     url.to_string()
 }
@@ -609,7 +694,7 @@ fn stream_generate_content_url(base_url: &str, model: &str) -> String {
         let fallback = trimmed.trim_end_matches('/');
         return format!("{fallback}/models/{model}:streamGenerateContent?alt=sse");
     };
-    let path = url.path().trim_end_matches('/');
+    let path = api_base_path(&url);
     url.set_path(&format!("{path}/models/{model}:streamGenerateContent"));
     let existing_query = url
         .query_pairs()
@@ -690,6 +775,236 @@ mod tests {
                 "gemini-2.5-flash"
             ),
             "https://example.com/v1beta/models/gemini-2.5-flash:generateContent?token=query-secret#client-fragment"
+        );
+    }
+
+    #[test]
+    fn content_urls_default_bare_host_to_v1beta() {
+        // Model listing and Gemini ASR already default a bare host to
+        // /v1beta; the LLM call must too, or validation 404s.
+        for base in [
+            "https://generativelanguage.googleapis.com",
+            "https://generativelanguage.googleapis.com/",
+        ] {
+            assert_eq!(
+                generate_content_url(base, "gemini-3.5-flash-lite"),
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
+            );
+            assert_eq!(
+                stream_generate_content_url(base, "gemini-3.5-flash-lite"),
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:streamGenerateContent?alt=sse"
+            );
+        }
+        assert_eq!(
+            generate_content_url("https://proxy.example/v1", "m"),
+            "https://proxy.example/v1/models/m:generateContent"
+        );
+    }
+
+    const GENERIC_INVALID_ARGUMENT: &str = r#"{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}"#;
+
+    /// Answers each request on its own connection: Gemini's generic 400 when
+    /// `reject(body)` holds, else a one-word reply. Returns the base URL and
+    /// the request bodies seen so far.
+    async fn gemini_server(
+        reject: fn(&str) -> bool,
+        probe_delay: Duration,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}/v1beta", listener.local_addr().unwrap());
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&bodies);
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                let body = loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(read, 0, "request ended before body");
+                    request.extend_from_slice(&buffer[..read]);
+                    let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let header = String::from_utf8_lossy(&request[..index]).to_ascii_lowercase();
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    if request.len() >= index + 4 + length {
+                        break String::from_utf8_lossy(&request[index + 4..index + 4 + length])
+                            .into_owned();
+                    }
+                };
+                let (status, reply) = if reject(&body) {
+                    ("400 Bad Request", GENERIC_INVALID_ARGUMENT)
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}"#,
+                    )
+                };
+                seen.lock().unwrap().push(body);
+                if status == "200 OK" {
+                    tokio::time::sleep(probe_delay).await;
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (base_url, bodies)
+    }
+
+    fn provider_for(base_url: &str, thinking_enabled: bool) -> GeminiProvider {
+        // Do not inherit machine-specific proxy settings or the global cache.
+        GeminiProvider {
+            config: GeminiConfig::new("k", "gemini-3.5-flash-lite", base_url)
+                .with_thinking_enabled(thinking_enabled),
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        }
+    }
+
+    fn is_thinking_required<T>(result: &Result<T, LLMError>) -> bool {
+        matches!(result, Err(LLMError::ParseError(code)) if code == "llmThinkingRequired")
+    }
+
+    #[tokio::test]
+    async fn rejected_thinking_off_asks_to_turn_thinking_on() {
+        // gemini-3.5-flash-lite answers thinkingBudget 0 with the generic
+        // INVALID_ARGUMENT and accepts the request without thinkingConfig.
+        let (base_url, bodies) =
+            gemini_server(|body| body.contains("thinkingConfig"), Duration::ZERO).await;
+        let provider = provider_for(&base_url, false);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+
+        let unary = provider
+            .send_unary(&generate_content_url(&base_url, "m"), &body)
+            .await;
+        assert!(is_thinking_required(&unary));
+        let streaming = provider
+            .send_streaming(
+                &stream_generate_content_url(&base_url, "m"),
+                &body,
+                |_| {},
+                || false,
+            )
+            .await;
+        assert!(is_thinking_required(&streaming));
+
+        // Each call: the rejected request, then one probe without thinkingConfig.
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 4);
+        assert!(!bodies[1].contains("thinkingConfig"));
+        assert!(!bodies[3].contains("thinkingConfig"));
+    }
+
+    #[tokio::test]
+    async fn other_invalid_arguments_keep_the_http_error() {
+        let (base_url, bodies) = gemini_server(|_| true, Duration::ZERO).await;
+        let url = generate_content_url(&base_url, "m");
+
+        // The probe fails too, so thinking is not the cause.
+        let provider = provider_for(&base_url, false);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let result = provider.send_unary(&url, &body).await;
+        assert!(matches!(
+            result,
+            Err(LLMError::InvalidResponse { status: 400, .. })
+        ));
+        assert_eq!(bodies.lock().unwrap().len(), 2);
+
+        // Thinking on sends no thinkingConfig, so there is nothing to probe.
+        let provider = provider_for(&base_url, true);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let result = provider.send_unary(&url, &body).await;
+        assert!(matches!(
+            result,
+            Err(LLMError::InvalidResponse { status: 400, .. })
+        ));
+        assert_eq!(bodies.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn cancelled_stream_does_not_probe_thinking_config() {
+        let (base_url, bodies) = gemini_server(|_| true, Duration::ZERO).await;
+        let provider = provider_for(&base_url, false);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let result = provider
+            .send_streaming(
+                &stream_generate_content_url(&base_url, "m"),
+                &body,
+                |_| panic!("cancelled request emitted text"),
+                || !bodies.lock().unwrap().is_empty(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(LLMError::Network(ref message)) if message == "cancelled")
+        );
+        assert_eq!(bodies.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_stream_interrupts_a_pending_thinking_probe() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (base_url, bodies) = gemini_server(
+            |body| body.contains("thinkingConfig"),
+            Duration::from_secs(10),
+        )
+        .await;
+        let provider = provider_for(&base_url, false);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let cancel = std::sync::Arc::clone(&cancelled);
+        let seen = std::sync::Arc::clone(&bodies);
+        tokio::spawn(async move {
+            while seen.lock().unwrap().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            cancel.store(true, Ordering::Release);
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            provider.send_streaming(
+                &stream_generate_content_url(&base_url, "m"),
+                &body,
+                |_| panic!("cancelled request emitted text"),
+                || cancelled.load(Ordering::Acquire),
+            ),
+        )
+        .await
+        .expect("cancellation must not wait for the probe response");
+        assert!(
+            matches!(result, Err(LLMError::Network(ref message)) if message == "cancelled")
+        );
+        assert_eq!(bodies.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn only_a_400_with_thinking_config_is_probed() {
+        let cfg = GeminiConfig::new("k", "gemini-3.8-flash", "https://x/v1beta");
+        let body = GeminiProvider::new(cfg).build_generate_body("SYS", vec![user_content("hi")]);
+
+        let probe = body_without_thinking_config(reqwest::StatusCode::BAD_REQUEST, &body)
+            .expect("a 400 on the thinking-off request should be probed");
+        assert!(probe["generationConfig"].get("thinkingConfig").is_none());
+        assert_eq!(
+            probe["generationConfig"]["temperature"],
+            body["generationConfig"]["temperature"]
+        );
+        assert_eq!(probe["contents"], body["contents"]);
+        assert_eq!(probe["systemInstruction"], body["systemInstruction"]);
+
+        assert!(body_without_thinking_config(reqwest::StatusCode::NOT_FOUND, &body).is_none());
+        assert!(
+            body_without_thinking_config(reqwest::StatusCode::TOO_MANY_REQUESTS, &body).is_none()
         );
     }
 

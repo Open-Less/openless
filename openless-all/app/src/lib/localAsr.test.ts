@@ -11,11 +11,7 @@ const whisper = { runtime: 'generic', family: 'whisper' } as const;
 const foundry = { runtime: 'foundry', family: 'whisper' } as const;
 const sherpa = { runtime: 'sherpa_onnx', family: 'qwen3_asr' } as const;
 for (const os of ['mac', 'win', 'android'] as const) {
-  assertEqual(
-    isLocalAsrModelSupportedOnOs(qwen, os),
-    os === 'mac',
-    `generic Qwen on ${os}`,
-  );
+  assertEqual(isLocalAsrModelSupportedOnOs(qwen, os), os === 'mac', `generic Qwen on ${os}`);
   assertEqual(isLocalAsrModelSupportedOnOs(whisper, os), os === 'mac', `whisper.cpp on ${os}`);
   assertEqual(isLocalAsrModelSupportedOnOs(foundry, os), os === 'win', `Foundry Whisper on ${os}`);
   assertEqual(isLocalAsrModelSupportedOnOs(sherpa, os), os === 'win', `Sherpa Qwen on ${os}`);

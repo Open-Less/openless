@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class RimePinyinController(context: Context) {
     private val context = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
-    private val worker = Executors.newSingleThreadExecutor()
+    private val worker = RimeTaskQueue.executor
     private val cloudWorker = Executors.newSingleThreadExecutor()
     @Volatile private var generation = 0L
     @Volatile private var requestId = 0L
@@ -23,10 +23,12 @@ internal class RimePinyinController(context: Context) {
     @Volatile private var cloudChoices: Set<String> = emptySet()
     @Volatile private var candidateRevision = 0L
     private var session = ""
+    private var sessionGeneration = 0L
     private var pending = ""
     private var pendingLiteral = ""
     private var commit: (String) -> Boolean = { false }
     private val confirmedText = StringBuilder()
+    val associationLearning = TypedContinuationHistory()
     private var associationEpoch = 0L
     fun bindCommit(handler: (String) -> Boolean) { commit = handler }
     fun currentEncoding(): String = encoding
@@ -57,7 +59,16 @@ internal class RimePinyinController(context: Context) {
             try {
                 if (epoch != generation) return@execute
                 OpenLessRime.initialize(context)
-                if (session.isEmpty()) session = OpenLessRime.request("create", "", if (learning) "learning" else "private").getString("session")
+                // A dictionary import/export or a fuzzy-pinyin redeploy closed every native session.
+                if (session.isNotEmpty() && sessionGeneration != OpenLessRime.sessionGeneration) {
+                    // A failed editor write still belongs to this editor even if
+                    // maintenance closed the native session before its retry.
+                    session = ""
+                }
+                if (session.isEmpty()) {
+                    sessionGeneration = OpenLessRime.sessionGeneration
+                    session = OpenLessRime.request("create", "", if (learning) "learning" else "private").getString("session")
+                }
                 if (pending.isNotEmpty()) {
                     check(deliver(pending, epoch)) { "Editor write failed" }
                     OpenLessRime.request("ack", session); pending = ""
@@ -152,7 +163,8 @@ internal class RimePinyinController(context: Context) {
             catch (_: Throwable) {} finally { session = ""; pending = ""; pendingLiteral = "" }
         }
     }
-    fun shutdown() { clear(); worker.shutdown(); cloudWorker.shutdownNow() }
+    // The input queue also belongs to other controllers and dictionary maintenance.
+    fun shutdown() { clear(); cloudWorker.shutdownNow() }
     private fun cloudEnabled(): Boolean = learning && context.getSharedPreferences("openless_ime_ui", Context.MODE_PRIVATE)
         .getBoolean("cloud_pinyin_enabled", false)
 
@@ -180,7 +192,9 @@ internal class RimePinyinController(context: Context) {
         if (confirmedText.length > StrokeInputController.MAX_ASSOCIATION_CONTEXT)
             confirmedText.delete(0, confirmedText.length - StrokeInputController.MAX_ASSOCIATION_CONTEXT)
     }
-    fun resetAssociationContext() { confirmedText.clear(); associationEpoch++ }
+    /** What was committed just before the next commit, for StrokePhraseRepository.recordTypedContinuation(). */
+    fun associationContext(): String = confirmedText.toString()
+    fun resetAssociationContext() { confirmedText.clear(); associationLearning.reset(); associationEpoch++ }
     fun queryAssociations(repository: StrokePhraseRepository, update: (List<StrokePhraseRepository.Candidate>) -> Unit) {
         val text = confirmedText.toString()
         if (text.isEmpty()) { update(emptyList()); return }

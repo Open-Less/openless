@@ -61,8 +61,7 @@ button:disabled {
   padding: 8px 0;
 }
 
-/* Do not composite a masked copy of every scrolling page. Native wheel momentum
-   stays under OS control; no preventDefault, debounce or second inertia engine. */
+/* Trackpad momentum stays native; only coarse mouse-wheel notches are smoothed. */
 .ol-scroll-fade {
   mask-image: none !important;
   -webkit-mask-image: none !important;
@@ -92,6 +91,16 @@ button:disabled {
 }
 .ol-settings-content-pane {
   background: var(--ol-surface) !important;
+}
+.ol-capsule-style-segmented {
+  width: min(220px, 100%);
+  min-width: 0;
+}
+.ol-capsule-style-segmented .ol-segmented-option {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
 }
 /* Colours and hover come from .ol-settings-rail-link (global.css). */
 .ol-settings-return {
@@ -237,16 +246,19 @@ button:disabled {
   min-width: 0;
 }
 .ol-shortcut-recorder > div {
-  width: 100%;
+  max-width: 100%;
 }
 .ol-shortcut-binding {
-  display: flex;
-  justify-content: flex-end;
+  display: inline-flex;
+  justify-content: center;
   align-items: center;
-  flex: 1;
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
   min-height: 32px;
-  padding: 4px;
-  text-align: right;
+  padding: 4px 8px;
+  border-radius: 8px;
+  text-align: center;
 }
 .ol-shortcut-binding > span {
   flex-wrap: wrap;
@@ -767,4 +779,81 @@ html[data-ol-input='keyboard'] .ol-switch-thumb {
   .ol-select-trigger {
     border-color: var(--ol-ink-2);
   }
+}
+
+.ol-transition-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.ol-transition-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  background: color-mix(in srgb, var(--ol-surface) 18%, transparent);
+  transition: opacity 120ms var(--ol-motion-quick);
+}
+.ol-transition-viewport[aria-busy='true'] .ol-transition-mask {
+  opacity: 1;
+}
+.ol-main-arrival {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 40%;
+  animation: ol-main-arrive 280ms var(--ol-motion-soft);
+}
+@keyframes ol-main-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0px);
+  }
+}
+.ol-shell-depth {
+  transition:
+    transform 280ms var(--ol-motion-soft),
+    opacity 280ms var(--ol-motion-soft);
+  transform-origin: 50% 40%;
+}
+.ol-app-shell-bg[data-ol-settings-open='true'] {
+  transform: scale(0.985);
+  opacity: 0.72;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-transition-mask {
+    transition: none;
+  }
+  .ol-main-arrival {
+    animation: none;
+  }
+  .ol-shell-depth {
+    transition: none;
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* Scrolling remains available by wheel, touch and keyboard without visual rails. */
+.ol-thinscroll,
+.ol-dialog-card,
+.ol-channel-dialog-body,
+.ol-guide-reading {
+  scrollbar-width: none;
+}
+.ol-thinscroll::-webkit-scrollbar,
+.ol-dialog-card::-webkit-scrollbar,
+.ol-channel-dialog-body::-webkit-scrollbar,
+.ol-guide-reading::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }

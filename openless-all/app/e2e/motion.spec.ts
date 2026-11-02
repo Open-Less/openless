@@ -115,9 +115,10 @@ test('settings entrance exposes its starting pose, interpolates and releases its
     }
   });
   expect(initial.opacity).toBeLessThan(0.1);
-  // A full-window settings destination fades; scaling its text caused raster flicker.
-  expect(initial.y).toBe(0);
-  expect(initial.scale).toBe(1);
+  // Settings enters as a surface, then releases its transform at rest for crisp text.
+  expect(initial.y).toBeCloseTo(10, 1);
+  expect(initial.scale).toBeCloseTo(0.965, 3);
+  expect(frames.some((frame) => frame.scale > 0.966 && frame.scale < 0.999)).toBe(true);
   expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
   expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
   await expect(dialog).toHaveCSS('opacity', '1');
@@ -129,7 +130,7 @@ test('rapid return to the current page cannot leave it transparent or inert', as
     await page.getByRole('button', { name: '历史', exact: true }).press('Enter');
     await page.getByRole('button', { name: '概览', exact: true }).press('Enter');
     // Inspect beyond the complete transition budget to catch stale completion callbacks.
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(500);
     const content = page.locator('main .ol-scroll-fade');
     await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
     await expect(content).toHaveCSS('opacity', '1');
@@ -267,8 +268,10 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   // OpenLess is now the default; opt into the optional WebGL style for this probe.
-  await page.getByRole('combobox', { name: '胶囊样式' }).click();
-  await page.getByRole('option', { name: /Siri/ }).click();
+  await page
+    .getByRole('group', { name: '胶囊样式' })
+    .getByRole('button', { name: /Siri/ })
+    .click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws))
     .toBeGreaterThan(5);
@@ -278,7 +281,7 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   const before = await page.evaluate(
     () => (window as Window & { motionDraws: number }).motionDraws,
   );
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
   expect(await page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws)).toBe(
     before,
   );

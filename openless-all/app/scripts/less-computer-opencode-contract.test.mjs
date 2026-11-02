@@ -14,8 +14,9 @@ assert(
   'Windows must expose Less Computer configuration and its text entry point',
 );
 assert(
-  /if \(prefs\.testingFeaturesEnabled && \(os === 'mac' \|\| os === 'win'\)\)\s*commands\.push\(/.test(shortcuts) &&
-    shortcuts.includes('binding: prefs.codingAgentVoiceHotkey'),
+  /if \(prefs\.testingFeaturesEnabled && \(os === 'mac' \|\| os === 'win'\)\)\s*commands\.push\(/.test(
+    shortcuts,
+  ) && shortcuts.includes('binding: prefs.codingAgentVoiceHotkey'),
   'Windows must expose the Less Computer voice shortcut',
 );
 // Platform visibility is covered by navigation.test.ts; the detail route must
@@ -131,7 +132,8 @@ assert(
   'settings microphone enumeration must not block the AppKit main thread',
 );
 assert(
-  onboarding.includes("t('onboarding.continueToSettings')"),
+  onboarding.includes('DesktopOnboarding') &&
+    (await read('src/components/DesktopOnboarding.tsx')).includes("t('desktopGuide.skipAll')"),
   'users must be able to configure OpenCode without granting unrelated system permissions first',
 );
 assert(
@@ -203,7 +205,10 @@ assert(
     windowsShow.includes('result_tx.send(result)') &&
     windowsShow.includes('result_rx.recv().map_err(') &&
     windowsShow.indexOf('run_on_main_thread') < windowsShow.indexOf('window.show()') &&
-    windowsShow.indexOf('ensure_testing_features_enabled()', windowsShow.indexOf('run_on_main_thread')) < windowsShow.indexOf('window.show()'),
+    windowsShow.indexOf(
+      'ensure_testing_features_enabled()',
+      windowsShow.indexOf('run_on_main_thread'),
+    ) < windowsShow.indexOf('window.show()'),
   'Windows Less Computer must return creation/show failures before reporting success',
 );
 const submitTextEnd = qaCommands.indexOf(

@@ -308,16 +308,42 @@ fn emit_capsule_payload_locked(
         log::debug!("[capsule] skipped stale payload commit at revision {captured_revision}");
         return event_epoch;
     }
+    // On Windows, callers include the cpal audio callback (~30 Hz) and the backend event
+    // task. Keep Tauri handle access on the event-loop thread there; other platforms retain
+    // their existing presentation path.
+    #[cfg(target_os = "windows")]
+    {
+        let inner_for_main = Arc::clone(inner);
+        inner.host.on_main_thread(move || {
+            present_capsule_payload(&inner_for_main, payload, event_epoch, prev_state)
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    present_capsule_payload(inner, payload, event_epoch, prev_state);
+    event_epoch
+}
+
+/// Native or WebView capsule presentation plus the `capsule:state` events. On Windows this
+/// runs on the event-loop thread; other platforms keep their existing dispatch behavior.
+fn present_capsule_payload(
+    inner: &Arc<Inner>,
+    payload: CapsulePayload,
+    event_epoch: u64,
+    prev_state: Option<CapsuleState>,
+) {
+    let state = payload.state;
     #[cfg(not(mobile))]
     if inner
         .host
         .present_native_capsule(&payload, event_epoch, prev_state)
     {
         inner.host.emit_capsule_state_to_main(&payload);
-        return event_epoch;
+        return;
     }
+    #[cfg(mobile)]
+    let _ = event_epoch;
     let Some(capsule) = inner.host.capsule_window() else {
-        return event_epoch;
+        return;
     };
 
     #[cfg(target_os = "android")]
@@ -386,7 +412,6 @@ fn emit_capsule_payload_locked(
     // recording cues. On Linux the cue must still work while the capsule is hidden, so it is
     // also sent to the main window. Always immediate, decoupled from capsule window show timing.
     inner.host.emit_capsule_state_to_main(&payload);
-    event_epoch
 }
 
 /// Whether a selection-polish terminal timer is still eligible to collapse the capsule.

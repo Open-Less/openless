@@ -271,7 +271,9 @@ body {
   margin-bottom: 10px;
   cursor: pointer;
 }
-.help:not([open]) .help-title { margin-bottom: 0; }
+.help:not([open]) .help-title {
+  margin-bottom: 0;
+}
 .help-step {
   font-size: 12.5px;
   color: var(--ink-3);
