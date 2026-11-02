@@ -157,9 +157,6 @@ impl OpenLessEguiApp {
             return;
         };
         match field {
-            frontend::view_model::SettingsField::StreamingInsert => {
-                preferences.streaming_insert = !preferences.streaming_insert;
-            }
             frontend::view_model::SettingsField::StableTranscription => {
                 preferences.stable_transcription_enabled =
                     !preferences.stable_transcription_enabled;
@@ -195,15 +192,8 @@ impl OpenLessEguiApp {
                 preferences.show_overview_activity_heatmap =
                     !preferences.show_overview_activity_heatmap;
             }
-            frontend::view_model::SettingsField::RestoreClipboard => {
-                preferences.restore_clipboard_after_paste =
-                    !preferences.restore_clipboard_after_paste;
-            }
             frontend::view_model::SettingsField::SystemProxy => {
                 preferences.use_system_proxy = !preferences.use_system_proxy;
-            }
-            frontend::view_model::SettingsField::Multimodal => {
-                preferences.multimodal_pipeline_enabled = !preferences.multimodal_pipeline_enabled;
             }
             frontend::view_model::SettingsField::SelectionVoiceEnabled => {
                 preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
@@ -264,10 +254,6 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsField::DebugArchiveRaw => {
                 preferences.debug_archive_raw = !preferences.debug_archive_raw;
-            }
-            frontend::view_model::SettingsField::StreamingSaveClipboard => {
-                preferences.streaming_insert_save_clipboard =
-                    !preferences.streaming_insert_save_clipboard;
             }
             frontend::view_model::SettingsField::LaunchAtLogin => {
                 preferences.launch_at_login = !preferences.launch_at_login;

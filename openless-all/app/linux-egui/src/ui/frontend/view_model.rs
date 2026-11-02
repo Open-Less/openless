@@ -548,11 +548,8 @@ pub enum SettingsSection {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsField {
-    StreamingInsert,
     /// 稳定模式（先录音后识别，上游 #1082）。
     StableTranscription,
-    StreamingSaveClipboard,
-    RestoreClipboard,
     StartMinimized,
     LaunchAtLogin,
     AutoUpdate,
@@ -581,7 +578,6 @@ pub enum SettingsField {
     DebugArchiveRaw,
     ActivityHeatmap,
     SystemProxy,
-    Multimodal,
     /// 选区助手：语音编辑（口述指令改选区）开关（Tauri `selectionVoiceEnabled`）。
     SelectionVoiceEnabled,
     /// 选区助手：自动判断「提问 vs 编辑」（Tauri `selectionVoiceIntentMode`）。
