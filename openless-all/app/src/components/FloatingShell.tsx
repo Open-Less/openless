@@ -17,6 +17,7 @@ import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { SettingsModal, type SettingsSectionId } from './SettingsModal';
+import type { ServiceViewId } from '../pages/settings/navigation';
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
 const History = lazy(() => import('../pages/History').then((m) => ({ default: m.History })));
@@ -145,6 +146,7 @@ function FloatingShellBody({
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSectionId | undefined
   >();
+  const [settingsInitialServiceView, setSettingsInitialServiceView] = useState<ServiceViewId>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
@@ -237,8 +239,9 @@ function FloatingShellBody({
     setHotkeyModePromptOpen(false);
   };
 
-  const openSettings = (section?: SettingsSectionId) => {
+  const openSettings = (section?: SettingsSectionId, serviceView?: ServiceViewId) => {
     setSettingsInitialSection(section);
+    setSettingsInitialServiceView(serviceView);
     setSettingsOpen(true);
     setMoreOpen(false);
     setStyleOpen(false);
@@ -642,10 +645,11 @@ function FloatingShellBody({
           fallback={<div className="ol-settings-placeholder" aria-hidden="true" />}
         >
           <SettingsModal
-            key={settingsInitialSection ?? 'default'}
+            key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
             os={os}
             closing={settingsMount.closing}
             initialSettingsSection={settingsInitialSection}
+            initialServiceView={settingsInitialServiceView}
             onClose={() => setSettingsOpen(false)}
           />
         </Suspense>
