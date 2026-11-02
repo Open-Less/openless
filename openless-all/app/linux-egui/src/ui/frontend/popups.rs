@@ -1266,11 +1266,18 @@ pub fn dictation_capsule(
             }
             let listening = matches!(phase.as_str(), "starting" | "recording");
             let siri_effect = if siri && (listening || processing || terminal) {
+                // 光球和条子共用同一套自适应量程，否则安静麦克风下光球几乎不动。
+                let drive_level = siri_wgpu::adaptive_level(
+                    ui.ctx(),
+                    "capsule-siri-level",
+                    state.audio_level.unwrap_or_default(),
+                    ui.input(|input| input.stable_dt),
+                );
                 let clock = siri_wgpu::tick(
                     ui.ctx(),
                     "capsule-siri",
                     siri_wgpu::SiriDrive {
-                        level: state.audio_level.unwrap_or_default(),
+                        level: drive_level,
                         resolved: if listening { 1.0 } else { 0.0 },
                         speed: if processing { 1.5 } else { 1.0 },
                         warming: listening && state.audio_level.is_none(),
@@ -1416,13 +1423,19 @@ pub fn dictation_capsule(
                     paint_siri_error(ui, center, state, lang);
                 }
             } else if phase == "recording" {
-                audio_bars(
-                    ui,
-                    center,
+                // 条状胶囊和 siri 一样逐帧动：Core 的 level 是分块来的（10–20 Hz），
+                // 直接照抄快照会一格一格跳。缓动放在 siri_wgpu::vu_level 里，
+                // 起音快、回落慢，和 Tauri 的 canvas 同一套曲线。
+                let dt = ui.input(|input| input.stable_dt);
+                let level = siri_wgpu::vu_level(
+                    ui.ctx(),
+                    "capsule-bars",
                     state.audio_level.unwrap_or_default(),
-                    bar_count,
-                    pill_ink,
+                    dt,
                 );
+                audio_bars(ui, center, level, bar_count, pill_ink);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             } else if processing {
                 // 经典 / typeless 的「思考中」：文案 + 扫光（Tauri `cap-shine`）。
                 paint_thinking_label(
@@ -1792,10 +1805,9 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     } else {
         24.0
     };
-    let voice = level.clamp(0.0, 1.0);
-    let gated = ((voice - 0.012) / (0.34 - 0.012)).clamp(0.0, 1.0);
-    let eased = gated * gated * (3.0 - 2.0 * gated);
-    let visual = eased.powf(0.42);
+    // `level` 到这里已经是视觉值（0..1，来自 `siri_wgpu::vu_level` 的
+    // gate + smoothstep + pow 映射 + 逐帧缓动）。再压一次会让条子几乎不动。
+    let visual = level.clamp(0.0, 1.0);
     let bar_width = 3.0 * scale;
     let gap = 3.0 * scale;
     let total = envelope.len() as f32 * bar_width + (envelope.len() - 1) as f32 * gap;

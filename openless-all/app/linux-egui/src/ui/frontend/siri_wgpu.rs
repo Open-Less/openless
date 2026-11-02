@@ -160,6 +160,54 @@ pub fn visual_voice(raw: f32) -> f32 {
     eased.max(0.0).powf(0.42)
 }
 
+/// 自适应电平归一化：把「实际说话的电平」重新铺满 0..1。
+///
+/// 固定的 `visual_voice` 门限（gate 0.012 / ceiling 0.34）假设麦克风说话时能到
+/// 0.2–0.3。实测这台机器的 USB 声卡峰值只有 0.04（RMS×4 之后约 0.02），于是
+/// 所有胶囊都停在一个几乎不动的小高度上 —— 看起来就是「太平」。
+///
+/// 这里用一条约 1.5 s 半衰的峰值跟踪当量程：安静麦克风说话也能把条子推到满，
+/// 大声说话不会溢出（归一化后仍 clamp）。噪声门跟着峰值走（`peak * 0.15`），
+/// 所以停顿期间底噪不会被抬成满格。
+pub fn adaptive_level(ctx: &egui::Context, id: &str, raw: f32, dt: f32) -> f32 {
+    /// 峰值再低也按这个量程算，避免纯静音时把量化噪声放大成满格。
+    const MIN_PEAK: f32 = 0.012;
+    /// 约 1.5 s 半衰：一句话说完、停顿一秒多之后量程回落。
+    const PEAK_DECAY_SECONDS: f32 = 1.5;
+
+    let key = egui::Id::unique(("openless-vu-peak", id));
+    let dt = dt.clamp(0.0, 0.05);
+    let mut peak = ctx.data_mut(|data| data.get_temp::<f32>(key).unwrap_or(MIN_PEAK));
+    peak *= 1.0 - (dt / PEAK_DECAY_SECONDS).clamp(0.0, 1.0);
+    peak = peak.max(raw).max(MIN_PEAK);
+    ctx.data_mut(|data| data.insert_temp(key, peak));
+
+    let gate = peak * 0.25;
+    let span = (peak - gate).max(raw.max(MIN_PEAK) * 0.5).max(0.004);
+    ((raw - gate) / span).clamp(0.0, 1.0)
+}
+
+/// 逐帧 VU 缓动，给**条状**胶囊（classic / typeless）用。
+///
+/// 之前电平条是「来一条快照跳一次」：Core 按音频块发 `DictationStateChanged`
+/// （10–20 Hz，块大小随设备），所以条子既不会平滑地涨落，也看不出「说话时明显
+/// 变大、停顿时掉下去」。Tauri 的 canvas 是 60 fps 逐帧缓动的，同一个
+/// `visualVoice` 映射在 60 fps 下才显得有呼吸。
+///
+/// 这里把状态存在 `ctx` 里：每帧按 `dt` 逼近 `visual_voice(raw)`，
+/// 起音快（14）、回落慢（5），与 `SiriGL` 的 attack/release 一致。
+#[allow(dead_code)]
+pub fn vu_level(ctx: &egui::Context, id: &str, raw: f32, dt: f32) -> f32 {
+    let key = egui::Id::unique(("openless-vu-level", id));
+    let dt = dt.clamp(0.0, 0.05);
+    let target = visual_voice(adaptive_level(ctx, id, raw, dt));
+    let mut level = ctx.data_mut(|data| data.get_temp::<f32>(key).unwrap_or(0.0));
+    let attack = if target > level { 14.0 } else { 5.0 };
+    level += (target - level) * (1.0 - (-dt * attack).exp());
+    ctx.data_mut(|data| data.insert_temp(key, level));
+    level
+}
+
 pub fn tick(ctx: &egui::Context, id: &str, drive: SiriDrive, dt: f32) -> SiriClock {
     let key = egui::Id::unique(("openless-siri-clock", id));
     let dt = dt.clamp(0.0, 0.05);
@@ -953,6 +1001,73 @@ mod tests {
             size: [320.0, 80.0],
         });
         assert_eq!(bytes.len(), 64);
+    }
+
+    /// 安静麦克风（原始 level 只有 0.02 上下）也必须被铺开：
+    /// 这是「所有胶囊都太平」的直接原因 —— 固定门限 0.012/0.34 下，
+    /// 0.02 只映射到约 8% 高度。
+    #[test]
+    fn adaptive_level_spreads_a_quiet_microphone() {
+        let ctx = egui::Context::default();
+        let id = "capsule-quiet";
+        let mut quiet = 0.0;
+        for _ in 0..60 {
+            quiet = adaptive_level(&ctx, id, 0.004, 0.016); // 底噪
+        }
+        let mut speech = 0.0;
+        for _ in 0..30 {
+            speech = adaptive_level(&ctx, id, 0.023, 0.016); // 实测说话电平
+        }
+        assert!(quiet < 0.2, "noise floor must stay low: {quiet}");
+        assert!(speech > 0.8, "speech must reach the top: {speech}");
+    }
+
+    /// 量程会回落，不会把一次大声说话永久当成满量程。
+    #[test]
+    fn adaptive_level_range_decays_back() {
+        let ctx = egui::Context::default();
+        let id = "capsule-decay";
+        for _ in 0..20 {
+            adaptive_level(&ctx, id, 0.30, 0.016);
+        }
+        // 安静六秒后，同样的 0.023 又被当成「说话」而不是底噪。
+        let mut value = 0.0;
+        for _ in 0..375 {
+            value = adaptive_level(&ctx, id, 0.002, 0.016);
+        }
+        assert!(value < 0.2, "floor should have dropped: {value}");
+        let speech = adaptive_level(&ctx, id, 0.023, 0.016);
+        assert!(
+            speech > 0.5,
+            "quiet speech should read as speech again: {speech}"
+        );
+    }
+
+    /// 条状胶囊的 VU 缓动必须「起音快、回落慢」，否则电平看起来是死的
+    /// （Core 只按音频块给 level，快照之间没有插值）。
+    #[test]
+    fn vu_level_attacks_fast_and_releases_slow() {
+        let ctx = egui::Context::default();
+        let id = "vu-contract";
+        // 从静音爬起来：一帧就动，五帧（约 80 ms）过六成 —— 与 Tauri 的
+        // `SiriGL` 同一套 14/s 指数起音。
+        let one = vu_level(&ctx, id, 0.30, 0.016);
+        assert!(one > 0.15, "attack does not move: {one}");
+        let mut peak = one;
+        for _ in 0..4 {
+            peak = vu_level(&ctx, id, 0.30, 0.016);
+        }
+        assert!(peak > 0.6, "attack too slow: {peak}");
+        // 慢释放：同样五帧回落，掉得比爬升少得多。
+        let mut fallen = peak;
+        for _ in 0..5 {
+            fallen = vu_level(&ctx, id, 0.0, 0.016);
+        }
+        assert!(
+            fallen > peak * 0.45,
+            "release too fast: {fallen} (peak {peak})"
+        );
+        assert!(fallen < peak, "release must move");
     }
 
     #[test]
