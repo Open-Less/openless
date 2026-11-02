@@ -6400,17 +6400,17 @@ pub const CATALOG: &[Msg] = &[
             "Zur Untersuchung von Erkennungsproblemen. Standardmäßig deaktiviert.",
         ),
     },
-        Msg {
+            Msg {
         key: "settings.language.es",
-        text: row("Español", "Español", "Español", "スペイン語", "스페인어", "Español", "Español", "Español"),
+        text: row("Español", "Español", "Español", "Español", "Español", "Español", "Español", "Español"),
     },
-    Msg {
+        Msg {
         key: "settings.language.fr",
-        text: row("Français", "Français", "Français", "フランス語", "프랑스어", "Français", "Français", "Français"),
+        text: row("Français", "Français", "Français", "Français", "Français", "Français", "Français", "Français"),
     },
-    Msg {
+        Msg {
         key: "settings.language.de",
-        text: row("Deutsch", "Deutsch", "Deutsch", "ドイツ語", "독일어", "Deutsch", "Deutsch", "Deutsch"),
+        text: row("Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch"),
     },
     Msg {
         key: "settings.output_text.title",
