@@ -300,17 +300,18 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     onOpenSettings?.(section, serviceView);
 
   return (
-    // Single-screen fixed page: no scrolling, fills the height given by the shell, dashboards share
-    // one screen elastically; when the window is squeezed very short, the bottom row shrinks internally
-    // (the recent list scrolls internally) and the page itself shows no scrollbar.
+    // Single-screen fixed dashboard: the shell owns the viewport and cards own their
+    // internal scrolling. The page surface never grows a document scrollbar.
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
         flex: 1,
+        height: '100%',
         minHeight: 0,
         minWidth: 0,
-        gap: 14,
+        gap: 12,
+        overflow: 'hidden',
       }}
     >
       <PageHeader
@@ -330,7 +331,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           display: 'grid',
           gridTemplateColumns:
             mobile || setup.providers.length < 2 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
-          gap: 12,
+          gap: 10,
           flexShrink: 0,
         }}
       >
@@ -355,7 +356,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
       </div>
 
       {/* Usage records: title + four metric cards as one group. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
         <h2
           style={{
             fontSize: 13,
@@ -370,7 +371,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           style={{
             display: 'grid',
             gridTemplateColumns: mobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-            gap: 12,
+            gap: 8,
           }}
         >
           <Metric
@@ -415,10 +416,10 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         style={{
           display: 'grid',
           gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
-          gap: 12,
-          flex: 1,
-          // Keep the chart readable; when the window is too short the page scrolls instead.
-          minHeight: mobile ? 0 : 260,
+          gap: 10,
+          flex: '1 1 0',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
       >
         <PeriodMetricsCard
@@ -433,7 +434,13 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 
         <Card
           padding={0}
-          style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+          }}
         >
           <div
             style={{
@@ -656,7 +663,18 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
     };
   }, [activity, i18n.resolvedLanguage, i18n.language]);
   return (
-    <Card padding={12} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+    <Card
+      padding={12}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 0,
+        minHeight: 0,
+        flex: '0 1 132px',
+        overflow: 'hidden',
+      }}
+    >
       <span
         style={{
           fontSize: 13,
