@@ -542,15 +542,13 @@ function FloatingShellBody({
               //     scrollbar appears only when it truly overflows.
               //   - Other tabs use the thin scrollbar too.
               className="ol-thinscroll ol-scroll-fade"
-              // Overview is a fixed single-screen page (overflow hidden, never scrolls):
-              // no scrollbar gutter reserved.
+              // Overview is a fixed single-screen dashboard. Its cards own any internal
+              // scrolling; the page surface itself never becomes a scroll container.
               style={{
                 flex: 1,
                 minHeight: 0,
-                // Overview is a fixed single-screen page: no scrolling; all dashboards
-                // fit one screen with heights distributed by Overview.tsx's internal
-                // flex; other pages keep the thin scrollbar.
-                overflow: 'auto',
+                overflow: displayTab === 'overview' ? 'hidden' : 'auto',
+                boxSizing: 'border-box',
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
                   : displayTab === 'overview'
