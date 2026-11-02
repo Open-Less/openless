@@ -604,6 +604,10 @@ pub enum SettingsComboField {
     SelectionVoicePlanFormat,
     /// AEC 的扬声器参考源（回环/监听设备）。
     AecReference,
+    /// 中文正字法：0 = 跟随输入，1 = 简体，2 = 繁体。
+    ChineseScript,
+    /// 输出语言：0 = 跟随输入，1 = 简体中文，2 = 繁體中文，3 = English，4 = 日本語，5 = 한국어。
+    OutputLanguage,
     /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
     /// 重启后生效；不是 Core 偏好，所以不上云、不影响 Tauri。
     LogLevel,
@@ -1276,6 +1280,10 @@ pub struct SettingsFields {
     pub multimodal: bool,
     pub language: usize,
     pub theme: usize,
+    /// 中文正字法：0 = 跟随输入，1 = 简体，2 = 繁体（Core `ChineseScriptPreference`）。
+    pub chinese_script: usize,
+    /// 输出语言：0 = 跟随输入，1..=5 对应 `OutputLanguagePreference`。
+    pub output_language: usize,
     /// 历史保留天数（0 = 永久，输入框）。
     pub retention_days: String,
     pub remote_port: String,
@@ -1338,6 +1346,8 @@ impl Default for SettingsFields {
             multimodal: false,
             language: 0,
             theme: 0,
+            chinese_script: 0,
+            output_language: 0,
             retention_days: "0".to_string(),
             remote_port: String::new(),
         }

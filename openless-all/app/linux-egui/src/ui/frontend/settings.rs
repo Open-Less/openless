@@ -2208,6 +2208,52 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
             },
         );
     });
+    // 输出文字：繁简 + 输出语言。Core 的 polish 提示词直接用这两个偏好
+    // （`ChineseScriptPreference` / `OutputLanguagePreference`），不是装饰开关。
+    card(
+        ui,
+        tr_l10n(lang, "settings.output_text.title"),
+        tr_l10n(lang, "settings.output_text.desc"),
+        |ui| {
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.output_text.script"),
+                tr_l10n(lang, "settings.output_text.script_desc"),
+                vm.settings.chinese_script,
+                &[
+                    tr_l10n(lang, "settings.output_text.script_auto"),
+                    tr_l10n(lang, "settings.output_text.script_simplified"),
+                    tr_l10n(lang, "settings.output_text.script_traditional"),
+                ],
+                |val| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::ChineseScript,
+                        val,
+                    ));
+                },
+            );
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.output_text.language"),
+                tr_l10n(lang, "settings.output_text.language_desc"),
+                vm.settings.output_language,
+                &[
+                    tr_l10n(lang, "settings.output_text.language_auto"),
+                    tr_l10n(lang, "settings.output_text.language_zh_cn"),
+                    tr_l10n(lang, "settings.output_text.language_zh_tw"),
+                    tr_l10n(lang, "settings.output_text.language_en"),
+                    tr_l10n(lang, "settings.output_text.language_ja"),
+                    tr_l10n(lang, "settings.output_text.language_ko"),
+                ],
+                |val| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::OutputLanguage,
+                        val,
+                    ));
+                },
+            );
+        },
+    );
     card(
         ui,
         tr_l10n(lang, "settings.language.title"),
@@ -2225,6 +2271,9 @@ fn appearance(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<F
                     tr_l10n(lang, "settings.language.en"),
                     tr_l10n(lang, "settings.language.ja"),
                     tr_l10n(lang, "settings.language.ko"),
+                    tr_l10n(lang, "settings.language.es"),
+                    tr_l10n(lang, "settings.language.fr"),
+                    tr_l10n(lang, "settings.language.de"),
                 ],
                 |val| {
                     actions.push(FrontendAction::SettingsCombo(

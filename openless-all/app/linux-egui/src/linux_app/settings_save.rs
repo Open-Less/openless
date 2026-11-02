@@ -329,6 +329,25 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsComboField::LogLevel => {}
             // 已在函数开头处理（换算成偏好里的设备名字符串）。
             frontend::view_model::SettingsComboField::AecReference => {}
+            frontend::view_model::SettingsComboField::ChineseScript => {
+                preferences.chinese_script_preference = match index {
+                    1 => openless_core::shared_types::ChineseScriptPreference::Simplified,
+                    2 => openless_core::shared_types::ChineseScriptPreference::Traditional,
+                    _ => openless_core::shared_types::ChineseScriptPreference::Auto,
+                };
+                self.frontend_vm.settings.chinese_script = index;
+            }
+            frontend::view_model::SettingsComboField::OutputLanguage => {
+                preferences.output_language_preference = match index {
+                    1 => openless_core::shared_types::OutputLanguagePreference::ZhCn,
+                    2 => openless_core::shared_types::OutputLanguagePreference::ZhTw,
+                    3 => openless_core::shared_types::OutputLanguagePreference::En,
+                    4 => openless_core::shared_types::OutputLanguagePreference::Ja,
+                    5 => openless_core::shared_types::OutputLanguagePreference::Ko,
+                    _ => openless_core::shared_types::OutputLanguagePreference::Auto,
+                };
+                self.frontend_vm.settings.output_language = index;
+            }
             frontend::view_model::SettingsComboField::Theme => {
                 preferences.theme_mode = match index {
                     0 => openless_core::shared_types::ThemeMode::System,
@@ -340,14 +359,13 @@ impl OpenLessEguiApp {
                 self.frontend_vm.settings.theme = index;
             }
             frontend::view_model::SettingsComboField::Language => {
+                // 索引 0 = 跟随系统，其余按 LANGS 顺序，新增语种只改 LANGS。
                 let pref = match index {
                     0 => LocalePref::System,
-                    1 => LocalePref::Lang(Lang::ZhCn),
-                    2 => LocalePref::Lang(Lang::ZhTw),
-                    3 => LocalePref::Lang(Lang::En),
-                    4 => LocalePref::Lang(Lang::Ja),
-                    5 => LocalePref::Lang(Lang::Ko),
-                    _ => return,
+                    _ => match openless_linux_egui::LANGS.get(index - 1) {
+                        Some(lang) => LocalePref::Lang(*lang),
+                        None => return,
+                    },
                 };
                 self.apply_locale_pref(pref);
                 self.frontend_vm.settings.language = index;

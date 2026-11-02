@@ -27,16 +27,20 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const CATALOG_PATH = resolve(APP_ROOT, 'linux-egui/src/i18n.rs');
 
-// Rust row order: [zh-CN, zh-TW, en, ja, ko].
+// Rust row order: [zh-CN, zh-TW, en, ja, ko, es, fr, de] — the same set the
+// Tauri `SUPPORTED_LOCALES` exports.
 const LOCALES = [
   ['zh-CN', 'zhCN'],
   ['zh-TW', 'zhTW'],
   ['en', 'en'],
   ['ja', 'ja'],
   ['ko', 'ko'],
+  ['es', 'es'],
+  ['fr', 'fr'],
+  ['de', 'de'],
 ];
 
-const RUST_LOCALE_ORDER = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
+const RUST_LOCALE_ORDER = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
 
 /// Keys where the egui host deliberately keeps its own wording and must not be
 /// overwritten by the Tauri value (different product surface / screenshot parity).
@@ -271,7 +275,17 @@ async function main() {
     const tauri = shared.get(normalizeKey(message.key));
     if (!tauri || KEEP_EGUI.has(message.key)) {
       skipped += 1;
-      rewritten.push(source.slice(message.start, message.end));
+      // egui-only rows still have to carry one value per locale. Pad with the
+      // row's own English text: Spanish/French/German readers get English for
+      // these host-specific strings instead of falling back to Chinese.
+      const padded = [...message.values];
+      const english = padded[2] ?? padded[0];
+      while (padded.length < RUST_LOCALE_ORDER.length) padded.push(english);
+      rewritten.push(
+        padded.length === message.values.length
+          ? source.slice(message.start, message.end)
+          : renderBlock(message.key, padded),
+      );
       cursor = message.end;
       continue;
     }
@@ -279,11 +293,24 @@ async function main() {
     // Never take a translation whose placeholders no longer line up with the
     // arguments the egui pages pass; that would render a literal `{}`.
     const expected = message.values.map(placeholderCount);
-    const mismatch = values.some((value, index) => placeholderCount(value) !== expected[index]);
+    // Compare per locale that both sides know about; a row migrating from 5 to
+    // 8 columns has fewer stored values than the Tauri catalog provides.
+    const mismatch = values.some(
+      (value, index) =>
+        index < expected.length && placeholderCount(value) !== expected[index],
+    );
     if (mismatch) {
       guarded += 1;
       if (check) console.log(`skipped (placeholder mismatch): ${message.key}`);
-      rewritten.push(source.slice(message.start, message.end));
+      // Keep the row, but still normalise its width so `row()` keeps compiling.
+      const padded = [...message.values];
+      const english = padded[2] ?? padded[0];
+      while (padded.length < RUST_LOCALE_ORDER.length) padded.push(english);
+      rewritten.push(
+        padded.length === message.values.length
+          ? source.slice(message.start, message.end)
+          : renderBlock(message.key, padded),
+      );
       cursor = message.end;
       continue;
     }

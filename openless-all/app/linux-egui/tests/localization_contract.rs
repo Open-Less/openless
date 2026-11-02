@@ -33,6 +33,9 @@ fn cloud_sync_counts_are_formatted_in_every_language() {
             Lang::En => "1 of 3 conflicts resolved",
             Lang::Ja => "競合を 1 / 3 件解決済み",
             Lang::Ko => "충돌 1 / 3개 해결",
+            Lang::Es => "1 de 3 conflictos resueltos",
+            Lang::Fr => "1 conflits résolus sur 3",
+            Lang::De => "1 von 3 Konflikten gelöst",
         };
         assert_eq!(progress, expected, "{lang:?}");
         assert!(!progress.contains("{}"), "{lang:?}: {progress}");

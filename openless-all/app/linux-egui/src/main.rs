@@ -5750,18 +5750,33 @@ mod linux_app {
                     s.remote_port = prefs.remote_input_port.to_string();
                 }
                 s.activity_heatmap = prefs.show_overview_activity_heatmap;
+                // 索引 0 = 跟随系统，其余按 LANGS 顺序；新增语种只改 i18n 的
+                // LANGS，这里不用再补一行 match。
                 s.language = match self.locale_pref {
                     LocalePref::System => 0,
-                    LocalePref::Lang(Lang::ZhCn) => 1,
-                    LocalePref::Lang(Lang::ZhTw) => 2,
-                    LocalePref::Lang(Lang::En) => 3,
-                    LocalePref::Lang(Lang::Ja) => 4,
-                    LocalePref::Lang(Lang::Ko) => 5,
+                    LocalePref::Lang(lang) => openless_linux_egui::LANGS
+                        .iter()
+                        .position(|candidate| *candidate == lang)
+                        .map(|index| index + 1)
+                        .unwrap_or(0),
                 };
                 s.theme = match prefs.theme_mode {
                     openless_core::shared_types::ThemeMode::System => 0,
                     openless_core::shared_types::ThemeMode::Light => 1,
                     openless_core::shared_types::ThemeMode::Dark => 2,
+                };
+                s.chinese_script = match prefs.chinese_script_preference {
+                    openless_core::shared_types::ChineseScriptPreference::Auto => 0,
+                    openless_core::shared_types::ChineseScriptPreference::Simplified => 1,
+                    openless_core::shared_types::ChineseScriptPreference::Traditional => 2,
+                };
+                s.output_language = match prefs.output_language_preference {
+                    openless_core::shared_types::OutputLanguagePreference::Auto => 0,
+                    openless_core::shared_types::OutputLanguagePreference::ZhCn => 1,
+                    openless_core::shared_types::OutputLanguagePreference::ZhTw => 2,
+                    openless_core::shared_types::OutputLanguagePreference::En => 3,
+                    openless_core::shared_types::OutputLanguagePreference::Ja => 4,
+                    openless_core::shared_types::OutputLanguagePreference::Ko => 5,
                 };
                 vm.translation_working_languages = prefs.working_languages.clone();
                 vm.translation_target_language = prefs.translation_target_language.clone();
