@@ -122,6 +122,19 @@ export class Palette {
     return $r('app.color.c_scrim');
   }
 
+  /** Immersive capsule glass: top/bottom gradient stops plus the highlight edge. */
+  static glassHi(): Resource {
+    return $r('app.color.c_glass_hi');
+  }
+
+  static glassLo(): Resource {
+    return $r('app.color.c_glass_lo');
+  }
+
+  static glassEdge(): Resource {
+    return $r('app.color.c_glass_edge');
+  }
+
   /** Activity heat map ramp, 0 = no dictation that day. */
   static heat(level: number): Resource {
     if (level <= 0) return $r('app.color.c_heat_0');
@@ -252,8 +265,8 @@ export function floatShadow(): ShadowOptions {
 }
 
 /**
- * 手机端优先：当前阶段只做手机竖屏的样子。开启时窗口尺寸类固定为 sm——
- * 不画侧栏、页面单列、主页卡片一列、历史/设置不分栏；等手机形态定稿后再打开
- * 宽度自适应（改为 false 即可恢复 md/lg/xl）。
+ * 目前不画侧栏/图标栏：手机和平板都用底部胶囊 Dock。宽度仍然按窗口自适应
+ * （sm 单列 / md 两列 / lg-x 多列），横屏会利用弹性布局放大，而不是把内容
+ * 强行拉满或锁死成一条窄列。
  */
-export const PHONE_FIRST: boolean = true;
+export const NO_RAIL: boolean = true;

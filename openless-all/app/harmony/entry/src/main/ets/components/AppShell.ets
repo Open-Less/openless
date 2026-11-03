@@ -1,5 +1,5 @@
 import { KeyCode } from '@kit.InputKit';
-import { Layout, Leading, Palette, PHONE_FIRST, Radius, Space, Type, floatShadow } from '../common/Theme';
+import { Layout, Leading, Palette, NO_RAIL, Radius, Space, Type, floatShadow } from '../common/Theme';
 import { PageBackBar } from './Kit';
 import { symbolOf } from './Icons';
 import { Nav, NavItem } from './Nav';
@@ -32,7 +32,7 @@ export struct AppShell {
 
   build() {
     Row() {
-      if (Layout.isRail(this.bp)) {
+      if (!NO_RAIL && Layout.isRail(this.bp)) {
         this.rail()
       }
       Column() {
@@ -53,13 +53,13 @@ export struct AppShell {
           }
           .width('100%')
           .height('100%')
-          .constraintSize({ maxWidth: PHONE_FIRST ? 480 : Layout.contentMax(this.bp) })
+          .constraintSize({ maxWidth: Layout.contentMax(this.bp) })
         }
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
 
-        if (!Layout.isRail(this.bp)) {
+        if (NO_RAIL || !Layout.isRail(this.bp)) {
           this.dock()
         }
       }
@@ -135,11 +135,14 @@ export struct AppShell {
       .height(60)
       .padding({ left: Space.xxs, right: Space.xxs })
       .borderRadius(Radius.pill)
-      .backgroundColor(Palette.bgElevated())
-      // 沉浸光感：系统毛玻璃材质。API 26 的 uiMaterial 在兼容 SDK 12 上不可用，
-      // 这里用系统 COMPONENT_ULTRA_THICK 模糊 + 半透明底色近似同一效果。
+      // 沉浸光感：本机 SDK 没有 uiMaterial.ImmersiveMaterial，用「毛玻璃 + 竖向
+      // 玻璃渐变 + 顶部高光边 + 浮动投影」组合出系统的光感层次。
+      .linearGradient({
+        angle: 180,
+        colors: [[Palette.glassHi(), 0.0], [Palette.glassLo(), 1.0]]
+      })
       .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-      .border({ width: 0.5, color: Palette.line() })
+      .border({ width: { top: 0.5, left: 0.5, right: 0.5, bottom: 0.5 }, color: Palette.glassEdge() })
       .shadow(floatShadow())
     }
     .width('100%')

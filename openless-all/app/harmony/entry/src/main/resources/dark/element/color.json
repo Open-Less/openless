@@ -295,6 +295,18 @@
     {
       "name": "c_heat_4",
       "value": "#4C8DFF"
+    },
+    {
+      "name": "c_glass_hi",
+      "value": "#E81C1D21"
+    },
+    {
+      "name": "c_glass_lo",
+      "value": "#B818191D"
+    },
+    {
+      "name": "c_glass_edge",
+      "value": "#33FFFFFF"
     }
   ]
 }
