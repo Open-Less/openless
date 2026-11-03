@@ -1,9 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { Appearance } from '../common/Appearance';
-import { Labels } from '../common/Labels';
 import { Layout, Leading, Motion, Palette, Radius, Space, Type } from '../common/Theme';
 import {
-  EmptyHint,
   ErrorNote,
   Group,
   PageScaffold,
@@ -13,20 +11,17 @@ import {
   Segmented,
   SettingSwitch,
   SheetTitle,
-  Tag,
   TextButton,
   TonalButton,
   notify
 } from '../components/Kit';
 import { Nav, NavItem } from '../components/Nav';
-import { Api, CredentialStatus, NetworkState } from '../data/Api';
+import { Api, NetworkState } from '../data/Api';
 import {
-  Channel,
   CloudSyncStatus,
   HistoryEntry,
   NativeReply,
   PlatformCapabilities,
-  ProviderDescriptor,
   SettingsSnapshot,
   StartupSnapshot,
   UserPreferences
@@ -34,8 +29,6 @@ import {
 
 const THEME_IDS: string[] = ['system', 'light', 'dark'];
 const THEME_LABELS: string[] = ['跟随系统', '浅色', '深色'];
-const PIPELINE_IDS: string[] = ['traditional', 'multimodal'];
-const PIPELINE_LABELS: string[] = ['两段式', '全模态'];
 /** Native names, as `translation_target_language` expects; empty = translation off. */
 const LANG_IDS: string[] = ['', '简体中文', 'English', '日本語', '한국어'];
 const LANG_LABELS: string[] = ['关闭翻译', '简体中文', 'English', '日本語', '한국어'];
@@ -52,16 +45,19 @@ interface ThemeCarrier {
 /**
  * Settings v2.
  *
- * Grouping matches what the Harmony build actually uses:
- *   大模型配置 / 外观 / 语言 / 权限与数据 / 云同步 / 工具 / 关于
+ * The page keeps only what is a *setting*: appearance, language, permissions and
+ * local data, cloud sync, the secondary tool list and the about facts.
  *
- * Everything writes through `update_setting_fields` with the pointer names the
- * shared preference document really has (`/themeMode`, `/translationTargetLanguage`,
- * `/pipelineMode`, ...), so no control is a placeholder: the appearance switch
- * pushes `setColorMode`, the model section validates the real channels, and the
- * language choice lands in the document the dictation pipeline reads.
+ * Model configuration (engines, models, channels, keys and the connectivity check)
+ * is owned by the credentials page, so this page carries exactly one entry to it
+ * instead of a second, partial copy of the same controls.
  *
- * Wide windows show the configuration column next to the data column; compact
+ * Every control writes through `update_setting_fields` with a pointer the shared
+ * preference document really has (`/themeMode`, `/translationTargetLanguage`,
+ * `/recordAudioForDebug`, ...), so no control is a placeholder; the appearance
+ * switch also pushes `setColorMode` straight away.
+ *
+ * Wide windows show the appearance column next to the data column; compact
  * windows stack the same sections in reading order.
  */
 @Component
@@ -83,8 +79,6 @@ export struct SettingsPage {
   @State private historyCount: number = 0;
   @State private error: string = '';
   @State private busy: boolean = false;
-  @State private asrOpen: boolean = false;
-  @State private llmOpen: boolean = false;
   @State private micOpen: boolean = false;
   @State private clearOpen: boolean = false;
   @State private micTesting: boolean = false;
@@ -92,14 +86,6 @@ export struct SettingsPage {
   @State private logPath: string = '';
   @State private syncing: boolean = false;
   @State private clearing: boolean = false;
-  @State private asrProviders: ProviderDescriptor[] = [];
-  @State private llmProviders: ProviderDescriptor[] = [];
-  @State private asrChannels: Channel[] = [];
-  @State private llmChannels: Channel[] = [];
-  @State private credentials: CredentialStatus = {};
-  @State private checkState: string = '';
-  @State private checkNote: string = '';
-  @State private checking: boolean = false;
 
   aboutToAppear(): void {
     this.reload();
@@ -136,11 +122,6 @@ export struct SettingsPage {
       const history: HistoryEntry[] = await Api.history();
       this.historyCount = history.length;
       await this.loadSyncStatus();
-      this.asrProviders = await Api.providerDescriptors('asr');
-      this.llmProviders = await Api.providerDescriptors('llm');
-      this.asrChannels = await Api.channels('asr');
-      this.llmChannels = await Api.channels('llm');
-      this.credentials = await Api.credentialStatus();
       await this.loadMicPermission();
       // Keep the window in step with the stored preference (the shell also applies
       // it on boot; re-applying here is idempotent and self-heals a stale window).
@@ -254,147 +235,6 @@ export struct SettingsPage {
     if (context === undefined) return false;
     Appearance.apply(context as common.UIAbilityContext, this.themeMode);
     return true;
-  }
-
-  // ── Models ──────────────────────────────────────────────────────────────────
-
-  /**
-   * Pipeline routing is two preferences: `multimodalPipelineEnabled` gates the
-   * whole multimodal path, `pipelineMode` picks the configured mode. Writing the
-   * mode first avoids briefly activating a stale multimodal config.
-   */
-  private async applyPipelineMode(mode: string): Promise<void> {
-    this.busy = true;
-    try {
-      const snapshot: SettingsSnapshot = await Api.writeString('/pipelineMode', mode);
-      this.prefs = snapshot.preferences;
-      const enabled: SettingsSnapshot = await Api.writeBool('/multimodalPipelineEnabled', mode === 'multimodal');
-      this.prefs = enabled.preferences;
-      notify('处理管线已切换为' + Labels.pipeline(mode));
-      this.error = '';
-    } catch (error) {
-      this.error = (error as Error).message;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private async activateAsr(provider: string): Promise<void> {
-    this.busy = true;
-    try {
-      const snapshot: SettingsSnapshot = await Api.activateAsrProvider(provider);
-      this.prefs = snapshot.preferences;
-      this.credentials = await Api.credentialStatus();
-      this.asrOpen = false;
-      notify('转写引擎已切换为' + Labels.provider(provider));
-      this.error = '';
-    } catch (error) {
-      this.error = (error as Error).message;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private async activateLlm(provider: string): Promise<void> {
-    this.busy = true;
-    try {
-      const snapshot: SettingsSnapshot = await Api.activateLlmProvider(provider);
-      this.prefs = snapshot.preferences;
-      this.credentials = await Api.credentialStatus();
-      this.llmOpen = false;
-      notify('润色模型已切换为' + Labels.provider(provider));
-      this.error = '';
-    } catch (error) {
-      this.error = (error as Error).message;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  /** Channel that the active provider actually resolves to, for the self-check. */
-  private channelFor(kind: string): string {
-    const channels: Channel[] = kind === 'asr' ? this.asrChannels : this.llmChannels;
-    if (channels.length === 0) return '';
-    const active: string = kind === 'asr' ? (this.prefs.activeAsrProvider ?? '') : (this.prefs.activeLlmProvider ?? '');
-    for (let index = 0; index < channels.length; index++) {
-      if (channels[index].id === active) return channels[index].id;
-    }
-    for (let index = 0; index < channels.length; index++) {
-      if (channels[index].providerType === active) return channels[index].id;
-    }
-    for (let index = 0; index < channels.length; index++) {
-      if (channels[index].enabled) return channels[index].id;
-    }
-    return channels[0].id;
-  }
-
-  /**
-   * Connectivity self-check: validate the channel the active provider resolves to,
-   * record the result so the credentials page shows it, and report both kinds.
-   */
-  private async runSelfCheck(): Promise<void> {
-    if (this.checking) return;
-    const asrId: string = this.channelFor('asr');
-    const llmId: string = this.channelFor('llm');
-    if (asrId.length === 0 && llmId.length === 0) {
-      this.checkState = 'fail';
-      this.checkNote = '还没有渠道；先到「凭据与密钥」新建一个再自检';
-      notify('没有可自检的渠道');
-      return;
-    }
-    this.checking = true;
-    this.checkState = 'running';
-    this.checkNote = '正在对当前渠道各发一次最小请求…';
-    const parts: string[] = [];
-    let passed: number = 0;
-    let total: number = 0;
-    if (asrId.length > 0) {
-      total = total + 1;
-      const ok: boolean = await this.validateOne('asr', asrId, parts);
-      if (ok) passed = passed + 1;
-    }
-    if (llmId.length > 0) {
-      total = total + 1;
-      const ok: boolean = await this.validateOne('llm', llmId, parts);
-      if (ok) passed = passed + 1;
-    }
-    this.checking = false;
-    this.checkNote = parts.join(' · ');
-    if (passed === total) {
-      this.checkState = 'ok';
-      notify('连通正常 · ' + this.checkNote);
-    } else if (passed > 0) {
-      this.checkState = 'partial';
-      notify('部分渠道未通过 · ' + this.checkNote);
-    } else {
-      this.checkState = 'fail';
-      notify('渠道校验未通过，请检查密钥与接入点');
-    }
-    try {
-      this.asrChannels = await Api.channels('asr');
-      this.llmChannels = await Api.channels('llm');
-    } catch (error) {
-      console.warn('[OpenLess Settings] channel list not refreshed');
-    }
-  }
-
-  private async validateOne(kind: string, channelId: string, parts: string[]): Promise<boolean> {
-    const label: string = kind === 'asr' ? '转写 ' : '润色 ';
-    const started: number = Date.now();
-    try {
-      const ok: boolean = await Api.validateChannel(kind, channelId);
-      const latency: number = Date.now() - started;
-      try {
-        await Api.recordChannelTest(kind, channelId, ok, latency, ok ? '' : '校验未通过');
-      } catch (error) {
-        console.warn('[OpenLess Settings] channel test not recorded');
-      }
-      parts.push(ok ? label + latency.toString() + ' ms' : label + '失败');
-      return ok;
-    } catch (error) {
-      parts.push(label + '失败');
-      return false;
-    }
   }
 
   // ── Language ────────────────────────────────────────────────────────────────
@@ -600,10 +440,6 @@ export struct SettingsPage {
     return 0;
   }
 
-  private pipelineIndex(): number {
-    return this.prefs.pipelineMode === 'multimodal' ? 1 : 0;
-  }
-
   private langIndex(): number {
     const current: string = this.prefs.translationTargetLanguage ?? '';
     for (let index = 0; index < LANG_IDS.length; index++) {
@@ -635,52 +471,33 @@ export struct SettingsPage {
     return 0;
   }
 
-  private channelSummary(): string {
-    return '转写 ' + this.asrChannels.length.toString() + ' 个 · 润色 ' +
-      this.llmChannels.length.toString() + ' 个';
-  }
-
-  private configuredSummary(): string {
-    const asr: string = this.credentials.asrConfigured === true ? '转写已配置' : '转写未配置';
-    const llm: string = this.credentials.llmConfigured === true ? '润色已配置' : '润色未配置';
-    return asr + ' · ' + llm;
-  }
-
-  private checkTagText(): string {
-    if (this.checking || this.checkState === 'running') return '检测中';
-    if (this.checkState === 'ok') return '通过';
-    if (this.checkState === 'partial') return '部分失败';
-    if (this.checkState === 'fail') return '失败';
-    return '未测试';
-  }
-
-  private checkTone(): string {
-    if (this.checking || this.checkState === 'running') return 'accent';
-    if (this.checkState === 'ok') return 'success';
-    if (this.checkState === 'partial') return 'warning';
-    if (this.checkState === 'fail') return 'danger';
-    return 'neutral';
-  }
-
-  private checkDetail(): string {
-    if (this.checkNote.length > 0) return this.checkNote;
-    return '对当前转写与润色渠道各发一次最小请求，结果会回写到凭据页';
-  }
-
   private levelWidth(): number {
     const level: number = Math.min(1, Math.max(0, this.micLevel));
     return Math.round(Math.max(4, level * 96));
   }
 
+  /**
+   * Tool list minus the credentials entry: model configuration has its own single
+   * row above, so settings points at the credentials page exactly once.
+   */
+  private toolItems(): NavItem[] {
+    const all: NavItem[] = Nav.tools();
+    const out: NavItem[] = [];
+    for (let index = 0; index < all.length; index++) {
+      if (all[index].id !== Nav.CREDENTIALS) {
+        out.push(all[index]);
+      }
+    }
+    return out;
+  }
+
   private choiceItems(kind: string): string[] {
     if (kind === 'theme') return THEME_LABELS;
-    if (kind === 'pipeline') return PIPELINE_LABELS;
     return LANG_LABELS;
   }
 
   private choiceSelected(kind: string): number {
     if (kind === 'theme') return this.themeIndex();
-    if (kind === 'pipeline') return this.pipelineIndex();
     return this.langIndex();
   }
 
@@ -689,16 +506,7 @@ export struct SettingsPage {
       this.applyTheme(THEME_IDS[index]);
       return;
     }
-    if (kind === 'pipeline') {
-      this.applyPipelineMode(PIPELINE_IDS[index]);
-      return;
-    }
     this.applyLanguage(LANG_IDS[index]);
-  }
-
-  private activeProvider(provider: string, asr: boolean): boolean {
-    if (asr) return provider === this.prefs.activeAsrProvider;
-    return provider === this.prefs.activeLlmProvider;
   }
 
   // ── View ────────────────────────────────────────────────────────────────────
@@ -722,18 +530,19 @@ export struct SettingsPage {
         })
       }
 
+      this.modelEntry()
+
       if (this.isWide()) {
         Row({ space: Space.md }) {
           Column({ space: Space.md }) {
-            this.modelSection()
             this.appearanceSection()
             this.languageSection()
+            this.privacySection()
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
           Column({ space: Space.md }) {
-            this.privacySection()
             this.cloudSection()
             this.toolsSection()
             this.aboutSection()
@@ -745,7 +554,6 @@ export struct SettingsPage {
         .alignItems(VerticalAlign.Top)
       } else {
         Column({ space: Space.md }) {
-          this.modelSection()
           this.appearanceSection()
           this.languageSection()
           this.privacySection()
@@ -758,126 +566,21 @@ export struct SettingsPage {
     }
   }
 
-  // ── 大模型配置 ──────────────────────────────────────────────────────────────
-
+  /**
+   * The single entry to model configuration. Engines, models, channels, keys and
+   * the connectivity check all live on the credentials page; keeping a partial
+   * copy of them here was duplication without the full feature set.
+   */
   @Builder
-  modelSection() {
-    Column({ space: Space.xs }) {
-      SectionTitle({ title: '大模型配置', hint: '转写、润色与渠道连通性' })
-      Group() {
-        RowItem({
-          symbol: 'localasr',
-          title: '转写引擎',
-          value: Labels.provider(this.prefs.activeAsrProvider),
-          showChevron: true,
-          onTap: () => {
-            this.asrOpen = true;
-          }
-        })
-
-        Row()
-          .width(0)
-          .height(0)
-          .bindSheet($$this.asrOpen, this.asrSheet, {
-            height: SheetSize.MEDIUM,
-            dragBar: true,
-            showClose: true,
-            onDisappear: () => {
-              this.asrOpen = false;
-            }
-          })
-
-        RowItem({
-          symbol: 'style',
-          title: '润色模型',
-          value: Labels.provider(this.prefs.activeLlmProvider),
-          showChevron: true,
-          onTap: () => {
-            this.llmOpen = true;
-          }
-        })
-
-        Row()
-          .width(0)
-          .height(0)
-          .bindSheet($$this.llmOpen, this.llmSheet, {
-            height: SheetSize.MEDIUM,
-            dragBar: true,
-            showClose: true,
-            onDisappear: () => {
-              this.llmOpen = false;
-            }
-          })
-
-        this.choiceBlock('pipeline', '处理管线', '全模态把转写与润色合成一次调用，延迟更低；切换会同时开关多模态配置', true)
-
-        SettingSwitch({
-          label: '深度思考',
-          hint: '更慢，但长句改写更稳',
-          checked: this.prefs.llmThinkingEnabled === true,
-          onToggle: (value: boolean) => {
-            this.writeBool('/llmThinkingEnabled', value);
-          }
-        })
-
-        this.connectivityBlock()
-
-        RowItem({
-          title: '渠道与模型',
-          subtitle: '在凭据页新建渠道、拉取模型列表或直接填模型 ID',
-          value: this.channelSummary(),
-          showChevron: true,
-          showDivider: true,
-          onTap: () => Nav.go(Nav.CREDENTIALS)
-        })
-        RowItem({
-          title: '凭据与密钥',
-          subtitle: 'API Key / App ID 存在系统密钥库，不写进偏好文件',
-          value: this.configuredSummary(),
-          showChevron: true,
-          showDivider: false,
-          onTap: () => Nav.go(Nav.CREDENTIALS)
-        })
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  /** Self-check row: state Tag + one action, result also recorded in the backend. */
-  @Builder
-  connectivityBlock() {
-    Column() {
-      Row({ space: Space.sm }) {
-        Column({ space: Space.xxs }) {
-          Text('连通性自检')
-            .fontSize(Type.body)
-            .lineHeight(Leading.body)
-            .fontColor(Palette.text1())
-          Text(this.checkDetail())
-            .fontSize(Type.caption)
-            .lineHeight(Leading.caption)
-            .fontColor(Palette.text3())
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        Tag({ text: this.checkTagText(), tone: this.checkTone() })
-        TextButton({
-          label: this.checking ? '检测中…' : '自检',
-          usable: !this.checking,
-          onTap: () => {
-            this.runSelfCheck();
-          }
-        })
-      }
-      .width('100%')
-      .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.sm })
-
-      Divider()
-        .color(Palette.line())
-        .strokeWidth(0.5)
-        .margin({ left: Space.md })
+  modelEntry() {
+    Group() {
+      RowItem({
+        title: '大模型与凭据',
+        subtitle: '在这里添加或修改大模型配置',
+        showChevron: true,
+        showDivider: false,
+        onTap: () => Nav.go(Nav.CREDENTIALS)
+      })
     }
     .width('100%')
   }
@@ -1210,14 +913,14 @@ export struct SettingsPage {
   @Builder
   toolsSection() {
     Column({ space: Space.xs }) {
-      SectionTitle({ title: '工具', hint: '选取助手、翻译、词典、纠错、问答、凭据与模型设置' })
+      SectionTitle({ title: '工具', hint: '选取助手、翻译、词典、纠错、问答与模型设置' })
       Group() {
-        ForEach(Nav.tools(), (item: NavItem, index: number) => {
+        ForEach(this.toolItems(), (item: NavItem, index: number) => {
           RowItem({
             symbol: item.id,
             title: item.label,
             showChevron: true,
-            showDivider: index < Nav.tools().length - 1,
+            showDivider: index < this.toolItems().length - 1,
             onTap: () => Nav.go(item.id)
           })
         }, (item: NavItem) => 'tool-' + item.id)
@@ -1310,100 +1013,6 @@ export struct SettingsPage {
   }
 
   // ── Sheets ──────────────────────────────────────────────────────────────────
-
-  @Builder
-  asrSheet() {
-    Column({ space: Space.sm }) {
-      SheetTitle({
-        title: '选择转写引擎',
-        hint: '当前：' + Labels.provider(this.prefs.activeAsrProvider)
-      })
-      if (this.asrProviders.length === 0) {
-        EmptyHint({
-          symbol: 'localasr',
-          title: '读不到供应商列表',
-          hint: '检查网络后点右上角重新读取'
-        })
-      } else {
-        Scroll() {
-          Column() {
-            Group() {
-              ForEach(this.asrProviders, (descriptor: ProviderDescriptor, index: number) => {
-                RowItem({
-                  symbol: this.activeProvider(descriptor.providerType, true) ? 'check' : '',
-                  accentSymbol: this.activeProvider(descriptor.providerType, true),
-                  title: Labels.provider(descriptor.providerType),
-                  subtitle: descriptor.providerType,
-                  showChevron: false,
-                  showDivider: index < this.asrProviders.length - 1,
-                  onTap: () => {
-                    this.activateAsr(descriptor.providerType);
-                  }
-                })
-              }, (descriptor: ProviderDescriptor) => 'asr-' + descriptor.kind + '-' + descriptor.providerType)
-            }
-          }
-          .width('100%')
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: Space.md, right: Space.md, top: Space.xs, bottom: Space.lg })
-  }
-
-  @Builder
-  llmSheet() {
-    Column({ space: Space.sm }) {
-      SheetTitle({
-        title: '选择润色模型',
-        hint: '当前：' + Labels.provider(this.prefs.activeLlmProvider)
-      })
-      if (this.llmProviders.length === 0) {
-        EmptyHint({
-          symbol: 'style',
-          title: '读不到供应商列表',
-          hint: '检查网络后点右上角重新读取'
-        })
-      } else {
-        Scroll() {
-          Column() {
-            Group() {
-              ForEach(this.llmProviders, (descriptor: ProviderDescriptor, index: number) => {
-                RowItem({
-                  symbol: this.activeProvider(descriptor.providerType, false) ? 'check' : '',
-                  accentSymbol: this.activeProvider(descriptor.providerType, false),
-                  title: Labels.provider(descriptor.providerType),
-                  subtitle: descriptor.providerType,
-                  showChevron: false,
-                  showDivider: index < this.llmProviders.length - 1,
-                  onTap: () => {
-                    this.activateLlm(descriptor.providerType);
-                  }
-                })
-              }, (descriptor: ProviderDescriptor) => 'llm-' + descriptor.kind + '-' + descriptor.providerType)
-            }
-          }
-          .width('100%')
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: Space.md, right: Space.md, top: Space.xs, bottom: Space.lg })
-  }
 
   @Builder
   micSheet() {
