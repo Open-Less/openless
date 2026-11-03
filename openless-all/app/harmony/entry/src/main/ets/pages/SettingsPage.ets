@@ -142,6 +142,9 @@ export struct SettingsPage {
       this.llmChannels = await Api.channels('llm');
       this.credentials = await Api.credentialStatus();
       await this.loadMicPermission();
+      // Keep the window in step with the stored preference (the shell also applies
+      // it on boot; re-applying here is idempotent and self-heals a stale window).
+      this.applyCurrentAppearance();
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;

@@ -133,7 +133,7 @@ export interface UserPreferences {
   lowLatencyDictationEnabled?: boolean;
   restoreClipboardAfterPaste?: boolean;
   useSystemProxy?: boolean;
-  theme?: string;
+  themeMode?: string;
   locale?: string;
   translationEnabled?: boolean;
   translationTargetLanguage?: string;

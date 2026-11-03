@@ -131,7 +131,7 @@ struct Index {
     try {
       const snapshot: SettingsSnapshot = await Api.settings();
       const prefs: UserPreferences = snapshot.preferences;
-      Appearance.apply(context, prefs.theme ?? 'system');
+      Appearance.apply(context, prefs.themeMode ?? 'system');
     } catch (error) {
       console.warn('[OpenLess Boot] appearance preference unavailable');
     }
