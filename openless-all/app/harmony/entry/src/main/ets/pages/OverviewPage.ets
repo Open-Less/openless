@@ -1,9 +1,20 @@
-import { Breakpoints } from '../common/Breakpoint';
 import { Fmt } from '../common/Format';
 import { Labels } from '../common/Labels';
 import { Store } from '../common/Store';
-import { C, R, S, T, cardShadow } from '../common/Tokens';
-import { Card, EmptyState, GhostButton, MetricTile, Pill, PrimaryButton, SectionHeader, StatusRow } from '../components/Common';
+import { Layout, Leading, Motion, Palette, Radius, Space, Type } from '../common/Theme';
+import {
+  Banner,
+  EmptyHint,
+  Group,
+  MetricBlock,
+  PageScaffold,
+  PrimaryButton,
+  RowItem,
+  SectionTitle,
+  Surface,
+  Tag,
+  TextButton
+} from '../components/Kit';
 import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
 import { Api } from '../data/Api';
@@ -22,11 +33,9 @@ interface WeekColumn {
 const HEAT_LEVELS: number[] = [0, 1, 2, 3, 4];
 
 /**
- * Overview: the one screen a user lands on.
- *
- * It owns the whole dictation loop (start, level feedback, stop, result) and the
- * at-a-glance state of the backend. Wide layouts put the dictation hero and the
- * activity panel side by side; the compact layout stacks them.
+ * Overview v2: one clear action (dictation), then today's numbers, activity and
+ * current configuration. Wide windows put the dictation surface next to the
+ * secondary panels; compact windows stack the same blocks.
  */
 @Component
 export struct OverviewPage {
@@ -55,7 +64,10 @@ export struct OverviewPage {
     this.reload();
   }
 
-  /** Re-reads the panels a dictation or a settings change can invalidate. */
+  private isWide(): boolean {
+    return this.bp === Layout.LG || this.bp === Layout.XL;
+  }
+
   private async reload(): Promise<void> {
     try {
       const activity = await Api.activity();
@@ -98,7 +110,7 @@ export struct OverviewPage {
     this.todayDuration = duration;
   }
 
-  /** Twelve weeks of activity, Sunday-first like the HarmonyOS calendar. */
+  /** Twelve weeks, Sunday-first like the HarmonyOS calendar. */
   private buildWeeks(activity: ActivityDay[]): WeekColumn[] {
     const counts: Map<string, number> = new Map<string, number>();
     for (let index = 0; index < activity.length; index++) {
@@ -115,8 +127,7 @@ export struct OverviewPage {
         const iso: string = cell.getFullYear().toString() + '-' +
           (cell.getMonth() + 1 < 10 ? '0' : '') + (cell.getMonth() + 1).toString() + '-' +
           (cell.getDate() < 10 ? '0' : '') + cell.getDate().toString();
-        const count: number = counts.get(iso) ?? 0;
-        days.push({ date: iso, count: count });
+        days.push({ date: iso, count: counts.get(iso) ?? 0 });
       }
       columns.push({ key: 'w' + week.toString(), days: days });
     }
@@ -139,6 +150,11 @@ export struct OverviewPage {
     return '晚上好';
   }
 
+  private configuredLabel(): string {
+    if (this.configured) return this.greeting() + ' · 说一句就上屏';
+    return this.greeting() + ' · 还差一个转写密钥';
+  }
+
   private microphoneLabel(): string {
     const name: string | undefined = this.prefs.microphoneDeviceName;
     if (name === undefined || name.length === 0) return '系统默认';
@@ -146,18 +162,18 @@ export struct OverviewPage {
   }
 
   private phaseTitle(): string {
-    if (this.phase === 'starting') return '正在准备麦克风…';
+    if (this.phase === 'starting') return '正在准备麦克风';
     if (this.phase === 'recording') return '正在聆听';
-    if (this.phase === 'processing') return '正在转写与润色…';
-    if (this.phase === 'cancelling') return '正在取消…';
+    if (this.phase === 'processing') return '正在转写与润色';
+    if (this.phase === 'cancelling') return '正在取消';
     if (this.dictError.length > 0) return '上次录音失败';
     return '点一下，开始说话';
   }
 
   private phaseHint(): string {
     if (this.dictError.length > 0) return this.dictError;
-    if (this.phase === 'recording') return '再次点击结束并上屏；说完直接停也行';
-    if (this.phase === 'idle') return '录音在设备本地完成，只有转写请求会发送音频';
+    if (this.phase === 'recording') return '再次点击结束并上屏，说完直接停也可以';
+    if (this.phase === 'idle') return '录音在本机完成，只有转写请求会上传音频';
     return '';
   }
 
@@ -190,108 +206,46 @@ export struct OverviewPage {
   }
 
   build() {
-    Column() {
-      Row({ space: S.md }) {
-        Column({ space: S.xxs }) {
-          Text(this.greeting())
-            .fontSize(T.footnote)
-            .fontColor(C.textTertiary())
-          Text('概览')
-            .fontSize(T.display)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(C.textPrimary())
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        GhostButton({
-          label: '刷新',
-          symbol: 'refresh',
-          onTap: () => {
-            this.reload();
-          }
-        })
+    PageScaffold({
+      title: '概览',
+      subtitle: this.configuredLabel(),
+      actionLabel: '刷新',
+      actionSymbol: 'refresh',
+      onAction: () => {
+        this.reload();
       }
-      .width('100%')
-      .padding({ top: S.lg, bottom: S.md })
-
-      Scroll() {
-        if (Breakpoints.isWide(this.bp)) {
-          Row({ space: S.md }) {
-            Column({ space: S.md }) {
-              this.dictationCard()
-              this.resultCard()
-            }
-            .layoutWeight(5)
-            .alignItems(HorizontalAlign.Start)
-
-            Column({ space: S.md }) {
-              this.metricsCard()
-              this.activityCard()
-              this.statusCard()
-              this.recentCard()
-            }
-            .layoutWeight(4)
-            .alignItems(HorizontalAlign.Start)
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Top)
-        } else {
-          Column({ space: S.md }) {
-            this.onboardingCard()
+    }) {
+      if (!this.configured) {
+        this.setupBanner()
+      }
+      if (this.isWide()) {
+        Row({ space: Space.md }) {
+          Column({ space: Space.md }) {
             this.dictationCard()
             this.resultCard()
-            this.metricsCard()
+          }
+          .layoutWeight(5)
+          .alignItems(HorizontalAlign.Start)
+
+          Column({ space: Space.md }) {
+            this.todayCard()
             this.activityCard()
-            this.statusCard()
+            this.configCard()
             this.recentCard()
           }
-          .width('100%')
+          .layoutWeight(4)
+          .alignItems(HorizontalAlign.Start)
         }
-      }
-      .scrollBar(BarState.Off)
-      .layoutWeight(1)
-      .align(Alignment.Top)
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: S.gutter(this.bp), right: S.gutter(this.bp) })
-  }
-
-  /** First run: the app cannot transcribe until a provider key exists. */
-  @Builder
-  onboardingCard() {
-    if (!this.configured) {
-      Card() {
-        Column({ space: S.sm }) {
-          Row({ space: S.sm }) {
-            SymbolGlyph(symbolOf('sparkles'))
-              .fontSize(20)
-              .fontColor([C.accent()])
-            Text('先配一个转写密钥')
-              .fontSize(T.headline)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(C.textPrimary())
-              .layoutWeight(1)
-          }
-          .width('100%')
-          Text('鸿蒙端把转写交给云端引擎，密钥存在系统密钥库。没有密钥时录音会失败，历史里只会留下错误码。')
-            .fontSize(T.footnote)
-            .fontColor(C.textSecondary())
-            .lineHeight(21)
-            .width('100%')
-          Row({ space: S.sm }) {
-            GhostButton({
-              label: '去配凭据',
-              symbol: 'settings',
-              onTap: () => Nav.go(Nav.CREDENTIALS)
-            })
-            GhostButton({
-              label: '查看引擎',
-              onTap: () => Nav.go(Nav.SETTINGS)
-            })
-          }
-          .width('100%')
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+      } else {
+        Column({ space: Space.md }) {
+          this.dictationCard()
+          this.resultCard()
+          this.todayCard()
+          this.activityCard()
+          this.configCard()
+          this.recentCard()
         }
         .width('100%')
       }
@@ -299,112 +253,111 @@ export struct OverviewPage {
   }
 
   @Builder
+  setupBanner() {
+    Banner({
+      title: '先配一个转写密钥',
+      text: '鸿蒙端把转写交给云端引擎，密钥保存在系统密钥库。没有密钥时录音会失败，历史里只会留下错误码。',
+      action: '去配凭据',
+      actionSymbol: 'settings',
+      onAction: () => Nav.go(Nav.CREDENTIALS)
+    })
+  }
+
+  /** One tap target for the whole dictation loop; no second, competing button. */
+  @Builder
   dictationCard() {
-    Card() {
-      Column({ space: S.md }) {
-        Column({ space: S.sm }) {
-          Stack() {
-            Circle()
-              .width(180)
-              .height(180)
-              .fill(C.accentSoft())
-              .opacity(0.25)
-            Circle()
-              .width(148)
-              .height(148)
-              .fill(C.accentSoft())
-              .opacity(this.phase === 'recording' ? 0.55 + this.level * 0.45 : 0.5)
-              .scale({ x: 1 + this.level * 0.08, y: 1 + this.level * 0.08 })
-              .animation({ duration: 120, curve: Curve.EaseOut })
+    Surface({ inset: Space.md }) {
+      Column({ space: Space.md }) {
+        Stack() {
+          Column()
+            .width(168)
+            .height(168)
+            .borderRadius(Radius.pill)
+            .backgroundColor(Palette.accentSoft())
+            .opacity(0.5)
+          Column()
+            .width(136)
+            .height(136)
+            .borderRadius(Radius.pill)
+            .backgroundColor(Palette.accentSoft())
+            .opacity(this.phase === 'recording' ? 0.55 + this.level * 0.45 : 1)
+            .scale({ x: 1 + this.level * 0.06, y: 1 + this.level * 0.06 })
+            .animation({ duration: Motion.quick, curve: Curve.EaseOut })
+          Column()
+            .width(104)
+            .height(104)
+            .borderRadius(Radius.pill)
+            .backgroundColor(this.phase === 'recording' ? Palette.accentPressed() : Palette.accent())
+            .justifyContent(FlexAlign.Center)
+          SymbolGlyph(symbolOf(this.phase === 'recording' ? 'stop' : 'mic'))
+            .fontSize(38)
+            .fontColor([Palette.onAccent()])
+        }
+        .width(168)
+        .height(168)
+        .onClick(() => {
+          this.toggleDictation();
+        })
 
-            Circle()
-              .width(108)
-              .height(108)
-              .fill(this.phase === 'recording' ? C.accent() : C.accentSoft())
-              .shadow({
-                radius: this.phase === 'recording' ? 32 : 16,
-                color: C.accentSoft(),
-                offsetX: 0,
-                offsetY: 6
-              })
-
-            SymbolGlyph(symbolOf(this.phase === 'recording' ? 'stop' : 'mic'))
-              .fontSize(42)
-              .fontColor([this.phase === 'recording' ? C.textOnAccent() : C.accent()])
-          }
-          .width(160)
-          .height(160)
-          .onClick(() => {
-            this.toggleDictation();
-          })
-
+        Column({ space: Space.xxs }) {
           Text(this.phaseTitle())
-            .fontSize(T.headline)
+            .fontSize(Type.section)
+            .lineHeight(Leading.section)
             .fontWeight(FontWeight.Medium)
-            .fontColor(C.textPrimary())
+            .fontColor(Palette.text1())
           if (this.phaseHint().length > 0) {
             Text(this.phaseHint())
-              .fontSize(T.footnote)
-              .fontColor(this.dictError.length > 0 ? C.danger() : C.textTertiary())
+              .fontSize(Type.label)
+              .lineHeight(Leading.label)
+              .fontColor(this.dictError.length > 0 ? Palette.danger() : Palette.text3())
               .textAlign(TextAlign.Center)
           }
           if (this.error.length > 0) {
             Text(this.error)
-              .fontSize(T.footnote)
-              .fontColor(C.danger())
+              .fontSize(Type.label)
+              .lineHeight(Leading.label)
+              .fontColor(Palette.danger())
               .textAlign(TextAlign.Center)
           }
         }
         .width('100%')
         .alignItems(HorizontalAlign.Center)
-        .padding({ top: S.md, bottom: S.xs })
 
-        Row({ space: S.sm }) {
-          if (Breakpoints.isCompact(this.bp)) {
+        Row({ space: Space.sm }) {
+          if (this.phase === 'recording') {
             PrimaryButton({
-              label: this.phase === 'recording' ? '结束并上屏' : '开始说话',
-              usable: !this.busy && (this.phase === 'idle' || this.phase === 'recording' || this.dictError.length > 0),
+              label: '结束并上屏',
               onTap: () => {
                 this.toggleDictation();
               }
             })
-            if (this.phase === 'recording') {
-              GhostButton({
-                label: '取消',
-                onTap: () => {
-                  this.cancelDictation();
-                }
-              })
-            }
+            TextButton({
+              label: '取消',
+              tone: 'quiet',
+              onTap: () => {
+                this.cancelDictation();
+              }
+            })
           } else {
             PrimaryButton({
-              label: this.phase === 'recording' ? '结束并上屏' : '开始说话',
-              usable: !this.busy && (this.phase === 'idle' || this.phase === 'recording' || this.dictError.length > 0),
+              label: '开始说话',
+              usable: !this.busy,
               onTap: () => {
                 this.toggleDictation();
               }
             })
-            if (this.phase === 'recording') {
-              GhostButton({
-                label: '取消录音',
-                onTap: () => {
-                  this.cancelDictation();
-                }
-              })
-            }
           }
         }
         .width('100%')
         .justifyContent(FlexAlign.Center)
 
-        Row({ space: S.xs }) {
-          Pill({ text: this.prefs.polishMode === 'raw' ? '原文模式' : '润色模式', tone: 'accent' })
-          Pill({ text: Labels.provider(this.prefs.activeAsrProvider), tone: 'neutral' })
-          Pill({ text: this.online ? '在线' : '离线', tone: this.online ? 'success' : 'warning' })
+        Row({ space: Space.xs }) {
+          Tag({ text: this.prefs.polishMode === 'raw' ? '原文模式' : '润色模式', tone: 'accent' })
+          Tag({ text: Labels.provider(this.prefs.activeAsrProvider), tone: 'neutral' })
+          Tag({ text: this.online ? '在线' : '离线', tone: this.online ? 'success' : 'warning' })
         }
         .width('100%')
         .justifyContent(FlexAlign.Center)
-        .padding({ bottom: S.xs })
       }
       .width('100%')
     }
@@ -413,15 +366,16 @@ export struct OverviewPage {
   @Builder
   resultCard() {
     if (this.result.length > 0) {
-      Card() {
-        Column({ space: S.sm }) {
-          Row({ space: S.sm }) {
+      Surface({ inset: Space.md }) {
+        Column({ space: Space.xs }) {
+          Row({ space: Space.sm }) {
             Text('刚刚上屏')
-              .fontSize(T.callout)
+              .fontSize(Type.label)
+              .lineHeight(Leading.label)
               .fontWeight(FontWeight.Medium)
-              .fontColor(C.textPrimary())
+              .fontColor(Palette.text2())
               .layoutWeight(1)
-            GhostButton({
+            TextButton({
               label: '复制',
               symbol: 'copy',
               onTap: () => {
@@ -432,9 +386,9 @@ export struct OverviewPage {
           .width('100%')
 
           Text(this.result)
-            .fontSize(T.body)
-            .fontColor(C.textPrimary())
-            .lineHeight(24)
+            .fontSize(Type.body)
+            .lineHeight(Leading.body)
+            .fontColor(Palette.text1())
             .width('100%')
             .copyOption(CopyOptions.LocalDevice)
         }
@@ -444,14 +398,14 @@ export struct OverviewPage {
   }
 
   @Builder
-  metricsCard() {
-    Card() {
-      Column({ space: S.md }) {
-        SectionHeader({ title: '今天', hint: '设备本地统计，不上传' })
-        Row() {
-          MetricTile({ label: '段数', value: this.todayCount.toString(), hero: true })
-          MetricTile({ label: '字数', value: Fmt.count(this.todayChars), hero: true })
-          MetricTile({ label: '时长', value: Fmt.duration(this.todayDuration), hero: true })
+  todayCard() {
+    Surface({ inset: Space.md }) {
+      Column({ space: Space.sm }) {
+        SectionTitle({ title: '今天', hint: '统计只留在这台设备上' })
+        Row({ space: Space.sm }) {
+          MetricBlock({ label: '段数', value: this.todayCount.toString() })
+          MetricBlock({ label: '字数', value: Fmt.count(this.todayChars) })
+          MetricBlock({ label: '时长', value: Fmt.duration(this.todayDuration) })
         }
         .width('100%')
         .alignItems(VerticalAlign.Bottom)
@@ -462,18 +416,18 @@ export struct OverviewPage {
 
   @Builder
   activityCard() {
-    Card() {
-      Column({ space: S.md }) {
-        SectionHeader({ title: '近 12 周', hint: '每格代表一天，颜色越深说得越多' })
-        Row({ space: S.xs }) {
+    Surface({ inset: Space.md }) {
+      Column({ space: Space.sm }) {
+        SectionTitle({ title: '近 12 周', hint: '一格一天，越深说得越多' })
+        Row() {
           ForEach(this.weeks, (week: WeekColumn) => {
-            Column({ space: S.xs }) {
+            Column({ space: 4 }) {
               ForEach(week.days, (day: DayCell) => {
                 Column()
-                  .width(14)
-                  .height(14)
-                  .backgroundColor(C.heat(this.heatLevel(day.count)))
-                  .borderRadius(4)
+                  .width(13)
+                  .height(13)
+                  .backgroundColor(Palette.heat(this.heatLevel(day.count)))
+                  .borderRadius(3)
               }, (day: DayCell) => day.date)
             }
           }, (week: WeekColumn) => week.key)
@@ -481,20 +435,20 @@ export struct OverviewPage {
         .width('100%')
         .justifyContent(FlexAlign.SpaceBetween)
 
-        Row({ space: S.xs }) {
+        Row({ space: Space.xxs }) {
           Text('少')
-            .fontSize(T.caption)
-            .fontColor(C.textTertiary())
+            .fontSize(Type.caption)
+            .fontColor(Palette.text3())
           ForEach(HEAT_LEVELS, (level: number) => {
             Column()
               .width(10)
               .height(10)
-              .backgroundColor(C.heat(level))
-              .borderRadius(3)
+              .backgroundColor(Palette.heat(level))
+              .borderRadius(2)
           }, (level: number) => 'legend-' + level.toString())
           Text('多')
-            .fontSize(T.caption)
-            .fontColor(C.textTertiary())
+            .fontSize(Type.caption)
+            .fontColor(Palette.text3())
         }
       }
       .width('100%')
@@ -502,33 +456,47 @@ export struct OverviewPage {
   }
 
   @Builder
-  statusCard() {
-    Card() {
+  configCard() {
+    Group() {
       Column() {
-        SectionHeader({ title: '当前配置' })
-        StatusRow({
-          label: '转写引擎',
+        Row() {
+          SectionTitle({ title: '当前配置' })
+        }
+        .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xxs })
+          .width('100%')
+
+        RowItem({
+          title: '转写引擎',
           value: Labels.provider(this.prefs.activeAsrProvider),
+          showChevron: true,
+          showDivider: true,
           onTap: () => Nav.go(Nav.SETTINGS)
         })
-        StatusRow({
-          label: '润色模型',
+        RowItem({
+          title: '润色模型',
           value: Labels.provider(this.prefs.activeLlmProvider),
+          showChevron: true,
+          showDivider: true,
           onTap: () => Nav.go(Nav.SETTINGS)
         })
-        StatusRow({
-          label: '麦克风',
+        RowItem({
+          title: '麦克风',
           value: this.microphoneLabel(),
+          showChevron: true,
+          showDivider: true,
           onTap: () => Nav.go(Nav.SETTINGS)
         })
-        StatusRow({
-          label: '网络',
+        RowItem({
+          title: '网络',
           value: this.online ? '已连接' : '未连接',
+          showChevron: true,
+          showDivider: true,
           onTap: () => Nav.go(Nav.SETTINGS)
         })
-        StatusRow({
-          label: '离线听写',
+        RowItem({
+          title: '离线听写',
           value: this.capabilities.supportsLocalAsr === true ? '可用' : '需联网转写',
+          showChevron: true,
           showDivider: false,
           onTap: () => Nav.go(Nav.LOCALASR)
         })
@@ -539,44 +507,31 @@ export struct OverviewPage {
 
   @Builder
   recentCard() {
-    Card() {
-      Column({ space: S.sm }) {
-        Row({ space: S.sm }) {
-          Text('最近')
-            .fontSize(T.headline)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(C.textPrimary())
-            .layoutWeight(1)
-          GhostButton({
-            label: '全部历史',
-            onTap: () => Nav.go(Nav.HISTORY)
+    Group() {
+      Column() {
+        Row() {
+          SectionTitle({
+            title: '最近',
+            action: '全部历史',
+            onAction: () => Nav.go(Nav.HISTORY)
           })
         }
+        .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xxs })
         .width('100%')
 
         if (this.recent.length === 0) {
-          EmptyState({ symbol: 'history', title: '还没有听写记录', hint: '点上面的麦克风说第一句话' })
+          EmptyHint({ symbol: 'history', title: '还没有听写记录', hint: '点上面的麦克风说第一句话' })
         } else {
-          ForEach(this.recent, (entry: HistoryEntry) => {
-            Row({ space: S.sm }) {
-              Column({ space: S.xxs }) {
-                Text(Fmt.preview(entry.finalText, 40))
-                  .fontSize(T.callout)
-                  .fontColor(C.textPrimary())
-                  .maxLines(2)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(Fmt.relative(entry.createdAt))
-                  .fontSize(T.caption)
-                  .fontColor(C.textTertiary())
+          ForEach(this.recent, (entry: HistoryEntry, index: number) => {
+            RowItem({
+              title: Fmt.preview(entry.finalText, 40),
+              subtitle: Fmt.relative(entry.createdAt),
+              showChevron: true,
+              showDivider: index < this.recent.length - 1,
+              onTap: () => {
+                Nav.go(Nav.HISTORY);
+                Store.put<string>('detailId', entry.id);
               }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ top: S.sm, bottom: S.sm })
-            .onClick(() => {
-              Nav.go(Nav.HISTORY);
-              Store.put<string>('detailId', entry.id);
             })
           }, (entry: HistoryEntry) => entry.id)
         }

@@ -23,6 +23,8 @@ export function symbolOf(id: string): Resource {
   if (id === 'close') return $r('sys.symbol.xmark');
   if (id === 'check') return $r('sys.symbol.checkmark');
   if (id === 'chevron') return $r('sys.symbol.chevron_right');
+  if (id === 'chevron_left') return $r('sys.symbol.chevron_left');
+  if (id === 'chevron_down') return $r('sys.symbol.chevron_down');
   if (id === 'list') return $r('sys.symbol.list_bullet');
   if (id === 'trash') return $r('sys.symbol.trash');
   if (id === 'add') return $r('sys.symbol.plus');

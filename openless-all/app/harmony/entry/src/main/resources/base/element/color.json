@@ -175,6 +175,126 @@
     {
       "name": "ol_glow_c",
       "value": "#147A5CFF"
+    },
+    {
+      "name": "c_bg",
+      "value": "#F2F3F5"
+    },
+    {
+      "name": "c_bg_elev",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "c_card",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "c_card_alt",
+      "value": "#F7F8FA"
+    },
+    {
+      "name": "c_card_pressed",
+      "value": "#EFF1F4"
+    },
+    {
+      "name": "c_line",
+      "value": "#E7E9ED"
+    },
+    {
+      "name": "c_line_strong",
+      "value": "#D8DBE1"
+    },
+    {
+      "name": "c_text_1",
+      "value": "#0E0F12"
+    },
+    {
+      "name": "c_text_2",
+      "value": "#5B6069"
+    },
+    {
+      "name": "c_text_3",
+      "value": "#8B9099"
+    },
+    {
+      "name": "c_text_on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "c_icon_1",
+      "value": "#1B1D22"
+    },
+    {
+      "name": "c_icon_2",
+      "value": "#6C7280"
+    },
+    {
+      "name": "c_accent",
+      "value": "#0A59F7"
+    },
+    {
+      "name": "c_accent_soft",
+      "value": "#EAF1FF"
+    },
+    {
+      "name": "c_accent_pressed",
+      "value": "#0847C6"
+    },
+    {
+      "name": "c_success",
+      "value": "#12A150"
+    },
+    {
+      "name": "c_success_soft",
+      "value": "#E7F7EE"
+    },
+    {
+      "name": "c_warning",
+      "value": "#DE8A00"
+    },
+    {
+      "name": "c_warning_soft",
+      "value": "#FCF2E0"
+    },
+    {
+      "name": "c_danger",
+      "value": "#D2412F"
+    },
+    {
+      "name": "c_danger_soft",
+      "value": "#FDECEA"
+    },
+    {
+      "name": "c_control",
+      "value": "#EDEFF3"
+    },
+    {
+      "name": "c_control_selected",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "c_scrim",
+      "value": "#66000000"
+    },
+    {
+      "name": "c_heat_0",
+      "value": "#E9ECF1"
+    },
+    {
+      "name": "c_heat_1",
+      "value": "#CDE0FF"
+    },
+    {
+      "name": "c_heat_2",
+      "value": "#9CC2FF"
+    },
+    {
+      "name": "c_heat_3",
+      "value": "#5E96FA"
+    },
+    {
+      "name": "c_heat_4",
+      "value": "#0A59F7"
     }
   ]
 }

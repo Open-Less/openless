@@ -1,27 +1,26 @@
 import { KeyCode } from '@kit.InputKit';
-import { Glass } from './Material';
-import { Breakpoints } from '../common/Breakpoint';
-import { C, R, S, T } from '../common/Tokens';
+import { Layout, Palette, Radius, Space, Type, Leading } from '../common/Theme';
+import { PageBackBar } from './Kit';
+import { symbolOf } from './Icons';
+import { Nav, NavItem } from './Nav';
 import { CredentialsPage } from '../pages/CredentialsPage';
 import { HistoryPage } from '../pages/HistoryPage';
 import { CorrectionsPage, MarketplacePage, StylePage, VocabPage } from '../pages/LibraryPages';
 import { OverviewPage } from '../pages/OverviewPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { LocalAsrPage, QaPage, QuickNotePage, TranslationPage } from '../pages/ToolPages';
-import { symbolOf } from './Icons';
-import { Nav, NavItem } from './Nav';
 
 /**
- * Adaptive application shell (一次开发，多端部署).
+ * Adaptive shell v2 (一次开发，多端部署).
  *
- *   < 840vp   bottom tab bar (five destinations)     phone portrait/landscape,
- *                                                    tablet portrait
- *   >= 840vp  labelled side bar                      tablet landscape, 2-in-1
+ *   sm  < 600vp   bottom tab bar
+ *   md  600-840   88vp icon rail
+ *   lg  840-1080  240vp labelled rail
+ *   xl  >= 1080   264vp labelled rail
  *
- * Only five destinations exist at this level. Secondary screens live inside 设置,
- * which is what keeps a phone-sized tab bar readable and a tablet side bar short.
- * Chrome is drawn on translucent material (`backgroundBlurStyle`) over the ambient
- * glow painted by `Index`, i.e. the HarmonyOS immersive-material look.
+ * The shell only draws navigation and the back affordance; pages own their titles
+ * and content width. Chrome is opaque and separated by a hairline — no blur stack,
+ * no ambient wash.
  */
 @Component
 export struct AppShell {
@@ -30,37 +29,34 @@ export struct AppShell {
 
   build() {
     Row() {
-      if (Breakpoints.isWide(this.bp)) {
-        this.sideBar()
+      if (Layout.isRail(this.bp)) {
+        this.rail()
       }
       Column() {
-        Column() {
-          // Secondary screens (工具页) live outside the five tabs, so they need an
-          // explicit way back; without it the tab bar only leads to a primary page.
-          if (Nav.isSecondary(this.route)) {
-            Row({ space: S.xs }) {
-              SymbolGlyph(symbolOf('chevron_left'))
-                .fontSize(20)
-                .fontColor([C.accent()])
-              Text(Nav.label(Nav.ownerOf(this.route)))
-                .fontSize(T.footnote)
-                .fontColor(C.accent())
-            }
-            .width('100%')
-            .height(44)
-            .padding({ left: S.md, right: S.md })
-            .hoverEffect(HoverEffect.Highlight)
-            .onClick(() => Nav.go(Nav.ownerOf(this.route)))
+        if (Nav.isSecondary(this.route)) {
+          Row() {
+            PageBackBar({
+              label: Nav.label(Nav.ownerOf(this.route)),
+              onTap: () => Nav.go(Nav.ownerOf(this.route))
+            })
           }
-          this.content()
+          .width('100%')
+          .padding({ left: Layout.gutter(this.bp), right: Layout.gutter(this.bp) })
         }
-        .layoutWeight(1)
-        .width('100%')
-        // Column centers its children by default, so the capped column sits centred
-        // with equal side margins instead of hugging the left edge on a portrait tablet.
-        .constraintSize({ maxWidth: S.contentMax(this.bp) })
 
-        if (!Breakpoints.isWide(this.bp)) {
+        Row() {
+          Column() {
+            this.content()
+          }
+          .width('100%')
+          .height('100%')
+          .constraintSize({ maxWidth: Layout.contentMax(this.bp) })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+
+        if (!Layout.isRail(this.bp)) {
           this.tabBar()
         }
       }
@@ -69,11 +65,12 @@ export struct AppShell {
     }
     .width('100%')
     .height('100%')
+    .backgroundColor(Palette.bg())
     .focusable(true)
     .onKeyEvent((event: KeyEvent) => this.handleKey(event))
   }
 
-  /** Ctrl/⌘ + 1..5 jumps to a primary destination (2-in-1 and tablets with keyboards). */
+  /** Ctrl/⌘ + 1..5 jumps to a primary destination on tablets and 2-in-1. */
   private handleKey(event: KeyEvent): void {
     if (event.type !== KeyType.Down) return;
     let withModifier: boolean = false;
@@ -95,7 +92,6 @@ export struct AppShell {
     }
   }
 
-  /** Route table: navigation only rebuilds this slot, pages keep their own state. */
   @Builder
   content() {
     if (this.route === Nav.HISTORY) {
@@ -126,71 +122,77 @@ export struct AppShell {
   }
 
   @Builder
-  sideBar() {
+  rail() {
     Column() {
-      Row({ space: S.md }) {
+      Row({ space: Space.xs }) {
         Text('OL')
-          .fontSize(T.footnote)
+          .fontSize(Type.caption)
           .fontWeight(FontWeight.Bold)
-          .fontColor(C.textOnAccent())
+          .fontColor(Palette.onAccent())
           .width(32)
           .height(32)
           .textAlign(TextAlign.Center)
-          .backgroundColor(C.accent())
-          .borderRadius(R.md)
-        Column({ space: 0 }) {
+          .backgroundColor(Palette.accent())
+          .borderRadius(Radius.control)
+
+        if (Layout.isLabelledRail(this.bp)) {
           Text('OpenLess')
-            .fontSize(T.body)
+            .fontSize(Type.cardTitle)
             .fontWeight(FontWeight.Medium)
-            .fontColor(C.textPrimary())
-          Text('鸿蒙原生版')
-            .fontSize(T.caption)
-            .fontColor(C.textTertiary())
+            .fontColor(Palette.text1())
+            .layoutWeight(1)
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
       }
       .width('100%')
-      .padding({ top: S.xl, bottom: S.xl, left: S.sm, right: S.sm })
+      .padding({
+        left: Layout.isLabelledRail(this.bp) ? Space.md : 0,
+        right: Space.md,
+        top: Space.lg,
+        bottom: Space.lg
+      })
+      .justifyContent(Layout.isLabelledRail(this.bp) ? FlexAlign.Start : FlexAlign.Center)
 
       ForEach(Nav.items(), (item: NavItem) => {
         this.railItem(item)
-      }, (item: NavItem) => item.id)
+      }, (item: NavItem) => 'rail-' + item.id)
 
       Blank()
 
-      Text('v' + (AppStorage.get<string>('appVersion') ?? '—'))
-        .fontSize(T.caption)
-        .fontColor(C.textTertiary())
-        .padding({ left: S.md, bottom: S.lg })
+      if (Layout.isLabelledRail(this.bp)) {
+        Text('v' + (AppStorage.get<string>('appVersion') ?? '—'))
+          .fontSize(Type.caption)
+          .fontColor(Palette.text3())
+          .width('100%')
+          .padding({ left: Space.md, bottom: Space.lg })
+      }
     }
-    .width(S.rail(this.bp))
+    .width(Layout.rail(this.bp))
     .height('100%')
-    .padding({ left: S.sm, right: S.sm })
-    .backgroundColor(C.glass())
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-    .border({ width: { right: 0.5 }, color: C.border() })
+    .padding({ left: Space.xs, right: Space.xs })
+    .backgroundColor(Palette.bgElevated())
+    .border({ width: { right: 0.5 }, color: Palette.line() })
   }
 
   @Builder
   railItem(item: NavItem) {
-    Row({ space: S.md }) {
+    Column({ space: Space.xxs }) {
       SymbolGlyph(symbolOf(item.id))
-        .fontSize(20)
-        .fontColor([this.tabActive(item.id) ? C.accent() : C.iconSecondary()])
-      Text(item.label)
-        .fontSize(T.callout)
-        .fontColor(this.tabActive(item.id) ? C.accent() : C.textPrimary())
-        .fontWeight(this.tabActive(item.id) ? FontWeight.Medium : FontWeight.Regular)
-        .layoutWeight(1)
+        .fontSize(22)
+        .fontColor([this.tabActive(item.id) ? Palette.accent() : Palette.icon2()])
+      if (Layout.isLabelledRail(this.bp)) {
+        Text(item.label)
+          .fontSize(Type.caption)
+          .lineHeight(Leading.caption)
+          .fontColor(this.tabActive(item.id) ? Palette.accent() : Palette.text2())
+      }
     }
     .width('100%')
-    .height(S.rowSingle)
-    .padding({ left: S.md, right: S.md })
-    .margin({ bottom: S.xxs })
-    .backgroundColor(this.tabActive(item.id) ? C.accentSoft() : Color.Transparent)
-    .borderRadius(R.md)
-    // 2-in-1 / PC: pointer hover and keyboard focus must be visible before the click.
+    .height(Layout.isLabelledRail(this.bp) ? 56 : 52)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .margin({ bottom: Space.xxs })
+    .backgroundColor(this.tabActive(item.id) ? Palette.accentSoft() : Color.Transparent)
+    .borderRadius(Radius.card)
     .hoverEffect(HoverEffect.Highlight)
     .focusable(true)
     .onClick(() => Nav.go(item.id))
@@ -198,29 +200,29 @@ export struct AppShell {
 
   @Builder
   tabBar() {
-    Row() {
+    Row({ space: Space.xs }) {
       ForEach(Nav.PRIMARY, (id: string) => {
         this.tabItem(id)
       }, (id: string) => 'tab-' + id)
     }
     .width('100%')
-    .height(64)
-    .padding({ left: S.sm, right: S.sm, bottom: S.xs })
-    .backgroundColor(C.glassStrong())
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-    .border({ width: { top: 0.5 }, color: C.border() })
+    .height(56)
+    .padding({ left: Space.xs, right: Space.xs })
+    .backgroundColor(Palette.bgElevated())
+    .border({ width: { top: 0.5 }, color: Palette.line() })
   }
 
   @Builder
   tabItem(id: string) {
-    Column({ space: S.xxs }) {
+    Column({ space: Space.xxs }) {
       SymbolGlyph(symbolOf(id))
         .fontSize(22)
-        .fontColor([this.tabActive(id) ? C.accent() : C.iconSecondary()])
+        .fontColor([this.tabActive(id) ? Palette.accent() : Palette.icon2()])
       Text(Nav.label(id))
-        .fontSize(T.caption)
-        .fontColor(this.tabActive(id) ? C.accent() : C.textSecondary())
-        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Regular)
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.tabActive(id) ? Palette.accent() : Palette.text2())
     }
     .layoutWeight(1)
     .height('100%')

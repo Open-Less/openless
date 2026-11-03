@@ -2,13 +2,16 @@ import { bundleManager, common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import nativeHost from 'libopenless_harmony.so';
+import { Appearance } from '../common/Appearance';
 import { WindowWatcher } from '../common/Breakpoint';
-import { C, R, S, T } from '../common/Tokens';
-import { AppShell } from '../components/AppShell';
-import { Nav } from '../components/Nav';
 import { Boot } from '../common/Boot';
 import { Store } from '../common/Store';
+import { Palette, Radius, Space, Type, Leading } from '../common/Theme';
+import { AppShell } from '../components/AppShell';
+import { symbolOf } from '../components/Icons';
+import { Nav } from '../components/Nav';
 import { Api, Runtime } from '../data/Api';
+import { SettingsSnapshot, UserPreferences } from '../data/Types';
 
 interface BootReply {
   ok: boolean;
@@ -20,11 +23,12 @@ interface NativeError {
 }
 
 /**
- * Native entry point.
+ * Native entry point v2.
  *
- * The ArkWeb shell is gone: this page owns the window size class, boots the Rust
- * core, and hosts the route table inside the adaptive `AppShell`. Every page reads
- * the same core over the same bridge, so phone, tablet and 2-in-1 run one UI.
+ * Owns the window size class, boots the Rust core, applies the saved appearance
+ * and hosts the route table inside the adaptive shell. The system insets the
+ * window (no full-screen drawing), so status bar and gesture area are handled by
+ * the platform instead of hand-patched paddings.
  */
 @Entry
 @Component
@@ -72,7 +76,7 @@ struct Index {
     return false;
   }
 
-  /** Size class from the window rectangle: covers rotation, split and free-form. */
+  /** Size class from the window rectangle: covers rotation, split and free-form resizing. */
   private watchWindow(): void {
     const pinned: string = AppStorage.get<string>('bpOverride') ?? '';
     if (pinned.length > 0) {
@@ -114,10 +118,22 @@ struct Index {
         console.warn('[OpenLess Boot] version unavailable');
       }
       await Api.bridgeOf().restoreCredentials();
+      await this.applySavedAppearance(context);
       this.ready = true;
       console.info('[OpenLess Native] core ready');
     } catch (error) {
       this.startupError = (error as NativeError).message;
+    }
+  }
+
+  /** The theme preference is applied before the first frame of the shell. */
+  private async applySavedAppearance(context: common.UIAbilityContext): Promise<void> {
+    try {
+      const snapshot: SettingsSnapshot = await Api.settings();
+      const prefs: UserPreferences = snapshot.preferences;
+      Appearance.apply(context, prefs.theme ?? 'system');
+    } catch (error) {
+      console.warn('[OpenLess Boot] appearance preference unavailable');
     }
   }
 
@@ -128,77 +144,56 @@ struct Index {
       } else if (!this.ready) {
         this.loading()
       } else {
-        Stack() {
-          this.ambient()
-          AppShell()
-        }
-        .width('100%')
-        .height('100%')
+        AppShell()
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(C.bg())
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-  }
-
-  /**
-   * Background: one very low-alpha brand wash instead of blurred colour blobs.
-   * Large blurred circles read as stains on a tablet panel; a single diagonal
-   * gradient stays even under the translucent chrome and still gives the material
-   * something to refract.
-   */
-  @Builder
-  ambient() {
-    Column()
-      .width('100%')
-      .height('100%')
-      .backgroundColor(C.bg())
-      .linearGradient({
-        angle: 150,
-        colors: [
-          [C.bg(), 0.0],
-          [C.glowA(), 0.42],
-          [C.bg(), 0.72],
-          [C.glowB(), 1.0]
-        ]
-      })
+    .backgroundColor(Palette.bg())
   }
 
   @Builder
   loading() {
-    Column({ space: S.md }) {
+    Column({ space: Space.sm }) {
       LoadingProgress()
-        .width(48)
-        .height(48)
-        .color(C.accent())
-      Text('正在启动本地后端…')
-        .fontSize(T.body)
-        .fontColor(C.textSecondary())
+        .width(40)
+        .height(40)
+        .color(Palette.accent())
+      Text('正在启动本地后端')
+        .fontSize(Type.label)
+        .lineHeight(Leading.label)
+        .fontColor(Palette.text3())
     }
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
+    .backgroundColor(Palette.bg())
   }
 
   @Builder
   failure() {
-    Column({ space: S.md }) {
+    Column({ space: Space.sm }) {
+      SymbolGlyph(symbolOf('close'))
+        .fontSize(28)
+        .fontColor([Palette.danger()])
       Text('后端启动失败')
-        .fontSize(T.headline)
+        .fontSize(Type.section)
+        .lineHeight(Leading.section)
         .fontWeight(FontWeight.Medium)
-        .fontColor(C.textPrimary())
+        .fontColor(Palette.text1())
       Text(this.startupError)
-        .fontSize(T.footnote)
-        .fontColor(C.danger())
-        .padding(S.md)
-        .backgroundColor(C.dangerSoft())
-        .borderRadius(R.md)
+        .fontSize(Type.label)
+        .lineHeight(Leading.label)
+        .fontColor(Palette.text2())
+        .padding(Space.sm)
+        .backgroundColor(Palette.dangerSoft())
+        .borderRadius(Radius.card)
         .textAlign(TextAlign.Center)
-      Button('重试')
-        .backgroundColor(C.accent())
-        .fontColor(C.textOnAccent())
-        .borderRadius(R.pill)
+      Button('重试', { type: ButtonType.Capsule })
+        .height(44)
+        .fontSize(Type.body)
+        .backgroundColor(Palette.accent())
+        .fontColor(Palette.onAccent())
         .onClick(() => {
           this.startupError = '';
           this.boot();
@@ -207,7 +202,7 @@ struct Index {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .padding(S.xl)
+    .padding(Space.xl)
+    .backgroundColor(Palette.bg())
   }
-
 }
