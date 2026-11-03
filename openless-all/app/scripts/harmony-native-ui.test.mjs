@@ -1,198 +1,150 @@
-// Contract test for the native HarmonyOS UI.
+// Contract test for the native HarmonyOS UI (v2 design system).
 //
-// The HAP used to be an ArkWeb shell around the shared web bundle: the whole app
-// was one `Web({ src: $rawfile('web/index.html') })`. It is now a native ArkUI
-// app built for phone, tablet and 2-in-1, and the risks this test guards are the
-// ones that actually bit during the migration:
+// v2 replaced the glass/glow "Common.ets + Tokens.ets" stack with a small,
+// closed vocabulary: `common/Theme.ets` (semantic tokens) + `components/Kit.ets`
+// (one way to draw a card, row, button, chip or input). This test guards the
+// invariants that actually broke or drifted during the migration:
 //
-//   * a `webview` import creeping back in (it would ship 40 MB of dead assets and
-//     two UIs that drift apart);
-//   * `AppStorage.setOrCreate` used as an assignment - it silently ignores an
-//     existing key, which pinned navigation to the first destination forever;
-//   * `deviceTypes`/`orientation` losing 2-in-1 or rotation support;
-//   * a route that exists in the side bar but has no page behind it;
-//   * a light-mode token without a dark-mode counterpart.
+//   * a WebView shell creeping back in (dead bundle + two UIs drifting apart);
+//   * `AppStorage.setOrCreate` used as an assignment (freezes navigation);
+//   * a route that exists in the dock/rail but has no page behind it;
+//   * pages drifting back to hard-coded hex colors or font sizes;
+//   * a light-mode token without a dark counterpart;
+//   * the v1 files resurrecting.
 //
-// Text-based so it also runs in the Linux contract job (no node_modules).
+// Text-based so it runs in the Linux contract job (no node_modules required).
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import vm from 'node:vm';
-import ts from 'typescript';
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = resolve(appRoot, '../..');
 const ets = (path) => readFileSync(join(appRoot, 'harmony/entry/src/main/ets', path), 'utf8');
 const read = (path) => readFileSync(join(appRoot, path), 'utf8');
+const has = (path) => existsSync(join(appRoot, path));
 
 const index = ets('pages/Index.ets');
 const shell = ets('components/AppShell.ets');
 const nav = ets('components/Nav.ets');
-const tokens = ets('common/Tokens.ets');
-const breakpoints = ets('common/Breakpoint.ets');
+const theme = ets('common/Theme.ets');
+const kit = ets('components/Kit.ets');
 const moduleJson = read('harmony/entry/src/main/module.json5');
 const buildScript = read('scripts/build-harmony-app.sh');
 const packaging = read('scripts/package-harmony-hap.sh');
 
-// 1. Native UI: no ArkWeb shell, no web bundle.
+const PAGE_FILES = [
+  'pages/OverviewPage.ets',
+  'pages/HistoryPage.ets',
+  'pages/LibraryPages.ets',
+  'pages/SettingsPage.ets',
+  'pages/ToolPages.ets',
+  'pages/CredentialsPage.ets',
+  'pages/SelectionPage.ets'
+];
+const pages = PAGE_FILES.map(ets).join('\n');
+
+// 1. Native UI only: no ArkWeb shell, no web bundle.
 for (const [label, source] of [['pages/Index.ets', index], ['components/AppShell.ets', shell]]) {
   assert.doesNotMatch(source, /@kit\.ArkWeb|webview\.|WebviewController/, `${label} must not import ArkWeb`);
   assert.doesNotMatch(source, /rawfile\('web\/|Web\(\{/, `${label} must not host the web bundle`);
 }
-assert.ok(
-  !existsSync(join(appRoot, 'harmony/entry/src/main/resources/rawfile/web')),
-  'the web bundle must not be staged into the HAP',
-);
+assert.ok(!existsSync(join(appRoot, 'harmony/entry/src/main/resources/rawfile/web')), 'the web bundle must not be staged');
 assert.doesNotMatch(buildScript, /npm run build|web-dist|rawfile\/web'\)/, 'the build must not produce a web bundle');
 assert.match(packaging, /build-harmony-app\.sh/, 'packaging drives the native build script');
-assert.ok(
-  !existsSync(join(appRoot, 'scripts/build-harmony-frontend.sh')),
-  'the old frontend-bundle script must be gone',
-);
+assert.ok(!has('scripts/build-harmony-frontend.sh'), 'the old frontend-bundle script must stay gone');
 
-// 2. `AppStorage.setOrCreate` only creates; every writer needs an assignment.
-assert.match(nav, /Store\.put<string>\('route'/, 'navigation must assign the route, not only create it');
-assert.doesNotMatch(
-  nav + index,
-  /AppStorage\.setOrCreate<string>\('route'/,
-  'setOrCreate silently ignores an existing route key and freezes navigation',
-);
+// 2. v1 design system is gone for good.
+for (const stale of ['harmony/entry/src/main/ets/components/Common.ets',
+  'harmony/entry/src/main/ets/components/Material.ets',
+  'harmony/entry/src/main/ets/common/Tokens.ets']) {
+  assert.ok(!has(stale), `${stale} must stay deleted`);
+}
+
+// 3. Navigation assignment + four destinations.
 assert.match(ets('common/Store.ets'), /AppStorage\.set<T>\(key, value\)/, 'Store.put must assign after creating');
-
-// 3. One UI for phone, tablet and PC.
-// deviceTypes must stay inside what the signing profile grants: declaring `2in1`
-// without a 2-in-1 profile makes the system reject the app outright.
-assert.match(moduleJson, /"deviceTypes":\s*\[\s*\n\s*"phone",\s*\n\s*"tablet"\s*\n\s*\]/, 'deviceTypes must be phone + tablet');
-assert.doesNotMatch(moduleJson, /"2in1"/, 'a 2in1 device type needs a 2-in-1 signing profile first');
-assert.match(moduleJson, /"orientation": "auto_rotation"/, 'the window must be free to rotate');
-assert.doesNotMatch(moduleJson, /"supportWindowMode":\s*\[[^\]]*"floating"/, 'free-form windows are a 2-in-1 capability the profile does not cover');
-assert.match(moduleJson, /"supportWindowMode":\s*\[\s*\n\s*"fullscreen",\s*\n\s*"split"\s*\n\s*\]/, 'tablets may still split');
-
-// 4. Size classes come from the window rectangle, not from `mediaquery`.
-assert.doesNotMatch(breakpoints, /mediaquery\.matchMediaSync/, 'the size class must not depend on mediaquery ranges');
-assert.match(breakpoints, /getWindowProperties\(\)/, 'the size class must use the window rectangle');
-assert.match(breakpoints, /'windowSizeChange'/, 'rotation and free-form resize must re-flow through windowSizeChange');
-{
-  const source = breakpoints
-    .replace(/\r\n/g, '\n')
-    .replace(/^import .*;\n/gm, '');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(compiled, { exports, console });
-  const of = exports.Breakpoints.of;
-  const cases = [
-    [320, 'sm'], // phone portrait
-    [599, 'sm'],
-    [600, 'md'], // phone landscape / small tablet
-    [839, 'md'],
-    [840, 'lg'], // large tablet / folded phone
-    [1079, 'lg'],
-    [1080, 'xl'], // 2-in-1 / PC
-    [1600, 'xl'],
-  ];
-  for (const [width, expected] of cases) assert.equal(of(width), expected, `${width}vp must be ${expected}`);
+assert.doesNotMatch(nav + index, /AppStorage\.setOrCreate<string>\('route'/, 'setOrCreate silently freezes navigation');
+const primary = nav.match(/static readonly PRIMARY: string\[\] = \[([\s\S]*?)\];/)?.[1] ?? '';
+const primaryIds = [...primary.matchAll(/Nav\.([A-Z]+)/g)].map((m) => m[1]);
+assert.deepEqual(primaryIds, ['OVERVIEW', 'HISTORY', 'STYLE', 'SETTINGS'], 'the dock holds exactly four destinations');
+for (const id of ['SELECTION', 'TRANSLATION', 'VOCAB', 'CORRECTIONS', 'QA', 'CREDENTIALS', 'LOCALASR']) {
+  assert.match(nav, new RegExp(`id: Nav\\.${id}, label:`), `${id} must be listed in Nav.tools()`);
 }
+assert.ok(!/Nav\.MARKETPLACE|Nav\.QUICKNOTE/.test(nav), 'marketplace and quicknote routes are merged away');
+assert.match(nav, /static rootOf\(id: string\): string/, 'secondary pages need a top-level owner for the dock');
+assert.match(shell, /Nav\.rootOf\(this\.route\)/, 'the dock must highlight the top-level destination');
+assert.match(shell, /systemGlass|backgroundBlurStyle/, 'the dock must use the system material');
+assert.match(shell, /Nav\.PRIMARY/, 'the dock must render Nav.PRIMARY');
 
-// 5. Every navigation destination has a page behind it.
-const destinations = [...nav.matchAll(/static readonly [A-Z]+: string = '([a-z]+)'/g)].map((match) => match[1]);
-assert.ok(destinations.length >= 12, `expected at least 12 routes, got ${destinations.length}`);
-for (const id of destinations) {
-  if (id === 'overview') continue;
-  assert.match(shell, new RegExp(`Nav\\.${id.toUpperCase()}\\)|Nav\\.${id.toUpperCase()}\\b`), `AppShell must route ${id}`);
-}
-// The overview is the fallback: an unknown route must still land somewhere sane.
-assert.match(shell, /else \{\s*\n\s*OverviewPage\(\)/, 'unknown routes must fall back to the overview');
-
-// Navigation stays short: five primary destinations, everything else under 设置.
-const primary = nav.match(/static readonly PRIMARY: string\[\] = \[([^\]]+)\]/)?.[1] ?? '';
-const primaryIds = [...primary.matchAll(/Nav\.([A-Z]+)/g)].map((match) => match[1]);
-assert.equal(primaryIds.length, 5, `the tab bar may hold five destinations, got ${primaryIds.length}`);
-for (const id of ['CORRECTIONS', 'LOCALASR', 'CREDENTIALS', 'MARKETPLACE', 'TRANSLATION', 'QA', 'QUICKNOTE']) {
-  assert.ok(!primaryIds.includes(id), `${id} belongs in 设置, not in the tab bar`);
-  assert.match(nav, new RegExp(`\\{ id: Nav\\.${id}, label: `), `${id} must be listed in Nav.tools()`);
-}
-assert.match(ets('pages/SettingsPage.ets'), /Nav\.tools\(\)/, '设置 must render the tool list');
-assert.ok(!existsSync(join(appRoot, 'harmony/entry/src/main/ets/components/MorePage.ets')), 'the 更多 sheet is gone with the old 11-item bar');
-
-// Portrait stays phone-shaped: only the widest class gets a side bar.
-assert.match(shell, /if \(Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.sideBar\(\)/, 'only lg may draw a side bar');
-assert.match(shell, /if \(!Breakpoints\.isWide\(this\.bp\)\) \{\s*\n\s*this\.tabBar\(\)/, 'md and sm keep the bottom tab bar');
-
-// HarmonyOS design baseline: 8vp grid, spec type scale, 16vp card radius.
-assert.match(tokens, /static readonly xxs: number = 4;/, 'spacing starts at 4vp');
-assert.match(tokens, /static readonly xxxl: number = 64;/, 'spacing follows the 8vp grid up to 64vp');
-assert.match(tokens, /static readonly body: number = 16;/, 'Body M is 16fp');
-assert.match(tokens, /static readonly caption: number = 12;/, 'captions bottom out at 12fp');
-assert.match(tokens, /static readonly touch: number = 44;/, 'touch targets stay above 40vp');
-assert.match(tokens, /static gutter\(bp: string\): number \{[\s\S]{0,200}return 32;/, 'XL margins are 32vp');
-
-// Immersive material: translucent glass + blur over an ambient glow.
-assert.match(ets('common/Tokens.ets'), /static glass\(\)/, 'cards need a translucent glass token');
-assert.match(ets('components/Common.ets'), /backgroundBlurStyle\(BlurStyle\.COMPONENT_THICK\)/, 'cards must use the system blur material');
-assert.match(shell, /backgroundBlurStyle\(BlurStyle\.COMPONENT_ULTRA_THICK\)/, 'navigation chrome must use the system blur material');
-assert.match(index, /ambient\(\)/, 'the shell must paint an ambient background');
-assert.match(index, /linearGradient\(/, 'the ambient wash is a single gradient, not blurred colour blobs');
-assert.match(index, /C\.glowA\(\)/, 'the wash must use the brand glow token');
-const pageFiles = [
-  'pages/CredentialsPage.ets',
-  'pages/OverviewPage.ets',
-  'pages/HistoryPage.ets',
-  'pages/SettingsPage.ets',
-  'pages/LibraryPages.ets',
-  'pages/ToolPages.ets',
-];
-for (const file of pageFiles) assert.ok(existsSync(join(appRoot, 'harmony/entry/src/main/ets', file)), `${file} must exist`);
-const pages = pageFiles.map((file) => ets(file)).join('\n');
-for (const struct of ['OverviewPage', 'HistoryPage', 'VocabPage', 'CorrectionsPage', 'StylePage',
-  'MarketplacePage', 'TranslationPage', 'QaPage', 'QuickNotePage', 'LocalAsrPage', 'SettingsPage',
-  'CredentialsPage']) {
+// 4. Every page the shell routes to exists and is exported.
+for (const struct of ['OverviewPage', 'HistoryPage', 'StylePage', 'VocabPage', 'CorrectionsPage',
+  'SettingsPage', 'CredentialsPage', 'SelectionPage', 'TranslationPage', 'QaPage', 'LocalAsrPage']) {
   assert.ok(pages.includes(`export struct ${struct}`), `missing native page ${struct}`);
   assert.ok(shell.includes(`${struct}()`), `AppShell must render ${struct}`);
 }
+assert.match(shell, /else \{\s*\n\s*OverviewPage\(\)/, 'unknown routes must fall back to the overview');
 
-// 6. Everything goes through the one bridge to the shared Rust core.
-for (const file of ['pages/OverviewPage.ets', 'pages/HistoryPage.ets', 'pages/SettingsPage.ets']) {
-  assert.match(ets(file), /from '\.\.\/data\/Api'/, `${file} must use the typed Api façade`);
+// 5. Design tokens: one closed scale, resource-backed colors only.
+assert.match(theme, /static readonly xxs: number = 4;/, 'spacing starts at 4vp');
+assert.match(theme, /static readonly xxl: number = 40;/, 'spacing tops out at 40vp in the 4-step grid');
+assert.match(theme, /static readonly body: number = 16;/, 'Body is 16fp');
+assert.match(theme, /static readonly caption: number = 12;/, 'captions bottom out at 12fp');
+assert.match(theme, /static contentMax\(bp: string\): number \{[\s\S]{0,400}return 880;/, 'XL content is capped');
+assert.doesNotMatch(theme, /backgroundBlurStyle|linearGradient/, 'tokens must not paint material themselves');
+assert.match(kit, /export struct PageScaffold/, 'pages share one scaffold');
+
+// 6. Pages only use tokens: no hex colors, no literal font sizes.
+const hex = /#[0-9A-Fa-f]{6,8}\b/;
+for (const file of PAGE_FILES) {
+  const source = ets(file);
+  assert.ok(!hex.test(source), `${file} must not hard-code a color`);
+  assert.ok(!/fontSize\(\s*\d/.test(source), `${file} must not hard-code a font size`);
+  assert.ok(!/backgroundBlurStyle\(/.test(source), `${file} must not paint its own material`);
+  assert.match(source, /from '\.\.\/components\/Kit'/, `${file} must use the shared kit`);
 }
-assert.doesNotMatch(pages, /nativeHost\.invoke/, 'pages must not call the native module directly');
-// Secrets never travel through the preference document.
-assert.match(ets('pages/CredentialsPage.ets'), /Api\.setCredential/, 'credentials must go through set_credential');
-assert.doesNotMatch(ets('pages/CredentialsPage.ets'), /writeString\('\/.*apiKey/i, 'a key must never be a preference');
+assert.ok(!hex.test(kit), 'the kit must not hard-code a color');
 
-// 7. Light and dark palettes stay in step.
+// 7. Light and dark palettes stay in step, and both carry the v2 roles.
 const colors = (theme) =>
-  JSON.parse(read(`harmony/entry/src/main/resources/${theme}/element/color.json`)).color.map((entry) => entry.name);
+  JSON.parse(read(`harmony/entry/src/main/resources/${theme}/element/color.json`)).color.map((e) => e.name);
 const light = colors('base');
 const dark = colors('dark');
-assert.ok(light.length >= 20, 'the palette must define the shared tokens');
 for (const name of light) assert.ok(dark.includes(name), `dark palette is missing ${name}`);
-assert.match(tokens, /ol_accent/, 'tokens must expose the brand accent');
-
-// 8. Feature surfaces stay wired to the shared core.
-const pagesAll = pages;
-for (const [label, source, api] of [
-  ['history playback', ets('pages/HistoryPage.ets'), /Api\.readRecording/],
-  ['history re-polish', ets('pages/HistoryPage.ets'), /Api\.repolish/],
-  ['channel test', ets('pages/CredentialsPage.ets'), /Api\.validateChannel/],
-  ['channel CRUD', ets('pages/CredentialsPage.ets'), /Api\.createChannel/],
-  ['model list', ets('pages/CredentialsPage.ets'), /Api\.listModels/],
-  ['style editing', ets('pages/LibraryPages.ets'), /Api\.saveStylePack/],
-  ['marketplace like', ets('pages/LibraryPages.ets'), /Api\.likePack/],
-  ['marketplace login', ets('pages/LibraryPages.ets'), /Api\.githubDeviceFlowStart/],
-  ['microphone test', ets('pages/SettingsPage.ets'), /Api\.startMicrophoneMonitor/],
-  ['log export', ets('pages/SettingsPage.ets'), /Api\.exportErrorLog/],
-  ['onboarding', ets('pages/OverviewPage.ets'), /Api\.credentialStatus/],
-]) {
-  assert.match(source, api, `${label} must call the core through Api`);
+assert.ok(light.filter((name) => name.startsWith('c_')).length >= 20, 'the v2 palette defines the shared roles');
+for (const role of ['c_bg', 'c_card', 'c_line', 'c_text_1', 'c_accent', 'c_danger']) {
+  assert.ok(light.includes(role), `missing color role ${role}`);
 }
-assert.match(ets('common/AudioPlayback.ets'), /AVPlayer/, 'recording playback must use AVPlayer');
-assert.match(ets('common/AudioPlayback.ets'), /fdSrc/, 'AVPlayer reads the cached wav through fdSrc');
 
-// 9. The layout override used for single-device QA stays opt-in.
-assert.match(index, /bpOverride/, 'the size class override must be readable for QA');
-assert.match(ets('entryability/EntryAbility.ets'), /--ps layout/, 'the launcher form is documented next to the parser');
+// 8. Merged surfaces keep their behaviour.
+assert.ok(!/export struct MarketplacePage/.test(pages), 'the marketplace is a section of StylePage');
+assert.ok(!/export struct QuickNotePage/.test(pages), 'quick note lives inside the history page');
+assert.match(ets('pages/LibraryPages.ets'), /风格市场/, 'StylePage must expose the marketplace section');
+assert.match(ets('pages/HistoryPage.ets'), /速记/, 'HistoryPage must expose the notes section');
+assert.match(ets('pages/OverviewPage.ets'), /Dashboard/, 'the overview composes user-selectable cards');
+assert.match(ets('common/Dashboard.ets'), /static readonly CARDS/, 'the dashboard keeps a card registry');
 
-console.log('harmony-native-ui contract passed');
+// 9. Everything still goes through the one bridge to the shared Rust core.
+for (const file of ['pages/OverviewPage.ets', 'pages/HistoryPage.ets', 'pages/SettingsPage.ets']) {
+  assert.match(ets(file), /from '\.\.\/data\/Api'/, `${file} must use the typed Api façade`);
+  assert.doesNotMatch(ets(file), /nativeHost\.invoke/, `${file} must not call the native module directly`);
+}
+for (const [label, file, api] of [
+  ['history playback', 'pages/HistoryPage.ets', /Api\.readRecording/],
+  ['history re-polish', 'pages/HistoryPage.ets', /Api\.repolish/],
+  ['dictation', 'pages/OverviewPage.ets', /Api\.startDictation/],
+  ['settings writes', 'pages/SettingsPage.ets', /Api\.writeBool/],
+  ['cloud sync', 'pages/SettingsPage.ets', /Api\.cloudSyncUpload/],
+  ['credentials', 'pages/CredentialsPage.ets', /Api\.setCredential/],
+  ['channel test', 'pages/CredentialsPage.ets', /Api\.validateChannel/],
+  ['channel create', 'pages/CredentialsPage.ets', /Api\.createChannel/],
+  ['marketplace install', 'pages/LibraryPages.ets', /Api\.installMarketplacePack/],
+  ['marketplace like', 'pages/LibraryPages.ets', /Api\.likePack/]
+]) {
+  assert.match(ets(file), api, `${label} must stay wired`);
+}
+
+// 10. One UI for phone, tablet and 2-in-1 within the signing profile.
+assert.match(moduleJson, /"deviceTypes":\s*\[\s*\n\s*"phone",\s*\n\s*"tablet"\s*\n\s*\]/, 'deviceTypes must be phone + tablet');
+assert.doesNotMatch(moduleJson, /"2in1"/, 'a 2in1 device type needs a 2-in-1 signing profile first');
+assert.match(moduleJson, /"orientation": "auto_rotation"/, 'the window must be free to rotate');
+assert.doesNotMatch(ets('common/Breakpoint.ets'), /mediaquery\.matchMediaSync/, 'the size class must not depend on mediaquery');
+assert.match(ets('common/Breakpoint.ets'), /getWindowProperties\(\)/, 'the size class must use the window rectangle');

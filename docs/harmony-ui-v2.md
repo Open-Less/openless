@@ -54,3 +54,16 @@
 - 每个页面同一结构名（如 `export struct OverviewPage`），`AppShell` 路由表不变。
 - 改完必须能 `bash openless-all/app/scripts/build-harmony-app.sh` 构建通过；契约测试在整轮结束后统一更新。
 - 页面内禁止出现颜色 hex、字号字面量、手写按钮/行样式；一律走 `Kit` + `Theme`。
+
+## 6. 导航与合并（v2.1 更新）
+
+- 一级目的地只有 4 个，底部是**悬浮胶囊 Dock**：主页 / 历史记录 / 风格市场 / 设置。
+  Dock 用系统材质（`backgroundBlurStyle(COMPONENT_ULTRA_THICK)` + 半透明底 + 0.5vp 描边 + 浮动阴影），
+  行高 60vp、四等分，选中项为 accentSoft 胶囊；壳层为 Dock 预留高度，内容不会被盖住；
+  窗口保持默认（非全屏），系统导航栏/手势条由系统 inset，不会被 Dock 压住。
+- md（600-840）为 88vp 图标栏；lg/xl 为 240/264vp 文字侧栏，配置与 Dock 一致（4 项）。
+- 速记并入历史记录页（分段：记录 / 速记），草稿存本地 preferences（`common/Draft.ets`），不进云同步。
+- 本地风格包与风格市场合并进 `StylePage`（分段：本地风格包 / 风格市场），`MarketplacePage` 不再单独存在。
+- 设置页工具入口来自 `Nav.tools()`：选取助手 / 翻译 / 词典 / 纠错规则 / 问答 / 凭据与密钥 / 模型设置；
+  选取助手是说明页（鸿蒙只走输入法扩展，不接跨应用划词）。
+- 设置页分组：大模型配置 / 外观 / 语言 / 权限与数据 / 云同步 / 关于；本期不做快捷键配置。

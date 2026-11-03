@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { AudioPlayback } from '../common/AudioPlayback';
+import { Draft } from '../common/Draft';
 import { Fmt } from '../common/Format';
 import { Store } from '../common/Store';
 import { Layout, Leading, Palette, Space, Type } from '../common/Theme';
@@ -7,12 +8,14 @@ import {
   EmptyHint,
   ErrorNote,
   Group,
+  InputField,
   PageBackBar,
   PageScaffold,
   PrimaryButton,
   RowItem,
   SearchField,
   SectionTitle,
+  Segmented,
   Skeleton,
   Surface,
   Tag,
@@ -38,6 +41,12 @@ const MODE_LABELS: ModeLabel[] = [
 /** Fixed width of the list column on lg/xl; the detail takes the rest. */
 const LIST_WIDTH: number = 360;
 
+/** The two modes this destination now carries: transcripts and the scratchpad. */
+const TAB_LABELS: string[] = ['记录', '速记'];
+
+/** Type-ahead draft save: short enough to survive a swipe away, long enough to batch. */
+const DRAFT_DEBOUNCE_MS: number = 400;
+
 function modeLabel(mode: string | undefined): string {
   if (mode === undefined || mode.length === 0) return '';
   for (let index = 0; index < MODE_LABELS.length; index++) {
@@ -47,20 +56,28 @@ function modeLabel(mode: string | undefined): string {
 }
 
 /**
- * History v2: searchable transcript list.
+ * 历史记录 v2: the transcript list and 速记 (quick note) behind one segmented
+ * control, because both are "what I said / what I want to keep".
  *
- * `detailId` in AppStorage is the single source of truth for the open record, so
- * the same screen serves three cases without a half-built Navigation stack:
+ * Records: `detailId` in AppStorage is the single source of truth for the open
+ * entry, so one screen covers three cases without a half-built Navigation stack:
  *   sm/md  list, or the detail pushed over it with a back bar;
  *   lg/xl  list column on the left + detail on the right (placeholder when none).
  * The system back gesture clears `detailId` first (see Index.onBackPress).
+ *
+ * 速记: a scratchpad with a voice-append button. The text is restored from
+ * `common/Draft` (local preferences, `home_draft` / `text`), saved 400 ms after
+ * the last keystroke and dropped when the note is cleared.
  */
 @Component
 export struct HistoryPage {
   @StorageLink('bp') bp: string = 'md';
   @StorageLink('detailId') detailId: string = '';
   @StorageLink('backendRevision') @Watch('onRevision') revision: number = 0;
+  @StorageLink('dictPhase') phase: string = 'idle';
+  @StorageLink('dictError') dictError: string = '';
 
+  @State private tab: number = 0;
   @State private entries: HistoryEntry[] = [];
   @State private query: string = '';
   @State private busy: boolean = false;
@@ -68,14 +85,20 @@ export struct HistoryPage {
   @State private loading: boolean = true;
   @State private prefs: UserPreferences = {};
   @State private playing: boolean = false;
+  @State private note: string = '';
+  @State private noteError: string = '';
+  @State private noteBusy: boolean = false;
   private audio: AudioPlayback = new AudioPlayback();
+  private draftTimer: number = -1;
 
   aboutToAppear(): void {
     this.reload();
+    this.restoreDraft();
   }
 
   aboutToDisappear(): void {
     this.audio.stop();
+    this.flushDraft();
   }
 
   /** Another page changed the backend (settings, credentials); pick it up. */
@@ -266,54 +289,348 @@ export struct HistoryPage {
     }
   }
 
+  // ── 速记 (quick note) ──────────────────────────────────────────────────────
+  private async dictate(): Promise<void> {
+    if (this.noteBusy) return;
+    this.noteBusy = true;
+    this.noteError = '';
+    try {
+      if (this.phase === 'idle' || this.dictError.length > 0) {
+        await Api.startDictation();
+      } else {
+        const voice = await Api.stopDictation();
+        const text: string = voice.polishedText.length > 0 ? voice.polishedText : voice.rawText;
+        if (text.length > 0) {
+          this.note = this.note.length > 0 ? this.note + '\n' + text : text;
+          this.scheduleDraftSave();
+          notify('已追加一段');
+        }
+      }
+    } catch (error) {
+      this.noteError = (error as Error).message;
+    } finally {
+      this.noteBusy = false;
+    }
+  }
+
+  private onNoteInput(value: string): void {
+    this.note = value;
+    this.scheduleDraftSave();
+  }
+
+  private copyNote(): void {
+    if (this.note.length === 0) return;
+    this.copy(this.note, '已复制全部内容');
+  }
+
+  private clearNote(): void {
+    if (this.note.length === 0) return;
+    this.note = '';
+    this.cancelDraftSave();
+    const context: common.UIAbilityContext | undefined = this.draftContext();
+    if (context !== undefined) Draft.clear(context);
+    notify('已清空草稿');
+  }
+
+  private noteHint(): string {
+    if (this.phase === 'recording') return '正在录音，点一下结束并追加';
+    if (this.phase === 'starting') return '正在准备麦克风…';
+    if (this.phase === 'processing') return '正在转写，稍后追加到末尾';
+    return '语音会追加到末尾 · 草稿自动保存';
+  }
+
+  /** The note only owns its own error; a leftover dictError is shown when idle. */
+  private noteStatusText(): string {
+    if (this.noteError.length > 0) return this.noteError;
+    if (this.phase === 'idle') return this.dictError;
+    return '';
+  }
+
+  private canDictate(): boolean {
+    return !this.noteBusy && this.phase !== 'processing';
+  }
+
+  private draftContext(): common.UIAbilityContext | undefined {
+    try {
+      const context = this.getUIContext().getHostContext();
+      if (context === undefined) return undefined;
+      return context as common.UIAbilityContext;
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  private async restoreDraft(): Promise<void> {
+    const context: common.UIAbilityContext | undefined = this.draftContext();
+    if (context === undefined) return;
+    try {
+      const stored: string = await Draft.load(context);
+      // A keystroke that beat the disk wins: never overwrite a fresh edit.
+      if (stored.length > 0 && this.note.length === 0) this.note = stored;
+    } catch (error) {
+      console.warn('[OpenLess History] draft restore failed');
+    }
+  }
+
+  private scheduleDraftSave(): void {
+    this.cancelDraftSave();
+    this.draftTimer = setTimeout(() => {
+      this.draftTimer = -1;
+      this.persistDraft();
+    }, DRAFT_DEBOUNCE_MS);
+  }
+
+  private cancelDraftSave(): void {
+    if (this.draftTimer === -1) return;
+    clearTimeout(this.draftTimer);
+    this.draftTimer = -1;
+  }
+
+  /** Leaving or switching tabs writes a pending keystroke immediately. */
+  private flushDraft(): void {
+    if (this.draftTimer === -1) return;
+    this.cancelDraftSave();
+    this.persistDraft();
+  }
+
+  private persistDraft(): void {
+    const context: common.UIAbilityContext | undefined = this.draftContext();
+    if (context === undefined) return;
+    if (this.note.length === 0) {
+      Draft.clear(context);
+      return;
+    }
+    Draft.save(context, this.note);
+  }
+
   build() {
     PageScaffold({
-      title: '历史',
-      subtitle: this.subtitleText(),
-      actionLabel: '刷新',
-      actionSymbol: 'refresh',
+      title: this.pageTitle(),
+      subtitle: this.pageSubtitle(),
+      actionLabel: this.pageActionLabel(),
+      actionSymbol: this.pageActionSymbol(),
       scrollable: false,
       onAction: () => {
         this.reload();
       }
     }) {
-      if (this.isWide()) {
-        this.searchRow()
-        this.errorNote()
-        Row({ space: Space.md }) {
-          Column() {
-            this.listPane()
-          }
-          .width(LIST_WIDTH)
-          .height('100%')
+      this.tabBar()
+      if (this.tab === 0) {
+        this.recordsPane()
+      } else {
+        this.quickNotePane()
+      }
+    }
+  }
 
-          Column() {
-            this.detailSlot()
-          }
-          .layoutWeight(1)
-          .height('100%')
+  private pageTitle(): string {
+    return this.tab === 0 ? '历史' : '速记';
+  }
+
+  private pageSubtitle(): string {
+    if (this.tab === 1) return '想到什么先记下来，稍后再整理';
+    return this.subtitleText();
+  }
+
+  private pageActionLabel(): string {
+    return this.tab === 0 ? '刷新' : '';
+  }
+
+  private pageActionSymbol(): string {
+    return this.tab === 0 ? 'refresh' : '';
+  }
+
+  @Builder
+  tabBar() {
+    Segmented({
+      items: TAB_LABELS,
+      selected: this.tab,
+      onSelect: (index: number) => {
+        if (index === this.tab) return;
+        this.tab = index;
+        if (index === 0) this.flushDraft();
+      }
+    })
+  }
+
+  @Builder
+  recordsPane() {
+    if (this.isWide()) {
+      this.searchRow()
+      this.errorNote()
+      Row({ space: Space.md }) {
+        Column() {
+          this.listPane()
         }
-        .width('100%')
+        .width(LIST_WIDTH)
+        .height('100%')
+
+        Column() {
+          this.detailSlot()
+        }
         .layoutWeight(1)
-        .alignItems(VerticalAlign.Top)
-      } else if (this.activeEntry() !== undefined) {
-        Row() {
-          PageBackBar({
-            label: '历史',
-            onTap: () => {
-              Store.put<string>('detailId', '');
+        .height('100%')
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .alignItems(VerticalAlign.Top)
+    } else if (this.activeEntry() !== undefined) {
+      Row() {
+        PageBackBar({
+          label: '历史',
+          onTap: () => {
+            Store.put<string>('detailId', '');
+          }
+        })
+      }
+      .width('100%')
+
+      this.errorNote()
+      this.detailPane(this.activeEntry() as HistoryEntry)
+    } else {
+      this.searchRow()
+      this.errorNote()
+      this.listPane()
+    }
+  }
+
+  @Builder
+  quickNotePane() {
+    Scroll() {
+      Column({ space: Space.md }) {
+        if (this.noteStatusText().length > 0) {
+          ErrorNote({
+            message: this.noteStatusText(),
+            onRetry: () => {
+              this.dictate();
             }
           })
         }
+        if (this.isWide()) {
+          Row({ space: Space.md }) {
+            Column({ space: Space.md }) {
+              this.noteActionCard()
+              this.noteEditorCard()
+            }
+            .layoutWeight(5)
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: Space.md }) {
+              this.noteTipsCard()
+            }
+            .layoutWeight(4)
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+        } else {
+          Column({ space: Space.md }) {
+            this.noteActionCard()
+            this.noteEditorCard()
+            this.noteTipsCard()
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ bottom: Space.xl })
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .align(Alignment.Top)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  noteActionCard() {
+    Surface({ inset: Space.md }) {
+      Column({ space: Space.sm }) {
+        SectionTitle({ title: '草稿', hint: this.noteHint() })
+
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
+          Row() {
+            PrimaryButton({
+              label: this.phase === 'recording' ? '结束并追加' : '语音追加',
+              usable: this.canDictate(),
+              onTap: () => {
+                this.dictate();
+              }
+            })
+          }
+          .margin({ right: Space.xs, bottom: Space.xs })
+
+          Row() {
+            TonalButton({
+              label: '复制全部',
+              symbol: 'copy',
+              usable: this.note.length > 0,
+              onTap: () => {
+                this.copyNote();
+              }
+            })
+          }
+          .margin({ right: Space.xs, bottom: Space.xs })
+
+          Row() {
+            TextButton({
+              label: '清空',
+              symbol: 'trash',
+              tone: 'danger',
+              usable: this.note.length > 0,
+              onTap: () => {
+                this.clearNote();
+              }
+            })
+          }
+          .margin({ right: Space.xs, bottom: Space.xs })
+        }
         .width('100%')
 
-        this.errorNote()
-        this.detailPane(this.activeEntry() as HistoryEntry)
-      } else {
-        this.searchRow()
-        this.errorNote()
-        this.listPane()
+        Row({ space: Space.xs }) {
+          Tag({ text: this.note.length.toString() + ' 字', tone: 'neutral' })
+          if (this.phase === 'recording') {
+            Tag({ text: '正在录音', tone: 'danger' })
+          } else if (this.phase === 'processing') {
+            Tag({ text: '转写中', tone: 'accent' })
+          }
+        }
+        .width('100%')
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    }
+  }
+
+  @Builder
+  noteEditorCard() {
+    Surface({ inset: Space.md }) {
+      InputField({
+        label: '内容',
+        placeholder: '在这里写，或用上面的语音追加一段',
+        value: this.note,
+        multiline: true,
+        onInput: (value: string) => {
+          this.onNoteInput(value);
+        }
+      })
+    }
+  }
+
+  @Builder
+  noteTipsCard() {
+    Surface({ tone: 'alt', inset: Space.md }) {
+      Column({ space: Space.xs }) {
+        SectionTitle({ title: '说明' })
+        Text('草稿会自动保存在这台设备上，离开页面再回来可以接着写；点「清空」会连同保存的草稿一起删除。语音追加复用听写链路，转写结果接在最后一段之后。')
+          .fontSize(Type.label)
+          .lineHeight(Leading.body)
+          .fontColor(Palette.text2())
+          .width('100%')
+      }
+      .width('100%')
     }
   }
 

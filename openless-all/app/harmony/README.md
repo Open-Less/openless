@@ -40,18 +40,22 @@ ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
 
 | 尺寸类 | 判定 | 导航形态 |
 | --- | --- | --- |
-| `sm` | 窗口 < 600vp | 底部标签栏（概览/历史/词典/风格/设置 + 更多） |
-| `md` | 600–840vp | 图标侧栏 + 单列内容 |
-| `lg` | ≥ 840vp | 带文字侧边栏；概览、历史等页面自动两栏（列表 + 详情） |
+| `sm` | 窗口 < 600vp | 悬浮胶囊 Dock（主页/历史记录/风格市场/设置） |
+| `md` | 600–840vp | 88vp 图标栏 + 单列内容 |
+| `lg` | 840–1080vp | 240vp 文字侧栏；概览、历史等页面自动两栏（列表 + 详情） |
+| `xl` | ≥ 1080vp | 264vp 文字侧栏 + 三列卡片主页 |
 
 - 路由表在 `components/AppShell.ets`，导航状态放在 `AppStorage`（写入统一走 `common/Store.ets`，
   因为 `setOrCreate` 对已存在的键是静默无效的）。
-- 页面：概览（听写主控 + 今日统计 + 12 周热力图 + 配置状态）、历史（搜索/详情/重转写/删除）、
-  词典、纠正规则、风格、风格市场、翻译、问答、速记、模型设置、设置。
+- 页面：主页（iOS 风格语音卡 + 用户可自选的信息卡片网格：今日数据、最近趋势、12 周热力图、
+  最近记录、当前配置、快捷入口）、历史记录（记录/速记两段，搜索/详情/重转写/删除）、
+  风格市场（本地风格包 + 市场两段）、设置（大模型配置/外观/语言/权限与数据/云同步/关于）与其二级页
+  （选取助手、翻译、词典、纠错规则、问答、凭据与密钥、模型设置）。
 - 数据全部经 `data/Api.ets` → `HarmonyApi.invokeAsync` → `libopenless_harmony.so`，与 web/桌面同一份
   `openless-core` 契约（camelCase JSON）；ArkTS 侧仍负责录音、麦克风枚举、剪贴板、文件与凭据。
-- 设计 token 在 `common/Tokens.ets`：品牌蓝 `#0A59F7` + HarmonyOS 中性色阶，浅/深色各一套
-  （`resources/base|dark/element/color.json`），圆角/间距按 8vp 栅格。
+- 设计 token 在 `common/Theme.ets`（Palette/Space/Radius/Type/Leading/Size/Motion/Layout）；
+  颜色是 `c_*` 语义资源，浅/深色各一套（`resources/base|dark/element/color.json`），
+  组件统一来自 `components/Kit.ets`（PageScaffold/Surface/Group/RowItem/按钮/Segmented/输入等）。
 - 启动参数即深链：`aa start -a EntryAbility -b openless.hm.com --ps route settings --ps layout sm`
   可直接打开某个页面，`layout` 把尺寸类钉在 `sm|md|lg`，方便单机验收三端布局。
 

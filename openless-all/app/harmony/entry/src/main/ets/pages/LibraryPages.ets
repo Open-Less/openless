@@ -25,9 +25,9 @@ import { Api, PendingCorrection, StylePackPayload, VocabPreset } from '../data/A
 import { CorrectionRule, DictionaryEntry, MarketplacePack, SettingsSnapshot, StylePack } from '../data/Types';
 
 /**
- * Library surfaces of the v2 UI: 词典 / 纠正规则 / 风格 / 风格市场.
+ * Library surfaces of the v2 UI: 词典 / 纠正规则 / 风格（本地风格包 + 风格市场同页）.
  *
- * All four are list-shaped, so they share one skeleton: a `PageScaffold` title,
+ * All three pages are list-shaped, so they share one skeleton: a `PageScaffold` title,
  * a search field on its own line, a `Segmented` filter, a `Flex`-wrapped action
  * row (never a single overflowing `Row`), then a `Group` of `RowItem`s. Rows only
  * navigate: every mutation (enable, delete, edit, install, like) happens in a
@@ -43,9 +43,11 @@ const SHEET_CREATE: string = 'create';
 const SHEET_EDIT: string = 'edit';
 const SHEET_CONFIRM: string = 'confirm';
 const SHEET_SUGGEST: string = 'suggest';
+const SHEET_MARKET: string = 'market';
 
 const LIBRARY_FILTERS: string[] = ['全部', '已启用', '已停用'];
 const MARKET_SORTS: string[] = ['按热度', '最新'];
+const STYLE_SEGMENTS: string[] = ['本地风格包', '风格市场'];
 
 /**
  * 词典：本机词条的增删启停 + 只读预设词组。
@@ -1135,26 +1137,47 @@ export struct CorrectionsPage {
 }
 
 /**
- * 风格：风格包的增删改、启停、切换当前、ZIP 导入导出。
+ * 风格：本地风格包与风格市场合并为一页，顶部 `Segmented` 切换。
+ *
+ * 两段共用一个 `PageScaffold`、一条搜索行、一个 sheet 锚点与同一套两栏骨架，
+ * 但状态各成一套：切换段只做“首次按需加载”，之后回到该段时搜索词、筛选、
+ * 选中行都不会被另一段覆盖。`sm/md` 单列，`lg/xl` 左列表右详情。
  */
 @Component
 export struct StylePage {
   @StorageLink('bp') bp: string = 'md';
   @StorageLink('backendRevision') revision: number = 0;
 
-  @State private packs: StylePack[] = [];
-  @State private active: string = '';
+  /** 当前段：0 = 本地风格包，1 = 风格市场。 */
+  @State private segment: number = 0;
+  @State private error: string = '';
+
+  // ── 本地风格包 ────────────────────────────────────────────────────────────
   @State private query: string = '';
   @State private filter: number = 0;
-  @State private error: string = '';
+  @State private packs: StylePack[] = [];
+  @State private active: string = '';
   @State private loading: boolean = false;
   @State private busy: boolean = false;
   @State private selectedId: string = '';
-  @State private sheetOpen: boolean = false;
-  @State private sheetMode: string = SHEET_CREATE;
   @State private newName: string = '';
   @State private newPrompt: string = '';
   @State private draftPrompt: string = '';
+
+  // ── 风格市场（原独立的市场页状态，整组搬入本页） ─────────────────────────
+  @State private marketQuery: string = '';
+  @State private marketSort: string = 'popular';
+  @State private marketPacks: MarketplacePack[] = [];
+  @State private marketSelectedId: string = '';
+  @State private marketLoading: boolean = false;
+  @State private marketLoaded: boolean = false;
+  @State private loginState: string = '';
+  @State private loginCode: string = '';
+  @State private loginBusy: boolean = false;
+
+  // ── 两段共用的半模态：一个锚点 + sheetMode 决定内容 ───────────────────────
+  @State private sheetOpen: boolean = false;
+  @State private sheetMode: string = SHEET_CREATE;
 
   aboutToAppear(): void {
     this.reload();
@@ -1163,6 +1186,56 @@ export struct StylePage {
   private isWide(): boolean {
     return this.bp === Layout.LG || this.bp === Layout.XL;
   }
+
+  /** 段切换只按需首次加载市场，之后完全保留两段各自的状态。 */
+  private switchSegment(index: number): void {
+    this.segment = index;
+    if (index === 1 && !this.marketLoaded && !this.marketLoading) {
+      this.reloadMarket();
+    }
+  }
+
+  private subtitleText(): string {
+    if (this.segment === 1) {
+      return this.marketPacks.length.toString() + ' 个社区风格包 · 需要网络与 GitHub 账号';
+    }
+    return this.packs.length.toString() + ' 个风格包 · 决定润色的语气';
+  }
+
+  private actionLabel(): string {
+    return this.segment === 1 ? '刷新' : '新建风格';
+  }
+
+  private actionSymbol(): string {
+    return this.segment === 1 ? 'refresh' : 'add';
+  }
+
+  private triggerAction(): void {
+    if (this.segment === 1) {
+      this.reloadMarket();
+      return;
+    }
+    this.startCreate();
+  }
+
+  private searchPlaceholder(): string {
+    return this.segment === 1 ? '搜索名称、描述或标签' : '搜索本地风格包';
+  }
+
+  private searchValue(): string {
+    return this.segment === 1 ? this.marketQuery : this.query;
+  }
+
+  private onSearchInput(value: string): void {
+    if (this.segment === 1) {
+      this.marketQuery = value;
+      this.reloadMarket();
+      return;
+    }
+    this.query = value;
+  }
+
+  // ── 本地风格包 ────────────────────────────────────────────────────────────
 
   private async reload(): Promise<void> {
     this.loading = true;
@@ -1370,21 +1443,175 @@ export struct StylePage {
     }
   }
 
+  // ── 风格市场 ──────────────────────────────────────────────────────────────
+
+  private async reloadMarket(): Promise<void> {
+    this.marketLoading = true;
+    try {
+      try {
+        const auth = await Api.marketplaceAuthStatus();
+        this.loginState = auth.loggedIn === true ? '已登录 ' + (auth.login ?? '') : '';
+      } catch (error) {
+        this.loginState = '';
+      }
+      this.marketPacks = await Api.marketplace(this.marketQuery, this.marketSort);
+      this.marketLoaded = true;
+      this.error = '';
+    } catch (error) {
+      this.error = (error as Error).message;
+    } finally {
+      this.marketLoading = false;
+    }
+  }
+
+  private marketSortIndex(): number {
+    return this.marketSort === 'new' ? 1 : 0;
+  }
+
+  private loginLabel(): string {
+    if (this.loginState.length > 0) return this.loginState;
+    return 'GitHub 登录';
+  }
+
+  private async startLogin(): Promise<void> {
+    this.loginBusy = true;
+    try {
+      const flow = await Api.githubDeviceFlowStart();
+      this.loginCode = flow.userCode;
+      this.loginState = '等待授权…';
+      Api.copyText(flow.userCode);
+      let attempts: number = 0;
+      while (attempts < 60) {
+        attempts++;
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), Math.max(2, flow.interval) * 1000));
+        const poll = await Api.githubDeviceFlowPoll(flow.flowId);
+        if (poll.state === 'authorized') {
+          this.loginState = '已登录 ' + (poll.login ?? '');
+          this.loginCode = '';
+          notify('已登录 GitHub');
+          await this.reloadMarket();
+          return;
+        }
+        if (poll.state === 'expired' || poll.state === 'error') {
+          this.loginState = '';
+          this.loginCode = '';
+          notify('登录失败，请重试');
+          return;
+        }
+      }
+      this.loginState = '';
+      this.loginCode = '';
+      notify('登录超时');
+    } catch (error) {
+      this.loginState = '';
+      this.loginCode = '';
+      this.error = (error as Error).message;
+      notify('登录不可用：' + this.error);
+    } finally {
+      this.loginBusy = false;
+    }
+  }
+
+  private async toggleLogin(): Promise<void> {
+    if (this.loginState.length > 0) {
+      try {
+        await Api.marketplaceLogout();
+        this.loginState = '';
+        this.loginCode = '';
+        notify('已退出 GitHub');
+        await this.reloadMarket();
+      } catch (error) {
+        this.error = (error as Error).message;
+        notify('退出失败：' + this.error);
+      }
+      return;
+    }
+    await this.startLogin();
+  }
+
+  private marketDetailIndex(): number {
+    for (let index = 0; index < this.marketPacks.length; index++) {
+      if (this.marketPacks[index].id === this.marketSelectedId) return index;
+    }
+    return -1;
+  }
+
+  private marketDetailName(): string {
+    const index: number = this.marketDetailIndex();
+    return index < 0 ? '' : this.marketPacks[index].name;
+  }
+
+  private marketDetailDescription(): string {
+    const index: number = this.marketDetailIndex();
+    if (index < 0) return '';
+    return this.marketPacks[index].description ?? '';
+  }
+
+  private marketDetailInstalled(): boolean {
+    const index: number = this.marketDetailIndex();
+    return index >= 0 && this.marketPacks[index].installed === true;
+  }
+
+  private marketDetailMeta(): string {
+    const index: number = this.marketDetailIndex();
+    if (index < 0) return '';
+    const pack: MarketplacePack = this.marketPacks[index];
+    return (pack.author ?? '社区') + ' · ' + (pack.downloads ?? 0).toString() + ' 次下载 · ' +
+      (pack.likes ?? 0).toString() + ' 赞';
+  }
+
+  private selectMarketPack(id: string): void {
+    this.marketSelectedId = id;
+    if (!this.isWide()) this.openSheet(SHEET_MARKET);
+  }
+
+  private async install(): Promise<void> {
+    const id: string = this.marketSelectedId;
+    if (id.length === 0) return;
+    try {
+      await Api.installMarketplacePack(id);
+      notify('已安装到本机');
+      await this.reloadMarket();
+      // 安装会写进本地风格包列表，本地段也要跟着刷新。
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+      notify('安装失败：' + this.error);
+    }
+  }
+
+  private async like(): Promise<void> {
+    const id: string = this.marketSelectedId;
+    if (id.length === 0) return;
+    try {
+      await Api.likePack(id);
+      notify('已点赞');
+      await this.reloadMarket();
+    } catch (error) {
+      this.error = (error as Error).message;
+      notify('点赞失败：' + this.error);
+    }
+  }
+
   build() {
     PageScaffold({
       title: '风格',
-      subtitle: this.packs.length.toString() + ' 个风格包 · 决定润色的语气',
-      actionLabel: '新建风格',
-      actionSymbol: 'add',
+      subtitle: this.subtitleText(),
+      actionLabel: this.actionLabel(),
+      actionSymbol: this.actionSymbol(),
       scrollable: false,
       gap: Space.sm,
-      onAction: () => this.startCreate()
+      onAction: () => this.triggerAction()
     }) {
       if (this.error.length > 0) {
         ErrorNote({
           message: this.error,
           onRetry: () => {
-            this.reload();
+            if (this.segment === 1) {
+              this.reloadMarket();
+            } else {
+              this.reload();
+            }
           }
         })
       }
@@ -1398,54 +1625,117 @@ export struct StylePage {
     }
   }
 
+  /**
+   * 一条搜索行 + 段切换 + 段内独占的筛选/动作。搜索框始终单独一行，
+   * 动作按钮一律走 `Flex` 换行，不会把输入框挤窄。
+   */
   @Builder
   filterRow() {
     Column({ space: Space.xs }) {
       SearchField({
-        placeholder: '搜索风格包',
-        value: this.query,
+        placeholder: this.searchPlaceholder(),
+        value: this.searchValue(),
         onInput: (value: string) => {
-          this.query = value;
+          this.onSearchInput(value);
         }
       })
-      Segmented({
-        items: LIBRARY_FILTERS,
-        selected: this.filter,
-        onSelect: (index: number) => {
-          this.filter = index;
-        }
-      })
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-        Row() {
-          TonalButton({
-            label: '风格市场',
-            symbol: 'marketplace',
-            onTap: () => Nav.go(Nav.STYLE)
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
 
-        Row() {
-          TonalButton({
-            label: '从 ZIP 导入',
-            symbol: 'add',
-            onTap: () => {
-              this.importZip();
+      Segmented({
+        items: STYLE_SEGMENTS,
+        selected: this.segment,
+        onSelect: (index: number) => this.switchSegment(index)
+      })
+
+      if (this.segment === 1) {
+        if (this.loginCode.length > 0) {
+          Banner({
+            title: '在浏览器输入配对码',
+            text: this.loginCode,
+            action: '复制配对码',
+            actionSymbol: 'copy',
+            onAction: () => {
+              Api.copyText(this.loginCode);
+              notify('已复制配对码');
             }
           })
         }
-        .padding({ right: Space.xs, bottom: Space.xxs })
 
-        Row() {
-          TonalButton({
-            label: '新建风格',
-            symbol: 'add',
-            onTap: () => this.startCreate()
-          })
+        Segmented({
+          items: MARKET_SORTS,
+          selected: this.marketSortIndex(),
+          onSelect: (index: number) => {
+            this.marketSort = index === 1 ? 'new' : 'popular';
+            this.reloadMarket();
+          }
+        })
+
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          Row() {
+            TonalButton({
+              label: this.loginLabel(),
+              symbol: 'person',
+              usable: !this.loginBusy,
+              onTap: () => {
+                this.toggleLogin();
+              }
+            })
+          }
+          .padding({ right: Space.xs, bottom: Space.xxs })
+
+          Row() {
+            TonalButton({
+              label: '刷新列表',
+              symbol: 'refresh',
+              usable: !this.marketLoading,
+              onTap: () => {
+                this.reloadMarket();
+              }
+            })
+          }
+          .padding({ right: Space.xs, bottom: Space.xxs })
         }
-        .padding({ right: Space.xs, bottom: Space.xxs })
+        .width('100%')
+      } else {
+        Segmented({
+          items: LIBRARY_FILTERS,
+          selected: this.filter,
+          onSelect: (index: number) => {
+            this.filter = index;
+          }
+        })
+
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          Row() {
+            TonalButton({
+              label: '去风格市场',
+              symbol: 'marketplace',
+              onTap: () => this.switchSegment(1)
+            })
+          }
+          .padding({ right: Space.xs, bottom: Space.xxs })
+
+          Row() {
+            TonalButton({
+              label: '从 ZIP 导入',
+              symbol: 'add',
+              onTap: () => {
+                this.importZip();
+              }
+            })
+          }
+          .padding({ right: Space.xs, bottom: Space.xxs })
+
+          Row() {
+            TonalButton({
+              label: '新建风格',
+              symbol: 'add',
+              onTap: () => this.startCreate()
+            })
+          }
+          .padding({ right: Space.xs, bottom: Space.xxs })
+        }
+        .width('100%')
       }
-      .width('100%')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -1487,11 +1777,43 @@ export struct StylePage {
       .layoutWeight(5)
       .height('100%')
 
-      Column() {
+      this.detailPane()
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .alignItems(VerticalAlign.Top)
+  }
+
+  /** 右栏：按段取各自的选中项；没有选中就提示。 */
+  @Builder
+  detailPane() {
+    Column() {
+      if (this.segment === 1) {
+        if (this.marketDetailIndex() >= 0) {
+          Scroll() {
+            Surface({ inset: Space.md }) {
+              this.marketDetailBody()
+            }
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .align(Alignment.Top)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+        } else {
+          Surface({ inset: Space.md }) {
+            EmptyHint({
+              symbol: 'marketplace',
+              title: '选一个社区风格包',
+              hint: '右侧显示作者、下载量与安装、点赞操作'
+            })
+          }
+        }
+      } else {
         if (this.detailIndex() >= 0) {
           Scroll() {
             Surface({ inset: Space.md }) {
-              this.detailBody()
+              this.localDetailBody()
             }
           }
           .width('100%')
@@ -1509,24 +1831,30 @@ export struct StylePage {
           }
         }
       }
-      .layoutWeight(4)
-      .height('100%')
     }
-    .width('100%')
-    .layoutWeight(1)
-    .alignItems(VerticalAlign.Top)
+    .layoutWeight(4)
+    .height('100%')
   }
 
   @Builder
   listBody() {
+    if (this.segment === 1) {
+      this.marketListBody()
+    } else {
+      this.localListBody()
+    }
+  }
+
+  @Builder
+  localListBody() {
     if (this.loading && this.packs.length === 0) {
       Skeleton({ rows: 4 })
     } else if (this.filtered().length === 0) {
       if (this.packs.length === 0) {
         EmptyHint({
           symbol: 'style',
-          title: '还没有风格包',
-          hint: '去风格市场安装一个，或创建自定义风格'
+          title: '还没有本地风格包',
+          hint: '切到上方「风格市场」安装一个，或创建自定义风格'
         })
       } else {
         EmptyHint({
@@ -1558,7 +1886,40 @@ export struct StylePage {
   }
 
   @Builder
-  detailBody() {
+  marketListBody() {
+    if (this.marketLoading && this.marketPacks.length === 0) {
+      Skeleton({ rows: 4 })
+    } else if (this.marketPacks.length === 0) {
+      EmptyHint({
+        symbol: 'marketplace',
+        title: this.marketLoading ? '正在加载…' : '还没有可显示的风格包',
+        hint: '市场需要网络与 GitHub 账号；未登录或搜索无结果时这里会是空的'
+      })
+    } else {
+      Group() {
+        ForEach(this.marketPacks, (pack: MarketplacePack, index: number) => {
+          RowItem({
+            symbol: 'style',
+            accentSymbol: pack.installed === true,
+            title: pack.name,
+            subtitle: pack.description !== undefined && pack.description.length > 0
+              ? pack.description : (pack.author ?? '社区'),
+            value: pack.installed === true ? '已安装'
+              : (pack.downloads ?? 0).toString() + ' 次下载',
+            showChevron: true,
+            showDivider: index < this.marketPacks.length - 1,
+            onTap: () => {
+              this.selectMarketPack(pack.id);
+            }
+          })
+        }, (pack: MarketplacePack) => pack.id)
+      }
+    }
+  }
+
+  /** 本地风格包详情，宽屏右栏与窄屏 sheet 共用。 */
+  @Builder
+  localDetailBody() {
     Column({ space: Space.sm }) {
       Text(this.detailName())
         .fontSize(Type.cardTitle)
@@ -1657,6 +2018,73 @@ export struct StylePage {
           tone: 'danger',
           onTap: () => {
             this.openSheet(SHEET_CONFIRM);
+          }
+        })
+        if (!this.isWide()) {
+          TextButton({
+            label: '关闭',
+            tone: 'quiet',
+            onTap: () => {
+              this.closeSheet();
+            }
+          })
+        }
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 市场风格包详情，宽屏右栏与窄屏 sheet 共用。 */
+  @Builder
+  marketDetailBody() {
+    Column({ space: Space.sm }) {
+      Text(this.marketDetailName())
+        .fontSize(Type.cardTitle)
+        .lineHeight(Leading.cardTitle)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Palette.text1())
+        .width('100%')
+
+      Row({ space: Space.xs }) {
+        Tag({
+          text: this.marketDetailInstalled() ? '已安装' : '未安装',
+          tone: this.marketDetailInstalled() ? 'success' : 'neutral'
+        })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
+
+      if (this.marketDetailDescription().length > 0) {
+        Text(this.marketDetailDescription())
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
+          .fontColor(Palette.text2())
+          .width('100%')
+      }
+
+      Text(this.marketDetailMeta())
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontColor(Palette.text3())
+        .width('100%')
+
+      Row({ space: Space.sm }) {
+        if (!this.marketDetailInstalled()) {
+          PrimaryButton({
+            label: '安装到本机',
+            onTap: () => {
+              this.install();
+            }
+          })
+        }
+        TonalButton({
+          label: '点赞',
+          symbol: 'sparkles',
+          onTap: () => {
+            this.like();
           }
         })
         if (!this.isWide()) {
@@ -1802,480 +2230,13 @@ export struct StylePage {
       if (this.sheetMode === SHEET_CREATE) {
         this.createBody()
       } else if (this.sheetMode === SHEET_DETAIL) {
-        this.detailBody()
+        this.localDetailBody()
       } else if (this.sheetMode === SHEET_EDIT) {
         this.editBody()
       } else if (this.sheetMode === SHEET_CONFIRM) {
         this.confirmBody()
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xl })
-  }
-
-  @Builder
-  sheetHost() {
-    Row()
-      .width(0)
-      .height(0)
-      .bindSheet($$this.sheetOpen, this.sheetBody, {
-        height: SheetSize.MEDIUM,
-        dragBar: true,
-        showClose: true,
-        onDisappear: () => {
-          this.sheetOpen = false;
-        }
-      })
-  }
-}
-
-/**
- * 风格市场：列表/搜索/排序/安装/点赞 + GitHub device flow 登录态。
- */
-@Component
-export struct MarketplacePage {
-  @StorageLink('bp') bp: string = 'md';
-
-  @State private packs: MarketplacePack[] = [];
-  @State private query: string = '';
-  @State private sort: string = 'popular';
-  @State private error: string = '';
-  @State private loading: boolean = false;
-  @State private busy: boolean = false;
-  @State private loginState: string = '';
-  @State private loginCode: string = '';
-  @State private selectedId: string = '';
-  @State private sheetOpen: boolean = false;
-  @State private sheetMode: string = SHEET_DETAIL;
-
-  aboutToAppear(): void {
-    this.reload();
-  }
-
-  private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
-  }
-
-  private sortIndex(): number {
-    return this.sort === 'new' ? 1 : 0;
-  }
-
-  private loginLabel(): string {
-    if (this.loginState.length > 0) return this.loginState;
-    return 'GitHub 登录';
-  }
-
-  private async reload(): Promise<void> {
-    this.loading = true;
-    try {
-      try {
-        const auth = await Api.marketplaceAuthStatus();
-        this.loginState = auth.loggedIn === true ? '已登录 ' + (auth.login ?? '') : '';
-      } catch (error) {
-        this.loginState = '';
-      }
-      this.packs = await Api.marketplace(this.query, this.sort);
-      this.error = '';
-    } catch (error) {
-      this.error = (error as Error).message;
-    } finally {
-      this.loading = false;
-    }
-  }
-
-  private async startLogin(): Promise<void> {
-    this.busy = true;
-    try {
-      const flow = await Api.githubDeviceFlowStart();
-      this.loginCode = flow.userCode;
-      this.loginState = '等待授权…';
-      Api.copyText(flow.userCode);
-      let attempts: number = 0;
-      while (attempts < 60) {
-        attempts++;
-        await new Promise<void>((resolve) => setTimeout(() => resolve(), Math.max(2, flow.interval) * 1000));
-        const poll = await Api.githubDeviceFlowPoll(flow.flowId);
-        if (poll.state === 'authorized') {
-          this.loginState = '已登录 ' + (poll.login ?? '');
-          this.loginCode = '';
-          notify('已登录 GitHub');
-          await this.reload();
-          return;
-        }
-        if (poll.state === 'expired' || poll.state === 'error') {
-          this.loginState = '';
-          this.loginCode = '';
-          notify('登录失败，请重试');
-          return;
-        }
-      }
-      this.loginState = '';
-      this.loginCode = '';
-      notify('登录超时');
-    } catch (error) {
-      this.loginState = '';
-      this.loginCode = '';
-      this.error = (error as Error).message;
-      notify('登录不可用：' + this.error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private async toggleLogin(): Promise<void> {
-    if (this.loginState.length > 0) {
-      try {
-        await Api.marketplaceLogout();
-        this.loginState = '';
-        this.loginCode = '';
-        notify('已退出 GitHub');
-        await this.reload();
-      } catch (error) {
-        this.error = (error as Error).message;
-        notify('退出失败：' + this.error);
-      }
-      return;
-    }
-    await this.startLogin();
-  }
-
-  private detailIndex(): number {
-    for (let index = 0; index < this.packs.length; index++) {
-      if (this.packs[index].id === this.selectedId) return index;
-    }
-    return -1;
-  }
-
-  private detailName(): string {
-    const index: number = this.detailIndex();
-    return index < 0 ? '' : this.packs[index].name;
-  }
-
-  private detailDescription(): string {
-    const index: number = this.detailIndex();
-    if (index < 0) return '';
-    return this.packs[index].description ?? '';
-  }
-
-  private detailInstalled(): boolean {
-    const index: number = this.detailIndex();
-    return index >= 0 && this.packs[index].installed === true;
-  }
-
-  private detailMeta(): string {
-    const index: number = this.detailIndex();
-    if (index < 0) return '';
-    const pack: MarketplacePack = this.packs[index];
-    return (pack.author ?? '社区') + ' · ' + (pack.downloads ?? 0).toString() + ' 次下载 · ' +
-      (pack.likes ?? 0).toString() + ' 赞';
-  }
-
-  private selectPack(id: string): void {
-    this.selectedId = id;
-    if (!this.isWide()) this.openSheet();
-  }
-
-  private openSheet(): void {
-    this.sheetMode = SHEET_DETAIL;
-    this.sheetOpen = true;
-  }
-
-  private closeSheet(): void {
-    this.sheetOpen = false;
-  }
-
-  private async install(): Promise<void> {
-    const id: string = this.selectedId;
-    if (id.length === 0) return;
-    try {
-      await Api.installMarketplacePack(id);
-      notify('已安装到本机');
-      await this.reload();
-    } catch (error) {
-      this.error = (error as Error).message;
-      notify('安装失败：' + this.error);
-    }
-  }
-
-  private async like(): Promise<void> {
-    const id: string = this.selectedId;
-    if (id.length === 0) return;
-    try {
-      await Api.likePack(id);
-      notify('已点赞');
-      await this.reload();
-    } catch (error) {
-      this.error = (error as Error).message;
-      notify('点赞失败：' + this.error);
-    }
-  }
-
-  build() {
-    PageScaffold({
-      title: '风格市场',
-      subtitle: '浏览社区风格包，安装到本机',
-      actionLabel: '刷新',
-      actionSymbol: 'refresh',
-      scrollable: false,
-      gap: Space.sm,
-      onAction: () => {
-        this.reload();
-      }
-    }) {
-      if (this.error.length > 0) {
-        ErrorNote({
-          message: this.error,
-          onRetry: () => {
-            this.reload();
-          }
-        })
-      }
-      this.filterRow()
-      if (this.isWide()) {
-        this.wideBody()
-      } else {
-        this.narrowBody()
-      }
-      this.sheetHost()
-    }
-  }
-
-  @Builder
-  filterRow() {
-    Column({ space: Space.xs }) {
-      SearchField({
-        placeholder: '搜索名称、描述或标签',
-        value: this.query,
-        onInput: (value: string) => {
-          this.query = value;
-          this.reload();
-        }
-      })
-
-      if (this.loginCode.length > 0) {
-        Banner({
-          title: '在浏览器输入配对码',
-          text: this.loginCode,
-          action: '复制配对码',
-          actionSymbol: 'copy',
-          onAction: () => {
-            Api.copyText(this.loginCode);
-            notify('已复制配对码');
-          }
-        })
-      }
-
-      Segmented({
-        items: MARKET_SORTS,
-        selected: this.sortIndex(),
-        onSelect: (index: number) => {
-          this.sort = index === 1 ? 'new' : 'popular';
-          this.reload();
-        }
-      })
-
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-        Row() {
-          TonalButton({
-            label: this.loginLabel(),
-            symbol: 'person',
-            usable: !this.busy,
-            onTap: () => {
-              this.toggleLogin();
-            }
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
-
-        Row() {
-          TonalButton({
-            label: '刷新列表',
-            symbol: 'refresh',
-            usable: !this.loading,
-            onTap: () => {
-              this.reload();
-            }
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
-  narrowBody() {
-    Scroll() {
-      Column({ space: Space.sm }) {
-        this.listBody()
-      }
-      .width('100%')
-      .padding({ bottom: Space.lg })
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .align(Alignment.Top)
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
-  }
-
-  @Builder
-  wideBody() {
-    Row({ space: Space.md }) {
-      Column() {
-        Scroll() {
-          Column({ space: Space.sm }) {
-            this.listBody()
-          }
-          .width('100%')
-          .padding({ bottom: Space.lg })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      }
-      .layoutWeight(5)
-      .height('100%')
-
-      Column() {
-        if (this.detailIndex() >= 0) {
-          Scroll() {
-            Surface({ inset: Space.md }) {
-              this.detailBody()
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .align(Alignment.Top)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-        } else {
-          Surface({ inset: Space.md }) {
-            EmptyHint({
-              symbol: 'marketplace',
-              title: '选一个风格包',
-              hint: '右侧显示作者、下载量与安装、点赞操作'
-            })
-          }
-        }
-      }
-      .layoutWeight(4)
-      .height('100%')
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .alignItems(VerticalAlign.Top)
-  }
-
-  @Builder
-  listBody() {
-    if (this.loading && this.packs.length === 0) {
-      Skeleton({ rows: 4 })
-    } else if (this.packs.length === 0) {
-      EmptyHint({
-        symbol: 'marketplace',
-        title: this.loading ? '正在加载…' : '还没有可显示的风格包',
-        hint: '市场需要网络与 GitHub 账号；未登录或搜索无结果时这里会是空的'
-      })
-    } else {
-      Group() {
-        ForEach(this.packs, (pack: MarketplacePack, index: number) => {
-          RowItem({
-            symbol: 'style',
-            accentSymbol: pack.installed === true,
-            title: pack.name,
-            subtitle: pack.description !== undefined && pack.description.length > 0
-              ? pack.description : (pack.author ?? '社区'),
-            value: pack.installed === true ? '已安装'
-              : (pack.downloads ?? 0).toString() + ' 次下载',
-            showChevron: true,
-            showDivider: index < this.packs.length - 1,
-            onTap: () => {
-              this.selectPack(pack.id);
-            }
-          })
-        }, (pack: MarketplacePack) => pack.id)
-      }
-    }
-  }
-
-  @Builder
-  detailBody() {
-    Column({ space: Space.sm }) {
-      Text(this.detailName())
-        .fontSize(Type.cardTitle)
-        .lineHeight(Leading.cardTitle)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Palette.text1())
-        .width('100%')
-
-      Row({ space: Space.xs }) {
-        Tag({
-          text: this.detailInstalled() ? '已安装' : '未安装',
-          tone: this.detailInstalled() ? 'success' : 'neutral'
-        })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Start)
-
-      if (this.detailDescription().length > 0) {
-        Text(this.detailDescription())
-          .fontSize(Type.label)
-          .lineHeight(Leading.label)
-          .fontColor(Palette.text2())
-          .width('100%')
-      }
-
-      Text(this.detailMeta())
-        .fontSize(Type.caption)
-        .lineHeight(Leading.caption)
-        .fontColor(Palette.text3())
-        .width('100%')
-
-      Row({ space: Space.sm }) {
-        if (!this.detailInstalled()) {
-          PrimaryButton({
-            label: '安装到本机',
-            usable: true,
-            onTap: () => {
-              this.install();
-            }
-          })
-        }
-        TonalButton({
-          label: '点赞',
-          symbol: 'sparkles',
-          onTap: () => {
-            this.like();
-          }
-        })
-        if (!this.isWide()) {
-          TextButton({
-            label: '关闭',
-            tone: 'quiet',
-            onTap: () => {
-              this.closeSheet();
-            }
-          })
-        }
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Start)
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
-  sheetBody() {
-    Column({ space: Space.md }) {
-      if (this.sheetMode === SHEET_DETAIL) {
-        this.detailBody()
+      } else if (this.sheetMode === SHEET_MARKET) {
+        this.marketDetailBody()
       }
     }
     .width('100%')
