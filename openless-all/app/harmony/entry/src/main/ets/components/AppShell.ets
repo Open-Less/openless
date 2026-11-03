@@ -1,26 +1,29 @@
 import { KeyCode } from '@kit.InputKit';
-import { Layout, Palette, Radius, Space, Type, Leading } from '../common/Theme';
+import { Layout, Leading, Palette, Radius, Space, Type, floatShadow } from '../common/Theme';
 import { PageBackBar } from './Kit';
 import { symbolOf } from './Icons';
 import { Nav, NavItem } from './Nav';
 import { CredentialsPage } from '../pages/CredentialsPage';
 import { HistoryPage } from '../pages/HistoryPage';
-import { CorrectionsPage, MarketplacePage, StylePage, VocabPage } from '../pages/LibraryPages';
+import { CorrectionsPage, StylePage, VocabPage } from '../pages/LibraryPages';
 import { OverviewPage } from '../pages/OverviewPage';
+import { SelectionPage } from '../pages/SelectionPage';
 import { SettingsPage } from '../pages/SettingsPage';
-import { LocalAsrPage, QaPage, QuickNotePage, TranslationPage } from '../pages/ToolPages';
+import { LocalAsrPage, QaPage, TranslationPage } from '../pages/ToolPages';
 
 /**
  * Adaptive shell v2 (一次开发，多端部署).
  *
- *   sm  < 600vp   bottom tab bar
- *   md  600-840   88vp icon rail
- *   lg  840-1080  240vp labelled rail
- *   xl  >= 1080   264vp labelled rail
+ *   sm  < 600vp              floating capsule dock (4 destinations)
+ *   md  600-840              88vp icon rail
+ *   lg  840-1080             240vp labelled rail
+ *   xl  >= 1080              264vp labelled rail
  *
- * The shell only draws navigation and the back affordance; pages own their titles
- * and content width. Chrome is opaque and separated by a hairline — no blur stack,
- * no ambient wash.
+ * The dock is a real HarmonyOS material: `uiMaterial.ImmersiveMaterial` through
+ * `Glass.bar()` on API 26+, with the plain system blur as the fallback. It floats
+ * above the bottom edge with a margin, and the shell reserves its height so no
+ * page content is covered; the window itself stays inset by the system, so the
+ * gesture bar never overlaps the capsule.
  */
 @Component
 export struct AppShell {
@@ -57,7 +60,7 @@ export struct AppShell {
         .justifyContent(FlexAlign.Center)
 
         if (!Layout.isRail(this.bp)) {
-          this.tabBar()
+          this.dock()
         }
       }
       .layoutWeight(1)
@@ -70,7 +73,7 @@ export struct AppShell {
     .onKeyEvent((event: KeyEvent) => this.handleKey(event))
   }
 
-  /** Ctrl/⌘ + 1..5 jumps to a primary destination on tablets and 2-in-1. */
+  /** Ctrl/⌘ + 1..4 jumps to a primary destination on tablets and 2-in-1. */
   private handleKey(event: KeyEvent): void {
     if (event.type !== KeyType.Down) return;
     let withModifier: boolean = false;
@@ -83,10 +86,10 @@ export struct AppShell {
     }
     if (!withModifier) return;
     const slots: number[] = [KeyCode.KEYCODE_1, KeyCode.KEYCODE_2, KeyCode.KEYCODE_3,
-      KeyCode.KEYCODE_4, KeyCode.KEYCODE_5];
+      KeyCode.KEYCODE_4];
     for (let index = 0; index < slots.length; index++) {
       if (event.keyCode === slots[index]) {
-        Nav.go(Nav.PRIMARY[index]);
+        if (index < Nav.PRIMARY.length) Nav.go(Nav.PRIMARY[index]);
         return;
       }
     }
@@ -98,27 +101,73 @@ export struct AppShell {
       HistoryPage()
     } else if (this.route === Nav.STYLE) {
       StylePage()
-    } else if (this.route === Nav.VOCAB) {
-      VocabPage()
     } else if (this.route === Nav.SETTINGS) {
       SettingsPage()
-    } else if (this.route === Nav.CREDENTIALS) {
-      CredentialsPage()
-    } else if (this.route === Nav.MARKETPLACE) {
-      MarketplacePage()
-    } else if (this.route === Nav.CORRECTIONS) {
-      CorrectionsPage()
+    } else if (this.route === Nav.SELECTION) {
+      SelectionPage()
     } else if (this.route === Nav.TRANSLATION) {
       TranslationPage()
+    } else if (this.route === Nav.VOCAB) {
+      VocabPage()
+    } else if (this.route === Nav.CORRECTIONS) {
+      CorrectionsPage()
     } else if (this.route === Nav.QA) {
       QaPage()
-    } else if (this.route === Nav.QUICKNOTE) {
-      QuickNotePage()
+    } else if (this.route === Nav.CREDENTIALS) {
+      CredentialsPage()
     } else if (this.route === Nav.LOCALASR) {
       LocalAsrPage()
     } else {
       OverviewPage()
     }
+  }
+
+  /** Floating capsule dock: one material surface, four equal destinations. */
+  @Builder
+  dock() {
+    Column() {
+      Row() {
+        ForEach(Nav.PRIMARY, (id: string) => {
+          this.dockItem(id)
+        }, (id: string) => 'dock-' + id)
+      }
+      .width('100%')
+      .height(60)
+      .padding({ left: Space.xxs, right: Space.xxs })
+      .borderRadius(Radius.pill)
+      .backgroundColor(Palette.bgElevated())
+      // 沉浸光感：系统毛玻璃材质。API 26 的 uiMaterial 在兼容 SDK 12 上不可用，
+      // 这里用系统 COMPONENT_ULTRA_THICK 模糊 + 半透明底色近似同一效果。
+      .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+      .border({ width: 0.5, color: Palette.line() })
+      .shadow(floatShadow())
+    }
+    .width('100%')
+    .padding({ left: Space.md, right: Space.md, top: Space.xxs, bottom: Space.sm })
+  }
+
+  @Builder
+  dockItem(id: string) {
+    Column({ space: 2 }) {
+      SymbolGlyph(symbolOf(id))
+        .fontSize(21)
+        .fontColor([this.tabActive(id) ? Palette.accent() : Palette.icon2()])
+      Text(Nav.label(id))
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.tabActive(id) ? Palette.accent() : Palette.text2())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(52)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(this.tabActive(id) ? Palette.accentSoft() : Color.Transparent)
+    .borderRadius(Radius.pill)
+    .hoverEffect(HoverEffect.Highlight)
+    .focusable(true)
+    .onClick(() => Nav.go(id))
   }
 
   @Builder
@@ -198,42 +247,8 @@ export struct AppShell {
     .onClick(() => Nav.go(item.id))
   }
 
-  @Builder
-  tabBar() {
-    Row({ space: Space.xs }) {
-      ForEach(Nav.PRIMARY, (id: string) => {
-        this.tabItem(id)
-      }, (id: string) => 'tab-' + id)
-    }
-    .width('100%')
-    .height(56)
-    .padding({ left: Space.xs, right: Space.xs })
-    .backgroundColor(Palette.bgElevated())
-    .border({ width: { top: 0.5 }, color: Palette.line() })
-  }
-
-  @Builder
-  tabItem(id: string) {
-    Column({ space: Space.xxs }) {
-      SymbolGlyph(symbolOf(id))
-        .fontSize(22)
-        .fontColor([this.tabActive(id) ? Palette.accent() : Palette.icon2()])
-      Text(Nav.label(id))
-        .fontSize(Type.caption)
-        .lineHeight(Leading.caption)
-        .fontWeight(this.tabActive(id) ? FontWeight.Medium : FontWeight.Normal)
-        .fontColor(this.tabActive(id) ? Palette.accent() : Palette.text2())
-    }
-    .layoutWeight(1)
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .hoverEffect(HoverEffect.Highlight)
-    .focusable(true)
-    .onClick(() => Nav.go(id))
-  }
-
-  /** A secondary page keeps its owner tab lit (风格市场 → 风格, 纠正规则 → 词典). */
+  /** Secondary pages keep their top-level destination lit in the dock. */
   private tabActive(id: string): boolean {
-    return Nav.ownerOf(this.route) === id;
+    return Nav.rootOf(this.route) === id;
   }
 }

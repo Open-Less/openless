@@ -1,12 +1,26 @@
-import { Breakpoints } from '../common/Breakpoint';
+import { common } from '@kit.AbilityKit';
 import { AudioPlayback } from '../common/AudioPlayback';
 import { Fmt } from '../common/Format';
 import { Store } from '../common/Store';
-import { C, R, S, T } from '../common/Tokens';
-import { Card, EmptyState, ErrorState, GhostButton, Pill, SearchField, SectionHeader, SkeletonList, StatusRow } from '../components/Common';
-import { symbolOf } from '../components/Icons';
+import { Layout, Leading, Palette, Space, Type } from '../common/Theme';
+import {
+  EmptyHint,
+  ErrorNote,
+  Group,
+  PageBackBar,
+  PageScaffold,
+  PrimaryButton,
+  RowItem,
+  SearchField,
+  SectionTitle,
+  Skeleton,
+  Surface,
+  Tag,
+  TextButton,
+  TonalButton,
+  notify
+} from '../components/Kit';
 import { Api } from '../data/Api';
-import { common } from '@kit.AbilityKit';
 import { HistoryEntry, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 interface ModeLabel {
@@ -21,8 +35,11 @@ const MODE_LABELS: ModeLabel[] = [
   { id: 'structured', label: '结构化' }
 ];
 
+/** Fixed width of the list column on lg/xl; the detail takes the rest. */
+const LIST_WIDTH: number = 360;
+
 function modeLabel(mode: string | undefined): string {
-  if (mode === undefined) return '';
+  if (mode === undefined || mode.length === 0) return '';
   for (let index = 0; index < MODE_LABELS.length; index++) {
     if (MODE_LABELS[index].id === mode) return MODE_LABELS[index].label;
   }
@@ -30,17 +47,19 @@ function modeLabel(mode: string | undefined): string {
 }
 
 /**
- * History: a searchable list that becomes list + detail on a wide window.
+ * History v2: searchable transcript list.
  *
- * The detail pane is driven by `detailId` in AppStorage, so the same screen covers
- * a tablet split view, a 2-in-1 two-pane window and the phone push flow (where the
- * system back gesture pops the detail first).
+ * `detailId` in AppStorage is the single source of truth for the open record, so
+ * the same screen serves three cases without a half-built Navigation stack:
+ *   sm/md  list, or the detail pushed over it with a back bar;
+ *   lg/xl  list column on the left + detail on the right (placeholder when none).
+ * The system back gesture clears `detailId` first (see Index.onBackPress).
  */
 @Component
 export struct HistoryPage {
   @StorageLink('bp') bp: string = 'md';
   @StorageLink('detailId') detailId: string = '';
-  @StorageLink('backendRevision') revision: number = 0;
+  @StorageLink('backendRevision') @Watch('onRevision') revision: number = 0;
 
   @State private entries: HistoryEntry[] = [];
   @State private query: string = '';
@@ -52,6 +71,15 @@ export struct HistoryPage {
   private audio: AudioPlayback = new AudioPlayback();
 
   aboutToAppear(): void {
+    this.reload();
+  }
+
+  aboutToDisappear(): void {
+    this.audio.stop();
+  }
+
+  /** Another page changed the backend (settings, credentials); pick it up. */
+  private onRevision(): void {
     this.reload();
   }
 
@@ -69,23 +97,109 @@ export struct HistoryPage {
     }
   }
 
-  private filtered(): HistoryEntry[] {
+  private isWide(): boolean {
+    return this.bp === Layout.LG || this.bp === Layout.XL;
+  }
+
+  private filteredEntries(): HistoryEntry[] {
     if (this.query.length === 0) return this.entries;
     const needle: string = this.query.toLowerCase();
     const result: HistoryEntry[] = [];
     for (let index = 0; index < this.entries.length; index++) {
       const entry: HistoryEntry = this.entries[index];
-      const text: string = (entry.finalText + ' ' + (entry.rawTranscript ?? '') + ' ' + (entry.appName ?? '')).toLowerCase();
+      const text: string = (entry.finalText + ' ' + (entry.rawTranscript ?? '') + ' ' +
+        (entry.appName ?? '')).toLowerCase();
       if (text.indexOf(needle) >= 0) result.push(entry);
     }
     return result;
   }
 
-  private selected(): HistoryEntry | undefined {
+  private activeEntry(): HistoryEntry | undefined {
+    if (this.detailId.length === 0) return undefined;
     for (let index = 0; index < this.entries.length; index++) {
       if (this.entries[index].id === this.detailId) return this.entries[index];
     }
     return undefined;
+  }
+
+  private subtitleText(): string {
+    if (this.query.length > 0) {
+      return '筛出 ' + this.filteredEntries().length.toString() + ' / ' +
+        this.entries.length.toString() + ' 条';
+    }
+    return this.entries.length.toString() + ' 条记录 · 只保存在这台设备上';
+  }
+
+  private previewOf(entry: HistoryEntry): string {
+    const text: string = Fmt.preview(entry.finalText, this.isWide() ? 46 : 60);
+    return text.length > 0 ? text : '（无转写文本）';
+  }
+
+  /** Second line of a list row: time · mode · app · failure. */
+  private metaLine(entry: HistoryEntry): string {
+    let line: string = Fmt.relative(entry.createdAt);
+    const mode: string = modeLabel(entry.mode);
+    if (mode.length > 0) line = line + ' · ' + mode;
+    const app: string = entry.appName ?? '';
+    if (app.length > 0) line = line + ' · ' + app;
+    if (this.hasError(entry)) line = line + ' · 失败';
+    return line;
+  }
+
+  private hasError(entry: HistoryEntry): boolean {
+    return entry.errorCode !== undefined && entry.errorCode !== null;
+  }
+
+  private appLabel(entry: HistoryEntry): string {
+    const app: string = entry.appName ?? '';
+    return app.length > 0 ? app : '—';
+  }
+
+  private insertLabel(entry: HistoryEntry): string {
+    const status: string = entry.insertStatus ?? '';
+    return status.length > 0 ? status : '—';
+  }
+
+  private errorLabel(entry: HistoryEntry): string {
+    const code: string = entry.errorCode ?? '';
+    return code.length > 0 ? code : '—';
+  }
+
+  private asrText(entry: HistoryEntry): string {
+    const asr: string = entry.asrTranscript ?? '';
+    return asr;
+  }
+
+  /** Raw ASR/whisper text used by the "复制原文" action. */
+  private copySource(entry: HistoryEntry): string {
+    const asr: string = this.asrText(entry);
+    if (asr.length > 0) return asr;
+    return entry.rawTranscript ?? '';
+  }
+
+  private showRawAction(entry: HistoryEntry): boolean {
+    const raw: string = entry.rawTranscript ?? '';
+    return raw.length > 0 && raw !== entry.finalText;
+  }
+
+  private hasAudio(entry: HistoryEntry): boolean {
+    return entry.hasAudioRecording === true;
+  }
+
+  private latency(provider: string | null | undefined, ms: number | null | undefined): string {
+    const name: string = provider === undefined || provider === null || provider.length === 0
+      ? '—' : provider;
+    if (ms === undefined || ms === null || ms <= 0) return name;
+    return name + ' · ' + ms.toString() + ' ms';
+  }
+
+  private async copy(text: string, done: string): Promise<void> {
+    try {
+      await Api.copyText(text);
+      notify(done);
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
   }
 
   private async remove(id: string): Promise<void> {
@@ -94,6 +208,7 @@ export struct HistoryPage {
       await Api.deleteHistoryEntry(id);
       if (this.detailId === id) Store.put<string>('detailId', '');
       await this.reload();
+      notify('已删除');
     } catch (error) {
       this.error = (error as Error).message;
     } finally {
@@ -129,6 +244,7 @@ export struct HistoryPage {
       const text: string = await Api.repolish(source, this.prefs.activeStylePackId ?? '');
       await Api.copyText(text);
       await this.reload();
+      notify('已重新润色并复制');
     } catch (error) {
       this.error = (error as Error).message;
     } finally {
@@ -142,6 +258,7 @@ export struct HistoryPage {
     try {
       await Api.retranscribe(id);
       await this.reload();
+      notify('已重新转写');
     } catch (error) {
       this.error = (error as Error).message;
     } finally {
@@ -149,278 +266,318 @@ export struct HistoryPage {
     }
   }
 
-  /** A2: wide screens use Navigation's Split mode; the detail is a NavDestination. */
-  private stack: NavPathStack = new NavPathStack();
+  build() {
+    PageScaffold({
+      title: '历史',
+      subtitle: this.subtitleText(),
+      actionLabel: '刷新',
+      actionSymbol: 'refresh',
+      scrollable: false,
+      onAction: () => {
+        this.reload();
+      }
+    }) {
+      if (this.isWide()) {
+        this.searchRow()
+        this.errorNote()
+        Row({ space: Space.md }) {
+          Column() {
+            this.listPane()
+          }
+          .width(LIST_WIDTH)
+          .height('100%')
 
-  private setDetail(id: string): void {
-    this.setDetail(id);
-    if (Breakpoints.isWide(this.bp) && this.stack.size() === 0) {
-      this.stack.pushPath({ name: 'detail', param: id });
+          Column() {
+            this.detailSlot()
+          }
+          .layoutWeight(1)
+          .height('100%')
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .alignItems(VerticalAlign.Top)
+      } else if (this.activeEntry() !== undefined) {
+        Row() {
+          PageBackBar({
+            label: '历史',
+            onTap: () => {
+              Store.put<string>('detailId', '');
+            }
+          })
+        }
+        .width('100%')
+
+        this.errorNote()
+        this.detailPane(this.activeEntry() as HistoryEntry)
+      } else {
+        this.searchRow()
+        this.errorNote()
+        this.listPane()
+      }
     }
   }
 
   @Builder
-  historyDestination(name: string, param: object) {
-    NavDestination() {
-      Column() {
-        if (this.selected() === undefined) {
-          EmptyState({ symbol: 'history', title: '选一条记录', hint: '左侧列表里点开任意一条' })
-        } else {
-          Scroll() {
-            this.detailPane(this.selected() as HistoryEntry, true)
-          }
-          .scrollBar(BarState.Off)
-          .width('100%')
-          .height('100%')
-        }
+  searchRow() {
+    SearchField({
+      placeholder: '搜索转写内容或应用名',
+      value: this.query,
+      onInput: (value: string) => {
+        this.query = value;
       }
-      .width('100%')
-      .height('100%')
-      .padding({ top: S.md })
-    }
-    .title('详情')
+    })
   }
 
-  build() {
-    Column() {
-      Row({ space: S.md }) {
-        Column({ space: S.xxs }) {
-          Text('历史')
-            .fontSize(T.display)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(C.textPrimary())
-          Text(this.entries.length.toString() + ' 条记录 · 全部保存在本机')
-            .fontSize(T.footnote)
-            .fontColor(C.textTertiary())
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        GhostButton({
-          label: '刷新',
-          symbol: 'refresh',
-          onTap: () => {
-            this.reload();
-          }
-        })
-      }
-      .width('100%')
-      .padding({ top: S.lg, bottom: S.md })
-
-      SearchField({
-        placeholder: '搜索转写内容或应用名',
-        value: this.query,
-        onInput: (value: string) => {
-          this.query = value;
+  @Builder
+  errorNote() {
+    if (this.error.length > 0) {
+      ErrorNote({
+        message: this.error,
+        onRetry: () => {
+          this.reload();
         }
       })
-
-      if (this.error.length > 0) {
-        ErrorState({
-          message: this.error,
-          onRetry: () => {
-            this.reload();
-          }
-        })
-      }
-
-      if (Breakpoints.isWide(this.bp)) {
-        Navigation(this.stack) {
-          Column() {
-            this.listPane()
-          }
-          .width('100%')
-          .height('100%')
-        }
-        .mode(NavigationMode.Split)
-        .navBarWidth(360)
-        .navBarWidthRange([300, 460])
-        .hideTitleBar(true)
-        .navDestination(this.historyDestination)
-        .width('100%')
-        .layoutWeight(1)
-      } else if (this.detailId.length > 0 && this.selected() !== undefined) {
-        Scroll() {
-          this.detailPane(this.selected() as HistoryEntry, false)
-        }
-        .scrollBar(BarState.Off)
-        .layoutWeight(1)
-        .align(Alignment.Top)
-      } else {
-        Column() {
-          this.listPane()
-        }
-        .layoutWeight(1)
-        .width('100%')
-      }
     }
-    .width('100%')
-    .height('100%')
-    .padding({ left: S.gutter(this.bp), right: S.gutter(this.bp) })
   }
 
   @Builder
   listPane() {
     if (this.loading && this.entries.length === 0) {
-      SkeletonList({ rows: 4 })
-    } else if (this.filtered().length === 0) {
-      EmptyState({
-        symbol: 'history',
-        title: this.query.length > 0 ? '没有匹配的记录' : '还没有听写记录',
-        hint: this.query.length > 0 ? '换个关键词试试' : '在概览页点麦克风说第一句话'
-      })
+      Skeleton({ rows: 4 })
+    } else if (this.filteredEntries().length === 0) {
+      Group() {
+        EmptyHint({
+          symbol: 'history',
+          title: this.query.length > 0 ? '没有匹配的记录' : '还没有听写记录',
+          hint: this.query.length > 0 ? '换个关键词试试' : '在概览页点麦克风说第一句话'
+        })
+      }
     } else {
-      List({ space: S.sm }) {
-        ForEach(this.filtered(), (entry: HistoryEntry) => {
+      List({ space: Space.xs }) {
+        ForEach(this.filteredEntries(), (entry: HistoryEntry) => {
           ListItem() {
-            Row({ space: S.md }) {
-              Column({ space: S.xs }) {
-                Text(Fmt.preview(entry.finalText, Breakpoints.isWide(this.bp) ? 46 : 60))
-                  .fontSize(T.body)
-                  .fontColor(C.textPrimary())
-                  .maxLines(2)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Row({ space: S.xs }) {
-                  Text(Fmt.relative(entry.createdAt))
-                    .fontSize(T.caption)
-                    .fontColor(C.textTertiary())
-                  if (modeLabel(entry.mode).length > 0) {
-                    Pill({ text: modeLabel(entry.mode), tone: 'accent' })
-                  }
-                  if (entry.appName !== undefined && entry.appName !== null && entry.appName.length > 0) {
-                    Pill({ text: entry.appName as string, tone: 'neutral' })
-                  }
-                  if (entry.errorCode !== undefined && entry.errorCode !== null) {
-                    Pill({ text: '失败', tone: 'danger' })
-                  }
-                }
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-
-              if (entry.durationMs !== undefined && entry.durationMs !== null && entry.durationMs > 0) {
-                Text(Fmt.duration(entry.durationMs))
-                  .fontSize(T.caption)
-                  .fontColor(C.textTertiary())
-              }
+            Group() {
+              this.entryRow(entry)
             }
-            .width('100%')
-            .padding(S.md)
-            .backgroundColor(this.detailId === entry.id ? C.accentSoft() : C.surface())
-            .borderRadius(R.md)
-            .onClick(() => {
-              Store.put<string>('detailId', this.detailId === entry.id ? '' : entry.id);
-            })
           }
         }, (entry: HistoryEntry) => entry.id)
       }
       .width('100%')
-      .height('100%')
+      .layoutWeight(1)
       .scrollBar(BarState.Off)
-      .lanes(Breakpoints.isWide(this.bp) ? 1 : 1)
+      .edgeEffect(EdgeEffect.Spring)
+      .cachedCount(6)
     }
   }
 
   @Builder
-  detailPane(entry: HistoryEntry, wide: boolean) {
-    Column({ space: S.md }) {
-      Card() {
-        Column({ space: S.sm }) {
-          Row({ space: S.sm }) {
-            Text(Fmt.relative(entry.createdAt))
-              .fontSize(T.callout)
-              .fontColor(C.textSecondary())
-              .layoutWeight(1)
-            if (!wide) {
-              GhostButton({
-                label: '返回列表',
-                onTap: () => Store.put<string>('detailId', '')
-              })
-            }
-          }
-          .width('100%')
+  entryRow(entry: HistoryEntry) {
+    RowItem({
+      symbol: this.detailId === entry.id ? 'check' : 'history',
+      accentSymbol: this.detailId === entry.id,
+      title: this.previewOf(entry),
+      subtitle: this.metaLine(entry),
+      value: entry.durationMs !== undefined && entry.durationMs !== null && entry.durationMs > 0
+        ? Fmt.duration(entry.durationMs) : '',
+      showChevron: !this.isWide(),
+      showDivider: false,
+      onTap: () => {
+        Store.put<string>('detailId', entry.id);
+      }
+    })
+  }
 
-          Text(entry.finalText)
-            .fontSize(T.body)
-            .fontColor(C.textPrimary())
-            .lineHeight(25)
+  /** Wide right column: the open record, or a hint until one is picked. */
+  @Builder
+  detailSlot() {
+    if (this.activeEntry() === undefined) {
+      Column() {
+        Group() {
+          EmptyHint({
+            symbol: 'history',
+            title: '选一条记录',
+            hint: '左侧列表里点开任意一条'
+          })
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+    } else {
+      this.detailPane(this.activeEntry() as HistoryEntry)
+    }
+  }
+
+  @Builder
+  detailPane(entry: HistoryEntry) {
+    Scroll() {
+      Column({ space: Space.md }) {
+        this.transcriptCard(entry)
+        this.asrCard(entry)
+        this.paramsCard(entry)
+        this.actionRow(entry)
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ bottom: Space.xl })
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .align(Alignment.Top)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  transcriptCard(entry: HistoryEntry) {
+    Surface({ inset: Space.md }) {
+      Column({ space: Space.sm }) {
+        Row({ space: Space.sm }) {
+          Text(Fmt.relative(entry.createdAt))
+            .fontSize(Type.label)
+            .lineHeight(Leading.label)
+            .fontColor(Palette.text2())
+            .layoutWeight(1)
+          if (this.hasError(entry)) {
+            Tag({ text: '失败', tone: 'danger' })
+          }
+        }
+        .width('100%')
+
+        Text(entry.finalText)
+          .fontSize(Type.body)
+          .lineHeight(Leading.body)
+          .fontColor(Palette.text1())
+          .width('100%')
+          .copyOption(CopyOptions.LocalDevice)
+
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          if (modeLabel(entry.mode).length > 0) {
+            Row() {
+              Tag({ text: modeLabel(entry.mode), tone: 'accent' })
+            }
+            .margin({ right: Space.xs, bottom: Space.xxs })
+          }
+          if ((entry.appName ?? '').length > 0) {
+            Row() {
+              Tag({ text: this.appLabel(entry) })
+            }
+            .margin({ right: Space.xs, bottom: Space.xxs })
+          }
+          if (entry.durationMs !== undefined && entry.durationMs !== null && entry.durationMs > 0) {
+            Row() {
+              Tag({ text: Fmt.duration(entry.durationMs) })
+            }
+            .margin({ right: Space.xs, bottom: Space.xxs })
+          }
+          if (this.hasAudio(entry)) {
+            Row() {
+              Tag({ text: '有录音', tone: 'success' })
+            }
+            .margin({ right: Space.xs, bottom: Space.xxs })
+          }
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    }
+  }
+
+  @Builder
+  asrCard(entry: HistoryEntry) {
+    if (this.asrText(entry).length > 0 && this.asrText(entry) !== entry.finalText) {
+      Surface({ inset: Space.md }) {
+        Column({ space: Space.sm }) {
+          SectionTitle({ title: '识别原文', hint: '润色之前的 ASR 输出，用来区分听错还是改写' })
+          Text(this.asrText(entry))
+            .fontSize(Type.label)
+            .lineHeight(Leading.label)
+            .fontColor(Palette.text2())
             .width('100%')
             .copyOption(CopyOptions.LocalDevice)
         }
         .width('100%')
+        .alignItems(HorizontalAlign.Start)
       }
+    }
+  }
 
-      if (entry.asrTranscript !== undefined && entry.asrTranscript !== null &&
-        entry.asrTranscript.length > 0 && entry.asrTranscript !== entry.finalText) {
-        Card() {
-          Column({ space: S.xs }) {
-            SectionHeader({ title: '识别原文', hint: '润色之前的 ASR 输出，用来区分听错还是改写' })
-            Text(entry.asrTranscript as string)
-              .fontSize(T.callout)
-              .fontColor(C.textSecondary())
-              .lineHeight(22)
-              .width('100%')
-              .copyOption(CopyOptions.LocalDevice)
-          }
-          .width('100%')
-        }
-      }
-
-      Card() {
-        Column() {
-          SectionHeader({ title: '参数' })
-          StatusRow({ label: '模式', value: modeLabel(entry.mode), showChevron: false })
-          StatusRow({ label: '时长', value: Fmt.duration(entry.durationMs), showChevron: false })
-          StatusRow({ label: '转写', value: this.latency(entry.asrProvider, entry.asrMs), showChevron: false })
-          StatusRow({ label: '润色', value: this.latency(entry.llmProvider, entry.polishMs), showChevron: false })
-          StatusRow({ label: '应用', value: entry.appName ?? '—', showChevron: false })
-          StatusRow({
-            label: '写入',
-            value: entry.insertStatus ?? '—',
-            showChevron: false,
-            showDivider: entry.errorCode === undefined || entry.errorCode === null
-          })
-          if (entry.errorCode !== undefined && entry.errorCode !== null) {
-            StatusRow({ label: '错误', value: entry.errorCode as string, showChevron: false, showDivider: false })
-          }
+  @Builder
+  paramsCard(entry: HistoryEntry) {
+    Group() {
+      Column() {
+        Row() {
+          SectionTitle({ title: '参数' })
         }
         .width('100%')
-      }
+        .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xxs })
 
-      Row({ space: S.sm }) {
-        if (entry.rawTranscript !== undefined && entry.rawTranscript.length > 0 &&
-          entry.rawTranscript !== entry.finalText) {
-          GhostButton({
-            label: '复制原文',
-            onTap: () => {
-              Api.copyText(entry.asrTranscript !== undefined && entry.asrTranscript !== null &&
-                entry.asrTranscript.length > 0 ? entry.asrTranscript as string : entry.rawTranscript as string);
-            }
+        RowItem({
+          title: '模式',
+          value: modeLabel(entry.mode).length > 0 ? modeLabel(entry.mode) : '—',
+          showChevron: false,
+          showDivider: true
+        })
+        RowItem({
+          title: '时长',
+          value: Fmt.duration(entry.durationMs),
+          showChevron: false,
+          showDivider: true
+        })
+        RowItem({
+          title: '转写',
+          value: this.latency(entry.asrProvider, entry.asrMs),
+          showChevron: false,
+          showDivider: true
+        })
+        RowItem({
+          title: '润色',
+          value: this.latency(entry.llmProvider, entry.polishMs),
+          showChevron: false,
+          showDivider: true
+        })
+        RowItem({
+          title: '应用',
+          value: this.appLabel(entry),
+          showChevron: false,
+          showDivider: true
+        })
+        RowItem({
+          title: '写入',
+          value: this.insertLabel(entry),
+          showChevron: false,
+          showDivider: !this.hasError(entry)
+        })
+        if (this.hasError(entry)) {
+          RowItem({
+            title: '错误',
+            value: this.errorLabel(entry),
+            showChevron: false,
+            showDivider: false
           })
         }
-        GhostButton({
-          label: this.busy ? '重润色中…' : '重新润色',
-          symbol: 'sparkles',
-          usable: !this.busy,
-          onTap: () => {
-            this.repolish(entry);
-          }
-        })
-        GhostButton({
-          label: '复制全文',
-          onTap: () => {
-            Api.copyText(entry.finalText);
-          }
-        })
-        if (entry.hasAudioRecording === true) {
-          GhostButton({
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder
+  actionRow(entry: HistoryEntry) {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
+      if (this.hasAudio(entry)) {
+        Row() {
+          PrimaryButton({
             label: this.playing ? '停止播放' : '播放录音',
-            symbol: 'play',
             onTap: () => {
               this.togglePlayback(entry);
             }
           })
-          GhostButton({
+        }
+        .margin({ right: Space.xs, bottom: Space.xs })
+
+        Row() {
+          TonalButton({
             label: this.busy ? '重新转写中…' : '重新转写',
             symbol: 'refresh',
             usable: !this.busy,
@@ -429,24 +586,58 @@ export struct HistoryPage {
             }
           })
         }
-        GhostButton({
+        .margin({ right: Space.xs, bottom: Space.xs })
+      }
+
+      Row() {
+        TonalButton({
+          label: this.busy ? '重润色中…' : '重新润色',
+          symbol: 'sparkles',
+          usable: !this.busy,
+          onTap: () => {
+            this.repolish(entry);
+          }
+        })
+      }
+      .margin({ right: Space.xs, bottom: Space.xs })
+
+      Row() {
+        TonalButton({
+          label: '复制全文',
+          symbol: 'copy',
+          onTap: () => {
+            this.copy(entry.finalText, '已复制全文');
+          }
+        })
+      }
+      .margin({ right: Space.xs, bottom: Space.xs })
+
+      if (this.showRawAction(entry)) {
+        Row() {
+          TextButton({
+            label: '复制原文',
+            symbol: 'copy',
+            onTap: () => {
+              this.copy(this.copySource(entry), '已复制原文');
+            }
+          })
+        }
+        .margin({ right: Space.xs, bottom: Space.xs })
+      }
+
+      Row() {
+        TextButton({
           label: '删除',
           symbol: 'trash',
+          tone: 'danger',
+          usable: !this.busy,
           onTap: () => {
             this.remove(entry.id);
           }
         })
       }
-      .width('100%')
-      .padding({ bottom: S.xxl })
+      .margin({ right: Space.xs, bottom: Space.xs })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  private latency(provider: string | null | undefined, ms: number | null | undefined): string {
-    const name: string = provider === undefined || provider === null || provider.length === 0 ? '—' : provider;
-    if (ms === undefined || ms === null || ms <= 0) return name;
-    return name + ' · ' + ms.toString() + ' ms';
   }
 }
