@@ -2188,6 +2188,11 @@ export function OmniChannelSection() {
   const geminiTranscribe =
     committedOmniProvider === 'gemini' &&
     ['gemini-3.5-transcribe', 'gemini-3.5-transcribe-live'].includes(omniModel.trim());
+  // OpenAI audio chat models reject text-only requests, so Verify probes them with
+  // short silence too (issue #1305). Without a model, Core uses the preset default.
+  const openaiAudio =
+    committedOmniProvider === 'openai' &&
+    (omniModel.trim() || omniPreset?.modelPlaceholder || '').toLowerCase().includes('audio');
 
   return (
     <Card className="ol-omni-settings" padding={16}>
@@ -2273,12 +2278,12 @@ export function OmniChannelSection() {
           </div>
         )}
         <ProviderTools
-          key={`omni:${committedOmniProvider}:${geminiTranscribe ? omniModel.trim() : ''}`}
+          key={`omni:${committedOmniProvider}:${geminiTranscribe || openaiAudio ? omniModel.trim() : ''}`}
           kind="omni"
           modelAccount="omni.model"
           onModelSelected={() => setOmniModelRevision((v) => v + 1)}
           compact
-          audioValidation={geminiTranscribe}
+          audioValidation={geminiTranscribe || openaiAudio}
         />
       </div>
     </Card>
