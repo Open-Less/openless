@@ -18,6 +18,26 @@ case "$OPENLESS_HARMONY_CLIPBOARD_ACCESS" in
     exit 1
     ;;
 esac
+# Keep the debug HAP on the same versionCode ladder as the release packaging:
+# a release build carries package-revision, and installing a lower code over it
+# fails with 9568263 "install version downgrade" (the only workaround would be
+# an uninstall, which wipes the device's app data).
+APP_JSON="$APP_ROOT/harmony/AppScope/app.json5"
+VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$APP_ROOT/linux-egui/package-revision")}"
+VERSION_NAME="${OPENLESS_HARMONY_VERSION:-$(node -p "require('$APP_ROOT/package.json').version" | sed 's/[-+].*//')}"
+APP_JSON_BACKUP="$(mktemp)"
+cp "$APP_JSON" "$APP_JSON_BACKUP"
+restore_app_json() { cp "$APP_JSON_BACKUP" "$APP_JSON"; rm -f "$APP_JSON_BACKUP"; }
+trap restore_app_json EXIT
+python3 - "$APP_JSON" "$VERSION_CODE" "$VERSION_NAME" << 'PY'
+import re, sys
+path, code, name = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(path).read()
+text = re.sub(r'"versionCode":\s*\d+', '"versionCode": ' + code, text)
+text = re.sub(r'"versionName":\s*"[^"]*"', '"versionName": "' + name + '"', text)
+open(path, 'w').write(text)
+PY
+
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 export OPENLESS_RIME_PREFIX="$CACHE_ROOT/mobile-rime/harmony/install"
 if [ ! -f "$OPENLESS_RIME_PREFIX/lib/librime.a" ] || [ ! -f "$CACHE_ROOT/mobile-rime/data/openless-data-version.txt" ]; then
