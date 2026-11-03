@@ -250,3 +250,10 @@ export function floatShadow(): ShadowOptions {
     offsetY: 8
   };
 }
+
+/**
+ * 手机端优先：当前阶段只做手机竖屏的样子。开启时窗口尺寸类固定为 sm——
+ * 不画侧栏、页面单列、主页卡片一列、历史/设置不分栏；等手机形态定稿后再打开
+ * 宽度自适应（改为 false 即可恢复 md/lg/xl）。
+ */
+export const PHONE_FIRST: boolean = true;

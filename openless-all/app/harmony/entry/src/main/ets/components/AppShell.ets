@@ -1,5 +1,5 @@
 import { KeyCode } from '@kit.InputKit';
-import { Layout, Leading, Palette, Radius, Space, Type, floatShadow } from '../common/Theme';
+import { Layout, Leading, Palette, PHONE_FIRST, Radius, Space, Type, floatShadow } from '../common/Theme';
 import { PageBackBar } from './Kit';
 import { symbolOf } from './Icons';
 import { Nav, NavItem } from './Nav';
@@ -53,7 +53,7 @@ export struct AppShell {
           }
           .width('100%')
           .height('100%')
-          .constraintSize({ maxWidth: Layout.contentMax(this.bp) })
+          .constraintSize({ maxWidth: PHONE_FIRST ? 480 : Layout.contentMax(this.bp) })
         }
         .width('100%')
         .layoutWeight(1)

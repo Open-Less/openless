@@ -6,7 +6,7 @@ import { Appearance } from '../common/Appearance';
 import { WindowWatcher } from '../common/Breakpoint';
 import { Boot } from '../common/Boot';
 import { Store } from '../common/Store';
-import { Palette, Radius, Space, Type, Leading } from '../common/Theme';
+import { Palette, PHONE_FIRST, Radius, Space, Type, Leading } from '../common/Theme';
 import { AppShell } from '../components/AppShell';
 import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
@@ -80,7 +80,7 @@ struct Index {
   private watchWindow(): void {
     const pinned: string = AppStorage.get<string>('bpOverride') ?? '';
     if (pinned.length > 0) {
-      Store.put<string>('bp', pinned);
+      Store.put<string>('bp', PHONE_FIRST ? 'sm' : pinned);
       console.info('[OpenLess Window] pinned size class ' + pinned);
       return;
     }

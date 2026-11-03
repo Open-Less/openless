@@ -1,4 +1,5 @@
 import { display, window } from '@kit.ArkUI';
+import { PHONE_FIRST } from './Theme';
 
 /**
  * One-development-multi-deployment breakpoints.
@@ -97,7 +98,7 @@ export class WindowWatcher {
   };
 
   private apply(widthPx: number): void {
-    const next: string = Breakpoints.of(widthPx / this.density);
+    const next: string = PHONE_FIRST ? Breakpoints.SM : Breakpoints.of(widthPx / this.density);
     if (next === this.current) return;
     this.current = next;
     if (this.callback !== undefined) this.callback(next);
