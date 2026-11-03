@@ -113,8 +113,8 @@ export struct RowItem {
               .fontSize(Size.icon)
               .fontColor([this.accentSymbol ? Palette.accent() : Palette.icon2()])
           }
-          .width(Size.tile)
-          .height(Size.tile)
+          .width(34)
+          .height(34)
           .backgroundColor(this.accentSymbol ? Palette.accentSoft() : Palette.cardAlt())
           .borderRadius(Radius.control)
         }

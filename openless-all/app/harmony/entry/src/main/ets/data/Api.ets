@@ -88,7 +88,13 @@ export class Api {
 
   // ── Settings ───────────────────────────────────────────────────────────────
   static async settings(): Promise<SettingsSnapshot> {
-    return JSON.parse(await Api.value('get_settings_snapshot', '{}')) as SettingsSnapshot;
+    const snapshot = JSON.parse(await Api.value('get_settings_snapshot', '{}')) as SettingsSnapshot;
+    // `preferences` can be absent before the core has a persisted document; the
+    // pages read fields off it directly, so never hand back undefined.
+    if (snapshot.preferences === undefined || snapshot.preferences === null) {
+      snapshot.preferences = {};
+    }
+    return snapshot;
   }
 
   /**

@@ -153,7 +153,7 @@ export struct AppShell {
   dockItem(id: string) {
     Column({ space: 2 }) {
       SymbolGlyph(symbolOf(id))
-        .fontSize(21)
+        .fontSize(18)
         .fontColor([this.tabActive(id) ? Palette.accent() : Palette.icon2()])
       Text(Nav.label(id))
         .fontSize(Type.caption)
