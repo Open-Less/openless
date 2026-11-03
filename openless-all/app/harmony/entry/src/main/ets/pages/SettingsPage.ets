@@ -573,14 +573,16 @@ export struct SettingsPage {
    */
   @Builder
   modelEntry() {
-    Group() {
-      RowItem({
-        title: '大模型与凭据',
-        subtitle: '在这里添加或修改大模型配置',
-        showChevron: true,
-        showDivider: false,
-        onTap: () => Nav.go(Nav.CREDENTIALS)
-      })
+    Column() {
+      Group() {
+        RowItem({
+          title: '大模型与凭据',
+          subtitle: '在这里添加或修改大模型配置',
+          showChevron: true,
+          showDivider: false,
+          onTap: () => Nav.go(Nav.CREDENTIALS)
+        })
+      }
     }
     .width('100%')
   }
