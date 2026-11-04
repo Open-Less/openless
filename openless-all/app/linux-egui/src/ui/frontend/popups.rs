@@ -424,6 +424,10 @@ pub fn selection_ask(
     // 这里换的是**窗口尺寸**（winit `InnerSize`），不是重建进程。
     let expanded = qa_wants_expanded(state, &phase);
     sync_qa_window_size(root_ui.ctx(), expanded);
+    // 紧凑形态只留输入框（Tauri `qa-capsule-shell.is-capsule`）：标题行、空状态、
+    // 「编辑指令」勾选框都不画 —— 212 px 高的小窗里画它们只会把输入框挤出去，
+    // 用户会以为「手打输入的框没了」。
+    let compact = !expanded;
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
@@ -443,61 +447,104 @@ pub fn selection_ask(
                 };
                 return;
             }
-            // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
-            egui::Frame::NONE
-                .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
-                .show(ui, |ui| {
-                    let row = ui
-                        .horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.title"))
-                                        .size(16.0)
-                                        .strong()
-                                        .color(theme::INK),
-                                );
-                                ui.add_space(2.0);
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
-                                        .size(12.0)
-                                        .color(theme::INK_4),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if compact {
+                // 紧凑形态的顶条：只有拖动手柄 + 关闭，尽量把高度留给输入框。
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 6))
+                    .show(ui, |ui| {
+                        let bar = ui
+                            .horizontal(|ui| {
+                                ui.add_space(ui.available_width() - 24.0);
                                 if icon_button(ui, icons::IconName::Close, theme::INK_3)
                                     .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
                                     .clicked()
                                 {
                                     action = QaAction::Dismiss;
                                 }
-                                // 图钉：固定后宿主不再自动收起（Tauri 的
-                                // qa.pinTooltip / qa.unpinTooltip）。
-                                let pin_color = if state.pinned {
-                                    theme::BLUE
-                                } else {
-                                    theme::INK_4
-                                };
-                                let pin_tooltip = if state.pinned {
-                                    tr_l10n(lang, "qa.unpin_tooltip")
-                                } else {
-                                    tr_l10n(lang, "qa.pin_tooltip")
-                                };
-                                if icon_button(ui, icons::IconName::Pin, pin_color)
-                                    .on_hover_text(pin_tooltip)
-                                    .clicked()
-                                {
-                                    action = QaAction::SetPinned(!state.pinned);
-                                }
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::drag());
-                    if row.drag_started() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                        super::layout::note_window_gesture_handoff(ui.ctx());
-                    }
-                });
-            hairline(ui, theme::LINE_SOFT);
+                            })
+                            .response
+                            .interact(egui::Sense::drag());
+                        if bar.drag_started() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            super::layout::note_window_gesture_handoff(ui.ctx());
+                        }
+                    });
+                hairline(ui, theme::LINE_SOFT);
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 8))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "qa.empty_title"))
+                                .size(13.0)
+                                .color(theme::INK_2),
+                        );
+                        ui.label(
+                            egui::RichText::new(tr_l10n(lang, "qa.empty_desc"))
+                                .size(11.0)
+                                .color(theme::INK_4),
+                        );
+                    });
+            }
+            // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
+            if !compact {
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
+                    .show(ui, |ui| {
+                        let row = ui
+                            .horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(lang, "qa.title"))
+                                            .size(16.0)
+                                            .strong()
+                                            .color(theme::INK),
+                                    );
+                                    ui.add_space(2.0);
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
+                                            .size(12.0)
+                                            .color(theme::INK_4),
+                                    );
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Min),
+                                    |ui| {
+                                        if icon_button(ui, icons::IconName::Close, theme::INK_3)
+                                            .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
+                                            .clicked()
+                                        {
+                                            action = QaAction::Dismiss;
+                                        }
+                                        // 图钉：固定后宿主不再自动收起（Tauri 的
+                                        // qa.pinTooltip / qa.unpinTooltip）。
+                                        let pin_color = if state.pinned {
+                                            theme::BLUE
+                                        } else {
+                                            theme::INK_4
+                                        };
+                                        let pin_tooltip = if state.pinned {
+                                            tr_l10n(lang, "qa.unpin_tooltip")
+                                        } else {
+                                            tr_l10n(lang, "qa.pin_tooltip")
+                                        };
+                                        if icon_button(ui, icons::IconName::Pin, pin_color)
+                                            .on_hover_text(pin_tooltip)
+                                            .clicked()
+                                        {
+                                            action = QaAction::SetPinned(!state.pinned);
+                                        }
+                                    },
+                                );
+                            })
+                            .response
+                            .interact(egui::Sense::drag());
+                        if row.drag_started() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            super::layout::note_window_gesture_handoff(ui.ctx());
+                        }
+                    });
+                hairline(ui, theme::LINE_SOFT);
+            }
 
             // ── CardContent ──────────────────────────────────────────────
             // 底部高度必须把新增的「编辑指令」勾选框与「保留上一版本 / 预览并确认
@@ -534,7 +581,9 @@ pub fn selection_ask(
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if !has_thread {
-                        empty_state(ui, lang, content_height);
+                        if !compact {
+                            empty_state(ui, lang, content_height);
+                        }
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt("openless-qa-thread")
@@ -632,50 +681,52 @@ pub fn selection_ask(
                     }
                     // 「编辑指令」勾选框（Tauri Composer 左下角，busy 时禁用）。
                     let busy = thinking || recording;
-                    let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
-                    let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 20.0),
-                        if busy {
-                            egui::Sense::hover()
-                        } else {
-                            egui::Sense::click()
-                        },
-                    );
-                    let box_rect = egui::Rect::from_center_size(
-                        egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
-                        egui::vec2(14.0, 14.0),
-                    );
-                    let checked = state.edit_instruction_mode;
-                    ui.painter().rect_filled(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        if checked { theme::INK } else { theme::SURFACE },
-                    );
-                    ui.painter().rect_stroke(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        egui::Stroke::new(0.8, theme::LINE_STRONG),
-                        egui::StrokeKind::Inside,
-                    );
-                    if checked {
-                        icons::draw_icon(
-                            ui,
-                            box_rect.center(),
-                            icons::IconName::Check,
-                            theme::SURFACE,
+                    if !compact {
+                        let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
+                        let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 20.0),
+                            if busy {
+                                egui::Sense::hover()
+                            } else {
+                                egui::Sense::click()
+                            },
                         );
+                        let box_rect = egui::Rect::from_center_size(
+                            egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
+                            egui::vec2(14.0, 14.0),
+                        );
+                        let checked = state.edit_instruction_mode;
+                        ui.painter().rect_filled(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            if checked { theme::INK } else { theme::SURFACE },
+                        );
+                        ui.painter().rect_stroke(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            egui::Stroke::new(0.8, theme::LINE_STRONG),
+                            egui::StrokeKind::Inside,
+                        );
+                        if checked {
+                            icons::draw_icon(
+                                ui,
+                                box_rect.center(),
+                                icons::IconName::Check,
+                                theme::SURFACE,
+                            );
+                        }
+                        ui.painter().text(
+                            egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            checkbox_label,
+                            egui::FontId::proportional(11.5),
+                            if busy { theme::INK_4 } else { theme::INK_3 },
+                        );
+                        if checkbox_response.clicked() && !busy {
+                            action = QaAction::SetEditInstructionMode(!checked);
+                        }
+                        ui.add_space(2.0);
                     }
-                    ui.painter().text(
-                        egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        checkbox_label,
-                        egui::FontId::proportional(11.5),
-                        if busy { theme::INK_4 } else { theme::INK_3 },
-                    );
-                    if checkbox_response.clicked() && !busy {
-                        action = QaAction::SetEditInstructionMode(!checked);
-                    }
-                    ui.add_space(2.0);
                     let width = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(width, COMPOSER_HEIGHT),
@@ -2360,8 +2411,14 @@ mod tests {
             }),
             ..Default::default()
         };
+        // 对比的是**展开态**的选区助手（同一套外壳只在有内容时出现）。
         let ask = QaPopupState {
             phase: "idle".to_string(),
+            messages: vec![PopupChatMessage {
+                role: "assistant".into(),
+                content: "answer".into(),
+                selection_text: None,
+            }],
             ..Default::default()
         };
         let mut polish_composer = String::new();
@@ -2486,18 +2543,21 @@ mod tests {
             selection_ask(ctx, &empty, &mut composer, Lang::ZhCn, None);
             String::new()
         });
+        // 空对话现在是**紧凑形态**：没有标题行，只有说明 + 输入框。
         for expected in [
-            tr_l10n(Lang::ZhCn, "qa.title"),
-            tr_l10n(Lang::ZhCn, "qa.header_hint"),
             tr_l10n(Lang::ZhCn, "qa.empty_title"),
             tr_l10n(Lang::ZhCn, "qa.empty_desc"),
             tr_l10n(Lang::ZhCn, "qa.composer_placeholder"),
         ] {
             assert!(
                 has(&painted, expected),
-                "empty ask panel must paint {expected:?}\n{painted}"
+                "compact ask panel must paint {expected:?}\n{painted}"
             );
         }
+        assert!(
+            !has(&painted, tr_l10n(Lang::ZhCn, "qa.title")),
+            "the compact layout must not spend height on the header\n{painted}"
+        );
 
         let thread = QaPopupState {
             polish: None,
@@ -2781,6 +2841,11 @@ mod tests {
             let state = QaPopupState {
                 phase: "idle".to_string(),
                 pinned,
+                messages: vec![PopupChatMessage {
+                    role: "assistant".into(),
+                    content: "answer".into(),
+                    selection_text: None,
+                }],
                 ..Default::default()
             };
             let mut composer = String::new();
@@ -2788,11 +2853,31 @@ mod tests {
                 selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
                 String::new()
             });
-            assert!(
-                has(&painted, tr_l10n(Lang::ZhCn, "qa.empty_title")),
-                "pinned={pinned}\n{painted}"
-            );
+            // 图钉只在展开态的标题行里；这里只要整帧有内容即可，动作由协议测试覆盖。
+            assert!(!painted.is_empty(), "pinned={pinned}\n{painted}");
         }
+    }
+
+    /// 紧凑高度（语音输入框那一段）里必须还画得出输入框：
+    /// 用户能打字提问是选区助手的基本能力，窗口缩小不能把它挤掉。
+    #[test]
+    fn compact_qa_window_still_paints_the_composer() {
+        let (w, h) = openless_linux_egui::QA_COMPACT_SIZE;
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(w as f32, h as f32), |ctx| {
+            selection_ask(ctx, &state, &mut composer, Lang::En, None);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::En, "qa.composer_placeholder")),
+            "composer missing at {}x{}:\n{painted}",
+            w,
+            h
+        );
     }
 
     #[test]
