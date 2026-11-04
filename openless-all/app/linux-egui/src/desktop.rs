@@ -285,8 +285,13 @@ fn open_external_with(url: &str, launchers: &[(&str, &[&str])]) -> Result<(), De
     let mut unavailable = Vec::new();
     for (program, prefix) in launchers {
         // Desktop launchers may echo a failed OAuth URL, including id_token_hint.
-        match Command::new(program).args(*prefix).arg(url)
-            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status() {
+        match Command::new(program)
+            .args(*prefix)
+            .arg(url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
             Ok(status) if status.success() => return Ok(()),
             Ok(status) => {
                 return Err(DesktopError::LauncherFailed {

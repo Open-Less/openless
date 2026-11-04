@@ -1017,8 +1017,9 @@ fn heatmap_card(
 ) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     #[cfg(test)]
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(egui::Id::unique("openless-overview-heatmap-rect"), rect));
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::unique("openless-overview-heatmap-rect"), rect)
+    });
     card_scope(ui, rect, CARD_PADDING, |ui, inner| {
         let painter = ui.painter().with_clip_rect(inner);
         painter.text(

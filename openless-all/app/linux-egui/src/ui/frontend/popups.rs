@@ -16,8 +16,7 @@ use eframe::egui;
 
 use super::{capsule_motion, icons, layout, siri_wgpu, theme};
 use openless_linux_egui::{
-    fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage,
-    QaPolishState, QaPopupState,
+    fmt_l10n, tr_l10n, CapsulePopupState, Lang, PopupChatMessage, QaPolishState, QaPopupState,
 };
 
 /// Result of rendering the polish-result mode inside the selection-ask panel.
@@ -210,14 +209,16 @@ pub fn polish_result_mode(
         .show(ui, |ui| {
             let row = ui
                 .horizontal(|ui| {
-                    ui.vertical(|ui| {
+                    // Tauri `.qa-answer-header`：✳ 标题 副标题 ✕ 全在**一行**。
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("✳").size(13.0).color(theme::INK_3));
                         ui.label(
                             egui::RichText::new(tr_l10n(lang, "selection.polish_preview.title"))
                                 .size(16.0)
                                 .strong()
                                 .color(theme::INK),
                         );
-                        ui.add_space(2.0);
+                        ui.add_space(8.0);
                         ui.label(
                             egui::RichText::new(tr_l10n(lang, "selection.polish_preview.subtitle"))
                                 .size(12.0)
@@ -269,15 +270,30 @@ pub fn polish_result_mode(
                         .max_height((editor_height - 24.0).max(60.0))
                         .show(ui, |ui| {
                             ui.set_min_width(width - 24.0);
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&state.text)
-                                        .size(14.0)
-                                        .color(theme::INK),
-                                )
-                                .wrap()
-                                .selectable(true),
+                            // 副标题写的是「可直接编辑」，那就必须真的能编辑：Tauri
+                            // `qa-polish-editor` 也是一个 textarea。草稿放在 ctx 里，
+                            // 换了新的润色结果（text 变了）就重置。
+                            let draft_id = egui::Id::unique("openless-polish-draft");
+                            let mut draft: String = ui.ctx().data_mut(|data| {
+                                match data.get_temp::<(String, String)>(draft_id) {
+                                    Some((source, draft)) if source == state.text => draft,
+                                    _ => state.text.clone(),
+                                }
+                            });
+                            let response = ui.add(
+                                egui::TextEdit::multiline(&mut draft)
+                                    .id(egui::Id::unique("openless-polish-editor"))
+                                    .frame(egui::Frame::NONE)
+                                    .desired_width(width - 24.0)
+                                    .desired_rows(6)
+                                    .text_color(theme::INK)
+                                    .font(egui::FontId::proportional(13.0)),
                             );
+                            if response.changed() {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(draft_id, (state.text.clone(), draft.clone()))
+                                });
+                            }
                         });
                 });
 
@@ -301,34 +317,45 @@ pub fn polish_result_mode(
         .show(ui, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let confirm = tr_l10n(lang, "selection.polish_preview.confirm_replace");
-                let confirm_width = layout::text_width(ui, confirm, 13.0) + 46.0;
+                // 确认送回去的是**编辑后的**草稿（没改过就等于原文）。
+                let edited = ui.ctx().data_mut(|data| {
+                    data.get_temp::<(String, String)>(egui::Id::unique("openless-polish-draft"))
+                        .filter(|(source, _)| *source == state.text)
+                        .map(|(_, draft)| draft)
+                });
+                let result_text = edited
+                    .filter(|draft| !draft.trim().is_empty())
+                    .unwrap_or_else(|| state.text.clone());
+                let confirm_width = layout::text_width(ui, confirm, 11.0) + 40.0;
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(confirm_width, 34.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(confirm_width, 28.0), egui::Sense::click());
                 let fill = if response.hovered() {
                     theme::BLUE.gamma_multiply(0.9)
                 } else {
                     theme::BLUE
                 };
                 ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(7), fill);
-                icon_text(
+                    .rect_filled(rect, egui::CornerRadius::same(9), fill);
+                icon_text_sized(
                     ui,
                     rect,
                     Some(icons::IconName::Check),
                     confirm,
                     theme::SURFACE,
+                    11.0,
+                    13.0,
                 );
                 if response.clicked() {
-                    action = PolishResultAction::Confirm(state.text.clone());
+                    action = PolishResultAction::Confirm(result_text.clone());
                 }
                 ui.add_space(8.0);
                 let cancel = tr_l10n(lang, "selection.polish_preview.cancel");
-                let cancel_width = layout::text_width(ui, cancel, 13.0) + 30.0;
+                let cancel_width = layout::text_width(ui, cancel, 11.0) + 26.0;
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(cancel_width, 34.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(cancel_width, 28.0), egui::Sense::click());
                 ui.painter().rect_filled(
                     rect,
-                    egui::CornerRadius::same(7),
+                    egui::CornerRadius::same(9),
                     if response.hovered() {
                         theme::SURFACE_2
                     } else {
@@ -337,11 +364,11 @@ pub fn polish_result_mode(
                 );
                 ui.painter().rect_stroke(
                     rect,
-                    egui::CornerRadius::same(7),
-                    egui::Stroke::new(0.5, theme::LINE_STRONG),
+                    egui::CornerRadius::same(9),
+                    egui::Stroke::new(1.0, theme::LINE_STRONG),
                     egui::StrokeKind::Inside,
                 );
-                icon_text(ui, rect, None, cancel, theme::INK_2);
+                icon_text_sized(ui, rect, None, cancel, theme::INK_2, 11.0, 13.0);
                 if response.clicked() {
                     action = PolishResultAction::Cancel;
                 }
@@ -354,6 +381,202 @@ pub fn polish_result_mode(
 
 /// 划词追问面板：卡片头（标题 + 副行 + ✕）、消息流（空状态 / 对话 / 思考中 /
 /// 出错）、底部输入组（选区条 + 输入框 + 麦克风 + 发送）。
+/// 卡片宽度（Tauri 760 宽窗口里卡片约 560，两侧是透明留白）。
+const QA_CARD_WIDTH: f32 = 560.0;
+
+/// 选区助手什么时候该长成完整面板（Tauri `QaPanel.tsx:373` 的同一个判定）。
+fn qa_wants_expanded(state: &QaPopupState, phase: &str) -> bool {
+    if state.polish.is_some() || state.error.is_some() {
+        return true;
+    }
+    if matches!(phase, "recording" | "thinking") {
+        return false;
+    }
+    // 流式正文已经在画了：再保持小窗就等于把答案藏在框外面。
+    if !state.streaming_answer.is_empty() {
+        return true;
+    }
+    state
+        .messages
+        .iter()
+        .any(|message| message.role.eq_ignore_ascii_case("assistant"))
+        || state.edit_apply_available
+        || state.edit_revert_available
+}
+
+/// 按当前阶段调整 QA 窗口尺寸，保持窗口中心不动。
+///
+/// 只在布局切换的那一帧发命令：每帧都发会让合成器不停重排。
+fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
+    let (width, height) = if expanded {
+        openless_linux_egui::QA_EXPANDED_SIZE
+    } else {
+        openless_linux_egui::QA_COMPACT_SIZE
+    };
+    let viewport = ctx.input(|input| input.viewport().clone());
+    let current = viewport.inner_rect.map(|rect| rect.size());
+
+    // 判据是**真实窗口尺寸**，不是记在上一次的标记里：弹窗进程会被宿主重建，
+    // 重建后窗口回到出生尺寸（紧凑态），而 ctx 里记的「已展开」还在——那样
+    // 润色预览就会挤在一个 480×140 的窗里被裁掉。
+    let already = current.is_some_and(|size| {
+        (size.x - width as f32).abs() <= 8.0 && (size.y - height as f32).abs() <= 8.0
+    });
+    if already {
+        return;
+    }
+
+    // Tauri `set_qa_window_expanded`：水平中心不动、底边不动（展开再上抬 40），
+    // 然后夹回工作区。
+    let old_size = current.unwrap_or(egui::vec2(width as f32, height as f32));
+    let old_pos = viewport.outer_rect.map(|rect| rect.min);
+    let lift = if expanded {
+        openless_linux_egui::QA_EXPANDED_LIFT as f32
+    } else {
+        0.0
+    };
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+        width as f32,
+        height as f32,
+    )));
+    let Some(old_pos) = old_pos else {
+        return;
+    };
+    let mut pos = egui::pos2(
+        old_pos.x + (old_size.x - width as f32) / 2.0,
+        old_pos.y + old_size.y - height as f32 - lift,
+    );
+    if let Some(monitor) = viewport.monitor_size {
+        let inset = openless_linux_egui::QA_BOTTOM_INSET as f32;
+        let max_x = (monitor.x - width as f32).max(0.0);
+        let max_y = (monitor.y - height as f32 - inset).max(0.0);
+        pos.x = pos.x.clamp(0.0, max_x);
+        pos.y = pos.y.clamp(0.0, max_y);
+    }
+    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+}
+
+/// 紧凑形态 = 一个药丸（Tauri `OpenLessPill`）。
+///
+/// macOS 的流程：按热键 → 屏幕底部中间冒出药丸（录音时 ✕ / 波形 / ✓，
+/// 处理中一行状态字）→ 语音结束、答案回来**之后**才长成对话面板。
+/// 所以紧凑态不画输入框，只画药丸。
+fn compact_pill(ui: &mut egui::Ui, state: &QaPopupState, lang: Lang, recording: bool) -> QaAction {
+    let mut action = QaAction::None;
+    let frame = ui.available_rect_before_wrap();
+    let pill_height = 44.0;
+    let thinking = matches!(
+        state.phase.to_ascii_lowercase().as_str(),
+        "thinking" | "loading" | "answerdelta" | "answer" | "awaiting_approval"
+    );
+    if thinking {
+        // 处理中：只有一行状态（Tauri 的 `statusWidth` 药丸）。
+        let status = tr_l10n(lang, "qa.thinking");
+        let galley = layout::text_galley(ui, status, theme::INK, 13.0, frame.width() - 32.0, 1);
+        let width = (galley.rect.width() + 32.0).max(68.0);
+        let rect = egui::Rect::from_center_size(frame.center(), egui::vec2(width, pill_height));
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(22), theme::SURFACE);
+        ui.painter().galley(
+            egui::pos2(
+                rect.center().x - galley.rect.width() / 2.0,
+                rect.center().y - galley.rect.height() / 2.0,
+            ),
+            galley,
+            theme::INK,
+        );
+        return action;
+    }
+    // 录音时药丸上方还有一行提示：Tauri `qa-voice-hint`（选区助手 · 选文摘要）。
+    if recording {
+        if let Some(selection) = state.selection_preview.as_deref() {
+            let hint = format!(
+                "{} · {}",
+                tr_l10n(lang, "qa.selection_preview"),
+                truncate(selection, 48)
+            );
+            let galley =
+                layout::text_galley(ui, &hint, theme::INK_4, 11.5, frame.width() - 24.0, 1);
+            ui.painter().galley(
+                egui::pos2(
+                    frame.center().x - galley.rect.width() / 2.0,
+                    frame.center().y - pill_height / 2.0 - galley.rect.height() - 2.0,
+                ),
+                galley,
+                theme::INK_4,
+            );
+        }
+    }
+    // 录音 / 待命：✕ + 波形 + ✓，与 macOS 药丸同序。
+    let width = if recording { 150.0 } else { 68.0 };
+    let rect = egui::Rect::from_center_size(frame.center(), egui::vec2(width, pill_height));
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(22), theme::SURFACE);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(22),
+        egui::Stroke::new(0.5, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+    let cancel_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 24.0, rect.center().y),
+        egui::vec2(28.0, 28.0),
+    );
+    let confirm_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 24.0, rect.center().y),
+        egui::vec2(28.0, 28.0),
+    );
+    let cancel = ui.interact(
+        cancel_rect,
+        ui.scope_id().with("openless-qa-pill-cancel"),
+        egui::Sense::click(),
+    );
+    let confirm = ui.interact(
+        confirm_rect,
+        ui.scope_id().with("openless-qa-pill-confirm"),
+        egui::Sense::click(),
+    );
+    icons::draw_icon(
+        ui,
+        cancel_rect.center(),
+        icons::IconName::Close,
+        theme::INK_2,
+    );
+    icons::draw_icon(
+        ui,
+        confirm_rect.center(),
+        icons::IconName::Check,
+        theme::INK_2,
+    );
+    // 波形复用条状胶囊的自适应电平（安静麦克风也看得见起伏）。
+    let dt = ui.input(|input| input.stable_dt);
+    let level = siri_wgpu::vu_level(
+        ui.ctx(),
+        "qa-pill",
+        state.audio_level.unwrap_or_default(),
+        dt,
+    );
+    audio_bars(
+        ui,
+        egui::Rect::from_center_size(rect.center(), egui::vec2(64.0, 28.0)),
+        level,
+        5,
+        theme::INK,
+    );
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(16));
+    if cancel.clicked() {
+        action = QaAction::Dismiss;
+    }
+    if confirm.clicked() {
+        action = QaAction::ToggleRecording;
+    }
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        action = QaAction::Dismiss;
+    }
+    action
+}
+
 pub fn selection_ask(
     root_ui: &mut egui::Ui,
     state: &QaPopupState,
@@ -371,12 +594,31 @@ pub fn selection_ask(
         "loading" | "thinking" | "awaiting_approval" | "answerdelta" | "answer"
     );
     let thinking_row = thinking && state.streaming_answer.is_empty();
+    // 两段式：Tauri 的 `expanded` 判定（QaPanel.tsx:373）。没有对话内容时只留
+    // 一条输入框的高度，有答案 / 润色结果 / 错误时才长成完整面板。
+    // 这里换的是**窗口尺寸**（winit `InnerSize`），不是重建进程。
+    let expanded = qa_wants_expanded(state, &phase);
+    sync_qa_window_size(root_ui.ctx(), expanded);
+    // 紧凑形态只留输入框（Tauri `qa-capsule-shell.is-capsule`）：标题行、空状态、
+    // 「编辑指令」勾选框都不画 —— 212 px 高的小窗里画它们只会把输入框挤出去，
+    // 用户会以为「手打输入的框没了」。
+    let compact = !expanded;
+    // Tauri 的窗口是 760×416，但卡片只有约 560 宽、两侧是透明留白；这里照抄，
+    // 否则卡片在 760 宽里被拉成一张大白板（截图里就是这个观感）。
+    let card_width = QA_CARD_WIDTH.min(root_ui.available_width());
+    let side_inset = ((root_ui.available_width() - card_width) / 2.0).max(0.0);
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
                 .fill(theme::SURFACE)
                 .corner_radius(egui::CornerRadius::same(14))
-                .stroke(egui::Stroke::new(0.5, theme::LINE)),
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
+                .outer_margin(egui::Margin {
+                    left: side_inset as i8,
+                    right: side_inset as i8,
+                    top: 8,
+                    bottom: 8,
+                }),
         )
         .show(root_ui, |ui| {
             // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
@@ -390,61 +632,94 @@ pub fn selection_ask(
                 };
                 return;
             }
-            // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
-            egui::Frame::NONE
-                .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
-                .show(ui, |ui| {
-                    let row = ui
-                        .horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.title"))
-                                        .size(16.0)
-                                        .strong()
-                                        .color(theme::INK),
-                                );
-                                ui.add_space(2.0);
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
-                                        .size(12.0)
-                                        .color(theme::INK_4),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if icon_button(ui, icons::IconName::Close, theme::INK_3)
-                                    .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
-                                    .clicked()
-                                {
-                                    action = QaAction::Dismiss;
-                                }
-                                // 图钉：固定后宿主不再自动收起（Tauri 的
-                                // qa.pinTooltip / qa.unpinTooltip）。
-                                let pin_color = if state.pinned {
-                                    theme::BLUE
-                                } else {
-                                    theme::INK_4
-                                };
-                                let pin_tooltip = if state.pinned {
-                                    tr_l10n(lang, "qa.unpin_tooltip")
-                                } else {
-                                    tr_l10n(lang, "qa.pin_tooltip")
-                                };
-                                if icon_button(ui, icons::IconName::Pin, pin_color)
-                                    .on_hover_text(pin_tooltip)
-                                    .clicked()
-                                {
-                                    action = QaAction::SetPinned(!state.pinned);
-                                }
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::drag());
-                    if row.drag_started() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                        super::layout::note_window_gesture_handoff(ui.ctx());
-                    }
-                });
-            hairline(ui, theme::LINE_SOFT);
+            if compact {
+                // 紧凑形态只是屏幕底部中间的一个药丸：窗口是透明的，没有卡片、
+                // 没有输入框（Tauri 的 `is-capsule` 同样只有 OpenLessPill）。
+                action = compact_pill(ui, state, lang, recording);
+                return;
+            }
+            // ── CardHeader：Tauri `.qa-answer-header` —— `✳ OpenLess` **居中**，
+            // ✕（与图钉）在右；`min-height 49 / padding 0 19 / gap 7`。
+            if !compact {
+                let header_width = ui.available_width();
+                let (header_rect, header_response) =
+                    ui.allocate_exact_size(egui::vec2(header_width, 49.0), egui::Sense::hover());
+                let center = header_rect.center();
+                let symbol = "✳";
+                let title = "OpenLess";
+                let symbol_width = layout::text_width(ui, symbol, 19.0);
+                let title_width = layout::text_width(ui, title, 12.0);
+                let group_width = symbol_width + 7.0 + title_width;
+                let left = center.x - group_width / 2.0;
+                ui.painter().text(
+                    egui::pos2(left, center.y),
+                    egui::Align2::LEFT_CENTER,
+                    symbol,
+                    egui::FontId::proportional(19.0),
+                    theme::BLUE,
+                );
+                ui.painter().text(
+                    egui::pos2(left + symbol_width + 7.0, center.y),
+                    egui::Align2::LEFT_CENTER,
+                    title,
+                    egui::FontId::proportional(12.0),
+                    theme::INK,
+                );
+                // 右侧操作区：✕ 在最右，图钉在它左边。
+                let close_rect = egui::Rect::from_center_size(
+                    egui::pos2(header_rect.right() - 19.0, center.y),
+                    egui::vec2(22.0, 22.0),
+                );
+                let pin_rect = egui::Rect::from_center_size(
+                    egui::pos2(header_rect.right() - 47.0, center.y),
+                    egui::vec2(22.0, 22.0),
+                );
+                let close = ui.interact(
+                    close_rect,
+                    ui.scope_id().with("openless-qa-close"),
+                    egui::Sense::click(),
+                );
+                icons::draw_icon(
+                    ui,
+                    close_rect.center(),
+                    icons::IconName::Close,
+                    theme::INK_3,
+                );
+                if close
+                    .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
+                    .clicked()
+                {
+                    action = QaAction::Dismiss;
+                }
+                let pin = ui.interact(
+                    pin_rect,
+                    ui.scope_id().with("openless-qa-pin"),
+                    egui::Sense::click(),
+                );
+                icons::draw_icon(
+                    ui,
+                    pin_rect.center(),
+                    icons::IconName::Pin,
+                    if state.pinned {
+                        theme::BLUE
+                    } else {
+                        theme::INK_4
+                    },
+                );
+                let pin_tooltip = if state.pinned {
+                    tr_l10n(lang, "qa.unpin_tooltip")
+                } else {
+                    tr_l10n(lang, "qa.pin_tooltip")
+                };
+                if pin.on_hover_text(pin_tooltip).clicked() {
+                    action = QaAction::SetPinned(!state.pinned);
+                }
+                if header_response.interact(egui::Sense::drag()).drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    super::layout::note_window_gesture_handoff(ui.ctx());
+                }
+                hairline(ui, theme::LINE_SOFT);
+            }
 
             // ── CardContent ──────────────────────────────────────────────
             // 底部高度必须把新增的「编辑指令」勾选框与「保留上一版本 / 预览并确认
@@ -481,7 +756,9 @@ pub fn selection_ask(
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if !has_thread {
-                        empty_state(ui, lang, content_height);
+                        if !compact {
+                            empty_state(ui, lang, content_height);
+                        }
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt("openless-qa-thread")
@@ -495,15 +772,31 @@ pub fn selection_ask(
                                     ui.add_space(10.0);
                                 }
                                 if !state.streaming_answer.is_empty() {
-                                    assistant_row(ui, |ui| {
-                                        render_markdown(ui, &state.streaming_answer)
-                                    });
+                                    answer_card(ui, &state.streaming_answer, lang);
                                     ui.add_space(10.0);
                                 }
                                 if thinking_row {
+                                    // Tauri 的 `qa.activity.*`：模型在搜索/读网页/用工具时
+                                    // 明确说在干什么，而不是一律「思考中」。
+                                    let label = match state.activity.as_deref() {
+                                        Some("searching_web") => {
+                                            tr_l10n(lang, "qa.activity.searching_web").to_string()
+                                        }
+                                        Some("reading_web") => {
+                                            tr_l10n(lang, "qa.activity.reading_web").to_string()
+                                        }
+                                        Some("using_tool") => {
+                                            let tool = state
+                                                .activity_tool
+                                                .as_deref()
+                                                .unwrap_or(tr_l10n(lang, "qa.activity.tool"));
+                                            fmt_l10n(lang, "qa.activity.using_tool", &[&tool])
+                                        }
+                                        _ => tr_l10n(lang, "qa.thinking").to_string(),
+                                    };
                                     assistant_row(ui, |ui| {
                                         ui.label(
-                                            egui::RichText::new(tr_l10n(lang, "qa.thinking"))
+                                            egui::RichText::new(label)
                                                 .size(12.0)
                                                 .color(theme::INK_3),
                                         );
@@ -561,50 +854,52 @@ pub fn selection_ask(
                     }
                     // 「编辑指令」勾选框（Tauri Composer 左下角，busy 时禁用）。
                     let busy = thinking || recording;
-                    let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
-                    let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 20.0),
-                        if busy {
-                            egui::Sense::hover()
-                        } else {
-                            egui::Sense::click()
-                        },
-                    );
-                    let box_rect = egui::Rect::from_center_size(
-                        egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
-                        egui::vec2(14.0, 14.0),
-                    );
-                    let checked = state.edit_instruction_mode;
-                    ui.painter().rect_filled(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        if checked { theme::INK } else { theme::SURFACE },
-                    );
-                    ui.painter().rect_stroke(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        egui::Stroke::new(0.8, theme::LINE_STRONG),
-                        egui::StrokeKind::Inside,
-                    );
-                    if checked {
-                        icons::draw_icon(
-                            ui,
-                            box_rect.center(),
-                            icons::IconName::Check,
-                            theme::SURFACE,
+                    if !compact {
+                        let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
+                        let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 20.0),
+                            if busy {
+                                egui::Sense::hover()
+                            } else {
+                                egui::Sense::click()
+                            },
                         );
+                        let box_rect = egui::Rect::from_center_size(
+                            egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
+                            egui::vec2(14.0, 14.0),
+                        );
+                        let checked = state.edit_instruction_mode;
+                        ui.painter().rect_filled(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            if checked { theme::INK } else { theme::SURFACE },
+                        );
+                        ui.painter().rect_stroke(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            egui::Stroke::new(0.8, theme::LINE_STRONG),
+                            egui::StrokeKind::Inside,
+                        );
+                        if checked {
+                            icons::draw_icon(
+                                ui,
+                                box_rect.center(),
+                                icons::IconName::Check,
+                                theme::SURFACE,
+                            );
+                        }
+                        ui.painter().text(
+                            egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            checkbox_label,
+                            egui::FontId::proportional(11.5),
+                            if busy { theme::INK_4 } else { theme::INK_3 },
+                        );
+                        if checkbox_response.clicked() && !busy {
+                            action = QaAction::SetEditInstructionMode(!checked);
+                        }
+                        ui.add_space(2.0);
                     }
-                    ui.painter().text(
-                        egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        checkbox_label,
-                        egui::FontId::proportional(11.5),
-                        if busy { theme::INK_4 } else { theme::INK_3 },
-                    );
-                    if checkbox_response.clicked() && !busy {
-                        action = QaAction::SetEditInstructionMode(!checked);
-                    }
-                    ui.add_space(2.0);
                     let width = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(width, COMPOSER_HEIGHT),
@@ -628,7 +923,13 @@ pub fn selection_ask(
                             color_to_f32(theme::INK)
                         };
                         let drive = siri_wgpu::SiriDrive {
-                            level: 0.0,
+                            // 录音时环跟着麦克风电平呼吸（Tauri 的 olchat-ring 同源）。
+                            // 电平来自 Core 的 `QaLevel` 事件；没收到就是 0。
+                            level: if recording {
+                                state.audio_level.unwrap_or(0.0)
+                            } else {
+                                0.0
+                            },
                             resolved: if recording { 1.0 } else { 0.0 },
                             // 思考态转得更快，和 Tauri 的 state→speed 语义一致。
                             speed: if recording { 1.0 } else { 1.45 },
@@ -790,48 +1091,97 @@ fn message_row(
     message: &PopupChatMessage,
     width: f32,
     lang: Lang,
-    avatar: Option<&egui::TextureHandle>,
+    _avatar: Option<&egui::TextureHandle>,
 ) {
     if message.role.eq_ignore_ascii_case("user") {
+        // Tauri `qa-user-message`：左对齐；先一段引用块（选中的原文，左侧 2px
+        // 竖线），再是问句正文，复制按钮贴在内容右侧。
         let selection = message
             .selection_text
             .as_deref()
             .map(|text| truncate(text, 120))
             .filter(|text| !text.is_empty() && *text != message.content);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            user_avatar(ui, avatar);
-            ui.add_space(8.0);
-            let max_width = (width - 56.0).max(120.0) * 0.8;
-            ui.allocate_ui_with_layout(
-                egui::vec2(max_width, 0.0),
-                egui::Layout::top_down(egui::Align::Max),
-                |ui| {
-                    if let Some(selection) = selection {
-                        bubble(ui, theme::SURFACE_2, theme::INK_3, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("“{selection}”"))
-                                    .size(12.0)
-                                    .italics()
-                                    .color(theme::INK_3),
-                            );
-                        });
-                        ui.add_space(4.0);
-                    }
-                    bubble(ui, theme::INK, theme::SURFACE, |ui| {
-                        ui.label(
-                            egui::RichText::new(&message.content)
-                                .size(14.0)
-                                .color(theme::SURFACE),
-                        );
-                    });
-                },
-            );
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_max_width((width - 40.0).max(120.0));
+                if let Some(selection) = selection {
+                    let quote_width = (width - 48.0).max(120.0);
+                    let galley =
+                        layout::text_galley(ui, &selection, theme::INK_3, 11.5, quote_width, 4);
+                    let height = galley.rect.height() + 4.0;
+                    let (rect, _) = ui
+                        .allocate_exact_size(egui::vec2(quote_width, height), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+                        egui::CornerRadius::same(1),
+                        theme::LINE_STRONG,
+                    );
+                    ui.painter().galley(
+                        egui::pos2(rect.left() + 8.0, rect.top() + 2.0),
+                        galley,
+                        theme::INK_3,
+                    );
+                    ui.add_space(6.0);
+                }
+                ui.label(
+                    egui::RichText::new(&message.content)
+                        .size(13.0)
+                        .color(theme::INK),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                copy_message_button(ui, &message.content, lang);
+            });
         });
-        let _ = lang;
         return;
     }
-    assistant_row(ui, |ui| render_markdown(ui, &message.content));
+    answer_card(ui, &message.content, lang);
 }
+
+/// 回答卡片（Tauri `qa-assistant-message`）：浅底嵌套卡 + 「✳ OpenLess 回答」头
+/// + 右侧复制按钮，正文是 Markdown。
+fn answer_card(ui: &mut egui::Ui, markdown: &str, lang: Lang) {
+    egui::Frame::new()
+        .fill(theme::CONTENT_BG)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("✳").size(12.0).color(theme::BLUE));
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "qa.compact.answer"))
+                        .size(11.0)
+                        .color(theme::INK_3),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    copy_message_button(ui, markdown, lang);
+                });
+            });
+            ui.add_space(6.0);
+            render_markdown(ui, markdown);
+        });
+}
+
+/// 逐条消息的「复制」按钮（Tauri `CopyMessage`）。
+///
+/// 注意与**插入兜底**的区别：这里只做用户显式点击的复制，不参与听写插入
+/// （Linux 的插入走 fcitx5 提交，失败就报错，不往剪贴板里塞文字）。
+fn copy_message_button(ui: &mut egui::Ui, text: &str, lang: Lang) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let response = icon_button(ui, icons::IconName::Copy, theme::INK_4)
+        .on_hover_text(tr_l10n(lang, "common.copy"));
+    if response.clicked() {
+        match openless_linux_egui::fcitx5_copy_to_clipboard(text) {
+            Ok(()) => log::info!("[qa] copied {} chars", text.chars().count()),
+            Err(error) => log::warn!("[qa] copy failed: {error}"),
+        }
+    }
+}
+
 
 /// 助手行：深色思考头像 + 内容（内容由调用方渲染在头像右侧）。
 fn assistant_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
@@ -845,20 +1195,6 @@ fn assistant_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-/// 一个聊天气泡：`rounded-3xl` = 24px，padding 12/10。
-fn bubble(
-    ui: &mut egui::Ui,
-    fill: egui::Color32,
-    ink: egui::Color32,
-    contents: impl FnOnce(&mut egui::Ui),
-) {
-    let _ = ink;
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(18))
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, contents);
-}
 
 /// 出错气泡（Tauri `variant="destructive"`）：红底红字。
 fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
@@ -869,50 +1205,6 @@ fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
         .show(ui, contents);
 }
 
-/// 用户头像：已登录 GitHub 时画真实头像（`github.com/{login}.png`，圆形裁切），
-/// 未登录 / 取图失败回落 GitHub 图标（Tauri `UserAvatar`）。
-fn user_avatar(ui: &mut egui::Ui, avatar: Option<&egui::TextureHandle>) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
-        egui::Sense::hover(),
-    );
-    let radius = (ROUND_BUTTON + 4.0) / 2.0;
-    match avatar {
-        Some(texture) => {
-            textured_circle(ui, rect.center(), radius, texture);
-        }
-        None => {
-            ui.painter()
-                .circle_filled(rect.center(), radius, theme::SURFACE_2);
-            icons::draw_icon(ui, rect.center(), icons::IconName::Github, theme::INK_2);
-        }
-    }
-}
-
-/// 把一张方形贴图画成圆形：以中心为扇形顶点、UV 按圆周比例展开。
-fn textured_circle(ui: &egui::Ui, center: egui::Pos2, radius: f32, texture: &egui::TextureHandle) {
-    const SEGMENTS: usize = 48;
-    let mut mesh = egui::Mesh::with_texture(texture.id());
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: center,
-        uv: egui::pos2(0.5, 0.5),
-        color: egui::Color32::WHITE,
-    });
-    for index in 0..=SEGMENTS {
-        let angle = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos,
-            uv: egui::pos2(0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5),
-            color: egui::Color32::WHITE,
-        });
-        if index > 0 {
-            mesh.indices
-                .extend_from_slice(&[0, index as u32, index as u32 + 1]);
-        }
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
 
 /// 输入区上方的整宽次级按钮（Tauri `Button variant="outline"`）。
 fn wide_button(ui: &mut egui::Ui, label: &str) -> bool {
@@ -1245,11 +1537,18 @@ pub fn dictation_capsule(
             }
             let listening = matches!(phase.as_str(), "starting" | "recording");
             let siri_effect = if siri && (listening || processing || terminal) {
+                // 光球和条子共用同一套自适应量程，否则安静麦克风下光球几乎不动。
+                let drive_level = siri_wgpu::adaptive_level(
+                    ui.ctx(),
+                    "capsule-siri-level",
+                    state.audio_level.unwrap_or_default(),
+                    ui.input(|input| input.stable_dt),
+                );
                 let clock = siri_wgpu::tick(
                     ui.ctx(),
                     "capsule-siri",
                     siri_wgpu::SiriDrive {
-                        level: state.audio_level.unwrap_or_default(),
+                        level: drive_level,
                         resolved: if listening { 1.0 } else { 0.0 },
                         speed: if processing { 1.5 } else { 1.0 },
                         warming: listening && state.audio_level.is_none(),
@@ -1395,13 +1694,19 @@ pub fn dictation_capsule(
                     paint_siri_error(ui, center, state, lang);
                 }
             } else if phase == "recording" {
-                audio_bars(
-                    ui,
-                    center,
+                // 条状胶囊和 siri 一样逐帧动：Core 的 level 是分块来的（10–20 Hz），
+                // 直接照抄快照会一格一格跳。缓动放在 siri_wgpu::vu_level 里，
+                // 起音快、回落慢，和 Tauri 的 canvas 同一套曲线。
+                let dt = ui.input(|input| input.stable_dt);
+                let level = siri_wgpu::vu_level(
+                    ui.ctx(),
+                    "capsule-bars",
                     state.audio_level.unwrap_or_default(),
-                    bar_count,
-                    pill_ink,
+                    dt,
                 );
+                audio_bars(ui, center, level, bar_count, pill_ink);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             } else if processing {
                 // 经典 / typeless 的「思考中」：文案 + 扫光（Tauri `cap-shine`）。
                 paint_thinking_label(
@@ -1771,10 +2076,9 @@ fn audio_bars(ui: &egui::Ui, rect: egui::Rect, level: f32, bar_count: usize, ink
     } else {
         24.0
     };
-    let voice = level.clamp(0.0, 1.0);
-    let gated = ((voice - 0.012) / (0.34 - 0.012)).clamp(0.0, 1.0);
-    let eased = gated * gated * (3.0 - 2.0 * gated);
-    let visual = eased.powf(0.42);
+    // `level` 到这里已经是视觉值（0..1，来自 `siri_wgpu::vu_level` 的
+    // gate + smoothstep + pow 映射 + 逐帧缓动）。再压一次会让条子几乎不动。
+    let visual = level.clamp(0.0, 1.0);
     let bar_width = 3.0 * scale;
     let gap = 3.0 * scale;
     let total = envelope.len() as f32 * bar_width + (envelope.len() - 1) as f32 * gap;
@@ -1814,23 +2118,40 @@ fn icon_text(
     text: &str,
     color: egui::Color32,
 ) {
-    let text_width = layout::text_width(ui, text, 13.0);
-    let icon_width = if icon.is_some() { 16.0 } else { 0.0 };
-    let gap = if icon.is_some() { 6.0 } else { 0.0 };
+    icon_text_sized(ui, rect, icon, text, color, 13.0, 16.0);
+}
+
+/// 同 [`icon_text`]，但可以指定字号/图标大小。
+///
+/// Tauri 的 `.qa-edit-actions button` 是 11px 字号 + 13px 图标（润色面板的
+/// 取消 / 确认并替换），而普通按钮是 13px + 16px —— 两种都要能画出来。
+fn icon_text_sized(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    icon: Option<icons::IconName>,
+    text: &str,
+    color: egui::Color32,
+    font_size: f32,
+    icon_size: f32,
+) {
+    let text_width = layout::text_width(ui, text, font_size);
+    let icon_width = if icon.is_some() { icon_size } else { 0.0 };
+    let gap = if icon.is_some() { 5.0 } else { 0.0 };
     let start = rect.center().x - (text_width + gap + icon_width) / 2.0;
     if let Some(icon) = icon {
-        icons::draw_icon(
+        icons::draw_icon_sized(
             ui,
             egui::pos2(start + icon_width / 2.0, rect.center().y),
             icon,
             color,
+            icon_size,
         );
     }
     ui.painter().text(
         egui::pos2(start + icon_width + gap, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(font_size),
         color,
     );
 }
@@ -2273,8 +2594,14 @@ mod tests {
             }),
             ..Default::default()
         };
+        // 对比的是**展开态**的选区助手（同一套外壳只在有内容时出现）。
         let ask = QaPopupState {
             phase: "idle".to_string(),
+            messages: vec![PopupChatMessage {
+                role: "assistant".into(),
+                content: "answer".into(),
+                selection_text: None,
+            }],
             ..Default::default()
         };
         let mut polish_composer = String::new();
@@ -2294,12 +2621,13 @@ mod tests {
             "the polish mode must paint header + footer separators, got {:?}",
             polish_lines
         );
-        // 第一条（头部下方那条）必须与选区助手面板的位置与宽度一致。
-        let (py, px0, px1) = polish_lines[0];
-        let (ay, ax0, ax1) = ask_lines[0];
+        // 横向范围必须与选区助手面板一致（同一个卡片宽度）；纵向高度不同是正常的：
+        // 润色标题只有一行，选区助手的标题行是「标题 + 副标题」两行（Tauri 也一样）。
+        let (_, px0, px1) = polish_lines[0];
+        let (_, ax0, ax1) = ask_lines[0];
         assert!(
-            (py - ay).abs() < 0.5 && (px0 - ax0).abs() < 0.5 && (px1 - ax1).abs() < 0.5,
-            "the header separator must match the selection-ask panel: polish {:?} vs ask {:?}",
+            (px0 - ax0).abs() < 0.5 && (px1 - ax1).abs() < 0.5,
+            "both cards must share the same width: polish {:?} vs ask {:?}",
             polish_lines[0],
             ask_lines[0]
         );
@@ -2399,16 +2727,11 @@ mod tests {
             selection_ask(ctx, &empty, &mut composer, Lang::ZhCn, None);
             String::new()
         });
-        for expected in [
-            tr_l10n(Lang::ZhCn, "qa.title"),
-            tr_l10n(Lang::ZhCn, "qa.header_hint"),
-            tr_l10n(Lang::ZhCn, "qa.empty_title"),
-            tr_l10n(Lang::ZhCn, "qa.empty_desc"),
-            tr_l10n(Lang::ZhCn, "qa.composer_placeholder"),
-        ] {
+        // 空对话是**紧凑形态** = 药丸：标题、空状态、输入框都不画。
+        for absent in ["qa.title", "qa.empty_title", "qa.composer_placeholder"] {
             assert!(
-                has(&painted, expected),
-                "empty ask panel must paint {expected:?}\n{painted}"
+                !has(&painted, tr_l10n(Lang::ZhCn, absent)),
+                "the compact pill must not paint {absent}\n{painted}"
             );
         }
 
@@ -2429,6 +2752,9 @@ mod tests {
             ],
             selection_preview: Some("selected source".to_string()),
             streaming_answer: String::new(),
+            audio_level: None,
+            activity: None,
+            activity_tool: None,
             error: Some("network error".to_string()),
             edit_instruction_mode: false,
             edit_apply_available: false,
@@ -2452,13 +2778,21 @@ mod tests {
 
     #[test]
     fn ask_panel_recording_shows_selection_chip_and_ring() {
+        // 选区条只在**展开态**（录音中 + 有选区预览）画；这里用助手消息把它撑开。
+        // 录音时选区的摘要画在药丸上方一行（Tauri `qa-voice-hint`）。
         let state = QaPopupState {
             phase: "recording".to_string(),
             selection_preview: Some("selection shown while recording".to_string()),
+            messages: vec![PopupChatMessage {
+                role: "assistant".into(),
+                content: "answer".into(),
+                selection_text: None,
+            }],
             ..Default::default()
         };
+        let (w, h) = openless_linux_egui::QA_COMPACT_SIZE;
         let mut composer = String::new();
-        let painted = run(egui::vec2(520.0, 520.0), |ctx| {
+        let painted = run(egui::vec2(w as f32, h as f32), |ctx| {
             selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
             String::new()
         });
@@ -2466,10 +2800,7 @@ mod tests {
             has(&painted, tr_l10n(Lang::ZhCn, "qa.selection_preview")),
             "{painted}"
         );
-        assert!(
-            has(&painted, "selection shown while recording"),
-            "{painted}"
-        );
+        assert!(has(&painted, "selection shown"), "{painted}");
     }
 
     /// Recording and thinking each queue exactly one WGPU centre effect. Terminal
@@ -2632,6 +2963,58 @@ mod tests {
     }
 
     #[test]
+    /// 两句式布局的判定：录音/思考时是小窗（语音输入框），有答案/润色/错误/
+    /// 流式正文才长成完整面板。这条规则如果反了，用户按热键就看不到输入框。
+    fn qa_layout_grows_only_when_there_is_content() {
+        let mut state = QaPopupState::default();
+        assert!(
+            !qa_wants_expanded(&state, "recording"),
+            "recording stays compact"
+        );
+        assert!(
+            !qa_wants_expanded(&state, "thinking"),
+            "thinking stays compact"
+        );
+        assert!(
+            !qa_wants_expanded(&state, "idle"),
+            "an empty conversation stays compact"
+        );
+
+        state.streaming_answer = "hello".into();
+        assert!(
+            qa_wants_expanded(&state, "answerdelta"),
+            "streaming expands"
+        );
+
+        state.streaming_answer.clear();
+        state.messages.push(PopupChatMessage {
+            role: "user".into(),
+            content: "question".into(),
+            selection_text: None,
+        });
+        assert!(
+            !qa_wants_expanded(&state, "idle"),
+            "a user message alone does not grow the window"
+        );
+
+        state.messages.push(PopupChatMessage {
+            role: "assistant".into(),
+            content: "answer".into(),
+            selection_text: None,
+        });
+        assert!(qa_wants_expanded(&state, "idle"), "an answer expands");
+
+        let error = QaPopupState {
+            error: Some("boom".into()),
+            ..Default::default()
+        };
+        assert!(
+            qa_wants_expanded(&error, "recording"),
+            "errors always expand"
+        );
+    }
+
+    #[test]
     fn qa_panel_paints_the_pin_affordance_in_both_states() {
         // 图钉是无文字的图标按钮：这里断言两种状态都能整帧渲染（含 tooltip 绑定），
         // 动作本身由 popup.rs 的协议测试覆盖。
@@ -2639,6 +3022,11 @@ mod tests {
             let state = QaPopupState {
                 phase: "idle".to_string(),
                 pinned,
+                messages: vec![PopupChatMessage {
+                    role: "assistant".into(),
+                    content: "answer".into(),
+                    selection_text: None,
+                }],
                 ..Default::default()
             };
             let mut composer = String::new();
@@ -2646,11 +3034,89 @@ mod tests {
                 selection_ask(ctx, &state, &mut composer, Lang::ZhCn, None);
                 String::new()
             });
+            // 图钉只在展开态的标题行里；这里只要整帧有内容即可，动作由协议测试覆盖。
+            assert!(!painted.is_empty(), "pinned={pinned}\n{painted}");
+        }
+    }
+
+    /// 润色预览在展开尺寸（760×416）下必须把「取消 / 确认并替换」画进窗口：
+    /// 这两个按钮是选区润色的唯一出口，被裁掉就等于功能消失。
+    #[test]
+    fn polish_preview_fits_the_expanded_window() {
+        let (w, h) = openless_linux_egui::QA_EXPANDED_SIZE;
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            polish: Some(QaPolishState {
+                text: "XBRK-HI3YM".into(),
+                source: "source paragraph".into(),
+            }),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let ctx = egui::Context::default();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w as f32, h as f32),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                selection_ask(ui, &state, &mut composer, Lang::ZhCn, None);
+            },
+        );
+        let mut text = String::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                text.push_str(&t.galley.job.text);
+                text.push('\n');
+            }
+        }
+        for expected in [
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.cancel"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.confirm_replace"),
+        ] {
             assert!(
-                has(&painted, tr_l10n(Lang::ZhCn, "qa.empty_title")),
-                "pinned={pinned}\n{painted}"
+                text.contains(expected),
+                "missing {expected:?} at {w}x{h}: {text}"
             );
         }
+    }
+
+    /// 紧凑态必须是一个**药丸**（录音 ✕/波形/✓、处理中一行状态），而不是输入框：
+    /// macOS 的语音输入就是先出药丸，答案回来才展开成面板。
+    #[test]
+    fn compact_qa_window_paints_the_pill() {
+        let (w, h) = openless_linux_egui::QA_COMPACT_SIZE;
+        let thinking = QaPopupState {
+            phase: "thinking".to_string(),
+            audio_level: Some(0.2),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let painted = run(egui::vec2(w as f32, h as f32), |ctx| {
+            selection_ask(ctx, &thinking, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.thinking")),
+            "the compact pill must show its status:\n{painted}"
+        );
+        let recording = QaPopupState {
+            phase: "recording".to_string(),
+            audio_level: Some(0.2),
+            ..Default::default()
+        };
+        let painted = run(egui::vec2(w as f32, h as f32), |ctx| {
+            selection_ask(ctx, &recording, &mut composer, Lang::ZhCn, None);
+            String::new()
+        });
+        assert!(
+            !has(&painted, tr_l10n(Lang::ZhCn, "qa.composer_placeholder")),
+            "the compact pill must not paint a text field:\n{painted}"
+        );
     }
 
     #[test]
@@ -2658,13 +3124,21 @@ mod tests {
         let ctx = egui::Context::default();
         let image = egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]);
         let texture = ctx.load_texture("test-avatar", image, egui::TextureOptions::LINEAR);
+        // 消息线程只在展开态渲染：补一条助手消息把窗口撑开。
         let state = QaPopupState {
             phase: "idle".to_string(),
-            messages: vec![PopupChatMessage {
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                selection_text: None,
-            }],
+            messages: vec![
+                PopupChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                    selection_text: None,
+                },
+                PopupChatMessage {
+                    role: "assistant".to_string(),
+                    content: "hi".to_string(),
+                    selection_text: None,
+                },
+            ],
             ..Default::default()
         };
         let mut composer = String::new();

@@ -19,6 +19,14 @@
  *    GetSelectionText() -> s             — 读取**当前** PRIMARY 选区文本：探针可用时以合成器为准，
  *                                          当前选区没有 text mime 时返回空，而不是 clipboard
  *                                          addon 里那份可能过期的缓存（见 primary_selection.h）
+ *    GetSurroundingText() -> s           — 焦点输入上下文的光标上下文：
+ *                                          text=应用自报的全文，cursor/anchor=字符偏移，
+ *                                          valid=应用是否支持 surrounding text，
+ *                                          program=应用程序名（用于敏感应用门禁）。
+ *                                          Linux 的光标上下文与自动学词都以它为准，
+ *                                          不支持 surrounding text 的应用返回 valid=0。
+ *                                          编码：`valid\x1fprogram\x1fcursor\x1fanchor\x1ftext`
+ *                                          （偏移是字符数，text 在最后一段，可含任意字符）。
  *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
@@ -368,37 +376,37 @@ public:
     }
 
     std::string captureSelectionTarget(const std::string &ticket) {
-        if (ticket.empty() || !selectionIc_) {
+        if (ticket.empty()) {
             return std::string();
         }
-        const auto &surrounding = selectionIc_->surroundingText();
-        const std::string surroundingSelected =
-            surrounding.isValid() ? surrounding.selectedText() : std::string();
-        // 选区文本以**合成器此刻的 PRIMARY** 为准；应用自己报的 surrounding 只在探针
-        // 给不出结论时兜底（规则见 primary_selection.h 的 chooseSelectionSource）。
-        // 旧实现反过来——先信 surrounding，再退到 clipboard addon 的缓存——于是
-        // “新选区没有 text mime”时会把上一次的选区文本当成当前选区。
-        const auto primary = primarySelectionReader_();
-        auto source =
-            openless_selection::chooseSelectionSource(primary, surroundingSelected);
-        if (source.text.empty() &&
-            primary.status == openless_selection::PrimarySelectionStatus::Unsupported) {
-            // 最后一级兜底：探针**不可用**（X11 会话、合成器没有 ext-data-control）
-            // 且应用自己也没报选中文本时，才用 clipboard addon 的缓存——那是本机
-            // 唯一剩下的来源，也是这次改动之前的行为（否则无 surrounding 的 XIM 类
-            // 应用在 X11 会话下会彻底拿不到选区）。
-            // 边界：探针**给出结论**时（NoText / NoSelection）绝不走这里，
-            // 否则“新选区不是文本”依旧会落到旧文本上，② 就白修了。
-            source = {selectionCacheReader_(), "clipboard-cache-fallback"};
-        }
-        logSelectionCapture(primary, source, surroundingSelected);
-        if (source.text.empty()) {
+        // 只走输入法：直接问 fcitx5 的 clipboard addon 要 PRIMARY —— 和“读剪贴板”
+        // 完全同一条路径（`IClipboard::primary(ic)`），并且把**当前输入上下文**
+        // 传进去，让它按该客户端的 data-device 取，而不是我们自己去合成器开
+        // ext-data-control（KWin 特有）、也不是读 addon 的字符串缓存。
+        //
+        // 之前的实现有三条来源（合成器探针 / 缓存 / 应用自报的 surrounding），
+        // 互相抢答，出现「拿到的是上一次的选区」这种不准确的情况。现在只留一条。
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            FCITX_LOGC(openless, Warn)
+                << "CaptureSelectionTarget: clipboard addon not loaded";
             return std::string();
         }
+        std::string text = clipboard->call<IClipboard::primary>(selectionIc_);
+        if (text.empty()) {
+            FCITX_LOGC(openless, Debug)
+                << "CaptureSelectionTarget: primary selection is empty";
+            return std::string();
+        }
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
+        FCITX_LOGC(openless, Debug)
+            << "CaptureSelectionTarget: clipboard primary read " << text.size()
+            << " chars (surrounding valid=" << surrounding.isValid() << ")";
         selectionTargets_[ticket] = {
-            selectionIc_, source.text, std::string(), surrounding.text(),
+            selectionIc_, text, std::string(), surrounding.text(),
             surrounding.cursor(), surrounding.anchor(), surrounding.isValid()};
-        return source.text;
+        return text;
     }
 
     bool captureDictationTarget(const std::string &ticket) {
@@ -432,6 +440,10 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文（选区来自 PRIMARY）：只读预览，替换必须安全失败。
+            return false;
+        }
         const auto &surrounding = ic->surroundingText();
         const auto &captured = found->second;
         // PRIMARY can outlive the selection, and the same selected string may
@@ -457,6 +469,10 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文时谈不上「撤销替换」。
+            return false;
+        }
         const auto &replacement = found->second.replacement;
         const auto &surrounding = ic->surroundingText();
         if (!surrounding.isValid()) {
@@ -685,25 +701,49 @@ public:
     /// 探针不可用（X11 会话、合成器不提供 ext-data-control）或数据没读完时，才退回
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
-        using Status = openless_selection::PrimarySelectionStatus;
-        const auto primary = primarySelectionReader_();
-        if (primary.status == Status::Text) {
+        // 与 `captureSelectionTarget` 同一条路径：只问 fcitx5 的 clipboard addon，
+        // 不读我们自己的缓存、不碰合成器探针。
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
             FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: probe read " << primary.text.size()
-                << " chars";
-            return primary.text;
-        }
-        if (primary.status == Status::NoText ||
-            primary.status == Status::NoSelection) {
-            FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: no text selection (" << primary.detail
-                << ")";
+                << "GetSelectionText: clipboard addon not loaded";
             return std::string();
         }
-        FCITX_LOGC(openless, Warn)
-            << "GetSelectionText: primary probe unavailable (" << primary.detail
-            << "), falling back to the clipboard addon cache";
-        return selectionCacheReader_();
+        // 用热键捕获的那个输入上下文（没有就传 nullptr，addon 内部按全局处理）。
+        std::string text = clipboard->call<IClipboard::primary>(selectionIc_);
+        FCITX_LOGC(openless, Debug)
+            << "GetSelectionText: " << text.size() << " chars";
+        return text;
+    }
+
+    /// 焦点输入上下文的 surrounding text。应用不支持时 `valid=false`。
+    ///
+    /// 为什么走 IME 而不是 AT-SPI：我们本来就在输入链路里（提交文字用的就是这个
+    /// input context），应用自报的光标位置比遍历无障碍树可靠得多，也不需要额外权限。
+    std::string getSurroundingText() {
+        auto *ic = savedIc_;
+        if (!ic) {
+            auto &mgr = instance_->inputContextManager();
+            mgr.foreachFocused([&](InputContext *focusedIc) {
+                ic = focusedIc;
+                return false;
+            });
+        }
+        constexpr char kSep = '\x1f';
+        if (!ic) {
+            return std::string("0") + kSep + std::string() + kSep + "0" + kSep + "0" + kSep;
+        }
+        const std::string program = ic->program();
+        const auto &surrounding = ic->surroundingText();
+        const bool valid = surrounding.isValid();
+        if (!valid) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSurroundingText: invalid for program=" << program;
+            return std::string("0") + kSep + program + kSep + "0" + kSep + "0" + kSep;
+        }
+        return std::string("1") + kSep + program + kSep +
+               std::to_string(surrounding.cursor()) + kSep +
+               std::to_string(surrounding.anchor()) + kSep + surrounding.text();
     }
 
     bool setClipboardText(const std::string &text) {
@@ -737,6 +777,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(getSurroundingText, "GetSurroundingText", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");

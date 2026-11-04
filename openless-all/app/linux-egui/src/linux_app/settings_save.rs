@@ -157,9 +157,6 @@ impl OpenLessEguiApp {
             return;
         };
         match field {
-            frontend::view_model::SettingsField::StreamingInsert => {
-                preferences.streaming_insert = !preferences.streaming_insert;
-            }
             frontend::view_model::SettingsField::StableTranscription => {
                 preferences.stable_transcription_enabled =
                     !preferences.stable_transcription_enabled;
@@ -170,6 +167,24 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::AutoUpdate => {
                 preferences.auto_update_check = !preferences.auto_update_check;
             }
+            frontend::view_model::SettingsField::BetaUpdateChannel => {
+                let following_beta =
+                    preferences.update_channel != openless_core::shared_types::UpdateChannel::Beta;
+                preferences.update_channel = if following_beta {
+                    openless_core::shared_types::UpdateChannel::Beta
+                } else {
+                    openless_core::shared_types::UpdateChannel::Stable
+                };
+                preferences.update_channel_explicit = true;
+
+                self.frontend_vm.settings.update_beta_channel = following_beta;
+            }
+            frontend::view_model::SettingsField::CursorContext => {
+                preferences.cursor_context_enabled = !preferences.cursor_context_enabled;
+            }
+            frontend::view_model::SettingsField::VocabularyLearning => {
+                preferences.vocabulary_learning_enabled = !preferences.vocabulary_learning_enabled;
+            }
             frontend::view_model::SettingsField::RemoteInput => {
                 preferences.remote_input_enabled = !preferences.remote_input_enabled;
             }
@@ -177,15 +192,8 @@ impl OpenLessEguiApp {
                 preferences.show_overview_activity_heatmap =
                     !preferences.show_overview_activity_heatmap;
             }
-            frontend::view_model::SettingsField::RestoreClipboard => {
-                preferences.restore_clipboard_after_paste =
-                    !preferences.restore_clipboard_after_paste;
-            }
             frontend::view_model::SettingsField::SystemProxy => {
                 preferences.use_system_proxy = !preferences.use_system_proxy;
-            }
-            frontend::view_model::SettingsField::Multimodal => {
-                preferences.multimodal_pipeline_enabled = !preferences.multimodal_pipeline_enabled;
             }
             frontend::view_model::SettingsField::SelectionVoiceEnabled => {
                 preferences.selection_voice_enabled = !preferences.selection_voice_enabled;
@@ -247,10 +255,6 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsField::DebugArchiveRaw => {
                 preferences.debug_archive_raw = !preferences.debug_archive_raw;
             }
-            frontend::view_model::SettingsField::StreamingSaveClipboard => {
-                preferences.streaming_insert_save_clipboard =
-                    !preferences.streaming_insert_save_clipboard;
-            }
             frontend::view_model::SettingsField::LaunchAtLogin => {
                 preferences.launch_at_login = !preferences.launch_at_login;
             }
@@ -266,7 +270,10 @@ impl OpenLessEguiApp {
     ) {
         // AEC 参考源是 Core 偏好里的字符串（空 = 自动，"off" = 不采集），
         // 界面用下标表达，这里换算回去。
-        if matches!(field, frontend::view_model::SettingsComboField::AecReference) {
+        if matches!(
+            field,
+            frontend::view_model::SettingsComboField::AecReference
+        ) {
             let value = match index {
                 0 => String::new(),
                 1 => "off".to_string(),
@@ -322,6 +329,25 @@ impl OpenLessEguiApp {
             frontend::view_model::SettingsComboField::LogLevel => {}
             // 已在函数开头处理（换算成偏好里的设备名字符串）。
             frontend::view_model::SettingsComboField::AecReference => {}
+            frontend::view_model::SettingsComboField::ChineseScript => {
+                preferences.chinese_script_preference = match index {
+                    1 => openless_core::shared_types::ChineseScriptPreference::Simplified,
+                    2 => openless_core::shared_types::ChineseScriptPreference::Traditional,
+                    _ => openless_core::shared_types::ChineseScriptPreference::Auto,
+                };
+                self.frontend_vm.settings.chinese_script = index;
+            }
+            frontend::view_model::SettingsComboField::OutputLanguage => {
+                preferences.output_language_preference = match index {
+                    1 => openless_core::shared_types::OutputLanguagePreference::ZhCn,
+                    2 => openless_core::shared_types::OutputLanguagePreference::ZhTw,
+                    3 => openless_core::shared_types::OutputLanguagePreference::En,
+                    4 => openless_core::shared_types::OutputLanguagePreference::Ja,
+                    5 => openless_core::shared_types::OutputLanguagePreference::Ko,
+                    _ => openless_core::shared_types::OutputLanguagePreference::Auto,
+                };
+                self.frontend_vm.settings.output_language = index;
+            }
             frontend::view_model::SettingsComboField::Theme => {
                 preferences.theme_mode = match index {
                     0 => openless_core::shared_types::ThemeMode::System,
@@ -333,14 +359,13 @@ impl OpenLessEguiApp {
                 self.frontend_vm.settings.theme = index;
             }
             frontend::view_model::SettingsComboField::Language => {
+                // 索引 0 = 跟随系统，其余按 LANGS 顺序，新增语种只改 LANGS。
                 let pref = match index {
                     0 => LocalePref::System,
-                    1 => LocalePref::Lang(Lang::ZhCn),
-                    2 => LocalePref::Lang(Lang::ZhTw),
-                    3 => LocalePref::Lang(Lang::En),
-                    4 => LocalePref::Lang(Lang::Ja),
-                    5 => LocalePref::Lang(Lang::Ko),
-                    _ => return,
+                    _ => match openless_linux_egui::LANGS.get(index - 1) {
+                        Some(lang) => LocalePref::Lang(*lang),
+                        None => return,
+                    },
                 };
                 self.apply_locale_pref(pref);
                 self.frontend_vm.settings.language = index;
@@ -659,6 +684,24 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.selection_voice_system_prompt = text;
             }
+            frontend::view_model::SettingsTextField::VocabObservationSeconds => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.observation_seconds = value;
+                }
+                self.frontend_vm.settings.vocab_observation_seconds = text;
+            }
+            frontend::view_model::SettingsTextField::VocabSuggestionSeconds => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.suggestion_seconds = value;
+                }
+                self.frontend_vm.settings.vocab_suggestion_seconds = text;
+            }
+            frontend::view_model::SettingsTextField::VocabMaxPhraseChars => {
+                if let Ok(value) = text.trim().parse::<u32>() {
+                    preferences.vocabulary_learning_settings.max_phrase_chars = value;
+                }
+                self.frontend_vm.settings.vocab_max_phrase_chars = text;
+            }
             frontend::view_model::SettingsTextField::HistoryMaxEntries => {
                 preferences.history_max_entries = text
                     .trim()
@@ -683,6 +726,46 @@ impl OpenLessEguiApp {
                     self.refresh_linux_access();
                     self.load_microphones();
                 }
+            }
+            frontend::view_model::SettingsActionField::UnlockKeyring => {
+                // 真正弹出系统密码框的是 Secret Service 的 Prompt；这件事必须离开
+                // UI 线程，而且用户可能要花时间输密码，所以给足上限并立刻把状态
+                // 标成「检查中」，让按钮变成等待态。
+                if self.frontend_vm.linux_access.checking {
+                    return;
+                }
+                self.frontend_vm.linux_access.checking = true;
+                self.frontend_vm.linux_access.keyring =
+                    openless_linux_egui::linux_access::KeyringState::Locked;
+                let tx = self.tx.clone();
+                let lang = self.lang;
+                let tokio = self.tokio.clone();
+                tokio.spawn(async move {
+                    let outcome = tokio::task::spawn_blocking(|| {
+                        openless_linux_egui::linux_access::unlock_default_vault(
+                            openless_linux_egui::linux_access::VAULT_UNLOCK_TIMEOUT,
+                        )
+                    })
+                    .await;
+                    let notice = match outcome {
+                        Ok(Ok(())) => Some(
+                            openless_linux_egui::tr_l10n(
+                                lang,
+                                "settings.linux_privacy.keyring_unlock_done",
+                            )
+                            .to_string(),
+                        ),
+                        Ok(Err(error)) => Some(error.message),
+                        Err(_) => Some(
+                            openless_linux_egui::tr_l10n(
+                                lang,
+                                "settings.linux_privacy.keyring_unlock_failed",
+                            )
+                            .to_string(),
+                        ),
+                    };
+                    let _ = tx.send(UiResult::KeyringUnlockFinished(notice));
+                });
             }
             frontend::view_model::SettingsActionField::RetrySave => {
                 self.settings_save.error = None;
@@ -783,6 +866,25 @@ impl OpenLessEguiApp {
             }
             frontend::view_model::SettingsActionField::OpenFeedback => {
                 let _ = open_external(ISSUES_URL);
+            }
+            frontend::view_model::SettingsActionField::CheckUpdate => {
+                self.check_updates();
+            }
+            frontend::view_model::SettingsActionField::ResetVocabularyLearning => {
+                if let Some(preferences) = self.preferences.as_mut() {
+                    preferences.vocabulary_learning_settings =
+                        openless_core::shared_types::VocabularyLearningSettings::default();
+                }
+                self.frontend_vm.settings.vocab_observation_seconds = "60".into();
+                self.frontend_vm.settings.vocab_suggestion_seconds = "10".into();
+                self.frontend_vm.settings.vocab_max_phrase_chars = "12".into();
+            }
+            frontend::view_model::SettingsActionField::OpenUpdatePage => {
+                let url = match &self.frontend_vm.settings.update_state {
+                    frontend::view_model::UpdateState::Available { url, .. } => url.clone(),
+                    _ => openless_linux_egui::update_check::RELEASES_URL.to_string(),
+                };
+                let _ = open_external(&url);
             }
             frontend::view_model::SettingsActionField::CopyQQ => {
                 match fcitx5_copy_to_clipboard("1078960553") {

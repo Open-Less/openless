@@ -33,8 +33,21 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (460, 228);
 /// Gap between the capsule pill and the bottom of the work area — Tauri's
 /// `EDGE_GAP` for the classic / siri capsule styles.
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
-/// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
-pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
+/// 选区助手紧凑态：宽度与位置照 Tauri（480 宽、贴工作区底部留 8px），高度
+/// **故意比 Tauri 的 80 高**。
+///
+/// Tauri 的紧凑态只有一个 68/116 px 的 OpenLessPill（取消 + 波形 + 确认），
+/// 没有输入框 —— 打字要等窗口展开。Linux 没有别的打字入口（macOS 靠
+/// `qaCompanionKey` 的辅助键进事件流），所以这里保留输入框，高度取
+/// 「一行说明 + 输入组」= 140 px。这是刻意的差异，不是漏抄。
+pub const QA_COMPACT_SIZE: (u32, u32) = (480, 140);
+/// 选区助手展开态：Tauri `QA_WINDOW_EXPANDED_WIDTH` / `_HEIGHT` = 760×416。
+pub const QA_EXPANDED_SIZE: (u32, u32) = (760, 416);
+/// 紧凑态离工作区底边的距离（Tauri `QA_WINDOW_BOTTOM_INSET`）。
+pub const QA_BOTTOM_INSET: i32 = 8;
+/// 展开后底边再上抬的距离（Tauri `QA_RESULT_BOTTOM_LIFT`），让结果面板不压住
+/// 原来的输入行位置。
+pub const QA_EXPANDED_LIFT: i32 = 40;
 // 旧的独立润色预览窗口（Tauri `selection-polish-preview` 640×440 / min 480×320）
 // 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线，Tauri 侧的独立窗口也已
 // 删除：润色结果现在由选区助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
@@ -44,7 +57,8 @@ pub fn popup_size(kind: crate::popup::PopupKind) -> (u32, u32) {
     use crate::popup::PopupKind;
     match kind {
         PopupKind::Capsule => CAPSULE_WINDOW_SIZE,
-        PopupKind::Qa => QA_WINDOW_SIZE,
+        // 出生即紧凑态：Tauri 的 qa 窗口同样先摆成 480×80。
+        PopupKind::Qa => QA_COMPACT_SIZE,
     }
 }
 
@@ -64,7 +78,9 @@ pub fn popup_position(
     use crate::popup::PopupKind;
     match kind {
         PopupKind::Capsule => environment.position_for(CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP),
-        PopupKind::Qa => environment.centred_for(QA_WINDOW_SIZE),
+        // Tauri `position_qa_window`：`bottom_center_position(frame, w, h, 8)`，
+        // 不是屏幕居中。
+        PopupKind::Qa => environment.position_for(QA_COMPACT_SIZE, QA_BOTTOM_INSET),
     }
 }
 
@@ -1014,7 +1030,7 @@ mod tests {
     fn popup_size_maps_every_kind() {
         assert_eq!(popup_size(PopupKind::Capsule), CAPSULE_WINDOW_SIZE);
         assert_eq!(CAPSULE_WINDOW_SIZE, (460, 228));
-        assert_eq!(popup_size(PopupKind::Qa), QA_WINDOW_SIZE);
+        assert_eq!(popup_size(PopupKind::Qa), QA_COMPACT_SIZE);
     }
 
     /// The capsule hugs the bottom edge of the work area, centred.
@@ -1031,26 +1047,14 @@ mod tests {
     /// would start at y=490 and end at 1030, i.e. inside the pill's 968..1068.
     #[test]
     fn popup_position_centres_the_panels_clear_of_the_capsule() {
-        // 尺寸取自 Tauri：qa 420×540（润色结果已并入这个面板，不再有独立预览窗口），
-        // 居中于 1920×1080 工作区。
+        // Tauri `position_qa_window`：`bottom_center_position(frame, 480, 80, 8)`。
+        // Linux 的紧凑态高度不同（保留输入框），但锚点一致：贴底居中。
+        let area = monitor(0, 0, 1920, 1080);
+        let (width, height) = QA_COMPACT_SIZE;
         assert_eq!(
             popup_position(&environment(), PopupKind::Qa),
-            Some((750, 270))
+            Some(bottom_center(area, (width, height), QA_BOTTOM_INSET)),
         );
-        let area = monitor(0, 0, 1920, 1080);
-        let (_, capsule_y) = bottom_center(area, CAPSULE_WINDOW_SIZE, CAPSULE_BOTTOM_GAP);
-        {
-            let kind = PopupKind::Qa;
-            let (_, y) = popup_position(&environment(), kind).expect("centred");
-            let height = popup_size(kind).1 as i32;
-            assert!(
-                y + height <= capsule_y,
-                "{kind:?} overlaps the capsule strip: {}..{} vs {}",
-                y,
-                y + height,
-                capsule_y
-            );
-        }
     }
 
     /// A work area smaller than the window keeps the window at its origin
@@ -1063,7 +1067,9 @@ mod tests {
             cursor: None,
             active_window: None,
         };
-        assert_eq!(popup_position(&environment, PopupKind::Qa), Some((0, 0)),);
+        // 480×140 的紧凑面板放进 400×300 的假工作区：按贴底锚点算完再夹回，
+        // 结果仍在工作区左上（宽超出，横向夹到 0；纵向贴底 = 300-8-140）。
+        assert_eq!(popup_position(&environment, PopupKind::Qa), Some((0, 152)),);
         assert_eq!(
             popup_position(&environment, PopupKind::Capsule),
             Some((0, 60)),
@@ -1112,10 +1118,10 @@ mod tests {
         let placement = place_panel(&mut x11, 4242, &environment(), PopupKind::Qa);
         assert_eq!(
             x11.calls,
-            vec!["find(4242)", "self_placed(42)", "move(42,750,270)"]
+            vec!["find(4242)", "self_placed(42)", "move(42,720,932)"]
         );
         assert_eq!(placement.window, Some(0x2a));
-        assert_eq!(placement.moved_to, Some((750, 270)));
+        assert_eq!(placement.moved_to, Some((720, 932)));
         assert!(!placement.focus_was_stolen);
         assert!(!placement.focus_restored);
         assert!(placement.warnings.is_empty());

@@ -130,6 +130,16 @@ stage_common() {
   done
 }
 
+# 插件必须**现编**：`build/libopenless.so` 是构建产物，仓库里那份可能是十天前的。
+# 以前直接 install 这份文件，于是插件侧的所有修复（选区抓取等）根本没进包 ——
+# 用户装完看到的还是旧行为。
+if [ "${OPENLESS_SKIP_FCITX5_PLUGIN:-0}" != "1" ]; then
+  PLUGIN_SRC="$APP_ROOT/scripts/linux-fcitx5-plugin"
+  echo "building the fcitx5 plugin into $PLUGIN_ROOT"
+  cmake -S "$PLUGIN_SRC" -B "$PLUGIN_ROOT" -DCMAKE_BUILD_TYPE=Release >/dev/null
+  cmake --build "$PLUGIN_ROOT" -j"$(nproc)" >/dev/null
+fi
+
 DEB_ROOT="$TARGET_DIR/linux-egui-deb-root"
 rm -rf "$DEB_ROOT"
 stage_common "$DEB_ROOT"

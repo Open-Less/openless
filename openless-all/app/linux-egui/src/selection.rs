@@ -68,7 +68,6 @@ struct LinuxSelectionTarget {
     replacement_text: Option<String>,
 }
 
-#[derive(Clone)]
 pub struct LinuxSelectionRuntime {
     bridge: Arc<dyn LinuxSelectionBridge>,
     // Core owns Capturing/Preview/Applying/Completed. This mutex serializes the
@@ -125,6 +124,7 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                 if let Some(previous) = target.take() {
                     let _ = bridge.cancel_target(previous.session_id);
                 }
+                // 只有一条来源：fcitx5 插件（内部直接问 clipboard addon 要 PRIMARY）。
                 let text = bridge.capture_target(session_id)?;
                 if let Err(error) = validate_selection_replacement_source(&text) {
                     let _ = bridge.cancel_target(session_id);

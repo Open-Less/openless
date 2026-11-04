@@ -306,11 +306,18 @@ pub fn titlebar(ctx: &egui::Context, actions: &mut Vec<FrontendAction>) {
             );
             let maximize = close.translate(egui::vec2(-button_width, 0.0));
             let minimize = maximize.translate(egui::vec2(-button_width, 0.0));
-            let close_response = ui.interact(close, ui.scope_id().with("close"), egui::Sense::click());
-            let maximize_response =
-                ui.interact(maximize, ui.scope_id().with("maximize"), egui::Sense::click());
-            let minimize_response =
-                ui.interact(minimize, ui.scope_id().with("minimize"), egui::Sense::click());
+            let close_response =
+                ui.interact(close, ui.scope_id().with("close"), egui::Sense::click());
+            let maximize_response = ui.interact(
+                maximize,
+                ui.scope_id().with("maximize"),
+                egui::Sense::click(),
+            );
+            let minimize_response = ui.interact(
+                minimize,
+                ui.scope_id().with("minimize"),
+                egui::Sense::click(),
+            );
             if close_response.clicked() {
                 actions.push(FrontendAction::WindowClose);
             }
@@ -1009,7 +1016,10 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
             ui.set_clip_rect(content);
             #[cfg(test)]
             ctx.data_mut(|data| {
-                data.insert_temp(egui::Id::unique("content-available-size"), ui.available_size());
+                data.insert_temp(
+                    egui::Id::unique("content-available-size"),
+                    ui.available_size(),
+                );
             });
             let scroll = &mut ui.style_mut().spacing.scroll;
             scroll.floating = true;

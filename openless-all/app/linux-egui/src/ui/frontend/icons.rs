@@ -31,6 +31,9 @@ pub enum IconName {
     Pin,
     Chat,
     // GitHub avatar fallback isn't a Lucide icon in the Tauri UI.
+    /// GitHub 品牌图标。QA 面板的用户头像已改成麦克风（Tauri 同步），
+    /// 但 Lucide 同步脚本要求每个图标都有 Rust 分支，保留映射。
+    #[allow(dead_code)]
     Github,
     More,
     ChevronRight,

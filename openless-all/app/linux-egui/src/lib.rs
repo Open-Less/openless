@@ -18,6 +18,7 @@ mod dictation_feedback;
 mod fcitx5;
 pub mod frame_stats;
 mod host_actions;
+pub mod host_context;
 mod hotkeys;
 mod i18n;
 pub mod linux_access;
@@ -41,6 +42,7 @@ mod siwc;
 mod tray;
 pub mod typography;
 mod ui_state;
+pub mod update_check;
 pub mod wgpu_device;
 
 // Shared by the eframe windows and the native Wayland layer-shell renderer so
@@ -73,8 +75,8 @@ pub use fcitx5::{
     copy_to_clipboard as fcitx5_copy_to_clipboard,
     ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_fcitx5_if_plugin_updated,
     reload_running_fcitx5, selection_text as fcitx5_selection_text,
-    set_hotkeys as set_fcitx5_hotkeys, Fcitx5TextInserter, FcitxPluginInstallPlan,
-    FcitxPluginStatus,
+    set_hotkeys as set_fcitx5_hotkeys, surrounding_text as fcitx5_surrounding_text,
+    Fcitx5TextInserter, FcitxPluginInstallPlan, FcitxPluginStatus, SurroundingText,
 };
 pub use host_actions::LinuxHostActions;
 
@@ -121,7 +123,7 @@ pub use popup_window::{
     bottom_center, clamp_to_area, monitor_containing, place_overlay, place_panel, popup_position,
     popup_size, select_overlay_window, x11_available, OverlayEnvironment, OverlayPlacement,
     OverlayX11, WindowCandidate, WindowMatch, X11Rect, CAPSULE_BOTTOM_GAP, CAPSULE_WINDOW_SIZE,
-    QA_WINDOW_SIZE,
+    QA_BOTTOM_INSET, QA_COMPACT_SIZE, QA_EXPANDED_LIFT, QA_EXPANDED_SIZE,
 };
 
 pub use openless_core::contract::*;

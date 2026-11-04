@@ -1,10 +1,10 @@
 //! Rust-native UI localization for the Linux egui host.
 //!
 //! This layer deliberately mirrors the Tauri UI's language choices
-//! (`system`, `zh-CN`, `zh-TW`, `en`, `ja`, `ko`) so both UIs offer the same
-//! set. The source of truth / fallback is `zh-CN`, exactly like the Tauri
-//! `i18n/index.ts`; all five concrete locales are bundled statically so there
-//! is no network fetch and no runtime loading.
+//! (`system`, `zh-CN`, `zh-TW`, `en`, `ja`, `ko`, `es`, `fr`, `de`) so both
+//! UIs offer the same set. The source of truth / fallback is `zh-CN`, exactly
+//! like the Tauri `i18n/index.ts`; all eight concrete locales are bundled
+//! statically so there is no network fetch and no runtime loading.
 //!
 //! UI text is looked up through a typed catalog rather than string-typed
 //! `format!` splices so the completeness/fallback contracts are enforceable
@@ -12,7 +12,7 @@
 
 use std::fmt::Display;
 
-/// The five concrete languages the Linux egui UI supports.
+/// The concrete languages the Linux egui UI supports (same set as Tauri).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Lang {
     ZhCn,
@@ -20,6 +20,9 @@ pub enum Lang {
     En,
     Ja,
     Ko,
+    Es,
+    Fr,
+    De,
 }
 
 /// The persisted UI-locale preference. `System` means "follow the host OS
@@ -31,7 +34,16 @@ pub enum LocalePref {
     Lang(Lang),
 }
 
-pub const LANGS: [Lang; 5] = [Lang::ZhCn, Lang::ZhTw, Lang::En, Lang::Ja, Lang::Ko];
+pub const LANGS: [Lang; 8] = [
+    Lang::ZhCn,
+    Lang::ZhTw,
+    Lang::En,
+    Lang::Ja,
+    Lang::Ko,
+    Lang::Es,
+    Lang::Fr,
+    Lang::De,
+];
 
 /// JSON/wire tags, matching the Tauri `SUPPORTED_LOCALES`.
 pub const FOLLOW_SYSTEM: &str = "system";
@@ -45,6 +57,9 @@ impl Lang {
             Lang::En => "en",
             Lang::Ja => "ja",
             Lang::Ko => "ko",
+            Lang::Es => "es",
+            Lang::Fr => "fr",
+            Lang::De => "de",
         }
     }
 
@@ -71,6 +86,16 @@ impl Lang {
         }
         if normalized.starts_with("en") {
             return Some(Lang::En);
+        }
+        // 三字母/带地区的写法都归结到基础语言（`es_419`、`fr_CA`、`de_AT`）。
+        if normalized.starts_with("es") {
+            return Some(Lang::Es);
+        }
+        if normalized.starts_with("fr") {
+            return Some(Lang::Fr);
+        }
+        if normalized.starts_with("de") {
+            return Some(Lang::De);
         }
         None
     }
@@ -124,20 +149,27 @@ pub fn resolve_system_lang() -> Lang {
 /// Index `0` is the `zh-CN` source of truth.
 pub struct Msg {
     pub key: &'static str,
-    pub text: [&'static str; 5],
+    pub text: [&'static str; 8],
 }
 
 /// Order helper so callers can write rows positionally and stay readable.
-/// `[zh, zh_tw, en, ja, ko]` is the single canonical order used everywhere.
-#[allow(dead_code)]
+/// `[zh, zh_tw, en, ja, ko, es, fr, de]` is the single canonical order used
+/// everywhere; it matches `SUPPORTED_LOCALES` in the Tauri `i18n/index.ts`.
+///
+/// 八个位置参数是刻意的：目录按语言顺序平铺，读起来和 Tauri 的
+/// `es.ts` / `fr.ts` / `de.ts` 一一对应，换成结构体会让 1100+ 行都看不懂。
+#[allow(dead_code, clippy::too_many_arguments)]
 const fn row(
     zh: &'static str,
     zh_tw: &'static str,
     en: &'static str,
     ja: &'static str,
     ko: &'static str,
-) -> [&'static str; 5] {
-    [zh, zh_tw, en, ja, ko]
+    es: &'static str,
+    fr: &'static str,
+    de: &'static str,
+) -> [&'static str; 8] {
+    [zh, zh_tw, en, ja, ko, es, fr, de]
 }
 
 // Global catalog of every UI string the Linux egui host renders.
@@ -149,37 +181,148 @@ const fn row(
 //     that the zh-CN column is fully populated and that every key actually
 //     referenced resolves.
 pub const CATALOG: &[Msg] = &[
-    Msg { key: "settings.audioDsp.eqPresets", text: row("均衡器预设", "均衡器預設", "Equalizer presets", "イコライザープリセット", "이퀄라이저 프리셋") },
-    Msg { key: "settings.audioDsp.eqNormal", text: row("平直", "平直", "Flat", "フラット", "플랫") },
-    Msg { key: "settings.audioDsp.eqBright", text: row("明亮人声", "明亮人聲", "Bright vocal", "明るい声", "밝은 음성") },
-    Msg { key: "settings.audioDsp.eqDeep", text: row("低沉人声", "低沉人聲", "Deep voice", "低い声", "낮은 음성") },
-    Msg { key: "settings.audioDsp.eqPodcast", text: row("播客", "播客", "Podcast", "ポッドキャスト", "팟캐스트") },
-    Msg { key: "settings.audioDsp.eqClarity", text: row("清晰人声", "清晰人聲", "Vocal clarity", "明瞭な声", "선명한 음성") },
-    Msg { key: "settings.audioDsp.eqWarm", text: row("温暖人声", "溫暖人聲", "Warm vocal", "温かい声", "따뜻한 음성") },
-    Msg { key: "settings.audioDsp.disabledHint", text: row("开启上方语音增强开关后可调整，当前配置已保留。", "開啟上方語音增強開關後可調整，目前設定已保留。", "Enable speech enhancement above to adjust these settings. Your configuration is retained.", "上の音声強調を有効にすると調整できます。設定は保持されています。", "위에서 음성 향상을 켜면 조정할 수 있습니다. 설정은 유지됩니다.") },
-    Msg { key: "settings.audioDsp.moveUp", text: row("上移处理阶段", "上移處理階段", "Move stage up", "処理を上へ移動", "처리 단계 위로 이동") },
-    Msg { key: "settings.audioDsp.moveDown", text: row("下移处理阶段", "下移處理階段", "Move stage down", "処理を下へ移動", "처리 단계 아래로 이동") },
-    Msg {
+        Msg {
+        key: "settings.audioDsp.eqPresets",
+        text: row(
+            "均衡器预设",
+            "均衡器預設",
+            "Equalizer presets",
+            "イコライザープリセット",
+            "이퀄라이저 프리셋",
+            "Equalizer presets",
+            "Equalizer presets",
+            "Equalizer presets",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.eqNormal",
+        text: row("平直", "平直", "Flat", "フラット", "플랫", "Flat", "Flat", "Flat"),
+    },
+        Msg {
+        key: "settings.audioDsp.eqBright",
+        text: row("明亮人声", "明亮人聲", "Bright vocal", "明るい声", "밝은 음성", "Bright vocal", "Bright vocal", "Bright vocal"),
+    },
+        Msg {
+        key: "settings.audioDsp.eqDeep",
+        text: row("低沉人声", "低沉人聲", "Deep voice", "低い声", "낮은 음성", "Deep voice", "Deep voice", "Deep voice"),
+    },
+        Msg {
+        key: "settings.audioDsp.eqPodcast",
+        text: row("播客", "播客", "Podcast", "ポッドキャスト", "팟캐스트", "Podcast", "Podcast", "Podcast"),
+    },
+        Msg {
+        key: "settings.audioDsp.eqClarity",
+        text: row(
+            "清晰人声",
+            "清晰人聲",
+            "Vocal clarity",
+            "明瞭な声",
+            "선명한 음성",
+            "Vocal clarity",
+            "Vocal clarity",
+            "Vocal clarity",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.eqWarm",
+        text: row("温暖人声", "溫暖人聲", "Warm vocal", "温かい声", "따뜻한 음성", "Warm vocal", "Warm vocal", "Warm vocal"),
+    },
+        Msg {
+        key: "settings.audioDsp.disabledHint",
+        text: row(
+            "开启上方语音增强开关后可调整，当前配置已保留。",
+            "開啟上方語音增強開關後可調整，目前設定已保留。",
+            "Enable speech enhancement above to adjust these settings. Your configuration is retained.",
+            "上の音声強調を有効にすると調整できます。設定は保持されています。",
+            "위에서 음성 향상을 켜면 조정할 수 있습니다. 설정은 유지됩니다.",
+            "Enable speech enhancement above to adjust these settings. Your configuration is retained.",
+            "Enable speech enhancement above to adjust these settings. Your configuration is retained.",
+            "Enable speech enhancement above to adjust these settings. Your configuration is retained.",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.moveUp",
+        text: row(
+            "上移处理阶段",
+            "上移處理階段",
+            "Move stage up",
+            "処理を上へ移動",
+            "처리 단계 위로 이동",
+            "Move stage up",
+            "Move stage up",
+            "Move stage up",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.moveDown",
+        text: row(
+            "下移处理阶段",
+            "下移處理階段",
+            "Move stage down",
+            "処理を下へ移動",
+            "처리 단계 아래로 이동",
+            "Move stage down",
+            "Move stage down",
+            "Move stage down",
+        ),
+    },
+        Msg {
         key: "settings.audioDsp.aecStage",
-        text: row("回声消除", "回聲消除", "Echo cancellation", "エコーキャンセル", "에코 제거"),
+        text: row(
+            "回声消除",
+            "回聲消除",
+            "Echo cancellation",
+            "エコーキャンセル",
+            "에코 제거",
+            "Echo cancellation",
+            "Echo cancellation",
+            "Echo cancellation",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.echoStage",
-        text: row("回声消除与缓冲", "回聲消除與緩衝", "Echo cancellation and buffering", "エコーキャンセルとバッファ", "에코 제거 및 버퍼"),
+        text: row(
+            "回声消除与缓冲",
+            "回聲消除與緩衝",
+            "Echo cancellation and buffering",
+            "エコーキャンセルとバッファ",
+            "에코 제거 및 버퍼",
+            "Echo cancellation and buffering",
+            "Echo cancellation and buffering",
+            "Echo cancellation and buffering",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecOff",
-        text: row("关闭", "關閉", "Off", "オフ", "끄기"),
+        text: row("关闭", "關閉", "Off", "オフ", "끄기", "Off", "Off", "Off"),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecLight",
-        text: row("轻量（省 CPU）", "輕量（省 CPU）", "Light (low CPU)", "軽量（低 CPU）", "경량(저 CPU)"),
+        text: row(
+            "轻量（省 CPU）",
+            "輕量（省 CPU）",
+            "Light (low CPU)",
+            "軽量（低 CPU）",
+            "경량(저 CPU)",
+            "Light (low CPU)",
+            "Light (low CPU)",
+            "Light (low CPU)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecModel",
-        text: row("模型（更强）", "模型（更強）", "Model (stronger)", "モデル（高精度）", "모델(강화)"),
+        text: row(
+            "模型（更强）",
+            "模型（更強）",
+            "Model (stronger)",
+            "モデル（高精度）",
+            "모델(강화)",
+            "Model (stronger)",
+            "Model (stronger)",
+            "Model (stronger)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecModelCost",
         text: row(
             "模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。",
@@ -187,13 +330,25 @@ pub const CATALOG: &[Msg] = &[
             "The model cancels more echo but costs about 3× the CPU; prefer Light on older machines.",
             "モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。",
             "모델 버전은 더 강하게 제거하지만 CPU를 약 3배 사용합니다. 오래된 기기에서는 경량을 권장합니다.",
+            "The model cancels more echo but costs about 3× the CPU; prefer Light on older machines.",
+            "The model cancels more echo but costs about 3× the CPU; prefer Light on older machines.",
+            "The model cancels more echo but costs about 3× the CPU; prefer Light on older machines.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecReferenceLabel",
-        text: row("扬声器参考源", "揚聲器參考源", "Speaker reference", "スピーカー参照", "스피커 참조"),
+        text: row(
+            "扬声器参考源",
+            "揚聲器參考源",
+            "Speaker reference",
+            "スピーカー参照",
+            "스피커 참조",
+            "Speaker reference",
+            "Speaker reference",
+            "Speaker reference",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecReferenceDesc",
         text: row(
             "采集哪台扬声器的回环信号供回声消除使用；没有回环源时 AEC 只能在没有参考的情况下工作。",
@@ -201,21 +356,51 @@ pub const CATALOG: &[Msg] = &[
             "Which speaker loopback feeds echo cancellation; without a loopback source AEC runs without a reference.",
             "どのスピーカーのループバックをエコーキャンセルに使うか。ループバック元がない場合、AEC は参照なしで動作します。",
             "어떤 스피커의 루프백을 에코 제거에 사용할지 선택합니다. 루프백 소스가 없으면 AEC는 참조 없이 동작합니다.",
+            "Which speaker loopback feeds echo cancellation; without a loopback source AEC runs without a reference.",
+            "Which speaker loopback feeds echo cancellation; without a loopback source AEC runs without a reference.",
+            "Which speaker loopback feeds echo cancellation; without a loopback source AEC runs without a reference.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecReferenceAuto",
-        text: row("自动（默认扬声器）", "自動（預設揚聲器）", "Automatic (default speaker)", "自動（既定のスピーカー）", "자동(기본 스피커)"),
+        text: row(
+            "自动（默认扬声器）",
+            "自動（預設揚聲器）",
+            "Automatic (default speaker)",
+            "自動（既定のスピーカー）",
+            "자동(기본 스피커)",
+            "Automatic (default speaker)",
+            "Automatic (default speaker)",
+            "Automatic (default speaker)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.aecReferenceOff",
-        text: row("不采集参考", "不擷取參考", "Do not capture a reference", "参照を取得しない", "참조를 수집하지 않음"),
+        text: row(
+            "不采集参考",
+            "不擷取參考",
+            "Do not capture a reference",
+            "参照を取得しない",
+            "참조를 수집하지 않음",
+            "Do not capture a reference",
+            "Do not capture a reference",
+            "Do not capture a reference",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.acousticEchoCancellation",
-        text: row("声学回声消除（AEC）", "聲學回聲消除（AEC）", "Acoustic echo cancellation (AEC)", "音響エコーキャンセル（AEC）", "음향 에코 제거(AEC)"),
+        text: row(
+            "声学回声消除（AEC）",
+            "聲學回聲消除（AEC）",
+            "Acoustic echo cancellation (AEC)",
+            "音響エコーキャンセル（AEC）",
+            "음향 에코 제거(AEC)",
+            "Acoustic echo cancellation (AEC)",
+            "Acoustic echo cancellation (AEC)",
+            "Acoustic echo cancellation (AEC)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.audioDsp.AEC_needs_a_loudspeaker_reference",
         text: row(
             "外放时压掉扬声器回授；没有参考信号时不会起作用，戴耳机可以关掉。",
@@ -223,64 +408,643 @@ pub const CATALOG: &[Msg] = &[
             "Suppresses loudspeaker feedback while on speaker; it does nothing without a reference signal, so leave it off with headphones.",
             "スピーカー使用時の回り込みを抑えます。参照信号がないと効果はないため、ヘッドホンならオフのままで構いません。",
             "스피커 사용 시 되먹임을 줄입니다. 참조 신호가 없으면 효과가 없으므로 헤드폰이면 꺼 두세요.",
+            "Suppresses loudspeaker feedback while on speaker; it does nothing without a reference signal, so leave it off with headphones.",
+            "Suppresses loudspeaker feedback while on speaker; it does nothing without a reference signal, so leave it off with headphones.",
+            "Suppresses loudspeaker feedback while on speaker; it does nothing without a reference signal, so leave it off with headphones.",
         ),
     },
-    Msg { key: "settings.audioDsp.noiseStage", text: row("降噪", "降噪", "Noise reduction", "ノイズ低減", "잡음 감소") },
-    Msg { key: "settings.audioDsp.roomStage", text: row("音色与房间", "音色與房間", "Tone and room", "音色と残響", "음색과 잔향") },
-    Msg { key: "settings.audioDsp.combStage", text: row("梳状滤波（简易去混响）", "梳狀濾波（簡易去混響）", "Comb filter (simple dereverb)", "コムフィルター（簡易デリバーブ）", "콤 필터(간이 디버브)") },
-    Msg { key: "settings.audioDsp.Speech_enhancement_settings", text: row("语音增强设置", "語音增強設置", "Speech enhancement settings", "音声強調設定", "음성 향상 설정") },
-    Msg { key: "settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording", text: row("RNNoise 更轻量，PureVox 模型降噪耗时较高。设置在下一次录音生效。", "RNNoise 更輕量，PureVox 模型降噪耗時較高。設置在下一次錄音生效。", "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.", "RNNoise は軽量、PureVox は CPU 使用量が多めです。設定は次の録音に適用されます。", "RNNoise는 가볍고 PureVox는 CPU를 더 사용합니다. 설정은 다음 녹음에 적용됩니다.") },
-    Msg { key: "settings.audioDsp.Noise_reduction_off", text: row("关闭降噪", "關闭降噪", "Noise reduction off", "ノイズ低減オフ", "잡음 감소 끄기") },
-    Msg { key: "settings.audioDsp.Spectral_subtraction", text: row("频谱减法", "頻譜減法", "Spectral subtraction", "スペクトル減算法", "스펙트럼 차감") },
-    Msg { key: "settings.audioDsp.Off", text: row("关闭降噪", "關闭降噪", "Off", "オフ", "끄기") },
-    Msg { key: "settings.audioDsp.Noise_reduction", text: row("降噪强度 %", "降噪強度 %", "Noise reduction %", "ノイズ低減 %", "잡음 감소 %") },
-    Msg { key: "settings.audioDsp.Input_gain_dB", text: row("输入增益 dB", "輸入增益 dB", "Input gain dB", "入力ゲイン dB", "입력 게인 dB") },
-    Msg { key: "settings.audioDsp.Automatic_gain", text: row("自动增益", "自動增益", "Automatic gain", "自動ゲイン", "자동 게인") },
-    Msg { key: "settings.audioDsp.Target_level", text: row("目标电平 %", "目標電平 %", "Target level %", "目標レベル %", "목표 레벨 %") },
-    Msg { key: "settings.audioDsp.Attack_speed", text: row("启动速度", "啟動速度", "Attack speed", "アタック速度", "어택 속도") },
-    Msg { key: "settings.audioDsp.Release_speed", text: row("释放速度", "釋放速度", "Release speed", "リリース速度", "릴리스 속도") },
-    Msg { key: "settings.audioDsp.Speech_gate_does_not_stop_recording", text: row("低于门限的片段被衰减，录音不会因此停止。", "低於門檻的片段被衰減，錄音不會因此停止。", "Passages below the threshold are attenuated; recording never stops for them.", "しきい値を下回る区間は減衰されますが、録音は停止しません。", "임계값 미만 구간은 감쇠되지만 녹음은 중단되지 않습니다.") },
-    Msg { key: "settings.audioDsp.Threshold_dB", text: row("门限 dB", "門限 dB", "Threshold dB", "しきい値 dB", "임계값 dB") },
-    Msg { key: "settings.audioDsp.A_high_threshold_can_remove_quiet_speech", text: row("门限过高可能丢失轻声。", "門限過高可能丟失輕聲。", "A high threshold can remove quiet speech.", "しきい値が高いと小さな声が失われる場合があります。", "임계값이 높으면 작은 목소리가 사라질 수 있습니다.") },
-    Msg { key: "settings.audioDsp.Tone_and_room_adjustments", text: row("音色与房间调整", "音色與房間調整", "Tone and room adjustments", "音色と室内音響の調整", "음색 및 실내 음향 조정") },
-    Msg { key: "settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0", text: row("把 10 ms 前的信号按比例减掉，能压掉一点早期反射，但会给音色染上金属感；从 0 开始试。真正的去混响需要频谱或模型方法，这里没做。", "把 10 ms 前的訊號按比例減掉，能壓掉一點早期反射，但會讓音色帶金屬感；從 0 開始試。真正的去混響需要頻譜或模型方法，這裡沒做。", "Subtracts the signal from 10 ms ago, trimming some early reflections at the cost of a metallic color; start at 0. Real dereverberation needs spectral or model-based methods, which this is not.", "10 ms 前の信号を差し引いて初期反射を少し抑えますが、金属的な音色になります。0 から試してください。本格的なデリバーブは周波数領域かモデル方式が必要で、ここでは未実装です。", "10 ms 전 신호를 비율로 빼서 초기 반사를 조금 줄이지만 금속성 음색이 생깁니다. 0부터 시작하세요. 실제 디버브는 주파수 영역이나 모델 방식이 필요하며 여기서는 구현되지 않았습니다.") },
-    Msg { key: "settings.audioDsp.Comb_filter", text: row("梳状滤波 %", "梳狀濾波 %", "Comb filter %", "コムフィルター %", "콤 필터 %") },
-    Msg { key: "settings.audioDsp.10_band_equalizer", text: row("十段均衡器", "十段均衡器", "10-band equalizer", "10 バンドイコライザー", "10밴드 이퀄라이저") },
-    Msg { key: "settings.audioDsp.Preamp_dB", text: row("前置增益 dB", "前置增益 dB", "Preamp dB", "プリアンプ dB", "프리앰프 dB") },
-    Msg { key: "settings.audioDsp.Processing_order", text: row("处理顺序", "處理順序", "Processing order", "処理順序", "처리 순서") },
-    Msg { key: "settings.audioDsp.Equalizer", text: row("均衡器", "均衡器", "Equalizer", "イコライザー", "이퀄라이저") },
-    Msg { key: "settings.audioDsp.Input_gain", text: row("输入增益", "輸入增益", "Input gain", "入力ゲイン", "입력 게인") },
-    Msg { key: "settings.audioDsp.Speech_gate", text: row("噪声门限（不是人声检测）", "雜訊門檻（不是人聲偵測）", "Noise gate (not speech detection)", "ノイズゲート（音声検出ではありません）", "노이즈 게이트(음성 검출 아님)") },
-    Msg { key: "settings.audioDsp.Reset_enhancement_settings", text: row("恢复增强默认设置", "恢復增強默認設置", "Reset enhancement settings", "強調設定を初期化", "향상 설정 초기화") },
-    Msg { key: "settings.providers.presets.chatgptSiwc", text: row("ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan") },
-    Msg { key: "siwc.description", text: row("符合条件的文本润色和翻译使用你的 ChatGPT 计划或积分余额。ASR 仍使用原渠道；额度不足时不会自动切换到 API Key。", "符合條件的文字潤飾和翻譯使用你的 ChatGPT 方案或點數。ASR 仍使用原管道；額度不足時不會自動切換至 API Key。", "Eligible text polishing and translation use your ChatGPT plan or credits. ASR keeps its existing provider. Usage limits never switch you to an API key automatically.", "対象の文章校正と翻訳には ChatGPT プランまたはクレジットを使用します。音声認識は従来のプロバイダーを使い、上限到達時に API キーへ自動切り替えしません。", "지원되는 텍스트 다듬기와 번역에 ChatGPT 요금제 또는 크레딧을 사용합니다. 음성 인식은 기존 서비스를 사용하며 한도에 도달해도 API 키로 자동 전환하지 않습니다.") },
-    Msg { key: "siwc.account", text: row("ChatGPT 账号", "ChatGPT 帳號", "ChatGPT account", "ChatGPT アカウント", "ChatGPT 계정") },
-    Msg { key: "siwc.cancel", text: row("取消登录", "取消登入", "Cancel sign-in", "ログインをキャンセル", "로그인 취소") },
-    Msg { key: "siwc.enableUsage", text: row("授权计划用量", "授權方案用量", "Enable plan usage", "プラン利用を許可", "요금제 사용 허용") },
-    Msg { key: "siwc.reauthorize", text: row("重新授权", "重新授權", "Sign in again", "再ログイン", "다시 로그인") },
-    Msg { key: "siwc.addAccount", text: row("添加账号或工作区", "新增帳號或工作區", "Add account or workspace", "アカウント・ワークスペースを追加", "계정 또는 워크스페이스 추가") },
-    Msg { key: "siwc.disconnect", text: row("断开连接", "中斷連線", "Disconnect", "接続を解除", "연결 해제") },
-    Msg { key: "siwc.manageUsage", text: row("管理用量", "管理用量", "Manage usage", "使用量を管理", "사용량 관리") },
-    Msg { key: "siwc.retry", text: row("重试计划用量", "重試方案用量", "Retry plan usage", "プラン利用を再試行", "요금제 사용 재시도") },
-    Msg { key: "siwc.model", text: row("润色模型", "潤飾模型", "Polishing model", "校正モデル", "다듬기 모델") },
-    Msg { key: "siwc.selectModel", text: row("选择账号可用模型", "選擇帳號可用模型", "Select an available model", "利用可能なモデルを選択", "사용 가능한 모델 선택") },
-    Msg { key: "siwc.modelUnavailable", text: row("模型 {0} 当前不可用，请重新选择。", "模型 {0} 目前無法使用，請重新選擇。", "{0} is no longer available. Select another model.", "{0} は現在利用できません。モデルを選び直してください。", "{0} 모델을 사용할 수 없습니다. 다른 모델을 선택하세요.") },
-    Msg { key: "siwc.noModels", text: row("该账号暂时没有可显示的模型。", "此帳號目前沒有可顯示的模型。", "No displayable models are available for this account.", "このアカウントには表示可能なモデルがありません。", "이 계정에서 표시할 수 있는 모델이 없습니다.") },
-    Msg { key: "siwc.refreshModels", text: row("刷新模型", "重新整理模型", "Refresh models", "モデルを更新", "모델 새로고침") },
-    Msg { key: "siwc.test", text: row("测试连接", "測試連線", "Test connection", "接続をテスト", "연결 테스트") },
-    Msg { key: "siwc.testHint", text: row("获取模型列表不执行推理；测试连接会使用少量 ChatGPT 计划用量。", "取得模型清單不會執行推理；測試連線會使用少量 ChatGPT 方案用量。", "Listing models does not run inference. Testing uses a small amount of your ChatGPT plan.", "モデル一覧の取得では推論を実行しません。接続テストはプランの使用量を少量消費します。", "모델 목록 조회는 추론을 실행하지 않습니다. 연결 테스트는 요금제 사용량을 소량 소모합니다.") },
-    Msg { key: "siwc.testSuccess", text: row("连接测试成功", "連線測試成功", "Connection test succeeded", "接続テストに成功しました", "연결 테스트 성공") },
-    Msg { key: "siwc.remoteUnconfirmed", text: row("已在本机断开连接，但未确认远端撤销。请到 ChatGPT 设置中断开此应用。", "已在本機登出，但未確認遠端撤銷。請至 ChatGPT 設定中中斷此應用程式。", "Signed out locally, but remote revocation was not confirmed. Disconnect this app in ChatGPT settings.", "端末ではログアウトしましたが、サーバー側の失効を確認できません。ChatGPT 設定でこのアプリの接続を解除してください。", "이 기기에서는 로그아웃했지만 원격 취소는 확인되지 않았습니다. ChatGPT 설정에서 이 앱의 연결을 해제하세요.") },
-    Msg { key: "siwc.welcome", text: row("正在使用你的 ChatGPT 计划", "正在使用你的 ChatGPT 方案", "You’re using your ChatGPT plan", "ChatGPT プランを使用しています", "ChatGPT 요금제를 사용하고 있습니다") },
-    Msg { key: "siwc.gotIt", text: row("知道了", "知道了", "Got it", "了解", "확인") },
-    Msg { key: "siwc.failed", text: row("请求未完成，请检查连接或重新授权。", "請求未完成，請檢查連線或重新授權。", "The request did not complete. Check your connection or sign in again.", "リクエストを完了できませんでした。接続を確認するか再ログインしてください。", "요청이 완료되지 않았습니다. 연결을 확인하거나 다시 로그인하세요.") },
-    Msg { key: "siwc.states.signed_out", text: row("尚未连接 ChatGPT", "尚未連接 ChatGPT", "Not connected to ChatGPT", "ChatGPT に未接続", "ChatGPT에 연결되지 않음") },
-    Msg { key: "siwc.states.authorizing", text: row("请在系统浏览器中完成授权", "請在系統瀏覽器完成授權", "Complete authorization in your system browser", "システムブラウザーで認証を完了してください", "시스템 브라우저에서 인증을 완료하세요") },
-    Msg { key: "siwc.states.connected", text: row("正在使用 ChatGPT 计划", "正在使用 ChatGPT 方案", "Using ChatGPT plan", "ChatGPT プランを使用中", "ChatGPT 요금제 사용 중") },
-    Msg { key: "siwc.states.usage_disabled", text: row("已登录，尚未授权计划用量", "已登入，尚未授權方案用量", "Signed in; plan usage is not enabled", "ログイン済み・プラン利用は未許可", "로그인됨 · 요금제 사용 허용 필요") },
-    Msg { key: "siwc.states.usage_limited", text: row("已达到计划或此应用的用量限制", "已達方案或此應用程式的用量限制", "Plan or app usage limit reached", "プランまたはアプリの利用上限に達しました", "요금제 또는 앱의 사용 한도에 도달함") },
-    Msg { key: "siwc.states.reauthorization_required", text: row("需要重新登录 ChatGPT", "需要重新登入 ChatGPT", "Sign in to ChatGPT again", "ChatGPT に再ログインしてください", "ChatGPT에 다시 로그인하세요") },
-    Msg {
+        Msg {
+        key: "settings.audioDsp.noiseStage",
+        text: row(
+            "降噪",
+            "降噪",
+            "Noise reduction",
+            "ノイズ低減",
+            "잡음 감소",
+            "Noise reduction",
+            "Noise reduction",
+            "Noise reduction",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.roomStage",
+        text: row(
+            "音色与房间",
+            "音色與房間",
+            "Tone and room",
+            "音色と残響",
+            "음색과 잔향",
+            "Tone and room",
+            "Tone and room",
+            "Tone and room",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.combStage",
+        text: row(
+            "梳状滤波（简易去混响）",
+            "梳狀濾波（簡易去混響）",
+            "Comb filter (simple dereverb)",
+            "コムフィルター（簡易デリバーブ）",
+            "콤 필터(간이 디버브)",
+            "Comb filter (simple dereverb)",
+            "Comb filter (simple dereverb)",
+            "Comb filter (simple dereverb)",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Speech_enhancement_settings",
+        text: row(
+            "语音增强设置",
+            "語音增強設置",
+            "Speech enhancement settings",
+            "音声強調設定",
+            "음성 향상 설정",
+            "Speech enhancement settings",
+            "Speech enhancement settings",
+            "Speech enhancement settings",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.RNNoise_is_lightweight_PureVox_uses_more_CPU_Changes_apply_to_the_next_recording",
+        text: row(
+            "RNNoise 更轻量，PureVox 模型降噪耗时较高。设置在下一次录音生效。",
+            "RNNoise 更輕量，PureVox 模型降噪耗時較高。設置在下一次錄音生效。",
+            "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.",
+            "RNNoise は軽量、PureVox は CPU 使用量が多めです。設定は次の録音に適用されます。",
+            "RNNoise는 가볍고 PureVox는 CPU를 더 사용합니다. 설정은 다음 녹음에 적용됩니다.",
+            "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.",
+            "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.",
+            "RNNoise is lightweight; PureVox uses more CPU. Changes apply to the next recording.",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Noise_reduction_off",
+        text: row(
+            "关闭降噪",
+            "關闭降噪",
+            "Noise reduction off",
+            "ノイズ低減オフ",
+            "잡음 감소 끄기",
+            "Noise reduction off",
+            "Noise reduction off",
+            "Noise reduction off",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Spectral_subtraction",
+        text: row(
+            "频谱减法",
+            "頻譜減法",
+            "Spectral subtraction",
+            "スペクトル減算法",
+            "스펙트럼 차감",
+            "Spectral subtraction",
+            "Spectral subtraction",
+            "Spectral subtraction",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Off",
+        text: row("关闭降噪", "關闭降噪", "Off", "オフ", "끄기", "Off", "Off", "Off"),
+    },
+        Msg {
+        key: "settings.audioDsp.Noise_reduction",
+        text: row(
+            "降噪强度 %",
+            "降噪強度 %",
+            "Noise reduction %",
+            "ノイズ低減 %",
+            "잡음 감소 %",
+            "Noise reduction %",
+            "Noise reduction %",
+            "Noise reduction %",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Input_gain_dB",
+        text: row(
+            "输入增益 dB",
+            "輸入增益 dB",
+            "Input gain dB",
+            "入力ゲイン dB",
+            "입력 게인 dB",
+            "Input gain dB",
+            "Input gain dB",
+            "Input gain dB",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Automatic_gain",
+        text: row(
+            "自动增益",
+            "自動增益",
+            "Automatic gain",
+            "自動ゲイン",
+            "자동 게인",
+            "Automatic gain",
+            "Automatic gain",
+            "Automatic gain",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Target_level",
+        text: row(
+            "目标电平 %",
+            "目標電平 %",
+            "Target level %",
+            "目標レベル %",
+            "목표 레벨 %",
+            "Target level %",
+            "Target level %",
+            "Target level %",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Attack_speed",
+        text: row("启动速度", "啟動速度", "Attack speed", "アタック速度", "어택 속도", "Attack speed", "Attack speed", "Attack speed"),
+    },
+        Msg {
+        key: "settings.audioDsp.Release_speed",
+        text: row(
+            "释放速度",
+            "釋放速度",
+            "Release speed",
+            "リリース速度",
+            "릴리스 속도",
+            "Release speed",
+            "Release speed",
+            "Release speed",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Speech_gate_does_not_stop_recording",
+        text: row(
+            "低于门限的片段被衰减，录音不会因此停止。",
+            "低於門檻的片段被衰減，錄音不會因此停止。",
+            "Passages below the threshold are attenuated; recording never stops for them.",
+            "しきい値を下回る区間は減衰されますが、録音は停止しません。",
+            "임계값 미만 구간은 감쇠되지만 녹음은 중단되지 않습니다.",
+            "Passages below the threshold are attenuated; recording never stops for them.",
+            "Passages below the threshold are attenuated; recording never stops for them.",
+            "Passages below the threshold are attenuated; recording never stops for them.",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Threshold_dB",
+        text: row("门限 dB", "門限 dB", "Threshold dB", "しきい値 dB", "임계값 dB", "Threshold dB", "Threshold dB", "Threshold dB"),
+    },
+        Msg {
+        key: "settings.audioDsp.A_high_threshold_can_remove_quiet_speech",
+        text: row(
+            "门限过高可能丢失轻声。",
+            "門限過高可能丟失輕聲。",
+            "A high threshold can remove quiet speech.",
+            "しきい値が高いと小さな声が失われる場合があります。",
+            "임계값이 높으면 작은 목소리가 사라질 수 있습니다.",
+            "A high threshold can remove quiet speech.",
+            "A high threshold can remove quiet speech.",
+            "A high threshold can remove quiet speech.",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Tone_and_room_adjustments",
+        text: row(
+            "音色与房间调整",
+            "音色與房間調整",
+            "Tone and room adjustments",
+            "音色と室内音響の調整",
+            "음색 및 실내 음향 조정",
+            "Tone and room adjustments",
+            "Tone and room adjustments",
+            "Tone and room adjustments",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.The_MicYou_comb_filter_can_color_speech_Start_at_0",
+        text: row(
+            "把 10 ms 前的信号按比例减掉，能压掉一点早期反射，但会给音色染上金属感；从 0 开始试。真正的去混响需要频谱或模型方法，这里没做。",
+            "把 10 ms 前的訊號按比例減掉，能壓掉一點早期反射，但會讓音色帶金屬感；從 0 開始試。真正的去混響需要頻譜或模型方法，這裡沒做。",
+            "Subtracts the signal from 10 ms ago, trimming some early reflections at the cost of a metallic color; start at 0. Real dereverberation needs spectral or model-based methods, which this is not.",
+            "10 ms 前の信号を差し引いて初期反射を少し抑えますが、金属的な音色になります。0 から試してください。本格的なデリバーブは周波数領域かモデル方式が必要で、ここでは未実装です。",
+            "10 ms 전 신호를 비율로 빼서 초기 반사를 조금 줄이지만 금속성 음색이 생깁니다. 0부터 시작하세요. 실제 디버브는 주파수 영역이나 모델 방식이 필요하며 여기서는 구현되지 않았습니다.",
+            "Subtracts the signal from 10 ms ago, trimming some early reflections at the cost of a metallic color; start at 0. Real dereverberation needs spectral or model-based methods, which this is not.",
+            "Subtracts the signal from 10 ms ago, trimming some early reflections at the cost of a metallic color; start at 0. Real dereverberation needs spectral or model-based methods, which this is not.",
+            "Subtracts the signal from 10 ms ago, trimming some early reflections at the cost of a metallic color; start at 0. Real dereverberation needs spectral or model-based methods, which this is not.",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Comb_filter",
+        text: row(
+            "梳状滤波 %",
+            "梳狀濾波 %",
+            "Comb filter %",
+            "コムフィルター %",
+            "콤 필터 %",
+            "Comb filter %",
+            "Comb filter %",
+            "Comb filter %",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.10_band_equalizer",
+        text: row(
+            "十段均衡器",
+            "十段均衡器",
+            "10-band equalizer",
+            "10 バンドイコライザー",
+            "10밴드 이퀄라이저",
+            "10-band equalizer",
+            "10-band equalizer",
+            "10-band equalizer",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Preamp_dB",
+        text: row("前置增益 dB", "前置增益 dB", "Preamp dB", "プリアンプ dB", "프리앰프 dB", "Preamp dB", "Preamp dB", "Preamp dB"),
+    },
+        Msg {
+        key: "settings.audioDsp.Processing_order",
+        text: row(
+            "处理顺序",
+            "處理順序",
+            "Processing order",
+            "処理順序",
+            "처리 순서",
+            "Processing order",
+            "Processing order",
+            "Processing order",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Equalizer",
+        text: row("均衡器", "均衡器", "Equalizer", "イコライザー", "이퀄라이저", "Equalizer", "Equalizer", "Equalizer"),
+    },
+        Msg {
+        key: "settings.audioDsp.Input_gain",
+        text: row("输入增益", "輸入增益", "Input gain", "入力ゲイン", "입력 게인", "Input gain", "Input gain", "Input gain"),
+    },
+        Msg {
+        key: "settings.audioDsp.Speech_gate",
+        text: row(
+            "噪声门限（不是人声检测）",
+            "雜訊門檻（不是人聲偵測）",
+            "Noise gate (not speech detection)",
+            "ノイズゲート（音声検出ではありません）",
+            "노이즈 게이트(음성 검출 아님)",
+            "Noise gate (not speech detection)",
+            "Noise gate (not speech detection)",
+            "Noise gate (not speech detection)",
+        ),
+    },
+        Msg {
+        key: "settings.audioDsp.Reset_enhancement_settings",
+        text: row(
+            "恢复增强默认设置",
+            "恢復增強默認設置",
+            "Reset enhancement settings",
+            "強調設定を初期化",
+            "향상 설정 초기화",
+            "Reset enhancement settings",
+            "Reset enhancement settings",
+            "Reset enhancement settings",
+        ),
+    },
+        Msg {
+        key: "settings.providers.presets.chatgptSiwc",
+        text: row("ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan", "ChatGPT Plan"),
+    },
+        Msg {
+        key: "siwc.description",
+        text: row(
+            "符合条件的文本润色和翻译使用你的 ChatGPT 计划或积分余额。ASR 仍使用原渠道；额度不足时不会自动切换到 API Key。",
+            "符合條件的文字潤飾和翻譯使用你的 ChatGPT 方案或點數。ASR 仍使用原管道；額度不足時不會自動切換至 API Key。",
+            "Eligible text polishing and translation use your ChatGPT plan or credits. ASR keeps its existing provider. Usage limits never switch you to an API key automatically.",
+            "対象の文章校正と翻訳には ChatGPT プランまたはクレジットを使用します。音声認識は従来のプロバイダーを使い、上限到達時に API キーへ自動切り替えしません。",
+            "지원되는 텍스트 다듬기와 번역에 ChatGPT 요금제 또는 크레딧을 사용합니다. 음성 인식은 기존 서비스를 사용하며 한도에 도달해도 API 키로 자동 전환하지 않습니다.",
+            "Las tareas compatibles de revisión y traducción usan tu plan o créditos de ChatGPT. El reconocimiento de voz conserva su proveedor. Si alcanzas un límite, no se cambia automáticamente a una clave API.",
+            "Les tâches compatibles de révision et de traduction utilisent votre forfait ou vos crédits ChatGPT. La reconnaissance vocale conserve son fournisseur. Aucun basculement automatique vers une clé API en cas de limite.",
+            "Geeignete Textüberarbeitung und Übersetzung nutzen Ihren ChatGPT-Tarif oder Ihr Guthaben. Die Spracherkennung bleibt beim bisherigen Anbieter. Bei Nutzungslimits erfolgt kein automatischer Wechsel zu einem API-Schlüssel.",
+        ),
+    },
+        Msg {
+        key: "siwc.account",
+        text: row(
+            "ChatGPT 账号",
+            "ChatGPT 帳號",
+            "ChatGPT account",
+            "ChatGPT アカウント",
+            "ChatGPT 계정",
+            "Cuenta de ChatGPT",
+            "Compte ChatGPT",
+            "ChatGPT-Konto",
+        ),
+    },
+        Msg {
+        key: "siwc.cancel",
+        text: row(
+            "取消登录",
+            "取消登入",
+            "Cancel sign-in",
+            "ログインをキャンセル",
+            "로그인 취소",
+            "Cancelar inicio de sesión",
+            "Annuler la connexion",
+            "Anmeldung abbrechen",
+        ),
+    },
+        Msg {
+        key: "siwc.enableUsage",
+        text: row(
+            "授权计划用量",
+            "授權方案用量",
+            "Enable plan usage",
+            "プラン利用を許可",
+            "요금제 사용 허용",
+            "Autorizar uso del plan",
+            "Autoriser l’utilisation du forfait",
+            "Tarifnutzung erlauben",
+        ),
+    },
+        Msg {
+        key: "siwc.reauthorize",
+        text: row(
+            "重新授权",
+            "重新授權",
+            "Sign in again",
+            "再ログイン",
+            "다시 로그인",
+            "Volver a iniciar sesión",
+            "Se reconnecter",
+            "Erneut anmelden",
+        ),
+    },
+        Msg {
+        key: "siwc.addAccount",
+        text: row(
+            "添加账号或工作区",
+            "新增帳號或工作區",
+            "Add account or workspace",
+            "アカウント・ワークスペースを追加",
+            "계정 또는 워크스페이스 추가",
+            "Añadir cuenta o espacio de trabajo",
+            "Ajouter un compte ou un espace de travail",
+            "Konto oder Arbeitsbereich hinzufügen",
+        ),
+    },
+        Msg {
+        key: "siwc.disconnect",
+        text: row(
+            "断开连接",
+            "中斷連線",
+            "Disconnect",
+            "接続を解除",
+            "연결 해제",
+            "Desconectar",
+            "Déconnecter",
+            "Verbindung trennen",
+        ),
+    },
+        Msg {
+        key: "siwc.manageUsage",
+        text: row(
+            "管理用量",
+            "管理用量",
+            "Manage usage",
+            "使用量を管理",
+            "사용량 관리",
+            "Gestionar uso",
+            "Gérer l’utilisation",
+            "Nutzung verwalten",
+        ),
+    },
+        Msg {
+        key: "siwc.retry",
+        text: row(
+            "重试计划用量",
+            "重試方案用量",
+            "Retry plan usage",
+            "プラン利用を再試行",
+            "요금제 사용 재시도",
+            "Reintentar uso del plan",
+            "Réessayer avec le forfait",
+            "Tarifnutzung erneut versuchen",
+        ),
+    },
+        Msg {
+        key: "siwc.model",
+        text: row(
+            "润色模型",
+            "潤飾模型",
+            "Polishing model",
+            "校正モデル",
+            "다듬기 모델",
+            "Modelo de revisión",
+            "Modèle de révision",
+            "Überarbeitungsmodell",
+        ),
+    },
+        Msg {
+        key: "siwc.selectModel",
+        text: row(
+            "选择账号可用模型",
+            "選擇帳號可用模型",
+            "Select an available model",
+            "利用可能なモデルを選択",
+            "사용 가능한 모델 선택",
+            "Selecciona un modelo disponible",
+            "Choisir un modèle disponible",
+            "Verfügbares Modell auswählen",
+        ),
+    },
+    Msg { key: "siwc.modelUnavailable", text: row("模型 {0} 当前不可用，请重新选择。", "模型 {0} 目前無法使用，請重新選擇。", "{0} is no longer available. Select another model.", "{0} は現在利用できません。モデルを選び直してください。", "{0} 모델을 사용할 수 없습니다. 다른 모델을 선택하세요.", "{0} is no longer available. Select another model.", "{0} is no longer available. Select another model.", "{0} is no longer available. Select another model.") },
+        Msg {
+        key: "siwc.noModels",
+        text: row(
+            "该账号暂时没有可显示的模型。",
+            "此帳號目前沒有可顯示的模型。",
+            "No displayable models are available for this account.",
+            "このアカウントには表示可能なモデルがありません。",
+            "이 계정에서 표시할 수 있는 모델이 없습니다.",
+            "Esta cuenta no tiene modelos disponibles para mostrar.",
+            "Aucun modèle affichable n’est disponible pour ce compte.",
+            "Für dieses Konto sind keine anzeigbaren Modelle verfügbar.",
+        ),
+    },
+        Msg {
+        key: "siwc.refreshModels",
+        text: row(
+            "刷新模型",
+            "重新整理模型",
+            "Refresh models",
+            "モデルを更新",
+            "모델 새로고침",
+            "Actualizar modelos",
+            "Actualiser les modèles",
+            "Modelle aktualisieren",
+        ),
+    },
+        Msg {
+        key: "siwc.test",
+        text: row(
+            "测试连接",
+            "測試連線",
+            "Test connection",
+            "接続をテスト",
+            "연결 테스트",
+            "Probar conexión",
+            "Tester la connexion",
+            "Verbindung testen",
+        ),
+    },
+        Msg {
+        key: "siwc.testHint",
+        text: row(
+            "获取模型列表不执行推理；测试连接会使用少量 ChatGPT 计划用量。",
+            "取得模型清單不會執行推理；測試連線會使用少量 ChatGPT 方案用量。",
+            "Listing models does not run inference. Testing uses a small amount of your ChatGPT plan.",
+            "モデル一覧の取得では推論を実行しません。接続テストはプランの使用量を少量消費します。",
+            "모델 목록 조회는 추론을 실행하지 않습니다. 연결 테스트는 요금제 사용량을 소량 소모합니다.",
+            "Consultar modelos no ejecuta inferencia. La prueba consume una pequeña parte del uso de tu plan de ChatGPT.",
+            "La liste des modèles ne lance pas d’inférence. Le test consomme une petite partie de votre forfait ChatGPT.",
+            "Die Modellabfrage führt keine Inferenz aus. Der Verbindungstest verbraucht einen kleinen Teil Ihres ChatGPT-Kontingents.",
+        ),
+    },
+        Msg {
+        key: "siwc.testSuccess",
+        text: row(
+            "连接测试成功",
+            "連線測試成功",
+            "Connection test succeeded",
+            "接続テストに成功しました",
+            "연결 테스트 성공",
+            "Prueba de conexión correcta",
+            "Test de connexion réussi",
+            "Verbindungstest erfolgreich",
+        ),
+    },
+        Msg {
+        key: "siwc.remoteUnconfirmed",
+        text: row(
+            "已在本机断开连接，但未确认远端撤销。请到 ChatGPT 设置中断开此应用。",
+            "已在本機登出，但未確認遠端撤銷。請至 ChatGPT 設定中中斷此應用程式。",
+            "Signed out locally, but remote revocation was not confirmed. Disconnect this app in ChatGPT settings.",
+            "端末ではログアウトしましたが、サーバー側の失効を確認できません。ChatGPT 設定でこのアプリの接続を解除してください。",
+            "이 기기에서는 로그아웃했지만 원격 취소는 확인되지 않았습니다. ChatGPT 설정에서 이 앱의 연결을 해제하세요.",
+            "Sesión cerrada localmente, pero no se confirmó la revocación remota. Desconecta la aplicación en los ajustes de ChatGPT.",
+            "Déconnexion locale effectuée, mais la révocation à distance n’a pas été confirmée. Déconnectez l’application dans les paramètres ChatGPT.",
+            "Lokal abgemeldet, aber der Widerruf auf dem Server wurde nicht bestätigt. Trennen Sie die App in den ChatGPT-Einstellungen.",
+        ),
+    },
+        Msg {
+        key: "siwc.welcome",
+        text: row(
+            "正在使用你的 ChatGPT 计划",
+            "正在使用你的 ChatGPT 方案",
+            "You’re using your ChatGPT plan",
+            "ChatGPT プランを使用しています",
+            "ChatGPT 요금제를 사용하고 있습니다",
+            "Estás usando tu plan de ChatGPT",
+            "Vous utilisez votre forfait ChatGPT",
+            "Sie nutzen Ihren ChatGPT-Tarif",
+        ),
+    },
+        Msg {
+        key: "siwc.gotIt",
+        text: row("知道了", "知道了", "Got it", "了解", "확인", "Entendido", "Compris", "Verstanden"),
+    },
+        Msg {
+        key: "siwc.failed",
+        text: row(
+            "请求未完成，请检查连接或重新授权。",
+            "請求未完成，請檢查連線或重新授權。",
+            "The request did not complete. Check your connection or sign in again.",
+            "リクエストを完了できませんでした。接続を確認するか再ログインしてください。",
+            "요청이 완료되지 않았습니다. 연결을 확인하거나 다시 로그인하세요.",
+            "La solicitud no se completó. Comprueba la conexión o vuelve a iniciar sesión.",
+            "La requête n’a pas abouti. Vérifiez la connexion ou reconnectez-vous.",
+            "Die Anfrage wurde nicht abgeschlossen. Prüfen Sie die Verbindung oder melden Sie sich erneut an.",
+        ),
+    },
+        Msg {
+        key: "siwc.states.signed_out",
+        text: row(
+            "尚未连接 ChatGPT",
+            "尚未連接 ChatGPT",
+            "Not connected to ChatGPT",
+            "ChatGPT に未接続",
+            "ChatGPT에 연결되지 않음",
+            "Sin conexión con ChatGPT",
+            "Non connecté à ChatGPT",
+            "Nicht mit ChatGPT verbunden",
+        ),
+    },
+        Msg {
+        key: "siwc.states.authorizing",
+        text: row(
+            "请在系统浏览器中完成授权",
+            "請在系統瀏覽器完成授權",
+            "Complete authorization in your system browser",
+            "システムブラウザーで認証を完了してください",
+            "시스템 브라우저에서 인증을 완료하세요",
+            "Completa la autorización en el navegador del sistema",
+            "Terminez l’autorisation dans le navigateur système",
+            "Autorisierung im Systembrowser abschließen",
+        ),
+    },
+        Msg {
+        key: "siwc.states.connected",
+        text: row(
+            "正在使用 ChatGPT 计划",
+            "正在使用 ChatGPT 方案",
+            "Using ChatGPT plan",
+            "ChatGPT プランを使用中",
+            "ChatGPT 요금제 사용 중",
+            "Usando el plan de ChatGPT",
+            "Forfait ChatGPT utilisé",
+            "ChatGPT-Tarif wird verwendet",
+        ),
+    },
+        Msg {
+        key: "siwc.states.usage_disabled",
+        text: row(
+            "已登录，尚未授权计划用量",
+            "已登入，尚未授權方案用量",
+            "Signed in; plan usage is not enabled",
+            "ログイン済み・プラン利用は未許可",
+            "로그인됨 · 요금제 사용 허용 필요",
+            "Sesión iniciada; falta autorizar el uso del plan",
+            "Connecté ; utilisation du forfait non autorisée",
+            "Angemeldet; Tarifnutzung noch nicht erlaubt",
+        ),
+    },
+        Msg {
+        key: "siwc.states.usage_limited",
+        text: row(
+            "已达到计划或此应用的用量限制",
+            "已達方案或此應用程式的用量限制",
+            "Plan or app usage limit reached",
+            "プランまたはアプリの利用上限に達しました",
+            "요금제 또는 앱의 사용 한도에 도달함",
+            "Límite del plan o de la aplicación alcanzado",
+            "Limite du forfait ou de l’application atteinte",
+            "Nutzungslimit des Tarifs oder der App erreicht",
+        ),
+    },
+        Msg {
+        key: "siwc.states.reauthorization_required",
+        text: row(
+            "需要重新登录 ChatGPT",
+            "需要重新登入 ChatGPT",
+            "Sign in to ChatGPT again",
+            "ChatGPT に再ログインしてください",
+            "ChatGPT에 다시 로그인하세요",
+            "Vuelve a iniciar sesión en ChatGPT",
+            "Reconnectez-vous à ChatGPT",
+            "Erneute ChatGPT-Anmeldung erforderlich",
+        ),
+    },
+        Msg {
         key: "providers.extra_headers_hint",
         text: row(
             "不读取已保存的请求头。留空保留；清除密钥时一并移除。",
@@ -288,9 +1052,12 @@ pub const CATALOG: &[Msg] = &[
             "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
             "保存済みヘッダーは読み戻しません。空欄なら保持し、秘密情報の削除時に一緒に削除します。",
             "저장된 헤더는 다시 읽지 않습니다. 비워 두면 유지되며 비밀 정보 삭제 시 함께 제거됩니다.",
+            "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
+            "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
+            "Saved headers are never read back. Blank keeps them; Clear Secret removes them.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.source_truncated",
         text: row(
             "选区包含截断占位，未替换，以免删除未读取的原文。",
@@ -298,9 +1065,12 @@ pub const CATALOG: &[Msg] = &[
             "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
             "選択範囲に省略されたテキストが含まれています。未取得の原文を保護するため、置換しませんでした。",
             "선택 영역에 잘린 대체 텍스트가 포함되어 있습니다. 생략된 원문을 보호하기 위해 교체하지 않았습니다.",
+            "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
+            "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
+            "The selection contains a truncated stand-in. Nothing was replaced, to protect the omitted text.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsuleTranscriptLabel",
         text: row(
             "显示流式原文",
@@ -308,9 +1078,12 @@ pub const CATALOG: &[Msg] = &[
             "Show live transcript",
             "文字起こしをリアルタイム表示",
             "실시간 원문 표시",
+            "Mostrar transcripción en directo",
+            "Afficher la transcription en direct",
+            "Live-Transkript anzeigen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsuleTranscriptDesc",
         text: row(
             "在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。",
@@ -318,9 +1091,12 @@ pub const CATALOG: &[Msg] = &[
             "Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.",
             "音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。",
             "오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.",
+            "Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.",
+            "Affiche le texte reconnu à la place des barres audio. Sans streaming, le texte apparaît à réception du résultat. Désactivez pour retrouver l’affichage initial.",
+            "Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsuleTranscriptFontSize",
         text: row(
             "原文字号",
@@ -328,9 +1104,12 @@ pub const CATALOG: &[Msg] = &[
             "Transcript font size",
             "文字起こしの文字サイズ",
             "원문 글자 크기",
+            "Tamaño de la transcripción",
+            "Taille de la transcription",
+            "Transkript-Schriftgröße",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.requestFormatLabel",
         text: row(
             "请求格式",
@@ -338,9 +1117,12 @@ pub const CATALOG: &[Msg] = &[
             "Request format",
             "リクエスト形式",
             "요청 형식",
+            "Formato de solicitud",
+            "Format de requête",
+            "Anfrageformat",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.responsesThinkingHint",
         text: row(
             "部分模型只能降低思考，不能完全关闭。推理请求不发送温度参数。",
@@ -348,9 +1130,12 @@ pub const CATALOG: &[Msg] = &[
             "Some models can only reduce thinking, not turn it off. Reasoning requests omit temperature.",
             "一部のモデルでは思考を軽減できますが、完全には無効にできません。推論リクエストでは温度を送信しません。",
             "일부 모델은 사고를 줄일 수만 있으며 완전히 끌 수 없습니다. 추론 요청에는 온도를 보내지 않습니다.",
+            "Algunos modelos solo permiten reducir el razonamiento, no desactivarlo. Las solicitudes de razonamiento omiten la temperatura.",
+            "Certains modèles permettent seulement de réduire le raisonnement, pas de le désactiver. Les requêtes de raisonnement omettent la température.",
+            "Bei einigen Modellen lässt sich das Denken nur reduzieren, nicht abschalten. Anfragen mit Denken senden keinen Temperaturparameter.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.serviceTierLabel",
         text: row(
             "方舟低延迟推理（fast）",
@@ -358,9 +1143,12 @@ pub const CATALOG: &[Msg] = &[
             "Ark low-latency inference (fast)",
             "Ark 低レイテンシ推論（fast）",
             "Ark 저지연 추론(fast)",
+            "Inferencia de baja latencia de Ark (fast)",
+            "Inférence Ark à faible latence (fast)",
+            "Ark-Inferenz mit niedriger Latenz (fast)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.serviceTierHint",
         text: row(
             "仅适用于支持低延迟的方舟模型；不支持的模型可能返回 400。",
@@ -368,9 +1156,12 @@ pub const CATALOG: &[Msg] = &[
             "Only supported Ark models can use this option; unsupported models may return 400.",
             "対応する Ark モデルでのみ利用できます。非対応モデルでは 400 が返る場合があります。",
             "지원되는 Ark 모델에서만 사용할 수 있으며, 지원되지 않는 모델은 400을 반환할 수 있습니다.",
+            "Solo los modelos Ark compatibles pueden usar esta opción; otros pueden devolver 400.",
+            "Seuls les modèles Ark compatibles peuvent utiliser cette option ; les autres peuvent renvoyer 400.",
+            "Nur unterstützte Ark-Modelle können diese Option verwenden; andere Modelle geben möglicherweise 400 zurück.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.messagesThinkingLabel",
         text: row(
             "思考方式",
@@ -378,17 +1169,29 @@ pub const CATALOG: &[Msg] = &[
             "Thinking mode",
             "思考方式",
             "사고 방식",
+            "Modo de razonamiento",
+            "Mode de raisonnement",
+            "Denkmodus",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.thinkingAdaptive",
-        text: row("自适应", "自適應", "Adaptive", "適応型", "적응형"),
+        text: row("自适应", "自適應", "Adaptive", "適応型", "적응형", "Adaptativo", "Adaptatif", "Adaptiv"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.thinkingBudget",
-        text: row("固定预算", "固定預算", "Fixed budget", "固定予算", "고정 예산"),
+        text: row(
+            "固定预算",
+            "固定預算",
+            "Fixed budget",
+            "固定予算",
+            "고정 예산",
+            "Presupuesto fijo",
+            "Budget fixe",
+            "Festes Budget",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.maxTokensLabel",
         text: row(
             "最大输出 tokens",
@@ -396,9 +1199,12 @@ pub const CATALOG: &[Msg] = &[
             "Maximum output tokens",
             "最大出力トークン数",
             "최대 출력 토큰",
+            "Máximo de tokens de salida",
+            "Nombre maximal de jetons en sortie",
+            "Maximale Ausgabetokens",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.thinkingBudgetLabel",
         text: row(
             "思考预算 tokens",
@@ -406,9 +1212,12 @@ pub const CATALOG: &[Msg] = &[
             "Thinking budget tokens",
             "思考トークン予算",
             "사고 토큰 예산",
+            "Presupuesto de tokens de razonamiento",
+            "Budget de jetons de raisonnement",
+            "Tokenbudget für das Denken",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.messagesThinkingHint",
         text: row(
             "旧模型或兼容网关可能需要固定预算；思考预算必须小于最大输出。开启思考时不发送温度参数。",
@@ -416,9 +1225,12 @@ pub const CATALOG: &[Msg] = &[
             "Older models or compatible gateways may need a fixed budget below the output limit. Thinking requests omit temperature.",
             "旧モデルや互換ゲートウェイでは固定予算が必要な場合があります。予算は最大出力未満にしてください。思考時は温度を送信しません。",
             "이전 모델이나 호환 게이트웨이는 고정 예산이 필요할 수 있습니다. 예산은 출력 한도보다 작아야 합니다. 사고 요청에는 온도를 보내지 않습니다.",
+            "Los modelos antiguos o servicios compatibles pueden necesitar un presupuesto fijo inferior al límite de salida. Las solicitudes de razonamiento omiten la temperatura.",
+            "Les anciens modèles ou passerelles compatibles peuvent nécessiter un budget fixe inférieur à la limite de sortie. Les requêtes de raisonnement omettent la température.",
+            "Ältere Modelle oder kompatible Gateways benötigen möglicherweise ein festes Budget unterhalb der Ausgabegrenze. Anfragen mit Denken senden keinen Temperaturparameter.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmServiceTierInvalid",
         text: row(
             "低延迟推理选项无效，请重新选择。",
@@ -426,9 +1238,12 @@ pub const CATALOG: &[Msg] = &[
             "Invalid low-latency inference option. Select it again.",
             "低レイテンシ推論の設定が無効です。もう一度選択してください。",
             "저지연 추론 옵션이 잘못되었습니다. 다시 선택하세요.",
+            "Opción de inferencia de baja latencia no válida. Selecciónala de nuevo.",
+            "Option d’inférence à faible latence non valide. Sélectionnez-la à nouveau.",
+            "Ungültige Option für Inferenz mit niedriger Latenz. Wähle sie erneut.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmRequestFormatInvalid",
         text: row(
             "请求格式无效，请重新选择。",
@@ -436,9 +1251,12 @@ pub const CATALOG: &[Msg] = &[
             "Invalid request format. Select a supported format.",
             "リクエスト形式が無効です。選択し直してください。",
             "잘못된 요청 형식입니다. 다시 선택하세요.",
+            "Formato de solicitud no válido. Selecciona uno compatible.",
+            "Format de requête non valide. Sélectionnez un format pris en charge.",
+            "Ungültiges Anfrageformat. Wähle ein unterstütztes Format.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmThinkingModeInvalid",
         text: row(
             "思考方式无效，请重新选择。",
@@ -446,9 +1264,12 @@ pub const CATALOG: &[Msg] = &[
             "Invalid thinking mode. Select a supported mode.",
             "思考方式が無効です。選択し直してください。",
             "잘못된 사고 방식입니다. 다시 선택하세요.",
+            "Modo de razonamiento no válido. Selecciona uno compatible.",
+            "Mode de raisonnement non valide. Sélectionnez un mode pris en charge.",
+            "Ungültiger Denkmodus. Wähle einen unterstützten Modus.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmTokenLimitInvalid",
         text: row(
             "Token 上限必须为正整数。",
@@ -456,9 +1277,12 @@ pub const CATALOG: &[Msg] = &[
             "Token limits must be positive integers.",
             "トークン上限は正の整数にしてください。",
             "토큰 한도는 양의 정수여야 합니다.",
+            "Los límites de tokens deben ser números enteros positivos.",
+            "Les limites de jetons doivent être des entiers positifs.",
+            "Tokenlimits müssen positive ganze Zahlen sein.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmThinkingBudgetInvalid",
         text: row(
             "思考预算至少为 1024，且固定预算必须小于最大输出。",
@@ -466,9 +1290,12 @@ pub const CATALOG: &[Msg] = &[
             "Thinking budget must be at least 1024 and below the output limit in fixed-budget mode.",
             "思考予算は1024以上、固定予算では最大出力未満にしてください。",
             "사고 예산은 1024 이상이며 고정 예산 모드에서는 출력 한도보다 작아야 합니다.",
+            "El presupuesto de razonamiento debe ser al menos 1024 y, en modo fijo, inferior al límite de salida.",
+            "Le budget de raisonnement doit être au moins de 1024 et, en mode fixe, inférieur à la limite de sortie.",
+            "Das Denkbudget muss mindestens 1024 betragen und im festen Modus unter der Ausgabegrenze liegen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmThinkingRequired",
         text: row(
             "该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。",
@@ -476,74 +1303,200 @@ pub const CATALOG: &[Msg] = &[
             "This model does not accept thinking turned off. Turn on Thinking next to the model, then verify again.",
             "このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。",
             "이 모델은 사고를 끌 수 없습니다. 모델 옆의 \"사고\"를 켠 뒤 다시 검증하세요.",
+            "Este modelo no admite el razonamiento desactivado. Activa «Razonamiento» junto al modelo y vuelve a verificar.",
+            "Ce modèle n’accepte pas le raisonnement désactivé. Activez « Raisonnement » à côté du modèle, puis vérifiez à nouveau.",
+            "Dieses Modell lässt sich nicht mit ausgeschaltetem Denkmodus nutzen. Schalte „Denkmodus“ neben dem Modell ein und prüfe erneut.",
         ),
     },
     // ---- Shell / navigation ------------------------------------------------
 
-    Msg {
+        Msg {
         key: "shell.version",
-        text: row(
-            "版本 {}",
-            "版本 {}",
-            "Version {}",
-            "バージョン {}",
-            "버전 {}",
-        ),
+        text: row("版本 {}", "版本 {}", "Version {}", "バージョン {}", "버전 {}", "Version {}", "Version {}", "Version {}"),
     },
-    Msg {
+        Msg {
         key: "nav.overview",
-        text: row("概览", "概覽", "Overview", "概要", "개요"),
-    },
-    Msg {
-        key: "nav.history",
-        text: row("历史", "歷史", "History", "履歴", "기록"),
-    },
-    Msg {
-        key: "marketplace.derivativeBadge",
-        text: row("衍生自 @{}", "衍生自 @{}", "Derived from @{}", "@{} から派生", "@{}에서 파생"),
-    },
-    Msg {
-        key: "nav.quickNote",
-        text: row("速记", "速記", "Quick notes", "速記", "속기"),
-    },
-    Msg { key: "quickNote.kicker", text: row("速记", "速記", "Quick notes", "速記", "속기") },
-    Msg { key: "quickNote.title", text: row("速记", "速記", "Quick notes", "速記", "속기") },
-    Msg { key: "quickNote.desc", text: row("永久保留录音，支持回放、导出、重新转录和重新润色。", "永久保留錄音，支援回放、匯出、重新轉錄與重新潤色。", "Permanent audio with playback, export, retranscription, and repolish.", "音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。", "오디오를 영구 보관하고 재생·내보내기·재전사·다시 다듬기를 지원합니다.") },
-    Msg { key: "quickNote.start", text: row("开始录音", "開始錄音", "Start recording", "録音を開始", "녹음 시작") },
-    Msg { key: "quickNote.finish", text: row("完成录音", "完成錄音", "Finish recording", "録音を終了", "녹음 종료") },
-    Msg { key: "quickNote.noTranscript", text: row("还没有转写内容。", "尚未有轉錄內容。", "No transcript yet.", "まだ文字起こしがありません。", "아직 전사 내용이 없습니다.") },
-    Msg { key: "quickNote.recording", text: row("录音中…", "錄音中…", "Recording…", "録音中…", "녹음 중…") },
-    Msg { key: "quickNote.shortcutTitle", text: row("速记快捷键", "速記快捷鍵", "Quick note shortcut", "速記ショートカット", "속기 단축키") },
-    Msg { key: "quickNote.shortcutDesc", text: row("按一次开始永久录音，再按一次结束并保存。", "按一下開始永久錄音，再按一下結束並保存。", "Press once to start a permanent capture, then press again to finish.", "一度押して録音を開始し、もう一度押して保存します。", "한 번 눌러 녹음하고 다시 눌러 저장합니다.") },
-    Msg {
-        key: "nav.vocab",
-        text: row("词典", "詞彙表", "Dictionary", "辞書", "사전"),
-    },
-
-    Msg {
-        key: "nav.marketplace",
         text: row(
-            "风格市场",
-            "風格市場",
-            "Marketplace",
-            "マーケット",
-            "마켓",
+            "概览",
+            "概覽",
+            "Overview",
+            "概要",
+            "개요",
+            "Resumen",
+            "Vue d’ensemble",
+            "Übersicht",
         ),
     },
+        Msg {
+        key: "nav.history",
+        text: row("历史", "歷史", "History", "履歴", "기록", "Historial", "Historique", "Verlauf"),
+    },
+        Msg {
+        key: "marketplace.derivativeBadge",
+        text: row(
+            "衍生自 @{}",
+            "衍生自 @{}",
+            "Derived from @{}",
+            "@{} から派生",
+            "@{}에서 파생",
+            "Basado en @{}",
+            "Dérivé de @{}",
+            "Abgeleitet von @{}",
+        ),
+    },
+        Msg {
+        key: "nav.quickNote",
+        text: row(
+            "速记",
+            "速記",
+            "Quick notes",
+            "速記",
+            "속기",
+            "Notas rápidas",
+            "Notes vocales",
+            "Schnellnotizen",
+        ),
+    },
+        Msg {
+        key: "quickNote.kicker",
+        text: row(
+            "速记",
+            "速記",
+            "Quick notes",
+            "速記",
+            "속기",
+            "Notas rápidas",
+            "Notes vocales",
+            "Schnellnotizen",
+        ),
+    },
+        Msg {
+        key: "quickNote.title",
+        text: row(
+            "速记",
+            "速記",
+            "Quick notes",
+            "速記",
+            "속기",
+            "Notas rápidas",
+            "Notes vocales",
+            "Schnellnotizen",
+        ),
+    },
+        Msg {
+        key: "quickNote.desc",
+        text: row(
+            "永久保留录音，支持回放、导出、重新转录和重新润色。",
+            "永久保留錄音，支援回放、匯出、重新轉錄與重新潤色。",
+            "Permanent audio with playback, export, retranscription, and repolish.",
+            "音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。",
+            "오디오를 영구 보관하고 재생·내보내기·재전사·다시 다듬기를 지원합니다.",
+            "Audio permanente con reproducción, exportación, retranscripción y redacción.",
+            "Audio conservé durablement avec lecture, export, retranscription et réécriture.",
+            "Audio dauerhaft behalten, mit Wiedergabe, Export, Neu-Transkription und Überarbeitung.",
+        ),
+    },
+        Msg {
+        key: "quickNote.start",
+        text: row(
+            "开始录音",
+            "開始錄音",
+            "Start recording",
+            "録音を開始",
+            "녹음 시작",
+            "Start recording",
+            "Start recording",
+            "Start recording",
+        ),
+    },
+        Msg {
+        key: "quickNote.finish",
+        text: row(
+            "完成录音",
+            "完成錄音",
+            "Finish recording",
+            "録音を終了",
+            "녹음 종료",
+            "Finish recording",
+            "Finish recording",
+            "Finish recording",
+        ),
+    },
+        Msg {
+        key: "quickNote.noTranscript",
+        text: row(
+            "还没有转写内容。",
+            "尚未有轉錄內容。",
+            "No transcript yet.",
+            "まだ文字起こしがありません。",
+            "아직 전사 내용이 없습니다.",
+            "Aún no hay transcripción.",
+            "Aucune transcription pour le moment.",
+            "Noch keine Transkription.",
+        ),
+    },
+        Msg {
+        key: "quickNote.recording",
+        text: row(
+            "录音中…",
+            "錄音中…",
+            "Recording…",
+            "録音中…",
+            "녹음 중…",
+            "Grabando…",
+            "Enregistrement…",
+            "Aufnahme läuft …",
+        ),
+    },
+        Msg {
+        key: "quickNote.shortcutTitle",
+        text: row(
+            "速记快捷键",
+            "速記快捷鍵",
+            "Quick note shortcut",
+            "速記ショートカット",
+            "속기 단축키",
+            "Atajo de nota rápida",
+            "Raccourci de note vocale",
+            "Schnellnotizen-Kurzbefehl",
+        ),
+    },
+        Msg {
+        key: "quickNote.shortcutDesc",
+        text: row(
+            "按一次开始永久录音，再按一次结束并保存。",
+            "按一下開始永久錄音，再按一下結束並保存。",
+            "Press once to start a permanent capture, then press again to finish.",
+            "一度押して録音を開始し、もう一度押して保存します。",
+            "한 번 눌러 녹음하고 다시 눌러 저장합니다.",
+            "Pulsa una vez para grabar y otra vez para guardar.",
+            "Appuyez une fois pour enregistrer, puis à nouveau pour sauvegarder.",
+            "Einmal drücken zum Aufnehmen, erneut drücken zum Speichern.",
+        ),
+    },
+        Msg {
+        key: "nav.vocab",
+        text: row("词典", "詞彙表", "Dictionary", "辞書", "사전", "Diccionario", "Dictionnaire", "Wörterbuch"),
+    },
 
-    Msg {
+        Msg {
+        key: "nav.marketplace",
+        text: row("风格市场", "風格市場", "Marketplace", "マーケット", "마켓", "Catálogo", "Catalogue", "Marktplatz"),
+    },
+
+        Msg {
         key: "nav.settings",
-        text: row("设置", "設定", "Settings", "設定", "설정"),
+        text: row("设置", "設定", "Settings", "設定", "설정", "Settings", "Settings", "Settings"),
     },
-    Msg {
+        Msg {
         key: "nav.group_style",
-        text: row("风格", "風格", "Style", "スタイル", "스타일"),
+        text: row("风格", "風格", "Style", "スタイル", "스타일", "Estilo", "Style", "Stil"),
     },
-    Msg {
+        Msg {
         key: "nav.group_tools",
-        text: row("工具", "工具", "Tools", "ツール", "도구"),
+        text: row("工具", "工具", "Tools", "ツール", "도구", "Herramientas", "Outils", "Werkzeuge"),
     },
-    Msg {
+        Msg {
         key: "nav.polish_mode",
         text: row(
             "润色模式",
@@ -551,37 +1504,34 @@ pub const CATALOG: &[Msg] = &[
             "Polish mode",
             "推敲モード",
             "다듬기 모드",
+            "Modo de redacción",
+            "Mode de rédaction",
+            "Überarbeitungsmodus",
         ),
     },
-    Msg {
+        Msg {
         key: "nav.translation",
-        text: row("翻译", "翻譯", "Translation", "翻訳", "번역"),
+        text: row("翻译", "翻譯", "Translation", "翻訳", "번역", "Traducción", "Traduction", "Übersetzung"),
     },
-    Msg {
+        Msg {
         key: "nav.selection_ask",
-        text: row("问任何问题", "問任何問題", "Ask", "何でも質問", "무엇이든 질문"),
+        text: row("问任何问题", "問任何問題", "Ask", "何でも質問", "무엇이든 질문", "Preguntar", "Questions", "Nachfragen"),
     },
-    Msg {
+        Msg {
         key: "nav.corrections",
-        text: row(
-            "纠错规则",
-            "糾錯規則",
-            "Corrections",
-            "修正ルール",
-            "교정 규칙",
-        ),
+        text: row("纠错规则", "糾錯規則", "Corrections", "修正ルール", "교정 규칙", "Corrections", "Corrections", "Corrections"),
     },
     // ---- Common controls ----------------------------------------------------
 
-    Msg {
+        Msg {
         key: "btn.close",
-        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기", "Close", "Close", "Close"),
     },
 
     // ---- Dictation / empty states ------------------------------------------
 
 
-    Msg {
+        Msg {
         key: "qa.submitted",
         text: row(
             "问答已提交",
@@ -589,19 +1539,16 @@ pub const CATALOG: &[Msg] = &[
             "Question submitted",
             "質問を送信しました",
             "질문이 제출되었습니다",
+            "Question submitted",
+            "Question submitted",
+            "Question submitted",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.closed",
-        text: row(
-            "问答已关闭",
-            "問答已關閉",
-            "Q&A closed",
-            "Q&A を閉じました",
-            "Q&A가 닫혔습니다",
-        ),
+        text: row("问答已关闭", "問答已關閉", "Q&A closed", "Q&A を閉じました", "Q&A가 닫혔습니다", "Q&A closed", "Q&A closed", "Q&A closed"),
     },
-    Msg {
+        Msg {
         key: "qa.recording_updated",
         text: row(
             "问答录音状态已更新",
@@ -609,9 +1556,12 @@ pub const CATALOG: &[Msg] = &[
             "Q&A recording updated",
             "Q&A の録音状態を更新しました",
             "Q&A 녹음 상태가 업데이트되었습니다",
+            "Q&A recording updated",
+            "Q&A recording updated",
+            "Q&A recording updated",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.replaced",
         text: row(
             "选区替换已确认",
@@ -619,9 +1569,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection replace confirmed",
             "選択範囲の置換を確認しました",
             "선택 영역 바꾸기가 확인되었습니다",
+            "Selection replace confirmed",
+            "Selection replace confirmed",
+            "Selection replace confirmed",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.cancelled",
         text: row(
             "选区替换已取消",
@@ -629,9 +1582,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection replace cancelled",
             "選択範囲の置換をキャンセルしました",
             "선택 영역 바꾸기가 취소되었습니다",
+            "Selection replace cancelled",
+            "Selection replace cancelled",
+            "Selection replace cancelled",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.reverted",
         text: row(
             "选区替换已撤销",
@@ -639,12 +1595,15 @@ pub const CATALOG: &[Msg] = &[
             "Selection replace reverted",
             "選択範囲の置換を元に戻しました",
             "선택 영역 바꾸기가 취소되었습니다",
+            "Selection replace reverted",
+            "Selection replace reverted",
+            "Selection replace reverted",
         ),
     },
 
     // ---- Overview metrics ---------------------------------------------------
 
-    Msg {
+        Msg {
         key: "metric.near7",
         text: row(
             "近7天 {} 段 · 近30天 {} 段",
@@ -652,10 +1611,13 @@ pub const CATALOG: &[Msg] = &[
             "{} in 7d · {} in 30d",
             "直近7日 {} 件 · 30日 {} 件",
             "7일 {}건 · 30일 {}건",
+            "{} in 7d · {} in 30d",
+            "{} in 7d · {} in 30d",
+            "{} in 7d · {} in 30d",
         ),
     },
 
-    Msg {
+        Msg {
         key: "loading.overview",
         text: row(
             "正在加载概览数据…",
@@ -663,37 +1625,37 @@ pub const CATALOG: &[Msg] = &[
             "Loading overview…",
             "概要を読み込み中…",
             "개요를 불러오는 중…",
+            "Loading overview…",
+            "Loading overview…",
+            "Loading overview…",
         ),
     },
 
-    Msg {
+        Msg {
         key: "overview.not_set",
-        text: row(
-            "(未设置)",
-            "(未設定)",
-            "(not set)",
-            "(未設定)",
-            "(설정 안 됨)",
-        ),
+        text: row("(未设置)", "(未設定)", "(not set)", "(未設定)", "(설정 안 됨)", "(not set)", "(not set)", "(not set)"),
     },
 
-    Msg {
+        Msg {
         key: "overview.unconfigured",
-        text: row("未配置", "未設定", "Not configured", "未設定", "미설정"),
+        text: row(
+            "未配置",
+            "未設定",
+            "Not configured",
+            "未設定",
+            "미설정",
+            "Not configured",
+            "Not configured",
+            "Not configured",
+        ),
     },
     Msg {
         key: "overview.recent_empty",
-        text: row(
-            "暂无识别记录，点击上方「开始」说第一句吧。",
-            "暫無辨識紀錄，點按上方「開始」說第一句吧。",
-            "No recent dictation yet — hit Start above to begin.",
-            "まだ認識記録はありません。上の「開始」を押してください。",
-            "아직 받아쓰기 기록이 없습니다. 위의 시작을 눌러주세요.",
-        ),
+        text: row("暂无识别记录，点击上方「开始」说第一句吧。", "暫無辨識紀錄，點按上方「開始」說第一句吧。", "No recent dictation yet — hit Start above to begin.", "まだ認識記録はありません。上の「開始」を押してください。", "아직 받아쓰기 기록이 없습니다. 위의 시작을 눌러주세요.", "No recent dictation yet — hit Start above to begin.", "No recent dictation yet — hit Start above to begin.", "No recent dictation yet — hit Start above to begin."),
     },
 
     // ---- Overview page (2.0 dashboard) ------------------------------------
-    Msg {
+        Msg {
         key: "overview.title",
         text: row(
             "今日概览",
@@ -701,43 +1663,28 @@ pub const CATALOG: &[Msg] = &[
             "Today's overview",
             "本日の概要",
             "오늘 개요",
+            "Resumen de hoy",
+            "Vue d’ensemble du jour",
+            "Heutige Übersicht",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.mode_raw",
-        text: row("原文", "原文", "Verbatim", "原文", "원문"),
+        text: row("原文", "原文", "Verbatim", "原文", "원문", "Verbatim", "Verbatim", "Verbatim"),
     },
-    Msg {
+        Msg {
         key: "overview.mode_light",
-        text: row(
-            "轻度润色",
-            "輕度潤色",
-            "Light polish",
-            "軽い推敲",
-            "가벼운 다듬기",
-        ),
+        text: row("轻度润色", "輕度潤色", "Light polish", "軽い推敲", "가벼운 다듬기", "Light polish", "Light polish", "Light polish"),
     },
-    Msg {
+        Msg {
         key: "overview.mode_structured",
-        text: row(
-            "清晰结构",
-            "清晰結構",
-            "Structured",
-            "明確な構造",
-            "명확한 구조",
-        ),
+        text: row("清晰结构", "清晰結構", "Structured", "明確な構造", "명확한 구조", "Structured", "Structured", "Structured"),
     },
-    Msg {
+        Msg {
         key: "overview.mode_formal",
-        text: row(
-            "正式表达",
-            "正式表達",
-            "Formal",
-            "フォーマル",
-            "격식체",
-        ),
+        text: row("正式表达", "正式表達", "Formal", "フォーマル", "격식체", "Formal", "Formal", "Formal"),
     },
-    Msg {
+        Msg {
         key: "overview.refresh",
         text: row(
             "刷新状态",
@@ -745,9 +1692,12 @@ pub const CATALOG: &[Msg] = &[
             "Refresh status",
             "状態を更新",
             "상태 새로고침",
+            "Actualizar estado",
+            "Actualiser l’état",
+            "Status aktualisieren",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.stats_title",
         text: row(
             "使用记录",
@@ -755,9 +1705,12 @@ pub const CATALOG: &[Msg] = &[
             "Your activity",
             "利用記録",
             "사용 기록",
+            "Tu actividad",
+            "Votre activité",
+            "Deine Aktivität",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.metric_chars",
         text: row(
             "今日字数",
@@ -765,13 +1718,25 @@ pub const CATALOG: &[Msg] = &[
             "Characters today",
             "本日の文字数",
             "오늘 글자 수",
+            "Caracteres de hoy",
+            "Caractères aujourd’hui",
+            "Zeichen heute",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.metric_segments",
-        text: row("{} 段", "{} 段", "{} segments", "{} セグメント", "{} 세그먼트"),
+        text: row(
+            "{} 段",
+            "{} 段",
+            "{} segments",
+            "{} セグメント",
+            "{} 세그먼트",
+            "{} segmentos",
+            "{} segments",
+            "Abschnitte: {}",
+        ),
     },
-    Msg {
+        Msg {
         key: "overview.metric_duration",
         text: row(
             "今日总时长",
@@ -779,9 +1744,12 @@ pub const CATALOG: &[Msg] = &[
             "Total duration today",
             "本日の合計時間",
             "오늘 총 시간",
+            "Duración total de hoy",
+            "Durée totale du jour",
+            "Gesamtdauer heute",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.metric_avg",
         text: row(
             "平均段落",
@@ -789,9 +1757,12 @@ pub const CATALOG: &[Msg] = &[
             "Avg per segment",
             "平均セグメント",
             "평균 세그먼트",
+            "Media por segmento",
+            "Moyenne par segment",
+            "Durchschnitt pro Abschnitt",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.metric_avg_trend",
         text: row(
             "今日均值",
@@ -799,14 +1770,26 @@ pub const CATALOG: &[Msg] = &[
             "Today's average",
             "本日の平均",
             "오늘 평균",
+            "Media de hoy",
+            "Moyenne du jour",
+            "Heutiger Durchschnitt",
         ),
     },
-            Msg {
+                Msg {
         key: "overview.metric_no_data",
-        text: row("暂无数据", "暫無資料", "No data", "データなし", "데이터 없음"),
+        text: row(
+            "暂无数据",
+            "暫無資料",
+            "No data",
+            "データなし",
+            "데이터 없음",
+            "Sin datos",
+            "Aucune donnée",
+            "Keine Daten",
+        ),
     },
 
-    Msg {
+        Msg {
         key: "overview.metric_total",
         text: row(
             "累计记录",
@@ -814,49 +1797,40 @@ pub const CATALOG: &[Msg] = &[
             "Total records",
             "累計記録",
             "누적 기록",
+            "Registros totales",
+            "Nombre total d’entrées",
+            "Einträge insgesamt",
         ),
     },
     Msg {
         key: "overview.metric_total_trend",
-        text: row(
-            "本机存档（上限 {}）",
-            "本機存檔（上限 {}）",
-            "Stored locally (max {})",
-            "ローカル保存（上限 {}）",
-            "로컬 저장(최대 {})",
-        ),
+        text: row("本机存档（上限 {}）", "本機存檔（上限 {}）", "Stored locally (max {})", "ローカル保存（上限 {}）", "로컬 저장(최대 {})", "Stored locally (max {})", "Stored locally (max {})", "Stored locally (max {})"),
     },
-    Msg {
+        Msg {
         key: "overview.period_last7",
-        text: row("近 7 天", "近 7 天", "Last 7 days", "直近 7 日", "최근 7일"),
+        text: row("近 7 天", "近 7 天", "Last 7 days", "直近 7 日", "최근 7일", "Last 7 days", "Last 7 days", "Last 7 days"),
     },
-    Msg {
+        Msg {
         key: "overview.period_last30",
-        text: row(
-            "近 30 天",
-            "近 30 天",
-            "Last 30 days",
-            "直近 30 日",
-            "최근 30일",
-        ),
+        text: row("近 30 天", "近 30 天", "Last 30 days", "直近 30 日", "최근 30일", "Last 30 days", "Last 30 days", "Last 30 days"),
     },
-    Msg {
+        Msg {
         key: "overview.daily_avg",
-        text: row("日均 {}", "日均 {}", "{} / day", "1日平均 {}", "일평균 {}"),
+        text: row("日均 {}", "日均 {}", "{} / day", "1日平均 {}", "일평균 {}", "{} / day", "{} / day", "{} / day"),
     },
-    Msg {
+        Msg {
         key: "overview.metric_count",
-        text: row("条数", "條數", "Count", "件数", "건수"),
+        text: row("条数", "條數", "Count", "件数", "건수", "Count", "Count", "Count"),
     },
-    Msg {
+        Msg {
         key: "overview.metric_chars_name",
-        text: row("字数", "字數", "Characters", "文字数", "글자 수"),
+        text: row("字数", "字數", "Characters", "文字数", "글자 수", "Characters", "Characters", "Characters"),
     },
-    Msg {
+        Msg {
         key: "overview.metric_duration_name",
-        text: row("时长", "時長", "Duration", "時間", "시간"),
+        text: row("时长", "時長", "Duration", "時間", "시간", "Duration", "Duration", "Duration"),
     },
-    Msg {
+        Msg {
         key: "overview.recent_title",
         text: row(
             "最近识别",
@@ -864,13 +1838,25 @@ pub const CATALOG: &[Msg] = &[
             "Recent transcripts",
             "最近の認識",
             "최근 인식",
+            "Transcripciones recientes",
+            "Transcriptions récentes",
+            "Neueste Transkripte",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.recent_all",
-        text: row("全部记录 →", "全部記錄 →", "View all →", "すべて表示 →", "전체 보기 →"),
+        text: row(
+            "全部记录 →",
+            "全部記錄 →",
+            "View all →",
+            "すべて表示 →",
+            "전체 보기 →",
+            "Ver todo →",
+            "Tout voir →",
+            "Alle anzeigen →",
+        ),
     },
-    Msg {
+        Msg {
         key: "overview.recent_empty_hint",
         text: row(
             "还没有听写记录。跟着上方的引导试一次，结果会显示在这里。",
@@ -878,14 +1864,17 @@ pub const CATALOG: &[Msg] = &[
             "No dictations yet. Follow the guide above to try one; your result will appear here.",
             "まだ音声入力の記録がありません。上の案内に沿って試すと、ここに結果が表示されます。",
             "아직 받아쓰기 기록이 없습니다. 위 안내에 따라 사용해 보면 결과가 여기에 표시됩니다.",
+            "Todavía no hay dictados. Prueba uno siguiendo la guía de arriba y el resultado aparecerá aquí.",
+            "Aucune dictée pour le moment. Essayez avec le guide ci-dessus ; le résultat apparaîtra ici.",
+            "Noch keine Diktate. Probiere es mit der Anleitung oben aus. Dein Ergebnis erscheint hier.",
         ),
     },
 
-    Msg {
+        Msg {
         key: "overview.retry",
-        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+        text: row("重试", "重試", "Retry", "再試行", "다시 시도", "Retry", "Retry", "Retry"),
     },
-    Msg {
+        Msg {
         key: "overview.activity_title",
         text: row(
             "年度活动",
@@ -893,9 +1882,12 @@ pub const CATALOG: &[Msg] = &[
             "Annual activity",
             "年間アクティビティ",
             "연간 활동",
+            "Actividad anual",
+            "Activité annuelle",
+            "Aktivität im Jahr",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.activity_count",
         text: row(
             "{} 次听写",
@@ -903,10 +1895,13 @@ pub const CATALOG: &[Msg] = &[
             "{} dictation(s)",
             "{} 回の入力",
             "{}회 받아쓰기",
+            "{} dictados",
+            "{} dictée(s)",
+            "Diktate: {}",
         ),
     },
 
-    Msg {
+        Msg {
         key: "overview.services_title",
         text: row(
             "当前语音服务",
@@ -914,9 +1909,12 @@ pub const CATALOG: &[Msg] = &[
             "Current voice services",
             "使用中の音声サービス",
             "현재 음성 서비스",
+            "Servicios de voz actuales",
+            "Services vocaux actuels",
+            "Aktuelle Sprachdienste",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.asr_kind",
         text: row(
             "语音识别",
@@ -924,9 +1922,12 @@ pub const CATALOG: &[Msg] = &[
             "Speech recognition",
             "音声認識",
             "음성 인식",
+            "Reconocimiento de voz",
+            "Reconnaissance vocale",
+            "Spracherkennung",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.llm_kind",
         text: row(
             "文字处理",
@@ -934,9 +1935,12 @@ pub const CATALOG: &[Msg] = &[
             "Text processing",
             "テキスト処理",
             "텍스트 처리",
+            "Procesamiento de texto",
+            "Traitement du texte",
+            "Textverarbeitung",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.provider_help_asr",
         text: row(
             "将语音转成文字。",
@@ -944,9 +1948,12 @@ pub const CATALOG: &[Msg] = &[
             "Turns your speech into text.",
             "音声をテキストに変換します。",
             "음성을 텍스트로 변환합니다.",
+            "Convierte tu voz en texto.",
+            "Transforme votre voix en texte.",
+            "Wandelt deine Sprache in Text um.",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.provider_help_llm",
         text: row(
             "按你的风格整理和润色文字。",
@@ -954,13 +1961,16 @@ pub const CATALOG: &[Msg] = &[
             "Organizes and polishes text in your style.",
             "あなたのスタイルに合わせて文章を整えます。",
             "내 스타일에 맞게 글을 정리하고 다듬습니다.",
+            "Organiza y mejora el texto con tu estilo.",
+            "Organise et améliore le texte selon votre style.",
+            "Gliedert und überarbeitet Text in deinem Stil.",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.configure_provider",
-        text: row("去配置", "前往設定", "Configure", "設定する", "설정하기"),
+        text: row("去配置", "前往設定", "Configure", "設定する", "설정하기", "Configurar", "Configurer", "Einrichten"),
     },
-    Msg {
+        Msg {
         key: "overview.manage_provider",
         text: row(
             "管理服务",
@@ -968,9 +1978,12 @@ pub const CATALOG: &[Msg] = &[
             "Manage service",
             "サービスを管理",
             "서비스 관리",
+            "Administrar servicio",
+            "Gérer le service",
+            "Dienst verwalten",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.status_loading",
         text: row(
             "正在读取服务配置…",
@@ -978,10 +1991,13 @@ pub const CATALOG: &[Msg] = &[
             "Reading service configuration…",
             "サービス設定を読み込み中…",
             "서비스 설정을 불러오는 중…",
+            "Leyendo la configuración de servicios…",
+            "Lecture de la configuration des services…",
+            "Dienstkonfiguration wird gelesen…",
         ),
     },
 
-    Msg {
+        Msg {
         key: "overview.week_days",
         text: row(
             "日|一|二|三|四|五|六",
@@ -989,9 +2005,12 @@ pub const CATALOG: &[Msg] = &[
             "Sun|Mon|Tue|Wed|Thu|Fri|Sat",
             "日|月|火|水|木|金|土",
             "일|월|화|수|목|금|토",
+            "Dom|Lun|Mar|Mié|Jue|Vie|Sáb",
+            "Dim|Lun|Mar|Mer|Jeu|Ven|Sam",
+            "So|Mo|Di|Mi|Do|Fr|Sa",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.months",
         text: row(
             "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月",
@@ -999,76 +2018,94 @@ pub const CATALOG: &[Msg] = &[
             "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec",
             "1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月",
             "1월|2월|3월|4월|5월|6월|7월|8월|9월|10월|11월|12월",
+            "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec",
+            "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec",
+            "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.minutes",
-        text: row("{} 分钟", "{} 分鐘", "{} min", "{} 分", "{}분"),
+        text: row("{} 分钟", "{} 分鐘", "{} min", "{} 分", "{}분", "{} min", "{} min", "{} min"),
     },
-    Msg {
+        Msg {
         key: "overview.hours_minutes",
-        text: row(
-            "{} 小时 {} 分",
-            "{} 小時 {} 分",
-            "{} h {} min",
-            "{} 時間 {} 分",
-            "{}시간 {}분",
-        ),
+        text: row("{} 小时 {} 分", "{} 小時 {} 分", "{} h {} min", "{} 時間 {} 分", "{}시간 {}분", "{} h {} min", "{} h {} min", "{} h {} min"),
     },
-    Msg {
+        Msg {
         key: "overview.copy",
-        text: row("复制", "複製", "Copy", "コピー", "복사"),
+        text: row("复制", "複製", "Copy", "コピー", "복사", "Copy", "Copy", "Copy"),
     },
-    Msg {
+        Msg {
         key: "overview.copied",
-        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨"),
+        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨", "Copied", "Copied", "Copied"),
     },
     // ---- Shared controls ---------------------------------------------------
-            Msg {
+                Msg {
         key: "common.refresh",
-        text: row("刷新", "重新整理", "Refresh", "更新", "새로고침"),
+        text: row(
+            "刷新",
+            "重新整理",
+            "Refresh",
+            "更新",
+            "새로고침",
+            "Actualizar",
+            "Actualiser",
+            "Aktualisieren",
+        ),
     },
-    Msg {
+        Msg {
         key: "common.clear",
-        text: row("清空", "清空", "Clear", "クリア", "지우기"),
+        text: row("清空", "清空", "Clear", "クリア", "지우기", "Borrar", "Effacer", "Leeren"),
     },
-            Msg {
+                Msg {
         key: "common.loading",
-        text: row("加载中…", "載入中…", "Loading…", "読み込み中…", "로딩 중…"),
+        text: row(
+            "加载中…",
+            "載入中…",
+            "Loading…",
+            "読み込み中…",
+            "로딩 중…",
+            "Cargando…",
+            "Chargement…",
+            "Wird geladen…",
+        ),
     },
-    Msg {
+        Msg {
         key: "common.retry",
-        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+        text: row(
+            "重试",
+            "重試",
+            "Retry",
+            "再試行",
+            "다시 시도",
+            "Reintentar",
+            "Réessayer",
+            "Erneut versuchen",
+        ),
     },
-    Msg {
+        Msg {
         key: "common.copy",
-        text: row("复制", "複製", "Copy", "コピー", "복사"),
+        text: row("复制", "複製", "Copy", "コピー", "복사", "Copiar", "Copier", "Kopieren"),
     },
-    Msg {
+        Msg {
         key: "common.copied",
-        text: row("已复制", "已複製", "Copied", "コピーしました", "복사됨"),
+        text: row("已复制", "已複製", "Copied", "コピーしました", "복사됨", "Copiado", "Copié", "Kopiert"),
     },
 
-    Msg {
+        Msg {
         key: "status.copied",
-        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨"),
+        text: row("已复制", "已複製", "Copied", "コピー済み", "복사됨", "Copied", "Copied", "Copied"),
     },
     // egui-only: the style page's pack counter and new-pack hint are not part of
     // the Tauri catalog (it renders the equivalent UI from Core data).
 
     // egui-only: the Core vocabulary presets are loaded from the backend in the
     // Tauri app; the egui host lists the four built-ins by name.
-    Msg {
+        Msg {
         key: "vocab.presets_dev_tools",
-        text: row(
-            "开发工具",
-            "開發工具",
-            "Dev tools",
-            "開発ツール",
-            "개발 도구",
-        ),
+        text: row("开发工具", "開發工具", "Dev tools", "開発ツール", "개발 도구", "Dev tools", "Dev tools", "Dev tools"),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_products",
         text: row(
             "产品与平台",
@@ -1076,9 +2113,12 @@ pub const CATALOG: &[Msg] = &[
             "Products & platforms",
             "製品とプラットフォーム",
             "제품 및 플랫폼",
+            "Products & platforms",
+            "Products & platforms",
+            "Products & platforms",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_terms",
         text: row(
             "技术术语",
@@ -1086,9 +2126,12 @@ pub const CATALOG: &[Msg] = &[
             "Technical terms",
             "技術用語",
             "기술 용어",
+            "Technical terms",
+            "Technical terms",
+            "Technical terms",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_english",
         text: row(
             "英文写作",
@@ -1096,11 +2139,14 @@ pub const CATALOG: &[Msg] = &[
             "English writing",
             "英語ライティング",
             "영어 작문",
+            "English writing",
+            "English writing",
+            "English writing",
         ),
     },
     // egui-only: the not-yet-wired page placeholder and the marketplace's
     // decorative preview text have no Tauri counterpart.
-    Msg {
+        Msg {
         key: "common.unsupported_title",
         text: row(
             "此页面暂未接线",
@@ -1108,9 +2154,12 @@ pub const CATALOG: &[Msg] = &[
             "This page is not wired up yet",
             "このページは未接続です",
             "이 페이지는 아직 연결되지 않았습니다",
+            "This page is not wired up yet",
+            "This page is not wired up yet",
+            "This page is not wired up yet",
         ),
     },
-    Msg {
+        Msg {
         key: "common.unsupported_hint",
         text: row(
             "数据桥接将在后续阶段完成",
@@ -1118,35 +2167,38 @@ pub const CATALOG: &[Msg] = &[
             "Data wiring lands in a later stage",
             "データ連携は後続の段階で完了します",
             "데이터 연결은 이후 단계에서 완료됩니다",
+            "Data wiring lands in a later stage",
+            "Data wiring lands in a later stage",
+            "Data wiring lands in a later stage",
         ),
     },
 
-    Msg {
+        Msg {
         key: "common.delete",
-        text: row("删除", "刪除", "Delete", "削除", "삭제"),
+        text: row("删除", "刪除", "Delete", "削除", "삭제", "Eliminar", "Supprimer", "Löschen"),
     },
-    Msg {
+        Msg {
         key: "common.cancel",
-        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소", "Cancelar", "Annuler", "Abbrechen"),
     },
-    Msg {
+        Msg {
         key: "common.confirm",
-        text: row("确认", "確認", "Confirm", "確認", "확인"),
+        text: row("确认", "確認", "Confirm", "確認", "확인", "Confirm", "Confirm", "Confirm"),
     },
-    Msg {
+        Msg {
         key: "common.duration_minutes",
-        text: row("{} 分钟", "{} 分鐘", "{}m", "{} 分", "{}분"),
+        text: row("{} 分钟", "{} 分鐘", "{}m", "{} 分", "{}분", "{}min", "{}min", "{}m"),
     },
     // ---- History -----------------------------------------------------------
-            Msg {
+                Msg {
         key: "history.kicker",
-        text: row("历史记录", "HISTORY", "HISTORY", "履歴", "기록"),
+        text: row("历史记录", "HISTORY", "HISTORY", "履歴", "기록", "HISTORIAL", "HISTORIQUE", "VERLAUF"),
     },
-    Msg {
+        Msg {
         key: "history.title",
-        text: row("历史记录", "歷史記錄", "History", "履歴", "기록"),
+        text: row("历史记录", "歷史記錄", "History", "履歴", "기록", "Historial", "Historique", "Verlauf"),
     },
-            Msg {
+                Msg {
         key: "history.desc",
         text: row(
             "本机保存的识别记录。",
@@ -1154,9 +2206,12 @@ pub const CATALOG: &[Msg] = &[
             "Locally stored transcripts.",
             "ローカルに保存された認識記録。",
             "로컬에 저장된 인식 기록.",
+            "Transcripciones guardadas en este dispositivo.",
+            "Transcriptions enregistrées sur cet appareil.",
+            "Lokal gespeicherte Transkripte.",
         ),
     },
-    Msg {
+        Msg {
         key: "history.search_placeholder",
         text: row(
             "搜索转写内容…（{}）",
@@ -1164,19 +2219,16 @@ pub const CATALOG: &[Msg] = &[
             "Search transcripts… ({})",
             "文字起こしを検索…（{}）",
             "기록 검색…（{}）",
+            "Buscar transcripciones… ({})",
+            "Rechercher dans les transcriptions… ({})",
+            "Transkripte durchsuchen… ({})",
         ),
     },
     Msg {
         key: "history.empty",
-        text: row(
-            "还没有历史记录。",
-            "還沒有歷史記錄。",
-            "No history yet.",
-            "履歴はまだありません。",
-            "아직 기록이 없습니다.",
-        ),
+        text: row("还没有历史记录。", "還沒有歷史記錄。", "No history yet.", "履歴はまだありません。", "아직 기록이 없습니다.", "No history yet.", "No history yet.", "No history yet."),
     },
-    Msg {
+        Msg {
         key: "history.search_no_match",
         text: row(
             "没有匹配「{}」的记录。",
@@ -1184,9 +2236,12 @@ pub const CATALOG: &[Msg] = &[
             "No entries match “{}”.",
             "「{}」に一致する項目はありません。",
             "“{}”과(와) 일치하는 항목이 없습니다.",
+            "No hay registros que coincidan con «{}».",
+            "Aucune entrée ne correspond à « {} ».",
+            "Keine Einträge für „{}“.",
         ),
     },
-            Msg {
+                Msg {
         key: "history.load_failed",
         text: row(
             "加载历史失败：{}",
@@ -1194,9 +2249,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to load history: {}",
             "履歴の読み込みに失敗：{}",
             "기록 로드 실패: {}",
+            "No se pudo cargar el historial: {}",
+            "Impossible de charger l’historique : {}",
+            "Verlauf konnte nicht geladen werden: {}",
         ),
     },
-            Msg {
+                Msg {
         key: "history.select_hint",
         text: row(
             "左侧选一条查看详情。",
@@ -1204,23 +2262,53 @@ pub const CATALOG: &[Msg] = &[
             "Select an entry on the left to see details.",
             "左側から 1 件選択して詳細を表示。",
             "왼쪽에서 하나를 선택하여 자세히 보기.",
+            "Selecciona un registro de la izquierda para ver sus detalles.",
+            "Sélectionnez une entrée à gauche pour afficher ses détails.",
+            "Wähle links einen Eintrag aus, um die Details anzuzeigen.",
         ),
     },
-    Msg {
+        Msg {
         key: "history.recorded",
-        text: row("录音 {}", "錄音 {}", "Recorded {}", "録音 {}", "녹음 {}"),
+        text: row(
+            "录音 {}",
+            "錄音 {}",
+            "Recorded {}",
+            "録音 {}",
+            "녹음 {}",
+            "Grabación: {}",
+            "Enregistrement : {}",
+            "Aufnahmedauer: {}",
+        ),
     },
     // egui-only in-app player controls; Tauri opens the recording externally.
-    Msg {
+        Msg {
         key: "history.pause",
-        text: row("暂停播放", "暫停播放", "Pause recording", "再生を一時停止", "재생 일시 정지"),
+        text: row(
+            "暂停播放",
+            "暫停播放",
+            "Pause recording",
+            "再生を一時停止",
+            "재생 일시 정지",
+            "Pause recording",
+            "Pause recording",
+            "Pause recording",
+        ),
     },
-    Msg {
+        Msg {
         key: "history.resume",
-        text: row("继续播放", "繼續播放", "Resume recording", "再生を再開", "재생 계속"),
+        text: row(
+            "继续播放",
+            "繼續播放",
+            "Resume recording",
+            "再生を再開",
+            "재생 계속",
+            "Resume recording",
+            "Resume recording",
+            "Resume recording",
+        ),
     },
 
-    Msg {
+        Msg {
         key: "history.play",
         text: row(
             "播放录音",
@@ -1228,9 +2316,12 @@ pub const CATALOG: &[Msg] = &[
             "Play recording",
             "録音を再生",
             "녹음 재생",
+            "Play recording",
+            "Play recording",
+            "Play recording",
         ),
     },
-    Msg {
+        Msg {
         key: "history.export",
         text: row(
             "导出录音",
@@ -1238,43 +2329,67 @@ pub const CATALOG: &[Msg] = &[
             "Export recording",
             "録音をエクスポート",
             "녹음 내보내기",
+            "Export recording",
+            "Export recording",
+            "Export recording",
         ),
     },
-    Msg {
+        Msg {
         key: "history.retranscribe",
+        text: row("重新转写", "重新轉寫", "Retranscribe", "再文字起こし", "다시 받아쓰기", "Retranscribe", "Retranscribe", "Retranscribe"),
+    },
+        Msg {
+        key: "history.raw_label",
+        text: row("原文", "原文", "Raw", "原文", "원문", "Original", "Brut", "Rohtext"),
+    },
+        Msg {
+        key: "history.raw_empty",
+        text: row("（空）", "（空）", "(empty)", "（空）", "(비어 있음)", "(vacío)", "(vide)", "(leer)"),
+    },
+        Msg {
+        key: "history.step_asr",
         text: row(
-            "重新转写",
-            "重新轉寫",
-            "Retranscribe",
-            "再文字起こし",
-            "다시 받아쓰기",
+            "识别",
+            "辨識",
+            "Transcribe",
+            "認識",
+            "인식",
+            "Transcripción",
+            "Transcription",
+            "Transkribieren",
         ),
     },
-    Msg {
-        key: "history.raw_label",
-        text: row("原文", "原文", "Raw", "原文", "원문"),
-    },
-    Msg {
-        key: "history.raw_empty",
-        text: row("（空）", "（空）", "(empty)", "（空）", "(비어 있음)"),
-    },
-    Msg {
-        key: "history.step_asr",
-        text: row("识别", "辨識", "Transcribe", "認識", "인식"),
-    },
-    Msg {
+        Msg {
         key: "history.step_polish",
-        text: row("润色", "潤飾", "Polish", "推敲", "다듬기"),
+        text: row(
+            "润色",
+            "潤飾",
+            "Polish",
+            "推敲",
+            "다듬기",
+            "Mejora del texto",
+            "Amélioration",
+            "Überarbeiten",
+        ),
     },
-    Msg {
+        Msg {
         key: "history.step_insert",
-        text: row("插入", "插入", "Insert", "挿入", "삽입"),
+        text: row("插入", "插入", "Insert", "挿入", "삽입", "Inserción", "Insertion", "Einfügen"),
     },
-    Msg {
+        Msg {
         key: "history.chars",
-        text: row("{} 字", "{} 字", "{} chars", "{} 文字", "{}자"),
+        text: row(
+            "{} 字",
+            "{} 字",
+            "{} chars",
+            "{} 文字",
+            "{}자",
+            "{} caracteres",
+            "{} caractères",
+            "{} Zeichen",
+        ),
     },
-    Msg {
+        Msg {
         key: "history.vocab_hits",
         text: row(
             "{} 个热词",
@@ -1282,17 +2397,29 @@ pub const CATALOG: &[Msg] = &[
             "{} vocab hits",
             "{} ホットワード",
             "핫워드 {}개",
+            "{} coincidencias del diccionario",
+            "{} correspondances du dictionnaire",
+            "{} Wörterbuchtreffer",
         ),
     },
-    Msg {
+        Msg {
         key: "history.inserted",
-        text: row("已插入", "已插入", "Inserted", "入力済み", "입력됨"),
+        text: row("已插入", "已插入", "Inserted", "入力済み", "입력됨", "Insertado", "Inséré", "Eingefügt"),
     },
-            Msg {
+                Msg {
         key: "history.paste_sent",
-        text: row("已尝试粘贴", "已嘗試貼上", "Paste sent", "貼り付けを試行", "붙여넣기 시도됨"),
+        text: row(
+            "已尝试粘贴",
+            "已嘗試貼上",
+            "Paste sent",
+            "貼り付けを試行",
+            "붙여넣기 시도됨",
+            "Pegado enviado",
+            "Collage envoyé",
+            "Einfügebefehl gesendet",
+        ),
     },
-    Msg {
+        Msg {
         key: "history.copied_fallback",
         text: row(
             "已复制(需 {})",
@@ -1300,9 +2427,12 @@ pub const CATALOG: &[Msg] = &[
             "Copied (use {})",
             "コピー済み（要 {}）",
             "복사됨({} 필요)",
+            "Copiado (usa {})",
+            "Copié (utilisez {})",
+            "Kopiert (mit {} einfügen)",
         ),
     },
-    Msg {
+        Msg {
         key: "history.insert_failed",
         text: row(
             "插入失败",
@@ -1310,9 +2440,12 @@ pub const CATALOG: &[Msg] = &[
             "Insert failed",
             "入力失敗",
             "입력 실패",
+            "No se pudo insertar",
+            "Échec de l’insertion",
+            "Einfügen fehlgeschlagen",
         ),
     },
-            Msg {
+                Msg {
         key: "history.confirm_clear",
         text: row(
             "确定清空全部 {} 条记录？此操作不可恢复。",
@@ -1320,9 +2453,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete all {} history entries? This cannot be undone.",
             "全 {} 件の記録を削除しますか？この操作は取り消せません。",
             "전체 {}건의 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+            "¿Eliminar los {} registros del historial? Esta acción no se puede deshacer.",
+            "Supprimer les {} entrées de l’historique ? Cette action est irréversible.",
+            "Alle {} Verlaufseinträge löschen? Dies kann nicht rückgängig gemacht werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "history.confirm_delete",
         text: row(
             "确定删除这条记录？此操作不可恢复。",
@@ -1330,9 +2466,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete this record? This cannot be undone.",
             "この記録を削除しますか？元に戻せません。",
             "이 기록을 삭제할까요? 되돌릴 수 없습니다.",
+            "Delete this record? This cannot be undone.",
+            "Delete this record? This cannot be undone.",
+            "Delete this record? This cannot be undone.",
         ),
     },
-    Msg {
+        Msg {
         key: "history.clear_failed",
         text: row(
             "清空失败：{}",
@@ -1340,9 +2479,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to clear history: {}",
             "履歴の消去に失敗：{}",
             "기록 비우기 실패: {}",
+            "No se pudo borrar el historial: {}",
+            "Impossible d’effacer l’historique : {}",
+            "Verlauf konnte nicht geleert werden: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "history.delete_failed",
         text: row(
             "删除失败：{}",
@@ -1350,9 +2492,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to delete entry: {}",
             "記録の削除に失敗：{}",
             "항목 삭제 실패: {}",
+            "No se pudo eliminar el registro: {}",
+            "Impossible de supprimer l’entrée : {}",
+            "Eintrag konnte nicht gelöscht werden: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "history.copy_failed",
         text: row(
             "复制失败：{}",
@@ -1360,9 +2505,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to copy: {}",
             "コピーに失敗：{}",
             "복사 실패: {}",
+            "No se pudo copiar: {}",
+            "Impossible de copier : {}",
+            "Kopieren fehlgeschlagen: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "history.export_failed",
         text: row(
             "导出失败：{}",
@@ -1370,9 +2518,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to export: {}",
             "エクスポート失敗：{}",
             "내보내기 실패: {}",
+            "No se pudo exportar: {}",
+            "Échec de l’exportation : {}",
+            "Export fehlgeschlagen: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "history.retranscribe_failed",
         text: row(
             "重新转录失败：{}",
@@ -1380,21 +2531,24 @@ pub const CATALOG: &[Msg] = &[
             "Retranscribe failed: {}",
             "再認識に失敗：{}",
             "다시 인식 실패: {}",
+            "No se pudo volver a transcribir: {}",
+            "Échec de la nouvelle transcription : {}",
+            "Erneute Transkription fehlgeschlagen: {}",
         ),
     },
     // ---- Durations ---------------------------------------------------------
-    Msg {
+        Msg {
         key: "dur.ms",
-        text: row("{} 毫秒", "{} 毫秒", "{} ms", "{} ミリ秒", "{} 밀리초"),
+        text: row("{} 毫秒", "{} 毫秒", "{} ms", "{} ミリ秒", "{} 밀리초", "{} ms", "{} ms", "{} ms"),
     },
-    Msg {
+        Msg {
         key: "dur.sec",
-        text: row("{} 秒", "{} 秒", "{} s", "{} 秒", "{} 초"),
+        text: row("{} 秒", "{} 秒", "{} s", "{} 秒", "{} 초", "{} s", "{} s", "{} s"),
     },
 
     // ---- Language selector --------------------------------------------------
 
-    Msg {
+        Msg {
         key: "settings.language_follow_system",
         text: row(
             "跟随系统",
@@ -1402,13 +2556,16 @@ pub const CATALOG: &[Msg] = &[
             "Follow system",
             "システムに従う",
             "시스템 따라가기",
+            "Seguir al sistema",
+            "Suivre le système",
+            "Systemsprache",
         ),
     },
 
     // ---- Appearance (settings) ---------------------------------------------
 
     // ---- Status / host ------------------------------------------------------
-    Msg {
+        Msg {
         key: "status.core_started",
         text: row(
             "Core 2.0 已启动",
@@ -1416,9 +2573,12 @@ pub const CATALOG: &[Msg] = &[
             "Core 2.0 ready",
             "Core 2.0 起動済み",
             "Core 2.0 시작됨",
+            "Core 2.0 ready",
+            "Core 2.0 ready",
+            "Core 2.0 ready",
         ),
     },
-    Msg {
+        Msg {
         key: "status.startup_failed",
         text: row(
             "启动失败",
@@ -1426,9 +2586,12 @@ pub const CATALOG: &[Msg] = &[
             "Startup failed",
             "起動に失敗しました",
             "시작 실패",
+            "Startup failed",
+            "Startup failed",
+            "Startup failed",
         ),
     },
-    Msg {
+        Msg {
         key: "startup.input_method_unavailable_title",
         text: row(
             "输入法服务不可用",
@@ -1436,9 +2599,12 @@ pub const CATALOG: &[Msg] = &[
             "Input method unavailable",
             "入力メソッドを利用できません",
             "입력기 서비스를 사용할 수 없음",
+            "Input method unavailable",
+            "Input method unavailable",
+            "Input method unavailable",
         ),
     },
-    Msg {
+        Msg {
         key: "startup.input_method_unavailable",
         text: row(
             "输入法服务当前不可用。应用仍会继续运行，但全局快捷键和划词功能暂不可用。请安装并启动 fcitx5、启用 OpenLess 插件，并确认当前桌面会话的 D-Bus 可用。详情：{}",
@@ -1446,13 +2612,16 @@ pub const CATALOG: &[Msg] = &[
             "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
             "入力メソッドサービスを利用できません。アプリは起動を続けますが、グローバルショートカットと選択ツールは一時的に利用できません。fcitx5 と OpenLess アドオンを有効にし、デスクトップセッションの D-Bus を確認してください。詳細：{}",
             "입력기 서비스를 사용할 수 없습니다. 앱은 계속 실행되지만 전역 단축키와 선택 도구를 일시적으로 사용할 수 없습니다. fcitx5와 OpenLess 애드온을 설치·시작하고 데스크톱 세션의 D-Bus를 확인하세요. 세부 정보: {}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
+            "The input method service is unavailable. The app will continue running, but global hotkeys and selection tools are temporarily unavailable. Install and start fcitx5, enable the OpenLess addon, and check the desktop session's D-Bus. Details: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "common.load_more",
-        text: row("加载更多", "載入更多", "Load more", "もっと読み込む", "더 불러오기"),
+        text: row("加载更多", "載入更多", "Load more", "もっと読み込む", "더 불러오기", "Load more", "Load more", "Load more"),
     },
-    Msg {
+        Msg {
         key: "common.loaded_of_total",
         text: row(
             "已载入 {} / 共 {}",
@@ -1460,132 +2629,1014 @@ pub const CATALOG: &[Msg] = &[
             "Loaded {} of {}",
             "{} / {} 件を読み込み済み",
             "{} / {}개 불러옴",
+            "Loaded {} of {}",
+            "Loaded {} of {}",
+            "Loaded {} of {}",
         ),
     },
-    Msg {
+        Msg {
         key: "common.saving",
-        text: row("保存中", "儲存中", "Saving…", "保存中", "저장 중"),
+        text: row(
+            "保存中",
+            "儲存中",
+            "Saving…",
+            "保存中",
+            "저장 중",
+            "Guardando…",
+            "Enregistrement…",
+            "Wird gespeichert…",
+        ),
     },
-    Msg { key: "startup.connecting", text: row("正在连接 OpenLess…", "正在連線 OpenLess…", "Connecting to OpenLess…", "OpenLess に接続中…", "OpenLess에 연결 중…") },
+        Msg {
+        key: "startup.connecting",
+        text: row(
+            "正在连接 OpenLess…",
+            "正在連線 OpenLess…",
+            "Connecting to OpenLess…",
+            "OpenLess に接続中…",
+            "OpenLess에 연결 중…",
+            "Connecting to OpenLess…",
+            "Connecting to OpenLess…",
+            "Connecting to OpenLess…",
+        ),
+    },
     // ---- Buttons (models / providers / vocab / styles / marketplace / history)
 
-    Msg { key: "btn.add", text: row("添加", "新增", "Add", "追加", "추가") },
+        Msg {
+        key: "btn.add",
+        text: row("添加", "新增", "Add", "追加", "추가", "Add", "Add", "Add"),
+    },
 
-    Msg { key: "btn.edit", text: row("编辑", "編輯", "Edit", "編集", "편집") },
+        Msg {
+        key: "btn.edit",
+        text: row("编辑", "編輯", "Edit", "編集", "편집", "Edit", "Edit", "Edit"),
+    },
 
-    Msg { key: "btn.save_fields", text: row("保存字段/Secret", "儲存欄位/Secret", "Save fields/Secret", "欄位/Secret を保存", "필드/Secret 저장") },
-    Msg { key: "btn.clear_secret", text: row("清除 Secret", "清除 Secret", "Clear Secret", "Secret を消去", "Secret 지우기") },
+        Msg {
+        key: "btn.save_fields",
+        text: row(
+            "保存字段/Secret",
+            "儲存欄位/Secret",
+            "Save fields/Secret",
+            "欄位/Secret を保存",
+            "필드/Secret 저장",
+            "Save fields/Secret",
+            "Save fields/Secret",
+            "Save fields/Secret",
+        ),
+    },
+        Msg {
+        key: "btn.clear_secret",
+        text: row("清除 Secret", "清除 Secret", "Clear Secret", "Secret を消去", "Secret 지우기", "Clear Secret", "Clear Secret", "Clear Secret"),
+    },
 
-    Msg { key: "btn.export_error_log", text: row("导出错误日志", "匯出錯誤日誌", "Export error log", "エラーログをエクスポート", "오류 로그 내보내기") },
+        Msg {
+        key: "btn.export_error_log",
+        text: row(
+            "导出错误日志",
+            "匯出錯誤日誌",
+            "Export error log",
+            "エラーログをエクスポート",
+            "오류 로그 내보내기",
+            "Export error log",
+            "Export error log",
+            "Export error log",
+        ),
+    },
 
-    Msg { key: "btn.activate", text: row("激活", "啟用", "Activate", "アクティブ化", "활성화") },
+        Msg {
+        key: "btn.activate",
+        text: row("激活", "啟用", "Activate", "アクティブ化", "활성화", "Activate", "Activate", "Activate"),
+    },
 
     // ---- Page / section headings
 
     // ---- Update UI
     // ---- Settings / preferences
 
-    Msg { key: "settings.microphone", text: row("麦克风", "麥克風", "Microphone", "マイク", "마이크") },
-    Msg { key: "settings.system_default", text: row("系统默认", "系統預設", "System default", "システム既定", "시스템 기본") },
+        Msg {
+        key: "settings.microphone",
+        text: row("麦克风", "麥克風", "Microphone", "マイク", "마이크", "Microphone", "Microphone", "Microphone"),
+    },
+        Msg {
+        key: "settings.system_default",
+        text: row(
+            "系统默认",
+            "系統預設",
+            "System default",
+            "システム既定",
+            "시스템 기본",
+            "System default",
+            "System default",
+            "System default",
+        ),
+    },
 
     // ---- Hotkey control labels
 
-    Msg { key: "hotkey.translation", text: row("翻译修饰键", "翻譯修飾鍵", "Translate modifier", "翻訳修飾キー", "번역 수정자") },
+        Msg {
+        key: "hotkey.translation",
+        text: row(
+            "翻译修饰键",
+            "翻譯修飾鍵",
+            "Translate modifier",
+            "翻訳修飾キー",
+            "번역 수정자",
+            "Translate modifier",
+            "Translate modifier",
+            "Translate modifier",
+        ),
+    },
 
     // ---- Remote input
 
-    Msg { key: "lbl.new_style_default", text: row("新风格", "新風格", "New style", "新規スタイル", "새 스타일") },
+        Msg {
+        key: "lbl.new_style_default",
+        text: row("新风格", "新風格", "New style", "新規スタイル", "새 스타일", "New style", "New style", "New style"),
+    },
 
-    Msg { key: "providers.credentials", text: row("凭据渠道", "憑證管道", "Credential channels", "資格情報チャネル", "자격 증명 채널") },
-    Msg { key: "providers.core_note", text: row("Provider 类型、默认 Endpoint/Model 与鉴权要求均来自 Core descriptor。", "Provider 類型、預設 Endpoint/Model 與鑑權要求皆來自 Core descriptor。", "Provider type, default Endpoint/Model and auth requirements come from the Core descriptor.", "Provider 種別・既定 Endpoint/Model・認証要件は Core descriptor 由来です。", "Provider 유형, 기본 Endpoint/Model 및 인증 요구 사항은 Core descriptor에서 옵니다.") },
+        Msg {
+        key: "providers.credentials",
+        text: row(
+            "凭据渠道",
+            "憑證管道",
+            "Credential channels",
+            "資格情報チャネル",
+            "자격 증명 채널",
+            "Credential channels",
+            "Credential channels",
+            "Credential channels",
+        ),
+    },
+        Msg {
+        key: "providers.core_note",
+        text: row(
+            "Provider 类型、默认 Endpoint/Model 与鉴权要求均来自 Core descriptor。",
+            "Provider 類型、預設 Endpoint/Model 與鑑權要求皆來自 Core descriptor。",
+            "Provider type, default Endpoint/Model and auth requirements come from the Core descriptor.",
+            "Provider 種別・既定 Endpoint/Model・認証要件は Core descriptor 由来です。",
+            "Provider 유형, 기본 Endpoint/Model 및 인증 요구 사항은 Core descriptor에서 옵니다.",
+            "Provider type, default Endpoint/Model and auth requirements come from the Core descriptor.",
+            "Provider type, default Endpoint/Model and auth requirements come from the Core descriptor.",
+            "Provider type, default Endpoint/Model and auth requirements come from the Core descriptor.",
+        ),
+    },
 
-    Msg { key: "providers.editing", text: row("编辑渠道 {}", "編輯管道 {}", "Edit channel {}", "チャネル {} を編集", "채널 {} 편집") },
+        Msg {
+        key: "providers.editing",
+        text: row(
+            "编辑渠道 {}",
+            "編輯管道 {}",
+            "Edit channel {}",
+            "チャネル {} を編集",
+            "채널 {} 편집",
+            "Edit channel {}",
+            "Edit channel {}",
+            "Edit channel {}",
+        ),
+    },
 
-    Msg { key: "providers.name", text: row("名称", "名稱", "Name", "名前", "이름") },
+        Msg {
+        key: "providers.name",
+        text: row("名称", "名稱", "Name", "名前", "이름", "Name", "Name", "Name"),
+    },
 
-    Msg { key: "providers.no_cloud_note", text: row("此 Provider 不使用云凭据；模型由本地模型面板管理。", "此 Provider 不使用雲端憑證；模型由本機模型面板管理。", "This provider uses no cloud credentials; models are managed in Local Models.", "この Provider はクラウド資格情報を使いません。モデルはローカルモデルで管理します。", "이 프로바이더는 클라우드 자격 증명을 사용하지 않습니다. 모델은 로컬 모델에서 관리합니다.") },
-    Msg { key: "providers.oauth_note", text: row("此 Provider 使用 OAuth；Linux egui 不读取或显示 OAuth token。", "此 Provider 使用 OAuth；Linux egui 不讀取或顯示 OAuth token。", "This provider uses OAuth; the Linux egui UI never reads or shows the OAuth token.", "この Provider は OAuth を使用します。Linux egui は OAuth トークンを読み取らず表示もしません。", "이 프로바이더는 OAuth를 사용합니다. Linux egui는 OAuth 토큰을 읽거나 표시하지 않습니다.") },
-    Msg { key: "providers.api_key_hint", text: row("API Key（留空表示不修改）", "API Key（留空表示不修改）", "API Key (blank leaves unchanged)", "API Key（空欄なら変更しない）", "API Key(비우면 변경 안 함)") },
+        Msg {
+        key: "providers.no_cloud_note",
+        text: row(
+            "此 Provider 不使用云凭据；模型由本地模型面板管理。",
+            "此 Provider 不使用雲端憑證；模型由本機模型面板管理。",
+            "This provider uses no cloud credentials; models are managed in Local Models.",
+            "この Provider はクラウド資格情報を使いません。モデルはローカルモデルで管理します。",
+            "이 프로바이더는 클라우드 자격 증명을 사용하지 않습니다. 모델은 로컬 모델에서 관리합니다.",
+            "This provider uses no cloud credentials; models are managed in Local Models.",
+            "This provider uses no cloud credentials; models are managed in Local Models.",
+            "This provider uses no cloud credentials; models are managed in Local Models.",
+        ),
+    },
+        Msg {
+        key: "providers.oauth_note",
+        text: row(
+            "此 Provider 使用 OAuth；Linux egui 不读取或显示 OAuth token。",
+            "此 Provider 使用 OAuth；Linux egui 不讀取或顯示 OAuth token。",
+            "This provider uses OAuth; the Linux egui UI never reads or shows the OAuth token.",
+            "この Provider は OAuth を使用します。Linux egui は OAuth トークンを読み取らず表示もしません。",
+            "이 프로바이더는 OAuth를 사용합니다. Linux egui는 OAuth 토큰을 읽거나 표시하지 않습니다.",
+            "This provider uses OAuth; the Linux egui UI never reads or shows the OAuth token.",
+            "This provider uses OAuth; the Linux egui UI never reads or shows the OAuth token.",
+            "This provider uses OAuth; the Linux egui UI never reads or shows the OAuth token.",
+        ),
+    },
+        Msg {
+        key: "providers.api_key_hint",
+        text: row(
+            "API Key（留空表示不修改）",
+            "API Key（留空表示不修改）",
+            "API Key (blank leaves unchanged)",
+            "API Key（空欄なら変更しない）",
+            "API Key(비우면 변경 안 함)",
+            "API Key (blank leaves unchanged)",
+            "API Key (blank leaves unchanged)",
+            "API Key (blank leaves unchanged)",
+        ),
+    },
 
     // ---- Empty / info labels
 
     // ---- Status / toast messages
 
-    Msg { key: "status.auto_stopped", text: row("录音已自动结束", "錄音已自動結束", "Recording auto-stopped", "録音を自動終了", "녹음 자동 종료") },
+        Msg {
+        key: "status.auto_stopped",
+        text: row(
+            "录音已自动结束",
+            "錄音已自動結束",
+            "Recording auto-stopped",
+            "録音を自動終了",
+            "녹음 자동 종료",
+            "Recording auto-stopped",
+            "Recording auto-stopped",
+            "Recording auto-stopped",
+        ),
+    },
 
-    Msg { key: "status.marketplace_loaded", text: row("Marketplace 已加载 {} 个风格包", "Marketplace 已載入 {} 個風格包", "Marketplace loaded {} style packs", "Marketplace が {} 個のスタイルパックを読込", "마켓플레이스 스타일 팩 {}개 로드됨") },
+        Msg {
+        key: "status.marketplace_loaded",
+        text: row(
+            "Marketplace 已加载 {} 个风格包",
+            "Marketplace 已載入 {} 個風格包",
+            "Marketplace loaded {} style packs",
+            "Marketplace が {} 個のスタイルパックを読込",
+            "마켓플레이스 스타일 팩 {}개 로드됨",
+            "Marketplace loaded {} style packs",
+            "Marketplace loaded {} style packs",
+            "Marketplace loaded {} style packs",
+        ),
+    },
 
-    Msg { key: "status.detail_loaded", text: row("已加载风格详情：{}", "已載入風格詳情：{}", "Loaded style details: {}", "スタイル詳細を読込: {}", "스타일 상세 로드됨: {}") },
-    Msg { key: "status.my_publish_likes", text: row("我的发布 {} 个，喜欢 {} 个", "我的發布 {} 個，喜歡 {} 個", "{} of my uploads · {} liked", "マイ投稿 {} 件・いいね {} 件", "내 업로드 {}개 · 좋아요 {}개") },
-    Msg { key: "status.settings_saved", text: row("设置已保存", "設定已儲存", "Settings saved", "設定を保存しました", "설정 저장됨") },
-    Msg { key: "status.remote_updated", text: row("远程输入状态已更新", "遠端輸入狀態已更新", "Remote input updated", "リモート入力を更新しました", "원격 입력 업데이트됨") },
+        Msg {
+        key: "status.detail_loaded",
+        text: row(
+            "已加载风格详情：{}",
+            "已載入風格詳情：{}",
+            "Loaded style details: {}",
+            "スタイル詳細を読込: {}",
+            "스타일 상세 로드됨: {}",
+            "Loaded style details: {}",
+            "Loaded style details: {}",
+            "Loaded style details: {}",
+        ),
+    },
+        Msg {
+        key: "status.my_publish_likes",
+        text: row(
+            "我的发布 {} 个，喜欢 {} 个",
+            "我的發布 {} 個，喜歡 {} 個",
+            "{} of my uploads · {} liked",
+            "マイ投稿 {} 件・いいね {} 件",
+            "내 업로드 {}개 · 좋아요 {}개",
+            "{} of my uploads · {} liked",
+            "{} of my uploads · {} liked",
+            "{} of my uploads · {} liked",
+        ),
+    },
+        Msg {
+        key: "status.settings_saved",
+        text: row(
+            "设置已保存",
+            "設定已儲存",
+            "Settings saved",
+            "設定を保存しました",
+            "설정 저장됨",
+            "Settings saved",
+            "Settings saved",
+            "Settings saved",
+        ),
+    },
+        Msg {
+        key: "status.remote_updated",
+        text: row(
+            "远程输入状态已更新",
+            "遠端輸入狀態已更新",
+            "Remote input updated",
+            "リモート入力を更新しました",
+            "원격 입력 업데이트됨",
+            "Remote input updated",
+            "Remote input updated",
+            "Remote input updated",
+        ),
+    },
 
-    Msg { key: "status.channel_active", text: row("active 渠道已更新", "active 管道已更新", "Active channel updated", "アクティブチャネルを更新しました", "활성 채널 업데이트됨") },
-    Msg { key: "status.channel_enabled", text: row("渠道启用状态已更新", "管道啟用狀態已更新", "Channel enabled state updated", "チャネルの有効状態を更新しました", "채널 사용 상태 업데이트됨") },
-    Msg { key: "status.channel_reordered", text: row("渠道顺序已更新", "管道順序已更新", "Channel order updated", "チャネルの順序を更新しました", "채널 순서 업데이트됨") },
-    Msg { key: "status.channel_deleted", text: row("渠道已删除", "管道已刪除", "Channel deleted", "チャネルを削除しました", "채널 삭제됨") },
-    Msg { key: "status.provider_type_updated", text: row("Provider 类型已更新", "Provider 類型已更新", "Provider type updated", "Provider 種別を更新しました", "Provider 유형 업데이트됨") },
-    Msg { key: "status.channel_saved", text: row("渠道配置已保存", "管道設定已儲存", "Channel configuration saved", "チャネル設定を保存しました", "채널 설정 저장됨") },
-    Msg { key: "status.secret_cleared", text: row("渠道 Secret 已清除", "管道 Secret 已清除", "Channel Secret cleared", "チャネルの Secret を消去しました", "채널 Secret 지워짐") },
-    Msg { key: "status.provider_validated", text: row("Provider 验证通过（{} ms）", "Provider 驗證通過（{} ms）", "Provider validated ({} ms)", "Provider 検証成功（{} ms）", "Provider 검증 통과({}ms)") },
-    Msg { key: "status.log_level_saved", text: row("日志级别已保存，重启 OpenLess 后生效", "日誌等級已儲存，重新啟動 OpenLess 後生效", "Log level saved; restart OpenLess to apply", "ログレベルを保存しました。OpenLess の再起動で反映されます", "로그 레벨을 저장했습니다. OpenLess를 다시 시작하면 적용됩니다") },
-    Msg { key: "status.export_log_done", text: row("错误日志已导出", "錯誤日誌已匯出", "Error log exported", "エラーログをエクスポートしました", "오류 로그 내보냄") },
-    Msg { key: "status.hotkey_handled", text: row("已处理快捷键", "已處理快速鍵", "Hotkey handled", "ホットキーを処理しました", "단축키 처리됨") },
-    Msg { key: "status.launch_handled", text: row("已处理启动请求", "已處理啟動請求", "Launch request handled", "起動要求を処理しました", "시작 요청 처리됨") },
-    Msg { key: "status.request_restart", text: row("请手动重启 OpenLess", "請手動重新啟動 OpenLess", "Please restart OpenLess manually", "OpenLess を手動で再起動してください", "OpenLess를 수동으로 재시작하세요") },
-    Msg { key: "status.tray_stopped", text: row("系统托盘已停止：{}", "系統托盤已停止：{}", "System tray stopped: {}", "システムトレイを停止: {}", "시스템 트레이 중지됨: {}") },
-    Msg { key: "status.style_switched", text: row("已切换风格：{}", "已切換風格：{}", "Switched style: {}", "スタイルを切替: {}", "스타일 전환됨: {}") },
-    Msg { key: "status.no_previous_style", text: row("没有可切换的上一风格", "沒有可切換的上一風格", "No previous style to switch to", "切替可能な前スタイルがありません", "전환할 이전 스타일이 없습니다") },
-    Msg { key: "status.mic_selected", text: row("已选择麦克风：{}", "已選擇麥克風：{}", "Microphone selected: {}", "マイクを選択: {}", "마이크 선택됨: {}") },
-    Msg { key: "status.preset_updated", text: row("词汇预设已更新", "詞彙預設已更新", "Vocabulary preset updated", "語彙プリセットを更新しました", "어휘 프리셋 업데이트됨") },
+        Msg {
+        key: "status.channel_active",
+        text: row(
+            "active 渠道已更新",
+            "active 管道已更新",
+            "Active channel updated",
+            "アクティブチャネルを更新しました",
+            "활성 채널 업데이트됨",
+            "Active channel updated",
+            "Active channel updated",
+            "Active channel updated",
+        ),
+    },
+        Msg {
+        key: "status.channel_enabled",
+        text: row(
+            "渠道启用状态已更新",
+            "管道啟用狀態已更新",
+            "Channel enabled state updated",
+            "チャネルの有効状態を更新しました",
+            "채널 사용 상태 업데이트됨",
+            "Channel enabled state updated",
+            "Channel enabled state updated",
+            "Channel enabled state updated",
+        ),
+    },
+        Msg {
+        key: "status.channel_reordered",
+        text: row(
+            "渠道顺序已更新",
+            "管道順序已更新",
+            "Channel order updated",
+            "チャネルの順序を更新しました",
+            "채널 순서 업데이트됨",
+            "Channel order updated",
+            "Channel order updated",
+            "Channel order updated",
+        ),
+    },
+        Msg {
+        key: "status.channel_deleted",
+        text: row(
+            "渠道已删除",
+            "管道已刪除",
+            "Channel deleted",
+            "チャネルを削除しました",
+            "채널 삭제됨",
+            "Channel deleted",
+            "Channel deleted",
+            "Channel deleted",
+        ),
+    },
+        Msg {
+        key: "status.provider_type_updated",
+        text: row(
+            "Provider 类型已更新",
+            "Provider 類型已更新",
+            "Provider type updated",
+            "Provider 種別を更新しました",
+            "Provider 유형 업데이트됨",
+            "Provider type updated",
+            "Provider type updated",
+            "Provider type updated",
+        ),
+    },
+        Msg {
+        key: "status.channel_saved",
+        text: row(
+            "渠道配置已保存",
+            "管道設定已儲存",
+            "Channel configuration saved",
+            "チャネル設定を保存しました",
+            "채널 설정 저장됨",
+            "Channel configuration saved",
+            "Channel configuration saved",
+            "Channel configuration saved",
+        ),
+    },
+        Msg {
+        key: "status.secret_cleared",
+        text: row(
+            "渠道 Secret 已清除",
+            "管道 Secret 已清除",
+            "Channel Secret cleared",
+            "チャネルの Secret を消去しました",
+            "채널 Secret 지워짐",
+            "Channel Secret cleared",
+            "Channel Secret cleared",
+            "Channel Secret cleared",
+        ),
+    },
+        Msg {
+        key: "status.provider_validated",
+        text: row(
+            "Provider 验证通过（{} ms）",
+            "Provider 驗證通過（{} ms）",
+            "Provider validated ({} ms)",
+            "Provider 検証成功（{} ms）",
+            "Provider 검증 통과({}ms)",
+            "Provider validated ({} ms)",
+            "Provider validated ({} ms)",
+            "Provider validated ({} ms)",
+        ),
+    },
+        Msg {
+        key: "status.log_level_saved",
+        text: row(
+            "日志级别已保存，重启 OpenLess 后生效",
+            "日誌等級已儲存，重新啟動 OpenLess 後生效",
+            "Log level saved; restart OpenLess to apply",
+            "ログレベルを保存しました。OpenLess の再起動で反映されます",
+            "로그 레벨을 저장했습니다. OpenLess를 다시 시작하면 적용됩니다",
+            "Log level saved; restart OpenLess to apply",
+            "Log level saved; restart OpenLess to apply",
+            "Log level saved; restart OpenLess to apply",
+        ),
+    },
+        Msg {
+        key: "status.export_log_done",
+        text: row(
+            "错误日志已导出",
+            "錯誤日誌已匯出",
+            "Error log exported",
+            "エラーログをエクスポートしました",
+            "오류 로그 내보냄",
+            "Error log exported",
+            "Error log exported",
+            "Error log exported",
+        ),
+    },
+        Msg {
+        key: "status.hotkey_handled",
+        text: row(
+            "已处理快捷键",
+            "已處理快速鍵",
+            "Hotkey handled",
+            "ホットキーを処理しました",
+            "단축키 처리됨",
+            "Hotkey handled",
+            "Hotkey handled",
+            "Hotkey handled",
+        ),
+    },
+        Msg {
+        key: "status.launch_handled",
+        text: row(
+            "已处理启动请求",
+            "已處理啟動請求",
+            "Launch request handled",
+            "起動要求を処理しました",
+            "시작 요청 처리됨",
+            "Launch request handled",
+            "Launch request handled",
+            "Launch request handled",
+        ),
+    },
+        Msg {
+        key: "status.request_restart",
+        text: row(
+            "请手动重启 OpenLess",
+            "請手動重新啟動 OpenLess",
+            "Please restart OpenLess manually",
+            "OpenLess を手動で再起動してください",
+            "OpenLess를 수동으로 재시작하세요",
+            "Please restart OpenLess manually",
+            "Please restart OpenLess manually",
+            "Please restart OpenLess manually",
+        ),
+    },
+        Msg {
+        key: "status.tray_stopped",
+        text: row(
+            "系统托盘已停止：{}",
+            "系統托盤已停止：{}",
+            "System tray stopped: {}",
+            "システムトレイを停止: {}",
+            "시스템 트레이 중지됨: {}",
+            "System tray stopped: {}",
+            "System tray stopped: {}",
+            "System tray stopped: {}",
+        ),
+    },
+        Msg {
+        key: "status.style_switched",
+        text: row(
+            "已切换风格：{}",
+            "已切換風格：{}",
+            "Switched style: {}",
+            "スタイルを切替: {}",
+            "스타일 전환됨: {}",
+            "Switched style: {}",
+            "Switched style: {}",
+            "Switched style: {}",
+        ),
+    },
+        Msg {
+        key: "status.no_previous_style",
+        text: row(
+            "没有可切换的上一风格",
+            "沒有可切換的上一風格",
+            "No previous style to switch to",
+            "切替可能な前スタイルがありません",
+            "전환할 이전 스타일이 없습니다",
+            "No previous style to switch to",
+            "No previous style to switch to",
+            "No previous style to switch to",
+        ),
+    },
+        Msg {
+        key: "status.mic_selected",
+        text: row(
+            "已选择麦克风：{}",
+            "已選擇麥克風：{}",
+            "Microphone selected: {}",
+            "マイクを選択: {}",
+            "마이크 선택됨: {}",
+            "Microphone selected: {}",
+            "Microphone selected: {}",
+            "Microphone selected: {}",
+        ),
+    },
+        Msg {
+        key: "status.preset_updated",
+        text: row(
+            "词汇预设已更新",
+            "詞彙預設已更新",
+            "Vocabulary preset updated",
+            "語彙プリセットを更新しました",
+            "어휘 프리셋 업데이트됨",
+            "Vocabulary preset updated",
+            "Vocabulary preset updated",
+            "Vocabulary preset updated",
+        ),
+    },
 
-    Msg { key: "status.vocab_saved", text: row("词汇已保存", "詞彙已儲存", "Vocabulary saved", "語彙を保存しました", "어휘 저장됨") },
-    Msg { key: "status.vocab_updated", text: row("词汇已更新", "詞彙已更新", "Vocabulary updated", "語彙を更新しました", "어휘 업데이트됨") },
-    Msg { key: "status.correction_saved", text: row("纠错规则已保存", "糾錯規則已儲存", "Correction rule saved", "修正ルールを保存しました", "교정 규칙 저장됨") },
-    Msg { key: "status.correction_updated", text: row("纠错规则已更新", "糾錯規則已更新", "Correction rule updated", "修正ルールを更新しました", "교정 규칙 업데이트됨") },
+        Msg {
+        key: "status.vocab_saved",
+        text: row(
+            "词汇已保存",
+            "詞彙已儲存",
+            "Vocabulary saved",
+            "語彙を保存しました",
+            "어휘 저장됨",
+            "Vocabulary saved",
+            "Vocabulary saved",
+            "Vocabulary saved",
+        ),
+    },
+        Msg {
+        key: "status.vocab_updated",
+        text: row(
+            "词汇已更新",
+            "詞彙已更新",
+            "Vocabulary updated",
+            "語彙を更新しました",
+            "어휘 업데이트됨",
+            "Vocabulary updated",
+            "Vocabulary updated",
+            "Vocabulary updated",
+        ),
+    },
+        Msg {
+        key: "status.correction_saved",
+        text: row(
+            "纠错规则已保存",
+            "糾錯規則已儲存",
+            "Correction rule saved",
+            "修正ルールを保存しました",
+            "교정 규칙 저장됨",
+            "Correction rule saved",
+            "Correction rule saved",
+            "Correction rule saved",
+        ),
+    },
+        Msg {
+        key: "status.correction_updated",
+        text: row(
+            "纠错规则已更新",
+            "糾錯規則已更新",
+            "Correction rule updated",
+            "修正ルールを更新しました",
+            "교정 규칙 업데이트됨",
+            "Correction rule updated",
+            "Correction rule updated",
+            "Correction rule updated",
+        ),
+    },
 
-    Msg { key: "status.style_imported", text: row("已导入风格包：{}", "已匯入風格包：{}", "Imported style pack: {}", "スタイルパックを読込: {}", "스타일 팩 가져옴: {}") },
-    Msg { key: "status.style_saved", text: row("风格包已保存：{}", "風格包已儲存：{}", "Style pack saved: {}", "スタイルパックを保存: {}", "스타일 팩 저장됨: {}") },
-    Msg { key: "status.style_updated", text: row("风格包已更新", "風格包已更新", "Style pack updated", "スタイルパックを更新しました", "스타일 팩 업데이트됨") },
+        Msg {
+        key: "status.style_imported",
+        text: row(
+            "已导入风格包：{}",
+            "已匯入風格包：{}",
+            "Imported style pack: {}",
+            "スタイルパックを読込: {}",
+            "스타일 팩 가져옴: {}",
+            "Imported style pack: {}",
+            "Imported style pack: {}",
+            "Imported style pack: {}",
+        ),
+    },
+        Msg {
+        key: "status.style_saved",
+        text: row(
+            "风格包已保存：{}",
+            "風格包已儲存：{}",
+            "Style pack saved: {}",
+            "スタイルパックを保存: {}",
+            "스타일 팩 저장됨: {}",
+            "Style pack saved: {}",
+            "Style pack saved: {}",
+            "Style pack saved: {}",
+        ),
+    },
+        Msg {
+        key: "status.style_updated",
+        text: row(
+            "风格包已更新",
+            "風格包已更新",
+            "Style pack updated",
+            "スタイルパックを更新しました",
+            "스타일 팩 업데이트됨",
+            "Style pack updated",
+            "Style pack updated",
+            "Style pack updated",
+        ),
+    },
 
-    Msg { key: "status.marketplace_installed", text: row("已安装风格包：{}", "已安裝風格包：{}", "Installed style pack: {}", "スタイルパックをインストール: {}", "스타일 팩 설치됨: {}") },
-    Msg { key: "status.marketplace_like", text: row("喜欢数：{}", "喜歡數：{}", "Likes: {}", "いいね数: {}", "좋아요 수: {}") },
-    Msg { key: "status.marketplace_zip_saved", text: row("Marketplace ZIP 已保存", "Marketplace ZIP 已儲存", "Marketplace ZIP saved", "Marketplace ZIP を保存しました", "마켓플레이스 ZIP 저장됨") },
+        Msg {
+        key: "status.marketplace_installed",
+        text: row(
+            "已安装风格包：{}",
+            "已安裝風格包：{}",
+            "Installed style pack: {}",
+            "スタイルパックをインストール: {}",
+            "스타일 팩 설치됨: {}",
+            "Installed style pack: {}",
+            "Installed style pack: {}",
+            "Installed style pack: {}",
+        ),
+    },
+        Msg {
+        key: "status.marketplace_like",
+        text: row("喜欢数：{}", "喜歡數：{}", "Likes: {}", "いいね数: {}", "좋아요 수: {}", "Likes: {}", "Likes: {}", "Likes: {}"),
+    },
+        Msg {
+        key: "status.marketplace_zip_saved",
+        text: row(
+            "Marketplace ZIP 已保存",
+            "Marketplace ZIP 已儲存",
+            "Marketplace ZIP saved",
+            "Marketplace ZIP を保存しました",
+            "마켓플레이스 ZIP 저장됨",
+            "Marketplace ZIP saved",
+            "Marketplace ZIP saved",
+            "Marketplace ZIP saved",
+        ),
+    },
 
-    Msg { key: "status.copy_failed", text: row("复制失败：{}", "複製失敗：{}", "Copy failed: {}", "コピー失敗: {}", "복사 실패: {}") },
+        Msg {
+        key: "status.copy_failed",
+        text: row(
+            "复制失败：{}",
+            "複製失敗：{}",
+            "Copy failed: {}",
+            "コピー失敗: {}",
+            "복사 실패: {}",
+            "Copy failed: {}",
+            "Copy failed: {}",
+            "Copy failed: {}",
+        ),
+    },
 
-    Msg { key: "status.history_deleted", text: row("历史记录已删除", "歷史紀錄已刪除", "History entry deleted", "履歴を削除しました", "기록 삭제됨") },
+        Msg {
+        key: "status.history_deleted",
+        text: row(
+            "历史记录已删除",
+            "歷史紀錄已刪除",
+            "History entry deleted",
+            "履歴を削除しました",
+            "기록 삭제됨",
+            "History entry deleted",
+            "History entry deleted",
+            "History entry deleted",
+        ),
+    },
 
-    Msg { key: "status.recording_exported", text: row("录音已导出：{}", "錄音已匯出：{}", "Recording exported: {}", "録音をエクスポート: {}", "녹음 내보냄: {}") },
-    Msg { key: "status.retranscribed", text: row("重新转写完成：{}", "重新轉寫完成：{}", "Retranscription done: {}", "再文字起こし完了: {}", "다시 받아쓰기 완료: {}") },
-    Msg { key: "status.dictation_phase", text: row("听写：{}", "聽寫：{}", "Dictation: {}", "ディクテーション: {}", "받아쓰기: {}") },
-    Msg { key: "status.dictation_done", text: row("听写完成：{}", "聽寫完成：{}", "Dictation done: {}", "ディクテーション完了: {}", "받아쓰기 완료: {}") },
+        Msg {
+        key: "status.recording_exported",
+        text: row(
+            "录音已导出：{}",
+            "錄音已匯出：{}",
+            "Recording exported: {}",
+            "録音をエクスポート: {}",
+            "녹음 내보냄: {}",
+            "Recording exported: {}",
+            "Recording exported: {}",
+            "Recording exported: {}",
+        ),
+    },
+        Msg {
+        key: "status.retranscribed",
+        text: row(
+            "重新转写完成：{}",
+            "重新轉寫完成：{}",
+            "Retranscription done: {}",
+            "再文字起こし完了: {}",
+            "다시 받아쓰기 완료: {}",
+            "Retranscription done: {}",
+            "Retranscription done: {}",
+            "Retranscription done: {}",
+        ),
+    },
+        Msg {
+        key: "status.dictation_phase",
+        text: row(
+            "听写：{}",
+            "聽寫：{}",
+            "Dictation: {}",
+            "ディクテーション: {}",
+            "받아쓰기: {}",
+            "Dictation: {}",
+            "Dictation: {}",
+            "Dictation: {}",
+        ),
+    },
+        Msg {
+        key: "status.dictation_done",
+        text: row(
+            "听写完成：{}",
+            "聽寫完成：{}",
+            "Dictation done: {}",
+            "ディクテーション完了: {}",
+            "받아쓰기 완료: {}",
+            "Dictation done: {}",
+            "Dictation done: {}",
+            "Dictation done: {}",
+        ),
+    },
 
-    Msg { key: "status.backlog_reset", text: row("事件积压 {} 条，已重置派生界面并重放可用事件", "事件積壓 {} 條，已重置衍生介面並重放可用事件", "{} events backlogged — reset derived UI and replayed available events", "{} 件のイベントが滞り、派生UIをリセットして再送しました", "이벤트 {}건 밀림 — 파생 UI 재설정 및 재생됨") },
-    Msg { key: "status.backlog_replay", text: row("事件积压 {} 条，已从 Core 重放补齐", "事件積壓 {} 條，已從 Core 重放補齊", "{} events backlogged — replayed from Core", "{} 件のイベントが滞り、Core から再送しました", "이벤트 {}건 밀림 — Core에서 재생됨") },
+        Msg {
+        key: "status.backlog_reset",
+        text: row(
+            "事件积压 {} 条，已重置派生界面并重放可用事件",
+            "事件積壓 {} 條，已重置衍生介面並重放可用事件",
+            "{} events backlogged — reset derived UI and replayed available events",
+            "{} 件のイベントが滞り、派生UIをリセットして再送しました",
+            "이벤트 {}건 밀림 — 파생 UI 재설정 및 재생됨",
+            "{} events backlogged — reset derived UI and replayed available events",
+            "{} events backlogged — reset derived UI and replayed available events",
+            "{} events backlogged — reset derived UI and replayed available events",
+        ),
+    },
+        Msg {
+        key: "status.backlog_replay",
+        text: row(
+            "事件积压 {} 条，已从 Core 重放补齐",
+            "事件積壓 {} 條，已從 Core 重放補齊",
+            "{} events backlogged — replayed from Core",
+            "{} 件のイベントが滞り、Core から再送しました",
+            "이벤트 {}건 밀림 — Core에서 재생됨",
+            "{} events backlogged — replayed from Core",
+            "{} events backlogged — replayed from Core",
+            "{} events backlogged — replayed from Core",
+        ),
+    },
 
-    Msg { key: "popup.ignore_no_session", text: row("已忽略没有活动会话的弹窗操作", "已忽略沒有活動工作階段的彈窗操作", "Ignored popup action without an active session", "アクティブなセッションのないポップアップ操作を無視しました", "활성 세션이 없는 팝업 동작 무시됨") },
-    Msg { key: "popup.ignore_stale", text: row("已忽略迟到、重复或跨类型的弹窗操作", "已忽略遲到、重複或跨類型的彈窗操作", "Ignored late, duplicate or cross-kind popup action", "遅延・重複・異種のポップアップ操作を無視しました", "지연/중복/유형 오류 팝업 동작 무시됨") },
-    Msg { key: "popup.ignore_late_qa", text: row("已忽略迟到的问答弹窗操作", "已忽略遲到的問答彈窗操作", "Ignored a late Q&A popup action", "遅れた Q&A ポップアップ操作を無視しました", "지연된 Q&A 팝업 동작 무시됨") },
-    Msg { key: "popup.protocol_error", text: row("原生弹窗协议错误：{}", "原生彈窗協定錯誤：{}", "Native popup protocol error: {}", "ネイティブポップアップのプロトコルエラー: {}", "네이티브 팝업 프로토콜 오류: {}") },
-    Msg { key: "popup.spawn_failed", text: row("原生弹窗启动失败：{}", "原生彈窗啟動失敗：{}", "Failed to start native popup: {}", "ネイティブポップアップの起動に失敗: {}", "네이티브 팝업 시작 실패: {}") },
-    Msg { key: "popup.exited", text: row("原生弹窗异常退出：{}", "原生彈窗異常結束：{}", "Native popup exited unexpectedly: {}", "ネイティブポップアップが異常終了: {}", "네이티브 팝업 비정상 종료: {}") },
-    Msg { key: "popup.start_failed", text: row("无法启动原生弹窗：{}", "無法啟動原生彈窗：{}", "Could not start the native popup: {}", "ネイティブポップアップを起動できません: {}", "네이티브 팝업을 시작할 수 없음: {}") },
-    Msg { key: "popup.channel_rebuild", text: row("原生弹窗通道重建：{}", "原生彈窗通道重建：{}", "Rebuilt native popup channel: {}", "ネイティブポップアップのチャネルを再構築: {}", "네이티브 팝업 채널 재구축: {}") },
-    Msg { key: "popup.recover_failed", text: row("原生弹窗恢复失败：{}", "原生彈窗恢復失敗：{}", "Native popup recovery failed: {}", "ネイティブポップアップの復元に失敗: {}", "네이티브 팝업 복구 실패: {}") },
-    Msg { key: "popup.session_invalid", text: row("弹窗 session 无效：{}", "彈窗 session 無效：{}", "Invalid popup session: {}", "無効なポップアップセッション: {}", "잘못된 팝업 세션: {}") },
-    Msg { key: "status.from_preset", text: row("预设：{}", "預設：{}", "Preset: {}", "プリセット: {}", "프리셋: {}") },
-    Msg { key: "dialog.export_log_cancelled", text: row("日志导出已取消", "日誌匯出已取消", "Log export cancelled", "ログのエクスポートをキャンセル", "로그 내보내기 취소됨") },
-    Msg { key: "dialog.style_import_cancelled", text: row("风格包导入已取消", "風格包匯入已取消", "Style-pack import cancelled", "スタイルパックのインポートをキャンセル", "스타일 팩 가져오기 취소됨") },
-    Msg { key: "dialog.style_export_cancelled", text: row("风格包导出已取消", "風格包匯出已取消", "Style-pack export cancelled", "スタイルパックのエクスポートをキャンセル", "스타일 팩 내보내기 취소됨") },
-    Msg { key: "dialog.recording_export_cancelled", text: row("录音导出已取消", "錄音匯出已取消", "Recording export cancelled", "録音のエクスポートをキャンセル", "녹음 내보내기 취소됨") },
-    Msg { key: "dialog.marketplace_zip_cancelled", text: row("Marketplace 下载已取消", "Marketplace 下載已取消", "Marketplace download cancelled", "Marketplace のダウンロードをキャンセル", "마켓플레이스 다운로드 취소됨") },
-    Msg { key: "status.history_cleared", text: row("历史已清空", "歷史已清空", "History cleared", "履歴をクリアしました", "기록이 지워졌습니다") },
+        Msg {
+        key: "popup.ignore_no_session",
+        text: row(
+            "已忽略没有活动会话的弹窗操作",
+            "已忽略沒有活動工作階段的彈窗操作",
+            "Ignored popup action without an active session",
+            "アクティブなセッションのないポップアップ操作を無視しました",
+            "활성 세션이 없는 팝업 동작 무시됨",
+            "Ignored popup action without an active session",
+            "Ignored popup action without an active session",
+            "Ignored popup action without an active session",
+        ),
+    },
+        Msg {
+        key: "popup.ignore_stale",
+        text: row(
+            "已忽略迟到、重复或跨类型的弹窗操作",
+            "已忽略遲到、重複或跨類型的彈窗操作",
+            "Ignored late, duplicate or cross-kind popup action",
+            "遅延・重複・異種のポップアップ操作を無視しました",
+            "지연/중복/유형 오류 팝업 동작 무시됨",
+            "Ignored late, duplicate or cross-kind popup action",
+            "Ignored late, duplicate or cross-kind popup action",
+            "Ignored late, duplicate or cross-kind popup action",
+        ),
+    },
+        Msg {
+        key: "popup.ignore_late_qa",
+        text: row(
+            "已忽略迟到的问答弹窗操作",
+            "已忽略遲到的問答彈窗操作",
+            "Ignored a late Q&A popup action",
+            "遅れた Q&A ポップアップ操作を無視しました",
+            "지연된 Q&A 팝업 동작 무시됨",
+            "Ignored a late Q&A popup action",
+            "Ignored a late Q&A popup action",
+            "Ignored a late Q&A popup action",
+        ),
+    },
+        Msg {
+        key: "popup.protocol_error",
+        text: row(
+            "原生弹窗协议错误：{}",
+            "原生彈窗協定錯誤：{}",
+            "Native popup protocol error: {}",
+            "ネイティブポップアップのプロトコルエラー: {}",
+            "네이티브 팝업 프로토콜 오류: {}",
+            "Native popup protocol error: {}",
+            "Native popup protocol error: {}",
+            "Native popup protocol error: {}",
+        ),
+    },
+        Msg {
+        key: "popup.spawn_failed",
+        text: row(
+            "原生弹窗启动失败：{}",
+            "原生彈窗啟動失敗：{}",
+            "Failed to start native popup: {}",
+            "ネイティブポップアップの起動に失敗: {}",
+            "네이티브 팝업 시작 실패: {}",
+            "Failed to start native popup: {}",
+            "Failed to start native popup: {}",
+            "Failed to start native popup: {}",
+        ),
+    },
+        Msg {
+        key: "popup.exited",
+        text: row(
+            "原生弹窗异常退出：{}",
+            "原生彈窗異常結束：{}",
+            "Native popup exited unexpectedly: {}",
+            "ネイティブポップアップが異常終了: {}",
+            "네이티브 팝업 비정상 종료: {}",
+            "Native popup exited unexpectedly: {}",
+            "Native popup exited unexpectedly: {}",
+            "Native popup exited unexpectedly: {}",
+        ),
+    },
+        Msg {
+        key: "popup.start_failed",
+        text: row(
+            "无法启动原生弹窗：{}",
+            "無法啟動原生彈窗：{}",
+            "Could not start the native popup: {}",
+            "ネイティブポップアップを起動できません: {}",
+            "네이티브 팝업을 시작할 수 없음: {}",
+            "Could not start the native popup: {}",
+            "Could not start the native popup: {}",
+            "Could not start the native popup: {}",
+        ),
+    },
+        Msg {
+        key: "popup.channel_rebuild",
+        text: row(
+            "原生弹窗通道重建：{}",
+            "原生彈窗通道重建：{}",
+            "Rebuilt native popup channel: {}",
+            "ネイティブポップアップのチャネルを再構築: {}",
+            "네이티브 팝업 채널 재구축: {}",
+            "Rebuilt native popup channel: {}",
+            "Rebuilt native popup channel: {}",
+            "Rebuilt native popup channel: {}",
+        ),
+    },
+        Msg {
+        key: "popup.recover_failed",
+        text: row(
+            "原生弹窗恢复失败：{}",
+            "原生彈窗恢復失敗：{}",
+            "Native popup recovery failed: {}",
+            "ネイティブポップアップの復元に失敗: {}",
+            "네이티브 팝업 복구 실패: {}",
+            "Native popup recovery failed: {}",
+            "Native popup recovery failed: {}",
+            "Native popup recovery failed: {}",
+        ),
+    },
+        Msg {
+        key: "popup.session_invalid",
+        text: row(
+            "弹窗 session 无效：{}",
+            "彈窗 session 無效：{}",
+            "Invalid popup session: {}",
+            "無効なポップアップセッション: {}",
+            "잘못된 팝업 세션: {}",
+            "Invalid popup session: {}",
+            "Invalid popup session: {}",
+            "Invalid popup session: {}",
+        ),
+    },
+        Msg {
+        key: "status.from_preset",
+        text: row("预设：{}", "預設：{}", "Preset: {}", "プリセット: {}", "프리셋: {}", "Preset: {}", "Preset: {}", "Preset: {}"),
+    },
+        Msg {
+        key: "dialog.export_log_cancelled",
+        text: row(
+            "日志导出已取消",
+            "日誌匯出已取消",
+            "Log export cancelled",
+            "ログのエクスポートをキャンセル",
+            "로그 내보내기 취소됨",
+            "Log export cancelled",
+            "Log export cancelled",
+            "Log export cancelled",
+        ),
+    },
+        Msg {
+        key: "dialog.style_import_cancelled",
+        text: row(
+            "风格包导入已取消",
+            "風格包匯入已取消",
+            "Style-pack import cancelled",
+            "スタイルパックのインポートをキャンセル",
+            "스타일 팩 가져오기 취소됨",
+            "Style-pack import cancelled",
+            "Style-pack import cancelled",
+            "Style-pack import cancelled",
+        ),
+    },
+        Msg {
+        key: "dialog.style_export_cancelled",
+        text: row(
+            "风格包导出已取消",
+            "風格包匯出已取消",
+            "Style-pack export cancelled",
+            "スタイルパックのエクスポートをキャンセル",
+            "스타일 팩 내보내기 취소됨",
+            "Style-pack export cancelled",
+            "Style-pack export cancelled",
+            "Style-pack export cancelled",
+        ),
+    },
+        Msg {
+        key: "dialog.recording_export_cancelled",
+        text: row(
+            "录音导出已取消",
+            "錄音匯出已取消",
+            "Recording export cancelled",
+            "録音のエクスポートをキャンセル",
+            "녹음 내보내기 취소됨",
+            "Recording export cancelled",
+            "Recording export cancelled",
+            "Recording export cancelled",
+        ),
+    },
+        Msg {
+        key: "dialog.marketplace_zip_cancelled",
+        text: row(
+            "Marketplace 下载已取消",
+            "Marketplace 下載已取消",
+            "Marketplace download cancelled",
+            "Marketplace のダウンロードをキャンセル",
+            "마켓플레이스 다운로드 취소됨",
+            "Marketplace download cancelled",
+            "Marketplace download cancelled",
+            "Marketplace download cancelled",
+        ),
+    },
+        Msg {
+        key: "status.history_cleared",
+        text: row(
+            "历史已清空",
+            "歷史已清空",
+            "History cleared",
+            "履歴をクリアしました",
+            "기록이 지워졌습니다",
+            "History cleared",
+            "History cleared",
+            "History cleared",
+        ),
+    },
 
-    Msg { key: "tray.show", text: row("显示 OpenLess", "顯示 OpenLess", "Show OpenLess", "OpenLess を表示", "OpenLess 표시") },
-    Msg { key: "tray.previous_style", text: row("切换到上一风格", "切換到上一風格", "Switch to previous style", "前のスタイルに切り替え", "이전 스타일로 전환") },
-    Msg { key: "tray.quit", text: row("退出", "結束", "Quit", "終了", "종료") },
-    Msg {
+        Msg {
+        key: "tray.show",
+        text: row(
+            "显示 OpenLess",
+            "顯示 OpenLess",
+            "Show OpenLess",
+            "OpenLess を表示",
+            "OpenLess 표시",
+            "Show OpenLess",
+            "Show OpenLess",
+            "Show OpenLess",
+        ),
+    },
+        Msg {
+        key: "tray.previous_style",
+        text: row(
+            "切换到上一风格",
+            "切換到上一風格",
+            "Switch to previous style",
+            "前のスタイルに切り替え",
+            "이전 스타일로 전환",
+            "Switch to previous style",
+            "Switch to previous style",
+            "Switch to previous style",
+        ),
+    },
+        Msg {
+        key: "tray.quit",
+        text: row("退出", "結束", "Quit", "終了", "종료", "Quit", "Quit", "Quit"),
+    },
+        Msg {
         key: "selection_ask.desc",
         text: row(
             "选中文字后语音提问，支持多轮追问。",
@@ -1593,9 +3644,12 @@ pub const CATALOG: &[Msg] = &[
             "Select text and ask questions by voice, with multi-turn follow-ups.",
             "テキストを選択して音声で質問。複数ターンの追問対応。",
             "텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.",
+            "Selecciona texto y pregunta por voz, con preguntas de seguimiento.",
+            "Sélectionnez du texte et posez des questions à voix haute, puis poursuivez la conversation.",
+            "Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_ask_desc",
         text: row(
             "按 {} 录音，再按一次提交。",
@@ -1603,9 +3657,12 @@ pub const CATALOG: &[Msg] = &[
             "Press {} to record, then press again to submit.",
             "{} で録音し、もう一度押して送信します。",
             "{}로 녹음하고, 다시 눌러 전송하세요.",
+            "Pulsa {} para grabar y vuelve a pulsarlo para enviar.",
+            "Appuyez sur {} pour enregistrer, puis de nouveau pour envoyer.",
+            "Drücke {} zum Aufnehmen und erneut zum Senden.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_ask_title",
         text: row(
             "开口说出问题",
@@ -1613,9 +3670,12 @@ pub const CATALOG: &[Msg] = &[
             "Say your question",
             "声で質問する",
             "말로 질문하기",
+            "Di tu pregunta",
+            "Posez votre question à voix haute",
+            "Frage sprechen",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_dismiss",
         text: row(
             "关闭浮窗，结束本次对话",
@@ -1623,9 +3683,12 @@ pub const CATALOG: &[Msg] = &[
             "Close the panel and end this conversation",
             "パネルを閉じて、この会話を終了",
             "패널을 닫고 이번 대화 종료",
+            "Cierra el panel y termina esta conversación",
+            "Fermer le panneau et terminer cette conversation",
+            "Fenster schließen und dieses Gespräch beenden",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_followup",
         text: row(
             "继续使用录音快捷键，即可多轮追问。",
@@ -1633,9 +3696,12 @@ pub const CATALOG: &[Msg] = &[
             "Use the recording shortcut again to ask a follow-up.",
             "録音キーでもう一度、続けて質問できます。",
             "녹음 단축키를 다시 눌러 후속 질문을 할 수 있어요.",
+            "Usa de nuevo el atajo de grabación para hacer otra pregunta.",
+            "Réutilisez le raccourci d’enregistrement pour poser une autre question.",
+            "Verwende den Aufnahmekurzbefehl erneut, um nachzufragen.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_open_desc",
         text: row(
             "按 {}，开始一轮对话。",
@@ -1643,9 +3709,12 @@ pub const CATALOG: &[Msg] = &[
             "Press {} to start a conversation.",
             "{} で会話を始めます。",
             "{}로 대화를 시작하세요.",
+            "Pulsa {} para empezar una conversación.",
+            "Appuyez sur {} pour commencer une conversation.",
+            "Drücke {}, um ein Gespräch zu beginnen.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_open_title",
         text: row(
             "打开追问浮窗",
@@ -1653,9 +3722,12 @@ pub const CATALOG: &[Msg] = &[
             "Open the panel",
             "パネルを開く",
             "질문 패널 열기",
+            "Abre el panel",
+            "Ouvrez le panneau",
+            "Fenster öffnen",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_select_title",
         text: row(
             "选中想了解的内容",
@@ -1663,9 +3735,12 @@ pub const CATALOG: &[Msg] = &[
             "Select something to explore",
             "知りたい内容を選択",
             "궁금한 내용 선택",
+            "Selecciona un texto que quieras explorar",
+            "Sélectionnez un texte à explorer",
+            "Text zum Nachfragen auswählen",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.guide_unset_desc",
         text: row(
             "先在快捷键设置中，为划词追问设置一个快捷键。",
@@ -1673,9 +3748,12 @@ pub const CATALOG: &[Msg] = &[
             "Assign a Selection Ask shortcut in Shortcut settings first.",
             "まずショートカット設定で選択追問のキーを割り当ててください。",
             "먼저 단축키 설정에서 선택 질문 단축키를 지정하세요.",
+            "Primero asigna un atajo para preguntar sobre una selección en Ajustes de atajos.",
+            "Attribuez d’abord un raccourci aux questions sur la sélection dans Réglages des raccourcis.",
+            "Lege zuerst in den Kurzbefehlseinstellungen einen Kurzbefehl für Fragen zur Textauswahl fest.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.history_desc",
         text: row(
             "开启后在本地保存问答记录，默认关闭。",
@@ -1683,13 +3761,25 @@ pub const CATALOG: &[Msg] = &[
             "Save Q&A records locally when enabled. Off by default.",
             "有効時、Q&A 記録をローカルに保存。デフォルト OFF。",
             "활성화 시 Q&A 기록을 로컬에 저장. 기본 OFF.",
+            "Guarda las conversaciones en este dispositivo. Desactivado de forma predeterminada.",
+            "Enregistre les conversations sur cet appareil. Désactivé par défaut.",
+            "Speichert Fragen und Antworten lokal. Standardmäßig deaktiviert.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.history_title",
-        text: row("保存历史", "儲存歷史", "Save history", "履歴を保存", "기록 저장"),
+        text: row(
+            "保存历史",
+            "儲存歷史",
+            "Save history",
+            "履歴を保存",
+            "기록 저장",
+            "Guardar historial",
+            "Conserver l’historique",
+            "Verlauf speichern",
+        ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.howto_step2",
         text: row(
             "在任意 app 选中文字。",
@@ -1697,17 +3787,38 @@ pub const CATALOG: &[Msg] = &[
             "Select text in any app.",
             "任意のアプリでテキストを選択。",
             "아무 앱에서 텍스트 선택.",
+            "Selecciona texto en cualquier aplicación.",
+            "Sélectionnez du texte dans une application.",
+            "Wähle Text in einer beliebigen App aus.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.howto_title",
-        text: row("使用方法", "使用方法", "How to use", "使い方", "사용 방법"),
+        text: row(
+            "使用方法",
+            "使用方法",
+            "How to use",
+            "使い方",
+            "사용 방법",
+            "Cómo usarlo",
+            "Mode d’emploi",
+            "So funktioniert es",
+        ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.title",
-        text: row("问任何问题", "問任何問題", "Ask anything", "何でも質問", "무엇이든 질문"),
+        text: row(
+            "问任何问题",
+            "問任何問題",
+            "Ask anything",
+            "何でも質問",
+            "무엇이든 질문",
+            "Pregunta lo que quieras",
+            "Poser une question",
+            "Alles fragen",
+        ),
     },
-    Msg {
+        Msg {
         key: "translation.desc",
         text: row(
             "录音后自动翻译为目标语言再插入。",
@@ -1715,9 +3826,12 @@ pub const CATALOG: &[Msg] = &[
             "Auto-translate recordings into a target language before insertion.",
             "録音後に自動翻訳してから入力。",
             "녹음 후 대상 언어로 자동 번역하여 삽입.",
+            "Traduce automáticamente las grabaciones a otro idioma antes de insertar el texto.",
+            "Traduit automatiquement les enregistrements dans la langue choisie avant d’insérer le texte.",
+            "Aufnahmen vor dem Einfügen automatisch in eine Zielsprache übersetzen.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_step1",
         text: row(
             "在任意输入框聚焦光标。",
@@ -1725,9 +3839,12 @@ pub const CATALOG: &[Msg] = &[
             "Place cursor in any text field.",
             "任意の入力欄にカーソルを置く。",
             "아무 입력 필드에 커서를 놓으세요.",
+            "Coloca el cursor en cualquier campo de texto.",
+            "Placez le curseur dans un champ de texte.",
+            "Setze den Cursor in ein beliebiges Textfeld.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_step2",
         text: row(
             "按 {} 开始录音。",
@@ -1735,19 +3852,16 @@ pub const CATALOG: &[Msg] = &[
             "Press {} to start recording.",
             "{} を押して録音開始。",
             "{} 를 눌러 녹음 시작.",
+            "Pulsa {} para empezar a grabar.",
+            "Appuyez sur {} pour démarrer l’enregistrement.",
+            "Drücke {}, um die Aufnahme zu starten.",
         ),
     },
     Msg {
         key: "translation.howto_step3",
-        text: row(
-            "录音中按一下 {} 激活翻译。",
-            "錄音中按一下 {} 啟動翻譯。",
-            "Press {} once during recording to activate translation.",
-            "録音中に {} を一度押して翻訳を起動。",
-            "녹음 중 {} 를 한 번 눌러 번역 활성화.",
-        ),
+        text: row("录音中按一下 {} 激活翻译。", "錄音中按一下 {} 啟動翻譯。", "Press {} once during recording to activate translation.", "録音中に {} を一度押して翻訳を起動。", "녹음 중 {} 를 한 번 눌러 번역 활성화.", "Press {} once during recording to activate translation.", "Press {} once during recording to activate translation.", "Press {} once during recording to activate translation."),
     },
-    Msg {
+        Msg {
         key: "translation.howto_step4",
         text: row(
             "再按 {} 停止录音。",
@@ -1755,9 +3869,12 @@ pub const CATALOG: &[Msg] = &[
             "Press {} again to stop.",
             "再度 {} を押して停止。",
             "다시 {} 를 눌러 정지.",
+            "Vuelve a pulsar {} para detenerla.",
+            "Appuyez de nouveau sur {} pour arrêter.",
+            "Drücke erneut {}, um die Aufnahme zu beenden.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_step5",
         text: row(
             "翻译结果自动插入到光标位置。",
@@ -1765,25 +3882,37 @@ pub const CATALOG: &[Msg] = &[
             "Translated text is inserted at the cursor.",
             "翻訳結果がカーソル位置に挿入されます。",
             "번역 결과가 커서 위치에 삽입됩니다.",
+            "La traducción se insertará donde esté el cursor.",
+            "Le texte traduit est inséré à l’emplacement du curseur.",
+            "Der übersetzte Text wird an der Cursorposition eingefügt.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_title",
-        text: row("使用方法", "使用方法", "How to use", "使い方", "사용 방법"),
+        text: row(
+            "使用方法",
+            "使用方法",
+            "How to use",
+            "使い方",
+            "사용 방법",
+            "Cómo usarlo",
+            "Mode d’emploi",
+            "So funktioniert es",
+        ),
     },
-    Msg {
+        Msg {
         key: "translation.kicker",
-        text: row("翻译", "TRANSLATION", "TRANSLATION", "翻訳", "번역"),
+        text: row("翻译", "TRANSLATION", "TRANSLATION", "翻訳", "번역", "TRADUCCIÓN", "TRADUCTION", "ÜBERSETZUNG"),
     },
-    Msg {
+        Msg {
         key: "translation.status_disabled",
-        text: row("未启用", "未啟用", "Disabled", "無効", "비활성화됨"),
+        text: row("未启用", "未啟用", "Disabled", "無効", "비활성화됨", "Desactivada", "Désactivée", "Deaktiviert"),
     },
-    Msg {
+        Msg {
         key: "translation.status_enabled",
-        text: row("已启用", "已啟用", "Enabled", "有効", "활성화됨"),
+        text: row("已启用", "已啟用", "Enabled", "有効", "활성화됨", "Activada", "Activée", "Aktiviert"),
     },
-    Msg {
+        Msg {
         key: "translation.style_desc",
         text: row(
             "自动继承「风格」页当前激活的风格包。",
@@ -1791,9 +3920,12 @@ pub const CATALOG: &[Msg] = &[
             "Automatically inherits the active style pack from the Style page.",
             "「スタイル」ページで現在有効なスタイルパックを自動的に引き継ぎます。",
             "「스타일」 페이지에서 현재 활성화된 스타일 팩을 자동으로 사용합니다.",
+            "Hereda automáticamente el paquete activo de la página Estilo.",
+            "Hérite automatiquement du pack actif dans la page Style.",
+            "Übernimmt automatisch das aktive Stilpaket von der Seite „Stil“.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.style_title",
         text: row(
             "翻译风格",
@@ -1801,9 +3933,12 @@ pub const CATALOG: &[Msg] = &[
             "Translation style",
             "翻訳スタイル",
             "번역 스타일",
+            "Estilo de traducción",
+            "Style de traduction",
+            "Übersetzungsstil",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.target_desc",
         text: row(
             "录音时按 Shift 触发翻译。选「不启用」则 Shift 无效。",
@@ -1811,9 +3946,12 @@ pub const CATALOG: &[Msg] = &[
             "Press Shift during recording to trigger translation. \"Disabled\" makes Shift a no-op.",
             "録音中に Shift で翻訳を起動。「無効」で Shift 無効化。",
             "녹음 중 Shift 로 번역 실행. \"비활성화\" 시 Shift 무효.",
+            "Pulsa Mayús mientras grabas para traducir. Con «Desactivada», Mayús no hace nada.",
+            "Appuyez sur Maj pendant l’enregistrement pour traduire. Si la traduction est désactivée, Maj n’a aucun effet.",
+            "Drücke während der Aufnahme Shift, um die Übersetzung zu aktivieren. Bei „Deaktiviert“ hat Shift keine Wirkung.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.target_disabled",
         text: row(
             "不启用（Shift 按下不触发翻译）",
@@ -1821,9 +3959,12 @@ pub const CATALOG: &[Msg] = &[
             "Disabled (Shift does nothing)",
             "無効（Shift で翻訳を発動しない）",
             "비활성화 (Shift 로 번역 발동 안 함)",
+            "Desactivada (Mayús no hace nada)",
+            "Désactivée (Maj sans effet)",
+            "Deaktiviert (Shift ohne Wirkung)",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.target_same_as_working",
         text: row(
             "目标语言与你唯一的工作语言相同，翻译不会生效：按 Shift 仍按普通润色处理。换一个目标语言，或在上方多勾选一个工作语言。",
@@ -1831,9 +3972,12 @@ pub const CATALOG: &[Msg] = &[
             "The target matches your only working language, so translation cannot take effect — Shift will just run a normal polish. Pick a different target, or add another working language above.",
             "ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。",
             "대상 언어가 유일한 작업 언어와 같아 번역이 실행되지 않습니다. Shift 를 눌러도 일반 정리로 처리됩니다. 다른 대상 언어를 고르거나 위에서 작업 언어를 추가하세요.",
+            "El destino coincide con tu único idioma habitual, por lo que la traducción no tendrá efecto: Mayús solo mejorará el texto. Elige otro destino o añade otro idioma habitual arriba.",
+            "La langue cible correspond à votre seule langue habituelle : la traduction sera sans effet et Maj améliorera simplement le texte. Choisissez une autre cible ou ajoutez une langue habituelle ci-dessus.",
+            "Das Übersetzungsziel entspricht deiner einzigen Arbeitssprache. Shift löst deshalb nur die normale Textüberarbeitung aus. Wähle eine andere Zielsprache oder füge oben eine weitere Arbeitssprache hinzu.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.target_title",
         text: row(
             "翻译目标语言",
@@ -1841,13 +3985,16 @@ pub const CATALOG: &[Msg] = &[
             "Translation target language",
             "翻訳ターゲット言語",
             "번역 대상 언어",
+            "Idioma de destino",
+            "Langue de traduction",
+            "Zielsprache der Übersetzung",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.title",
-        text: row("翻译", "翻譯", "Translation", "翻訳", "번역"),
+        text: row("翻译", "翻譯", "Translation", "翻訳", "번역", "Traducción", "Traduction", "Übersetzung"),
     },
-    Msg {
+        Msg {
         key: "translation.working_desc",
         text: row(
             "勾选日常使用的语言，影响润色与翻译效果。",
@@ -1855,9 +4002,12 @@ pub const CATALOG: &[Msg] = &[
             "Select languages you use regularly to improve polish and translation.",
             "日常使用する言語を選択し、整文と翻訳に反映。",
             "일상적으로 사용하는 언어를 선택하여 정리와 번역에 반영.",
+            "Selecciona los idiomas que usas a menudo para mejorar la redacción y la traducción.",
+            "Sélectionnez les langues que vous utilisez régulièrement pour améliorer la rédaction et la traduction.",
+            "Wähle regelmäßig verwendete Sprachen, um Überarbeitung und Übersetzung zu verbessern.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.working_title",
         text: row(
             "工作语言",
@@ -1865,9 +4015,12 @@ pub const CATALOG: &[Msg] = &[
             "Working languages",
             "作業言語",
             "작업 언어",
+            "Idiomas habituales",
+            "Langues habituelles",
+            "Arbeitssprachen",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_empty",
         text: row(
             "还没有纠正规则。",
@@ -1875,13 +4028,16 @@ pub const CATALOG: &[Msg] = &[
             "No correction rules yet.",
             "補正ルールはまだありません。",
             "아직 교정 규칙이 없습니다.",
+            "Todavía no hay reglas de corrección.",
+            "Aucune règle de correction pour le moment.",
+            "Noch keine Korrekturregeln.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_learned_badge",
-        text: row("自动", "自動", "auto", "自動", "자동"),
+        text: row("自动", "自動", "auto", "自動", "자동", "automática", "auto", "auto"),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_pattern_placeholder",
         text: row(
             "误识别写法，如 {num}粒",
@@ -1889,9 +4045,12 @@ pub const CATALOG: &[Msg] = &[
             "Mistaken text, e.g. {num}粒",
             "誤認識された表記（例：{num}粒）",
             "오인식 표현, 예: {num}粒",
+            "Texto incorrecto, p. ej., {num} casas",
+            "Texte erroné, p. ex. {num} voies",
+            "Fehlerhafter Text, z. B. {num} mahl",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_replacement_placeholder",
         text: row(
             "目标写法，如 {num}例",
@@ -1899,9 +4058,12 @@ pub const CATALOG: &[Msg] = &[
             "Target text, e.g. {num}例",
             "修正後の表記（例：{num}例）",
             "대상 표현, 예: {num}例",
+            "Texto deseado, p. ej., {num} casos",
+            "Texte souhaité, p. ex. {num} voix",
+            "Zieltext, z. B. {num} mal",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_tip",
         text: row(
             "修正常见 ASR 误识别，支持 {num} 数字通配。",
@@ -1909,9 +4071,12 @@ pub const CATALOG: &[Msg] = &[
             "Fix common ASR mistakes. Supports {num} number wildcard.",
             "ASR の誤認識を修正。{num} 数字ワイルドカード対応。",
             "ASR 오인식 수정. {num} 숫자 와일드카드 지원.",
+            "Corrige errores frecuentes del reconocimiento de voz. Admite el comodín numérico {num}.",
+            "Corrige les erreurs fréquentes de reconnaissance vocale. Accepte le caractère générique numérique {num}.",
+            "Behebt häufige ASR-Fehler. Unterstützt den Zahlenplatzhalter {num}.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_title",
         text: row(
             "纠正规则",
@@ -1919,9 +4084,12 @@ pub const CATALOG: &[Msg] = &[
             "Correction rules",
             "補正ルール",
             "교정 규칙",
+            "Reglas de corrección",
+            "Règles de correction",
+            "Korrekturregeln",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.desc",
         text: row(
             "添加生词或专业术语，提高识别准确率。",
@@ -1929,13 +4097,16 @@ pub const CATALOG: &[Msg] = &[
             "Add terms or jargon to improve recognition accuracy.",
             "新語や専門用語を追加して認識精度を向上。",
             "새 단어나 전문 용어를 추가하여 인식 정확도 향상.",
+            "Añade términos o jerga para mejorar la precisión del reconocimiento.",
+            "Ajoutez des termes ou du jargon pour améliorer la précision de la reconnaissance.",
+            "Füge Begriffe oder Fachwörter hinzu, um die Erkennungsgenauigkeit zu verbessern.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.kicker",
-        text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전"),
+        text: row("词典", "VOCABULARY", "DICTIONARY", "辞書", "사전", "DICCIONARIO", "DICTIONNAIRE", "WÖRTERBUCH"),
     },
-    Msg {
+        Msg {
         key: "vocabCard.title",
         text: row(
             "要记住这个词吗？",
@@ -1943,17 +4114,20 @@ pub const CATALOG: &[Msg] = &[
             "Remember this word?",
             "この語を覚えますか？",
             "이 단어를 기억할까요?",
+            "¿Recordar esta palabra?",
+            "Mémoriser ce mot ?",
+            "Dieses Wort merken?",
         ),
     },
-    Msg {
+        Msg {
         key: "vocabCard.accept",
-        text: row("记住", "記住", "Remember", "覚える", "기억하기"),
+        text: row("记住", "記住", "Remember", "覚える", "기억하기", "Recordar", "Mémoriser", "Merken"),
     },
-    Msg {
+        Msg {
         key: "vocabCard.reject",
-        text: row("不用", "不用", "Skip", "不要", "건너뛰기"),
+        text: row("不用", "不用", "Skip", "不要", "건너뛰기", "Omitir", "Ignorer", "Überspringen"),
     },
-    Msg {
+        Msg {
         key: "vocab.learned_section",
         text: row(
             "确认收集（{}）",
@@ -1961,9 +4135,12 @@ pub const CATALOG: &[Msg] = &[
             "Confirmed ({})",
             "確認して追加（{}）",
             "확인 후 수집 ({})",
+            "Confirmadas ({})",
+            "Confirmés ({})",
+            "Bestätigt ({})",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.placeholder",
         text: row(
             "输入词语，按 Enter 或点添加…",
@@ -1971,9 +4148,12 @@ pub const CATALOG: &[Msg] = &[
             "Type a word, press Enter or click Add…",
             "単語を入力し、Enter または追加をクリック…",
             "단어를 입력하고 Enter 또는 추가 클릭…",
+            "Escribe una palabra y pulsa Intro o Añadir…",
+            "Saisissez un mot, puis appuyez sur Entrée ou cliquez sur Ajouter…",
+            "Wort eingeben, Enter drücken oder auf „Hinzufügen“ klicken…",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_apply",
         text: row(
             "启用所选",
@@ -1981,29 +4161,77 @@ pub const CATALOG: &[Msg] = &[
             "Apply selected",
             "選択中を有効化",
             "선택 활성화",
+            "Aplicar seleccionados",
+            "Appliquer la sélection",
+            "Auswahl anwenden",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_create",
-        text: row("新建预设", "新建預設", "New preset", "プリセット新規作成", "프리셋 새로 만들기"),
+        text: row(
+            "新建预设",
+            "新建預設",
+            "New preset",
+            "プリセット新規作成",
+            "프리셋 새로 만들기",
+            "Nuevo preajuste",
+            "Nouveau préréglage",
+            "Neue Vorlage",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_edit",
-        text: row("编辑 {}", "編輯 {}", "Edit {}", "{} を編集", "{} 편집"),
+        text: row(
+            "编辑 {}",
+            "編輯 {}",
+            "Edit {}",
+            "{} を編集",
+            "{} 편집",
+            "Editar {}",
+            "Modifier {}",
+            "{} bearbeiten",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_name_placeholder",
-        text: row("预设名称", "預設名稱", "Preset name", "プリセット名", "프리셋 이름"),
+        text: row(
+            "预设名称",
+            "預設名稱",
+            "Preset name",
+            "プリセット名",
+            "프리셋 이름",
+            "Nombre del preajuste",
+            "Nom du préréglage",
+            "Name der Vorlage",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_new_preset",
-        text: row("新预设", "新預設", "New preset", "新しいプリセット", "새 프리셋"),
+        text: row(
+            "新预设",
+            "新預設",
+            "New preset",
+            "新しいプリセット",
+            "새 프리셋",
+            "Nuevo preajuste",
+            "Nouveau préréglage",
+            "Neue Vorlage",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_save",
-        text: row("保存预设", "儲存預設", "Save preset", "プリセットを保存", "프리셋 저장"),
+        text: row(
+            "保存预设",
+            "儲存預設",
+            "Save preset",
+            "プリセットを保存",
+            "프리셋 저장",
+            "Guardar preajuste",
+            "Enregistrer le préréglage",
+            "Vorlage speichern",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_tip",
         text: row(
             "可多选批量启用，支持编辑和新建。",
@@ -2011,9 +4239,12 @@ pub const CATALOG: &[Msg] = &[
             "Multi-select to apply in batch. Supports edit and create.",
             "複数選択で一括適用。編集・新規作成対応。",
             "다중 선택 일괄 적용 가능. 편집 및 생성 지원.",
+            "Selecciona varios para aplicarlos a la vez. Puedes editarlos y crear otros nuevos.",
+            "Sélectionnez-en plusieurs pour les appliquer ensemble. Vous pouvez les modifier ou en créer.",
+            "Wähle mehrere Vorlagen aus, um sie gemeinsam anzuwenden. Vorlagen lassen sich bearbeiten und neu erstellen.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_title",
         text: row(
             "场景预设",
@@ -2021,9 +4252,12 @@ pub const CATALOG: &[Msg] = &[
             "Scenario presets",
             "シーンプリセット",
             "시나리오 프리셋",
+            "Preajustes por contexto",
+            "Préréglages par contexte",
+            "Vorlagen für Anwendungsfälle",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.presets_words_placeholder",
         text: row(
             "词条（用逗号或换行分隔）",
@@ -2031,17 +4265,29 @@ pub const CATALOG: &[Msg] = &[
             "Terms (comma or newline separated)",
             "語彙（カンマまたは改行区切り）",
             "어휘(쉼표 또는 줄바꿈으로 구분)",
+            "Términos separados por comas o saltos de línea",
+            "Termes séparés par des virgules ou des retours à la ligne",
+            "Begriffe (durch Kommas oder Zeilenumbrüche getrennt)",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.remove_all_learned",
-        text: row("全部删除", "全部刪除", "Remove all", "すべて削除", "모두 삭제"),
+        text: row(
+            "全部删除",
+            "全部刪除",
+            "Remove all",
+            "すべて削除",
+            "모두 삭제",
+            "Eliminar todas",
+            "Tout supprimer",
+            "Alle entfernen",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.section_title",
-        text: row("词条", "詞條", "Entries", "項目", "항목"),
+        text: row("词条", "詞條", "Entries", "項目", "항목", "Entradas", "Entrées", "Einträge"),
     },
-    Msg {
+        Msg {
         key: "vocab.tip",
         text: row(
             "支持中英混合 · 数字开头按字面识别 · 命中次数自动计数",
@@ -2049,17 +4295,29 @@ pub const CATALOG: &[Msg] = &[
             "Mixed Chinese/English supported · numeric prefixes are matched literally · hits counted automatically",
             "日本語と英数の混在対応 · 数字始まりは字面通り認識 · ヒット回数を自動カウント",
             "한영 혼용 지원 · 숫자로 시작하면 그대로 인식 · 적중 횟수 자동 카운트",
+            "Admite chino e inglés combinados · los prefijos numéricos se comparan literalmente · las coincidencias se cuentan automáticamente",
+            "Chinois et anglais combinés acceptés · les préfixes numériques sont comparés littéralement · les correspondances sont comptées automatiquement",
+            "Chinesisch und Englisch mischbar · Zahlenpräfixe werden wörtlich abgeglichen · Treffer werden automatisch gezählt",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.title",
-        text: row("词典", "詞彙表", "Dictionary", "辞書", "사전"),
+        text: row("词典", "詞彙表", "Dictionary", "辞書", "사전", "Diccionario", "Dictionnaire", "Wörterbuch"),
     },
-    Msg {
+        Msg {
         key: "style.custom_prompt_save",
-        text: row("保存提示词", "儲存提示詞", "Save prompt", "プロンプトを保存", "프롬프트 저장"),
+        text: row(
+            "保存提示词",
+            "儲存提示詞",
+            "Save prompt",
+            "プロンプトを保存",
+            "프롬프트 저장",
+            "Guardar instrucciones",
+            "Enregistrer les instructions",
+            "Prompt speichern",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.desc",
         text: row(
             "选择录音的默认输出风格。",
@@ -2067,21 +4325,24 @@ pub const CATALOG: &[Msg] = &[
             "Choose the default output style for recording.",
             "録音のデフォルト出力スタイルを選択。",
             "녹음의 기본 출력 스타일 선택.",
+            "Elige el estilo de salida predeterminado para las grabaciones.",
+            "Choisissez le style de sortie par défaut pour les enregistrements.",
+            "Wähle den Standardstil für Aufnahmeergebnisse.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.kicker",
-        text: row("风格", "STYLE", "STYLE", "スタイル", "스타일"),
+        text: row("风格", "STYLE", "STYLE", "スタイル", "스타일", "ESTILO", "STYLE", "STIL"),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtin",
-        text: row("内置", "內建", "Built-in", "ビルトイン", "기본"),
+        text: row("内置", "內建", "Built-in", "ビルトイン", "기본", "Incluido", "Intégré", "Integriert"),
     },
-    Msg {
+        Msg {
         key: "style.pack.current",
-        text: row("当前", "目前", "Current", "現在", "현재"),
+        text: row("当前", "目前", "Current", "現在", "현재", "Actual", "Actuel", "Aktuell"),
     },
-    Msg {
+        Msg {
         key: "style.pack.dictation_prompt_title",
         text: row(
             "录音 / ASR Prompt",
@@ -2089,9 +4350,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording / ASR prompt",
             "録音 / ASRプロンプト",
             "녹음 / ASR 프롬프트",
+            "Instrucciones para grabación / ASR",
+            "Instructions d’enregistrement / ASR",
+            "Aufnahme- / ASR-Prompt",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.dictation_tab",
         text: row(
             "录音 / ASR 风格",
@@ -2099,9 +4363,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording / ASR styles",
             "録音 / ASRスタイル",
             "녹음 / ASR 스타일",
+            "Estilos de grabación / ASR",
+            "Styles d’enregistrement / ASR",
+            "Aufnahme- / ASR-Stile",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.new_description",
         text: row(
             "简短描述这个风格的使用场景。",
@@ -2109,9 +4376,12 @@ pub const CATALOG: &[Msg] = &[
             "Briefly describe when to use this style.",
             "このスタイルを使う場面を簡潔に説明してください。",
             "이 스타일을 언제 사용하는지 간단히 설명하세요.",
+            "Describe brevemente cuándo usar este estilo.",
+            "Décrivez brièvement quand utiliser ce style.",
+            "Beschreibe kurz, wofür sich dieser Stil eignet.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.selection_tab",
         text: row(
             "选区润色",
@@ -2119,13 +4389,25 @@ pub const CATALOG: &[Msg] = &[
             "Selection polish",
             "選択範囲の推敲",
             "선택 영역 다듬기",
+            "Mejorar selección",
+            "Amélioration de la sélection",
+            "Auswahl überarbeiten",
         ),
     },
-    Msg {
+        Msg {
         key: "style.title",
-        text: row("输出风格", "輸出風格", "Output style", "出力スタイル", "출력 스타일"),
+        text: row(
+            "输出风格",
+            "輸出風格",
+            "Output style",
+            "出力スタイル",
+            "출력 스타일",
+            "Estilo de salida",
+            "Style de sortie",
+            "Ausgabestil",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.desc",
         text: row(
             "浏览、安装和分享社区风格包。",
@@ -2133,13 +4415,25 @@ pub const CATALOG: &[Msg] = &[
             "Browse, install, and share community style packs.",
             "コミュニティのスタイルパックを閲覧・インストール・共有。",
             "커뮤니티 스타일 팩 둘러보기, 설치, 공유.",
+            "Explora, instala y comparte paquetes de estilos de la comunidad.",
+            "Parcourez, installez et partagez les packs de styles de la communauté.",
+            "Stilpakete der Community entdecken, installieren und teilen.",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.download_zip_btn",
-        text: row("下载 ZIP", "下載 ZIP", "Download ZIP", "ZIP をダウンロード", "ZIP 다운로드"),
+        text: row(
+            "下载 ZIP",
+            "下載 ZIP",
+            "Download ZIP",
+            "ZIP をダウンロード",
+            "ZIP 다운로드",
+            "Descargar ZIP",
+            "Télécharger le ZIP",
+            "ZIP herunterladen",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.empty",
         text: row(
             "还没有风格包",
@@ -2147,9 +4441,12 @@ pub const CATALOG: &[Msg] = &[
             "No style packs yet",
             "まだスタイルパックがありません",
             "아직 스타일 팩이 없습니다",
+            "Todavía no hay paquetes de estilos",
+            "Aucun pack de styles pour le moment",
+            "Noch keine Stilpakete",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.empty_hint",
         text: row(
             "换个搜索词，或自己上传一个分享给社区",
@@ -2157,21 +4454,24 @@ pub const CATALOG: &[Msg] = &[
             "Try a different keyword, or upload your own",
             "別のキーワードを試すか、自分のパックを共有してみましょう",
             "다른 키워드로 검색하거나 직접 업로드해 보세요",
+            "Prueba otra palabra clave o sube tu propio paquete",
+            "Essayez un autre mot-clé ou publiez votre propre pack",
+            "Versuche einen anderen Suchbegriff oder lade ein eigenes Paket hoch",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.install_btn",
-        text: row("安装到本地", "安裝到本機", "Install", "インストール", "설치"),
+        text: row("安装到本地", "安裝到本機", "Install", "インストール", "설치", "Instalar", "Installer", "Installieren"),
     },
-    Msg {
+        Msg {
         key: "marketplace.kicker",
-        text: row("风格市场", "MARKETPLACE", "MARKETPLACE", "マーケット", "마켓"),
+        text: row("风格市场", "MARKETPLACE", "MARKETPLACE", "マーケット", "마켓", "CATÁLOGO", "CATALOGUE", "MARKTPLATZ"),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload_btn",
-        text: row("上传", "上傳", "Upload", "アップロード", "업로드"),
+        text: row("上传", "上傳", "Upload", "アップロード", "업로드", "Subir", "Publier", "Hochladen"),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload.title",
         text: row(
             "选择要上传的风格包",
@@ -2179,17 +4479,29 @@ pub const CATALOG: &[Msg] = &[
             "Pick a style pack to upload",
             "アップロードするパックを選択",
             "업로드할 팩 선택",
+            "Elige un paquete de estilos para subir",
+            "Choisissez un pack de styles à publier",
+            "Stilpaket zum Hochladen wählen",
+        ),
+    },
+        Msg {
+        key: "marketplace.upload.updateTitle",
+        text: row(
+            "更新「{}」",
+            "更新「{}」",
+            "Update \"{}\"",
+            "「{}」を更新",
+            "\"{}\" 업데이트",
+            "Actualizar «{}»",
+            "Mettre à jour « {} »",
+            "„{}“ aktualisieren",
         ),
     },
     Msg {
-        key: "marketplace.upload.updateTitle",
-        text: row("更新「{}」", "更新「{}」", "Update \"{}\"", "「{}」を更新", "\"{}\" 업데이트"),
-    },
-    Msg {
         key: "marketplace.upload.hint",
-        text: row("选择一个本地风格包发布到市场。", "選擇一個本機風格包發布到市場。", "Choose a local style pack to publish.", "公開するローカルスタイルパックを選択してください。", "게시할 로컬 스타일 팩을 선택하세요."),
+        text: row("选择一个本地风格包发布到市场。", "選擇一個本機風格包發布到市場。", "Choose a local style pack to publish.", "公開するローカルスタイルパックを選択してください。", "게시할 로컬 스타일 팩을 선택하세요.", "Choose a local style pack to publish.", "Choose a local style pack to publish.", "Choose a local style pack to publish."),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload.updateHint",
         text: row(
             "选中要上传的本地新版本风格包，下方点「确定上传」。同名包默认预选。",
@@ -2197,9 +4509,12 @@ pub const CATALOG: &[Msg] = &[
             "Pick the local newer version, then click \"Confirm upload\". A same-name pack is pre-selected.",
             "アップロードするローカルの新版を選んで「アップロード確定」を押してください。同名パックは自動選択されます。",
             "업로드할 로컬 최신본을 선택하고 \"업로드 확정\"을 누르세요. 동명 팩이 기본 선택됩니다.",
+            "Elige la versión local más reciente y pulsa «Confirmar subida». Se selecciona de antemano el paquete del mismo nombre.",
+            "Choisissez la version locale la plus récente, puis cliquez sur « Confirmer l’envoi ». Le pack portant le même nom est présélectionné.",
+            "Wähle die neuere lokale Version und klicke auf „Hochladen bestätigen“. Ein Paket mit demselben Namen ist bereits ausgewählt.",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload.noLocal",
         text: row(
             "本地没有可上传的风格包",
@@ -2207,37 +4522,67 @@ pub const CATALOG: &[Msg] = &[
             "No local style packs to upload",
             "アップロード可能なローカルパックがありません",
             "업로드 가능한 로컬 팩이 없습니다",
+            "No hay paquetes locales que se puedan subir",
+            "Aucun pack local à publier",
+            "Keine lokalen Stilpakete zum Hochladen",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload.confirm",
-        text: row("确定上传", "確定上傳", "Upload", "アップロード", "업로드"),
+        text: row("确定上传", "確定上傳", "Upload", "アップロード", "업로드", "Upload", "Upload", "Upload"),
     },
-    Msg {
+        Msg {
         key: "marketplace.upload.submitting",
-        text: row("正在提交…", "正在提交…", "Submitting…", "送信中…", "제출 중…"),
+        text: row("正在提交…", "正在提交…", "Submitting…", "送信中…", "제출 중…", "Submitting…", "Submitting…", "Submitting…"),
     },
-    Msg {
+        Msg {
         key: "marketplace.withdraw.confirm",
-        text: row("确定要下架“{}”吗？", "確定要下架「{}」嗎？", "Withdraw “{}” from the marketplace?", "「{}」をマーケットから取り下げますか？", "“{}”을(를) 마켓에서 내릴까요?"),
+        text: row(
+            "确定要下架“{}”吗？",
+            "確定要下架「{}」嗎？",
+            "Withdraw “{}” from the marketplace?",
+            "「{}」をマーケットから取り下げますか？",
+            "“{}”을(를) 마켓에서 내릴까요?",
+            "Withdraw “{}” from the marketplace?",
+            "Withdraw “{}” from the marketplace?",
+            "Withdraw “{}” from the marketplace?",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.withdraw.confirmBtn",
-        text: row("确认下架", "確認下架", "Withdraw", "取り下げる", "내리기"),
+        text: row("确认下架", "確認下架", "Withdraw", "取り下げる", "내리기", "Withdraw", "Withdraw", "Withdraw"),
     },
-    Msg {
+        Msg {
         key: "marketplace.withdraw.success",
-        text: row("已下架", "已下架", "Publication withdrawn", "公開を取り下げました", "게시물을 내렸습니다"),
+        text: row(
+            "已下架",
+            "已下架",
+            "Publication withdrawn",
+            "公開を取り下げました",
+            "게시물을 내렸습니다",
+            "Publication withdrawn",
+            "Publication withdrawn",
+            "Publication withdrawn",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.my_packs_button_label",
-        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물"),
+        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물", "Mis paquetes", "Mes packs", "Meine Pakete"),
     },
-    Msg {
+        Msg {
         key: "marketplace.refresh_btn",
-        text: row("刷新", "重新整理", "Refresh", "更新", "새로고침"),
+        text: row(
+            "刷新",
+            "重新整理",
+            "Refresh",
+            "更新",
+            "새로고침",
+            "Actualizar",
+            "Actualiser",
+            "Aktualisieren",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.search_placeholder",
         text: row(
             "搜索名称 / 描述 / 标签…",
@@ -2245,25 +4590,37 @@ pub const CATALOG: &[Msg] = &[
             "Search name / description / tags…",
             "名前 / 説明 / タグを検索…",
             "이름 / 설명 / 태그 검색…",
+            "Buscar por nombre, descripción o etiquetas…",
+            "Rechercher un nom, une description ou des étiquettes…",
+            "Name, Beschreibung oder Schlagwörter suchen…",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.sort_liked",
-        text: row("我赞过的", "我讚過的", "Liked", "いいね済み", "좋아요한 팩"),
+        text: row("我赞过的", "我讚過的", "Liked", "いいね済み", "좋아요한 팩", "Me gusta", "Aimés", "Gefällt mir"),
     },
-    Msg {
+        Msg {
         key: "marketplace.sort_new",
-        text: row("最新", "最新", "Newest", "新着", "최신"),
+        text: row("最新", "最新", "Newest", "新着", "최신", "Recientes", "Récents", "Neueste"),
     },
-    Msg {
+        Msg {
         key: "marketplace.sort_popular",
-        text: row("按热度", "按熱度", "Popular", "人気順", "인기순"),
+        text: row("按热度", "按熱度", "Popular", "人気順", "인기순", "Populares", "Populaires", "Beliebt"),
     },
-    Msg {
+        Msg {
         key: "hotkey.triggers.right_option",
-        text: row("右 Option", "右 Option", "Right Option", "右 Option", "오른쪽 Option"),
+        text: row(
+            "右 Option",
+            "右 Option",
+            "Right Option",
+            "右 Option",
+            "오른쪽 Option",
+            "Option derecha",
+            "Option droite",
+            "Rechte Option-Taste",
+        ),
     },
-    Msg {
+        Msg {
         key: "modal.about.export_error_log",
         text: row(
             "导出错误日志",
@@ -2271,13 +4628,25 @@ pub const CATALOG: &[Msg] = &[
             "Export error log",
             "エラーログをエクスポート",
             "오류 로그 내보내기",
+            "Exportar registro de errores",
+            "Exporter le journal d’erreurs",
+            "Fehlerprotokoll exportieren",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.help_center",
-        text: row("帮助中心", "幫助中心", "Help center", "ヘルプセンター", "도움말 센터"),
+        text: row(
+            "帮助中心",
+            "幫助中心",
+            "Help center",
+            "ヘルプセンター",
+            "도움말 센터",
+            "Centro de ayuda",
+            "Centre d’aide",
+            "Hilfezentrum",
+        ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.release_notes",
         text: row(
             "发布日志",
@@ -2285,13 +4654,16 @@ pub const CATALOG: &[Msg] = &[
             "Release notes",
             "リリースノート",
             "릴리스 노트",
+            "Notas de la versión",
+            "Notes de version",
+            "Versionshinweise",
         ),
     },
-    Msg {
+        Msg {
         key: "overview.actions.shortcuts",
-        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカット", "단축키"),
+        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカット", "단축키", "Atajos", "Raccourcis", "Kurzbefehle"),
     },
-    Msg {
+        Msg {
         key: "overview.llm_name",
         text: row(
             "OpenAI 兼容",
@@ -2299,17 +4671,38 @@ pub const CATALOG: &[Msg] = &[
             "OpenAI-compatible",
             "OpenAI 互換",
             "OpenAI 호환",
+            "Compatible con OpenAI",
+            "Compatible OpenAI",
+            "OpenAI-kompatibel",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.data_storage.title",
-        text: row("数据存储", "資料儲存", "Data storage", "データ保存", "데이터 저장"),
+        text: row(
+            "数据存储",
+            "資料儲存",
+            "Data storage",
+            "データ保存",
+            "데이터 저장",
+            "Almacenamiento de datos",
+            "Stockage des données",
+            "Datenspeicherung",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.debug.title",
-        text: row("调试工具", "除錯工具", "Debug tools", "デバッグツール", "디버그 도구"),
+        text: row(
+            "调试工具",
+            "除錯工具",
+            "Debug tools",
+            "デバッグツール",
+            "디버그 도구",
+            "Herramientas de depuración",
+            "Outils de débogage",
+            "Diagnosewerkzeuge",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.language.title",
         text: row(
             "界面语言",
@@ -2317,25 +4710,37 @@ pub const CATALOG: &[Msg] = &[
             "Interface language",
             "表示言語",
             "인터페이스 언어",
+            "Idioma de la interfaz",
+            "Langue de l’interface",
+            "Sprache der Oberfläche",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.zh",
-        text: row("简体中文", "簡體中文", "简体中文", "简体中文", "简体中文"),
+        text: row("简体中文", "簡體中文", "简体中文", "简体中文", "简体中文", "简体中文", "简体中文", "简体中文"),
     },
-    Msg {
+        Msg {
         key: "settings.layout.title",
-        text: row("布局", "佈局", "Layout", "レイアウト", "레이아웃"),
+        text: row("布局", "佈局", "Layout", "レイアウト", "레이아웃", "Diseño", "Disposition", "Layout"),
     },
-    Msg {
+        Msg {
         key: "settings.marketplace.github.open_github",
-        text: row("打开 GitHub", "開啟 GitHub", "Open GitHub", "GitHub を開く", "GitHub 열기"),
+        text: row(
+            "打开 GitHub",
+            "開啟 GitHub",
+            "Open GitHub",
+            "GitHub を開く",
+            "GitHub 열기",
+            "Abrir GitHub",
+            "Ouvrir GitHub",
+            "GitHub öffnen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.marketplace.title",
-        text: row("扩展市场", "擴充市集", "Marketplace", "拡張マーケット", "확장 마켓"),
+        text: row("扩展市场", "擴充市集", "Marketplace", "拡張マーケット", "확장 마켓", "Catálogo", "Catalogue", "Marktplatz"),
     },
-    Msg {
+        Msg {
         key: "settings.network.use_system_proxy_label",
         text: row(
             "使用系统代理",
@@ -2343,38 +4748,95 @@ pub const CATALOG: &[Msg] = &[
             "Use system proxy",
             "システムプロキシを使用",
             "시스템 프록시 사용",
+            "Usar proxy del sistema",
+            "Utiliser le proxy système",
+            "Systemproxy verwenden",
         ),
     },
     // Linux-only settings: session services and the real data/credential split.
-    Msg {
+        Msg {
         key: "settings.linux_privacy.refresh",
-        text: row("重新检查会话与网络", "重新檢查工作階段與網路", "Recheck session & network", "セッションとネットワークを再確認", "세션 및 네트워크 다시 확인"),
+        text: row(
+            "重新检查会话与网络",
+            "重新檢查工作階段與網路",
+            "Recheck session & network",
+            "セッションとネットワークを再確認",
+            "세션 및 네트워크 다시 확인",
+            "Recheck session & network",
+            "Recheck session & network",
+            "Recheck session & network",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.not_checked",
-        text: row("尚未检查", "尚未檢查", "Not checked", "未確認", "확인 전"),
+        text: row("尚未检查", "尚未檢查", "Not checked", "未確認", "확인 전", "Not checked", "Not checked", "Not checked"),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.input_ready",
-        text: row("OpenLess 插件接口可达", "OpenLess 外掛介面可達", "OpenLess addon responds", "OpenLess プラグイン応答あり", "OpenLess 플러그인 응답 확인"),
+        text: row(
+            "OpenLess 插件接口可达",
+            "OpenLess 外掛介面可達",
+            "OpenLess addon responds",
+            "OpenLess プラグイン応答あり",
+            "OpenLess 플러그인 응답 확인",
+            "OpenLess addon responds",
+            "OpenLess addon responds",
+            "OpenLess addon responds",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.input_unavailable",
-        text: row("插件接口不可达", "外掛介面無法連線", "Addon interface unavailable", "プラグインに接続できません", "플러그인 인터페이스 사용 불가"),
+        text: row(
+            "插件接口不可达",
+            "外掛介面無法連線",
+            "Addon interface unavailable",
+            "プラグインに接続できません",
+            "플러그인 인터페이스 사용 불가",
+            "Addon interface unavailable",
+            "Addon interface unavailable",
+            "Addon interface unavailable",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.network_label",
-        text: row("OpenLess 网络连接", "OpenLess 網路連線", "OpenLess network connection", "OpenLess ネットワーク接続", "OpenLess 네트워크 연결"),
+        text: row(
+            "OpenLess 网络连接",
+            "OpenLess 網路連線",
+            "OpenLess network connection",
+            "OpenLess ネットワーク接続",
+            "OpenLess 네트워크 연결",
+            "OpenLess network connection",
+            "OpenLess network connection",
+            "OpenLess network connection",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.network_online",
-        text: row("HTTP 可达（{} ms）", "HTTP 可達（{} ms）", "HTTP reachable ({} ms)", "HTTP 接続確認（{} ms）", "HTTP 연결 확인 ({} ms)"),
+        text: row(
+            "HTTP 可达（{} ms）",
+            "HTTP 可達（{} ms）",
+            "HTTP reachable ({} ms)",
+            "HTTP 接続確認（{} ms）",
+            "HTTP 연결 확인 ({} ms)",
+            "HTTP reachable ({} ms)",
+            "HTTP reachable ({} ms)",
+            "HTTP reachable ({} ms)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.network_unavailable",
-        text: row("OpenLess 服务不可达", "OpenLess 服務無法連線", "OpenLess endpoint unreachable", "OpenLess サービスに接続できません", "OpenLess 서비스 연결 불가"),
+        text: row(
+            "OpenLess 服务不可达",
+            "OpenLess 服務無法連線",
+            "OpenLess endpoint unreachable",
+            "OpenLess サービスに接続できません",
+            "OpenLess 서비스 연결 불가",
+            "OpenLess endpoint unreachable",
+            "OpenLess endpoint unreachable",
+            "OpenLess endpoint unreachable",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.network_probe_desc",
         text: row(
             "与 Tauri 相同：GET OpenLess /packs，8 秒超时，收到 HTTP 响应才算可达。每 30 秒刷新；不代表 ASR/LLM 渠道鉴权有效，请在 AI 服务页验证渠道。",
@@ -2382,37 +4844,103 @@ pub const CATALOG: &[Msg] = &[
             "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
             "Tauri と同じく OpenLess /packs に GET し、8 秒でタイムアウトします。HTTP 応答で接続を確認し、30 秒ごとに更新します。ASR/LLM 認証は AI サービスで別途検証してください。",
             "Tauri와 동일하게 OpenLess /packs에 GET 요청하며 제한 시간은 8초입니다. HTTP 응답으로 연결을 확인하고 30초마다 갱신합니다. ASR/LLM 인증은 AI 서비스에서 별도로 확인하세요.",
+            "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
+            "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
+            "Same as Tauri: GET OpenLess /packs, with an 8-second timeout; an HTTP response proves reachability. Refreshes every 30 seconds. This does not validate ASR/LLM authentication; verify channels in AI Services.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_ready",
-        text: row("默认保险库已解锁", "預設保管庫已解鎖", "Default vault unlocked", "既定保管庫は解除済み", "기본 보관소 잠금 해제됨"),
+        text: row(
+            "默认保险库已解锁",
+            "預設保管庫已解鎖",
+            "Default vault unlocked",
+            "既定保管庫は解除済み",
+            "기본 보관소 잠금 해제됨",
+            "Default vault unlocked",
+            "Default vault unlocked",
+            "Default vault unlocked",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_locked",
-        text: row("默认保险库已锁定", "預設保管庫已鎖定", "Default vault locked", "既定保管庫はロック中", "기본 보관소 잠김"),
+        text: row(
+            "默认保险库已锁定",
+            "預設保管庫已鎖定",
+            "Default vault locked",
+            "既定保管庫はロック中",
+            "기본 보관소 잠김",
+            "Default vault locked",
+            "Default vault locked",
+            "Default vault locked",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_missing_service",
-        text: row("Secret Service 未运行", "Secret Service 未執行", "Secret Service not running", "Secret Service 未起動", "Secret Service 실행 안 됨"),
+        text: row(
+            "Secret Service 未运行",
+            "Secret Service 未執行",
+            "Secret Service not running",
+            "Secret Service 未起動",
+            "Secret Service 실행 안 됨",
+            "Secret Service not running",
+            "Secret Service not running",
+            "Secret Service not running",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_missing_collection",
-        text: row("缺少默认保险库", "缺少預設保管庫", "No default vault", "既定保管庫がありません", "기본 보관소 없음"),
+        text: row(
+            "缺少默认保险库",
+            "缺少預設保管庫",
+            "No default vault",
+            "既定保管庫がありません",
+            "기본 보관소 없음",
+            "No default vault",
+            "No default vault",
+            "No default vault",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_temporary",
-        text: row("默认保险库仅临时保存，原凭据可能在其他钱包中", "預設保管庫僅暫存，原憑據可能在其他錢包中", "Temporary default vault; existing credentials may be in another wallet", "既定保管庫は一時保存です。元の認証情報は別の保管庫にある可能性があります", "임시 기본 보관소입니다. 기존 자격 증명은 다른 보관소에 있을 수 있습니다"),
+        text: row(
+            "默认保险库仅临时保存，原凭据可能在其他钱包中",
+            "預設保管庫僅暫存，原憑據可能在其他錢包中",
+            "Temporary default vault; existing credentials may be in another wallet",
+            "既定保管庫は一時保存です。元の認証情報は別の保管庫にある可能性があります",
+            "임시 기본 보관소입니다. 기존 자격 증명은 다른 보관소에 있을 수 있습니다",
+            "Temporary default vault; existing credentials may be in another wallet",
+            "Temporary default vault; existing credentials may be in another wallet",
+            "Temporary default vault; existing credentials may be in another wallet",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_unavailable",
-        text: row("会话或保险库检查失败", "工作階段或保管庫檢查失敗", "Session/vault check failed", "セッション・保管庫の確認失敗", "세션/보관소 확인 실패"),
+        text: row(
+            "会话或保险库检查失败",
+            "工作階段或保管庫檢查失敗",
+            "Session/vault check failed",
+            "セッション・保管庫の確認失敗",
+            "세션/보관소 확인 실패",
+            "Session/vault check failed",
+            "Session/vault check failed",
+            "Session/vault check failed",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_restart",
-        text: row("服务已恢复，需重启 OpenLess", "服務已恢復，需重新啟動 OpenLess", "Service restored; restart OpenLess", "サービス復旧済み・OpenLess 再起動が必要", "서비스 복구됨, OpenLess 재시작 필요"),
+        text: row(
+            "服务已恢复，需重启 OpenLess",
+            "服務已恢復，需重新啟動 OpenLess",
+            "Service restored; restart OpenLess",
+            "サービス復旧済み・OpenLess 再起動が必要",
+            "서비스 복구됨, OpenLess 재시작 필요",
+            "Service restored; restart OpenLess",
+            "Service restored; restart OpenLess",
+            "Service restored; restart OpenLess",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_probe_desc",
         text: row(
             "只检查会话 D-Bus、默认保险库的锁定状态与适配器初始化结果。不读取密钥、不自动解锁或写入测试密钥；实际保存权限仍以保存结果为准。",
@@ -2420,9 +4948,12 @@ pub const CATALOG: &[Msg] = &[
             "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
             "セッション D-Bus、既定保管庫のロック状態、接続初期化のみ確認します。キーの読み取り、自動解除、テスト書き込みは行いません。書き込み権限は実際の保存結果で確認してください。",
             "세션 D-Bus, 기본 보관소 잠금 상태 및 어댑터 초기화만 확인합니다. 키 읽기, 자동 잠금 해제, 테스트 쓰기는 하지 않습니다. 실제 쓰기 권한은 저장 결과로 확인하세요.",
+            "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
+            "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
+            "Checks session D-Bus, default-vault lock state and adapter initialization only. No secret reads, automatic unlocks or test writes; actual write access is determined when saving.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.section_desc",
         text: row(
             "Linux 会话、Keyring / Secret Service，以及本地历史、录音和偏好。",
@@ -2430,13 +4961,25 @@ pub const CATALOG: &[Msg] = &[
             "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
             "Linux セッション、Keyring / Secret Service、ローカル履歴、録音、設定。",
             "Linux 세션, Keyring / Secret Service, 로컬 기록, 녹음 및 설정.",
+            "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
+            "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
+            "Linux session services, Keyring / Secret Service, local history, recordings and preferences.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.intro_title",
-        text: row("Linux 数据与隐私", "Linux 資料與隱私", "Linux data & privacy", "Linux データとプライバシー", "Linux 데이터 및 개인정보"),
+        text: row(
+            "Linux 数据与隐私",
+            "Linux 資料與隱私",
+            "Linux data & privacy",
+            "Linux データとプライバシー",
+            "Linux 데이터 및 개인정보",
+            "Linux data & privacy",
+            "Linux data & privacy",
+            "Linux data & privacy",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.intro_desc",
         text: row(
             "记录保存在本机；使用云端服务时，相应音频、文本及已启用的上下文会发送至配置的服务商。",
@@ -2444,13 +4987,25 @@ pub const CATALOG: &[Msg] = &[
             "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
             "記録はローカルに保存されます。クラウド利用時は、関連する音声、テキスト、有効なコンテキストが設定したプロバイダーに送信されます。",
             "기록은 로컬에 저장됩니다. 클라우드 사용 시 관련 오디오, 텍스트 및 활성화된 컨텍스트가 설정한 제공업체로 전송됩니다.",
+            "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
+            "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
+            "Records are stored locally. Cloud services receive the relevant audio, text and enabled context at the providers you configure.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.title",
-        text: row("Linux 会话与访问", "Linux 工作階段與存取", "Linux session & access", "Linux セッションとアクセス", "Linux 세션 및 접근"),
+        text: row(
+            "Linux 会话与访问",
+            "Linux 工作階段與存取",
+            "Linux session & access",
+            "Linux セッションとアクセス",
+            "Linux 세션 및 접근",
+            "Linux session & access",
+            "Linux session & access",
+            "Linux session & access",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.desc",
         text: row(
             "Linux 使用桌面会话服务；设备检测和后端就绪不代表每次录音或输入均获准。",
@@ -2458,9 +5013,12 @@ pub const CATALOG: &[Msg] = &[
             "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
             "Linux はデスクトップのセッションサービスを使います。デバイス検出やバックエンド初期化は録音・入力アクセスの保証ではありません。",
             "Linux는 데스크톱 세션 서비스를 사용합니다. 장치 감지 및 백엔드 초기화가 녹음이나 입력 접근을 보장하지는 않습니다.",
+            "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
+            "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
+            "Linux uses desktop session services. Device detection and backend initialization do not guarantee capture or input access.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.mic_desc",
         text: row(
             "经 PipeWire/PulseAudio/ALSA 录音；检测到设备不等于允许录音，访问限制需在音频或沙盒设置中处理。",
@@ -2468,13 +5026,25 @@ pub const CATALOG: &[Msg] = &[
             "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
             "録音は PipeWire/PulseAudio/ALSA を使います。デバイス検出は録音許可ではありません。失敗時は音声やサンドボックスの制限を確認してください。",
             "녹음은 PipeWire/PulseAudio/ALSA를 사용합니다. 장치 감지는 녹음 허가가 아닙니다. 녹음 실패 시 오디오 또는 샌드박스 제한을 확인하세요.",
+            "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
+            "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
+            "Capture uses PipeWire/PulseAudio/ALSA. Detecting a device does not grant capture access; check audio or sandbox restrictions if recording fails.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.mic_detected",
-        text: row("已检测到设备", "已偵測到裝置", "Device detected", "デバイス検出済み", "장치 감지됨"),
+        text: row(
+            "已检测到设备",
+            "已偵測到裝置",
+            "Device detected",
+            "デバイス検出済み",
+            "장치 감지됨",
+            "Device detected",
+            "Device detected",
+            "Device detected",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.hotkey_desc",
         text: row(
             "Fcitx5/OpenLess 全局快捷键监听后端须初始化；窗口内按键生效不代表全局监听可用。",
@@ -2482,17 +5052,38 @@ pub const CATALOG: &[Msg] = &[
             "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
             "グローバルショートカットには Fcitx5/OpenLess の監視バックエンドが必要です。アプリ内のキー動作だけではグローバル監視を確認できません。",
             "전역 단축키에는 Fcitx5/OpenLess 수신 백엔드가 필요합니다. 앱 내 키 동작만으로 전역 수신이 가능하다고 판단할 수 없습니다.",
+            "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
+            "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
+            "Global shortcuts require the Fcitx5/OpenLess listener backend. Keys working inside the app do not prove global listening is available.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.hotkey_ready",
-        text: row("监听后端已初始化", "監聽後端已初始化", "Listener initialized", "監視バックエンド初期化済み", "수신 백엔드 초기화됨"),
+        text: row(
+            "监听后端已初始化",
+            "監聽後端已初始化",
+            "Listener initialized",
+            "監視バックエンド初期化済み",
+            "수신 백엔드 초기화됨",
+            "Listener initialized",
+            "Listener initialized",
+            "Listener initialized",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.input_label",
-        text: row("选区与文字插入", "選取範圍與文字插入", "Selection & text insertion", "選択範囲とテキスト挿入", "선택 영역 및 텍스트 삽입"),
+        text: row(
+            "选区与文字插入",
+            "選取範圍與文字插入",
+            "Selection & text insertion",
+            "選択範囲とテキスト挿入",
+            "선택 영역 및 텍스트 삽입",
+            "Selection & text insertion",
+            "Selection & text insertion",
+            "Selection & text insertion",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.input_desc",
         text: row(
             "跨应用文本输入和选区服务由 Fcitx5/OpenLess 插件提供；Wayland 限制模拟按键和选区访问。后端不可用时可能只能复制到剪贴板。",
@@ -2500,9 +5091,12 @@ pub const CATALOG: &[Msg] = &[
             "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
             "Fcitx5/OpenLess プラグインがアプリ間のテキスト入力と選択を提供します。Wayland はキー送信と選択へのアクセスを制限します。バックエンド不在時はコピーのみになる場合があります。",
             "Fcitx5/OpenLess 플러그인이 앱 간 텍스트 입력과 선택 서비스를 제공합니다. Wayland는 키 합성과 선택 접근을 제한합니다. 백엔드를 사용할 수 없으면 클립보드 복사만 가능할 수 있습니다.",
+            "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
+            "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
+            "Fcitx5/OpenLess provides cross-app text and selection services. Wayland restricts synthetic keys and selection access; an unavailable backend may leave only clipboard copying.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.network_desc",
         text: row(
             "云端 ASR/LLM 需能访问服务端；请在 AI 服务页验证渠道连接，而不是寻找统一的系统网络授权按钮。",
@@ -2510,17 +5104,38 @@ pub const CATALOG: &[Msg] = &[
             "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
             "クラウド ASR/LLM にはプロバイダーへの接続が必要です。汎用のネットワーク許可ボタンではなく、AI サービスで各チャネルを検証してください。",
             "클라우드 ASR/LLM은 제공업체 엔드포인트에 접근해야 합니다. 일반 시스템 네트워크 권한 버튼 대신 AI 서비스에서 각 채널을 확인하세요.",
+            "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
+            "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
+            "Cloud ASR/LLM needs access to the provider endpoint. Verify each channel in AI Services rather than looking for a generic system network permission button.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.verify_channels",
-        text: row("按渠道验证", "依渠道驗證", "Verify per channel", "チャネルごとに検証", "채널별 확인"),
+        text: row(
+            "按渠道验证",
+            "依渠道驗證",
+            "Verify per channel",
+            "チャネルごとに検証",
+            "채널별 확인",
+            "Verify per channel",
+            "Verify per channel",
+            "Verify per channel",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_title",
-        text: row("凭据保险库（Keyring）", "憑證保管庫（Keyring）", "Credential vault (Keyring)", "認証情報保管庫（Keyring）", "자격 증명 보관소 (Keyring)"),
+        text: row(
+            "凭据保险库（Keyring）",
+            "憑證保管庫（Keyring）",
+            "Credential vault (Keyring)",
+            "認証情報保管庫（Keyring）",
+            "자격 증명 보관소 (Keyring)",
+            "Credential vault (Keyring)",
+            "Credential vault (Keyring)",
+            "Credential vault (Keyring)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_desc",
         text: row(
             "API 密钥和敏感请求头保存在用户会话的 Secret Service（org.freedesktop.secrets）。需启用 GNOME Keyring 或提供兼容接口的 KWallet，并解锁保险库。",
@@ -2528,13 +5143,25 @@ pub const CATALOG: &[Msg] = &[
             "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
             "API キーと機密ヘッダーはセッションの Secret Service（org.freedesktop.secrets）に保存されます。GNOME Keyring または互換の KWallet サービスを有効にして保管庫を解除してください。",
             "API 키와 민감한 헤더는 사용자 세션의 Secret Service (org.freedesktop.secrets)에 저장됩니다. GNOME Keyring 또는 호환 KWallet 서비스를 활성화하고 보관소 잠금을 해제하세요.",
+            "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
+            "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
+            "API keys and sensitive headers are stored in your session's Secret Service (org.freedesktop.secrets). Enable GNOME Keyring or a compatible KWallet service and unlock the vault.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_required",
-        text: row("需运行并解锁", "需執行並解鎖", "Must run and be unlocked", "起動とロック解除が必要", "실행 및 잠금 해제 필요"),
+        text: row(
+            "需运行并解锁",
+            "需執行並解鎖",
+            "Must run and be unlocked",
+            "起動とロック解除が必要",
+            "실행 및 잠금 해제 필요",
+            "Must run and be unlocked",
+            "Must run and be unlocked",
+            "Must run and be unlocked",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.keyring_recovery",
         text: row(
             "会话 D-Bus/服务不可用或保险库锁定时，凭据保存可能失败。恢复服务并解锁后重启 OpenLess 再重试；错误不代表已有密钥被删除。",
@@ -2542,9 +5169,90 @@ pub const CATALOG: &[Msg] = &[
             "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
             "セッションの D-Bus・サービスが使えない場合や保管庫がロック中の場合、保存に失敗することがあります。サービスを復旧し、保管庫を解除して OpenLess を再起動してください。エラーは既存キーの削除を意味しません。",
             "세션 D-Bus/서비스를 사용할 수 없거나 보관소가 잠기면 저장이 실패할 수 있습니다. 서비스를 복구하고 잠금을 해제한 뒤 OpenLess를 다시 시작하여 재시도하세요. 오류가 기존 키 삭제를 의미하지는 않습니다.",
+            "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
+            "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
+            "An unavailable session D-Bus/service or locked vault can prevent saving. Restore the service, unlock the vault, restart OpenLess and retry. An error does not mean existing keys were deleted.",
         ),
     },
-    Msg {
+        Msg {
+        key: "settings.linux_privacy.keyring_locked_message",
+        text: row(
+            "钥匙串已锁定：凭据暂时读不到也存不了。点「解锁钥匙串」在系统弹窗里输入密码后重试；已有的密钥没有被删除。",
+            "保管庫已鎖定：憑證暫時讀不到也存不了。點「解鎖保管庫」在系統視窗輸入密碼後重試；既有金鑰沒有被刪除。",
+            "The keyring is locked, so credentials cannot be read or saved right now. Unlock it in the system dialog and retry; saved keys were not deleted.",
+            "保管庫がロック中のため、資格情報を読み書きできません。システムの画面で解除してから再試行してください。既存のキーは削除されていません。",
+            "보관소가 잠겨 있어 자격 증명을 읽거나 저장할 수 없습니다. 시스템 창에서 잠금을 해제한 뒤 다시 시도하세요. 기존 키는 삭제되지 않았습니다.",
+            "The keyring is locked, so credentials cannot be read or saved right now. Unlock it in the system dialog and retry; saved keys were not deleted.",
+            "The keyring is locked, so credentials cannot be read or saved right now. Unlock it in the system dialog and retry; saved keys were not deleted.",
+            "The keyring is locked, so credentials cannot be read or saved right now. Unlock it in the system dialog and retry; saved keys were not deleted.",
+        ),
+    },
+        Msg {
+        key: "settings.linux_privacy.keyring_unlock_cancelled_message",
+        text: row(
+            "钥匙串仍未解锁（已取消或等待超时）。语音输入要读云端渠道的密钥，解锁后再试一次即可，已有密钥没有丢失。",
+            "保管庫仍未解鎖（已取消或等待逾時）。語音輸入需要讀取雲端通道的金鑰，解鎖後再試一次即可，既有金鑰沒有遺失。",
+            "The keyring is still locked (cancelled or timed out). Voice input needs the cloud channel keys, so unlock and retry; saved keys were not lost.",
+            "保管庫はまだロック中です（キャンセルまたはタイムアウト）。音声入力にはクラウド側のキーが必要なので、解除してから再試行してください。既存のキーは失われていません。",
+            "보관소가 아직 잠겨 있습니다(취소 또는 시간 초과). 음성 입력에는 클라우드 채널 키가 필요하니 잠금 해제 후 다시 시도하세요. 기존 키는 사라지지 않았습니다.",
+            "The keyring is still locked (cancelled or timed out). Voice input needs the cloud channel keys, so unlock and retry; saved keys were not lost.",
+            "The keyring is still locked (cancelled or timed out). Voice input needs the cloud channel keys, so unlock and retry; saved keys were not lost.",
+            "The keyring is still locked (cancelled or timed out). Voice input needs the cloud channel keys, so unlock and retry; saved keys were not lost.",
+        ),
+    },
+        Msg {
+        key: "settings.linux_privacy.keyring_unlock",
+        text: row(
+            "解锁钥匙串",
+            "解鎖保管庫",
+            "Unlock keyring",
+            "保管庫を解除",
+            "보관소 잠금 해제",
+            "Unlock keyring",
+            "Unlock keyring",
+            "Unlock keyring",
+        ),
+    },
+        Msg {
+        key: "settings.linux_privacy.keyring_unlock_hint",
+        text: row(
+            "点上面的按钮会弹出系统的钥匙串密码框；输完密码后 OpenLess 会自动重新检查，不用重启。",
+            "點上面的按鈕會彈出系統的保管庫密碼框；輸入密碼後 OpenLess 會自動重新檢查，不必重新啟動。",
+            "The button above opens the system keyring password dialog. Once you enter it, OpenLess re-checks automatically; no restart needed.",
+            "上のボタンでシステムの保管庫パスワード画面が開きます。入力後は OpenLess が自動で再確認します（再起動は不要）。",
+            "위 버튼을 누르면 시스템 보관소 암호 창이 열립니다. 입력하면 OpenLess가 자동으로 다시 확인합니다(재시작 불필요).",
+            "The button above opens the system keyring password dialog. Once you enter it, OpenLess re-checks automatically; no restart needed.",
+            "The button above opens the system keyring password dialog. Once you enter it, OpenLess re-checks automatically; no restart needed.",
+            "The button above opens the system keyring password dialog. Once you enter it, OpenLess re-checks automatically; no restart needed.",
+        ),
+    },
+        Msg {
+        key: "settings.linux_privacy.keyring_unlock_done",
+        text: row(
+            "钥匙串已解锁",
+            "保管庫已解鎖",
+            "Keyring unlocked",
+            "保管庫を解除しました",
+            "보관소 잠금 해제됨",
+            "Keyring unlocked",
+            "Keyring unlocked",
+            "Keyring unlocked",
+        ),
+    },
+        Msg {
+        key: "settings.linux_privacy.keyring_unlock_failed",
+        text: row(
+            "没能解锁钥匙串（已取消或等待超时），可以再试一次。",
+            "沒能解鎖保管庫（已取消或等待逾時），可以再試一次。",
+            "The keyring was not unlocked (cancelled or timed out). You can try again.",
+            "保管庫を解除できませんでした（キャンセルまたはタイムアウト）。もう一度お試しください。",
+            "보관소 잠금을 해제하지 못했습니다(취소 또는 시간 초과). 다시 시도할 수 있습니다.",
+            "The keyring was not unlocked (cancelled or timed out). You can try again.",
+            "The keyring was not unlocked (cancelled or timed out). You can try again.",
+            "The keyring was not unlocked (cancelled or timed out). You can try again.",
+        ),
+    },
+        Msg {
         key: "settings.linux_privacy.storage_desc",
         text: row(
             "历史、偏好、词库与已保存的录音位于应用数据目录。API 密钥使用 Keyring 存储，不写入 credential-metadata.json；录音留存设置不清除保险库。",
@@ -2552,17 +5260,38 @@ pub const CATALOG: &[Msg] = &[
             "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
             "履歴、設定、辞書、保存した録音はアプリのデータディレクトリにあります。API キーは credential-metadata.json ではなく Keyring に保存されます。録音の保持設定は保管庫を消去しません。",
             "기록, 설정, 어휘 및 저장된 녹음은 앱 데이터 디렉터리에 있습니다. API 키는 credential-metadata.json이 아닌 Keyring에 저장됩니다. 녹음 보존 설정은 보관소를 지우지 않습니다.",
+            "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
+            "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
+            "History, preferences, vocabulary and saved recordings live in the app data directory. API keys use Keyring, not credential-metadata.json; recording retention does not clear the vault.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.linux_privacy.data_directory",
-        text: row("应用数据目录", "應用程式資料目錄", "App data directory", "アプリデータの場所", "앱 데이터 디렉터리"),
+        text: row(
+            "应用数据目录",
+            "應用程式資料目錄",
+            "App data directory",
+            "アプリデータの場所",
+            "앱 데이터 디렉터리",
+            "App data directory",
+            "App data directory",
+            "App data directory",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.title",
-        text: row("权限", "權限", "Permissions", "権限", "권한"),
+        text: row(
+            "权限",
+            "權限",
+            "Permissions",
+            "権限",
+            "권한",
+            "Permisos",
+            "Autorisations",
+            "Berechtigungen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.auto_update_check_label",
         text: row(
             "自动检查更新",
@@ -2570,9 +5299,12 @@ pub const CATALOG: &[Msg] = &[
             "Auto-check for updates",
             "アップデートを自動チェック",
             "자동 업데이트 확인",
+            "Buscar actualizaciones automáticamente",
+            "Rechercher automatiquement les mises à jour",
+            "Automatisch nach Updates suchen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.desc",
         text: row(
             "全局录音的快捷键与触发方式。",
@@ -2580,9 +5312,12 @@ pub const CATALOG: &[Msg] = &[
             "Global recording hotkey and trigger mode.",
             "グローバル録音のショートカットとトリガー方式を定義します。",
             "전역 녹음의 단축키와 트리거 방식을 정의합니다.",
+            "Atajo global de grabación y modo de activación.",
+            "Raccourci global d’enregistrement et mode de déclenchement.",
+            "Globaler Aufnahmekurzbefehl und Auslösemodus.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.insert_group_title",
         text: row(
             "插入与剪贴板",
@@ -2590,9 +5325,12 @@ pub const CATALOG: &[Msg] = &[
             "Insertion & clipboard",
             "挿入とクリップボード",
             "삽입 및 클립보드",
+            "Inserción y portapapeles",
+            "Insertion et presse-papiers",
+            "Einfügen und Zwischenablage",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.microphone_system_default",
         text: row(
             "系统默认",
@@ -2600,17 +5338,29 @@ pub const CATALOG: &[Msg] = &[
             "system default",
             "システムデフォルト",
             "시스템 기본값",
+            "predeterminado del sistema",
+            "par défaut du système",
+            "Systemstandard",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mode_label",
-        text: row("录音方式", "錄音方式", "Trigger mode", "録音方式", "녹음 방식"),
+        text: row(
+            "录音方式",
+            "錄音方式",
+            "Trigger mode",
+            "録音方式",
+            "녹음 방식",
+            "Modo de activación",
+            "Mode de déclenchement",
+            "Auslösemodus",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mode_toggle",
-        text: row("切换式", "切換式", "Toggle", "トグル式", "토글 방식"),
+        text: row("切换式", "切換式", "Toggle", "トグル式", "토글 방식", "Alternar", "Basculer", "Umschalten"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_enhancement_label",
         text: row(
             "语音增强",
@@ -2618,9 +5368,12 @@ pub const CATALOG: &[Msg] = &[
             "Speech enhancement",
             "音声強調",
             "음성 향상",
+            "Mejora de voz",
+            "Amélioration de la voix",
+            "Sprachverbesserung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.echo_cancellation_label",
         text: row(
             "播放回声抑制",
@@ -2628,9 +5381,12 @@ pub const CATALOG: &[Msg] = &[
             "Playback echo cancellation",
             "再生エコーキャンセル",
             "재생 에코 제거",
+            "Cancelación del eco de reproducción",
+            "Annulation de l’écho de lecture",
+            "Wiedergabe-Echounterdrückung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mute_during_recording_label",
         text: row(
             "录音时静音",
@@ -2638,9 +5394,12 @@ pub const CATALOG: &[Msg] = &[
             "Mute while recording",
             "録音中はミュート",
             "녹음 중 음소거",
+            "Silenciar durante la grabación",
+            "Couper le son pendant l’enregistrement",
+            "Während der Aufnahme stummschalten",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.paste_shortcut_label",
         text: row(
             "模拟粘贴快捷键",
@@ -2648,13 +5407,25 @@ pub const CATALOG: &[Msg] = &[
             "Simulated paste shortcut",
             "貼り付けショートカット",
             "붙여넣기 단축키",
+            "Atajo de pegado simulado",
+            "Raccourci de collage simulé",
+            "Simulierter Einfügekurzbefehl",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.startup_group_title",
-        text: row("启动", "啟動", "Startup", "起動", "시작"),
+        text: row(
+            "启动",
+            "啟動",
+            "Startup",
+            "起動",
+            "시작",
+            "Inicio",
+            "Démarrage",
+            "Startverhalten",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.enable_label",
         text: row(
             "启用远程输入",
@@ -2662,29 +5433,41 @@ pub const CATALOG: &[Msg] = &[
             "Enable remote input",
             "リモート入力を有効化",
             "원격 입력 활성화",
+            "Activar entrada remota",
+            "Activer la saisie à distance",
+            "Ferneingabe aktivieren",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.port_label",
-        text: row("监听端口", "監聽連線埠", "Port", "待ち受けポート", "수신 포트"),
+        text: row("监听端口", "監聽連線埠", "Port", "待ち受けポート", "수신 포트", "Puerto", "Port", "Port"),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.title",
-        text: row("远程输入", "遠端輸入", "Remote Input", "リモート入力", "원격 입력"),
+        text: row(
+            "远程输入",
+            "遠端輸入",
+            "Remote Input",
+            "リモート入力",
+            "원격 입력",
+            "Entrada remota",
+            "Saisie à distance",
+            "Ferneingabe",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.dark",
-        text: row("深色", "深色", "Dark", "ダーク", "다크"),
+        text: row("深色", "深色", "Dark", "ダーク", "다크", "Oscuro", "Sombre", "Dunkel"),
     },
-    Msg {
+        Msg {
         key: "settings.theme.label",
-        text: row("主题", "主題", "Theme", "テーマ", "테마"),
+        text: row("主题", "主題", "Theme", "テーマ", "테마", "Tema", "Thème", "Design"),
     },
-    Msg {
+        Msg {
         key: "settings.theme.light",
-        text: row("浅色", "淺色", "Light", "ライト", "라이트"),
+        text: row("浅色", "淺色", "Light", "ライト", "라이트", "Claro", "Clair", "Hell"),
     },
-    Msg {
+        Msg {
         key: "marketplace.title",
         text: row(
             "风格包市场",
@@ -2692,9 +5475,12 @@ pub const CATALOG: &[Msg] = &[
             "Style Pack Marketplace",
             "スタイルパック マーケット",
             "스타일 팩 마켓",
+            "Catálogo de paquetes de estilos",
+            "Catalogue de packs de styles",
+            "Stilpaket-Marktplatz",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.title",
         text: row(
             "选区助手",
@@ -2702,9 +5488,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection Assistant",
             "選択範囲アシスタント",
             "선택 영역 도우미",
+            "Asistente de selección",
+            "Assistant de sélection",
+            "Assistent für Textauswahl",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.about",
         text: row(
             "关于与更新",
@@ -2712,9 +5501,12 @@ pub const CATALOG: &[Msg] = &[
             "About & updates",
             "バージョンと更新",
             "정보 및 업데이트",
+            "Acerca de y actualizaciones",
+            "À propos et mises à jour",
+            "Über OpenLess und Updates",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.advanced",
         text: row(
             "实验与扩展",
@@ -2722,9 +5514,12 @@ pub const CATALOG: &[Msg] = &[
             "Experiments & extensions",
             "実験機能と拡張",
             "실험 기능 및 확장",
+            "Experimentos y extensiones",
+            "Expériences et extensions",
+            "Experimente und Erweiterungen",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.appearance",
         text: row(
             "外观与语言",
@@ -2732,9 +5527,12 @@ pub const CATALOG: &[Msg] = &[
             "Appearance & language",
             "外観と言語",
             "모양 및 언어",
+            "Apariencia e idioma",
+            "Apparence et langue",
+            "Darstellung und Sprache",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.general",
         text: row(
             "录音与输入",
@@ -2742,9 +5540,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording & input",
             "録音と入力",
             "녹음 및 입력",
+            "Grabación y entrada",
+            "Enregistrement et saisie",
+            "Aufnahme und Eingabe",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.privacy",
         text: row(
             "权限与数据",
@@ -2752,9 +5553,12 @@ pub const CATALOG: &[Msg] = &[
             "Permissions & data",
             "権限とデータ",
             "권한 및 데이터",
+            "Permisos y datos",
+            "Autorisations et données",
+            "Berechtigungen und Daten",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.services",
         text: row(
             "AI 服务与模型",
@@ -2762,13 +5566,25 @@ pub const CATALOG: &[Msg] = &[
             "AI services & models",
             "AI サービスとモデル",
             "AI 서비스 및 모델",
+            "Servicios y modelos de IA",
+            "Services et modèles d’IA",
+            "KI-Dienste und Modelle",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.sections.shortcuts",
-        text: row("快捷键", "快捷鍵", "Shortcuts", "ショートカットと選択", "단축키 및 선택"),
+        text: row(
+            "快捷键",
+            "快捷鍵",
+            "Shortcuts",
+            "ショートカットと選択",
+            "단축키 및 선택",
+            "Atajos y selección",
+            "Raccourcis et sélection",
+            "Kurzbefehle und Auswahl",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.hint",
         text: row(
             "有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。",
@@ -2776,13 +5592,25 @@ pub const CATALOG: &[Msg] = &[
             "With a selection, one shortcut polishes (voice edit off) or takes a spoken instruction to ask or edit. With no selection but focus in a text field, speak to Help me write a draft or ask a question.",
             "テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。",
             "텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.",
+            "Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.",
+            "Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.",
+            "Wähle Text aus und verwende einen Kurzbefehl: Ohne Sprachbearbeitung wird der Text direkt überarbeitet. Mit Sprachbearbeitung hältst du die Taste gedrückt und sprichst; danach wählst du „Fragen“ oder „Bearbeiten“.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.voice_enable",
-        text: row("语音编辑", "語音編輯", "Voice edit", "音声編集", "음성 편집"),
+        text: row(
+            "语音编辑",
+            "語音編輯",
+            "Voice edit",
+            "音声編集",
+            "음성 편집",
+            "Edición por voz",
+            "Modification vocale",
+            "Sprachbearbeitung",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.multimodal_pipeline_label",
         text: row(
             "启用多模态识别管线",
@@ -2790,9 +5618,12 @@ pub const CATALOG: &[Msg] = &[
             "Enable multimodal pipeline",
             "マルチモーダルパイプラインを有効化",
             "멀티모달 파이프라인 활성화",
+            "Activar procesamiento multimodal",
+            "Activer le traitement multimodal",
+            "Multimodale Verarbeitung aktivieren",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.multimodal_pipeline_title",
         text: row(
             "多模态识别管线",
@@ -2800,17 +5631,20 @@ pub const CATALOG: &[Msg] = &[
             "Multimodal recognition pipeline",
             "マルチモーダル認識パイプライン",
             "멀티모달 인식 파이프라인 ",
+            "Reconocimiento multimodal (experimental)",
+            "Reconnaissance multimodale (expérimentale)",
+            "Multimodale Spracherkennung (experimentell)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.label",
-        text: row("语言", "語言", "Language", "言語", "언어"),
+        text: row("语言", "語言", "Language", "言語", "언어", "Idioma", "Langue", "Sprache"),
     },
-    Msg {
+        Msg {
         key: "settings.network.title",
-        text: row("网络", "網路", "Network", "ネットワーク", "네트워크"),
+        text: row("网络", "網路", "Network", "ネットワーク", "네트워크", "Red", "Réseau", "Netzwerk"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.title",
         text: row(
             "录音与输入",
@@ -2818,9 +5652,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording & input",
             "録音と入力",
             "녹음 및 입력",
+            "Grabación y entrada",
+            "Enregistrement et saisie",
+            "Aufnahme und Eingabe",
         ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.shortcut_settings",
         text: row(
             "快捷键设置",
@@ -2828,9 +5665,12 @@ pub const CATALOG: &[Msg] = &[
             "Shortcut settings",
             "ショートカット設定",
             "단축키 설정",
+            "Ajustes de atajos",
+            "Réglages des raccourcis",
+            "Kurzbefehlseinstellungen",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_only_learned",
         text: row(
             "只看自动收集的（{}）",
@@ -2838,9 +5678,12 @@ pub const CATALOG: &[Msg] = &[
             "Only auto-collected ({})",
             "自動収集のみ表示（{}）",
             "자동 수집만 보기 ({})",
+            "Solo automáticas ({})",
+            "Automatiques uniquement ({})",
+            "Nur automatisch gesammelte ({})",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.corrections_remove_all_learned",
         text: row(
             "删除全部自动收集的",
@@ -2848,9 +5691,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete all auto-collected",
             "自動収集をすべて削除",
             "자동 수집 전체 삭제",
+            "Eliminar todas las automáticas",
+            "Supprimer toutes les règles automatiques",
+            "Alle automatisch gesammelten löschen",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.empty",
         text: row(
             "还没有词条。在上面输入一个生词或专业术语，让模型在听写时优先匹配。",
@@ -2858,17 +5704,20 @@ pub const CATALOG: &[Msg] = &[
             "No entries yet. Add a new term or piece of jargon above so the model can prioritize it.",
             "語彙がありません。新語や専門用語を上に入力すると、ディクテーション時に優先的にマッチします。",
             "어휘가 없습니다. 위에 새 단어나 전문 용어를 입력하면 받아쓰기 시 우선 매칭됩니다.",
+            "Todavía no hay entradas. Añade arriba un término o expresión especializada para que el modelo les dé prioridad.",
+            "Aucune entrée pour le moment. Ajoutez un terme ou une expression spécialisée ci-dessus pour que le modèle les privilégie.",
+            "Noch keine Einträge. Füge oben einen Begriff oder ein Fachwort hinzu, damit das Modell es bevorzugt erkennt.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_all",
-        text: row("所有", "所有", "All", "すべて", "전체"),
+        text: row("所有", "所有", "All", "すべて", "전체", "Todas", "Tous", "Alle"),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_auto",
-        text: row("确认收集", "確認收集", "Confirmed", "確認して追加", "확인 후 수집"),
+        text: row("确认收集", "確認收集", "Confirmed", "確認して追加", "확인 후 수집", "Confirmadas", "Confirmés", "Bestätigt"),
     },
-    Msg {
+        Msg {
         key: "vocab.filter_manual",
         text: row(
             "手动添加",
@@ -2876,13 +5725,25 @@ pub const CATALOG: &[Msg] = &[
             "Manually Added",
             "手動追加",
             "수동 추가",
+            "Añadidas manualmente",
+            "Ajoutés manuellement",
+            "Manuell hinzugefügt",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.new_word",
-        text: row("新词", "新詞", "New Word", "新語", "새 단어"),
+        text: row(
+            "新词",
+            "新詞",
+            "New Word",
+            "新語",
+            "새 단어",
+            "Nueva palabra",
+            "Nouveau mot",
+            "Neues Wort",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.search_empty",
         text: row(
             "没有匹配的词条。",
@@ -2890,13 +5751,16 @@ pub const CATALOG: &[Msg] = &[
             "No matching words.",
             "一致する単語がありません。",
             "일치하는 단어가 없습니다.",
+            "No se encontraron palabras.",
+            "Aucun mot correspondant.",
+            "Keine passenden Wörter.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.search_placeholder",
-        text: row("搜索", "搜尋", "Search", "検索", "검색"),
+        text: row("搜索", "搜尋", "Search", "検索", "검색", "Buscar", "Rechercher", "Suchen"),
     },
-    Msg {
+        Msg {
         key: "translation.howto_fallback_desc",
         text: row(
             "翻译失败时回退为插入原始转写，不会丢字。",
@@ -2904,9 +5768,12 @@ pub const CATALOG: &[Msg] = &[
             "If translation fails, the raw transcript is inserted instead.",
             "翻訳失敗時は原文がそのまま挿入されます。",
             "번역 실패 시 원본 전사가 삽입됩니다.",
+            "Si la traducción falla, se inserta la transcripción original.",
+            "Si la traduction échoue, la transcription brute est insérée à la place.",
+            "Schlägt die Übersetzung fehl, wird stattdessen das ursprüngliche Transkript eingefügt.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_fallback_title",
         text: row(
             "安全兜底",
@@ -2914,9 +5781,12 @@ pub const CATALOG: &[Msg] = &[
             "Safety fallbacks",
             "セーフティフォールバック",
             "안전 폴백",
+            "Alternativa en caso de error",
+            "Solution de repli",
+            "Verhalten bei Fehlern",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_indicator_desc",
         text: row(
             "按 Shift 后屏幕底部会显示蓝色「正在翻译」标识。",
@@ -2924,9 +5794,12 @@ pub const CATALOG: &[Msg] = &[
             "A blue \"Translating\" indicator appears at the bottom of the screen after pressing Shift.",
             "Shift を押すと画面下部に青い「翻訳中」表示が出ます。",
             "Shift 를 누르면 화면 하단에 파란색 \"번역 중\" 표시가 나타납니다.",
+            "Después de pulsar Mayús, aparece un indicador azul de «Traduciendo» en la parte inferior de la pantalla.",
+            "Un indicateur bleu « Traduction » apparaît en bas de l’écran après avoir appuyé sur Maj.",
+            "Nach dem Drücken von Shift erscheint unten auf dem Bildschirm die blaue Anzeige „Wird übersetzt“.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.howto_indicator_title",
         text: row(
             "翻译模式指示",
@@ -2934,9 +5807,12 @@ pub const CATALOG: &[Msg] = &[
             "How to confirm translation mode is on",
             "翻訳モードの確認方法",
             "번역 모드 활성화 확인 방법",
+            "Cómo saber si la traducción está activada",
+            "Comment vérifier que la traduction est active",
+            "So erkennst du den Übersetzungsmodus",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.language_support_hint",
         text: row(
             "语音服务支持的语种可能不同；翻译目标不受界面语言限制。",
@@ -2944,9 +5820,12 @@ pub const CATALOG: &[Msg] = &[
             "Available speech languages depend on your provider. Translation targets are independent of the app language.",
             "音声認識で使える言語はサービスによって異なります。翻訳先はアプリの表示言語とは独立しています。",
             "음성 서비스에 따라 지원 언어가 다릅니다. 번역 언어는 앱 표시 언어와 별개입니다.",
+            "Los idiomas de reconocimiento disponibles dependen del proveedor. Los idiomas de traducción son independientes del idioma de la aplicación.",
+            "Les langues de reconnaissance disponibles dépendent du fournisseur. Les langues de traduction sont indépendantes de celle de l’application.",
+            "Die verfügbaren Erkennungssprachen hängen vom Dienst ab. Übersetzungsziele sind unabhängig von der App-Sprache.",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.no_matching_languages",
         text: row(
             "没有匹配的语言",
@@ -2954,9 +5833,12 @@ pub const CATALOG: &[Msg] = &[
             "No matching languages",
             "一致する言語がありません",
             "일치하는 언어가 없습니다",
+            "No se encontraron idiomas",
+            "Aucune langue correspondante",
+            "Keine passenden Sprachen",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.search_languages",
         text: row(
             "搜索语言…",
@@ -2964,9 +5846,12 @@ pub const CATALOG: &[Msg] = &[
             "Search languages…",
             "言語を検索…",
             "언어 검색…",
+            "Buscar idiomas…",
+            "Rechercher une langue…",
+            "Sprachen suchen…",
         ),
     },
-    Msg {
+        Msg {
         key: "translation.selected_languages",
         text: row(
             "已选择 {} 种语言",
@@ -2974,9 +5859,12 @@ pub const CATALOG: &[Msg] = &[
             "{} languages selected",
             "{} 言語を選択中",
             "언어 {}개 선택됨",
+            "{} idiomas seleccionados",
+            "{} langues sélectionnées",
+            "Ausgewählte Sprachen: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.auto_save_hint",
         text: row(
             "修改后自动保存",
@@ -2984,9 +5872,12 @@ pub const CATALOG: &[Msg] = &[
             "Changes save automatically",
             "変更は自動保存されます",
             "변경 사항이 자동 저장됩니다",
+            "Los cambios se guardan automáticamente",
+            "Les modifications sont enregistrées automatiquement",
+            "Änderungen werden automatisch gespeichert",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.search_placeholder",
         text: row(
             "查找设置分类…",
@@ -2994,9 +5885,12 @@ pub const CATALOG: &[Msg] = &[
             "Find a settings category…",
             "設定カテゴリを検索…",
             "설정 카테고리 찾기…",
+            "Buscar una categoría de ajustes…",
+            "Rechercher une catégorie de réglages…",
+            "Einstellungskategorie suchen…",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.asr",
         text: row(
             "语音识别",
@@ -3004,13 +5898,16 @@ pub const CATALOG: &[Msg] = &[
             "Speech recognition",
             "音声認識",
             "음성 인식",
+            "Reconocimiento de voz",
+            "Reconnaissance vocale",
+            "Spracherkennung",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.connections",
-        text: row("连接与扩展", "連線與擴充", "Connections", "接続と拡張", "연결 및 확장"),
+        text: row("连接与扩展", "連線與擴充", "Connections", "接続と拡張", "연결 및 확장", "Conexiones", "Connexions", "Verbindungen"),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.llm",
         text: row(
             "语言模型",
@@ -3018,13 +5915,25 @@ pub const CATALOG: &[Msg] = &[
             "Language models",
             "言語モデル",
             "언어 모델",
+            "Modelos de lenguaje",
+            "Modèles de langage",
+            "Sprachmodelle",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.models",
-        text: row("本地模型", "本機模型", "Local models", "ローカルモデル", "로컬 모델"),
+        text: row(
+            "本地模型",
+            "本機模型",
+            "Local models",
+            "ローカルモデル",
+            "로컬 모델",
+            "Modelos locales",
+            "Modèles locaux",
+            "Lokale Modelle",
+        ),
     },
-    Msg {
+        Msg {
         key: "selection_ask.hotkey_title",
         text: row(
             "弹出浮窗的快捷键",
@@ -3032,17 +5941,29 @@ pub const CATALOG: &[Msg] = &[
             "Hotkey to open the panel",
             "フロートウィンドウのショートカット",
             "플로팅 창 단축키",
+            "Atajo para abrir el panel",
+            "Raccourci pour ouvrir le panneau",
+            "Kurzbefehl zum Öffnen des Fensters",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.about.docs",
-        text: row("文档", "檔案", "Docs", "ドキュメント", "문서"),
+        text: row(
+            "文档",
+            "檔案",
+            "Docs",
+            "ドキュメント",
+            "문서",
+            "Documentación",
+            "Documentation",
+            "Dokumentation",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.about.feedback",
-        text: row("反馈", "反饋", "Feedback", "フィードバック", "피드백"),
+        text: row("反馈", "反饋", "Feedback", "フィードバック", "피드백", "Comentarios", "Commentaires", "Rückmeldung"),
     },
-    Msg {
+        Msg {
         key: "settings.about.links_title",
         text: row(
             "文档链接",
@@ -3050,13 +5971,25 @@ pub const CATALOG: &[Msg] = &[
             "Documentation",
             "ドキュメント",
             "문서 링크",
+            "Documentación",
+            "Documentation",
+            "Dokumentation",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.about.local_first",
-        text: row("本地优先", "本地優先", "Local-first", "ローカル優先", "로컬 우선"),
+        text: row(
+            "本地优先",
+            "本地優先",
+            "Local-first",
+            "ローカル優先",
+            "로컬 우선",
+            "Prioridad al almacenamiento local",
+            "Priorité au traitement local",
+            "Lokal orientiert",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.about.privacy_desc",
         text: row(
             "录音可能会发送到你配置的云端服务商进行转写。",
@@ -3064,9 +5997,12 @@ pub const CATALOG: &[Msg] = &[
             "Recordings may be sent to the cloud provider you configure for transcription.",
             "録音は、設定したクラウドプロバイダーへ文字起こしのため送信される場合があります。",
             "녹음은 전사를 위해 설정한 클라우드 공급자에게 전송될 수 있습니다.",
+            "Las grabaciones pueden enviarse al proveedor en la nube que configures para transcribirlas.",
+            "Les enregistrements peuvent être envoyés au fournisseur cloud configuré pour la transcription.",
+            "Aufnahmen können zur Transkription an den von dir eingerichteten Cloud-Anbieter gesendet werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.about.qq",
         text: row(
             "社区 QQ 群",
@@ -3074,13 +6010,25 @@ pub const CATALOG: &[Msg] = &[
             "QQ community group",
             "コミュニティ QQ グループ",
             "커뮤니티 QQ 그룹",
+            "Grupo de la comunidad en QQ",
+            "Groupe communautaire QQ",
+            "QQ-Community-Gruppe",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.about.source",
-        text: row("源码", "原始碼", "Source", "ソース", "소스"),
+        text: row(
+            "源码",
+            "原始碼",
+            "Source",
+            "ソース",
+            "소스",
+            "Código fuente",
+            "Code source",
+            "Quellcode",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.about.tagline",
         text: row(
             "自然说话，完美书写",
@@ -3088,9 +6036,12 @@ pub const CATALOG: &[Msg] = &[
             "Speak naturally, write perfectly",
             "自然に話し、きれいに書く",
             "자연스럽게 말하고, 정확하게 작성하세요",
+            "Habla con naturalidad, escribe con precisión",
+            "Parlez naturellement, écrivez avec précision",
+            "Natürlich sprechen, klar schreiben",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.local_asr_desc",
         text: row(
             "把转写从云端切到本机推理。仅推荐离线 / 隐私敏感场景。",
@@ -3098,9 +6049,12 @@ pub const CATALOG: &[Msg] = &[
             "Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.",
             "転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。",
             "전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.",
+            "Sustituye el ASR en la nube por inferencia en el dispositivo. Para uso sin conexión o con datos sensibles.",
+            "Remplace l’ASR dans le cloud par l’inférence sur l’appareil. Pour l’usage hors ligne ou les données sensibles.",
+            "Verlagert die Transkription von Cloud-ASR auf das Gerät. Für Offline-Nutzung oder sensible Daten.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.multimodal_pipeline_title_hint",
         text: row(
             "用单个多模态模型一步完成语音识别；与传统 ASR + LLM 配置完全隔离。",
@@ -3108,9 +6062,12 @@ pub const CATALOG: &[Msg] = &[
             "One-pass audio recognition with a single multimodal model; traditional ASR + LLM configuration is fully isolated from it.",
             "1つのマルチモーダルモデルで音声認識を一括実行。従来の ASR + LLM 設定から完全に分離されます。",
             "단일 멀티모달 모델로 음성 인식을 한 번에 처리합니다. 기존 ASR + LLM 설정과 완전히 분리됩니다.",
+            "Reconoce el audio en una sola pasada con un modelo multimodal; su configuración está completamente separada del ASR + LLM tradicional.",
+            "Reconnaît l’audio en un seul passage avec un modèle multimodal. Sa configuration est entièrement séparée de l’ASR + LLM traditionnel.",
+            "Spracherkennung in einem Durchgang mit einem multimodalen Modell. Die klassische ASR- und LLM-Konfiguration ist vollständig getrennt.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.platform_not_supported",
         text: row(
             "该平台暂未支持本地 ASR 模型集成。",
@@ -3118,9 +6075,12 @@ pub const CATALOG: &[Msg] = &[
             "Local ASR model integration is not supported on this platform.",
             "このプラットフォームではローカル ASR モデル統合に対応していません。",
             "이 플랫폼에서는 로컬 ASR 모델 통합이 아직 지원되지 않습니다.",
+            "Esta plataforma no admite la integración de modelos ASR locales.",
+            "L’intégration des modèles ASR locaux n’est pas prise en charge sur cette plateforme.",
+            "Lokale ASR-Modelle werden auf dieser Plattform nicht unterstützt.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.streaming_insert_desc",
         text: row(
             "逐字实时插入，降低感知延迟。不满足条件时回落到一次性粘贴。",
@@ -3128,9 +6088,12 @@ pub const CATALOG: &[Msg] = &[
             "Streams text to cursor character by character, reducing perceived latency. Falls back to one-shot paste when conditions are not met.",
             "逐字リアルタイム挿入で体感遅延を低減。条件不一致時はワンショット貼り付けにフォールバック。",
             "실시간 글자별 삽입으로 체감 지연 감소. 조건 불충족 시 일괄 붙여넣기로 전환.",
+            "Inserta el texto carácter a carácter donde está el cursor para reducir la espera percibida. Si no se cumplen las condiciones, pega todo de una vez.",
+            "Insère le texte caractère par caractère au curseur pour réduire l’attente ressentie. Si les conditions ne sont pas réunies, le texte est collé en une seule fois.",
+            "Fügt den Text Zeichen für Zeichen an der Cursorposition ein und verkürzt so die wahrgenommene Wartezeit. Sind die Voraussetzungen nicht erfüllt, wird der Text auf einmal eingefügt.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.streaming_insert_label",
         text: row(
             "流式输入",
@@ -3138,9 +6101,12 @@ pub const CATALOG: &[Msg] = &[
             "Streaming insertion",
             "ストリーミング入力",
             "스트리밍 입력",
+            "Inserción progresiva",
+            "Insertion progressive",
+            "Laufend einfügen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.streaming_insert_save_clipboard_label",
         text: row(
             "同步到剪贴板",
@@ -3148,14 +6114,26 @@ pub const CATALOG: &[Msg] = &[
             "Copy to clipboard",
             "クリップボードに保存",
             "클립보드에 저장",
+            "Copiar al portapapeles",
+            "Copier dans le presse-papiers",
+            "In Zwischenablage kopieren",
         ),
     },
 
-    Msg {
+        Msg {
         key: "settings.channels.add",
-        text: row("添加渠道", "新增渠道", "Add channel", "チャネルを追加", "채널 추가"),
+        text: row(
+            "添加渠道",
+            "新增渠道",
+            "Add channel",
+            "チャネルを追加",
+            "채널 추가",
+            "Añadir canal",
+            "Ajouter un canal",
+            "Kanal hinzufügen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.asr_title",
         text: row(
             "语音识别渠道",
@@ -3163,13 +6141,16 @@ pub const CATALOG: &[Msg] = &[
             "Speech recognition channels",
             "音声認識チャンネル",
             "음성 인식 채널",
+            "Canales de reconocimiento de voz",
+            "Canaux de reconnaissance vocale",
+            "Kanäle für Spracherkennung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.create",
-        text: row("创建", "建立", "Create", "作成", "만들기"),
+        text: row("创建", "建立", "Create", "作成", "만들기", "Crear", "Créer", "Erstellen"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.current",
         text: row(
             "当前使用",
@@ -3177,9 +6158,12 @@ pub const CATALOG: &[Msg] = &[
             "Currently used",
             "使用中",
             "현재 사용 중",
+            "En uso",
+            "En cours d’utilisation",
+            "Aktuell verwendet",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.delete",
         text: row(
             "删除渠道",
@@ -3187,17 +6171,29 @@ pub const CATALOG: &[Msg] = &[
             "Delete channel",
             "チャネルを削除",
             "채널 삭제",
+            "Eliminar canal",
+            "Supprimer le canal",
+            "Kanal löschen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.disabled",
-        text: row("已停用", "已停用", "Disabled", "無効", "사용 안 함"),
+        text: row("已停用", "已停用", "Disabled", "無効", "사용 안 함", "Desactivado", "Désactivé", "Deaktiviert"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.elapsed",
-        text: row("耗时 {} ms", "耗時 {} ms", "Took {} ms", "所要時間 {} ms", "소요 시간 {} ms"),
+        text: row(
+            "耗时 {} ms",
+            "耗時 {} ms",
+            "Took {} ms",
+            "所要時間 {} ms",
+            "소요 시간 {} ms",
+            "Duración: {} ms",
+            "Durée : {} ms",
+            "Dauer: {} ms",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.empty",
         text: row(
             "还没有渠道。点击「添加渠道」，连接你的第一个服务。",
@@ -3205,13 +6201,16 @@ pub const CATALOG: &[Msg] = &[
             "No channels yet. Choose \"Add channel\" to connect your first service.",
             "チャネルがまだありません。「チャネルを追加」で最初のサービスを接続しましょう。",
             "아직 채널이 없습니다. \"채널 추가\"로 첫 서비스를 연결하세요.",
+            "Todavía no hay canales. Elige «Añadir canal» para conectar tu primer servicio.",
+            "Aucun canal pour le moment. Choisissez « Ajouter un canal » pour connecter votre premier service.",
+            "Noch keine Kanäle. Verbinde deinen ersten Dienst über „Kanal hinzufügen“.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.enabled",
-        text: row("启用", "啟用", "Enabled", "有効", "사용"),
+        text: row("启用", "啟用", "Enabled", "有効", "사용", "Activado", "Activé", "Aktiviert"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.failed",
         text: row(
             "验证失败 · {}",
@@ -3219,9 +6218,12 @@ pub const CATALOG: &[Msg] = &[
             "Check failed · {}",
             "確認に失敗 · {}",
             "확인 실패 · {}",
+            "Comprobación fallida · {}",
+            "Échec de la vérification · {}",
+            "Prüfung fehlgeschlagen · {}",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.connection_title",
         text: row(
             "服务连接",
@@ -3229,9 +6231,12 @@ pub const CATALOG: &[Msg] = &[
             "Service connection",
             "サービス接続",
             "서비스 연결",
+            "Conexión al servicio",
+            "Connexion au service",
+            "Dienstverbindung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.edit_title",
         text: row(
             "编辑渠道",
@@ -3239,9 +6244,12 @@ pub const CATALOG: &[Msg] = &[
             "Edit channel",
             "チャネルを編集",
             "채널 편집",
+            "Editar canal",
+            "Modifier le canal",
+            "Kanal bearbeiten",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.create_title",
         text: row(
             "添加渠道",
@@ -3249,9 +6257,12 @@ pub const CATALOG: &[Msg] = &[
             "Add channel",
             "チャネルを追加",
             "채널 추가",
+            "Añadir canal",
+            "Ajouter un canal",
+            "Kanal hinzufügen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.auto_save_hint",
         text: row(
             "字段修改后自动保存；完成配置后，可手动验证连接。",
@@ -3259,9 +6270,12 @@ pub const CATALOG: &[Msg] = &[
             "Changes save automatically. Once configured, you can check the connection manually.",
             "変更は自動保存されます。設定が終わったら、手動で接続を確認できます。",
             "변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.",
+            "Los cambios se guardan automáticamente. Después de configurar el servicio, puedes comprobar la conexión.",
+            "Les modifications sont enregistrées automatiquement. Une fois le service configuré, vous pouvez vérifier la connexion.",
+            "Änderungen werden automatisch gespeichert. Anschließend kannst du die Verbindung manuell prüfen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.name_label",
         text: row(
             "渠道名称（可选）",
@@ -3269,13 +6283,16 @@ pub const CATALOG: &[Msg] = &[
             "Channel name (optional)",
             "チャネル名（任意）",
             "채널 이름 (선택)",
+            "Nombre del canal (opcional)",
+            "Nom du canal (facultatif)",
+            "Kanalname (optional)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.done",
-        text: row("完成", "完成", "Done", "完了", "완료"),
+        text: row("完成", "完成", "Done", "完了", "완료", "Hecho", "Terminé", "Fertig"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.llm_title",
         text: row(
             "文字处理渠道",
@@ -3283,9 +6300,12 @@ pub const CATALOG: &[Msg] = &[
             "Text processing channels",
             "テキスト処理チャンネル",
             "텍스트 처리 채널",
+            "Canales de procesamiento de texto",
+            "Canaux de traitement du texte",
+            "Kanäle für Textverarbeitung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.name_hint",
         text: row(
             "名称仅用于区分同一供应商的多个渠道，不影响模型或连接。",
@@ -3293,9 +6313,12 @@ pub const CATALOG: &[Msg] = &[
             "This name distinguishes channels from the same provider. It does not affect the model or connection.",
             "同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。",
             "같은 제공업체의 여러 채널을 구분하는 이름입니다. 모델이나 연결에는 영향을 주지 않습니다.",
+            "El nombre permite distinguir canales del mismo proveedor. No afecta al modelo ni a la conexión.",
+            "Ce nom distingue les canaux d’un même fournisseur. Il n’affecte ni le modèle ni la connexion.",
+            "Dieser Name unterscheidet Kanäle desselben Anbieters. Er beeinflusst weder Modell noch Verbindung.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.name_placeholder",
         text: row(
             "例如：硅基流动-主号",
@@ -3303,9 +6326,12 @@ pub const CATALOG: &[Msg] = &[
             "e.g. SiliconFlow — main key",
             "例：SiliconFlow — メインキー",
             "예: SiliconFlow — 메인 키",
+            "P. ej., SiliconFlow — clave principal",
+            "P. ex. SiliconFlow — clé principale",
+            "z. B. SiliconFlow – Hauptschlüssel",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.not_verified",
         text: row(
             "尚未验证",
@@ -3313,9 +6339,12 @@ pub const CATALOG: &[Msg] = &[
             "Not checked yet",
             "未確認",
             "아직 확인하지 않음",
+            "Sin comprobar",
+            "Pas encore vérifié",
+            "Noch nicht geprüft",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.order_hint",
         text: row(
             "列表中第一个启用的渠道用于请求。拖动调整顺序；停用的渠道移到末尾。",
@@ -3323,17 +6352,29 @@ pub const CATALOG: &[Msg] = &[
             "Requests use the first enabled channel. Drag to reorder; disabled channels move to the bottom.",
             "有効なチャネルのうち、先頭のものを使用します。ドラッグで順序を変更できます。無効なチャネルは末尾に移動します。",
             "사용 중인 채널 중 맨 위의 채널로 요청합니다. 드래그로 순서를 바꾸면 사용하지 않는 채널은 맨 아래로 이동합니다.",
+            "Se usa el primer canal activado. Arrastra para reordenar; los canales desactivados pasan al final.",
+            "Les requêtes utilisent le premier canal activé. Faites glisser pour réordonner ; les canaux désactivés passent en bas.",
+            "Anfragen nutzen den ersten aktivierten Kanal. Ziehen ändert die Reihenfolge; deaktivierte Kanäle werden nach unten verschoben.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.passed",
-        text: row("验证通过", "驗證通過", "Check passed", "確認に成功", "확인 성공"),
+        text: row(
+            "验证通过",
+            "驗證通過",
+            "Check passed",
+            "確認に成功",
+            "확인 성공",
+            "Comprobación correcta",
+            "Vérification réussie",
+            "Prüfung bestanden",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.verify",
-        text: row("验证", "驗證", "Verify", "検証", "검증"),
+        text: row("验证", "驗證", "Verify", "検証", "검증", "Verificar", "Vérifier", "Prüfen"),
     },
-    Msg {
+        Msg {
         key: "settings.data_storage.desc",
         text: row(
             "本机保留的历史会话与对话上下文。",
@@ -3341,9 +6382,12 @@ pub const CATALOG: &[Msg] = &[
             "Conversation history and context kept on this device.",
             "この端末に保存される会話履歴とコンテキスト。",
             "이 기기에 보관되는 대화 기록과 컨텍스트.",
+            "Historial de conversaciones y contexto guardados en este dispositivo.",
+            "Historique des conversations et contexte conservés sur cet appareil.",
+            "Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.debug.desc",
         text: row(
             "排查识别问题时使用，平时无需开启。",
@@ -3351,7 +6395,82 @@ pub const CATALOG: &[Msg] = &[
             "For troubleshooting recognition issues; off by default.",
             "認識の問題を調査するときに使用。通常はオフのままで構いません。",
             "인식 문제를 진단할 때 사용합니다. 평소에는 꺼두어도 됩니다.",
+            "Para investigar problemas de reconocimiento. Desactivadas de forma predeterminada.",
+            "Pour diagnostiquer les problèmes de reconnaissance ; désactivés par défaut.",
+            "Zur Untersuchung von Erkennungsproblemen. Standardmäßig deaktiviert.",
         ),
+    },
+            Msg {
+        key: "settings.language.es",
+        text: row("Español", "Español", "Español", "Español", "Español", "Español", "Español", "Español"),
+    },
+        Msg {
+        key: "settings.language.fr",
+        text: row("Français", "Français", "Français", "Français", "Français", "Français", "Français", "Français"),
+    },
+        Msg {
+        key: "settings.language.de",
+        text: row("Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch", "Deutsch"),
+    },
+    Msg {
+        key: "settings.output_text.title",
+        text: row("输出文字", "輸出文字", "Output text", "出力テキスト", "출력 텍스트", "Texto de salida", "Texte de sortie", "Ausgabetext"),
+    },
+    Msg {
+        key: "settings.output_text.desc",
+        text: row("决定润色后交给你的文字用哪种字形、哪种语言。", "決定潤色後交給你的文字用哪種字形、哪種語言。", "Choose the script and language of the polished text.", "整形後のテキストの字形と言語を選びます。", "다듬은 텍스트의 문자 형태와 언어를 선택합니다.", "Elige la escritura y el idioma del texto pulido.", "Choisissez l’écriture et la langue du texte corrigé.", "Schrift und Sprache des überarbeiteten Textes wählen."),
+    },
+    Msg {
+        key: "settings.output_text.script",
+        text: row("中文正字法", "中文正字法", "Chinese script", "中国語の字形", "중국어 문자 형태", "Escritura china", "Écriture chinoise", "Chinesische Schrift"),
+    },
+    Msg {
+        key: "settings.output_text.script_desc",
+        text: row("只说中文时按这一项决定输出简体还是繁体；非中文内容不受影响。", "只說中文時依這一項決定輸出簡體還是繁體；非中文內容不受影響。", "Decides simplified vs traditional for Chinese output; other languages are unaffected.", "中国語の出力を簡体字にするか繁体字にするかを決めます（他言語は影響を受けません）。", "중국어 출력을 간체로 할지 번체로 할지 정합니다(다른 언어는 영향 없음).", "Decide entre chino simplificado y tradicional; otros idiomas no se ven afectados.", "Choisit entre chinois simplifié et traditionnel ; les autres langues ne changent pas.", "Legt für chinesische Ausgabe Kurz- oder Langzeichen fest; andere Sprachen bleiben unberührt."),
+    },
+    Msg {
+        key: "settings.output_text.script_auto",
+        text: row("跟随识别结果", "跟隨辨識結果", "Follow the transcript", "認識結果に合わせる", "인식 결과 따르기", "Seguir la transcripción", "Suivre la transcription", "Transkript folgen"),
+    },
+    Msg {
+        key: "settings.output_text.script_simplified",
+        text: row("简体", "簡體", "Simplified", "簡体字", "간체", "Simplificado", "Simplifié", "Kurzzeichen"),
+    },
+    Msg {
+        key: "settings.output_text.script_traditional",
+        text: row("繁体", "繁體", "Traditional", "繁体字", "번체", "Tradicional", "Traditionnel", "Langzeichen"),
+    },
+    Msg {
+        key: "settings.output_text.language",
+        text: row("输出语言", "輸出語言", "Output language", "出力言語", "출력 언어", "Idioma de salida", "Langue de sortie", "Ausgabesprache"),
+    },
+    Msg {
+        key: "settings.output_text.language_desc",
+        text: row("润色后翻译成这一种语言；「跟随识别结果」保持原样。", "潤色後翻譯成這一種語言；「跟隨辨識結果」保持原樣。", "Translate the polished text into this language; follow the transcript keeps it as spoken.", "整形後のテキストをこの言語に翻訳します（「認識結果に合わせる」はそのまま）。", "다듬은 텍스트를 이 언어로 번역합니다(인식 결과 따르기는 그대로 유지).", "Traduce el texto pulido a este idioma; seguir la transcripción lo deja igual.", "Traduit le texte corrigé dans cette langue ; suivre la transcription le laisse tel quel.", "Übersetzt den überarbeiteten Text in diese Sprache; Transkript folgen lässt ihn unverändert."),
+    },
+    Msg {
+        key: "settings.output_text.language_auto",
+        text: row("跟随识别结果", "跟隨辨識結果", "Follow the transcript", "認識結果に合わせる", "인식 결과 따르기", "Seguir la transcripción", "Suivre la transcription", "Transkript folgen"),
+    },
+    Msg {
+        key: "settings.output_text.language_zh_cn",
+        text: row("简体中文", "簡體中文", "Simplified Chinese", "簡体字中国語", "간체 중국어", "Chino simplificado", "Chinois simplifié", "Chinesisch (Kurzzeichen)"),
+    },
+    Msg {
+        key: "settings.output_text.language_zh_tw",
+        text: row("繁體中文", "繁體中文", "Traditional Chinese", "繁体字中国語", "번체 중국어", "Chino tradicional", "Chinois traditionnel", "Chinesisch (Langzeichen)"),
+    },
+    Msg {
+        key: "settings.output_text.language_en",
+        text: row("English", "English", "English", "English", "English", "English", "English", "English"),
+    },
+    Msg {
+        key: "settings.output_text.language_ja",
+        text: row("日本語", "日本語", "Japanese", "日本語", "日本語", "Japonés", "Japonais", "Japanisch"),
+    },
+    Msg {
+        key: "settings.output_text.language_ko",
+        text: row("한국어", "한국어", "Korean", "韓国語", "한국어", "Coreano", "Coréen", "Koreanisch"),
     },
     Msg {
         key: "settings.language.desc",
@@ -3361,13 +6480,16 @@ pub const CATALOG: &[Msg] = &[
             "Switch the UI language. Applies to the current session immediately and persists across launches.",
             "UI の表示言語を切り替えます。現在のセッションに即時反映され、次回起動時も維持されます。",
             "UI 표시 언어를 전환합니다. 현재 세션에 즉시 반영되며 다음 실행에도 유지됩니다.",
+            "Cambia el idioma de la interfaz. Se aplica de inmediato y se conserva al volver a iniciar la aplicación.",
+            "Change la langue de l’interface immédiatement et conserve ce choix au prochain lancement.",
+            "Wechselt die Sprache der Oberfläche sofort und speichert die Auswahl für spätere Starts.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.en",
-        text: row("English", "English", "English", "English", "English"),
+        text: row("English", "English", "English", "English", "English", "English", "English", "English"),
     },
-    Msg {
+        Msg {
         key: "settings.language.follow_system",
         text: row(
             "跟随系统",
@@ -3375,17 +6497,20 @@ pub const CATALOG: &[Msg] = &[
             "Follow system",
             "システムに従う",
             "시스템 따라가기",
+            "Seguir al sistema",
+            "Suivre le système",
+            "Systemsprache",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.ja",
-        text: row("日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)"),
+        text: row("日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)", "日本語 (Beta)"),
     },
-    Msg {
+        Msg {
         key: "settings.language.ko",
-        text: row("한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)"),
+        text: row("한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)", "한국어 (Beta)"),
     },
-    Msg {
+        Msg {
         key: "settings.language.restart_hint",
         text: row(
             "部分原生菜单（系统托盘等）可能需要重启 App 才会切换。",
@@ -3393,13 +6518,16 @@ pub const CATALOG: &[Msg] = &[
             "Some native menus (system tray, etc.) may require an app restart to fully switch.",
             "一部のネイティブメニュー（トレイ等）は再起動後に反映されます。",
             "일부 네이티브 메뉴(트레이 등)는 앱 재시작 후 반영될 수 있습니다.",
+            "Algunos menús nativos, como la bandeja del sistema, pueden requerir reiniciar la aplicación para cambiar por completo.",
+            "Certains menus natifs, comme la zone de notification, peuvent nécessiter un redémarrage pour changer complètement de langue.",
+            "Einige native Menüs, etwa im Infobereich, wechseln möglicherweise erst nach einem App-Neustart vollständig die Sprache.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.zh_tw",
-        text: row("繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文"),
+        text: row("繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文", "繁體中文"),
     },
-    Msg {
+        Msg {
         key: "settings.marketplace.desc",
         text: row(
             "风格市场的上传身份。浏览与安装风格在「风格」页内完成。",
@@ -3407,9 +6535,12 @@ pub const CATALOG: &[Msg] = &[
             "Upload identity for the style marketplace. Browse and install styles on the Styles page.",
             "スタイルマーケットの投稿者 ID。スタイルの閲覧とインストールは「スタイル」ページで行います。",
             "스타일 마켓 업로드 신원. 스타일 둘러보기와 설치는 「스타일」 페이지에서 합니다.",
+            "Identidad de autor para subir paquetes al catálogo. Explora e instala estilos en la página Estilos.",
+            "Identité d’auteur pour publier des packs. Parcourez et installez les styles dans la page Styles.",
+            "Veröffentlichungsprofil für den Stilmarktplatz. Stile kannst du auf der Seite „Stile“ ansehen und installieren.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.marketplace.github.sign_in",
         text: row(
             "用 GitHub 账号登录",
@@ -3417,9 +6548,12 @@ pub const CATALOG: &[Msg] = &[
             "Sign in with GitHub",
             "GitHub でログイン",
             "GitHub로 로그인",
+            "Iniciar sesión con GitHub",
+            "Se connecter avec GitHub",
+            "Mit GitHub anmelden",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.acc_label",
         text: row(
             "辅助功能",
@@ -3427,9 +6561,12 @@ pub const CATALOG: &[Msg] = &[
             "Accessibility",
             "アクセシビリティ",
             "접근성",
+            "Accesibilidad",
+            "Accessibilité",
+            "Bedienungshilfen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.desc_no_acc",
         text: row(
             "麦克风必需；全局快捷键状态用来检测 native hook 是否运行。",
@@ -3437,13 +6574,16 @@ pub const CATALOG: &[Msg] = &[
             "OpenLess needs microphone access and uses the global hotkey listener state to verify the native hook is running.",
             "OpenLess はマイクへのアクセスと、グローバルショートカット監視状態を通じてネイティブフックの正常動作を判定する必要があります。",
             "OpenLess 는 마이크 사용과 전역 단축키 감지 상태를 통해 네이티브 후크의 정상 동작을 판정해야 합니다.",
+            "OpenLess necesita acceso al micrófono. El estado del detector de atajos globales permite comprobar que el componente nativo está activo.",
+            "OpenLess a besoin du microphone et utilise l’état du détecteur de raccourcis globaux pour vérifier que le composant natif fonctionne.",
+            "OpenLess benötigt Mikrofonzugriff und prüft anhand des globalen Kurzbefehlstatus, ob der native Hook läuft.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.granted",
-        text: row("已授权", "已授權", "Granted", "許可済み", "허용됨"),
+        text: row("已授权", "已授權", "Granted", "許可済み", "허용됨", "Concedido", "Accordé", "Erlaubt"),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.hotkey_label",
         text: row(
             "全局快捷键",
@@ -3451,25 +6591,37 @@ pub const CATALOG: &[Msg] = &[
             "Global hotkey",
             "グローバルショートカット",
             "전역 단축키",
+            "Atajo global",
+            "Raccourci global",
+            "Globaler Kurzbefehl",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.indeterminate",
-        text: row("未确定", "未確定", "Undetermined", "未確定", "미결정"),
+        text: row(
+            "未确定",
+            "未確定",
+            "Undetermined",
+            "未確定",
+            "미결정",
+            "Sin determinar",
+            "Indéterminé",
+            "Unbestimmt",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.mic_label",
-        text: row("麦克风", "麥克風", "Microphone", "マイク", "마이크"),
+        text: row("麦克风", "麥克風", "Microphone", "マイク", "마이크", "Micrófono", "Microphone", "Mikrofon"),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.network_label",
-        text: row("网络", "網路", "Network", "ネットワーク", "네트워크"),
+        text: row("网络", "網路", "Network", "ネットワーク", "네트워크", "Red", "Réseau", "Netzwerk"),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.network_ok",
-        text: row("可用", "可用", "Available", "利用可能", "사용 가능"),
+        text: row("可用", "可用", "Available", "利用可能", "사용 가능", "Disponible", "Disponible", "Verfügbar"),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.open_system",
         text: row(
             "打开系统设置",
@@ -3477,9 +6629,12 @@ pub const CATALOG: &[Msg] = &[
             "Open System Settings",
             "システム設定を開く",
             "시스템 설정 열기",
+            "Abrir Ajustes del Sistema",
+            "Ouvrir Réglages Système",
+            "Systemeinstellungen öffnen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.credential_storage_notice",
         text: row(
             "凭据保存在系统凭据库中。",
@@ -3487,13 +6642,16 @@ pub const CATALOG: &[Msg] = &[
             "Credentials are stored in the OS credential vault.",
             "資格情報は OS の資格情報ストアに保存されます。",
             "자격 증명은 OS 자격 증명 저장소에 보관됩니다.",
+            "Las credenciales se guardan en el almacén seguro del sistema operativo.",
+            "Les identifiants sont conservés dans le coffre sécurisé du système d’exploitation.",
+            "Zugangsdaten werden im geschützten Zugangsspeicher des Betriebssystems gespeichert.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.provider_label",
-        text: row("供应商", "供應商", "Provider", "プロバイダー", "공급자"),
+        text: row("供应商", "供應商", "Provider", "プロバイダー", "공급자", "Proveedor", "Fournisseur", "Anbieter"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.drag_hint",
         text: row(
             "按住拖动可调整优先级",
@@ -3501,9 +6659,12 @@ pub const CATALOG: &[Msg] = &[
             "Drag to change priority",
             "ドラッグで優先順位を変更",
             "드래그해서 우선순위 변경",
+            "Arrastra para cambiar la prioridad",
+            "Faites glisser pour changer la priorité",
+            "Zum Ändern der Priorität ziehen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.delete_confirm",
         text: row(
             "删除后该渠道保存的密钥也会一并清除。",
@@ -3511,13 +6672,16 @@ pub const CATALOG: &[Msg] = &[
             "Deleting also clears the keys stored for this channel.",
             "削除するとこのチャネルに保存された鍵も消去されます。",
             "삭제하면 이 채널에 저장된 키도 함께 지워집니다.",
+            "También se borrarán las claves guardadas para este canal.",
+            "La suppression efface aussi les clés enregistrées pour ce canal.",
+            "Beim Löschen werden auch die für diesen Kanal gespeicherten Schlüssel entfernt.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.confirm_delete",
-        text: row("确认删除", "確認刪除", "Delete", "削除する", "삭제"),
+        text: row("确认删除", "確認刪除", "Delete", "削除する", "삭제", "Eliminar", "Supprimer", "Löschen"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.last_check",
         text: row(
             "上次验证",
@@ -3525,9 +6689,12 @@ pub const CATALOG: &[Msg] = &[
             "Last check",
             "前回の接続確認",
             "마지막 확인",
+            "Última comprobación",
+            "Dernière vérification",
+            "Letzte Prüfung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.verifying",
         text: row(
             "正在验证…",
@@ -3535,17 +6702,38 @@ pub const CATALOG: &[Msg] = &[
             "Checking…",
             "確認中…",
             "확인 중…",
+            "Comprobando…",
+            "Vérification…",
+            "Wird geprüft…",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.reverify",
-        text: row("重新验证", "重新驗證", "Check again", "再確認", "다시 확인"),
+        text: row(
+            "重新验证",
+            "重新驗證",
+            "Check again",
+            "再確認",
+            "다시 확인",
+            "Comprobar de nuevo",
+            "Vérifier à nouveau",
+            "Erneut prüfen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.failed_plain",
-        text: row("验证失败", "驗證失敗", "Check failed", "確認に失敗", "확인 실패"),
+        text: row(
+            "验证失败",
+            "驗證失敗",
+            "Check failed",
+            "確認に失敗",
+            "확인 실패",
+            "Comprobación fallida",
+            "Échec de la vérification",
+            "Prüfung fehlgeschlagen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.failure_keeps_enabled",
         text: row(
             "验证失败不会自动停用。请求仍使用列表中第一个已启用的渠道，不会自动改用下一个。",
@@ -3553,9 +6741,12 @@ pub const CATALOG: &[Msg] = &[
             "A failed check does not turn this service off. Requests still use the first enabled service and do not switch to the next one.",
             "確認に失敗しても、このサービスは自動では停止しません。リクエストは有効な一覧の先頭を使い、次へは自動で切り替わりません。",
             "확인에 실패해도 이 서비스는 자동으로 꺼지지 않습니다. 요청은 켜진 목록의 첫 항목을 쓰며, 다음 항목으로 자동 전환되지 않습니다.",
+            "Un fallo no desactiva este servicio. Las solicitudes siguen usando el primer servicio activado y no cambian solas al siguiente.",
+            "Un échec ne désactive pas ce service. Les requêtes utilisent le premier service activé et ne passent pas automatiquement au suivant.",
+            "Eine fehlgeschlagene Prüfung schaltet den Dienst nicht ab. Anfragen nutzen weiter den ersten aktivierten Dienst und wechseln nicht automatisch.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.stale_result",
         text: row(
             "结果已超过 24 小时",
@@ -3563,25 +6754,28 @@ pub const CATALOG: &[Msg] = &[
             "Result is over 24 hours old",
             "24 時間以上前の結果",
             "24시간이 지난 결과",
+            "El resultado tiene más de 24 horas",
+            "Le résultat date de plus de 24 heures",
+            "Das Ergebnis ist älter als 24 Stunden",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.just_now",
-        text: row("刚刚", "剛剛", "just now", "たった今", "방금"),
+        text: row("刚刚", "剛剛", "just now", "たった今", "방금", "ahora mismo", "à l’instant", "gerade eben"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.minutes_ago",
-        text: row("{} 分钟前", "{} 分鐘前", "{}m ago", "{}分前", "{}분 전"),
+        text: row("{} 分钟前", "{} 分鐘前", "{}m ago", "{}分前", "{}분 전", "hace {}min", "il y a {}min", "vor {} Min."),
     },
-    Msg {
+        Msg {
         key: "settings.channels.hours_ago",
-        text: row("{} 小时前", "{} 小時前", "{}h ago", "{}時間前", "{}시간 전"),
+        text: row("{} 小时前", "{} 小時前", "{}h ago", "{}時間前", "{}시간 전", "hace {}h", "il y a {}h", "vor {} Std."),
     },
-    Msg {
+        Msg {
         key: "settings.channels.days_ago",
-        text: row("{} 天前", "{} 天前", "{}d ago", "{}日前", "{}일 전"),
+        text: row("{} 天前", "{} 天前", "{}d ago", "{}日前", "{}일 전", "hace {}d", "il y a {}j", "vor {} Tagen"),
     },
-    Msg {
+        Msg {
         key: "settings.channels.model_not_set",
         text: row(
             "模型未单独设置",
@@ -3589,9 +6783,12 @@ pub const CATALOG: &[Msg] = &[
             "No model set explicitly",
             "モデルの個別設定なし",
             "모델을 별도로 설정하지 않음",
+            "No se ha indicado ningún modelo",
+            "Aucun modèle explicitement défini",
+            "Kein Modell ausdrücklich festgelegt",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.pipeline_mode_label",
         text: row(
             "识别管线",
@@ -3599,9 +6796,12 @@ pub const CATALOG: &[Msg] = &[
             "Pipeline mode",
             "認識パイプライン",
             "인식 파이프라인",
+            "Modo de procesamiento",
+            "Mode de traitement",
+            "Verarbeitungsmodus",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.pipeline_mode_hint",
         text: row(
             "传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。",
@@ -3609,29 +6809,20 @@ pub const CATALOG: &[Msg] = &[
             "Traditional = ASR + LLM two-stage. Multimodal = a single audio-capable model in one pass.",
             "従来 = ASR 文字起こし + LLM 整形の2段式。マルチモーダル = 音声対応モデルが1回で完了。",
             "전통 = ASR 전사 + LLM 다듬기 2단계. 멀티모달 = 오디오 지원 모델이 한 번에 처리.",
+            "Tradicional: dos etapas, ASR + LLM. Multimodal: una sola pasada con un modelo que admite audio.",
+            "Traditionnel : deux étapes, ASR + LLM. Multimodal : un seul passage avec un modèle capable de traiter l’audio.",
+            "Klassisch = ASR + LLM in zwei Schritten. Multimodal = ein audiotaugliches Modell in einem Durchgang.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.pipeline_mode_traditional",
-        text: row(
-            "传统模式",
-            "傳統模式",
-            "Traditional",
-            "従来モード",
-            "전통 모드",
-        ),
+        text: row("传统模式", "傳統模式", "Traditional", "従来モード", "전통 모드", "Tradicional", "Traditionnel", "Klassisch"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.pipeline_mode_multimodal",
-        text: row(
-            "多模态模式",
-            "多模態模式",
-            "Multimodal",
-            "マルチモーダルモード",
-            "멀티모달 모드",
-        ),
+        text: row("多模态模式", "多模態模式", "Multimodal", "マルチモーダルモード", "멀티모달 모드", "Multimodal", "Multimodal", "Multimodal"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.pipeline_isolation_notice",
         text: row(
             "两种模式使用完全独立的凭据配置。切换模式不会删除另一套配置，只是暂时停用；切回即恢复。",
@@ -3639,9 +6830,12 @@ pub const CATALOG: &[Msg] = &[
             "The two modes keep fully separate credentials. Switching modes keeps the other set stored but unused; switching back restores it.",
             "2つのモードは完全に独立した認証情報を使用します。切り替えてももう一方の設定は削除されず、切り戻せば復元されます。",
             "두 모드는 완전히 분리된 자격 증명을 사용합니다. 전환해도 다른 쪽 설정은 삭제되지 않으며, 다시 전환하면 복원됩니다.",
+            "Cada modo conserva sus propias credenciales. Al cambiar, las del otro modo se guardan sin usarse y se restauran cuando vuelves.",
+            "Les deux modes conservent des identifiants distincts. Changer de mode garde l’autre configuration sans l’utiliser ; elle est restaurée à votre retour.",
+            "Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_cue_label",
         text: row(
             "录音提示音",
@@ -3649,9 +6843,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording start sound",
             "録音開始音",
             "녹음 시작음",
+            "Sonido al iniciar la grabación",
+            "Son de début d’enregistrement",
+            "Ton bei Aufnahmestart",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_recording_max_entries_label",
         text: row(
             "原始录音保留条数",
@@ -3659,9 +6856,12 @@ pub const CATALOG: &[Msg] = &[
             "Max raw recordings",
             "元音声の保持件数",
             "원본 녹음 보관 개수",
+            "Máximo de grabaciones originales",
+            "Nombre maximal d’enregistrements bruts",
+            "Maximale Rohaufnahmen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.history_group_title",
         text: row(
             "历史与上下文",
@@ -3669,9 +6869,12 @@ pub const CATALOG: &[Msg] = &[
             "History & context",
             "履歴とコンテキスト",
             "기록 및 컨텍스트",
+            "Historial y contexto",
+            "Historique et contexte",
+            "Verlauf und Kontext",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.history_max_entries_label",
         text: row(
             "历史条数上限",
@@ -3679,9 +6882,12 @@ pub const CATALOG: &[Msg] = &[
             "Max history entries",
             "履歴件数の上限",
             "기록 개수 상한",
+            "Máximo de registros",
+            "Nombre maximal d’entrées",
+            "Maximale Verlaufseinträge",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.history_retention_label",
         text: row(
             "历史保留天数",
@@ -3689,9 +6895,12 @@ pub const CATALOG: &[Msg] = &[
             "History retention (days)",
             "履歴保持期間（日）",
             "기록 보관 기간(일)",
+            "Conservación del historial (días)",
+            "Conservation de l’historique (jours)",
+            "Verlauf aufbewahren (Tage)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.hotkey_label",
         text: row(
             "录音快捷键",
@@ -3699,9 +6908,12 @@ pub const CATALOG: &[Msg] = &[
             "Recording hotkey",
             "録音ショートカット",
             "녹음 단축키",
+            "Atajo de grabación",
+            "Raccourci d’enregistrement",
+            "Aufnahmekurzbefehl",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.microphone_label",
         text: row(
             "首选麦克风",
@@ -3709,9 +6921,12 @@ pub const CATALOG: &[Msg] = &[
             "Preferred microphone",
             "優先マイク",
             "기본 선택 마이크",
+            "Micrófono preferido",
+            "Microphone préféré",
+            "Bevorzugtes Mikrofon",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.paste_shortcut_ctrl_shift_v",
         text: row(
             "Ctrl+Shift+V（kitty / alacritty / wezterm / 多数终端）",
@@ -3719,9 +6934,12 @@ pub const CATALOG: &[Msg] = &[
             "Ctrl+Shift+V (kitty / alacritty / wezterm / most terminals)",
             "Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）",
             "Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)",
+            "Ctrl+Shift+V (kitty / alacritty / wezterm / mayoría de terminales)",
+            "Ctrl+Shift+V (kitty / alacritty / wezterm / plupart des terminaux)",
+            "Ctrl+Shift+V (kitty / alacritty / wezterm / die meisten Terminals)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.paste_shortcut_ctrl_v",
         text: row(
             "Ctrl+V（默认 / 多数应用）",
@@ -3729,9 +6947,12 @@ pub const CATALOG: &[Msg] = &[
             "Ctrl+V (default / most apps)",
             "Ctrl+V（既定 / ほとんどのアプリ）",
             "Ctrl+V (기본 / 대부분 앱)",
+            "Ctrl+V (predeterminado / mayoría de aplicaciones)",
+            "Ctrl+V (par défaut / plupart des applications)",
+            "Ctrl+V (Standard / die meisten Apps)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.paste_shortcut_shift_insert",
         text: row(
             "Shift+Insert（xterm / urxvt）",
@@ -3739,13 +6960,16 @@ pub const CATALOG: &[Msg] = &[
             "Shift+Insert (xterm / urxvt)",
             "Shift+Insert（xterm / urxvt）",
             "Shift+Insert (xterm / urxvt)",
+            "Shift+Insert (xterm / urxvt)",
+            "Shift+Insert (xterm / urxvt)",
+            "Shift+Insert (xterm / urxvt)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.debug.log_level_label",
-        text: row("日志级别", "日誌等級", "Log level", "ログレベル", "로그 레벨"),
+        text: row("日志级别", "日誌等級", "Log level", "ログレベル", "로그 레벨", "Log level", "Log level", "Log level"),
     },
-    Msg {
+        Msg {
         key: "settings.debug.log_level_desc",
         text: row(
             "debug 记录心跳与 IPC 细节，排查问题时更有用；选择后需重启 OpenLess 生效。",
@@ -3753,13 +6977,25 @@ pub const CATALOG: &[Msg] = &[
             "debug records heartbeats and IPC details, which is what support needs; restart OpenLess to apply.",
             "debug はハートビートと IPC の詳細を記録します（調査向け）。OpenLess の再起動で反映されます。",
             "debug는 하트비트와 IPC 세부 정보를 기록합니다(문제 해결용). OpenLess를 다시 시작해야 적용됩니다.",
+            "debug records heartbeats and IPC details, which is what support needs; restart OpenLess to apply.",
+            "debug records heartbeats and IPC details, which is what support needs; restart OpenLess to apply.",
+            "debug records heartbeats and IPC details, which is what support needs; restart OpenLess to apply.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.archive_processed_label",
-        text: row("保存处理后的音频", "儲存處理後的音訊", "Keep processed audio", "処理後の音声を保存", "처리된 오디오 저장"),
+        text: row(
+            "保存处理后的音频",
+            "儲存處理後的音訊",
+            "Keep processed audio",
+            "処理後の音声を保存",
+            "처리된 오디오 저장",
+            "Keep processed audio",
+            "Keep processed audio",
+            "Keep processed audio",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.archive_processed_desc",
         text: row(
             "降噪与增益之后的版本，仍保存在原来的录制文件里（quick note 播放、本地模型回退都用它）。",
@@ -3767,13 +7003,25 @@ pub const CATALOG: &[Msg] = &[
             "The version after noise reduction and gain, still stored in the existing recording file (used by quick-note playback and the local model fallback).",
             "ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます（クイックノート再生とローカルモデルのフォールバックが使います）。",
             "노이즈 감소와 게인 적용 후의 오디오로, 기존 녹음 파일에 저장됩니다(퀵노트 재생과 로컬 모델 폴백이 사용).",
+            "The version after noise reduction and gain, still stored in the existing recording file (used by quick-note playback and the local model fallback).",
+            "The version after noise reduction and gain, still stored in the existing recording file (used by quick-note playback and the local model fallback).",
+            "The version after noise reduction and gain, still stored in the existing recording file (used by quick-note playback and the local model fallback).",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.archive_raw_label",
-        text: row("另存一份处理前的音频", "另存一份處理前的音訊", "Also keep pre-processing audio", "処理前の音声も保存", "처리 전 오디오도 저장"),
+        text: row(
+            "另存一份处理前的音频",
+            "另存一份處理前的音訊",
+            "Also keep pre-processing audio",
+            "処理前の音声も保存",
+            "처리 전 오디오도 저장",
+            "Also keep pre-processing audio",
+            "Also keep pre-processing audio",
+            "Also keep pre-processing audio",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.archive_raw_desc",
         text: row(
             "同一目录下另存 <会话>.raw.wav，可与上面那份逐段对照；只开这一项时，原始音频直接存进主档案。",
@@ -3781,9 +7029,12 @@ pub const CATALOG: &[Msg] = &[
             "Writes <session>.raw.wav next to it so you can compare segment by segment; with only this enabled the raw audio goes into the main archive.",
             "同じフォルダに <session>.raw.wav を追加保存し、上記と区間ごとに比較できます。これだけを有効にすると元音声がメインファイルに保存されます。",
             "같은 폴더에 <session>.raw.wav를 함께 저장해 구간별로 비교할 수 있습니다. 이것만 켜면 원본 오디오가 기본 파일에 저장됩니다.",
+            "Writes <session>.raw.wav next to it so you can compare segment by segment; with only this enabled the raw audio goes into the main archive.",
+            "Writes <session>.raw.wav next to it so you can compare segment by segment; with only this enabled the raw audio goes into the main archive.",
+            "Writes <session>.raw.wav next to it so you can compare segment by segment; with only this enabled the raw audio goes into the main archive.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.record_audio_for_debug_label",
         text: row(
             "保留原始录音（调试）",
@@ -3791,9 +7042,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep raw recording (debug)",
             "元の録音を保持（デバッグ）",
             "원본 녹음 보관(디버그)",
+            "Conservar grabación original (depuración)",
+            "Conserver l’enregistrement brut (débogage)",
+            "Rohaufnahmen behalten (Diagnose)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.restore_clipboard_label",
         text: row(
             "插入后恢复剪贴板",
@@ -3801,9 +7055,12 @@ pub const CATALOG: &[Msg] = &[
             "Restore clipboard after insert",
             "入力後にクリップボードを復元",
             "입력 후 클립보드 복원",
+            "Restaurar el portapapeles tras insertar",
+            "Restaurer le presse-papiers après insertion",
+            "Zwischenablage nach dem Einfügen wiederherstellen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.silence_auto_stop_label",
         text: row(
             "静音后自动停止",
@@ -3811,9 +7068,12 @@ pub const CATALOG: &[Msg] = &[
             "Auto-stop after silence",
             "無音で自動停止",
             "침묵 시 자동 중지",
+            "Detener tras un silencio",
+            "Arrêter après un silence",
+            "Bei Stille automatisch beenden",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.silence_auto_stop_seconds_label",
         text: row(
             "静音时长",
@@ -3821,13 +7081,16 @@ pub const CATALOG: &[Msg] = &[
             "Silence duration",
             "無音の長さ",
             "침묵 시간",
+            "Duración del silencio",
+            "Durée du silence",
+            "Dauer der Stille",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.silence_auto_stop_seconds_value",
-        text: row("{} 秒", "{} 秒", "{}s", "{} 秒", "{}초"),
+        text: row("{} 秒", "{} 秒", "{}s", "{} 秒", "{}초", "{}s", "{}s", "{}s"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.start_minimized_label",
         text: row(
             "启动时静默运行",
@@ -3835,9 +7098,12 @@ pub const CATALOG: &[Msg] = &[
             "Start minimized (no main window)",
             "起動時にメインウィンドウを表示しない",
             "시작 시 메인 창 숨기기",
+            "Iniciar minimizado (sin ventana principal)",
+            "Démarrer réduit (sans fenêtre principale)",
+            "Minimiert starten (ohne Hauptfenster)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.startup_at_boot",
         text: row(
             "开机自启",
@@ -3845,9 +7111,12 @@ pub const CATALOG: &[Msg] = &[
             "Launch at login",
             "起動時に自動起動",
             "부팅 시 자동 시작",
+            "Abrir al iniciar sesión",
+            "Ouvrir à la connexion",
+            "Bei Anmeldung starten",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.default_mode_label",
         text: row(
             "默认录音方式",
@@ -3855,9 +7124,12 @@ pub const CATALOG: &[Msg] = &[
             "Default recording mode",
             "既定の録音方式",
             "기본 녹음 방식",
+            "Modo de grabación predeterminado",
+            "Mode d’enregistrement par défaut",
+            "Standard-Aufnahmemodus",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.enable_desc",
         text: row(
             "手机/平板浏览器连到电脑录音，语音实时落到电脑光标处（需 HTTPS，首次访问要信任证书）",
@@ -3865,13 +7137,25 @@ pub const CATALOG: &[Msg] = &[
             "Record from a phone/tablet browser on your LAN; speech is typed at your computer's cursor (HTTPS required; trust the certificate on first visit)",
             "スマホ/タブレットのブラウザから PC に接続して録音し、音声を PC のカーソル位置にリアルタイムで入力します（HTTPS が必要。初回アクセス時は証明書を信頼してください）",
             "휴대폰/태블릿 브라우저를 PC에 연결해 녹음하고, 음성을 PC 커서 위치에 실시간으로 입력합니다(HTTPS 필요, 첫 접속 시 인증서를 신뢰해야 함)",
+            "Graba desde el navegador de un móvil o tableta en tu red local. El texto se escribirá donde esté el cursor del ordenador. Requiere HTTPS; confía en el certificado en la primera visita.",
+            "Enregistrez depuis le navigateur d’un téléphone ou d’une tablette sur votre réseau local. Le texte est inséré au curseur de l’ordinateur. HTTPS est requis ; approuvez le certificat à la première visite.",
+            "Nimm über den Browser eines Smartphones oder Tablets im lokalen Netzwerk auf. Der Text wird am Cursor deines Computers eingefügt (HTTPS erforderlich; dem Zertifikat beim ersten Besuch vertrauen).",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.mode_hold",
-        text: row("按住说话", "按住說話", "Hold to talk", "押し続けて話す", "눌러서 말하기"),
+        text: row(
+            "按住说话",
+            "按住說話",
+            "Hold to talk",
+            "押し続けて話す",
+            "눌러서 말하기",
+            "Mantener para hablar",
+            "Maintenir pour parler",
+            "Zum Sprechen gedrückt halten",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.mode_toggle",
         text: row(
             "点击切换",
@@ -3879,9 +7163,12 @@ pub const CATALOG: &[Msg] = &[
             "Tap to toggle",
             "タップで切替",
             "탭하여 전환",
+            "Pulsar para alternar",
+            "Appuyer pour basculer",
+            "Zum Umschalten tippen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.cancel",
         text: row(
             "取消本次录音",
@@ -3889,9 +7176,12 @@ pub const CATALOG: &[Msg] = &[
             "Cancel current recording",
             "本回の録音をキャンセル",
             "이번 녹음 취소",
+            "Cancelar la grabación actual",
+            "Annuler l’enregistrement actuel",
+            "Aktuelle Aufnahme abbrechen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.desc_no_acc",
         text: row(
             "所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。",
@@ -3899,9 +7189,12 @@ pub const CATALOG: &[Msg] = &[
             "All shortcuts apply globally. If unresponsive, check the global hotkey status in Permissions.",
             "すべてのショートカットはグローバルで有効。応答がない場合は権限ページでグローバルショートカット監視の状態を確認してください。",
             "모든 단축키는 전역에서 작동. 응답이 없으면 권한 페이지에서 전역 단축키 감지 상태를 확인해 주세요.",
+            "Todos los atajos funcionan globalmente. Si no responden, comprueba el estado de los atajos globales en Permisos.",
+            "Tous les raccourcis sont globaux. S’ils ne répondent pas, vérifiez l’état du raccourci global dans Autorisations.",
+            "Alle Kurzbefehle gelten global. Falls sie nicht reagieren, prüfe ihren Status unter „Berechtigungen“.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.open_app",
         text: row(
             "打开 OpenLess",
@@ -3909,9 +7202,12 @@ pub const CATALOG: &[Msg] = &[
             "Open OpenLess",
             "OpenLess を開く",
             "OpenLess 열기",
+            "Abrir OpenLess",
+            "Ouvrir OpenLess",
+            "OpenLess öffnen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.start_stop",
         text: row(
             "开始 / 停止录音",
@@ -3919,9 +7215,12 @@ pub const CATALOG: &[Msg] = &[
             "Start / Stop recording",
             "録音開始 / 停止",
             "녹음 시작 / 정지",
+            "Iniciar / detener grabación",
+            "Démarrer / arrêter l’enregistrement",
+            "Aufnahme starten / beenden",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.style_pack_add",
         text: row(
             "添加风格快捷键",
@@ -3929,9 +7228,12 @@ pub const CATALOG: &[Msg] = &[
             "Add style shortcut",
             "スタイルショートカットを追加",
             "스타일 단축키 추가",
+            "Añadir atajo de estilo",
+            "Ajouter un raccourci de style",
+            "Stilkurzbefehl hinzufügen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.style_pack_title",
         text: row(
             "风格直达快捷键",
@@ -3939,9 +7241,12 @@ pub const CATALOG: &[Msg] = &[
             "Style shortcuts",
             "スタイル直行ショートカット",
             "스타일 바로가기 단축키",
+            "Atajos de estilos",
+            "Raccourcis de styles",
+            "Stilkurzbefehle",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.switch_style",
         text: row(
             "切换到上一个风格",
@@ -3949,9 +7254,12 @@ pub const CATALOG: &[Msg] = &[
             "Switch to previous style",
             "前のスタイルに切り替え",
             "이전 스타일로 전환",
+            "Cambiar al estilo anterior",
+            "Passer au style précédent",
+            "Zum vorherigen Stil wechseln",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.title",
         text: row(
             "快捷键设置",
@@ -3959,9 +7267,12 @@ pub const CATALOG: &[Msg] = &[
             "Shortcut settings",
             "ショートカット設定",
             "단축키 설정",
+            "Ajustes de atajos",
+            "Réglages des raccourcis",
+            "Kurzbefehlseinstellungen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.activity_heatmap_label",
         text: row(
             "概览页显示年度活动热力图",
@@ -3969,9 +7280,12 @@ pub const CATALOG: &[Msg] = &[
             "Show annual activity heatmap on Overview",
             "概要ページに年間アクティビティを表示",
             "개요 페이지에 연간 활동 표시",
+            "Mostrar el mapa de actividad anual en Resumen",
+            "Afficher la carte d’activité annuelle dans Vue d’ensemble",
+            "Jährliche Aktivitätsübersicht in der Übersicht anzeigen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.conservative_layout_label",
         text: row(
             "保守排版",
@@ -3979,9 +7293,12 @@ pub const CATALOG: &[Msg] = &[
             "Conservative layout",
             "保守レイアウト",
             "보수적 레이아웃",
+            "Diseño conservador",
+            "Disposition prudente",
+            "Konservatives Layout",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.stacked_row_layout_label",
         text: row(
             "易读布局（防溢出换行）",
@@ -3989,9 +7306,12 @@ pub const CATALOG: &[Msg] = &[
             "Readable layout (wrap rows)",
             "読みやすいレイアウト（はみ出し防止）",
             "읽기 쉬운 레이아웃(넘침 방지 줄바꿈)",
+            "Diseño legible (ajuste de filas)",
+            "Disposition lisible (retour à la ligne)",
+            "Lesbares Layout (Zeilen umbrechen)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.system",
         text: row(
             "跟随系统",
@@ -3999,13 +7319,16 @@ pub const CATALOG: &[Msg] = &[
             "Follow system",
             "システムに従う",
             "시스템 따르기",
+            "Seguir al sistema",
+            "Suivre le système",
+            "Systemeinstellung",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.theme.title",
-        text: row("外观", "外觀", "Appearance", "外観", "모양"),
+        text: row("外观", "外觀", "Appearance", "外観", "모양", "Apariencia", "Apparence", "Darstellung"),
     },
-    Msg {
+        Msg {
         key: "vocab.delete_selected",
         text: row(
             "删除已选（{}）",
@@ -4013,9 +7336,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete selected ({})",
             "選択項目を削除（{}）",
             "선택 항목 삭제({})",
+            "Eliminar seleccionadas ({})",
+            "Supprimer la sélection ({})",
+            "Auswahl löschen ({})",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.select_all_visible",
         text: row(
             "选择当前结果",
@@ -4023,9 +7349,12 @@ pub const CATALOG: &[Msg] = &[
             "Select current results",
             "現在の結果を選択",
             "현재 결과 선택",
+            "Seleccionar resultados actuales",
+            "Sélectionner les résultats actuels",
+            "Aktuelle Ergebnisse auswählen",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.selected_count",
         text: row(
             "已选择 {} 个词",
@@ -4033,9 +7362,12 @@ pub const CATALOG: &[Msg] = &[
             "{} words selected",
             "{} 語を選択中",
             "단어 {}개 선택됨",
+            "{} palabras seleccionadas",
+            "{} mots sélectionnés",
+            "Ausgewählte Wörter: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.ark",
         text: row(
             "ARK（火山方舟）",
@@ -4043,16 +7375,28 @@ pub const CATALOG: &[Msg] = &[
             "ARK (Volcengine Ark)",
             "ARK（Volcengine Ark）",
             "ARK (Volcengine Ark)",
+            "ARK (Volcengine Ark)",
+            "ARK (Volcengine Ark)",
+            "ARK (Volcengine Ark)",
         ),
     },
-    Msg { key: "settings.providers.presets.deepseek", text: row("DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek") },
-    Msg {
-        key: "settings.providers.presets.siliconflow",
-        text: row("硅基流动", "矽基流動", "SiliconFlow", "SiliconFlow", "SiliconFlow"),
+        Msg {
+        key: "settings.providers.presets.deepseek",
+        text: row("DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek"),
     },
-    Msg { key: "settings.providers.presets.atlascloud", text: row("Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud") },
-    Msg { key: "settings.providers.presets.openai", text: row("OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.siliconflow",
+        text: row("硅基流动", "矽基流動", "SiliconFlow", "SiliconFlow", "SiliconFlow", "SiliconFlow", "SiliconFlow", "SiliconFlow"),
+    },
+        Msg {
+        key: "settings.providers.presets.atlascloud",
+        text: row("Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud", "Atlas Cloud"),
+    },
+        Msg {
+        key: "settings.providers.presets.openai",
+        text: row("OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI", "OpenAI"),
+    },
+        Msg {
         key: "settings.providers.presets.gemini",
         text: row(
             "Google Gemini",
@@ -4060,12 +7404,24 @@ pub const CATALOG: &[Msg] = &[
             "Google Gemini",
             "Google Gemini",
             "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
         ),
     },
-    Msg { key: "settings.providers.presets.codexOAuth", text: row("Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth") },
-    Msg { key: "settings.providers.presets.mimo", text: row("小米 MiMo", "小米 MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo") },
-    Msg { key: "settings.providers.presets.cometapi", text: row("CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.codexOAuth",
+        text: row("Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth", "Codex OAuth"),
+    },
+        Msg {
+        key: "settings.providers.presets.mimo",
+        text: row("小米 MiMo", "小米 MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo", "Xiaomi MiMo"),
+    },
+        Msg {
+        key: "settings.providers.presets.cometapi",
+        text: row("CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI", "CometAPI"),
+    },
+        Msg {
         key: "settings.providers.presets.openrouterFree",
         text: row(
             "OpenRouter（免费模型）",
@@ -4073,11 +7429,20 @@ pub const CATALOG: &[Msg] = &[
             "OpenRouter (free models)",
             "OpenRouter（無料モデル）",
             "OpenRouter(무료 모델)",
+            "OpenRouter (modelos gratuitos)",
+            "OpenRouter (modèles gratuits)",
+            "OpenRouter (kostenlose Modelle)",
         ),
     },
-    Msg { key: "settings.providers.presets.orcarouter", text: row("OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter") },
-    Msg { key: "settings.providers.presets.apiRoute", text: row("API Route", "API Route", "API Route", "API Route", "API Route") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.orcarouter",
+        text: row("OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter", "OrcaRouter"),
+    },
+        Msg {
+        key: "settings.providers.presets.apiRoute",
+        text: row("API Route", "API Route", "API Route", "API Route", "API Route", "API Route", "API Route", "API Route"),
+    },
+        Msg {
         key: "settings.providers.presets.alibabaCoding",
         text: row(
             "阿里云 Coding Plan",
@@ -4085,11 +7450,20 @@ pub const CATALOG: &[Msg] = &[
             "Alibaba Cloud Coding Plan",
             "Alibaba Cloud Coding Plan",
             "Alibaba Cloud Coding Plan",
+            "Alibaba Cloud Coding Plan",
+            "Alibaba Cloud Coding Plan",
+            "Alibaba Cloud Coding Plan",
         ),
     },
-    Msg { key: "settings.providers.presets.codingPlanX", text: row("CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX") },
-    Msg { key: "settings.providers.presets.minimax", text: row("MiniMax（M3）", "MiniMax（M3）", "MiniMax (M3)", "MiniMax（M3）", "MiniMax (M3)") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.codingPlanX",
+        text: row("CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX", "CodingPlanX"),
+    },
+        Msg {
+        key: "settings.providers.presets.minimax",
+        text: row("MiniMax（M3）", "MiniMax（M3）", "MiniMax (M3)", "MiniMax（M3）", "MiniMax (M3)", "MiniMax (M3)", "MiniMax (M3)", "MiniMax (M3)"),
+    },
+        Msg {
         key: "settings.providers.presets.stepfun",
         text: row(
             "StepFun（阶跃星辰）",
@@ -4097,10 +7471,16 @@ pub const CATALOG: &[Msg] = &[
             "StepFun",
             "StepFun（階躍星辰）",
             "StepFun",
+            "StepFun",
+            "StepFun",
+            "StepFun",
         ),
     },
-    Msg { key: "settings.providers.presets.opencode", text: row("OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.opencode",
+        text: row("OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen", "OpenCode Zen"),
+    },
+        Msg {
         key: "settings.providers.presets.tencentTokenHub",
         text: row(
             "腾讯云 TokenHub",
@@ -4108,9 +7488,12 @@ pub const CATALOG: &[Msg] = &[
             "Tencent Cloud TokenHub",
             "Tencent Cloud TokenHub",
             "Tencent Cloud TokenHub",
+            "TokenHub de Tencent Cloud",
+            "TokenHub Tencent Cloud",
+            "Tencent Cloud TokenHub",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.customChatCompletions",
         text: row(
             "自定义 · Chat Completions",
@@ -4118,9 +7501,12 @@ pub const CATALOG: &[Msg] = &[
             "Custom · Chat Completions",
             "カスタム · Chat Completions",
             "사용자 지정 · Chat Completions",
+            "Personalizado · Chat Completions",
+            "Personnalisé · Chat Completions",
+            "Benutzerdefiniert · Chat Completions",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.customResponses",
         text: row(
             "自定义 · Responses",
@@ -4128,9 +7514,12 @@ pub const CATALOG: &[Msg] = &[
             "Custom · Responses",
             "カスタム · Responses",
             "사용자 지정 · Responses",
+            "Personalizado · Responses",
+            "Personnalisé · Responses",
+            "Benutzerdefiniert · Responses",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.customMessages",
         text: row(
             "自定义 · Messages",
@@ -4138,10 +7527,25 @@ pub const CATALOG: &[Msg] = &[
             "Custom · Messages",
             "カスタム · Messages",
             "사용자 지정 · Messages",
+            "Personalizado · Messages",
+            "Personnalisé · Messages",
+            "Benutzerdefiniert · Messages",
         ),
     },
-    Msg { key: "settings.providers.presets.custom", text: row("自定义", "自定義", "Custom", "カスタム", "사용자 정의") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.custom",
+        text: row(
+            "自定义",
+            "自定義",
+            "Custom",
+            "カスタム",
+            "사용자 정의",
+            "Personalizado",
+            "Personnalisé",
+            "Benutzerdefiniert",
+        ),
+    },
+        Msg {
         key: "settings.providers.presets.asrVolcengine",
         text: row(
             "火山引擎 bigasr",
@@ -4149,9 +7553,12 @@ pub const CATALOG: &[Msg] = &[
             "Volcengine bigasr",
             "Volcengine bigasr",
             "Volcengine bigasr",
+            "Volcengine bigasr",
+            "Volcengine bigasr",
+            "Volcengine bigasr",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrBailian",
         text: row(
             "阿里云百炼实时 ASR",
@@ -4159,9 +7566,12 @@ pub const CATALOG: &[Msg] = &[
             "Alibaba Bailian realtime ASR",
             "Alibaba Bailian リアルタイム ASR",
             "Alibaba Bailian 실시간 ASR",
+            "Alibaba Bailian ASR en tiempo real",
+            "Alibaba Bailian ASR en temps réel",
+            "Alibaba Bailian Echtzeit-ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrBailianQwen3",
         text: row(
             "阿里云百炼 Qwen3 实时 ASR",
@@ -4169,9 +7579,12 @@ pub const CATALOG: &[Msg] = &[
             "Bailian Qwen3 Realtime ASR",
             "Bailian Qwen3 リアルタイム ASR",
             "Bailian Qwen3 실시간 ASR",
+            "Bailian Qwen3 ASR en tiempo real",
+            "Bailian Qwen3 ASR en temps réel",
+            "Bailian Qwen3 Realtime ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrBailianFunAsrFlash",
         text: row(
             "阿里云百炼 Fun-ASR-Flash（录音文件）",
@@ -4179,9 +7592,12 @@ pub const CATALOG: &[Msg] = &[
             "Bailian Fun-ASR-Flash (recorded file)",
             "Bailian Fun-ASR-Flash（録音ファイル）",
             "Bailian Fun-ASR-Flash (녹음 파일)",
+            "Bailian Fun-ASR-Flash (archivo grabado)",
+            "Bailian Fun-ASR-Flash (fichier enregistré)",
+            "Bailian Fun-ASR-Flash (Aufnahmedatei)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrSiliconflow",
         text: row(
             "硅基流动 SenseVoice",
@@ -4189,9 +7605,12 @@ pub const CATALOG: &[Msg] = &[
             "SiliconFlow SenseVoice",
             "SiliconFlow SenseVoice",
             "SiliconFlow SenseVoice",
+            "SiliconFlow SenseVoice",
+            "SiliconFlow SenseVoice",
+            "SiliconFlow SenseVoice",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrStepfun",
         text: row(
             "阶跃星辰 StepAudio",
@@ -4199,9 +7618,12 @@ pub const CATALOG: &[Msg] = &[
             "StepFun StepAudio ASR",
             "StepFun StepAudio ASR",
             "StepFun StepAudio ASR",
+            "StepFun StepAudio ASR",
+            "StepFun StepAudio ASR",
+            "StepFun StepAudio ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrZhipu",
         text: row(
             "智谱 GLM-ASR",
@@ -4209,9 +7631,12 @@ pub const CATALOG: &[Msg] = &[
             "Zhipu GLM-ASR",
             "Zhipu GLM-ASR",
             "Zhipu GLM-ASR",
+            "Zhipu GLM-ASR",
+            "Zhipu GLM-ASR",
+            "Zhipu GLM-ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrGroq",
         text: row(
             "Groq Whisper-large-v3",
@@ -4219,9 +7644,12 @@ pub const CATALOG: &[Msg] = &[
             "Groq Whisper-large-v3",
             "Groq Whisper-large-v3",
             "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
+            "Groq Whisper-large-v3",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrWhisper",
         text: row(
             "OpenAI Whisper（兼容）",
@@ -4229,9 +7657,12 @@ pub const CATALOG: &[Msg] = &[
             "OpenAI Whisper (compatible)",
             "OpenAI Whisper（互換）",
             "OpenAI Whisper(호환)",
+            "OpenAI Whisper (compatible)",
+            "OpenAI Whisper (compatible)",
+            "OpenAI Whisper (kompatibel)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrOpenrouter",
         text: row(
             "OpenRouter Whisper",
@@ -4239,10 +7670,16 @@ pub const CATALOG: &[Msg] = &[
             "OpenRouter Whisper",
             "OpenRouter Whisper",
             "OpenRouter Whisper",
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
+            "OpenRouter Whisper",
         ),
     },
-    Msg { key: "settings.providers.presets.asrZenmux", text: row("ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux") },
-    Msg {
+        Msg {
+        key: "settings.providers.presets.asrZenmux",
+        text: row("ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux", "ZenMux"),
+    },
+        Msg {
         key: "settings.providers.presets.asrOpenAiCompatible",
         text: row(
             "自定义 OpenAI 兼容",
@@ -4250,9 +7687,12 @@ pub const CATALOG: &[Msg] = &[
             "Custom OpenAI-compatible",
             "カスタム OpenAI 互換",
             "커스텀 OpenAI 호환",
+            "Personalizado compatible con OpenAI",
+            "Personnalisé compatible OpenAI",
+            "Eigener OpenAI-kompatibler Dienst",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrXiaomiMimo",
         text: row(
             "小米 MiMo ASR",
@@ -4260,9 +7700,12 @@ pub const CATALOG: &[Msg] = &[
             "Xiaomi MiMo ASR",
             "Xiaomi MiMo ASR",
             "Xiaomi MiMo ASR",
+            "Xiaomi MiMo ASR",
+            "Xiaomi MiMo ASR",
+            "Xiaomi MiMo ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrIflytek",
         text: row(
             "讯飞实时语音转写",
@@ -4270,9 +7713,12 @@ pub const CATALOG: &[Msg] = &[
             "iFlytek Realtime ASR",
             "iFlytek リアルタイム音声認識",
             "iFlytek 실시간 음성 인식",
+            "iFlytek ASR en tiempo real",
+            "iFlytek ASR en temps réel",
+            "iFlytek Echtzeit-ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrTencentCloud",
         text: row(
             "腾讯云混元实时 ASR",
@@ -4280,9 +7726,12 @@ pub const CATALOG: &[Msg] = &[
             "Tencent Cloud Hunyuan Realtime ASR",
             "Tencent Cloud Hunyuan リアルタイム ASR",
             "Tencent Cloud Hunyuan 실시간 ASR",
+            "ASR en tiempo real Hunyuan de Tencent Cloud",
+            "ASR temps réel Hunyuan de Tencent Cloud",
+            "Tencent Cloud Hunyuan Echtzeit-ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrElevenLabs",
         text: row(
             "ElevenLabs Scribe",
@@ -4290,9 +7739,12 @@ pub const CATALOG: &[Msg] = &[
             "ElevenLabs Scribe",
             "ElevenLabs Scribe",
             "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
+            "ElevenLabs Scribe",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrSherpaOnnxLocal",
         text: row(
             "本地 sherpa-onnx（实验性）",
@@ -4300,9 +7752,12 @@ pub const CATALOG: &[Msg] = &[
             "Local sherpa-onnx (Experimental)",
             "ローカル sherpa-onnx（実験的）",
             "로컬 sherpa-onnx(실험적)",
+            "sherpa-onnx local (experimental)",
+            "sherpa-onnx local (expérimental)",
+            "Lokales sherpa-onnx (experimentell)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrFoundryLocalWhisper",
         text: row(
             "本地 Whisper（Foundry Local）",
@@ -4310,9 +7765,12 @@ pub const CATALOG: &[Msg] = &[
             "Local Whisper (Foundry Local)",
             "ローカル Whisper（Foundry Local）",
             "로컬 Whisper(Foundry Local)",
+            "Whisper local (Foundry Local)",
+            "Whisper local (Foundry Local)",
+            "Lokales Whisper (Foundry Local)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrLocalWhisper",
         text: row(
             "本地 Whisper（批量解码）",
@@ -4320,9 +7778,12 @@ pub const CATALOG: &[Msg] = &[
             "Local Whisper (batch)",
             "ローカル Whisper（バッチ）",
             "로컬 Whisper(배치)",
+            "Whisper local (por lotes)",
+            "Whisper local (par lots)",
+            "Lokales Whisper (Stapelverarbeitung)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrLocalQwen3",
         text: row(
             "本地 Qwen3-ASR",
@@ -4330,9 +7791,12 @@ pub const CATALOG: &[Msg] = &[
             "Local Qwen3-ASR",
             "ローカル Qwen3-ASR",
             "로컬 Qwen3-ASR",
+            "Qwen3-ASR local",
+            "Qwen3-ASR local",
+            "Lokales Qwen3-ASR",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrLocalQwen3Mlx",
         text: row(
             "本地 Qwen3-ASR（MLX / Metal）",
@@ -4340,9 +7804,12 @@ pub const CATALOG: &[Msg] = &[
             "Local Qwen3-ASR (MLX / Metal)",
             "ローカル Qwen3-ASR（MLX / Metal）",
             "로컬 Qwen3-ASR(MLX / Metal)",
+            "Qwen3-ASR local (MLX / Metal)",
+            "Qwen3-ASR local (MLX / Metal)",
+            "Lokales Qwen3-ASR (MLX / Metal)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrLocalQwen3C",
         text: row(
             "本地 Qwen3-ASR（C / CPU）",
@@ -4350,9 +7817,12 @@ pub const CATALOG: &[Msg] = &[
             "Local Qwen3-ASR (C / CPU)",
             "ローカル Qwen3-ASR（C / CPU）",
             "로컬 Qwen3-ASR(C / CPU)",
+            "Qwen3-ASR local (C / CPU)",
+            "Qwen3-ASR local (C / CPU)",
+            "Lokales Qwen3-ASR (C / CPU)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.asrAppleSpeech",
         text: row(
             "苹果识别（macOS）",
@@ -4360,9 +7830,12 @@ pub const CATALOG: &[Msg] = &[
             "Apple Speech (macOS)",
             "Apple 音声認識 (macOS)",
             "Apple 음성 (macOS)",
+            "Apple Speech (macOS)",
+            "Apple Speech (macOS)",
+            "Apple Speech (macOS)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.omniOpenai",
         text: row(
             "OpenAI（支持音频）",
@@ -4370,9 +7843,12 @@ pub const CATALOG: &[Msg] = &[
             "OpenAI (audio-capable)",
             "OpenAI（音声対応）",
             "OpenAI (오디오 지원)",
+            "OpenAI (con audio)",
+            "OpenAI (avec audio)",
+            "OpenAI (mit Audiounterstützung)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.omniGemini",
         text: row(
             "Google Gemini",
@@ -4380,9 +7856,12 @@ pub const CATALOG: &[Msg] = &[
             "Google Gemini",
             "Google Gemini",
             "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
+            "Google Gemini",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presets.omniDashscope",
         text: row(
             "阿里云百炼 Omni",
@@ -4390,14 +7869,17 @@ pub const CATALOG: &[Msg] = &[
             "Alibaba DashScope Omni",
             "Alibaba DashScope Omni",
             "Alibaba DashScope Omni",
+            "Alibaba DashScope Omni",
+            "Alibaba DashScope Omni",
+            "Alibaba DashScope Omni",
         ),
     },
 
-    Msg {
+        Msg {
         key: "style.pack.activate",
-        text: row("激活", "啟用", "Activate", "有効化", "활성화"),
+        text: row("激活", "啟用", "Activate", "有効化", "활성화", "Activar", "Activer", "Aktivieren"),
     },
-    Msg {
+        Msg {
         key: "style.pack.add_pack_tile_hint",
         text: row(
             "从空白模板开始。",
@@ -4405,13 +7887,25 @@ pub const CATALOG: &[Msg] = &[
             "Start from a blank template.",
             "空のテンプレートから開始。",
             "빈 템플릿으로 시작.",
+            "Empieza con una plantilla en blanco.",
+            "Commencez avec un modèle vierge.",
+            "Mit einer leeren Vorlage beginnen.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.add_pack_tile_title",
-        text: row("新建风格包", "新建風格包", "New Pack", "新規パック", "새 팩"),
+        text: row(
+            "新建风格包",
+            "新建風格包",
+            "New Pack",
+            "新規パック",
+            "새 팩",
+            "Nuevo paquete",
+            "Nouveau pack",
+            "Neues Paket",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.dictation_prompt_hint",
         text: row(
             "用于录音转写后的 ASR 文本；这里可以写口语整理、ASR 错字纠正和专有名词还原规则。",
@@ -4419,29 +7913,41 @@ pub const CATALOG: &[Msg] = &[
             "For ASR text after dictation; write spoken-language cleanup, ASR typo fixes and term restoration rules here.",
             "録音の書き起こし後のASRテキスト用。口語整理、ASR誤字修正、固有名詞の復元ルールをここに書けます。",
             "녹음 후 받아쓰기한 ASR 텍스트용. 구어 정리, ASR 오타 수정, 고유명사 복원 규칙을 여기에 작성하세요.",
+            "Para texto reconocido tras el dictado. Define aquí reglas para limpiar el lenguaje oral, corregir errores del ASR y restaurar términos.",
+            "Pour les transcriptions après dictée. Définissez ici les règles de nettoyage du langage oral, de correction des erreurs ASR et de restauration des termes.",
+            "Für ASR-Text nach dem Diktat. Lege hier Regeln für gesprochene Sprache, Erkennungsfehler und die Wiederherstellung von Fachbegriffen fest.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.edit",
-        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+        text: row("编辑", "編輯", "Edit", "編集", "편집", "Editar", "Modifier", "Bearbeiten"),
     },
-    Msg {
+        Msg {
         key: "style.pack.export_short",
-        text: row("导出", "匯出", "Export", "エクスポート", "내보내기"),
+        text: row("导出", "匯出", "Export", "エクスポート", "내보내기", "Exportar", "Exporter", "Exportieren"),
     },
-    Msg {
+        Msg {
         key: "style.pack.import_zip",
-        text: row("导入 ZIP", "匯入 ZIP", "Import ZIP", "ZIP をインポート", "ZIP 가져오기"),
+        text: row(
+            "导入 ZIP",
+            "匯入 ZIP",
+            "Import ZIP",
+            "ZIP をインポート",
+            "ZIP 가져오기",
+            "Importar ZIP",
+            "Importer un ZIP",
+            "ZIP importieren",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.imported",
-        text: row("导入", "匯入", "Imported", "インポート", "가져옴"),
+        text: row("导入", "匯入", "Imported", "インポート", "가져옴", "Importado", "Importé", "Importiert"),
     },
-    Msg {
+        Msg {
         key: "style.pack.list_count",
-        text: row("{} 个风格包", "{} 個風格包", "{} packs", "{} 個", "{}개"),
+        text: row("{} 个风格包", "{} 個風格包", "{} packs", "{} 個", "{}개", "{} paquetes", "{} packs", "Pakete: {}"),
     },
-    Msg {
+        Msg {
         key: "style.pack.list_desc",
         text: row(
             "浏览和切换风格包。",
@@ -4449,13 +7955,25 @@ pub const CATALOG: &[Msg] = &[
             "Browse and switch packs.",
             "パックを閲覧・切替。",
             "팩 둘러보기·전환.",
+            "Explora y cambia de paquete.",
+            "Parcourez les packs et changez de style.",
+            "Pakete ansehen und wechseln.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.list_title",
-        text: row("本地风格包", "本機風格包", "Local Packs", "ローカルパック", "로컬 팩"),
+        text: row(
+            "本地风格包",
+            "本機風格包",
+            "Local Packs",
+            "ローカルパック",
+            "로컬 팩",
+            "Paquetes locales",
+            "Packs locaux",
+            "Lokale Pakete",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.liked_empty",
         text: row(
             "你还没有赞过任何风格包",
@@ -4463,9 +7981,12 @@ pub const CATALOG: &[Msg] = &[
             "You have not liked any style packs yet",
             "まだいいねしたパックがありません",
             "아직 좋아요한 팩이 없습니다",
+            "Todavía no has marcado ningún paquete con «Me gusta»",
+            "Vous n’avez pas encore aimé de pack de styles",
+            "Du hast noch keine Stilpakete mit „Gefällt mir“ markiert",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.liked_empty_hint",
         text: row(
             "点开任一风格包，红色星星点亮后会出现在这里",
@@ -4473,9 +7994,12 @@ pub const CATALOG: &[Msg] = &[
             "Open any pack and tap the star — liked packs appear here",
             "パックを開いて星をタップするとここに表示されます",
             "팩을 열고 별을 누르면 여기에 표시됩니다",
+            "Abre un paquete y pulsa la estrella. Los paquetes que te gusten aparecerán aquí",
+            "Ouvrez un pack et cliquez sur l’étoile ; les packs aimés apparaîtront ici",
+            "Öffne ein Paket und klicke auf den Stern. Markierte Pakete erscheinen hier",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.about",
         text: row(
             "查看当前版本、更新渠道与自动更新设置。",
@@ -4483,9 +8007,12 @@ pub const CATALOG: &[Msg] = &[
             "View your version, update channel and automatic update settings.",
             "現在のバージョン、更新チャンネル、自動更新を確認します。",
             "현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.",
+            "Consulta tu versión, el canal y los ajustes de actualización automática.",
+            "Consultez votre version, le canal et les réglages de mise à jour automatique.",
+            "Version, Updatekanal und automatische Updateeinstellungen anzeigen.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.advanced",
         text: row(
             "按需配置测试功能与调试工具。",
@@ -4493,9 +8020,12 @@ pub const CATALOG: &[Msg] = &[
             "Configure testing features and debugging tools as needed.",
             "テスト機能とデバッグツールを設定します。",
             "테스트 기능과 디버깅 도구를 설정합니다.",
+            "Configure testing features and debugging tools as needed.",
+            "Configure testing features and debugging tools as needed.",
+            "Configure testing features and debugging tools as needed.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.appearance",
         text: row(
             "调整主题、页面排版和界面语言，让阅读更舒服。",
@@ -4503,9 +8033,12 @@ pub const CATALOG: &[Msg] = &[
             "Adjust the theme, page layout and interface language for comfortable reading.",
             "テーマ、レイアウト、表示言語を読みやすく調整します。",
             "테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.",
+            "Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.",
+            "Réglez le thème, la disposition et la langue de l’interface pour une lecture confortable.",
+            "Design, Seitenlayout und Sprache der Oberfläche für angenehmes Lesen anpassen.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.general",
         text: row(
             "选择麦克风、设置录音方式与文字输入，也可连接手机输入。",
@@ -4513,9 +8046,12 @@ pub const CATALOG: &[Msg] = &[
             "Choose a microphone, adjust recording and text input, or connect your phone.",
             "マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。",
             "마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.",
+            "Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.",
+            "Choisissez un microphone, réglez l’enregistrement et la saisie de texte, ou connectez votre téléphone.",
+            "Mikrofon wählen, Aufnahme und Texteingabe anpassen oder dein Smartphone verbinden.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.privacy",
         text: row(
             "检查系统权限与连接状态，管理历史、录音和本地数据。",
@@ -4523,9 +8059,12 @@ pub const CATALOG: &[Msg] = &[
             "Check system permissions and connections. Manage history, recordings and local data.",
             "システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。",
             "시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.",
+            "Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.",
+            "Vérifiez les autorisations et les connexions. Gérez l’historique, les enregistrements et les données locales.",
+            "Systemberechtigungen und Verbindungen prüfen. Verlauf, Aufnahmen und lokale Daten verwalten.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.services",
         text: row(
             "选择语音识别与文字处理服务，管理渠道、本地模型和网络连接。",
@@ -4533,9 +8072,12 @@ pub const CATALOG: &[Msg] = &[
             "Choose speech recognition and text processing services. Manage channels, local models and connections.",
             "音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。",
             "음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.",
+            "Elige servicios de reconocimiento de voz y procesamiento de texto. Administra canales, modelos locales y conexiones.",
+            "Choisissez les services de reconnaissance vocale et de traitement du texte. Gérez les canaux, modèles locaux et connexions.",
+            "Spracherkennungs- und Textverarbeitungsdienste wählen. Kanäle, lokale Modelle und Verbindungen verwalten.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.descriptions.shortcuts",
         text: row(
             "搜索、分类与自定义各功能的快捷键。",
@@ -4543,9 +8085,12 @@ pub const CATALOG: &[Msg] = &[
             "Search, browse and customize keyboard shortcuts.",
             "各機能のショートカットと、テキスト選択後の操作を設定します。",
             "기능별 단축키와 텍스트 선택 후 동작을 설정합니다.",
+            "Configura atajos y elige qué sucede al seleccionar texto.",
+            "Configurez les raccourcis et choisissez l’action appliquée au texte sélectionné.",
+            "Kurzbefehle einrichten und Aktionen für ausgewählten Text festlegen.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.advanced_pages.debug",
         text: row(
             "保留调试录音、探测光标上下文和导出日志。",
@@ -4553,9 +8098,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep debug recordings, inspect cursor context, and export logs.",
             "デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。",
             "디버그 녹음을 보관하고 커서 문맥을 확인하며 로그를 내보냅니다.",
+            "Conserva grabaciones de depuración, inspecciona el contexto del cursor y exporta registros.",
+            "Conservez des enregistrements de débogage, inspectez le contexte du curseur et exportez des journaux.",
+            "Diagnoseaufnahmen speichern, Cursorkontext prüfen und Protokolle exportieren.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.advanced_pages.multimodal",
         text: row(
             "管理多模态识别的实验性开关。",
@@ -4563,13 +8111,16 @@ pub const CATALOG: &[Msg] = &[
             "Manage the experimental multimodal recognition switch.",
             "実験的なマルチモーダル認識の有効・無効を設定します。",
             "실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.",
+            "Administra la activación del reconocimiento multimodal experimental.",
+            "Gérez l’activation de la reconnaissance multimodale expérimentale.",
+            "Verwalte die experimentelle multimodale Spracherkennung.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.omni",
-        text: row("多模态模型", "多模態模型", "Multimodal", "マルチモーダル", "멀티모달"),
+        text: row("多模态模型", "多模態模型", "Multimodal", "マルチモーダル", "멀티모달", "Multimodal", "Multimodal", "Multimodal"),
     },
-    Msg {
+        Msg {
         key: "settings.advanced.multimodal_pipeline_hint",
         text: row(
             "开启后，「服务 → AI 提供商」页出现「传统模式 / 多模态模式」切换。传统 = ASR + LLM；多模态 = 单个支持音频的模型。两套配置分开存储、绝不共享凭据。",
@@ -4577,9 +8128,12 @@ pub const CATALOG: &[Msg] = &[
             "Adds a Traditional / Multimodal switch on the AI providers page. Traditional = ASR + LLM; Multimodal = one audio-capable model. The two configurations are stored separately and never share credentials.",
             "有効にすると「サービス → AI プロバイダー」ページに従来 / マルチモーダルの切り替えが表示されます。従来 = ASR + LLM、マルチモーダル = 音声対応モデル1つ。設定は別々に保存され、認証情報を共有しません。",
             "활성화하면 「서비스 → AI 공급자」 페이지에 전통 / 멀티모달 전환이 나타납니다. 전통 = ASR + LLM, 멀티모달 = 오디오 지원 모델 1개. 두 설정은 별도로 저장되며 자격 증명을 공유하지 않습니다.",
+            "Añade un selector Tradicional / Multimodal a la página de proveedores de IA. Tradicional usa ASR + LLM y Multimodal usa un modelo con audio. Las configuraciones se guardan por separado y nunca comparten credenciales.",
+            "Ajoute un sélecteur Traditionnel / Multimodal à la page des fournisseurs d’IA. Traditionnel utilise ASR + LLM ; Multimodal utilise un modèle avec audio. Les configurations sont séparées et ne partagent jamais d’identifiants.",
+            "Ergänzt auf der KI-Diensteseite den Schalter „Klassisch / Multimodal“. Klassisch = ASR + LLM; multimodal = ein audiotaugliches Modell. Beide Konfigurationen werden getrennt gespeichert und teilen keine Zugangsdaten.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.language.label_desc",
         text: row(
             "选择「跟随系统」时按操作系统当前语言显示。",
@@ -4587,9 +8141,12 @@ pub const CATALOG: &[Msg] = &[
             "Choose \"Follow system\" to match the OS language at launch.",
             "「システムに従う」を選ぶと OS の言語に合わせます。",
             "\"시스템 따라가기\"를 선택하면 OS 언어를 따릅니다.",
+            "Elige «Seguir al sistema» para usar el idioma del sistema operativo al iniciar.",
+            "Choisissez « Suivre le système » pour utiliser la langue du système au lancement.",
+            "Wähle „Systemsprache“, um beim Start die Sprache des Betriebssystems zu übernehmen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.network.use_system_proxy_desc",
         text: row(
             "开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流不受此开关影响。",
@@ -4597,17 +8154,38 @@ pub const CATALOG: &[Msg] = &[
             "When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams are unaffected.",
             "オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームは影響を受けません。",
             "켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림은 영향을 받지 않습니다.",
+            "When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams are unaffected.",
+            "When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams are unaffected.",
+            "When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams are unaffected.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.denied",
-        text: row("未授权", "未授權", "Not granted", "未許可", "허용되지 않음"),
+        text: row(
+            "未授权",
+            "未授權",
+            "Not granted",
+            "未許可",
+            "허용되지 않음",
+            "No concedido",
+            "Non accordé",
+            "Nicht erlaubt",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.not_applicable",
-        text: row("无需授权", "無需授權", "Not required", "権限不要", "권한 불필요"),
+        text: row(
+            "无需授权",
+            "無需授權",
+            "Not required",
+            "権限不要",
+            "권한 불필요",
+            "No es necesario",
+            "Non nécessaire",
+            "Nicht erforderlich",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_cue_desc",
         text: row(
             "按下热键开始录音时播放一段合成提示音，提醒已开始录音。胶囊隐藏时也会响。",
@@ -4615,9 +8193,12 @@ pub const CATALOG: &[Msg] = &[
             "Play a short synthesized chime when you press the hotkey to start recording. Plays even when the capsule is hidden.",
             "ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。",
             "단축키로 녹음을 시작할 때 합성된 짧은 알림음을 재생합니다. 캡슐이 숨겨져 있어도 재생됩니다.",
+            "Reproduce un breve sonido sintetizado al pulsar el atajo para empezar a grabar, incluso si la cápsula está oculta.",
+            "Joue un bref son synthétisé lorsque vous appuyez sur le raccourci pour enregistrer, même si la capsule est masquée.",
+            "Spielt einen kurzen synthetischen Ton ab, wenn du die Aufnahme per Kurzbefehl startest. Auch bei ausgeblendeter Kapsel.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_recording_max_entries_desc",
         text: row(
             "本地保留 wav 文件数上限，留空 = 200。",
@@ -4625,9 +8206,12 @@ pub const CATALOG: &[Msg] = &[
             "Max wav files retained locally. Blank = 200.",
             "ローカル保持 wav ファイル上限。空欄 = 200。",
             "로컬 보관 wav 파일 상한. 빈칸 = 200.",
+            "Máximo de archivos WAV guardados en el dispositivo. Vacío = 200.",
+            "Nombre maximal de fichiers WAV conservés localement. Vide = 200.",
+            "Maximale Anzahl lokal gespeicherter WAV-Dateien. Leer = 200.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.combo_disable_hint",
         text: row(
             "核心快捷键不可停用，录音必须绑定一个热键",
@@ -4635,9 +8219,12 @@ pub const CATALOG: &[Msg] = &[
             "Core hotkey cannot be disabled — recording needs a hotkey",
             "コアショートカットは無効化できません（録音にはショートカットが必須です）",
             "핵심 단축키는 비활성화할 수 없습니다 (녹음에는 단축키가 필수입니다)",
+            "No se puede desactivar el atajo principal: la grabación necesita un atajo",
+            "Le raccourci principal ne peut pas être désactivé : l’enregistrement a besoin d’un raccourci",
+            "Der zentrale Kurzbefehl kann nicht deaktiviert werden – für Aufnahmen wird ein Kurzbefehl benötigt",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.microphone_desc",
         text: row(
             "选择优先输入设备。设备断开时自动切到系统默认。",
@@ -4645,13 +8232,16 @@ pub const CATALOG: &[Msg] = &[
             "Choose the preferred input device; falls back to system default when unavailable.",
             "優先して使用する入力デバイスを選択します。一時的に利用できない場合はシステムのデフォルトマイクを使い、再接続後に自動で優先デバイスへ戻します。",
             "우선 사용할 입력 장치를 선택합니다. 장치를 일시적으로 사용할 수 없으면 시스템 기본 마이크를 사용하고, 다시 연결되면 자동으로 우선 장치로 돌아갑니다.",
+            "Elige el dispositivo de entrada preferido. Si no está disponible, se usará el predeterminado del sistema.",
+            "Choisissez le périphérique d’entrée préféré. S’il est indisponible, celui par défaut du système est utilisé.",
+            "Wähle das bevorzugte Eingabegerät. Ist es nicht verfügbar, wird der Systemstandard verwendet.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mode_auto",
-        text: row("自动", "自動", "Auto", "自動", "자동"),
+        text: row("自动", "自動", "Auto", "自動", "자동", "Automático", "Automatique", "Automatisch"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mode_desc",
         text: row(
             "切换式按一次开始、再按一次结束；按住说话按下保持、松开结束。",
@@ -4659,13 +8249,25 @@ pub const CATALOG: &[Msg] = &[
             "Toggle = tap once to start, again to stop. Push-to-talk = hold to record.",
             "トグル式 = 1 回押して開始、もう 1 回押して終了；押し続けて話す = 押している間だけ録音。",
             "토글 방식 = 한 번 누르면 시작, 다시 누르면 종료; 눌러서 말하기 = 누르고 있는 동안만 녹음.",
+            "Alternar: pulsa una vez para iniciar y otra para detener. Mantener para hablar: graba mientras mantienes pulsado.",
+            "Basculer : appuyez une fois pour démarrer, puis à nouveau pour arrêter. Maintenir pour parler : enregistre tant que la touche est enfoncée.",
+            "Umschalten = einmal drücken zum Starten, erneut drücken zum Beenden. Gedrückt halten = aufnehmen, solange die Taste gehalten wird.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mode_hold",
-        text: row("按住说话", "按住說話", "Push-to-talk", "押し続けて話す", "눌러서 말하기"),
+        text: row(
+            "按住说话",
+            "按住說話",
+            "Push-to-talk",
+            "押し続けて話す",
+            "눌러서 말하기",
+            "Mantener para hablar",
+            "Maintenir pour parler",
+            "Gedrückt halten",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.mute_during_recording_desc",
         text: row(
             "录音期间临时静音系统输出，避免扬声器回音。",
@@ -4673,9 +8275,12 @@ pub const CATALOG: &[Msg] = &[
             "Temporarily mute system output during voice input to avoid speaker echo.",
             "録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。",
             "녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.",
+            "Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.",
+            "Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.",
+            "Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_enhancement_desc",
         text: row(
             "应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。",
@@ -4683,9 +8288,12 @@ pub const CATALOG: &[Msg] = &[
             "Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.",
             "RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。",
             "RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.",
+            "Reducción de ruido RNNoise o PureVox, ganancia automática y limitación. Desactivada por defecto; los cambios se aplican a la próxima grabación.",
+            "Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.",
+            "RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.echo_cancellation_desc",
         text: row(
             "保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。",
@@ -4693,9 +8301,12 @@ pub const CATALOG: &[Msg] = &[
             "Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.",
             "再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。",
             "재생을 유지하면서 로컬 재생음을 참조합니다. macOS는 14.6 이상 및 시스템 오디오 녹음 권한이 필요합니다. 지원하지 않는 장치, Bluetooth 경로 또는 Linux ALSA에서는 일반 마이크 녹음으로 전환합니다. 다음 캡처부터 적용됩니다.",
+            "Usa una referencia local sin silenciar la reproducción. En macOS requiere 14.6+ y permiso para grabar audio del sistema. Los dispositivos, rutas Bluetooth o entornos Linux ALSA no compatibles usan solo el micrófono. Se aplica en la próxima captura.",
+            "Utilise une référence de lecture locale sans couper le son. Sur macOS, nécessite 14.6+ et une autorisation de capture audio système. Les appareils, routes Bluetooth ou configurations Linux ALSA non pris en charge utilisent uniquement le microphone. Prend effet à la prochaine capture.",
+            "Verwendet eine lokale Wiedergabereferenz, ohne die Wiedergabe stummzuschalten. macOS benötigt 14.6+ und die Berechtigung zur Systemaudioaufnahme. Nicht unterstützte Geräte, Bluetooth-Routen und Linux ALSA verwenden nur das Mikrofon. Gilt ab der nächsten Aufnahme.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.paste_shortcut_desc",
         text: row(
             "插入时模拟按下的粘贴键，部分终端类应用需要 Ctrl+Shift+V（仅 Windows / Linux）。",
@@ -4703,9 +8314,12 @@ pub const CATALOG: &[Msg] = &[
             "Which paste combo to simulate when inserting; some terminals need Ctrl+Shift+V (Windows / Linux only).",
             "挿入時に模擬するペーストショートカット。一部のターミナルでは Ctrl+Shift+V が必要（Windows / Linux のみ）。",
             "삽입 시 시뮬레이션할 붙여넣기 단축키. 일부 터미널은 Ctrl+Shift+V 가 필요 (Windows / Linux 만).",
+            "Combinación que se simula al insertar. Algunos terminales necesitan Ctrl+Shift+V (solo Windows / Linux).",
+            "Combinaison simulée pour insérer le texte. Certains terminaux nécessitent Ctrl+Shift+V (Windows / Linux uniquement).",
+            "Tastenkombination zum Einfügen. Einige Terminals benötigen Ctrl+Shift+V (nur Windows / Linux).",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_context_window_desc",
         text: row(
             "把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。",
@@ -4713,9 +8327,12 @@ pub const CATALOG: &[Msg] = &[
             "Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.",
             "直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。",
             "최근 N 분간 정리된 전사를 멀티턴 컨텍스트로 전달합니다. 0 = 비활성화.",
+            "Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.",
+            "Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.",
+            "Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_context_window_label",
         text: row(
             "对话上下文窗口（分钟）",
@@ -4723,9 +8340,12 @@ pub const CATALOG: &[Msg] = &[
             "Polish context window (minutes)",
             "会話コンテキスト窓（分）",
             "대화 컨텍스트 윈도(분)",
+            "Ventana de contexto para mejorar texto (minutos)",
+            "Fenêtre de contexte d’amélioration (minutes)",
+            "Kontextfenster für Überarbeitung (Minuten)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_skip_max_chars_desc",
         text: row(
             "转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。",
@@ -4733,9 +8353,12 @@ pub const CATALOG: &[Msg] = &[
             "Transcripts with at most N characters (spaces not counted) are inserted as raw text without calling the LLM. 0 = off. Translation always polishes.",
             "空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。",
             "공백을 제외하고 N자 이하의 인식 결과는 LLM 호출 없이 원문 그대로 삽입합니다. 0 = 끔. 번역은 항상 다듬습니다.",
+            "Las transcripciones de hasta N caracteres (sin contar espacios) se insertan tal cual, sin llamar al LLM. 0 = desactivado. La traducción siempre se mejora.",
+            "Les transcriptions d’au plus N caractères (espaces non comptés) sont insérées telles quelles, sans appel au LLM. 0 = désactivé. La traduction est toujours améliorée.",
+            "Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.polish_skip_max_chars_label",
         text: row(
             "短句跳过润色（最大字数）",
@@ -4743,9 +8366,12 @@ pub const CATALOG: &[Msg] = &[
             "Skip polish for short dictations (max characters)",
             "短い入力は整形をスキップ（最大文字数）",
             "짧은 입력은 다듬기 건너뛰기(최대 글자 수)",
+            "Omitir mejora en dictados cortos (máx. caracteres)",
+            "Ignorer l’amélioration pour les courtes dictées (caractères max)",
+            "Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.restore_clipboard_desc",
         text: row(
             "粘贴成功后恢复你原来的剪贴板内容（仅 Windows / Linux）。",
@@ -4753,9 +8379,12 @@ pub const CATALOG: &[Msg] = &[
             "Restore your original clipboard after a successful paste (Windows / Linux only).",
             "ペースト成功後に元のクリップボード内容を復元（Windows / Linux のみ）。",
             "붙여넣기 성공 후 원래 클립보드 내용을 복원합니다 (Windows / Linux 만).",
+            "Restaura el contenido original del portapapeles después de pegar correctamente (solo Windows / Linux).",
+            "Restaure le contenu initial du presse-papiers après un collage réussi (Windows / Linux uniquement).",
+            "Stellt die ursprüngliche Zwischenablage nach erfolgreichem Einfügen wieder her (nur Windows / Linux).",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.silence_auto_stop_desc",
         text: row(
             "仅切换模式生效。检测到语音后，连续静音达到所选时长即自动结束并提交；一直没说话则 10 秒后取消。默认关闭；第二次按键停止和 Esc 取消仍然有效。",
@@ -4763,9 +8392,12 @@ pub const CATALOG: &[Msg] = &[
             "Toggle only. After speech is detected, recording stops and submits automatically once silence lasts the chosen duration. Off by default; a second hotkey press and Esc still work.",
             "トグルモードのみ有効。音声を検出した後、無音が選択した時間続いたら録音を自動停止して送信します。一度も話さない場合は10秒後にキャンセル。既定ではオフで、2回目のキー押下による停止と Esc によるキャンセルは引き続き有効です。",
             "토글 모드에서만 동작합니다. 음성이 감지된 후 선택한 시간 동안 침묵이 이어지면 녹음을 자동으로 종료하고 제출합니다. 말을 전혀 하지 않으면 10초 후 취소됩니다. 기본적으로 꺼져 있으며, 두 번째 키 누름으로 중지하고 Esc로 취소하는 동작은 그대로 유지됩니다.",
+            "Solo en modo Alternar. Después de detectar voz, detiene y envía la grabación cuando el silencio dura el tiempo elegido. Desactivado de forma predeterminada; puedes seguir pulsando el atajo o Esc.",
+            "En mode Basculer uniquement. Après avoir détecté la voix, arrête et envoie l’enregistrement lorsque le silence dure le temps choisi. Désactivé par défaut ; le raccourci et Échap restent disponibles.",
+            "Nur im Umschaltmodus. Nach erkannter Sprache wird die Aufnahme automatisch beendet und gesendet, sobald die gewählte Dauer ohne Sprache verstrichen ist. Standardmäßig aus. Erneuter Tastendruck und Esc funktionieren weiterhin.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.cert_fingerprint_copy",
         text: row(
             "复制完整指纹",
@@ -4773,9 +8405,12 @@ pub const CATALOG: &[Msg] = &[
             "Copy full fingerprint",
             "指紋全体をコピー",
             "전체 지문 복사",
+            "Copiar huella completa",
+            "Copier l’empreinte complète",
+            "Vollständigen Fingerabdruck kopieren",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.cert_fingerprint_label",
         text: row(
             "本机根证书 SHA-256",
@@ -4783,9 +8418,12 @@ pub const CATALOG: &[Msg] = &[
             "This computer's root CA SHA-256",
             "このコンピューターのルート CA SHA-256",
             "이 컴퓨터의 루트 CA SHA-256",
+            "SHA-256 de la CA raíz de este ordenador",
+            "SHA-256 de la CA racine de cet ordinateur",
+            "Root-CA-SHA-256 dieses Computers",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.cert_fingerprint_unavailable",
         text: row(
             "完整指纹不可用。请勿安装或信任下载的证书。",
@@ -4793,9 +8431,12 @@ pub const CATALOG: &[Msg] = &[
             "The full fingerprint is unavailable. Do not install or trust a downloaded certificate.",
             "完全な指紋を取得できません。ダウンロードした証明書をインストールしたり信頼したりしないでください。",
             "전체 지문을 확인할 수 없습니다. 다운로드한 인증서를 설치하거나 신뢰하지 마세요.",
+            "La huella completa no está disponible. No instales ni confíes en un certificado descargado.",
+            "L’empreinte complète n’est pas disponible. N’installez et n’approuvez aucun certificat téléchargé.",
+            "Der vollständige Fingerabdruck ist nicht verfügbar. Installiere oder vertraue kein heruntergeladenes Zertifikat.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.cert_verify_hint",
         text: row(
             "在手机系统的证书详情中找到 SHA-256，与这里的全部 64 个字符逐一核对（忽略空格和冒号）。必须在开启完全信任前完成。网页、描述文件名称和标识不能证明证书身份；若不一致或无法查看完整指纹，请停止并移除已下载或安装的描述文件。",
@@ -4803,13 +8444,25 @@ pub const CATALOG: &[Msg] = &[
             "Find SHA-256 in the phone's system certificate details and compare all 64 characters with this value (ignore spaces and colons) before enabling full trust. A web page, profile name or identifier cannot prove identity. If the fingerprint differs or cannot be viewed in full, stop and remove the downloaded or installed profile.",
             "スマートフォンのシステム証明書詳細にある SHA-256 の全 64 文字を、空白とコロンを除いてこの値と照合し、完全に信頼する前に確認してください。Web ページ、プロファイル名や識別子は身元の証明にはなりません。一致しない場合や全体を表示できない場合は中止し、ダウンロード済みまたはインストール済みのプロファイルを削除してください。",
             "휴대폰 시스템의 인증서 상세 정보에서 SHA-256을 찾아, 완전한 신뢰를 켜기 전에 공백과 콜론을 제외한 64자 전체를 이 값과 비교하세요. 웹 페이지, 프로파일 이름이나 식별자는 신원 증명이 아닙니다. 일치하지 않거나 전체 지문을 볼 수 없으면 중단하고 다운로드했거나 설치한 프로파일을 제거하세요.",
+            "Antes de activar la confianza completa, busca el SHA-256 en los detalles del certificado del sistema del teléfono y compara los 64 caracteres con este valor (ignora espacios y dos puntos). Una página web, el nombre del perfil o un identificador no prueban la identidad. Si la huella difiere o no se puede ver completa, detente y elimina el perfil descargado o instalado.",
+            "Avant d’activer la confiance complète, retrouvez le SHA-256 dans les détails du certificat du système du téléphone et comparez les 64 caractères avec cette valeur (espaces et deux-points ignorés). Une page web, le nom du profil ou un identifiant ne prouvent pas l’identité. Si l’empreinte diffère ou n’est pas entièrement visible, arrêtez et supprimez le profil téléchargé ou installé.",
+            "Suche vor dem Aktivieren der vollständigen Vertrauensstellung den SHA-256 in den Zertifikatdetails des Telefons und vergleiche alle 64 Zeichen mit diesem Wert (Leerzeichen und Doppelpunkte ignorieren). Webseite, Profilname oder Bezeichner können die Identität nicht beweisen. Weicht der Fingerabdruck ab oder ist nicht vollständig einsehbar, brich ab und entferne das heruntergeladene oder installierte Profil.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.pin_label",
-        text: row("配对码", "配對碼", "Pairing code", "ペアリングコード", "페어링 코드"),
+        text: row(
+            "配对码",
+            "配對碼",
+            "Pairing code",
+            "ペアリングコード",
+            "페어링 코드",
+            "Código de vinculación",
+            "Code d’association",
+            "Kopplungscode",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.security_hint",
         text: row(
             "仅同一局域网可访问，需输入配对码；不用时建议关闭。",
@@ -4817,13 +8470,25 @@ pub const CATALOG: &[Msg] = &[
             "Reachable only on the same LAN and requires the pairing code; turn it off when not in use.",
             "同一 LAN からのみアクセス可能で、ペアリングコードの入力が必要です。使わないときはオフにすることを推奨します。",
             "같은 LAN에서만 접속 가능하며 페어링 코드 입력이 필요합니다. 사용하지 않을 때는 끄는 것을 권장합니다.",
+            "Solo es accesible desde la misma red local y requiere el código de vinculación. Desactívalo cuando no lo uses.",
+            "Accessible uniquement sur le même réseau local, avec le code d’association. Désactivez-la lorsque vous ne l’utilisez pas.",
+            "Nur im selben lokalen Netzwerk erreichbar und durch den Kopplungscode geschützt. Bei Nichtgebrauch ausschalten.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.remote_input.url_label",
-        text: row("访问网址", "存取網址", "Access URL", "アクセス URL", "접속 URL"),
+        text: row(
+            "访问网址",
+            "存取網址",
+            "Access URL",
+            "アクセス URL",
+            "접속 URL",
+            "URL de acceso",
+            "URL d’accès",
+            "Zugriffs-URL",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_polish.direct_replace",
         text: row(
             "直接覆盖",
@@ -4831,9 +8496,12 @@ pub const CATALOG: &[Msg] = &[
             "Replace directly",
             "直接置き換え",
             "직접 교체",
+            "Reemplazar directamente",
+            "Remplacer directement",
+            "Direkt ersetzen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_polish.preview_confirm",
         text: row(
             "预览确认",
@@ -4841,9 +8509,12 @@ pub const CATALOG: &[Msg] = &[
             "Preview & confirm",
             "プレビューして確認",
             "미리보기 후 확인",
+            "Revisar y confirmar",
+            "Vérifier et confirmer",
+            "Prüfen und bestätigen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.polish_delivery",
         text: row(
             "结果处理",
@@ -4851,9 +8522,12 @@ pub const CATALOG: &[Msg] = &[
             "Result handling",
             "結果の処理",
             "결과 처리",
+            "Tratamiento del resultado",
+            "Traitement du résultat",
+            "Ergebnis anwenden",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.polish_hotkey",
         text: row(
             "选区助手快捷键",
@@ -4861,9 +8535,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection assistant shortcut",
             "選択範囲アシスタントのショートカット",
             "선택 영역 도우미 단축키",
+            "Atajo del asistente de selección",
+            "Raccourci de l’assistant de sélection",
+            "Kurzbefehl für den Auswahlassistenten",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.polish_hotkey_desc",
         text: row(
             "关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。",
@@ -4871,9 +8548,12 @@ pub const CATALOG: &[Msg] = &[
             "Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).",
             "音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。",
             "음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).",
+            "Mejora el texto directamente sin edición por voz; con ella activada, mantén pulsado para hablar. La grabación sigue los ajustes generales.",
+            "Améliore directement le texte sans édition vocale ; sinon, maintenez pour parler. L’enregistrement suit les réglages généraux.",
+            "Überarbeitet direkt, wenn Sprachbearbeitung aus ist. Andernfalls zum Sprechen gedrückt halten. Für die Aufnahme gelten die globalen Einstellungen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.style_pack_desc",
         text: row(
             "为常用风格包各配一个快捷键，按下直接切换；停用中的包会自动启用。",
@@ -4881,9 +8561,12 @@ pub const CATALOG: &[Msg] = &[
             "Bind a shortcut to each favorite style pack for one-press switching; disabled packs are re-enabled automatically.",
             "よく使うスタイルパックにショートカットを割り当てて一発切替；無効中のパックは自動で有効化されます。",
             "자주 쓰는 스타일 팩에 단축키를 지정해 한 번에 전환합니다. 비활성화된 팩은 자동으로 다시 활성화됩니다.",
+            "Asigna atajos a tus paquetes favoritos para cambiar con una pulsación. Los paquetes desactivados se volverán a activar automáticamente.",
+            "Associez un raccourci à chaque pack favori pour changer d’une seule pression. Les packs désactivés sont réactivés automatiquement.",
+            "Weise deinen Lieblingsstilpaketen Kurzbefehle zu, um mit einem Tastendruck zu wechseln. Deaktivierte Pakete werden dabei automatisch wieder aktiviert.",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.about.docs_btn",
         text: row(
             "openless.app/docs ↗",
@@ -4891,9 +8574,12 @@ pub const CATALOG: &[Msg] = &[
             "openless.app/docs ↗",
             "openless.app/docs ↗",
             "openless.app/docs ↗",
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
+            "openless.app/docs ↗",
         ),
     },
-    Msg {
+        Msg {
         key: "modal.about.feedback_btn",
         text: row(
             "GitHub Issues ↗",
@@ -4901,13 +8587,25 @@ pub const CATALOG: &[Msg] = &[
             "GitHub Issues ↗",
             "GitHub Issues ↗",
             "GitHub Issues ↗",
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
+            "GitHub Issues ↗",
         ),
     },
-    Msg {
+        Msg {
         key: "common.experimental",
-        text: row("实验性", "實驗性", "Experimental", "実験的", "실험적"),
+        text: row(
+            "实验性",
+            "實驗性",
+            "Experimental",
+            "実験的",
+            "실험적",
+            "Experimental",
+            "Expérimental",
+            "Experimentell",
+        ),
     },
-    Msg {
+        Msg {
         key: "hotkey.mode_auto_suffix",
         text: row(
             "（自动识别）",
@@ -4915,9 +8613,12 @@ pub const CATALOG: &[Msg] = &[
             " (auto-detect)",
             "（自動判別）",
             "(자동 인식)",
+            " (detección automática)",
+            " (détection automatique)",
+            " (automatisch erkennen)",
         ),
     },
-    Msg {
+        Msg {
         key: "hotkey.mode_hold_suffix",
         text: row(
             "（按住说话）",
@@ -4925,9 +8626,12 @@ pub const CATALOG: &[Msg] = &[
             " (push-to-talk)",
             "（押し続けて話す）",
             "(눌러서 말하기)",
+            " (mantener para hablar)",
+            " (maintenir pour parler)",
+            " (zum Sprechen gedrückt halten)",
         ),
     },
-    Msg {
+        Msg {
         key: "hotkey.mode_toggle_suffix",
         text: row(
             "（开始 / 停止）",
@@ -4935,9 +8639,12 @@ pub const CATALOG: &[Msg] = &[
             " (start / stop)",
             "（開始 / 停止）",
             "(시작 / 정지)",
+            " (iniciar / detener)",
+            " (démarrer / arrêter)",
+            " (starten / beenden)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.combo_conflict",
         text: row(
             "该快捷键组合不可用",
@@ -4945,9 +8652,12 @@ pub const CATALOG: &[Msg] = &[
             "This shortcut combination is not available",
             "このショートカットの組み合わせは使用できません",
             "이 단축키 조합은 사용할 수 없습니다",
+            "Esta combinación de teclas no está disponible",
+            "Cette combinaison n’est pas disponible",
+            "Diese Tastenkombination ist nicht verfügbar",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.combo_record_btn",
         text: row(
             "录制快捷键",
@@ -4955,9 +8665,12 @@ pub const CATALOG: &[Msg] = &[
             "Record shortcut",
             "ショートカットを記録",
             "단축키 녹화",
+            "Grabar atajo",
+            "Enregistrer un raccourci",
+            "Kurzbefehl aufzeichnen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.combo_record_hint",
         text: row(
             "请按下快捷键组合…",
@@ -4965,25 +8678,37 @@ pub const CATALOG: &[Msg] = &[
             "Press your shortcut combination…",
             "ショートカットの組み合わせを押してください…",
             "단축키 조합을 눌러 주세요…",
+            "Pulsa tu combinación de teclas…",
+            "Appuyez sur votre combinaison…",
+            "Drücke deine Tastenkombination…",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.disable",
-        text: row("停用", "停用", "Disable", "無効化", "비활성화"),
+        text: row("停用", "停用", "Disable", "無効化", "비활성화", "Desactivar", "Désactiver", "Deaktivieren"),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.style_pack_disabled_suffix",
-        text: row("（已停用）", "（已停用）", " (disabled)", "（無効）", " (비활성화됨)"),
+        text: row(
+            "（已停用）",
+            "（已停用）",
+            " (disabled)",
+            "（無効）",
+            " (비활성화됨)",
+            " (desactivado)",
+            " (désactivé)",
+            " (deaktiviert)",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.shortcuts.style_pack_remove",
-        text: row("移除", "移除", "Remove", "削除", "제거"),
+        text: row("移除", "移除", "Remove", "削除", "제거", "Eliminar", "Supprimer", "Entfernen"),
     },
-    Msg {
+        Msg {
         key: "capsule.cancelled",
-        text: row("已取消", "已取消", "Cancelled", "キャンセルしました", "취소됨"),
+        text: row("已取消", "已取消", "Cancelled", "キャンセルしました", "취소됨", "Cancelado", "Annulé", "Abgebrochen"),
     },
-    Msg {
+        Msg {
         key: "capsule.error",
         text: row(
             "出错了",
@@ -4991,21 +8716,33 @@ pub const CATALOG: &[Msg] = &[
             "Something went wrong",
             "エラーが発生しました",
             "오류 발생",
+            "Se ha producido un error",
+            "Une erreur s’est produite",
+            "Ein Fehler ist aufgetreten",
         ),
     },
-    Msg {
+        Msg {
         key: "capsule.inserted",
-        text: row("已插入 {}", "已插入 {}", "Inserted {}", "{} 文字を入力しました", "{}자 입력됨"),
+        text: row(
+            "已插入 {}",
+            "已插入 {}",
+            "Inserted {}",
+            "{} 文字を入力しました",
+            "{}자 입력됨",
+            "{} insertados",
+            "{} insérés",
+            "{} eingefügt",
+        ),
     },
-    Msg {
+        Msg {
         key: "capsule.thinking",
-        text: row("thinking", "thinking", "thinking", "thinking", "thinking"),
+        text: row("thinking", "thinking", "thinking", "thinking", "thinking", "pensando", "réflexion", "denkt nach"),
     },
-    Msg {
+        Msg {
         key: "qa.close_tooltip",
-        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기", "Cerrar", "Fermer", "Schließen"),
     },
-    Msg {
+        Msg {
         key: "qa.composer_placeholder",
         text: row(
             "输入问题，Enter 发送",
@@ -5013,9 +8750,12 @@ pub const CATALOG: &[Msg] = &[
             "Type a question. Enter to send",
             "質問を入力。Enter で送信",
             "질문을 입력하세요. Enter로 보내기",
+            "Escribe una pregunta. Pulsa Intro para enviar",
+            "Saisissez une question. Appuyez sur Entrée pour envoyer",
+            "Frage eingeben. Mit Enter senden",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.empty_desc",
         text: row(
             "选中任意文字后开始追问，或直接在下方输入问题。回答会显示在这里，可以连续多轮。",
@@ -5023,9 +8763,12 @@ pub const CATALOG: &[Msg] = &[
             "Select any text to ask about it, or just type your question below. Answers appear here — ask as many follow-ups as you like.",
             "テキストを選択して質問するか、下に直接入力してください。回答はここに表示され、続けて質問できます。",
             "텍스트를 선택해 질문하거나 아래에 직접 입력하세요. 답변이 여기에 표시되며 계속 이어서 질문할 수 있습니다.",
+            "Selecciona un texto para preguntar sobre él o escribe tu pregunta abajo. Las respuestas aparecerán aquí y podrás seguir preguntando.",
+            "Sélectionnez un texte pour poser une question à son sujet, ou saisissez votre question ci-dessous. Les réponses apparaissent ici et vous pouvez poursuivre la conversation.",
+            "Wähle einen Text aus, zu dem du etwas fragen möchtest, oder gib unten deine Frage ein. Die Antworten erscheinen hier. Du kannst beliebig oft nachfragen.",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.empty_title",
         text: row(
             "有什么可以帮你？",
@@ -5033,9 +8776,12 @@ pub const CATALOG: &[Msg] = &[
             "How can I help?",
             "ご用件は？",
             "무엇을 도와드릴까요?",
+            "¿En qué puedo ayudarte?",
+            "Comment puis-je vous aider ?",
+            "Wie kann ich helfen?",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.error_retry_hint",
         text: row(
             "请再试一次。",
@@ -5043,13 +8789,25 @@ pub const CATALOG: &[Msg] = &[
             "Please try again.",
             "もう一度お試しください。",
             "다시 시도해 주세요.",
+            "Inténtalo de nuevo.",
+            "Veuillez réessayer.",
+            "Versuche es erneut.",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.header_hint",
-        text: row("随时提问", "隨時提問", "Ask anytime", "いつでも質問", "언제든 질문하세요"),
+        text: row(
+            "随时提问",
+            "隨時提問",
+            "Ask anytime",
+            "いつでも質問",
+            "언제든 질문하세요",
+            "Pregunta cuando quieras",
+            "Posez une question à tout moment",
+            "Jederzeit fragen",
+        ),
     },
-    Msg {
+        Msg {
         key: "qa.selection_preview",
         text: row(
             "基于选中文本：",
@@ -5057,21 +8815,24 @@ pub const CATALOG: &[Msg] = &[
             "From selected text:",
             "選択テキスト：",
             "선택된 텍스트 기반:",
+            "A partir del texto seleccionado:",
+            "À partir du texte sélectionné :",
+            "Aus dem ausgewählten Text:",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.thinking",
-        text: row("思考中…", "思考中…", "Thinking…", "思考中…", "생각 중…"),
+        text: row("思考中…", "思考中…", "Thinking…", "思考中…", "생각 중…", "Pensando…", "Réflexion…", "Denkt nach…"),
     },
-    Msg {
+        Msg {
         key: "qa.title",
-        text: row("问任何问题", "問任何問題", "Ask", "質問", "질문"),
+        text: row("问任何问题", "問任何問題", "Ask", "質問", "질문", "Preguntar", "Questions", "Nachfragen"),
     },
-    Msg {
+        Msg {
         key: "selection.polish_preview.cancel",
-        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소", "Cancelar", "Annuler", "Abbrechen"),
     },
-    Msg {
+        Msg {
         key: "selection.polish_preview.confirm_replace",
         text: row(
             "确认并替换",
@@ -5079,13 +8840,16 @@ pub const CATALOG: &[Msg] = &[
             "Confirm & replace",
             "確認して置き換え",
             "확인 후 교체",
+            "Confirmar y reemplazar",
+            "Confirmer et remplacer",
+            "Bestätigen und ersetzen",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.polish_preview.source_prefix",
-        text: row("原文：", "原文：", "Original: ", "原文：", "원문: "),
+        text: row("原文：", "原文：", "Original: ", "原文：", "원문: ", "Original: ", "Original : ", "Original: "),
     },
-            Msg {
+                Msg {
         key: "selection.polish_preview.subtitle",
         text: row(
             "可直接编辑；点击确认后才会替换原选区。",
@@ -5093,9 +8857,12 @@ pub const CATALOG: &[Msg] = &[
             "Editable; the original selection is replaced only after you confirm.",
             "編集可能です。確認後はじめて元の選択範囲を置き換えます。",
             "편집 가능합니다. 확인을 클릭한 뒤에만 원래 선택 영역을 교체합니다.",
+            "Puedes editar el resultado. El texto seleccionado solo se reemplazará cuando confirmes.",
+            "Vous pouvez modifier le résultat. La sélection d’origine ne sera remplacée qu’après confirmation.",
+            "Das Ergebnis lässt sich bearbeiten. Die ursprüngliche Auswahl wird erst nach deiner Bestätigung ersetzt.",
         ),
     },
-    Msg {
+        Msg {
         key: "selection.polish_preview.title",
         text: row(
             "选区润色预览",
@@ -5103,13 +8870,25 @@ pub const CATALOG: &[Msg] = &[
             "Selection Polish Preview",
             "選択範囲の推敲プレビュー",
             "선택 영역 다듬기 미리보기",
+            "Vista previa del texto mejorado",
+            "Aperçu du texte amélioré",
+            "Vorschau der Textüberarbeitung",
         ),
     },
-    Msg {
+        Msg {
         key: "capsule.translating",
-        text: row("正在翻译", "正在翻譯", "Translating", "翻訳中", "번역 중"),
+        text: row(
+            "正在翻译",
+            "正在翻譯",
+            "Translating",
+            "翻訳中",
+            "번역 중",
+            "Traduciendo",
+            "Traduction",
+            "Wird übersetzt",
+        ),
     },
-    Msg {
+        Msg {
         key: "qa.edit_apply_replace",
         text: row(
             "预览并确认插入",
@@ -5117,9 +8896,12 @@ pub const CATALOG: &[Msg] = &[
             "Preview and confirm insert",
             "プレビューして挿入を確認",
             "미리보기 후 삽입 확인",
+            "Ver vista previa y confirmar inserción",
+            "Aperçu et confirmation de l’insertion",
+            "Einfügen prüfen und bestätigen",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.edit_instruction_mode",
         text: row(
             "编辑指令",
@@ -5127,9 +8909,12 @@ pub const CATALOG: &[Msg] = &[
             "Edit instruction",
             "編集指示",
             "편집 지시",
+            "Instrucción de edición",
+            "Instruction de modification",
+            "Bearbeitungsanweisung",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.edit_revert_previous",
         text: row(
             "保留上一版本",
@@ -5137,9 +8922,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep previous version",
             "前のバージョンを保持",
             "이전 버전 유지",
+            "Conservar la versión anterior",
+            "Conserver la version précédente",
+            "Vorherige Version behalten",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.pin_tooltip",
         text: row(
             "固定（不自动关闭）",
@@ -5147,13 +8935,25 @@ pub const CATALOG: &[Msg] = &[
             "Pin (stay open)",
             "ピン留め（自動で閉じない）",
             "고정(자동으로 닫히지 않음)",
+            "Fijar (mantener abierto)",
+            "Épingler (garder ouvert)",
+            "Anheften (geöffnet lassen)",
         ),
     },
-    Msg {
+        Msg {
         key: "qa.unpin_tooltip",
-        text: row("取消固定", "取消固定", "Unpin", "ピン留めを解除", "고정 해제"),
+        text: row(
+            "取消固定",
+            "取消固定",
+            "Unpin",
+            "ピン留めを解除",
+            "고정 해제",
+            "Desfijar",
+            "Détacher",
+            "Anheften aufheben",
+        ),
     },
-    Msg {
+        Msg {
         key: "onboarding.mic_no_device_hint",
         text: row(
             "未检测到麦克风，请连接并启用麦克风后重试。",
@@ -5161,13 +8961,16 @@ pub const CATALOG: &[Msg] = &[
             "No microphone detected. Connect and enable a microphone, then retry.",
             "マイクが検出されません。マイクを接続して有効にしてから、もう一度お試しください。",
             "마이크가 감지되지 않습니다. 마이크를 연결하고 활성화한 후 다시 시도하세요.",
+            "No se ha detectado ningún micrófono. Conecta y activa uno, y vuelve a intentarlo.",
+            "Aucun microphone détecté. Connectez et activez un microphone, puis réessayez.",
+            "Kein Mikrofon erkannt. Schließe ein Mikrofon an, aktiviere es und versuche es erneut.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.audio_cue_preview",
-        text: row("试听", "試聽", "Preview", "試聴", "미리듣기"),
+        text: row("试听", "試聽", "Preview", "試聴", "미리듣기", "Escuchar", "Écouter", "Anhören"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_desc",
         text: row(
             "录音 / 转写时显示屏幕底部胶囊。",
@@ -5175,9 +8978,12 @@ pub const CATALOG: &[Msg] = &[
             "Show a translucent capsule at the bottom of the screen while recording.",
             "録音 / 転写中、画面下部に半透明のカプセルを表示。",
             "녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.",
+            "Muestra una cápsula en la parte inferior de la pantalla mientras grabas.",
+            "Affiche une capsule en bas de l’écran pendant l’enregistrement.",
+            "Zeigt während der Aufnahme eine halbtransparente Kapsel am unteren Bildschirmrand.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_label",
         text: row(
             "录音胶囊",
@@ -5185,19 +8991,25 @@ pub const CATALOG: &[Msg] = &[
             "Recording capsule",
             "録音カプセル",
             "녹음 캡슐",
+            "Cápsula de grabación",
+            "Capsule d’enregistrement",
+            "Aufnahmekapsel",
         ),
     },
-    Msg {
+            Msg {
         key: "settings.recording.capsule_style_classic",
         text: row(
-            "OpenLess 默认风格",
-            "OpenLess 預設風格",
-            "OpenLess default style",
-            "OpenLess デフォルトスタイル",
-            "OpenLess 기본 스타일",
+            "默认风格",
+            "預設風格",
+            "Default style",
+            "デフォルトスタイル",
+            "기본 스타일",
+            "Estilo predeterminado",
+            "Style par défaut",
+            "Standardstil",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_style_label",
         text: row(
             "胶囊样式",
@@ -5205,9 +9017,12 @@ pub const CATALOG: &[Msg] = &[
             "Capsule style",
             "カプセルスタイル",
             "캡슐 스타일",
+            "Estilo de cápsula",
+            "Style de capsule",
+            "Kapselstil",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_style_siri",
         text: row(
             "流光 Siri 风格",
@@ -5215,9 +9030,12 @@ pub const CATALOG: &[Msg] = &[
             "Shimmer Siri style",
             "光条 Siri スタイル",
             "시리 광선 스타일",
+            "Estilo luminoso Siri",
+            "Style lumineux Siri",
+            "Schimmernder Siri-Stil",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.capsule_style_typeless",
         text: row(
             "Typeless 传统风格",
@@ -5225,9 +9043,12 @@ pub const CATALOG: &[Msg] = &[
             "Typeless compact style",
             "Typeless コンパクトスタイル",
             "Typeless 컴팩트 스타일",
+            "Typeless compact style",
+            "Typeless compact style",
+            "Typeless compact style",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.microphone_load_error",
         text: row(
             "麦克风列表读取失败：{}",
@@ -5235,9 +9056,12 @@ pub const CATALOG: &[Msg] = &[
             "Failed to load microphones: {}",
             "マイクの読み込みに失敗：{}",
             "마이크 로드 실패: {}",
+            "No se pudieron cargar los micrófonos: {}",
+            "Impossible de charger les microphones : {}",
+            "Mikrofone konnten nicht geladen werden: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.stable_transcription_desc",
         text: row(
             "开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。",
@@ -5245,9 +9069,12 @@ pub const CATALOG: &[Msg] = &[
             "When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.",
             "有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。",
             "켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.",
+            "Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.",
+            "Une fois activé, l’ASR se connecte après l’arrêt et reçoit l’enregistrement complet. Le résultat arrive plus tard, mais la capture n’est pas perturbée par le délai de connexion ni par les variations du réseau pendant l’enregistrement.",
+            "Wenn aktiviert, verbindet sich ASR erst nach dem Aufnahmestopp und erhält die gesamte Aufnahme. Das Ergebnis erscheint später, aber Verbindungsaufbau und Netzwerkschwankungen während der Aufnahme stören die Aufzeichnung nicht.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.stable_transcription_label",
         text: row(
             "稳定模式（先录音后识别）",
@@ -5255,9 +9082,12 @@ pub const CATALOG: &[Msg] = &[
             "Stable mode (record, then transcribe)",
             "安定モード（録音後に文字起こし）",
             "안정 모드 (녹음 후 전사)",
+            "Modo estable (grabar y luego transcribir)",
+            "Mode stable (enregistrer puis transcrire)",
+            "Stabiler Modus (erst aufnehmen, dann transkribieren)",
         ),
     },
-    Msg {
+        Msg {
         key: "capsule.selectionPolish.noSelection",
         text: row(
             "未选中内容",
@@ -5265,9 +9095,12 @@ pub const CATALOG: &[Msg] = &[
             "Nothing selected",
             "選択されていません",
             "선택된 내용 없음",
+            "No hay texto seleccionado",
+            "Aucun texte sélectionné",
+            "Kein Text ausgewählt",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.availableModels",
         text: row(
             "可用模型",
@@ -5275,9 +9108,12 @@ pub const CATALOG: &[Msg] = &[
             "Available models",
             "利用可能なモデル",
             "사용 가능한 모델",
+            "Modelos disponibles",
+            "Modèles disponibles",
+            "Verfügbare Modelle",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.modelHint",
         text: row(
             "直接输入模型名称，或拉取并选择供应商的可用模型。",
@@ -5285,9 +9121,12 @@ pub const CATALOG: &[Msg] = &[
             "Enter a model name directly, or fetch and select a model from your provider.",
             "モデル名を直接入力するか、プロバイダーから一覧を取得して選択します。",
             "모델 이름을 직접 입력하거나 공급자의 모델 목록을 가져와 선택하세요.",
+            "Escribe el nombre de un modelo u obtén los modelos de tu proveedor y elige uno.",
+            "Saisissez le nom du modèle ou récupérez les modèles de votre fournisseur pour en choisir un.",
+            "Gib einen Modellnamen direkt ein oder rufe die Modelle des Anbieters ab und wähle eines aus.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.channels.modelTitle",
         text: row(
             "模型设置",
@@ -5295,9 +9134,12 @@ pub const CATALOG: &[Msg] = &[
             "Model settings",
             "モデル設定",
             "모델 설정",
+            "Ajustes del modelo",
+            "Réglages du modèle",
+            "Modelleinstellungen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.customModelLabel",
         text: row(
             "自定义模型…",
@@ -5305,13 +9147,25 @@ pub const CATALOG: &[Msg] = &[
             "Custom model…",
             "カスタムモデル…",
             "사용자 정의 모델…",
+            "Modelo personalizado…",
+            "Modèle personnalisé…",
+            "Eigenes Modell…",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.fetchModels",
-        text: row("拉取模型", "拉取模型", "Fetch models", "モデル一覧", "모델 가져오기"),
+        text: row(
+            "拉取模型",
+            "拉取模型",
+            "Fetch models",
+            "モデル一覧",
+            "모델 가져오기",
+            "Obtener modelos",
+            "Récupérer les modèles",
+            "Modelle abrufen",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.loadingModels",
         text: row(
             "拉取模型中…",
@@ -5319,13 +9173,16 @@ pub const CATALOG: &[Msg] = &[
             "Fetching models…",
             "モデル取得中…",
             "모델 가져오는 중…",
+            "Obteniendo modelos…",
+            "Récupération des modèles…",
+            "Modelle werden abgerufen…",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.modelLabel",
-        text: row("模型", "模型", "Model", "モデル", "모델"),
+        text: row("模型", "模型", "Model", "モデル", "모델", "Modelo", "Modèle", "Modell"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.modelSaved",
         text: row(
             "已保存模型 {}。",
@@ -5333,9 +9190,12 @@ pub const CATALOG: &[Msg] = &[
             "Saved model {}.",
             "モデル {} を保存しました。",
             "모델 {} 을(를) 저장했습니다.",
+            "Modelo {} guardado.",
+            "Modèle {} enregistré.",
+            "Modell {} gespeichert.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.modelsEmpty",
         text: row(
             "鉴权成功，但没有返回可用模型。",
@@ -5343,9 +9203,12 @@ pub const CATALOG: &[Msg] = &[
             "Credentials are valid, but no models were returned.",
             "認証成功ですが、利用可能なモデルが返されませんでした。",
             "인증 성공이지만 사용 가능한 모델이 반환되지 않았습니다.",
+            "Las credenciales son válidas, pero no se recibieron modelos.",
+            "Les identifiants sont valides, mais aucun modèle n’a été renvoyé.",
+            "Die Zugangsdaten sind gültig, aber es wurden keine Modelle zurückgegeben.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.modelsLoaded",
         text: row(
             "已拉取 {} 个模型。",
@@ -5353,9 +9216,12 @@ pub const CATALOG: &[Msg] = &[
             "Fetched {} models.",
             "{} 個のモデルを取得しました。",
             "{}개의 모델을 가져왔습니다.",
+            "Se han obtenido {} modelos.",
+            "{} modèles récupérés.",
+            "Abgerufene Modelle: {}.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.noMatchingModels",
         text: row(
             "没有匹配的模型",
@@ -5363,9 +9229,12 @@ pub const CATALOG: &[Msg] = &[
             "No matching models",
             "一致するモデルがありません",
             "일치하는 모델이 없습니다",
+            "Sin modelos coincidentes",
+            "Aucun modèle correspondant",
+            "Keine passenden Modelle",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.planModelsHint",
         text: row(
             "打开套餐控制台，复制支持的文本模型 ID 并填写到模型栏。",
@@ -5373,9 +9242,12 @@ pub const CATALOG: &[Msg] = &[
             "Open the plan console, copy a supported text model ID, and enter it in the model field.",
             "プランのコンソールで対応するテキストモデル ID をコピーし、モデル欄に入力してください。",
             "요금제 콘솔에서 지원되는 텍스트 모델 ID를 복사해 모델 필드에 입력하세요.",
+            "Abra la consola del plan, copie un ID de modelo de texto compatible e introdúzcalo en el campo del modelo.",
+            "Ouvrez la console du forfait, copiez un ID de modèle de texte pris en charge et collez-le dans le champ du modèle.",
+            "Öffnen Sie die Tarifkonsole, kopieren Sie eine unterstützte Textmodell-ID und tragen Sie sie im Modellfeld ein.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.presetListLabel",
         text: row(
             "返回预设列表",
@@ -5383,9 +9255,12 @@ pub const CATALOG: &[Msg] = &[
             "Back to presets",
             "プリセットに戻る",
             "프리셋으로 돌아가기",
+            "Volver a los preajustes",
+            "Retour aux préréglages",
+            "Zurück zu den Vorlagen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.searchModels",
         text: row(
             "搜索模型…",
@@ -5393,9 +9268,12 @@ pub const CATALOG: &[Msg] = &[
             "Search models…",
             "モデルを検索…",
             "모델 검색…",
+            "Buscar modelos…",
+            "Rechercher des modèles…",
+            "Modelle suchen…",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.selectModel",
         text: row(
             "选择一个模型写入上方字段",
@@ -5403,9 +9281,12 @@ pub const CATALOG: &[Msg] = &[
             "Select a model to fill the field above",
             "モデルを選んで上記欄に入力",
             "모델을 선택해 위 필드에 입력",
+            "Elige un modelo para completar el campo de arriba",
+            "Sélectionnez un modèle pour remplir le champ ci-dessus",
+            "Wähle ein Modell, um das Feld oben auszufüllen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.viewModels",
         text: row(
             "查看支持的模型",
@@ -5413,9 +9294,12 @@ pub const CATALOG: &[Msg] = &[
             "View supported models",
             "対応モデルを確認",
             "지원 모델 보기",
+            "Ver modelos compatibles",
+            "Voir les modèles pris en charge",
+            "Unterstützte Modelle ansehen",
         ),
     },
-    Msg {
+        Msg {
         key: "history.hide_raw",
         text: row(
             "隐藏原文",
@@ -5423,9 +9307,12 @@ pub const CATALOG: &[Msg] = &[
             "Hide raw transcript",
             "原文を隠す",
             "원문 숨기기",
+            "Ocultar transcripción original",
+            "Masquer la transcription brute",
+            "Rohtext ausblenden",
         ),
     },
-    Msg {
+        Msg {
         key: "history.play_recording",
         text: row(
             "播放录音",
@@ -5433,9 +9320,12 @@ pub const CATALOG: &[Msg] = &[
             "Play recording",
             "録音を再生",
             "녹음 재생",
+            "Reproducir grabación",
+            "Lire l’enregistrement",
+            "Aufnahme abspielen",
         ),
     },
-    Msg {
+        Msg {
         key: "history.show_raw",
         text: row(
             "查看原文",
@@ -5443,21 +9333,33 @@ pub const CATALOG: &[Msg] = &[
             "Show raw transcript",
             "原文を表示",
             "원문 보기",
+            "Mostrar transcripción original",
+            "Afficher la transcription brute",
+            "Rohtext anzeigen",
         ),
     },
-    Msg {
+        Msg {
         key: "shell.beta_tag",
-        text: row("BETA", "BETA", "BETA", "BETA", "BETA"),
+        text: row("BETA", "BETA", "BETA", "BETA", "BETA", "BETA", "BETA", "BETA"),
     },
-    Msg {
+        Msg {
         key: "common.close",
-        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기", "Cerrar", "Fermer", "Schließen"),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordAddSelected",
-        text: row("添加所选", "新增所選", "Add Selected", "選択を追加", "선택 추가"),
+        text: row(
+            "添加所选",
+            "新增所選",
+            "Add Selected",
+            "選択を追加",
+            "선택 추가",
+            "Añadir seleccionadas",
+            "Ajouter la sélection",
+            "Auswahl hinzufügen",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordDesc",
         text: row(
             "直接输入新词，或从预设模板批量导入。",
@@ -5465,9 +9367,12 @@ pub const CATALOG: &[Msg] = &[
             "Type a word directly, or import preset templates in bulk.",
             "単語を直接入力、またはプリセットテンプレートから一括インポート。",
             "단어를 직접 입력하거나 프리셋 템플릿에서 일괄 가져오세요.",
+            "Escribe una palabra o importa varias usando plantillas predefinidas.",
+            "Saisissez un mot ou importez plusieurs mots à partir de modèles prédéfinis.",
+            "Gib ein Wort direkt ein oder importiere mehrere Begriffe aus Vorlagen.",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordInputPlaceholder",
         text: row(
             "输入词语，按 Enter 添加…",
@@ -5475,9 +9380,12 @@ pub const CATALOG: &[Msg] = &[
             "Type a word, press Enter to add…",
             "単語を入力して Enter で追加…",
             "단어 입력 후 Enter로 추가…",
+            "Escribe una palabra y pulsa Intro para añadirla…",
+            "Saisissez un mot, puis appuyez sur Entrée pour l’ajouter…",
+            "Wort eingeben und mit Enter hinzufügen…",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordTemplates",
         text: row(
             "预设模板",
@@ -5485,9 +9393,12 @@ pub const CATALOG: &[Msg] = &[
             "Preset Templates",
             "プリセットテンプレート",
             "프리셋 템플릿",
+            "Plantillas predefinidas",
+            "Modèles prédéfinis",
+            "Vorlagen",
         ),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordTitle",
         text: row(
             "添加新词",
@@ -5495,9 +9406,12 @@ pub const CATALOG: &[Msg] = &[
             "Add New Words",
             "新語を追加",
             "새 단어 추가",
+            "Añadir palabras",
+            "Ajouter des mots",
+            "Neue Wörter hinzufügen",
         ),
     },
-    Msg {
+        Msg {
         key: "history.repolish.empty",
         text: row(
             "（模型返回了空结果）",
@@ -5505,9 +9419,12 @@ pub const CATALOG: &[Msg] = &[
             "(the model returned an empty result)",
             "（モデルが空の結果を返しました）",
             "(모델이 빈 결과를 반환했습니다)",
+            "(el modelo devolvió un resultado vacío)",
+            "(le modèle a renvoyé un résultat vide)",
+            "(das Modell hat ein leeres Ergebnis zurückgegeben)",
         ),
     },
-    Msg {
+        Msg {
         key: "history.repolish.hint",
         text: row(
             "基于上面的原文再跑一次润色。结果只在本次查看时显示，不写回这条记录。原风格包已删除或旧记录时，重试将使用当前风格。",
@@ -5515,9 +9432,12 @@ pub const CATALOG: &[Msg] = &[
             "Run polish again on the transcript above. Results are shown for this visit only and are not written back to the record. When the original style pack was deleted or the record predates style packs, retry uses the current style.",
             "上の原文でもう一度整文を実行します。結果は今回の表示のみで、この記録には書き戻しません。元のスタイルパックが削除されているか、古い記録の場合は、再試行では現在のスタイルを使用します。",
             "위 원문으로 다듬기를 다시 실행합니다. 결과는 이번 조회에만 표시되며 기록에 반영되지 않습니다. 원래 스타일 팩이 삭제되었거나 오래된 기록인 경우, 다시 시도 시 현재 스타일을 사용합니다.",
+            "Vuelve a mejorar la transcripción de arriba. Los resultados solo se muestran durante esta visita y no modifican el registro. Si se eliminó el paquete original o el registro es anterior a los paquetes de estilos, se usará el estilo actual.",
+            "Améliore à nouveau la transcription ci-dessus. Les résultats ne sont visibles que pendant cette visite et ne modifient pas l’entrée. Si le pack d’origine a été supprimé ou si l’entrée est antérieure aux packs de styles, le style actuel sera utilisé.",
+            "Überarbeitet das obige Transkript erneut. Die Ergebnisse werden nur für diesen Aufruf angezeigt und nicht im Eintrag gespeichert. Wurde das ursprüngliche Stilpaket gelöscht oder stammt der Eintrag aus der Zeit vor Stilpaketen, wird der aktuelle Stil verwendet.",
         ),
     },
-    Msg {
+        Msg {
         key: "history.repolish.retry",
         text: row(
             "用原风格重试",
@@ -5525,21 +9445,42 @@ pub const CATALOG: &[Msg] = &[
             "Retry with same style",
             "同じスタイルで再試行",
             "같은 스타일로 재시도",
+            "Reintentar con el mismo estilo",
+            "Réessayer avec le même style",
+            "Mit demselben Stil wiederholen",
         ),
     },
-    Msg {
+        Msg {
         key: "history.repolish.retryResultTitle",
-        text: row("重试结果", "重試結果", "Retry result", "再試行の結果", "재시도 결과"),
+        text: row(
+            "重试结果",
+            "重試結果",
+            "Retry result",
+            "再試行の結果",
+            "재시도 결과",
+            "Resultado del nuevo intento",
+            "Résultat du nouvel essai",
+            "Ergebnis des erneuten Versuchs",
+        ),
     },
-    Msg {
+        Msg {
         key: "history.repolish.title",
-        text: row("重新润色", "重新潤色", "Re-polish", "再整文", "다시 다듬기"),
+        text: row(
+            "重新润色",
+            "重新潤色",
+            "Re-polish",
+            "再整文",
+            "다시 다듬기",
+            "Volver a mejorar el texto",
+            "Améliorer à nouveau",
+            "Erneut überarbeiten",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.buttonLabel",
-        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물"),
+        text: row("我的发布", "我的發布", "My Packs", "自分の公開", "내 게시물", "Mis paquetes", "Mes packs", "Meine Pakete"),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.searchPlaceholder",
         text: row(
             "搜索名称、标签",
@@ -5547,9 +9488,12 @@ pub const CATALOG: &[Msg] = &[
             "Search name or tags",
             "名前・タグを検索",
             "이름·태그 검색",
+            "Buscar por nombre o etiquetas",
+            "Rechercher un nom ou des étiquettes",
+            "Nach Namen oder Schlagwörtern suchen",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.emptyTitle",
         text: row(
             "你还没有发布过风格包",
@@ -5557,9 +9501,12 @@ pub const CATALOG: &[Msg] = &[
             "You have not published any style packs yet",
             "まだ公開したパックはありません",
             "아직 게시한 팩이 없습니다",
+            "Todavía no has publicado paquetes de estilos",
+            "Vous n’avez pas encore publié de pack de styles",
+            "Du hast noch keine Stilpakete veröffentlicht",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.emptyHint",
         text: row(
             "在「风格」页面编辑后点「发布到风格市场」，或点击右上角上传本地风格包。",
@@ -5567,9 +9514,12 @@ pub const CATALOG: &[Msg] = &[
             "Edit a pack in the Style page and click \"Publish to Marketplace\", or upload a local pack from the top-right.",
             "「スタイル」ページで編集して「マーケットに公開」をクリックするか、右上からローカルパックをアップロードしてください。",
             "\"스타일\" 페이지에서 편집 후 \"마켓에 게시\"를 누르거나, 오른쪽 위에서 로컬 팩을 업로드하세요.",
+            "Edita un paquete en la página Estilo y pulsa «Publicar en el catálogo», o sube un paquete local desde la esquina superior derecha.",
+            "Modifiez un pack dans la page Style et cliquez sur « Publier dans le catalogue », ou envoyez un pack local depuis le coin supérieur droit.",
+            "Bearbeite ein Paket auf der Seite „Stil“ und klicke auf „Auf dem Marktplatz veröffentlichen“, oder lade oben rechts ein lokales Paket hoch.",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.noMatch",
         text: row(
             "没有匹配的风格包",
@@ -5577,13 +9527,25 @@ pub const CATALOG: &[Msg] = &[
             "No matching style packs",
             "一致するパックがありません",
             "일치하는 팩이 없습니다",
+            "No se encontraron paquetes de estilos",
+            "Aucun pack de styles correspondant",
+            "Keine passenden Stilpakete",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.loadingTitle",
-        text: row("正在拉取，请稍后…", "正在拉取，請稍後…", "Loading…", "読み込み中…", "불러오는 중…"),
+        text: row(
+            "正在拉取，请稍后…",
+            "正在拉取，請稍後…",
+            "Loading…",
+            "読み込み中…",
+            "불러오는 중…",
+            "Cargando…",
+            "Chargement…",
+            "Wird geladen…",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.loadingHint",
         text: row(
             "从风格市场获取你最新发布的风格包。",
@@ -5591,21 +9553,51 @@ pub const CATALOG: &[Msg] = &[
             "Fetching your latest publications from the marketplace.",
             "マーケットからあなたの最新公開を取得しています。",
             "마켓에서 최신 게시물을 가져오는 중입니다.",
+            "Obteniendo tus últimas publicaciones del catálogo.",
+            "Récupération de vos dernières publications dans le catalogue.",
+            "Deine neuesten Veröffentlichungen werden vom Marktplatz abgerufen.",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.loadErrorTitle",
-        text: row("加载失败", "載入失敗", "Load failed", "読み込み失敗", "불러오기 실패"),
+        text: row(
+            "加载失败",
+            "載入失敗",
+            "Load failed",
+            "読み込み失敗",
+            "불러오기 실패",
+            "No se pudo cargar",
+            "Échec du chargement",
+            "Laden fehlgeschlagen",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.loadErrorRetry",
-        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+        text: row(
+            "重试",
+            "重試",
+            "Retry",
+            "再試行",
+            "다시 시도",
+            "Reintentar",
+            "Réessayer",
+            "Erneut versuchen",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.summary",
-        text: row("已发布 {} 个风格包", "已發布 {} 個風格包", "{} published", "公開済み {} 個", "게시 {}개"),
+        text: row(
+            "已发布 {} 个风格包",
+            "已發布 {} 個風格包",
+            "{} published",
+            "公開済み {} 個",
+            "게시 {}개",
+            "{} publicados",
+            "{} publiés",
+            "{} veröffentlicht",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.derivativeBadge",
         text: row(
             "衍生自 @{}",
@@ -5613,21 +9605,24 @@ pub const CATALOG: &[Msg] = &[
             "Derived from @{}",
             "@{} から派生",
             "@{}에서 파생",
+            "Basado en @{}",
+            "Dérivé de @{}",
+            "Abgeleitet von @{}",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldDescription",
-        text: row("描述", "描述", "Description", "説明", "설명"),
+        text: row("描述", "描述", "Description", "説明", "설명", "Descripción", "Description", "Beschreibung"),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldName",
-        text: row("名称", "名稱", "Name", "名前", "이름"),
+        text: row("名称", "名稱", "Name", "名前", "이름", "Nombre", "Nom", "Name"),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldTags",
-        text: row("标签", "標籤", "Tags", "タグ", "태그"),
+        text: row("标签", "標籤", "Tags", "タグ", "태그", "Etiquetas", "Étiquettes", "Schlagwörter"),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldTagsPlaceholder",
         text: row(
             "用英文逗号分隔，例如 community, voiceover, formal",
@@ -5635,9 +9630,12 @@ pub const CATALOG: &[Msg] = &[
             "Comma-separated tags, e.g. community, voiceover, formal",
             "カンマ区切り、例: community, voiceover, formal",
             "쉼표로 구분, 예: community, voiceover, formal",
+            "Etiquetas separadas por comas, p. ej., comunidad, locución, formal",
+            "Étiquettes séparées par des virgules, p. ex. communauté, voix off, formel",
+            "Durch Kommas getrennt, z. B. Community, Kommentar, formell",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.selectionPromptHint",
         text: row(
             "用于用户主动选中的书面文字；不经过 ASR，不把内容当成转写，也不回答其中的问题。",
@@ -5645,9 +9643,12 @@ pub const CATALOG: &[Msg] = &[
             "For user-selected written text; not ASR output. Do not treat it as a transcript or answer its questions.",
             "ユーザーが選択した書面テキスト用。ASRは経由せず、書き起こしとして扱わず、その中の質問にも答えません。",
             "사용자가 선택한 서면 텍스트용. ASR을 거치지 않으며, 받아쓰기로 취급하지 않고 그 안의 질문에도 답하지 않습니다.",
+            "Para texto escrito seleccionado por el usuario, no para transcripciones. No lo trates como dictado ni respondas a sus preguntas.",
+            "Pour du texte écrit sélectionné par l’utilisateur, pas une transcription. Ne le traitez pas comme une dictée et ne répondez pas à ses questions.",
+            "Für ausgewählten geschriebenen Text, nicht für ASR-Ausgabe. Behandle ihn nicht als Transkript und beantworte keine darin enthaltenen Fragen.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.selectionPromptTitle",
         text: row(
             "选区润色 Prompt（无 ASR）",
@@ -5655,9 +9656,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection polish prompt (no ASR)",
             "選択範囲の推敲プロンプト（ASRなし）",
             "선택 영역 다듬기 프롬프트(ASR 없음)",
+            "Instrucciones para la selección (sin ASR)",
+            "Instructions pour la sélection (sans ASR)",
+            "Prompt für Textauswahl (ohne ASR)",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.voiceEditPromptTitle",
         text: row(
             "选区语音编辑 Prompt（EditPlan）",
@@ -5665,9 +9669,12 @@ pub const CATALOG: &[Msg] = &[
             "Selection voice edit prompt (EditPlan)",
             "選択範囲の音声編集プロンプト（EditPlan）",
             "선택 영역 음성 편집 프롬프트(EditPlan)",
+            "Prompt de edición por voz de la selección (EditPlan)",
+            "Invite d’édition vocale de sélection (EditPlan)",
+            "Prompt für Sprachbearbeitung der Auswahl (EditPlan)",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.buttonTitleEmpty",
         text: row(
             "先在 Settings → 风格市场 填写发布身份",
@@ -5675,9 +9682,12 @@ pub const CATALOG: &[Msg] = &[
             "Set publisher identity in Settings → Marketplace first",
             "先に 設定 → マーケット で公開者名を設定してください",
             "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
+            "Primero configura tu identidad de autor en Ajustes → Catálogo",
+            "Définissez d’abord votre identité d’auteur dans Réglages → Catalogue",
+            "Lege zuerst unter Einstellungen → Marktplatz dein Veröffentlichungsprofil fest",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.notLoggedIn",
         text: row(
             "请先在 Settings → 风格市场 填写发布身份",
@@ -5685,17 +9695,29 @@ pub const CATALOG: &[Msg] = &[
             "Set publisher identity in Settings → Marketplace first",
             "先に 設定 → マーケット で公開者名を設定してください",
             "먼저 설정 → 마켓에서 게시자 이름을 입력하세요",
+            "Primero configura tu identidad de autor en Ajustes → Catálogo",
+            "Définissez d’abord votre identité d’auteur dans Réglages → Catalogue",
+            "Lege zuerst unter Einstellungen → Marktplatz dein Veröffentlichungsprofil fest",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.modal.loggedInLabel",
-        text: row("已登录", "已登入", "Signed in", "ログイン済み", "로그인됨"),
+        text: row("已登录", "已登入", "Signed in", "ログイン済み", "로그인됨", "Signed in", "Signed in", "Signed in"),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.loginBtn",
-        text: row("登录", "登入", "Sign in", "サインイン", "로그인"),
+        text: row(
+            "登录",
+            "登入",
+            "Sign in",
+            "サインイン",
+            "로그인",
+            "Iniciar sesión",
+            "Se connecter",
+            "Anmelden",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.iconInvalid",
         text: row(
             "请选择不含外部资源的有效 SVG 图标（最大 256 KB）。",
@@ -5703,13 +9725,25 @@ pub const CATALOG: &[Msg] = &[
             "Choose a valid SVG icon with no external resources (up to 256 KB).",
             "外部リソースを含まない有効な SVG を選択してください（最大 256 KB）。",
             "외부 리소스가 없는 유효한 SVG 아이콘을 선택하세요(최대 256 KB).",
+            "Elige un icono SVG válido sin recursos externos (hasta 256 KB).",
+            "Choisissez une icône SVG valide, sans ressources externes (256 Ko maximum).",
+            "Wähle ein gültiges SVG-Symbol ohne externe Ressourcen (bis 256 KB).",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.iconSaved",
-        text: row("图标已保存", "圖示已儲存", "Icon saved", "アイコンを保存しました", "아이콘이 저장되었습니다"),
+        text: row(
+            "图标已保存",
+            "圖示已儲存",
+            "Icon saved",
+            "アイコンを保存しました",
+            "아이콘이 저장되었습니다",
+            "Icono guardado",
+            "Icône enregistrée",
+            "Symbol gespeichert",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.resetIcon",
         text: row(
             "恢复默认图标",
@@ -5717,9 +9751,12 @@ pub const CATALOG: &[Msg] = &[
             "Restore default icon",
             "既定のアイコンに戻す",
             "기본 아이콘 복원",
+            "Restaurar icono predeterminado",
+            "Rétablir l’icône par défaut",
+            "Standardsymbol wiederherstellen",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.uploadIcon",
         text: row(
             "为「{}」上传 SVG 图标",
@@ -5727,13 +9764,16 @@ pub const CATALOG: &[Msg] = &[
             "Upload an SVG icon for {}",
             "{} の SVG アイコンをアップロード",
             "{}의 SVG 아이콘 업로드",
+            "Subir un icono SVG para {}",
+            "Importer une icône SVG pour {}",
+            "SVG-Symbol für {} hochladen",
         ),
     },
-    Msg {
+        Msg {
         key: "common.hide",
-        text: row("隐藏", "隱藏", "Hide", "非表示", "숨기기"),
+        text: row("隐藏", "隱藏", "Hide", "非表示", "숨기기", "Ocultar", "Masquer", "Ausblenden"),
     },
-    Msg {
+        Msg {
         key: "quickNote.showShortcut",
         text: row(
             "显示速记快捷键",
@@ -5741,33 +9781,54 @@ pub const CATALOG: &[Msg] = &[
             "Show quick note shortcut",
             "速記ショートカットを表示",
             "속기 단축키 표시",
+            "Mostrar el atajo de nota rápida",
+            "Afficher le raccourci de note vocale",
+            "Schnellnotizen-Kurzbefehl anzeigen",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.active",
-        text: row("当前", "目前", "Active", "使用中", "사용 중"),
+        text: row("当前", "目前", "Active", "使用中", "사용 중", "Activo", "Actif", "Aktiv"),
     },
-    Msg {
+        Msg {
         key: "style.pack.closeEditor",
-        text: row("关闭", "關閉", "Close", "閉じる", "닫기"),
+        text: row("关闭", "關閉", "Close", "閉じる", "닫기", "Cerrar", "Fermer", "Schließen"),
     },
-    Msg {
+        Msg {
         key: "style.pack.deleteImported",
-        text: row("删除", "刪除", "Delete", "削除", "삭제"),
+        text: row("删除", "刪除", "Delete", "削除", "삭제", "Eliminar", "Supprimer", "Löschen"),
     },
-    Msg {
+        Msg {
         key: "style.pack.editorTitle",
-        text: row("编辑风格", "編輯風格", "Edit Pack", "パック編集", "팩 편집"),
+        text: row(
+            "编辑风格",
+            "編輯風格",
+            "Edit Pack",
+            "パック編集",
+            "팩 편집",
+            "Editar paquete",
+            "Modifier le pack",
+            "Paket bearbeiten",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.exportZip",
-        text: row("导出 ZIP", "匯出 ZIP", "Export ZIP", "ZIP をエクスポート", "ZIP 내보내기"),
+        text: row(
+            "导出 ZIP",
+            "匯出 ZIP",
+            "Export ZIP",
+            "ZIP をエクスポート",
+            "ZIP 내보내기",
+            "Exportar ZIP",
+            "Exporter en ZIP",
+            "ZIP exportieren",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldAuthor",
-        text: row("作者", "作者", "Author", "作者", "작성자"),
+        text: row("作者", "作者", "Author", "作者", "작성자", "Autor", "Auteur", "Autor"),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldAuthorPlaceholder",
         text: row(
             "可选，方便标注来源",
@@ -5775,9 +9836,12 @@ pub const CATALOG: &[Msg] = &[
             "Optional source label",
             "任意。ソース表示用",
             "선택. 출처 표시용",
+            "Etiqueta de origen opcional",
+            "Libellé d’origine facultatif",
+            "Optionale Quellenangabe",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldCompatibility",
         text: row(
             "兼容版本",
@@ -5785,9 +9849,12 @@ pub const CATALOG: &[Msg] = &[
             "Compatible App Version",
             "互換アプリバージョン",
             "호환 앱 버전",
+            "Versión compatible de la aplicación",
+            "Version compatible de l’application",
+            "Kompatible App-Version",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldCompatibilityPlaceholder",
         text: row(
             "可选，例如 >=1.3.0",
@@ -5795,9 +9862,12 @@ pub const CATALOG: &[Msg] = &[
             "Optional, e.g. >=1.3.0",
             "任意。例: >=1.3.0",
             "선택. 예: >=1.3.0",
+            "Opcional, p. ej., >=1.3.0",
+            "Facultatif, p. ex. >=1.3.0",
+            "Optional, z. B. >=1.3.0",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldModel",
         text: row(
             "推荐模型（仅元数据）",
@@ -5805,9 +9875,12 @@ pub const CATALOG: &[Msg] = &[
             "Recommended Model (Metadata)",
             "推奨モデル（メタデータのみ）",
             "권장 모델(메타데이터)",
+            "Modelo recomendado (metadatos)",
+            "Modèle recommandé (métadonnées)",
+            "Empfohlenes Modell (Metadaten)",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldModelHint",
         text: row(
             "仅作说明，不会切换实际模型。",
@@ -5815,9 +9888,12 @@ pub const CATALOG: &[Msg] = &[
             "Metadata only. Does not switch model.",
             "メタデータのみ。実際のモデルは切り替わりません。",
             "메타데이터일 뿐 실제 모델을 전환하지 않습니다.",
+            "Solo metadatos. No cambia el modelo.",
+            "Métadonnées uniquement. Ne change pas le modèle.",
+            "Nur Metadaten. Wechselt nicht das Modell.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldModelPlaceholder",
         text: row(
             "可选，例如 gpt-4.1 / deepseek-v3",
@@ -5825,29 +9901,50 @@ pub const CATALOG: &[Msg] = &[
             "Optional, e.g. gpt-4.1 / deepseek-v3",
             "任意。例: gpt-4.1 / deepseek-v3",
             "선택. 예: gpt-4.1 / deepseek-v3",
+            "Opcional, p. ej., gpt-4.1 / deepseek-v3",
+            "Facultatif, p. ex. gpt-4.1 / deepseek-v3",
+            "Optional, z. B. gpt-4.1 / deepseek-v3",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.fieldVersion",
-        text: row("版本", "版本", "Version", "バージョン", "버전"),
+        text: row("版本", "版本", "Version", "バージョン", "버전", "Versión", "Version", "Version"),
     },
-    Msg {
+        Msg {
         key: "style.pack.resetBuiltin",
-        text: row("重置", "重設", "Reset", "リセット", "재설정"),
+        text: row(
+            "重置",
+            "重設",
+            "Reset",
+            "リセット",
+            "재설정",
+            "Restablecer",
+            "Réinitialiser",
+            "Zurücksetzen",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.revert",
-        text: row("撤销", "還原", "Revert", "元に戻す", "되돌리기"),
+        text: row("撤销", "還原", "Revert", "元に戻す", "되돌리기", "Revertir", "Rétablir", "Zurücksetzen"),
     },
-    Msg {
+        Msg {
         key: "style.pack.save",
-        text: row("保存", "儲存", "Save", "保存", "저장"),
+        text: row("保存", "儲存", "Save", "保存", "저장", "Guardar", "Enregistrer", "Speichern"),
     },
-    Msg {
+        Msg {
         key: "style.pack.unsaved",
-        text: row("未保存", "未儲存", "Unsaved", "未保存", "저장 안 됨"),
+        text: row(
+            "未保存",
+            "未儲存",
+            "Unsaved",
+            "未保存",
+            "저장 안 됨",
+            "Sin guardar",
+            "Non enregistré",
+            "Nicht gespeichert",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.dictationPromptEditorDesc",
         text: row(
             "当前编辑录音 / ASR 风格 Prompt；输入对象是语音识别后的转写文本。",
@@ -5855,9 +9952,12 @@ pub const CATALOG: &[Msg] = &[
             "Editing the recording / ASR style prompt; input is ASR transcript text after dictation.",
             "録音 / ASRスタイルのプロンプトを編集中。入力は音声認識後の書き起こしテキストです。",
             "녹음 / ASR 스타일 프롬프트를 편집 중입니다. 입력은 음성 인식 후 받아쓰기 텍스트입니다.",
+            "Edita las instrucciones del estilo de grabación / ASR; la entrada es el texto transcrito tras el dictado.",
+            "Modifiez les instructions du style d’enregistrement / ASR ; l’entrée est le texte transcrit après la dictée.",
+            "Bearbeitet den Aufnahme-/ASR-Prompt. Die Eingabe ist das nach dem Diktat erkannte Transkript.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.selectionPromptEditorDesc",
         text: row(
             "当前编辑选区润色 Prompt；输入对象是用户主动选中的书面文字，不经过 ASR。",
@@ -5865,13 +9965,16 @@ pub const CATALOG: &[Msg] = &[
             "Editing the selection polish prompt; input is written text the user actively selected, without ASR.",
             "選択範囲の推敲プロンプトを編集中。入力はユーザーが選択した書面テキストで、ASRは経由しません。",
             "선택 영역 다듬기 프롬프트를 편집 중입니다. 입력은 사용자가 선택한 서면 텍스트이며 ASR을 거치지 않습니다.",
+            "Edita las instrucciones para mejorar texto escrito seleccionado expresamente por el usuario, sin ASR.",
+            "Modifiez les instructions destinées au texte écrit explicitement sélectionné par l’utilisateur, sans ASR.",
+            "Bearbeitet den Prompt für Textauswahl. Die Eingabe ist aktiv ausgewählter geschriebener Text, ohne ASR.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeActive",
-        text: row("当前生效", "目前生效", "Active", "有効", "활성"),
+        text: row("当前生效", "目前生效", "Active", "有効", "활성", "Activo", "Actif", "Aktiv"),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeContextDesc",
         text: row(
             "来自语言与应用上下文",
@@ -5879,9 +9982,12 @@ pub const CATALOG: &[Msg] = &[
             "From language and app context",
             "言語とアプリのコンテキストから",
             "언어·앱 컨텍스트에서",
+            "Del idioma y el contexto de la aplicación",
+            "D’après la langue et le contexte de l’application",
+            "Aus Sprach- und App-Kontext",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeContextEmpty",
         text: row(
             "当前不会附加",
@@ -5889,9 +9995,12 @@ pub const CATALOG: &[Msg] = &[
             "Not added in the current preview.",
             "現在のプレビューでは付加されません。",
             "현재 미리보기에는 추가되지 않습니다.",
+            "No se añade en esta vista previa.",
+            "Non ajouté dans cet aperçu.",
+            "In der aktuellen Vorschau nicht ergänzt.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeContextTitle",
         text: row(
             "上下文前提",
@@ -5899,9 +10008,12 @@ pub const CATALOG: &[Msg] = &[
             "Context premise",
             "コンテキスト前提",
             "컨텍스트 전제",
+            "Información de contexto",
+            "Éléments de contexte",
+            "Kontextgrundlage",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeDesc",
         text: row(
             "只读的运行时辅助项。",
@@ -5909,9 +10021,12 @@ pub const CATALOG: &[Msg] = &[
             "Read-only runtime helpers.",
             "読み取り専用の実行時ヘルパー。",
             "읽기 전용 런타임 보조.",
+            "Complementos de ejecución de solo lectura.",
+            "Compléments d’exécution en lecture seule.",
+            "Schreibgeschützte Ergänzungen zur Laufzeit.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHistoryDesc",
         text: row(
             "仅用于实时多轮 polish",
@@ -5919,9 +10034,12 @@ pub const CATALOG: &[Msg] = &[
             "Only for live multi-turn polish",
             "ライブのマルチターン polish のみで使用",
             "실시간 멀티턴 polish 전용",
+            "Solo para la mejora del texto en varias intervenciones",
+            "Uniquement pour l’amélioration sur plusieurs interventions",
+            "Nur bei laufender Überarbeitung über mehrere Gesprächsrunden",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.metaTitle",
         text: row(
             "安装信息",
@@ -5929,21 +10047,24 @@ pub const CATALOG: &[Msg] = &[
             "Installation Info",
             "インストール情報",
             "설치 정보",
+            "Información de instalación",
+            "Informations d’installation",
+            "Installationsinformationen",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.metaSource",
-        text: row("来源", "來源", "Source", "ソース", "소스"),
+        text: row("来源", "來源", "Source", "ソース", "소스", "Origen", "Origine", "Quelle"),
     },
-    Msg {
+        Msg {
         key: "style.pack.metaBaseMode",
-        text: row("基础模式", "基礎模式", "Base Mode", "ベースモード", "베이스 모드"),
+        text: row("基础模式", "基礎模式", "Base Mode", "ベースモード", "베이스 모드", "Modo base", "Mode de base", "Basismodus"),
     },
-    Msg {
+        Msg {
         key: "style.pack.metaUpdatedAt",
-        text: row("更新时间", "更新時間", "Updated", "更新日時", "업데이트"),
+        text: row("更新时间", "更新時間", "Updated", "更新日時", "업데이트", "Actualizado", "Mis à jour", "Aktualisiert"),
     },
-    Msg {
+        Msg {
         key: "style.pack.examplesTitle",
         text: row(
             "效果示例",
@@ -5951,9 +10072,12 @@ pub const CATALOG: &[Msg] = &[
             "Effect Examples",
             "効果例",
             "효과 예시",
+            "Ejemplos de resultados",
+            "Exemples de résultats",
+            "Beispiele",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.examplesDesc",
         text: row(
             "会随风格包一起导出。",
@@ -5961,13 +10085,25 @@ pub const CATALOG: &[Msg] = &[
             "Exported with the pack.",
             "パックと一緒にエクスポートされます。",
             "팩과 함께 내보내집니다.",
+            "Se exportan con el paquete.",
+            "Exportés avec le pack.",
+            "Werden mit dem Paket exportiert.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.addExample",
-        text: row("新增示例", "新增範例", "Add Example", "例を追加", "예시 추가"),
+        text: row(
+            "新增示例",
+            "新增範例",
+            "Add Example",
+            "例を追加",
+            "예시 추가",
+            "Añadir ejemplo",
+            "Ajouter un exemple",
+            "Beispiel hinzufügen",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.examplesEmpty",
         text: row(
             "还没有示例。",
@@ -5975,9 +10111,12 @@ pub const CATALOG: &[Msg] = &[
             "No examples yet.",
             "まだ例がありません。",
             "아직 예시가 없습니다.",
+            "Todavía no hay ejemplos.",
+            "Aucun exemple pour le moment.",
+            "Noch keine Beispiele.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.exampleTitlePlaceholder",
         text: row(
             "示例 {} 标题",
@@ -5985,17 +10124,20 @@ pub const CATALOG: &[Msg] = &[
             "Example {} title",
             "例 {} のタイトル",
             "예시 {} 제목",
+            "Título del ejemplo {}",
+            "Titre de l’exemple {}",
+            "Titel für Beispiel {}",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.exampleInput",
-        text: row("输入", "輸入", "Input", "入力", "입력"),
+        text: row("输入", "輸入", "Input", "入力", "입력", "Entrada", "Entrée", "Eingabe"),
     },
-    Msg {
+        Msg {
         key: "style.pack.exampleOutput",
-        text: row("输出", "輸出", "Output", "出力", "출력"),
+        text: row("输出", "輸出", "Output", "出力", "출력", "Salida", "Sortie", "Ausgabe"),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHistoryEmpty",
         text: row(
             "只有存在 prior turns 时才会附加",
@@ -6003,9 +10145,12 @@ pub const CATALOG: &[Msg] = &[
             "Only added when prior turns exist.",
             "前のターンが存在する場合のみ付加。",
             "이전 턴이 있을 때만 추가됩니다.",
+            "Solo se añade si hay intervenciones anteriores.",
+            "Ajouté uniquement en présence d’interventions précédentes.",
+            "Wird nur ergänzt, wenn vorherige Gesprächsrunden existieren.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHistoryTitle",
         text: row(
             "多轮历史保护段",
@@ -6013,9 +10158,12 @@ pub const CATALOG: &[Msg] = &[
             "Multi-turn history guardrail",
             "マルチターン履歴ガード",
             "멀티턴 히스토리 가드",
+            "Reglas para el historial de conversación",
+            "Règles pour l’historique de conversation",
+            "Regeln für mehrstufigen Verlauf",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHotwordDesc",
         text: row(
             "来自已启用热词",
@@ -6023,9 +10171,12 @@ pub const CATALOG: &[Msg] = &[
             "From enabled hotwords",
             "有効なホットワードから",
             "활성화된 핫워드에서",
+            "De las palabras clave activadas",
+            "D’après les mots-clés activés",
+            "Aus aktivierten Wörterbucheinträgen",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHotwordEmpty",
         text: row(
             "当前不会附加",
@@ -6033,9 +10184,12 @@ pub const CATALOG: &[Msg] = &[
             "Not added in the current preview.",
             "現在のプレビューでは付加されません。",
             "현재 미리보기에는 추가되지 않습니다.",
+            "No se añade en esta vista previa.",
+            "Non ajouté dans cet aperçu.",
+            "In der aktuellen Vorschau nicht ergänzt.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeHotwordTitle",
         text: row(
             "热词提示段",
@@ -6043,13 +10197,16 @@ pub const CATALOG: &[Msg] = &[
             "Hotword block",
             "ホットワードブロック",
             "핫워드 블록",
+            "Bloque de palabras clave",
+            "Bloc de mots-clés",
+            "Begriffsblock",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeInactive",
-        text: row("当前未生效", "目前未生效", "Inactive", "無効", "비활성"),
+        text: row("当前未生效", "目前未生效", "Inactive", "無効", "비활성", "Inactivo", "Inactif", "Inaktiv"),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimePreviewOmittedFrontApp",
         text: row(
             "预览已省略前台 app 标签。",
@@ -6057,9 +10214,12 @@ pub const CATALOG: &[Msg] = &[
             "Preview omits the front-app label.",
             "プレビューはフロントアプリのラベルを省略しています。",
             "미리보기에서 프런트앱 라벨이 생략되었습니다.",
+            "La vista previa omite la etiqueta de la aplicación activa.",
+            "L’aperçu omet le nom de l’application au premier plan.",
+            "Die Vorschau enthält keinen Namen der aktiven App.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.runtimeTitle",
         text: row(
             "OpenLess 运行时附加指令",
@@ -6067,17 +10227,29 @@ pub const CATALOG: &[Msg] = &[
             "OpenLess Runtime Directives",
             "OpenLess 実行時付加指令",
             "OpenLess 런타임 추가 지시",
+            "Directivas de ejecución de OpenLess",
+            "Directives d’exécution d’OpenLess",
+            "OpenLess-Laufzeitanweisungen",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.installingBtn",
-        text: row("安装中…", "安裝中…", "Installing…", "インストール中…", "설치 중…"),
+        text: row(
+            "安装中…",
+            "安裝中…",
+            "Installing…",
+            "インストール中…",
+            "설치 중…",
+            "Instalando…",
+            "Installation…",
+            "Wird installiert…",
+        ),
     },
-    Msg {
+        Msg {
         key: "vocab.newWordTemplateCount",
-        text: row("{} 词", "{} 詞", "{} words", "{} 語", "{}개 단어"),
+        text: row("{} 词", "{} 詞", "{} words", "{} 語", "{}개 단어", "{} palabras", "{} mots", "Wörter: {}"),
     },
-    Msg {
+        Msg {
         key: "style.pack.publishMarketplace",
         text: row(
             "发布到风格市场",
@@ -6085,25 +10257,37 @@ pub const CATALOG: &[Msg] = &[
             "Publish to Marketplace",
             "マーケットに公開",
             "마켓에 게시",
+            "Publicar en el catálogo",
+            "Publier dans le catalogue",
+            "Auf dem Marktplatz veröffentlichen",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.actions.update",
-        text: row("更新", "更新", "Update", "更新", "업데이트"),
+        text: row(
+            "更新",
+            "更新",
+            "Update",
+            "更新",
+            "업데이트",
+            "Actualizar",
+            "Mettre à jour",
+            "Aktualisieren",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.actions.withdraw",
-        text: row("下架", "下架", "Withdraw", "取り下げ", "내리기"),
+        text: row("下架", "下架", "Withdraw", "取り下げ", "내리기", "Retirar", "Retirer", "Zurückziehen"),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.stats",
-        text: row("★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}"),
+        text: row("★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}", "★ {} · ↓ {}"),
     },
-    Msg {
+        Msg {
         key: "marketplace.myPacks.versionDate",
-        text: row("v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}"),
+        text: row("v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}", "v{} · {}"),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.browserHint",
         text: row(
             "在浏览器中打开 {} 并输入下方代码：",
@@ -6111,17 +10295,20 @@ pub const CATALOG: &[Msg] = &[
             "Open {} in your browser and enter this code:",
             "ブラウザで {} を開き、このコードを入力してください：",
             "브라우저에서 {}을(를) 열고 아래 코드를 입력하세요:",
+            "Abre {} en el navegador e introduce este código:",
+            "Ouvrez {} dans votre navigateur et saisissez ce code :",
+            "Öffne {} im Browser und gib diesen Code ein:",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.cancelBtn",
-        text: row("取消", "取消", "Cancel", "キャンセル", "취소"),
+        text: row("取消", "取消", "Cancel", "キャンセル", "취소", "Cancelar", "Annuler", "Abbrechen"),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.copyBtn",
-        text: row("复制", "複製", "Copy", "コピー", "복사"),
+        text: row("复制", "複製", "Copy", "コピー", "복사", "Copiar", "Copier", "Kopieren"),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.generating",
         text: row(
             "正在生成设备验证码…",
@@ -6129,17 +10316,38 @@ pub const CATALOG: &[Msg] = &[
             "Generating device code…",
             "デバイスコードを生成中…",
             "디바이스 코드 생성 중…",
+            "Generando código de dispositivo…",
+            "Génération du code de l’appareil…",
+            "Gerätecode wird erstellt…",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.openBrowserBtn",
-        text: row("打开浏览器", "開啟瀏覽器", "Open browser", "ブラウザを開く", "브라우저 열기"),
+        text: row(
+            "打开浏览器",
+            "開啟瀏覽器",
+            "Open browser",
+            "ブラウザを開く",
+            "브라우저 열기",
+            "Abrir navegador",
+            "Ouvrir le navigateur",
+            "Browser öffnen",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.retryBtn",
-        text: row("重试", "重試", "Retry", "再試行", "다시 시도"),
+        text: row(
+            "重试",
+            "重試",
+            "Retry",
+            "再試行",
+            "다시 시도",
+            "Reintentar",
+            "Réessayer",
+            "Erneut versuchen",
+        ),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.title",
         text: row(
             "用 GitHub 登录",
@@ -6147,9 +10355,12 @@ pub const CATALOG: &[Msg] = &[
             "Sign in with GitHub",
             "GitHub でサインイン",
             "GitHub로 로그인",
+            "Iniciar sesión con GitHub",
+            "Se connecter avec GitHub",
+            "Mit GitHub anmelden",
         ),
     },
-    Msg {
+        Msg {
         key: "marketplace.oauth.waiting",
         text: row(
             "等待你在浏览器中授权…",
@@ -6157,9 +10368,12 @@ pub const CATALOG: &[Msg] = &[
             "Waiting for browser authorization…",
             "ブラウザでの認可を待っています…",
             "브라우저에서 인증을 기다리는 중…",
+            "Esperando autorización en el navegador…",
+            "En attente de l’autorisation dans le navigateur…",
+            "Warten auf Freigabe im Browser…",
         ),
     },
-    Msg {
+        Msg {
         key: "style.modes.raw.desc",
         text: row(
             "只补标点和必要分句，不改写不扩写。",
@@ -6167,9 +10381,12 @@ pub const CATALOG: &[Msg] = &[
             "Only adds punctuation and natural breaks — no rewriting or expansion.",
             "句読点と必要な区切りのみ補い、書き換えや拡張はしません。",
             "구두점과 필요한 문장 구분만 보충하고 다시 쓰거나 확장하지 않습니다.",
+            "Solo añade puntuación y pausas naturales, sin reescribir ni ampliar.",
+            "Ajoute uniquement la ponctuation et les pauses naturelles, sans réécrire ni développer.",
+            "Ergänzt nur Satzzeichen und natürliche Absätze, ohne den Text umzuschreiben oder zu erweitern.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.modes.light.desc",
         text: row(
             "去口癖、补标点，整理为可发送的自然文字。",
@@ -6177,9 +10394,12 @@ pub const CATALOG: &[Msg] = &[
             "Drops fillers, adds punctuation, and produces sendable natural prose.",
             "口癖の除去、句読点の補完、自然な送信可能テキストへの整理。",
             "입버릇 제거, 구두점 보충, 자연스럽게 보낼 수 있는 텍스트로 정리합니다.",
+            "Elimina muletillas, añade puntuación y produce un texto natural listo para enviar.",
+            "Supprime les hésitations, ajoute la ponctuation et produit un texte naturel prêt à envoyer.",
+            "Entfernt Füllwörter, ergänzt Satzzeichen und formuliert natürlich lesbaren Text.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.modes.structured.desc",
         text: row(
             "面向编程协作、技术排障和产品反馈，准确保留术语并梳理结构。",
@@ -6187,9 +10407,12 @@ pub const CATALOG: &[Msg] = &[
             "Organize coding discussions, troubleshooting and product feedback with precise terminology.",
             "開発の相談、技術的な問題解決、製品への意見を、用語を正確に保って整理します。",
             "개발 협업, 기술 문제 해결, 제품 피드백을 정확한 용어와 명확한 구조로 정리합니다.",
+            "Organiza conversaciones de programación, diagnósticos y comentarios sobre productos con terminología precisa.",
+            "Structure les échanges de programmation, le dépannage et les retours produit avec une terminologie précise.",
+            "Strukturiert Programmierfragen, Fehleranalysen und Produktfeedback mit präziser Fachsprache.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.modes.formal.desc",
         text: row(
             "工作沟通和邮件场景，更专业更完整。",
@@ -6197,50 +10420,125 @@ pub const CATALOG: &[Msg] = &[
             "Email and workplace tone — more complete, more professional.",
             "業務コミュニケーションやメール用途向け。よりプロフェッショナルで完成度の高い文体。",
             "업무 커뮤니케이션과 메일에 적합. 더 전문적이고 완성도 높은 문체.",
+            "Tono para correos y trabajo: más completo y profesional.",
+            "Un ton adapté aux courriels et au travail : plus complet et professionnel.",
+            "Passend für E-Mails und den Beruf: vollständiger und professioneller formuliert.",
         ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.minimalEdits",
-        text: row("最小改写", "最小改寫", "Minimal edits", "最小限の修正", "최소 수정"),
+        text: row(
+            "最小改写",
+            "最小改寫",
+            "Minimal edits",
+            "最小限の修正",
+            "최소 수정",
+            "Cambios mínimos",
+            "Retouches minimales",
+            "Minimale Änderungen",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.strongCorrection",
-        text: row("强纠错", "強糾錯", "Strong corrections", "誤認識を補正", "정확한 교정"),
+        text: row(
+            "强纠错",
+            "強糾錯",
+            "Strong corrections",
+            "誤認識を補正",
+            "정확한 교정",
+            "Corrección precisa",
+            "Correction renforcée",
+            "Gründliche Korrektur",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.communication",
-        text: row("沟通", "溝通", "Communication", "コミュニケーション", "의사소통"),
+        text: row(
+            "沟通",
+            "溝通",
+            "Communication",
+            "コミュニケーション",
+            "의사소통",
+            "Comunicación",
+            "Communication",
+            "Kommunikation",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.natural",
-        text: row("自然", "自然", "Natural", "自然な文章", "자연스러움"),
+        text: row("自然", "自然", "Natural", "自然な文章", "자연스러움", "Natural", "Naturel", "Natürlich"),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.organized",
-        text: row("条理", "條理", "Organized", "整理", "체계적 정리"),
+        text: row(
+            "条理",
+            "條理",
+            "Organized",
+            "整理",
+            "체계적 정리",
+            "Organizado",
+            "Structuré",
+            "Übersichtlich",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.workplaceCommunication",
-        text: row("工作沟通", "工作溝通", "Work communication", "仕事のやり取り", "업무 소통"),
+        text: row(
+            "工作沟通",
+            "工作溝通",
+            "Work communication",
+            "仕事のやり取り",
+            "업무 소통",
+            "Comunicación laboral",
+            "Communication professionnelle",
+            "Berufliche Kommunikation",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.aiCoding",
-        text: row("AI 编程", "AI 程式開發", "AI coding", "AIコーディング", "AI 코딩"),
+        text: row(
+            "AI 编程",
+            "AI 程式開發",
+            "AI coding",
+            "AIコーディング",
+            "AI 코딩",
+            "Programación con IA",
+            "Programmation avec l’IA",
+            "KI-Programmierung",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.builtinTags.technicalStructure",
-        text: row("技术结构化", "技術結構化", "Technical structure", "技術内容の構造化", "기술 내용 구조화"),
+        text: row(
+            "技术结构化",
+            "技術結構化",
+            "Technical structure",
+            "技術内容の構造化",
+            "기술 내용 구조화",
+            "Estructura técnica",
+            "Structure technique",
+            "Technische Struktur",
+        ),
     },
-    Msg {
+        Msg {
         key: "style.pack.writtenPolish",
-        text: row("书面润色", "書面潤色", "Written polish", "書面の推敲", "서면 다듬기"),
+        text: row(
+            "书面润色",
+            "書面潤色",
+            "Written polish",
+            "書面の推敲",
+            "서면 다듬기",
+            "Mejora de texto escrito",
+            "Amélioration du texte écrit",
+            "Geschriebenen Text überarbeiten",
+        ),
     },
 
-    Msg {
+        Msg {
         key: "settings.channels.edit",
-        text: row("编辑", "編輯", "Edit", "編集", "편집"),
+        text: row("编辑", "編輯", "Edit", "編集", "편집", "Editar", "Modifier", "Bearbeiten"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.extraHeadersLabel",
         text: row(
             "额外 Headers",
@@ -6248,9 +10546,12 @@ pub const CATALOG: &[Msg] = &[
             "Extra headers",
             "追加 Headers",
             "추가 Headers",
+            "Cabeceras adicionales",
+            "En-têtes supplémentaires",
+            "Zusätzliche Header",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.extraHeadersPlaceholder",
         text: row(
             "{\"custom-head\":\"...\"}",
@@ -6258,13 +10559,16 @@ pub const CATALOG: &[Msg] = &[
             "{\"custom-head\":\"...\"}",
             "{\"custom-head\":\"...\"}",
             "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
+            "{\"custom-head\":\"...\"}",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.temperatureLabel",
-        text: row("Temperature", "Temperature", "Temperature", "Temperature", "Temperature"),
+        text: row("Temperature", "Temperature", "Temperature", "Temperature", "Temperature", "Temperatura", "Température", "Temperatur"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.temperaturePlaceholder",
         text: row(
             "留空则不发送；范围 0～2（含边界），例如 0.3",
@@ -6272,9 +10576,12 @@ pub const CATALOG: &[Msg] = &[
             "Leave empty to omit; range 0–2 inclusive, e.g. 0.3",
             "空欄なら送信しません。範囲は 0〜2（両端を含む）。例: 0.3",
             "비워 두면 보내지 않음. 범위 0~2(양 끝 포함), 예: 0.3",
+            "Déjalo vacío para omitirlo. Intervalo: 0–2 inclusive, p. ej., 0.3",
+            "Laissez vide pour omettre ce paramètre. Plage : 0–2 inclus, p. ex. 0.3",
+            "Leer = nicht senden; Bereich 0–2 einschließlich, z. B. 0.3",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.thinkingModeHint",
         text: row(
             "按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。",
@@ -6282,13 +10589,16 @@ pub const CATALOG: &[Msg] = &[
             "Enable, disable, or reduce thinking using parameters supported by the selected request format and model. No control instructions are injected into prompts.",
             "選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。",
             "선택한 요청 형식과 모델이 지원하는 매개변수로 사고를 켜거나 끄거나 줄입니다. 프롬프트에 제어 지시를 추가하지 않습니다.",
+            "Activa, desactiva o reduce el razonamiento mediante los parámetros admitidos por el formato y el modelo. No se añaden instrucciones de control al prompt.",
+            "Activez, désactivez ou réduisez le raisonnement avec les paramètres pris en charge par le format et le modèle. Aucune instruction de contrôle n’est ajoutée au prompt.",
+            "Aktiviere, deaktiviere oder reduziere das Denken mit den vom Anfrageformat und Modell unterstützten Parametern. Dem Prompt werden keine Steueranweisungen hinzugefügt.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.thinkingModeLabel",
-        text: row("思考", "思考", "Thinking", "思考", "사고"),
+        text: row("思考", "思考", "Thinking", "思考", "사고", "Razonamiento", "Raisonnement", "Denkmodus"),
     },
-    Msg {
+        Msg {
         key: "common.operationFailed",
         text: row(
             "操作失败",
@@ -6296,13 +10606,16 @@ pub const CATALOG: &[Msg] = &[
             "Operation failed",
             "操作に失敗しました",
             "작업 실패",
+            "La operación falló",
+            "L’opération a échoué",
+            "Vorgang fehlgeschlagen",
         ),
     },
-    Msg {
+        Msg {
         key: "common.saved",
-        text: row("已保存", "已儲存", "Saved", "保存しました", "저장됨"),
+        text: row("已保存", "已儲存", "Saved", "保存しました", "저장됨", "Guardado", "Enregistré", "Gespeichert"),
     },
-    Msg {
+        Msg {
         key: "modal.service_views.inactive",
         text: row(
             "当前模式未使用",
@@ -6310,17 +10623,29 @@ pub const CATALOG: &[Msg] = &[
             "Not used in this mode",
             "現在のモードでは未使用",
             "현재 모드에서 사용 안 함",
+            "No se usa en este modo",
+            "Inutilisé dans ce mode",
+            "In diesem Modus ungenutzt",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.apiKeyLabel",
-        text: row("API 密钥", "API 金鑰", "API Key", "API キー", "API 키"),
+        text: row(
+            "API 密钥",
+            "API 金鑰",
+            "API Key",
+            "API キー",
+            "API 키",
+            "Clave API",
+            "Clé API",
+            "API-Schlüssel",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.baseUrlLabel",
-        text: row("接口地址", "介面地址", "Base URL", "エンドポイント", "엔드포인트"),
+        text: row("接口地址", "介面地址", "Base URL", "エンドポイント", "엔드포인트", "URL base", "URL de base", "Basis-URL"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.omniTitle",
         text: row(
             "多模态模型",
@@ -6328,13 +10653,16 @@ pub const CATALOG: &[Msg] = &[
             "Multimodal model",
             "マルチモーダルモデル",
             "멀티모달 모델",
+            "Modelo multimodal",
+            "Modèle multimodal",
+            "Multimodales Modell",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.providerLabel",
-        text: row("供应商", "供應商", "Provider", "サプライヤー", "공급자"),
+        text: row("供应商", "供應商", "Provider", "サプライヤー", "공급자", "Proveedor", "Fournisseur", "Anbieter"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.validateFailed",
         text: row(
             "连接检查未通过。",
@@ -6342,9 +10670,12 @@ pub const CATALOG: &[Msg] = &[
             "Connection check failed.",
             "接続チェックに失敗しました。",
             "연결 확인에 실패했습니다.",
+            "La comprobación de conexión falló.",
+            "Échec de la vérification de connexion.",
+            "Verbindungsprüfung fehlgeschlagen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.validateSuccessOmni",
         text: row(
             "文本连通性通过。这不代表音频听写可用，请再做一次短录音确认。",
@@ -6352,9 +10683,12 @@ pub const CATALOG: &[Msg] = &[
             "Text connectivity passed. This does not mean audio dictation works—please confirm with a short recording.",
             "テキスト疎通は成功しました。これは音声ディクテーションが使えることを意味しません。短い録音で確認してください。",
             "텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.",
+            "Conectividad de texto correcta. Esto no significa que el dictado de audio funcione: confirma con una grabación corta.",
+            "Connectivité texte OK. Cela ne signifie pas que la dictée audio fonctionne — confirmez avec un court enregistrement.",
+            "Text-Verbindung bestanden. Das bedeutet nicht, dass Audio-Diktat funktioniert — bitte mit einer kurzen Aufnahme bestätigen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.tencentCloudAppIdLabel",
         text: row(
             "腾讯云 AppID",
@@ -6362,9 +10696,12 @@ pub const CATALOG: &[Msg] = &[
             "Tencent Cloud AppID",
             "Tencent Cloud AppID",
             "Tencent Cloud AppID",
+            "AppID de Tencent Cloud",
+            "AppID Tencent Cloud",
+            "Tencent Cloud AppID",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.tencentCloudNote",
         text: row(
             "使用腾讯云「语音识别」服务的 API 密钥。默认 Hy-ASR-3.0-preview 支持中英与 20 种方言；Preview 仅支持 60 秒以内的 16kHz 单声道 PCM，暂不支持上下文或热词增强。",
@@ -6372,49 +10709,97 @@ pub const CATALOG: &[Msg] = &[
             "Uses Tencent Cloud Speech Recognition API credentials. The default Hy-ASR-3.0-preview supports Chinese, English, and 20 dialects; Preview accepts only mono 16 kHz PCM up to 60 seconds and does not yet support context or hotword boosting.",
             "Tencent Cloud 音声認識 API の認証情報を使用します。既定の Hy-ASR-3.0-preview は中国語・英語・20 方言に対応します。Preview は 60 秒以内の 16kHz モノラル PCM のみ対応し、コンテキストとホットワード強化は未対応です。",
             "Tencent Cloud 음성 인식 API 자격 증명을 사용합니다. 기본 Hy-ASR-3.0-preview는 중국어·영어·20개 방언을 지원합니다. Preview는 60초 이내의 16kHz 모노 PCM만 지원하며, 컨텍스트와 핫워드 강화는 아직 지원하지 않습니다.",
+            "Usa las credenciales del servicio de reconocimiento de voz de Tencent Cloud. El modelo predeterminado Hy-ASR-3.0-preview admite chino, inglés y 20 dialectos; Preview solo acepta PCM mono de 16 kHz de hasta 60 segundos y aún no admite contexto ni refuerzo de palabras clave.",
+            "Utilise les identifiants du service de reconnaissance vocale de Tencent Cloud. Le modèle par défaut Hy-ASR-3.0-preview prend en charge le chinois, l’anglais et 20 dialectes ; Preview n’accepte que le PCM mono 16 kHz jusqu’à 60 secondes et ne gère pas encore le contexte ni le renforcement de mots-clés.",
+            "Verwendet die Zugangsdaten der Tencent-Cloud-Spracherkennung. Das Standardmodell Hy-ASR-3.0-preview unterstützt Chinesisch, Englisch und 20 Dialekte; Preview nimmt nur Mono-PCM mit 16 kHz bis 60 Sekunden an und unterstützt noch keinen Kontext oder Hotword-Boosting.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.tencentCloudSecretIdLabel",
-        text: row("SecretID", "SecretID", "SecretID", "SecretID", "SecretID"),
+        text: row("SecretID", "SecretID", "SecretID", "SecretID", "SecretID", "SecretID", "SecretID", "SecretID"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.tencentCloudSecretKeyLabel",
-        text: row("SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey"),
+        text: row("SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey", "SecretKey"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineAccessKeyLabel",
-        text: row("Access Token", "Access Token", "Access Token", "Access Token", "Access Token"),
+        text: row("Access Token", "Access Token", "Access Token", "Access Token", "Access Token", "Access Token", "Access Token", "Access Token"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineApiKeyLabel",
-        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+        text: row(
+            "API Key",
+            "API Key",
+            "API Key",
+            "API Key",
+            "API Key",
+            "Clave API",
+            "Clé API",
+            "API-Schlüssel",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineAppKeyLabel",
-        text: row("APP ID", "APP ID", "APP ID", "APP ID", "APP ID"),
+        text: row("APP ID", "APP ID", "APP ID", "APP ID", "APP ID", "APP ID", "APP ID", "APP ID"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineAuthModeLabel",
-        text: row("鉴权模式", "鑑權模式", "Auth mode", "認証モード", "인증 모드"),
+        text: row(
+            "鉴权模式",
+            "鑑權模式",
+            "Auth mode",
+            "認証モード",
+            "인증 모드",
+            "Modo de autenticación",
+            "Mode d’authentification",
+            "Anmeldemethode",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineResourceIdLabel",
-        text: row("Resource ID", "Resource ID", "Resource ID", "Resource ID", "Resource ID"),
+        text: row(
+            "Resource ID",
+            "Resource ID",
+            "Resource ID",
+            "Resource ID",
+            "Resource ID",
+            "Resource ID",
+            "Resource ID",
+            "Ressourcen-ID",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.xfyunApiKeyLabel",
-        text: row("API Key", "API Key", "API Key", "API Key", "API Key"),
+        text: row(
+            "API Key",
+            "API Key",
+            "API Key",
+            "API Key",
+            "API Key",
+            "Clave API",
+            "Clé API",
+            "API-Schlüssel",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.xfyunAppIdLabel",
-        text: row("AppID", "AppID", "AppID", "AppID", "AppID"),
+        text: row("AppID", "AppID", "AppID", "AppID", "AppID", "AppID", "AppID", "AppID"),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.checking",
-        text: row("检查中…", "檢查中…", "Checking…", "確認中…", "확인 중…"),
+        text: row(
+            "检查中…",
+            "檢查中…",
+            "Checking…",
+            "確認中…",
+            "확인 중…",
+            "Comprobando…",
+            "Vérification…",
+            "Wird geprüft…",
+        ),
     },
-    Msg {
+        Msg {
         key: "settings.permissions.hotkey_failed",
         text: row(
             "监听失败",
@@ -6422,9 +10807,12 @@ pub const CATALOG: &[Msg] = &[
             "Listener failed",
             "監視失敗",
             "감지 실패",
+            "El detector falló",
+            "Échec du détecteur",
+            "Kurzbefehlüberwachung fehlgeschlagen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.apiKeyOptionalLabel",
         text: row(
             "API 密钥（可选）",
@@ -6432,17 +10820,29 @@ pub const CATALOG: &[Msg] = &[
             "API Key (optional)",
             "API キー（任意）",
             "API 키 (선택 사항)",
+            "Clave API (opcional)",
+            "Clé API (facultative)",
+            "API-Schlüssel (optional)",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.volcengineServiceLabel",
-        text: row("服务", "服務", "Service", "サービス", "서비스"),
+        text: row("服务", "服務", "Service", "サービス", "서비스", "Servicio", "Service", "Dienst"),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.account",
-        text: row("同步账号", "同步帳號", "Sync account", "同期アカウント", "동기화 계정"),
+        text: row(
+            "同步账号",
+            "同步帳號",
+            "Sync account",
+            "同期アカウント",
+            "동기화 계정",
+            "Cuenta de sincronización",
+            "Compte de synchronisation",
+            "Synchronisierungskonto",
+        ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.backupRetention",
         text: row(
             "删除后，服务备份副本最多保留 {} 天。",
@@ -6450,9 +10850,12 @@ pub const CATALOG: &[Msg] = &[
             "After deletion, service backup copies may be retained for up to {} days.",
             "削除後も、サービスのバックアップコピーは最長 {} 日間保持される場合があります。",
             "삭제 후에도 서비스의 백업 사본이 최대 {}일 동안 보관될 수 있습니다.",
+            "Tras la eliminación, el servicio puede conservar copias de seguridad durante un máximo de {} días.",
+            "Après suppression, les copies de sauvegarde du service peuvent être conservées jusqu’à {} jours.",
+            "Nach dem Löschen können Sicherungskopien des Dienstes bis zu {} Tage aufbewahrt werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.cancelTask",
         text: row(
             "取消当前任务",
@@ -6460,9 +10863,12 @@ pub const CATALOG: &[Msg] = &[
             "Cancel current task",
             "現在の処理をキャンセル",
             "현재 작업 취소",
+            "Cancelar tarea actual",
+            "Annuler la tâche en cours",
+            "Aktuellen Vorgang abbrechen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.changePassword",
         text: row(
             "更改同步密码",
@@ -6470,9 +10876,12 @@ pub const CATALOG: &[Msg] = &[
             "Change sync password",
             "同期パスワードを変更",
             "동기화 비밀번호 변경",
+            "Cambiar contraseña de sincronización",
+            "Modifier le mot de passe",
+            "Sync-Passwort ändern",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.confirmDelete",
         text: row(
             "删除云端备份",
@@ -6480,9 +10889,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete cloud backup",
             "クラウドバックアップを削除",
             "클라우드 백업 삭제",
+            "Eliminar copia en la nube",
+            "Supprimer la sauvegarde cloud",
+            "Cloud-Sicherung löschen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.confirmDisable",
         text: row(
             "关闭同步",
@@ -6490,9 +10902,12 @@ pub const CATALOG: &[Msg] = &[
             "Turn off sync",
             "同期をオフにする",
             "동기화 끄기",
+            "Desactivar sincronización",
+            "Désactiver la synchronisation",
+            "Synchronisierung ausschalten",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.confirmPassword",
         text: row(
             "再次输入新密码",
@@ -6500,9 +10915,12 @@ pub const CATALOG: &[Msg] = &[
             "Confirm new password",
             "新しいパスワードを再入力",
             "새 비밀번호 확인",
+            "Confirmar nueva contraseña",
+            "Confirmer le nouveau mot de passe",
+            "Neues Passwort bestätigen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.consentCheck",
         text: row(
             "我已了解完整范围，并同意加密同步这些资料。",
@@ -6510,9 +10928,12 @@ pub const CATALOG: &[Msg] = &[
             "I understand the full scope and agree to sync this data in encrypted form.",
             "対象範囲を理解し、これらのデータの暗号化同期に同意します。",
             "전체 범위를 이해했으며 이 데이터를 암호화해 동기화하는 데 동의합니다.",
+            "Entiendo el alcance y acepto sincronizar estos datos cifrados.",
+            "Je comprends le périmètre et j’accepte la synchronisation chiffrée de ces données.",
+            "Ich verstehe den Umfang und stimme der verschlüsselten Synchronisierung dieser Daten zu.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.consentDescription",
         text: row(
             "同步内容包含服务凭据和私密文本历史，资料会在本机加密后上传。请先了解完整范围。",
@@ -6520,9 +10941,12 @@ pub const CATALOG: &[Msg] = &[
             "This sync includes service credentials and private text history. Data is encrypted on your device before upload. Review the full scope first.",
             "サービスの認証情報と非公開のテキスト履歴も同期します。アップロード前に端末で暗号化します。対象範囲を確認してください。",
             "서비스 자격 증명과 비공개 텍스트 기록도 동기화됩니다. 업로드 전에 기기에서 암호화합니다. 전체 범위를 확인하세요.",
+            "Incluye credenciales de servicios e historial de textos privados. Los datos se cifran en el dispositivo antes de subirlos. Revisa todo el alcance.",
+            "La synchronisation inclut les identifiants de services et l’historique de textes privés. Les données sont chiffrées sur l’appareil avant envoi. Consultez le périmètre complet.",
+            "Die Synchronisierung umfasst Dienstzugangsdaten und private Textverläufe. Alles wird vor dem Upload lokal verschlüsselt. Prüfe zuerst den vollständigen Umfang.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.consentTitle",
         text: row(
             "启用端到端加密同步",
@@ -6530,13 +10954,16 @@ pub const CATALOG: &[Msg] = &[
             "Enable end-to-end encrypted sync",
             "エンドツーエンド暗号化同期を有効にする",
             "종단 간 암호화 동기화 사용",
+            "Activar sincronización cifrada de extremo a extremo",
+            "Activer la synchronisation chiffrée de bout en bout",
+            "Ende-zu-Ende-verschlüsselte Synchronisierung aktivieren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.continue",
-        text: row("继续", "繼續", "Continue", "続ける", "계속"),
+        text: row("继续", "繼續", "Continue", "続ける", "계속", "Continuar", "Continuer", "Weiter"),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.currentPassword",
         text: row(
             "当前同步密码",
@@ -6544,9 +10971,12 @@ pub const CATALOG: &[Msg] = &[
             "Current sync password",
             "現在の同期パスワード",
             "현재 동기화 비밀번호",
+            "Contraseña actual",
+            "Mot de passe actuel",
+            "Aktuelles Sync-Passwort",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.customServerHint",
         text: row(
             "留空则使用官方同步服务器。地址必须是 https:// 开头的根地址。",
@@ -6554,13 +10984,16 @@ pub const CATALOG: &[Msg] = &[
             "Leave blank to use the official sync server. The address must start with https:// and be a root URL.",
             "空欄の場合は公式の同期サーバーを使用します。アドレスは https:// で始まるルート URL である必要があります。",
             "비워두면 공식 동기화 서버를 사용합니다. 주소는 https://로 시작하는 루트 URL이어야 합니다.",
+            "Déjelo en blanco para usar el servidor de sincronización oficial. La dirección debe comenzar con https:// y ser una URL raíz.",
+            "Laissez vide pour utiliser le serveur de synchronisation officiel. L'adresse doit commencer par https:// et être une URL racine.",
+            "Leer lassen, um den offiziellen Sync-Server zu verwenden. Die Adresse muss mit https:// beginnen und eine Root-URL sein.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.customServerSave",
-        text: row("保存", "儲存", "Save", "保存", "저장"),
+        text: row("保存", "儲存", "Save", "保存", "저장", "Guardar", "Enregistrer", "Speichern"),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.customServerTitle",
         text: row(
             "自建同步服务器（高级）",
@@ -6568,9 +11001,12 @@ pub const CATALOG: &[Msg] = &[
             "Self-hosted sync server (advanced)",
             "自前の同期サーバー（上級者向け）",
             "자체 동기화 서버 (고급)",
+            "Servidor de sincronización propio (avanzado)",
+            "Serveur de synchronisation auto-hébergé (avancé)",
+            "Selbst gehosteter Sync-Server (erweitert)",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.customServerToken",
         text: row(
             "登录 Token",
@@ -6578,9 +11014,12 @@ pub const CATALOG: &[Msg] = &[
             "Sign-in token",
             "サインイン Token",
             "로그인 Token",
+            "Token de acceso",
+            "Jeton de connexion",
+            "Anmelde-Token",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.delete",
         text: row(
             "删除云端备份",
@@ -6588,9 +11027,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete cloud backup",
             "クラウドバックアップを削除",
             "클라우드 백업 삭제",
+            "Eliminar copia en la nube",
+            "Supprimer la sauvegarde cloud",
+            "Cloud-Sicherung löschen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.deleteDescription",
         text: row(
             "仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。",
@@ -6598,9 +11040,12 @@ pub const CATALOG: &[Msg] = &[
             "Only this account’s cloud backup is deleted. Local data is kept. You will need a new backup to restore on another device.",
             "このアカウントのクラウドバックアップのみ削除します。ローカルデータは残ります。別の端末で復元するには新しいバックアップが必要です。",
             "이 계정의 클라우드 백업만 삭제합니다. 로컬 데이터는 유지됩니다. 다른 기기에서 복원하려면 새 백업이 필요합니다.",
+            "Solo se elimina la copia en la nube de esta cuenta. Los datos locales permanecen. Necesitarás una nueva copia para restaurar en otro dispositivo.",
+            "Seule la sauvegarde cloud de ce compte sera supprimée. Les données locales restent. Une nouvelle sauvegarde sera nécessaire pour un autre appareil.",
+            "Nur die Cloud-Sicherung dieses Kontos wird gelöscht. Lokale Daten bleiben. Für ein anderes Gerät wird danach eine neue Sicherung benötigt.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.deleteTitle",
         text: row(
             "删除云端加密备份？",
@@ -6608,9 +11053,12 @@ pub const CATALOG: &[Msg] = &[
             "Delete the encrypted cloud backup?",
             "暗号化クラウドバックアップを削除しますか？",
             "암호화된 클라우드 백업을 삭제할까요?",
+            "¿Eliminar la copia cifrada en la nube?",
+            "Supprimer la sauvegarde cloud chiffrée ?",
+            "Verschlüsselte Cloud-Sicherung löschen?",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.description",
         text: row(
             "在本机加密后，通过 GitHub 账号或 Token 跨设备同步。",
@@ -6618,9 +11066,12 @@ pub const CATALOG: &[Msg] = &[
             "Encrypt on this device before syncing with your GitHub account.",
             "この端末で暗号化してから、GitHub アカウントで端末間を同期します。",
             "이 기기에서 암호화한 후 GitHub 계정으로 기기 간에 동기화합니다.",
+            "Cifra en este dispositivo antes de sincronizar con tu cuenta de GitHub.",
+            "Chiffrez sur cet appareil avant de synchroniser avec votre compte GitHub.",
+            "Vor der Synchronisierung mit deinem GitHub-Konto auf diesem Gerät verschlüsseln.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.disableDescription",
         text: row(
             "关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。",
@@ -6628,9 +11079,12 @@ pub const CATALOG: &[Msg] = &[
             "This stops further sync. Your cloud backup and local data are kept. Deleting the cloud backup is a separate action.",
             "以後の同期を停止します。クラウドのバックアップとローカルのデータは残ります。削除は別の操作です。",
             "이후 동기화를 중지합니다. 클라우드 백업과 로컬 데이터는 유지됩니다. 백업 삭제는 별도 작업입니다.",
+            "Se detiene la sincronización. Se conservan la copia en la nube y los datos locales. Eliminar la copia es una acción separada.",
+            "Les synchronisations cessent. La sauvegarde cloud et les données locales sont conservées. La suppression est une action distincte.",
+            "Weitere Synchronisierung wird gestoppt. Cloud-Sicherung und lokale Daten bleiben erhalten. Löschen ist eine separate Aktion.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.disableTitle",
         text: row(
             "关闭加密同步？",
@@ -6638,9 +11092,12 @@ pub const CATALOG: &[Msg] = &[
             "Turn off encrypted sync?",
             "暗号化同期をオフにしますか？",
             "암호화 동기화를 끌까요?",
+            "¿Desactivar la sincronización cifrada?",
+            "Désactiver la synchronisation chiffrée ?",
+            "Verschlüsselte Synchronisierung ausschalten?",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.enable",
         text: row(
             "启用加密同步",
@@ -6648,9 +11105,12 @@ pub const CATALOG: &[Msg] = &[
             "Enable encrypted sync",
             "暗号化同期を有効にする",
             "암호화 동기화 사용",
+            "Activar sincronización cifrada",
+            "Activer la synchronisation chiffrée",
+            "Verschlüsselte Synchronisierung aktivieren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.hasSnapshot",
         text: row(
             "云端已有加密备份。",
@@ -6658,9 +11118,12 @@ pub const CATALOG: &[Msg] = &[
             "An encrypted cloud backup is available.",
             "暗号化されたクラウドバックアップがあります。",
             "암호화된 클라우드 백업이 있습니다.",
+            "Hay una copia cifrada en la nube.",
+            "Une sauvegarde cloud chiffrée est disponible.",
+            "Eine verschlüsselte Cloud-Sicherung ist verfügbar.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.keyLocked",
         text: row(
             "此设备尚未解锁",
@@ -6668,9 +11131,12 @@ pub const CATALOG: &[Msg] = &[
             "Locked on this device",
             "この端末ではロック中",
             "이 기기에서 잠김",
+            "Bloqueado en este dispositivo",
+            "Verrouillé sur cet appareil",
+            "Auf diesem Gerät gesperrt",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.keyUnlocked",
         text: row(
             "此设备已解锁",
@@ -6678,9 +11144,12 @@ pub const CATALOG: &[Msg] = &[
             "Unlocked on this device",
             "この端末でロック解除済み",
             "이 기기에서 잠금 해제됨",
+            "Desbloqueado en este dispositivo",
+            "Déverrouillé sur cet appareil",
+            "Auf diesem Gerät entsperrt",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.loading",
         text: row(
             "正在读取同步状态…",
@@ -6688,9 +11157,12 @@ pub const CATALOG: &[Msg] = &[
             "Checking sync status…",
             "同期状態を確認中…",
             "동기화 상태 확인 중…",
+            "Comprobando la sincronización…",
+            "Vérification de la synchronisation…",
+            "Synchronisierungsstatus wird geprüft…",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.lock",
         text: row(
             "锁定此设备",
@@ -6698,9 +11170,12 @@ pub const CATALOG: &[Msg] = &[
             "Lock this device",
             "この端末をロック",
             "이 기기 잠그기",
+            "Bloquear este dispositivo",
+            "Verrouiller cet appareil",
+            "Dieses Gerät sperren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.noSnapshot",
         text: row(
             "云端尚无加密备份。",
@@ -6708,9 +11183,12 @@ pub const CATALOG: &[Msg] = &[
             "No encrypted cloud backup yet.",
             "暗号化クラウドバックアップはまだありません。",
             "아직 암호화된 클라우드 백업이 없습니다.",
+            "Todavía no hay una copia cifrada en la nube.",
+            "Aucune sauvegarde cloud chiffrée pour le moment.",
+            "Noch keine verschlüsselte Cloud-Sicherung.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.passwordTitle",
         text: row(
             "更改同步密码",
@@ -6718,9 +11196,12 @@ pub const CATALOG: &[Msg] = &[
             "Change your sync password",
             "同期パスワードを変更",
             "동기화 비밀번호 변경",
+            "Cambiar contraseña de sincronización",
+            "Modifier le mot de passe de synchronisation",
+            "Sync-Passwort ändern",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.passwordWarning",
         text: row(
             "请妥善保管同步密码。密码无法找回，遗失后可能无法读取云端资料。",
@@ -6728,9 +11209,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep your sync password safe. It cannot be recovered; losing it can make cloud data unreadable.",
             "同期パスワードは安全に保管してください。再発行できず、紛失するとクラウドのデータを読めなくなる場合があります。",
             "동기화 비밀번호를 안전하게 보관하세요. 복구할 수 없으며, 분실하면 클라우드 데이터를 읽지 못할 수 있습니다.",
+            "Guarda tu contraseña. No se puede recuperar; perderla puede impedir leer los datos de la nube.",
+            "Conservez votre mot de passe. Il est irrécupérable ; sa perte peut rendre les données cloud illisibles.",
+            "Bewahre dein Sync-Passwort sicher auf. Es ist nicht wiederherstellbar; bei Verlust können Cloud-Daten unlesbar werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolTitle",
         text: row(
             "云同步协议与隐私提醒",
@@ -6738,9 +11222,12 @@ pub const CATALOG: &[Msg] = &[
             "Cloud sync agreement and privacy notice",
             "クラウド同期の同意事項とプライバシー",
             "클라우드 동기화 약관 및 개인정보 안내",
+            "Acuerdo de sincronización y privacidad",
+            "Accord de synchronisation et confidentialité",
+            "Cloud-Sync: Vereinbarung und Datenschutz",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.refresh",
         text: row(
             "刷新状态",
@@ -6748,9 +11235,12 @@ pub const CATALOG: &[Msg] = &[
             "Refresh status",
             "状態を更新",
             "상태 새로고침",
+            "Actualizar estado",
+            "Actualiser l’état",
+            "Status aktualisieren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.rememberKey",
         text: row(
             "在此设备的安全存储中记住解锁密钥",
@@ -6758,9 +11248,12 @@ pub const CATALOG: &[Msg] = &[
             "Remember the unlock key in this device’s secure storage",
             "この端末の安全なストレージに解除キーを記憶する",
             "이 기기의 보안 저장소에 잠금 해제 키 기억",
+            "Recordar la clave en el almacenamiento seguro del dispositivo",
+            "Mémoriser la clé dans le stockage sécurisé de cet appareil",
+            "Entsperrschlüssel im sicheren Speicher dieses Geräts merken",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.restore",
         text: row(
             "审阅云端恢复",
@@ -6768,9 +11261,12 @@ pub const CATALOG: &[Msg] = &[
             "Review cloud restore",
             "クラウドからの復元を確認",
             "클라우드 복원 검토",
+            "Revisar restauración desde la nube",
+            "Examiner la restauration cloud",
+            "Cloud-Wiederherstellung prüfen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.restoreDescription",
         text: row(
             "请检查下列资料类别，敏感值不会展示。确认之前不会恢复任何内容。",
@@ -6778,9 +11274,12 @@ pub const CATALOG: &[Msg] = &[
             "Review the categories below. Sensitive values stay hidden. Nothing is restored until you confirm.",
             "データの種類を確認してください。機密の値は表示しません。確認するまで復元しません。",
             "데이터 종류를 확인하세요. 민감한 값은 표시하지 않습니다. 확인 전에는 복원하지 않습니다.",
+            "Revisa las categorías. Los valores sensibles permanecen ocultos. No se restaura nada hasta que confirmes.",
+            "Vérifiez les catégories. Les valeurs sensibles restent masquées. Rien n’est restauré avant confirmation.",
+            "Prüfe die Datenkategorien. Vertrauliche Werte bleiben verborgen. Ohne Bestätigung wird nichts wiederhergestellt.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.restoreTitle",
         text: row(
             "恢复前审阅",
@@ -6788,9 +11287,12 @@ pub const CATALOG: &[Msg] = &[
             "Review before restoring",
             "復元前に確認",
             "복원 전 검토",
+            "Revisar antes de restaurar",
+            "Examiner avant de restaurer",
+            "Wiederherstellung prüfen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.signIn",
         text: row(
             "使用 GitHub 登录",
@@ -6798,13 +11300,25 @@ pub const CATALOG: &[Msg] = &[
             "Sign in with GitHub",
             "GitHub でログイン",
             "GitHub로 로그인",
+            "Iniciar sesión con GitHub",
+            "Se connecter avec GitHub",
+            "Mit GitHub anmelden",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.signOut",
-        text: row("退出登录", "登出", "Sign out", "ログアウト", "로그아웃"),
+        text: row(
+            "退出登录",
+            "登出",
+            "Sign out",
+            "ログアウト",
+            "로그아웃",
+            "Cerrar sesión",
+            "Se déconnecter",
+            "Abmelden",
+        ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.snapshotUnknown",
         text: row(
             "尚未检查云端备份。",
@@ -6812,9 +11326,12 @@ pub const CATALOG: &[Msg] = &[
             "Cloud backup has not been checked yet.",
             "クラウドバックアップは未確認です。",
             "클라우드 백업을 아직 확인하지 않았습니다.",
+            "La copia en la nube aún no se ha comprobado.",
+            "La sauvegarde cloud n’a pas encore été vérifiée.",
+            "Cloud-Sicherung noch nicht geprüft.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.title",
         text: row(
             "加密云同步",
@@ -6822,13 +11339,25 @@ pub const CATALOG: &[Msg] = &[
             "Encrypted cloud sync",
             "暗号化クラウド同期",
             "암호화 클라우드 동기화",
+            "Sincronización cifrada en la nube",
+            "Synchronisation cloud chiffrée",
+            "Verschlüsselte Cloud-Synchronisierung",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.unlock",
-        text: row("解锁", "解鎖", "Unlock", "ロック解除", "잠금 해제"),
+        text: row(
+            "解锁",
+            "解鎖",
+            "Unlock",
+            "ロック解除",
+            "잠금 해제",
+            "Desbloquear",
+            "Déverrouiller",
+            "Entsperren",
+        ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.working",
         text: row(
             "正在处理…",
@@ -6836,9 +11365,12 @@ pub const CATALOG: &[Msg] = &[
             "Working securely…",
             "処理中…",
             "처리 중…",
+            "Procesando…",
+            "Traitement en cours…",
+            "Wird verarbeitet…",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.conflictProgress",
         text: row(
             "已处理 {} / {} 项冲突",
@@ -6846,9 +11378,12 @@ pub const CATALOG: &[Msg] = &[
             "{} of {} conflicts resolved",
             "競合を {} / {} 件解決済み",
             "충돌 {} / {}개 해결",
+            "{} de {} conflictos resueltos",
+            "{} conflits résolus sur {}",
+            "{} von {} Konflikten gelöst",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.deviceReview",
         text: row(
             "恢复后请核对 {} 项设备配置，包括快捷键、模型目录、麦克风及系统授权。",
@@ -6856,9 +11391,12 @@ pub const CATALOG: &[Msg] = &[
             "After restoring, review {} device settings, including shortcuts, model paths, microphones and system permissions.",
             "復元後は、ショートカット、モデルの場所、マイク、システム権限など {} 件の端末設定を確認してください。",
             "복원 후 단축키, 모델 경로, 마이크, 시스템 권한 등 기기 설정 {}개를 확인하세요.",
+            "Después de restaurar, revisa {} ajustes del dispositivo: atajos, rutas de modelos, micrófonos y permisos del sistema.",
+            "Après restauration, vérifiez {} réglages de l’appareil : raccourcis, chemins des modèles, microphones et autorisations système.",
+            "Nach der Wiederherstellung {} Geräteeinstellungen prüfen, etwa Tastenkürzel, Modellpfade, Mikrofone und Systemrechte.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.lastSync",
         text: row(
             "上次同步：{}",
@@ -6866,9 +11404,12 @@ pub const CATALOG: &[Msg] = &[
             "Last synced {}",
             "最終同期：{}",
             "마지막 동기화: {}",
+            "Última sincronización: {}",
+            "Dernière synchronisation : {}",
+            "Zuletzt synchronisiert: {}",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.merge",
         text: row(
             "合并，并逐项处理冲突",
@@ -6876,9 +11417,12 @@ pub const CATALOG: &[Msg] = &[
             "Merge and resolve conflicts",
             "マージして競合を解決",
             "병합하고 충돌 해결",
+            "Combinar y resolver conflictos",
+            "Fusionner et résoudre les conflits",
+            "Zusammenführen und Konflikte lösen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.passwordPolicy",
         text: row(
             "使用 12–128 个字符，包含大写字母、小写字母和数字，避免常见弱密码。",
@@ -6886,9 +11430,12 @@ pub const CATALOG: &[Msg] = &[
             "Use 12–128 characters with uppercase and lowercase letters and a number. Avoid common passwords.",
             "12～128 文字で英大文字・英小文字・数字を含めてください。よくあるパスワードは避けてください。",
             "12~128자로 영문 대문자, 소문자, 숫자를 포함하세요. 흔한 비밀번호는 피하세요.",
+            "Usa 12–128 caracteres con mayúsculas, minúsculas y un número. Evita contraseñas comunes.",
+            "12 à 128 caractères avec majuscule, minuscule et chiffre. Évitez les mots de passe courants.",
+            "12–128 Zeichen mit Groß- und Kleinbuchstaben sowie einer Zahl. Keine üblichen Passwörter verwenden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.replace",
         text: row(
             "使用云端资料替换本机同步资料",
@@ -6896,9 +11443,12 @@ pub const CATALOG: &[Msg] = &[
             "Replace synced local data with cloud data",
             "同期対象のローカルデータをクラウドの内容で置換",
             "동기화 대상 로컬 데이터를 클라우드 데이터로 교체",
+            "Reemplazar datos locales sincronizados por los de la nube",
+            "Remplacer les données locales synchronisées par le cloud",
+            "Synchronisierte lokale Daten durch Cloud-Daten ersetzen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.restoreCheck",
         text: row(
             "我已检查恢复方式和冲突处理选择。",
@@ -6906,13 +11456,16 @@ pub const CATALOG: &[Msg] = &[
             "I have reviewed the restore mode and conflict choices.",
             "復元方法と競合の選択を確認しました。",
             "복원 방식과 충돌 선택을 확인했습니다.",
+            "He revisado el modo y las decisiones sobre conflictos.",
+            "J’ai vérifié le mode et mes choix pour les conflits.",
+            "Ich habe Wiederherstellungsart und Konfliktentscheidungen geprüft.",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.family",
-        text: row("字体系列", "字型系列", "Font family", "フォントファミリー", "글꼴 모음"),
+        text: row("字体系列", "字型系列", "Font family", "フォントファミリー", "글꼴 모음", "Font family", "Font family", "Font family"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.fontHint",
         text: row(
             "仅使用已安装字体，缺失时回退到系统字体。不下载、不扫描，也不发起字体网络请求。",
@@ -6920,9 +11473,12 @@ pub const CATALOG: &[Msg] = &[
             "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
             "インストール済みのフォントのみを使用し、見つからない場合はシステムフォントに切り替えます。フォントのダウンロード、スキャン、ネットワーク通信は行いません。",
             "설치된 글꼴만 사용하며, 없으면 시스템 글꼴을 사용합니다. 글꼴 다운로드, 스캔 또는 네트워크 요청은 하지 않습니다.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
+            "Only installed fonts are used, with system fallbacks. No font downloads, scanning or network requests.",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.fontSize",
         text: row(
             "界面大小",
@@ -6930,9 +11486,12 @@ pub const CATALOG: &[Msg] = &[
             "Interface size",
             "インターフェースのサイズ",
             "인터페이스 크기",
+            "Interface size",
+            "Interface size",
+            "Interface size",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.storageError",
         text: row(
             "本地保存失败，本次会话仍使用当前选择。",
@@ -6940,13 +11499,16 @@ pub const CATALOG: &[Msg] = &[
             "Could not save locally. Your current session still uses this choice.",
             "このデバイスに保存できませんでした。現在のセッションではこの設定を引き続き使用します。",
             "이 기기에 저장하지 못했습니다. 현재 세션에서는 선택한 설정이 계속 적용됩니다.",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
+            "Could not save locally. Your current session still uses this choice.",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.typography",
-        text: row("字体与排版", "字型與排版", "Typography", "フォントと組版", "글꼴 및 조판"),
+        text: row("字体与排版", "字型與排版", "Typography", "フォントと組版", "글꼴 및 조판", "Typography", "Typography", "Typography"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.width",
         text: row(
             "阅读宽度",
@@ -6954,13 +11516,16 @@ pub const CATALOG: &[Msg] = &[
             "Reading width",
             "テキストの表示幅",
             "읽기 영역 너비",
+            "Reading width",
+            "Reading width",
+            "Reading width",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.back",
-        text: row("返回应用", "返回應用程式", "Back to app", "アプリに戻る", "앱으로 돌아가기"),
+        text: row("返回应用", "返回應用程式", "Back to app", "アプリに戻る", "앱으로 돌아가기", "Back to app", "Back to app", "Back to app"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.noResults",
         text: row(
             "没有匹配的命令",
@@ -6968,9 +11533,12 @@ pub const CATALOG: &[Msg] = &[
             "No matching commands",
             "一致するコマンドがありません",
             "일치하는 명령이 없습니다",
+            "No matching commands",
+            "No matching commands",
+            "No matching commands",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.shortcutHint",
         text: row(
             "点击按键即可重新录制。Esc 取消；保存前会检查快捷键冲突。",
@@ -6978,9 +11546,12 @@ pub const CATALOG: &[Msg] = &[
             "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
             "キーを選択してショートカットを記録します。Esc でキャンセルします。保存前に競合を確認します。",
             "키를 선택해 단축키를 기록하세요. Esc 키로 취소하며, 저장 전에 충돌을 확인합니다.",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
+            "Select the keys to record a shortcut. Escape cancels; conflicts are checked before saving.",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.shortcutsSearch",
         text: row(
             "搜索命令或按键",
@@ -6988,57 +11559,60 @@ pub const CATALOG: &[Msg] = &[
             "Search commands or keys",
             "コマンドまたはキーを検索",
             "명령 또는 키 검색",
+            "Search commands or keys",
+            "Search commands or keys",
+            "Search commands or keys",
         ),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.unassigned",
-        text: row("未分配", "未指派", "Unassigned", "未割り当て", "미지정"),
+        text: row("未分配", "未指派", "Unassigned", "未割り当て", "미지정", "Unassigned", "Unassigned", "Unassigned"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.all",
-        text: row("全部", "全部", "All", "すべて", "전체"),
+        text: row("全部", "全部", "All", "すべて", "전체", "All", "All", "All"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.assigned",
-        text: row("已分配", "已指派", "Assigned", "割り当て済み", "지정됨"),
+        text: row("已分配", "已指派", "Assigned", "割り当て済み", "지정됨", "Assigned", "Assigned", "Assigned"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.category",
-        text: row("分类", "分類", "Category", "カテゴリ", "분류"),
+        text: row("分类", "分類", "Category", "カテゴリ", "분류", "Category", "Category", "Category"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.recording",
-        text: row("语音与文本", "語音與文字", "Voice & text", "音声とテキスト", "음성 및 텍스트"),
+        text: row("语音与文本", "語音與文字", "Voice & text", "音声とテキスト", "음성 및 텍스트", "Voice & text", "Voice & text", "Voice & text"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.status",
-        text: row("分配状态", "指派狀態", "Assignment", "割り当て状況", "지정 상태"),
+        text: row("分配状态", "指派狀態", "Assignment", "割り当て状況", "지정 상태", "Assignment", "Assignment", "Assignment"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.styles",
-        text: row("风格", "風格", "Styles", "スタイル", "스타일"),
+        text: row("风格", "風格", "Styles", "スタイル", "스타일", "Styles", "Styles", "Styles"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.system",
-        text: row("系统", "系統", "System", "システム", "시스템"),
+        text: row("系统", "系統", "System", "システム", "시스템", "System", "System", "System"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.comfortable",
-        text: row("舒适", "舒適", "Comfortable", "ゆったり", "편안하게"),
+        text: row("舒适", "舒適", "Comfortable", "ゆったり", "편안하게", "Comfortable", "Comfortable", "Comfortable"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.narrow",
-        text: row("聚焦", "聚焦", "Focused", "集中表示", "집중"),
+        text: row("聚焦", "聚焦", "Focused", "集中表示", "집중", "Focused", "Focused", "Focused"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.native",
-        text: row("系统默认", "系統預設", "System", "システム既定", "시스템 기본값"),
+        text: row("系统默认", "系統預設", "System", "システム既定", "시스템 기본값", "System", "System", "System"),
     },
-    Msg {
+        Msg {
         key: "uiRefinement.wide",
-        text: row("宽阔", "寬闊", "Wide", "広め", "넓게"),
+        text: row("宽阔", "寬闊", "Wide", "広め", "넓게", "Wide", "Wide", "Wide"),
     },
-    Msg {
+        Msg {
         key: "settings.recording.auto_update_check_desc",
         text: row(
             "启动时及每 60 分钟自动检查更新。",
@@ -7046,9 +11620,12 @@ pub const CATALOG: &[Msg] = &[
             "Check for updates on launch and every 60 minutes.",
             "起動時および 60 分ごとに自動チェック。",
             "시작 시 및 60 분마다 자동 확인.",
+            "Busca actualizaciones al iniciar y cada 60 minutos.",
+            "Recherche les mises à jour au lancement, puis toutes les 60 minutes.",
+            "Sucht beim Start und alle 60 Minuten nach Updates.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.start_minimized_desc",
         text: row(
             "所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。",
@@ -7056,9 +11633,12 @@ pub const CATALOG: &[Msg] = &[
             "No main window on any launch path — menu bar / tray only.",
             "どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。",
             "모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.",
+            "Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.",
+            "Au lancement, seule la barre des menus ou la zone de notification est affichée, jamais la fenêtre principale.",
+            "Zeigt bei keinem Startweg das Hauptfenster an. Nur Menüleiste / Infobereich.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.recording.startup_at_boot_desc",
         text: row(
             "登录系统时自动启动 OpenLess。",
@@ -7066,9 +11646,12 @@ pub const CATALOG: &[Msg] = &[
             "Start OpenLess automatically when you sign in.",
             "ログイン時に OpenLess を自動起動。",
             "로그인 시 OpenLess 자동 시작.",
+            "Inicia OpenLess automáticamente cuando inicies sesión.",
+            "Démarre automatiquement OpenLess à l’ouverture de votre session.",
+            "Startet OpenLess automatisch, wenn du dich anmeldest.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.auto_intent",
         text: row(
             "自动判断意图",
@@ -7076,9 +11659,12 @@ pub const CATALOG: &[Msg] = &[
             "Auto-classify intent",
             "意図を自動判定",
             "의도 자동 판별",
+            "Detectar intención automáticamente",
+            "Détecter automatiquement l’intention",
+            "Absicht automatisch erkennen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.auto_intent_desc",
         text: row(
             "开启后默认用服务配置的模型判断问句 vs 编辑；模型不可用或解析失败时回退到问句启发式。",
@@ -7086,9 +11672,12 @@ pub const CATALOG: &[Msg] = &[
             "When on, the configured model classifies question vs edit by default; falls back to question-word heuristics if the model fails.",
             "オン時は設定モデルが質問/編集を判定。モデル失敗時のみ？/疑問語ヒューリスティックにフォールバック。",
             "켜면 설정된 모델이 질문/편집을 판별합니다. 모델 실패 시에만 의문사 휴리스틱으로 폴백합니다.",
+            "El modelo configurado distingue entre preguntas y ediciones. Si falla, se recurre a las palabras interrogativas.",
+            "Le modèle configuré distingue les questions des modifications. S’il échoue, la détection repose sur les mots interrogatifs.",
+            "Das eingerichtete Modell unterscheidet standardmäßig zwischen Fragen und Bearbeitungsaufträgen. Bei Modellfehlern wird anhand von Fragewörtern entschieden.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_keywords",
         text: row(
             "额外问句线索",
@@ -7096,9 +11685,12 @@ pub const CATALOG: &[Msg] = &[
             "Extra question cues",
             "追加の疑問手がかり",
             "추가 의문 단서",
+            "Indicadores adicionales de pregunta",
+            "Indices de question supplémentaires",
+            "Weitere Hinweise auf Fragen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_keywords_desc",
         text: row(
             "关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。",
@@ -7106,9 +11698,12 @@ pub const CATALOG: &[Msg] = &[
             "Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.",
             "自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。",
             "자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.",
+            "Solo si la detección automática está desactivada. Escribe un indicador por línea para forzar Preguntar; en otros casos se usan «?» y palabras interrogativas.",
+            "Uniquement lorsque la détection automatique est désactivée. Un indice par ligne force le mode Question ; sinon, « ? » et les mots interrogatifs servent d’indices.",
+            "Nur bei deaktivierter automatischer Erkennung. Ein Hinweis pro Zeile erzwingt den Fragemodus. Ansonsten wird anhand von „?“ und Fragewörtern entschieden.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_plan_format",
         text: row(
             "编辑方案格式",
@@ -7116,9 +11711,12 @@ pub const CATALOG: &[Msg] = &[
             "Edit plan format",
             "編集プラン形式",
             "편집 계획 형식",
+            "Formato del plan de edición",
+            "Format du plan d’édition",
+            "Format des Bearbeitungsplans",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_plan_format_desc",
         text: row(
             "模型优先按所选格式输出 EditPlan；解析失败时再尝试另一种格式。",
@@ -7126,17 +11724,20 @@ pub const CATALOG: &[Msg] = &[
             "Prefer this EditPlan format from the model; if parsing fails, try the other format.",
             "モデルはこの形式の EditPlan を優先出力。解析失敗時はもう一方を試します。",
             "모델이 선택한 형식으로 EditPlan을 우선 출력합니다. 파싱 실패 시 다른 형식을 시도합니다.",
+            "El modelo prioriza este formato de EditPlan; si falla el análisis, se prueba el otro.",
+            "Le modèle privilégie ce format EditPlan ; en cas d’échec d’analyse, l’autre format est tenté.",
+            "Das Modell bevorzugt dieses EditPlan-Format. Bei Parse-Fehlern wird das andere Format versucht.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_plan_format_json",
-        text: row("JSON", "JSON", "JSON", "JSON", "JSON"),
+        text: row("JSON", "JSON", "JSON", "JSON", "JSON", "JSON", "JSON", "JSON"),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_plan_format_xml",
-        text: row("XML", "XML", "XML", "XML", "XML"),
+        text: row("XML", "XML", "XML", "XML", "XML", "XML", "XML", "XML"),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_system_prompt",
         text: row(
             "编辑方案系统提示词",
@@ -7144,9 +11745,12 @@ pub const CATALOG: &[Msg] = &[
             "Edit plan system prompt",
             "編集プランのシステムプロンプト",
             "편집 계획 시스템 프롬프트",
+            "Prompt de sistema del plan de edición",
+            "Invite système du plan d’édition",
+            "Systemprompt für Bearbeitungspläne",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_system_prompt_desc",
         text: row(
             "覆盖风格包 / 内置默认的 EditPlan system prompt。留空则按「自定义 → 风格包 → 内置默认」回退。",
@@ -7154,9 +11758,12 @@ pub const CATALOG: &[Msg] = &[
             "Overrides the style-pack / built-in EditPlan system prompt. Leave empty to fall back: custom → pack → built-in.",
             "スタイルパック / 内蔵デフォルトの EditPlan システムプロンプトを上書き。空なら カスタム → パック → 内蔵 の順でフォールバック。",
             "스타일 팩 / 내장 기본 EditPlan 시스템 프롬프트를 덮어씁니다. 비우면 사용자 지정 → 팩 → 내장 순으로 폴백합니다.",
+            "Sustituye el prompt de sistema EditPlan del paquete / predeterminado. Vacío = personalizado → paquete → predeterminado.",
+            "Remplace l’invite système EditPlan du pack / intégrée. Vide = personnalisé → pack → intégré.",
+            "Überschreibt den EditPlan-Systemprompt aus Stilpaket / Standard. Leer = Benutzerdefiniert → Paket → Standard.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_system_prompt_reset",
         text: row(
             "恢复默认",
@@ -7164,9 +11771,12 @@ pub const CATALOG: &[Msg] = &[
             "Reset to default",
             "デフォルトに戻す",
             "기본값으로 재설정",
+            "Restablecer predeterminado",
+            "Réinitialiser",
+            "Auf Standard zurücksetzen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.voice_delivery_desc",
         text: row(
             "语音编辑完成后：直接替换选区，或在华词面板中预览后再确认。",
@@ -7174,9 +11784,12 @@ pub const CATALOG: &[Msg] = &[
             "After voice edit: replace selection directly, or preview in Ask panel then confirm.",
             "音声編集後：選択範囲を直接置換するか、Ask パネルで確認してから置換します。",
             "음성 편집 후: 선택 영역을 바로 교체하거나 Ask 패널에서 확인 후 교체합니다.",
+            "Tras editar por voz, reemplaza la selección directamente o revisa el resultado en el panel de preguntas antes de confirmar.",
+            "Après une modification vocale, remplacez directement la sélection ou vérifiez le résultat dans le panneau Questions avant de confirmer.",
+            "Nach der Sprachbearbeitung: Auswahl direkt ersetzen oder im Fragefenster prüfen und bestätigen.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.voice_enable_desc",
         text: row(
             "与上方同一快捷键；录音方式跟随全局设置（当前：{}）。",
@@ -7184,9 +11797,12 @@ pub const CATALOG: &[Msg] = &[
             "Uses the same shortcut above; recording follows global settings (current: {}).",
             "上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{}）。",
             "위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {}).",
+            "Usa el mismo atajo de arriba. La grabación sigue los ajustes generales (actual: {}).",
+            "Utilise le même raccourci ci-dessus. L’enregistrement suit les réglages généraux (actuel : {}).",
+            "Verwendet denselben Kurzbefehl wie oben. Die Aufnahme folgt den globalen Einstellungen (aktuell: {}).",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.selection_workspace.edit_system_prompt_placeholder",
         text: row(
             "留空 = 使用风格包或内置默认",
@@ -7194,12 +11810,15 @@ pub const CATALOG: &[Msg] = &[
             "Empty = use style pack or built-in default",
             "空 = スタイルパックまたは内蔵デフォルト",
             "비움 = 스타일 팩 또는 내장 기본값",
+            "Vacío = paquete de estilo o predeterminado",
+            "Vide = pack de style ou valeur intégrée",
+            "Leer = Stilpaket oder Standard",
         ),
     },
     // 加密云同步的错误文案。键名与 Tauri `cloudSyncE2ee.errors.*` 对齐；Core 里
     // Linux 侧独有的代码（conflict / denied / expired / locked / server /
     // unsupported / service_unavailable…）在这里补齐，避免把裸 key 画到界面上。
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.accountChanged",
         text: row(
             "GitHub 账号已改变，请刷新后再继续。",
@@ -7207,9 +11826,12 @@ pub const CATALOG: &[Msg] = &[
             "The GitHub account changed. Refresh before continuing.",
             "GitHub アカウントが変わりました。更新してから続けてください。",
             "GitHub 계정이 변경되었습니다. 새로고침한 후 계속하세요.",
+            "La cuenta GitHub cambió. Actualiza antes de continuar.",
+            "Le compte GitHub a changé. Actualisez avant de continuer.",
+            "GitHub-Konto geändert. Vor dem Fortfahren aktualisieren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.busy",
         text: row(
             "已有同步任务在运行，请等待或先取消。",
@@ -7217,9 +11839,12 @@ pub const CATALOG: &[Msg] = &[
             "Another sync task is running. Wait or cancel it first.",
             "別の同期処理が実行中です。待つか先にキャンセルしてください。",
             "다른 동기화 작업이 실행 중입니다. 기다리거나 먼저 취소하세요.",
+            "Hay otra tarea de sincronización en curso. Espera o cancélala.",
+            "Une tâche de synchronisation est en cours. Attendez ou annulez-la.",
+            "Ein Sync-Vorgang läuft. Warten oder zuerst abbrechen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.cancelled",
         text: row(
             "任务已取消。",
@@ -7227,9 +11852,12 @@ pub const CATALOG: &[Msg] = &[
             "The task was cancelled.",
             "処理をキャンセルしました。",
             "작업이 취소되었습니다.",
+            "Tarea cancelada.",
+            "Tâche annulée.",
+            "Vorgang abgebrochen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.changed",
         text: row(
             "审阅期间资料已改变。请关闭弹窗、刷新状态，并重新获取预览。",
@@ -7237,9 +11865,12 @@ pub const CATALOG: &[Msg] = &[
             "Data changed during review. Close this dialog, refresh, and review a new preview.",
             "確認中にデータが変わりました。閉じて状態を更新し、再度プレビューを取得してください。",
             "검토 중 데이터가 변경되었습니다. 창을 닫고 새로고침한 후 미리보기를 다시 확인하세요.",
+            "Los datos cambiaron. Cierra el diálogo, actualiza y revisa una nueva vista previa.",
+            "Les données ont changé. Fermez, actualisez et examinez un nouvel aperçu.",
+            "Daten wurden geändert. Dialog schließen, aktualisieren und neue Vorschau prüfen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.choicesRequired",
         text: row(
             "请为每项冲突选择本机或云端版本。",
@@ -7247,9 +11878,12 @@ pub const CATALOG: &[Msg] = &[
             "Choose local or cloud for every conflict.",
             "すべての競合でローカルかクラウドを選択してください。",
             "각 충돌에 대해 로컬 또는 클라우드를 선택하세요.",
+            "Elige local o nube para cada conflicto.",
+            "Choisissez local ou cloud pour chaque conflit.",
+            "Für jeden Konflikt lokal oder Cloud wählen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.invalidData",
         text: row(
             "加密备份未通过校验，本机资料未被替换。",
@@ -7257,9 +11891,12 @@ pub const CATALOG: &[Msg] = &[
             "The encrypted backup could not be verified. Local data was not replaced.",
             "暗号化バックアップを検証できませんでした。ローカルデータは置き換えていません。",
             "암호화 백업을 검증하지 못했습니다. 로컬 데이터는 교체되지 않았습니다.",
+            "No se pudo verificar la copia cifrada. No se reemplazaron datos locales.",
+            "Sauvegarde chiffrée invérifiable. Les données locales n’ont pas été remplacées.",
+            "Verschlüsselte Sicherung nicht verifizierbar. Lokale Daten wurden nicht ersetzt.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.invalidPassword",
         text: row(
             "密码无法解锁这份备份，或加密资料校验未通过。",
@@ -7267,9 +11904,12 @@ pub const CATALOG: &[Msg] = &[
             "The password could not unlock this backup, or the encrypted data could not be verified.",
             "このパスワードで解除できないか、暗号化データを検証できませんでした。",
             "비밀번호로 백업을 잠금 해제할 수 없거나 암호화 데이터를 검증하지 못했습니다.",
+            "La contraseña no desbloqueó la copia o no se pudieron verificar los datos cifrados.",
+            "Le mot de passe n’a pas déverrouillé la sauvegarde, ou les données chiffrées sont invérifiables.",
+            "Passwort entsperrt die Sicherung nicht oder verschlüsselte Daten konnten nicht geprüft werden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.localData",
         text: row(
             "这台设备还没准备好本机资料。点「刷新状态」，然后再试一次。",
@@ -7277,9 +11917,12 @@ pub const CATALOG: &[Msg] = &[
             "This device could not prepare its data. Choose Refresh status, then try again.",
             "このデバイスのデータを準備できませんでした。「状態を更新」を押して、もう一度試してください。",
             "이 기기의 데이터를 준비하지 못했습니다. 상태 새로고침을 누른 뒤 다시 시도하세요.",
+            "No se pudieron preparar los datos de este dispositivo. Actualiza el estado y vuelve a intentarlo.",
+            "Impossible de préparer les données de cet appareil. Actualisez l’état, puis réessayez.",
+            "Die Daten auf diesem Gerät konnten nicht vorbereitet werden. Status aktualisieren und erneut versuchen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.network",
         text: row(
             "暂时无法连接同步服务，请检查网络后重试。",
@@ -7287,9 +11930,12 @@ pub const CATALOG: &[Msg] = &[
             "Could not reach the sync service. Check your connection and try again.",
             "同期サービスに接続できません。ネットワークを確認して再試行してください。",
             "동기화 서비스에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
+            "No se pudo conectar con el servicio. Comprueba la conexión y vuelve a intentarlo.",
+            "Service de synchronisation inaccessible. Vérifiez votre connexion et réessayez.",
+            "Sync-Dienst nicht erreichbar. Verbindung prüfen und erneut versuchen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.outcomeUnknown",
         text: row(
             "云端结果尚未确认。请先核对待确认结果，不要重复创建备份。",
@@ -7297,9 +11943,12 @@ pub const CATALOG: &[Msg] = &[
             "The cloud result is not confirmed. Check the pending result before creating another backup.",
             "クラウドの結果が未確定です。新しいバックアップを作る前に未確定の結果を確認してください。",
             "클라우드 결과가 확인되지 않았습니다. 새 백업을 만들기 전에 대기 중인 결과를 확인하세요.",
+            "Resultado sin confirmar. Comprueba la operación pendiente antes de crear otra copia.",
+            "Résultat cloud non confirmé. Vérifiez l’opération en attente avant une nouvelle sauvegarde.",
+            "Cloud-Ergebnis unbestätigt. Ausstehenden Vorgang prüfen, bevor eine neue Sicherung erstellt wird.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.passwordMismatch",
         text: row(
             "两次输入的密码不一致。",
@@ -7307,9 +11956,12 @@ pub const CATALOG: &[Msg] = &[
             "The two passwords do not match.",
             "パスワードが一致しません。",
             "두 비밀번호가 일치하지 않습니다.",
+            "Las contraseñas no coinciden.",
+            "Les mots de passe ne correspondent pas.",
+            "Die Passwörter stimmen nicht überein.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.rateLimited",
         text: row(
             "请求过于频繁，请稍后重试。",
@@ -7317,9 +11969,12 @@ pub const CATALOG: &[Msg] = &[
             "Too many requests. Wait before retrying.",
             "リクエストが多すぎます。しばらく待ってから再試行してください。",
             "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+            "Demasiadas solicitudes. Espera antes de reintentar.",
+            "Trop de demandes. Attendez avant de réessayer.",
+            "Zu viele Anfragen. Vor erneutem Versuch warten.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.recovery",
         text: row(
             "本机同步状态需要恢复。请保留本机资料，不要覆盖云端备份。",
@@ -7327,9 +11982,12 @@ pub const CATALOG: &[Msg] = &[
             "Local recovery is needed. Keep this device’s data and do not overwrite the cloud backup.",
             "ローカル状態の復旧が必要です。この端末のデータを保持し、クラウドを上書きしないでください。",
             "로컬 상태 복구가 필요합니다. 이 기기의 데이터를 보관하고 클라우드 백업을 덮어쓰지 마세요.",
+            "Se necesita recuperación local. Conserva los datos de este dispositivo y no sobrescribas la copia en la nube.",
+            "Une récupération locale est nécessaire. Conservez les données de cet appareil sans écraser la sauvegarde cloud.",
+            "Lokale Wiederherstellung nötig. Daten dieses Geräts behalten und Cloud-Sicherung nicht überschreiben.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.reviewRequired",
         text: row(
             "请先确认完整同步范围，并审阅云端恢复预览。",
@@ -7337,9 +11995,12 @@ pub const CATALOG: &[Msg] = &[
             "Review the full sync scope and the cloud restore preview before continuing.",
             "続ける前に同期対象と復元プレビューを確認してください。",
             "계속하기 전에 동기화 범위와 복원 미리보기를 확인하세요.",
+            "Revisa el alcance y la vista previa de restauración antes de continuar.",
+            "Examinez le périmètre et l’aperçu de restauration avant de continuer.",
+            "Zuerst Sync-Umfang und Wiederherstellungsvorschau prüfen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.rolledBack",
         text: row(
             "恢复失败，本机更改已回滚。请刷新状态后重试。",
@@ -7347,9 +12008,12 @@ pub const CATALOG: &[Msg] = &[
             "Restore failed and local changes were rolled back. Refresh before trying again.",
             "復元に失敗し、ローカルの変更を元に戻しました。更新してから再試行してください。",
             "복원에 실패해 로컬 변경을 되돌렸습니다. 새로고침한 후 다시 시도하세요.",
+            "La restauración falló y se revirtieron los cambios locales. Actualiza antes de reintentar.",
+            "La restauration a échoué ; les modifications locales ont été annulées. Actualisez avant de réessayer.",
+            "Wiederherstellung fehlgeschlagen; lokale Änderungen zurückgesetzt. Vor erneutem Versuch aktualisieren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.secureStorage",
         text: row(
             "安全存储拒绝访问。请检查设备授权，或取消记住密钥后解锁。",
@@ -7357,9 +12021,12 @@ pub const CATALOG: &[Msg] = &[
             "Secure storage denied access. Check device permissions, or unlock without remembering the key.",
             "安全なストレージへのアクセスが拒否されました。権限を確認するか、キーを記憶せずに解除してください。",
             "보안 저장소 접근이 거부되었습니다. 권한을 확인하거나 키를 기억하지 않고 잠금 해제하세요.",
+            "Acceso al almacenamiento seguro denegado. Revisa permisos o desbloquea sin recordar la clave.",
+            "Accès au stockage sécurisé refusé. Vérifiez les autorisations ou déverrouillez sans mémoriser la clé.",
+            "Zugriff auf sicheren Speicher verweigert. Berechtigungen prüfen oder ohne gespeicherten Schlüssel entsperren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.signIn",
         text: row(
             "请重新登录 GitHub。",
@@ -7367,9 +12034,12 @@ pub const CATALOG: &[Msg] = &[
             "Sign in to GitHub again.",
             "GitHub に再ログインしてください。",
             "GitHub에 다시 로그인하세요.",
+            "Vuelve a iniciar sesión con GitHub.",
+            "Reconnectez-vous à GitHub.",
+            "Erneut bei GitHub anmelden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.tooLarge",
         text: row(
             "加密备份超出服务的大小限制。",
@@ -7377,9 +12047,12 @@ pub const CATALOG: &[Msg] = &[
             "The encrypted backup exceeds the service’s size limit.",
             "暗号化バックアップがサービスのサイズ上限を超えています。",
             "암호화 백업이 서비스 크기 제한을 초과합니다.",
+            "La copia cifrada supera el límite de tamaño del servicio.",
+            "La sauvegarde chiffrée dépasse la limite de taille du service.",
+            "Verschlüsselte Sicherung überschreitet das Größenlimit.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.unavailable",
         text: row(
             "加密同步暂不可用，请使用原生客户端并稍后检查服务。",
@@ -7387,9 +12060,12 @@ pub const CATALOG: &[Msg] = &[
             "Encrypted sync is unavailable here. Use the native app and check the service later.",
             "暗号化同期は利用できません。ネイティブアプリで後ほどサービスを確認してください。",
             "암호화 동기화를 사용할 수 없습니다. 네이티브 앱에서 나중에 서비스를 확인하세요.",
+            "La sincronización cifrada no está disponible. Usa la aplicación nativa y comprueba el servicio más tarde.",
+            "Synchronisation chiffrée indisponible. Utilisez l’application native et vérifiez le service plus tard.",
+            "Verschlüsselte Synchronisierung nicht verfügbar. Native App verwenden und Dienst später prüfen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.unknown",
         text: row(
             "操作未能完成，请刷新状态后重试。",
@@ -7397,9 +12073,12 @@ pub const CATALOG: &[Msg] = &[
             "The operation could not be completed. Refresh the status and try again.",
             "操作を完了できませんでした。状態を更新して再試行してください。",
             "작업을 완료하지 못했습니다. 상태를 새로고침한 후 다시 시도하세요.",
+            "No se pudo completar la operación. Actualiza el estado y vuelve a intentarlo.",
+            "L’opération n’a pas abouti. Actualisez l’état et réessayez.",
+            "Vorgang fehlgeschlagen. Status aktualisieren und erneut versuchen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.unlock",
         text: row(
             "请先使用同步密码解锁此设备。",
@@ -7407,9 +12086,12 @@ pub const CATALOG: &[Msg] = &[
             "Unlock this device with your sync password first.",
             "同期パスワードでこの端末を解除してください。",
             "먼저 동기화 비밀번호로 이 기기를 잠금 해제하세요.",
+            "Primero desbloquea el dispositivo con la contraseña de sincronización.",
+            "Déverrouillez d’abord cet appareil avec votre mot de passe.",
+            "Dieses Gerät zuerst mit dem Sync-Passwort entsperren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.weakPassword",
         text: row(
             "请使用满足长度和字符要求、且不常见的强密码。",
@@ -7417,9 +12099,12 @@ pub const CATALOG: &[Msg] = &[
             "Choose a stronger password meeting the length and character requirements.",
             "長さと文字種の条件を満たす、推測されにくいパスワードにしてください。",
             "길이와 문자 조건을 충족하는 더 강력한 비밀번호를 사용하세요.",
+            "Elige una contraseña más fuerte que cumpla los requisitos.",
+            "Choisissez un mot de passe plus fort respectant les critères.",
+            "Ein stärkeres Passwort mit passender Länge und Zeichenwahl verwenden.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.conflict",
         text: row(
             "本地与云端的数据版本冲突，请刷新状态后再试。",
@@ -7427,9 +12112,12 @@ pub const CATALOG: &[Msg] = &[
             "Local and cloud data versions conflict — refresh the status and retry.",
             "ローカルとクラウドのデータ版が競合しています。状態を更新してから再試行してください。",
             "로컬과 클라우드 데이터 버전이 충돌합니다. 상태를 새로 고친 뒤 다시 시도하세요.",
+            "Local and cloud data versions conflict — refresh the status and retry.",
+            "Local and cloud data versions conflict — refresh the status and retry.",
+            "Local and cloud data versions conflict — refresh the status and retry.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.denied",
         text: row(
             "服务拒绝了这次请求（权限或访问受限）。",
@@ -7437,9 +12125,12 @@ pub const CATALOG: &[Msg] = &[
             "The service rejected the request (permission or access restriction).",
             "サービスが要求を拒否しました（権限またはアクセス制限）。",
             "서비스가 요청을 거부했습니다(권한 또는 접근 제한).",
+            "The service rejected the request (permission or access restriction).",
+            "The service rejected the request (permission or access restriction).",
+            "The service rejected the request (permission or access restriction).",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.expired",
         text: row(
             "这次操作已过期，请重新发起。",
@@ -7447,9 +12138,12 @@ pub const CATALOG: &[Msg] = &[
             "This operation expired — start it again.",
             "この操作は期限切れです。もう一度実行してください。",
             "이 작업이 만료되었습니다. 다시 시작하세요.",
+            "This operation expired — start it again.",
+            "This operation expired — start it again.",
+            "This operation expired — start it again.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.locked",
         text: row(
             "同步密钥处于锁定状态，请先解锁。",
@@ -7457,9 +12151,12 @@ pub const CATALOG: &[Msg] = &[
             "The sync key is locked — unlock it first.",
             "同期キーがロックされています。先にロック解除してください。",
             "동기화 키가 잠겨 있습니다. 먼저 잠금을 해제하세요.",
+            "The sync key is locked — unlock it first.",
+            "The sync key is locked — unlock it first.",
+            "The sync key is locked — unlock it first.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.server",
         text: row(
             "同步服务返回了错误，请稍后重试。",
@@ -7467,9 +12164,12 @@ pub const CATALOG: &[Msg] = &[
             "The sync service returned an error — retry later.",
             "同期サービスがエラーを返しました。後で再試行してください。",
             "동기화 서비스가 오류를 반환했습니다. 나중에 다시 시도하세요.",
+            "The sync service returned an error — retry later.",
+            "The sync service returned an error — retry later.",
+            "The sync service returned an error — retry later.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.unsupported",
         text: row(
             "服务端协议不受支持，请更新 OpenLess 或改用自建服务器。",
@@ -7477,9 +12177,12 @@ pub const CATALOG: &[Msg] = &[
             "The server protocol is unsupported — update OpenLess or use your own server.",
             "サーバー側プロトコルが未対応です。OpenLess を更新するか自前サーバーを使用してください。",
             "서버 프로토콜이 지원되지 않습니다. OpenLess를 업데이트하거나 자체 서버를 사용하세요.",
+            "The server protocol is unsupported — update OpenLess or use your own server.",
+            "The server protocol is unsupported — update OpenLess or use your own server.",
+            "The server protocol is unsupported — update OpenLess or use your own server.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.invalidResponse",
         text: row(
             "服务返回的内容无法解析，请稍后重试。",
@@ -7487,9 +12190,12 @@ pub const CATALOG: &[Msg] = &[
             "The service returned an unreadable response — retry later.",
             "サービスの応答を解析できませんでした。後で再試行してください。",
             "서비스 응답을 해석할 수 없습니다. 나중에 다시 시도하세요.",
+            "The service returned an unreadable response — retry later.",
+            "The service returned an unreadable response — retry later.",
+            "The service returned an unreadable response — retry later.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.cloudDeleted",
         text: row(
             "云端备份已被删除；如需继续请重新启用同步。",
@@ -7497,9 +12203,12 @@ pub const CATALOG: &[Msg] = &[
             "The cloud backup was deleted — re-enable sync to continue.",
             "クラウドバックアップは削除されました。続けるには同期を再度有効にしてください。",
             "클라우드 백업이 삭제되었습니다. 계속하려면 동기화를 다시 활성화하세요.",
+            "The cloud backup was deleted — re-enable sync to continue.",
+            "The cloud backup was deleted — re-enable sync to continue.",
+            "The cloud backup was deleted — re-enable sync to continue.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.consentRequired",
         text: row(
             "请先确认完整同步范围再继续。",
@@ -7507,9 +12216,12 @@ pub const CATALOG: &[Msg] = &[
             "Confirm the full sync scope before continuing.",
             "続行する前に同期範囲全体を確認してください。",
             "계속하기 전에 전체 동기화 범위를 확인하세요.",
+            "Confirm the full sync scope before continuing.",
+            "Confirm the full sync scope before continuing.",
+            "Confirm the full sync scope before continuing.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.cryptoWorkerFailed",
         text: row(
             "加密运算失败，请重试；若持续出现请导出日志。",
@@ -7517,9 +12229,12 @@ pub const CATALOG: &[Msg] = &[
             "Encryption failed — retry; export the logs if it keeps happening.",
             "暗号処理に失敗しました。再試行し、続く場合はログを書き出してください。",
             "암호화 연산이 실패했습니다. 다시 시도하고 계속되면 로그를 내보내세요.",
+            "Encryption failed — retry; export the logs if it keeps happening.",
+            "Encryption failed — retry; export the logs if it keeps happening.",
+            "Encryption failed — retry; export the logs if it keeps happening.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.deleteConfirmationRequired",
         text: row(
             "删除云端备份需要再次确认。",
@@ -7527,9 +12242,12 @@ pub const CATALOG: &[Msg] = &[
             "Deleting the cloud backup needs another confirmation.",
             "クラウドバックアップの削除には再確認が必要です。",
             "클라우드 백업 삭제에는 다시 확인이 필요합니다.",
+            "Deleting the cloud backup needs another confirmation.",
+            "Deleting the cloud backup needs another confirmation.",
+            "Deleting the cloud backup needs another confirmation.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.metadataRequired",
         text: row(
             "缺少同步元数据，请刷新状态后重试。",
@@ -7537,9 +12255,12 @@ pub const CATALOG: &[Msg] = &[
             "Sync metadata is missing — refresh the status and retry.",
             "同期メタデータがありません。状態を更新して再試行してください。",
             "동기화 메타데이터가 없습니다. 상태를 새로 고친 뒤 다시 시도하세요.",
+            "Sync metadata is missing — refresh the status and retry.",
+            "Sync metadata is missing — refresh the status and retry.",
+            "Sync metadata is missing — refresh the status and retry.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.secureRandomUnavailable",
         text: row(
             "系统安全随机源不可用，无法生成加密密钥。",
@@ -7547,9 +12268,12 @@ pub const CATALOG: &[Msg] = &[
             "The system secure random source is unavailable; cannot derive keys.",
             "安全な乱数源が利用できず、鍵を生成できません。",
             "시스템 보안 난수원을 사용할 수 없어 키를 만들 수 없습니다.",
+            "The system secure random source is unavailable; cannot derive keys.",
+            "The system secure random source is unavailable; cannot derive keys.",
+            "The system secure random source is unavailable; cannot derive keys.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.staleTask",
         text: row(
             "该同步任务已失效，请刷新状态。",
@@ -7557,9 +12281,12 @@ pub const CATALOG: &[Msg] = &[
             "That sync task is no longer valid — refresh the status.",
             "その同期タスクは無効です。状態を更新してください。",
             "해당 동기화 작업이 더 이상 유효하지 않습니다. 상태를 새로 고치세요.",
+            "That sync task is no longer valid — refresh the status.",
+            "That sync task is no longer valid — refresh the status.",
+            "That sync task is no longer valid — refresh the status.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.errors.serviceUnavailable",
         text: row(
             "加密同步服务暂不可用，请稍后重试。",
@@ -7567,12 +12294,15 @@ pub const CATALOG: &[Msg] = &[
             "Encrypted sync is temporarily unavailable — retry later.",
             "暗号化同期は一時的に利用できません。後で再試行してください。",
             "암호화 동기화를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요.",
+            "Encrypted sync is temporarily unavailable — retry later.",
+            "Encrypted sync is temporarily unavailable — retry later.",
+            "Encrypted sync is temporarily unavailable — retry later.",
         ),
     },
 
     // 加密同步卡片的步骤标题 / 状态 / 按钮文案。这些键在 `cloud_sync_ui.rs` 里
     // 是静态字符串常量，之前也整批缺失，界面上直接画出了 `cloudSyncE2ee.states.disabled`。
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.checkPending",
         text: row(
             "核对待确认结果",
@@ -7580,9 +12310,12 @@ pub const CATALOG: &[Msg] = &[
             "Check pending result",
             "未確定の結果を確認",
             "확인 대기 결과 조회",
+            "Comprobar resultado pendiente",
+            "Vérifier le résultat en attente",
+            "Ausstehendes Ergebnis prüfen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.conflictCloud",
         text: row(
             "使用云端",
@@ -7590,9 +12323,12 @@ pub const CATALOG: &[Msg] = &[
             "Use cloud",
             "クラウドを使用",
             "클라우드 사용",
+            "Usar nube",
+            "Utiliser le cloud",
+            "Cloud verwenden",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.conflictLocal",
         text: row(
             "保留本机",
@@ -7600,9 +12336,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep local",
             "ローカルを使用",
             "로컬 유지",
+            "Conservar local",
+            "Garder la version locale",
+            "Lokal behalten",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.createTitle",
         text: row(
             "设置同步密码",
@@ -7610,9 +12349,12 @@ pub const CATALOG: &[Msg] = &[
             "Create a sync password",
             "同期パスワードを設定",
             "동기화 비밀번호 설정",
+            "Crear contraseña de sincronización",
+            "Créer un mot de passe de synchronisation",
+            "Sync-Passwort erstellen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolEncryption",
         text: row(
             "配置、服务 API 密钥和历史文本会先在本机加密，发往云端和保存在云端的备份内容均为密文。云同步服务无法据此读取或调用您的服务 API 密钥，也不会使用这些内容执行模型请求。",
@@ -7620,9 +12362,12 @@ pub const CATALOG: &[Msg] = &[
             "Settings, service API keys and text history are encrypted locally. Backup content is sent and stored as ciphertext. The sync service cannot read or use your API keys from it, and does not use this content to run model requests.",
             "設定、API キー、テキスト履歴はこの端末で暗号化されます。バックアップは暗号文として送信・保存されます。同期サービスはその内容から API キーを読み取ったり使用したりせず、モデルへのリクエストにも利用しません。",
             "설정, API 키, 텍스트 기록은 이 기기에서 암호화됩니다. 백업은 암호문으로 전송되고 저장됩니다. 동기화 서비스는 이를 통해 API 키를 읽거나 사용하지 못하며 모델 요청에도 이용하지 않습니다.",
+            "Los ajustes, claves API e historial de texto se cifran en este dispositivo. La copia se envía y almacena cifrada. El servicio no puede leer ni utilizar tus claves API y no usa estos datos para ejecutar solicitudes a modelos.",
+            "Réglages, clés API et historique texte sont chiffrés sur cet appareil. La sauvegarde est transmise et stockée chiffrée. Le service ne peut ni lire ni utiliser vos clés API et n’emploie pas ces contenus pour appeler des modèles.",
+            "Einstellungen, API-Schlüssel und Textverlauf werden auf diesem Gerät verschlüsselt. Backup-Inhalte werden als Geheimtext übertragen und gespeichert. Der Sync-Dienst kann Ihre API-Schlüssel daraus weder lesen noch verwenden und führt damit keine Modellanfragen aus.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolEncryptionTitle",
         text: row(
             "先在本机加密，再上传",
@@ -7630,9 +12375,12 @@ pub const CATALOG: &[Msg] = &[
             "Encrypt on this device before uploading",
             "端末で暗号化してから送信",
             "기기에서 암호화한 후 업로드",
+            "Cifrado local antes de subir los datos",
+            "Chiffrement local avant l’envoi",
+            "Vor dem Hochladen lokal verschlüsseln",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolExcluded",
         text: row(
             "同步密码、解密密钥、OpenLess 管理的 GitHub/OAuth 登录状态、访问令牌及设备私钥不进入备份。账号认证会单独处理必要凭据；服务器仍可见账号标识、密文大小、版本及同步时间。",
@@ -7640,9 +12388,12 @@ pub const CATALOG: &[Msg] = &[
             "The backup excludes your sync password, decryption keys, OpenLess-managed GitHub/OAuth sign-in state, access tokens and device private keys. Account authentication handles necessary credentials separately. The server can still see account identifiers, ciphertext size, versions and sync times.",
             "同期パスワード、復号キー、OpenLess が管理する GitHub/OAuth ログイン状態、アクセストークン、端末の秘密鍵はバックアップに含まれません。アカウント認証には必要な認証情報を別途使用します。サーバーにはアカウント識別子、暗号文のサイズ、版、同期日時が見えます。",
             "동기화 비밀번호, 복호화 키, OpenLess가 관리하는 GitHub/OAuth 로그인 상태, 액세스 토큰, 기기 개인 키는 백업에 포함되지 않습니다. 계정 인증에는 필요한 자격 증명을 별도로 사용합니다. 서버는 계정 식별자, 암호문 크기, 버전 및 동기화 시간을 볼 수 있습니다.",
+            "La copia excluye la contraseña, claves de descifrado, estado de GitHub/OAuth gestionado por OpenLess, tokens de acceso y claves privadas del dispositivo. La autenticación de la cuenta trata sus credenciales por separado. El servidor aún puede ver la cuenta, el tamaño del cifrado, las versiones y las fechas de sincronización.",
+            "La sauvegarde exclut le mot de passe, les clés de déchiffrement, l’état GitHub/OAuth géré par OpenLess, les jetons d’accès et les clés privées de l’appareil. L’authentification du compte traite séparément les identifiants nécessaires. Le serveur voit encore le compte, la taille chiffrée, les versions et les dates de synchronisation.",
+            "Das Backup enthält weder Sync-Passwort noch Entschlüsselungsschlüssel, von OpenLess verwaltete GitHub/OAuth-Anmeldedaten, Zugriffstoken oder private Geräteschlüssel. Die Kontoanmeldung verarbeitet notwendige Zugangsdaten separat. Kontokennung, Größe, Versionen und Sync-Zeiten bleiben für den Server sichtbar.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolExcludedTitle",
         text: row(
             "登录状态与可见信息",
@@ -7650,9 +12401,12 @@ pub const CATALOG: &[Msg] = &[
             "Sign-in state and visible metadata",
             "ログイン状態と確認可能な情報",
             "로그인 상태와 확인 가능한 정보",
+            "Inicio de sesión y metadatos visibles",
+            "Connexion et métadonnées visibles",
+            "Anmeldestatus und sichtbare Metadaten",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolIntro",
         text: row(
             "OpenLess 及个人开发者尊重您的隐私，并致力于保护您的资料。请阅读以下说明，再决定是否继续。",
@@ -7660,9 +12414,12 @@ pub const CATALOG: &[Msg] = &[
             "OpenLess and its independent developers respect your privacy and work to protect your data. Read this notice before continuing.",
             "OpenLess と開発者はプライバシーを尊重し、データの保護に取り組んでいます。続行する前に、以下をご確認ください。",
             "OpenLess와 독립 개발자는 개인정보를 존중하고 데이터를 보호하기 위해 노력합니다. 계속하기 전에 아래 안내를 읽어 주세요.",
+            "OpenLess y sus desarrolladores independientes respetan tu privacidad y protegen tus datos. Lee este aviso antes de continuar.",
+            "OpenLess et ses développeurs indépendants respectent votre vie privée et protègent vos données. Lisez cette notice avant de continuer.",
+            "OpenLess und seine unabhängigen Entwickler respektieren Ihre Privatsphäre und schützen Ihre Daten. Lesen Sie diese Hinweise, bevor Sie fortfahren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolPassword",
         text: row(
             "同步密码和解密密钥仅用于本机加密与解锁，不会发送给云同步服务。若密码遗失且没有仍可解锁的设备，我们无法找回加密内容。",
@@ -7670,9 +12427,12 @@ pub const CATALOG: &[Msg] = &[
             "Your sync password and decryption key are used locally and are never sent to the sync service. If you lose the password and have no device that can still unlock the backup, we cannot recover its contents.",
             "同期パスワードと復号キーは端末内で使用され、同期サービスには送信されません。パスワードを紛失し、解除できる端末もない場合、内容を復元することはできません。",
             "동기화 비밀번호와 복호화 키는 기기에서만 사용되며 동기화 서비스로 전송되지 않습니다. 비밀번호를 잃고 백업을 잠금 해제할 기기도 없다면 내용을 복구할 수 없습니다.",
+            "La contraseña y la clave de descifrado se usan localmente y no se envían al servicio. Si pierdes la contraseña y ningún dispositivo puede desbloquear la copia, no podremos recuperar su contenido.",
+            "Le mot de passe et la clé de déchiffrement restent utilisés localement et ne sont jamais envoyés au service. Si vous perdez le mot de passe et qu’aucun appareil ne peut déverrouiller la sauvegarde, nous ne pouvons pas récupérer son contenu.",
+            "Passwort und Entschlüsselungsschlüssel werden lokal verwendet und nicht an den Sync-Dienst gesendet. Geht das Passwort verloren und kann kein Gerät das Backup mehr entsperren, können wir den Inhalt nicht wiederherstellen.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.protocolPasswordTitle",
         text: row(
             "请妥善保存同步密码",
@@ -7680,9 +12440,12 @@ pub const CATALOG: &[Msg] = &[
             "Keep your sync password safe",
             "同期パスワードを大切に保管してください",
             "동기화 비밀번호를 안전하게 보관하세요",
+            "Guarda tu contraseña de sincronización",
+            "Conservez votre mot de passe",
+            "Synchronisierungspasswort sicher aufbewahren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.conflict",
         text: row(
             "请审阅冲突更改",
@@ -7690,9 +12453,12 @@ pub const CATALOG: &[Msg] = &[
             "Review conflicting changes",
             "競合する変更を確認してください",
             "충돌하는 변경 검토 필요",
+            "Revisar cambios en conflicto",
+            "Examiner les conflits",
+            "Konflikte prüfen",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.disabled",
         text: row(
             "同步已关闭",
@@ -7700,9 +12466,12 @@ pub const CATALOG: &[Msg] = &[
             "Sync is off",
             "同期はオフです",
             "동기화 꺼짐",
+            "Sincronización desactivada",
+            "Synchronisation désactivée",
+            "Synchronisierung aus",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.failed",
         text: row(
             "同步需要处理",
@@ -7710,9 +12479,12 @@ pub const CATALOG: &[Msg] = &[
             "Sync needs attention",
             "同期の確認が必要です",
             "동기화 확인 필요",
+            "La sincronización requiere atención",
+            "La synchronisation nécessite votre attention",
+            "Synchronisierung benötigt Aufmerksamkeit",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.outcome_unknown",
         text: row(
             "云端结果待确认",
@@ -7720,9 +12492,12 @@ pub const CATALOG: &[Msg] = &[
             "Waiting to confirm the cloud result",
             "クラウドの結果は未確定です",
             "클라우드 결과 확인 대기 중",
+            "Resultado en la nube sin confirmar",
+            "Résultat cloud à confirmer",
+            "Cloud-Ergebnis noch unbestätigt",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.pending",
         text: row(
             "本机更改待同步",
@@ -7730,19 +12505,16 @@ pub const CATALOG: &[Msg] = &[
             "Local changes are waiting to sync",
             "ローカルの変更は同期待ちです",
             "로컬 변경 동기화 대기 중",
+            "Cambios locales pendientes de sincronizar",
+            "Modifications locales en attente",
+            "Lokale Änderungen warten auf Synchronisierung",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.ready",
-        text: row(
-            "已同步",
-            "已同步",
-            "Up to date",
-            "同期済み",
-            "최신 상태",
-        ),
+        text: row("已同步", "已同步", "Up to date", "同期済み", "최신 상태", "Actualizado", "À jour", "Aktuell"),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.recovery_required",
         text: row(
             "需要恢复本机同步状态",
@@ -7750,9 +12522,12 @@ pub const CATALOG: &[Msg] = &[
             "Local recovery is required",
             "ローカル状態の復旧が必要です",
             "로컬 상태 복구 필요",
+            "Se requiere recuperación local",
+            "Récupération locale requise",
+            "Lokale Wiederherstellung erforderlich",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.sign_in_required",
         text: row(
             "需要登录 GitHub",
@@ -7760,9 +12535,12 @@ pub const CATALOG: &[Msg] = &[
             "GitHub sign-in required",
             "GitHub ログインが必要です",
             "GitHub 로그인 필요",
+            "Se requiere iniciar sesión con GitHub",
+            "Connexion GitHub requise",
+            "GitHub-Anmeldung erforderlich",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.syncing",
         text: row(
             "正在同步",
@@ -7770,9 +12548,12 @@ pub const CATALOG: &[Msg] = &[
             "Sync in progress",
             "同期中",
             "동기화 중",
+            "Sincronizando",
+            "Synchronisation en cours",
+            "Synchronisierung läuft",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.states.unlock_required",
         text: row(
             "请输入密码解锁",
@@ -7780,9 +12561,12 @@ pub const CATALOG: &[Msg] = &[
             "Enter your password to unlock",
             "パスワードを入力して解除してください",
             "비밀번호를 입력해 잠금을 해제하세요",
+            "Introduce tu contraseña para desbloquear",
+            "Saisissez le mot de passe pour déverrouiller",
+            "Zum Entsperren Passwort eingeben",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepEnableDetail",
         text: row(
             "打开右侧开关。确认协议之后，下一步是设置同步密码。",
@@ -7790,9 +12574,12 @@ pub const CATALOG: &[Msg] = &[
             "Use the switch. After you confirm the notice, the next step is a sync password.",
             "スイッチを使います。確認のあと、次は同期パスワードの設定です。",
             "스위치를 사용하세요. 확인 후 다음 단계는 동기화 비밀번호입니다.",
+            "Usa el interruptor. Tras confirmar, el siguiente paso es la contraseña.",
+            "Utilisez l’interrupteur. Après confirmation, l’étape suivante est le mot de passe.",
+            "Den Schalter verwenden. Nach der Bestätigung folgt das Sync-Passwort.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepEnableTitle",
         text: row(
             "第 1 步，共 3 步：开启同步",
@@ -7800,9 +12587,12 @@ pub const CATALOG: &[Msg] = &[
             "Step 1 of 3: Turn sync on",
             "手順 1/3：同期をオンにする",
             "1/3단계: 동기화 켜기",
+            "Paso 1 de 3: activar la sincronización",
+            "Étape 1 sur 3 : activer la synchronisation",
+            "Schritt 1 von 3: Synchronisierung einschalten",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepFollowDetail",
         text: row(
             "按这一行旁边的按钮继续。",
@@ -7810,9 +12600,12 @@ pub const CATALOG: &[Msg] = &[
             "Use the button on this row to continue.",
             "この行のボタンで続けてください。",
             "이 줄의 버튼으로 계속하세요.",
+            "Usa el botón de esta fila para continuar.",
+            "Utilisez le bouton sur cette ligne pour continuer.",
+            "Mit der Schaltfläche in dieser Zeile fortfahren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepUnlockDetail",
         text: row(
             "还差一步。输入同步密码，解锁之后才能同步。",
@@ -7820,9 +12613,12 @@ pub const CATALOG: &[Msg] = &[
             "One step left. Enter the sync password to unlock this device.",
             "あと 1 ステップです。同期パスワードを入力して、このデバイスのロックを解除します。",
             "한 단계 남았습니다. 동기화 비밀번호로 이 기기의 잠금을 해제하세요.",
+            "Falta un paso. Introduce la contraseña para desbloquear este dispositivo.",
+            "Il reste une étape. Saisissez le mot de passe pour déverrouiller cet appareil.",
+            "Noch ein Schritt. Sync-Passwort eingeben, um dieses Gerät zu entsperren.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepUnlockTitle",
         text: row(
             "第 2 步，共 3 步：解锁这台设备",
@@ -7830,9 +12626,12 @@ pub const CATALOG: &[Msg] = &[
             "Step 2 of 3: Unlock this device",
             "手順 2/3：このデバイスのロックを解除",
             "2/3단계: 이 기기 잠금 해제",
+            "Paso 2 de 3: desbloquear este dispositivo",
+            "Étape 2 sur 3 : déverrouiller cet appareil",
+            "Schritt 2 von 3: Dieses Gerät entsperren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.syncNow",
         text: row(
             "立即同步",
@@ -7840,9 +12639,12 @@ pub const CATALOG: &[Msg] = &[
             "Sync now",
             "今すぐ同期",
             "지금 동기화",
+            "Sincronizar ahora",
+            "Synchroniser maintenant",
+            "Jetzt synchronisieren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.unlockTitle",
         text: row(
             "解锁云端备份",
@@ -7850,9 +12652,12 @@ pub const CATALOG: &[Msg] = &[
             "Unlock your cloud backup",
             "クラウドバックアップを解除",
             "클라우드 백업 잠금 해제",
+            "Desbloquear copia en la nube",
+            "Déverrouiller la sauvegarde cloud",
+            "Cloud-Sicherung entsperren",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepRestoreTitle",
         text: row(
             "第 3 步，共 3 步：恢复云端备份",
@@ -7860,9 +12665,12 @@ pub const CATALOG: &[Msg] = &[
             "Step 3 of 3: restore the cloud backup",
             "ステップ 3/3：クラウドバックアップを復元",
             "3/3단계: 클라우드 백업 복원",
+            "Step 3 of 3: restore the cloud backup",
+            "Step 3 of 3: restore the cloud backup",
+            "Step 3 of 3: restore the cloud backup",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.stepRestoreDetail",
         text: row(
             "选择一份云端备份并先预览；确认后才会替换本机资料。",
@@ -7870,19 +12678,16 @@ pub const CATALOG: &[Msg] = &[
             "Pick a cloud backup and preview it first; local data is only replaced after you confirm.",
             "クラウドバックアップを選んでプレビューし、確認後にのみローカルを置き換えます。",
             "클라우드 백업을 선택해 먼저 미리 본 뒤 확인하면 로컬 데이터가 교체됩니다.",
+            "Pick a cloud backup and preview it first; local data is only replaced after you confirm.",
+            "Pick a cloud backup and preview it first; local data is only replaced after you confirm.",
+            "Pick a cloud backup and preview it first; local data is only replaced after you confirm.",
         ),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.noticeDone",
-        text: row(
-            "已完成。",
-            "已完成。",
-            "Done.",
-            "完了しました。",
-            "완료되었습니다.",
-        ),
+        text: row("已完成。", "已完成。", "Done.", "完了しました。", "완료되었습니다.", "Done.", "Done.", "Done."),
     },
-    Msg {
+        Msg {
         key: "cloudSyncE2ee.noticeRestored",
         text: row(
             "云端备份已恢复到本机。",
@@ -7890,11 +12695,14 @@ pub const CATALOG: &[Msg] = &[
             "The cloud backup was restored to this device.",
             "クラウドバックアップをこの端末に復元しました。",
             "클라우드 백업을 이 기기로 복원했습니다.",
+            "The cloud backup was restored to this device.",
+            "The cloud backup was restored to this device.",
+            "The cloud backup was restored to this device.",
         ),
     },
 
     // 提供方设置里以字面量引用的两个键；egui 目录此前缺失，界面上会画成裸键。
-    Msg {
+        Msg {
         key: "settings.providers.fillDefault",
         text: row(
             "填入默认值",
@@ -7902,9 +12710,12 @@ pub const CATALOG: &[Msg] = &[
             "Fill default value",
             "デフォルト値を入力",
             "기본값 입력",
+            "Usar valor predeterminado",
+            "Renseigner la valeur par défaut",
+            "Standardwert eintragen",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.llmProtocolHeaderConflict",
         text: row(
             "Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。",
@@ -7912,17 +12723,375 @@ pub const CATALOG: &[Msg] = &[
             "Messages sets authentication and version headers automatically. Remove x-api-key and anthropic-version from extra headers.",
             "Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。",
             "Messages 인증 및 버전 헤더는 자동 설정됩니다. 추가 헤더에서 x-api-key와 anthropic-version을 제거하세요.",
+            "Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.",
+            "Messages définit automatiquement les en-têtes d’authentification et de version. Retirez x-api-key et anthropic-version des en-têtes supplémentaires.",
+            "Messages setzt die Authentifizierungs- und Versionsheader automatisch. Entferne x-api-key und anthropic-version aus den zusätzlichen Headern.",
         ),
     },
-    Msg {
+        Msg {
         key: "settings.providers.showSecret",
-        text: row("显示", "顯示", "Show", "表示", "표시"),
+        text: row("显示", "顯示", "Show", "表示", "표시", "Show", "Show", "Show"),
     },
-    Msg {
+        Msg {
         key: "settings.providers.hideSecret",
-        text: row("隐藏", "隱藏", "Hide", "隠す", "숨기기"),
+        text: row("隐藏", "隱藏", "Hide", "隠す", "숨기기", "Hide", "Hide", "Hide"),
     },
 
+        Msg {
+        key: "settings.about.beta_channel_desc",
+        text: row(
+            "开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。",
+            "開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。",
+            "When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.",
+            "オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。",
+            "켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.",
+            "Al activarlo, las actualizaciones automáticas siguen el canal Beta; al desactivarlo, siguen el estable. Puedes buscar una Beta manualmente con el botón de abajo.",
+            "Si cette option est activée, les mises à jour automatiques suivent le canal Beta ; sinon, le canal stable. Le bouton ci-dessous permet de rechercher une Beta manuellement.",
+            "Bei Aktivierung verwendet die automatische Updatesuche den Beta-Kanal, andernfalls die stabile Version. Über die Taste unten kannst du jederzeit manuell nach Betas suchen.",
+        ),
+    },
+        Msg {
+        key: "settings.about.beta_channel_label",
+        text: row(
+            "加入 Beta 渠道",
+            "加入 Beta 渠道",
+            "Join Beta channel",
+            "Beta チャンネルに参加",
+            "Beta 채널 참여",
+            "Unirse al canal Beta",
+            "Rejoindre le canal Beta",
+            "Beta-Kanal verwenden",
+        ),
+    },
+        Msg {
+        key: "settings.about.beta_channel_toggle_label",
+        text: row(
+            "启用 Beta 渠道",
+            "啟用 Beta 渠道",
+            "Enable Beta channel",
+            "Beta チャンネルを有効化",
+            "Beta 채널 사용",
+            "Activar canal Beta",
+            "Activer le canal Beta",
+            "Beta-Kanal aktivieren",
+        ),
+    },
+        Msg {
+        key: "settings.about.checking_update",
+        text: row(
+            "检查中…",
+            "檢查中…",
+            "Checking…",
+            "確認中…",
+            "확인 중…",
+            "Buscando…",
+            "Recherche…",
+            "Wird geprüft…",
+        ),
+    },
+        Msg {
+        key: "settings.about.open_releases",
+        text: row(
+            "打开 Releases",
+            "開啟 Releases",
+            "Open Releases",
+            "Releases を開く",
+            "Releases 열기",
+            "Abrir versiones",
+            "Ouvrir les versions",
+            "Veröffentlichungen öffnen",
+        ),
+    },
+        Msg {
+        key: "settings.about.up_to_date",
+        text: row(
+            "当前已是最新版本。",
+            "當前已是最新版本。",
+            "You are already on the latest version.",
+            "現在最新バージョンです。",
+            "현재 최신 버전입니다.",
+            "Ya tienes la última versión.",
+            "Vous utilisez déjà la dernière version.",
+            "Du verwendest bereits die neueste Version.",
+        ),
+    },
+        Msg {
+        key: "status.hotkey_failed",
+        text: row(
+            "热键注册失败：{}",
+            "熱鍵註冊失敗：{}",
+            "Hotkey registration failed: {}",
+            "ホットキーの登録に失敗しました: {}",
+            "단축키 등록에 실패했습니다: {}",
+            "Hotkey registration failed: {}",
+            "Hotkey registration failed: {}",
+            "Hotkey registration failed: {}",
+        ),
+    },
+        Msg {
+        key: "status.insert_fallback",
+        text: row(
+            "插入失败：请确认焦点在可输入的位置后重试（文字仍保留在历史里）",
+            "插入失敗：請確認焦點在可輸入的位置後重試（文字仍保留在歷史裡）",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+            "挿入に失敗しました。入力可能な場所にフォーカスして再試行してください（テキストは履歴に残ります）",
+            "삽입에 실패했습니다. 입력 가능한 곳에 포커스를 두고 다시 시도하세요(텍스트는 기록에 남아 있습니다)",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+            "Insertion failed: focus an editable field and try again (the text stays in History)",
+        ),
+    },
+        Msg {
+        key: "settings.about.update_available",
+        text: row(
+            "有新版本 v{}",
+            "有新版本 v{}",
+            "Version v{} is available",
+            "新しいバージョン v{} があります",
+            "새 버전 v{}이(가) 있습니다",
+            "Version v{} is available",
+            "Version v{} is available",
+            "Version v{} is available",
+        ),
+    },
+        Msg {
+        key: "settings.about.update_error",
+        text: row(
+            "检查或更新失败，请稍后重试。",
+            "檢查或更新失敗，請稍後重試。",
+            "Update check or install failed. Please try again later.",
+            "確認またはアップデートに失敗しました。後で再試行してください。",
+            "확인 또는 업데이트에 실패했습니다. 잠시 후 다시 시도하세요.",
+            "No se pudo buscar o instalar la actualización. Inténtalo más tarde.",
+            "La recherche ou l’installation de la mise à jour a échoué. Réessayez plus tard.",
+            "Updatesuche oder Installation fehlgeschlagen. Versuche es später erneut.",
+        ),
+    },
+        Msg {
+        key: "settings.about.check_beta_update_btn",
+        text: row(
+            "检查 Beta 更新",
+            "檢查 Beta 更新",
+            "Check Beta update",
+            "Beta を確認",
+            "Beta 확인",
+            "Buscar versión Beta",
+            "Rechercher une version Beta",
+            "Beta-Version prüfen",
+        ),
+    },
+        Msg {
+        key: "settings.about.check_stable_update_btn",
+        text: row(
+            "检查正式版更新",
+            "檢查正式版更新",
+            "Check stable update",
+            "正式版を確認",
+            "정식판 확인",
+            "Buscar versión estable",
+            "Rechercher une version stable",
+            "Stabile Version prüfen",
+        ),
+    },
+        Msg {
+        key: "settings.data_storage.cursor_context_desc",
+        text: row(
+            "润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。",
+            "潤色時把游標附近的一小段文字傳給模型作參考，用於專有詞、同音詞和指代的判斷（macOS / Windows / Android）。聽寫、速記和雲筆記都會參考，但上下文本身不會寫入筆記、歷史或日誌；使用雲端模型時會隨本次潤色請求傳送給該模型服務。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。",
+            "Send a short stretch of text around the cursor with polish requests as reference for names, homophones and pronouns (macOS / Windows / Android). Dictation, quick notes and cloud notes all use it, but the context itself is never written to notes, history or logs; with a cloud model it is sent to that provider with the polish request. This switch is separate from local vocabulary learning. Password fields, terminals and known sensitive apps are excluded.",
+            "推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。",
+            "다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.",
+            "Envía un fragmento breve del texto cercano al cursor al modelo como referencia para nombres propios, homófonos y pronombres al pulir (macOS / Windows / Android). El dictado, las notas rápidas y las notas en la nube lo usan, pero el contexto en sí nunca se guarda en notas, historial ni registros; con un modelo en la nube se envía a ese proveedor junto con la solicitud de pulido. Es independiente del aprendizaje local. Se excluyen contraseñas, terminales y aplicaciones sensibles conocidas.",
+            "Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.",
+            "Einen kurzen Textabschnitt rund um den Cursor als Referenz für Eigennamen, Homophone und Bezüge mit der Überarbeitung an das Modell senden (macOS / Windows / Android). Diktat, Schnellnotizen und Cloud-Notizen nutzen ihn, der Kontext selbst wird aber nie in Notizen, Verlauf oder Protokolle geschrieben; bei einem Cloud-Modell wird er mit der Überarbeitungsanfrage an diesen Anbieter gesendet. Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.",
+        ),
+    },
+        Msg {
+        key: "settings.data_storage.cursor_context_label",
+        text: row(
+            "光标上下文（实验）",
+            "遊標上下文（實驗）",
+            "Cursor context (experimental)",
+            "カーソル文脈（実験的）",
+            "커서 문맥 (실험적)",
+            "Contexto del cursor (experimental)",
+            "Contexte du curseur (expérimental)",
+            "Cursorkontext (experimentell)",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.description",
+        text: row(
+            "插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。",
+            "插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。",
+            "After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.",
+            "挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。",
+            "입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.",
+            "Tras insertar texto, detecta cambios en el campo localmente durante un máximo de 60 segundos y pide confirmación antes de guardar palabras. El texto observado no se envía al modelo. Se excluyen contraseñas y aplicaciones sensibles conocidas. En Windows y Android depende del editor; Android requiere accesibilidad. Al desactivarlo se detiene la observación.",
+            "Après insertion, les modifications du champ sont détectées localement pendant 60 secondes maximum. Chaque mot nécessite une confirmation. Le texte observé n’est pas envoyé au modèle. Les champs de mot de passe et les applications sensibles connues sont exclus. Sous Windows et Android, la prise en charge dépend de l’éditeur ; Android nécessite le service d’accessibilité. Désactiver arrête l’observation.",
+            "Nach dem Einfügen werden Änderungen im Eingabefeld bis zu 60 Sekunden lokal erkannt. Wörter werden erst nach Bestätigung gespeichert. Der beobachtete Text wird nicht an ein Modell gesendet. Passwortfelder und bekannte sensible Apps sind ausgeschlossen. Die Unterstützung unter Windows und Android hängt vom Editor ab; Android benötigt Bedienungshilfen. Ausschalten beendet die Beobachtung.",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.enabled",
+        text: row(
+            "启用手改学词",
+            "啟用手改學詞",
+            "Enable learning from corrections",
+            "修正からの学習を有効にする",
+            "수정 학습 사용",
+            "Activar aprendizaje de correcciones",
+            "Activer l’apprentissage des corrections",
+            "Lernen aus Korrekturen aktivieren",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars",
+        text: row(
+            "最大词长",
+            "最大詞長",
+            "Maximum phrase length",
+            "最大文字数",
+            "최대 글자 수",
+            "Longitud máxima",
+            "Longueur maximale",
+            "Maximale Wortlänge",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.max_phrase_chars_hint",
+        text: row(
+            "自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。",
+            "自動建議中原詞和替換詞的長度上限，2–32 個字元；不影響手動加詞。",
+            "Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.",
+            "自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。",
+            "자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.",
+            "Limitar el original y el reemplazo de las sugerencias automáticas a 2–32 caracteres. No afecta a las adiciones manuales.",
+            "Limiter le texte original et son remplacement à 2–32 caractères dans les suggestions automatiques. Les ajouts manuels ne sont pas concernés.",
+            "Original und Ersatz in automatischen Vorschlägen auf 2–32 Zeichen begrenzen. Manuelle Einträge bleiben unverändert.",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.observation_seconds",
+        text: row(
+            "观察时长",
+            "觀察時長",
+            "Observation duration",
+            "監視時間",
+            "관찰 시간",
+            "Tiempo de observación",
+            "Durée d’observation",
+            "Beobachtungsdauer",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.observation_seconds_hint",
+        text: row(
+            "听写落字后观察当前输入框的最长时间，10–60 秒。",
+            "聽寫輸入後觀察目前輸入框的最長時間，10–60 秒。",
+            "Maximum time to observe the current field after dictation: 10–60 seconds.",
+            "音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。",
+            "음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).",
+            "Observar el campo actual durante un máximo de 10–60 segundos después del dictado.",
+            "Observer le champ actuel pendant 10 à 60 secondes au maximum après la dictée.",
+            "Das aktuelle Eingabefeld nach dem Diktat höchstens 10–60 Sekunden beobachten.",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.reset",
+        text: row(
+            "恢复默认参数",
+            "恢復預設參數",
+            "Reset parameters",
+            "設定値をリセット",
+            "매개변수 초기화",
+            "Restablecer parámetros",
+            "Réinitialiser les paramètres",
+            "Parameter zurücksetzen",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds",
+        text: row(
+            "建议保留时长",
+            "建議保留時長",
+            "Suggestion duration",
+            "候補の表示時間",
+            "제안 유지 시간",
+            "Duración de las sugerencias",
+            "Durée des suggestions",
+            "Anzeigedauer der Vorschläge",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.suggestion_seconds_hint",
+        text: row(
+            "未确认的建议会在 5–60 秒后消失，不加入词典。",
+            "未確認的建議會在 5–60 秒後消失，不加入詞典。",
+            "Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.",
+            "未確認の候補は 5～60 秒後に消え、辞書には追加されません。",
+            "확인하지 않은 제안은 5~60초 후 사전에 추가되지 않고 사라집니다.",
+            "Las sugerencias sin confirmar caducan tras 5–60 segundos sin añadirse al diccionario.",
+            "Les suggestions non confirmées expirent après 5 à 60 secondes sans ajout au dictionnaire.",
+            "Unbestätigte Vorschläge verfallen nach 5–60 Sekunden ohne Wörterbucheintrag.",
+        ),
+    },
+        Msg {
+        key: "settings.vocabulary_learning.title",
+        text: row(
+            "手改学词",
+            "手改學詞",
+            "Learn from corrections",
+            "修正から単語を学習",
+            "수정으로 단어 학습",
+            "Aprender de las correcciones",
+            "Apprendre des corrections",
+            "Aus Korrekturen lernen",
+        ),
+    },
+        Msg {
+        key: "qa.activity.reading_web",
+        text: row(
+            "正在阅读网页",
+            "正在閱讀網頁",
+            "Reading web pages",
+            "ウェブページを読込中",
+            "웹 페이지 읽는 중",
+            "Leyendo páginas web",
+            "Lecture des pages Web",
+            "Webseiten werden gelesen",
+        ),
+    },
+        Msg {
+        key: "qa.activity.searching_web",
+        text: row(
+            "正在搜索网页",
+            "正在搜尋網頁",
+            "Searching the web",
+            "ウェブを検索中",
+            "웹 검색 중",
+            "Buscando en la Web",
+            "Recherche sur le Web",
+            "Web wird durchsucht",
+        ),
+    },
+        Msg {
+        key: "qa.activity.tool",
+        text: row("工具", "工具", "tool", "ツール", "도구", "herramienta", "outil", "Werkzeug"),
+    },
+        Msg {
+        key: "qa.activity.using_tool",
+        text: row(
+            "正在使用 {}",
+            "正在使用 {}",
+            "Using {}",
+            "{} を使用中",
+            "{} 사용 중",
+            "Usando {}",
+            "Utilisation de {}",
+            "{} wird verwendet",
+        ),
+    },
 ];
 
 fn lang_index(lang: Lang) -> usize {
@@ -7932,6 +13101,9 @@ fn lang_index(lang: Lang) -> usize {
         Lang::En => 2,
         Lang::Ja => 3,
         Lang::Ko => 4,
+        Lang::Es => 5,
+        Lang::Fr => 6,
+        Lang::De => 7,
     }
 }
 
@@ -8011,6 +13183,13 @@ pub fn tr_catalog<L: IntoLang>(lang: L, key: &'static str) -> &'static str {
 pub fn provider_error_text(lang: Lang, message: &str) -> &str {
     if message == "llmThinkingRequired" || message.ends_with(": llmThinkingRequired") {
         tr_catalog(lang, "settings.providers.llmThinkingRequired")
+    } else if message == crate::linux_access::VAULT_LOCKED_MESSAGE {
+        tr_catalog(lang, "settings.linux_privacy.keyring_locked_message")
+    } else if message == crate::linux_access::VAULT_UNLOCK_CANCELLED_MESSAGE {
+        tr_catalog(
+            lang,
+            "settings.linux_privacy.keyring_unlock_cancelled_message",
+        )
     } else {
         message
     }
@@ -8050,14 +13229,16 @@ mod tests {
     use super::*;
 
     const TEST_CATALOG: &[Msg] = &[
-    Msg {
+        Msg {
             key: "k.full",
-            text: row("完整", "完整", "Full", "完全", "전체"),
+            text: row(
+                "完整", "完整", "Full", "完全", "전체", "Full", "Full", "Full",
+            ),
         },
         // `k.missing_en` deliberately leaves `en` empty to exercise fallback.
-    Msg {
+        Msg {
             key: "k.missing_en",
-            text: row("来源", "來源", "", "ソース", "출처"),
+            text: row("来源", "來源", "", "ソース", "출처", "", "", ""),
         },
     ];
 
@@ -8134,7 +13315,10 @@ mod tests {
         assert_eq!(Lang::parse("ja_JP.UTF-8"), Some(Lang::Ja));
         assert_eq!(Lang::parse("ko_KR"), Some(Lang::Ko));
         assert_eq!(Lang::parse("en_US"), Some(Lang::En));
-        assert_eq!(Lang::parse("fr_FR"), None);
+        // 与 Tauri 的 SUPPORTED_LOCALES 对齐后，这三种也要能识别出来。
+        assert_eq!(Lang::parse("es_ES.UTF-8"), Some(Lang::Es));
+        assert_eq!(Lang::parse("fr_CA"), Some(Lang::Fr));
+        assert_eq!(Lang::parse("de_DE"), Some(Lang::De));
         assert_eq!(Lang::parse(""), None);
     }
 

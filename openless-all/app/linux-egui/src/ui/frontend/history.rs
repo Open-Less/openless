@@ -1330,7 +1330,10 @@ fn confirm_overlay(
             );
             // 对话框矩形写进 memory 供测试查询（Area 覆盖整个 body，面积已不等于卡片）。
             ctx.data_mut(|data| {
-                data.insert_temp(egui::Id::unique("openless-history-confirm-card-rect"), dialog)
+                data.insert_temp(
+                    egui::Id::unique("openless-history-confirm-card-rect"),
+                    dialog,
+                )
             });
             paint_card(ui.painter(), dialog);
             let painter = ui.painter().with_clip_rect(dialog);

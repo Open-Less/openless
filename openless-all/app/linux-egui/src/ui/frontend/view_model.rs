@@ -386,6 +386,23 @@ pub enum ShortcutField {
     StyleDraft,
 }
 
+/// 关于页「检查更新」的状态。Linux 只做检测与跳转，不做自安装（deb/rpm 无法自替换）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Available {
+        version: String,
+        url: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 /// One credential channel shown in the AI-services settings tab.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct SettingsChannel {
@@ -531,14 +548,17 @@ pub enum SettingsSection {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsField {
-    StreamingInsert,
     /// 稳定模式（先录音后识别，上游 #1082）。
     StableTranscription,
-    StreamingSaveClipboard,
-    RestoreClipboard,
     StartMinimized,
     LaunchAtLogin,
     AutoUpdate,
+    /// 跟随 Beta 频道（写 `update_channel` + `update_channel_explicit`）。
+    BetaUpdateChannel,
+    /// 光标上下文（读焦点应用光标前后的文字，给润色当参考）。
+    CursorContext,
+    /// 自动学词（观察用户是否改了刚插入的文本）。
+    VocabularyLearning,
     RemoteInput,
     SilenceAutoStop,
     AudioCue,
@@ -558,7 +578,6 @@ pub enum SettingsField {
     DebugArchiveRaw,
     ActivityHeatmap,
     SystemProxy,
-    Multimodal,
     /// 选区助手：语音编辑（口述指令改选区）开关（Tauri `selectionVoiceEnabled`）。
     SelectionVoiceEnabled,
     /// 选区助手：自动判断「提问 vs 编辑」（Tauri `selectionVoiceIntentMode`）。
@@ -585,6 +604,10 @@ pub enum SettingsComboField {
     SelectionVoicePlanFormat,
     /// AEC 的扬声器参考源（回环/监听设备）。
     AecReference,
+    /// 中文正字法：0 = 跟随输入，1 = 简体，2 = 繁体。
+    ChineseScript,
+    /// 输出语言：0 = 跟随输入，1 = 简体中文，2 = 繁體中文，3 = English，4 = 日本語，5 = 한국어。
+    OutputLanguage,
     /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
     /// 重启后生效；不是 Core 偏好，所以不上云、不影响 Tauri。
     LogLevel,
@@ -594,6 +617,9 @@ pub enum SettingsComboField {
 pub enum SettingsTextField {
     RemotePort,
     HistoryMaxEntries,
+    VocabObservationSeconds,
+    VocabSuggestionSeconds,
+    VocabMaxPhraseChars,
     /// 历史保留天数（0 = 永久）。
     RetentionDays,
     /// 润色上下文窗口（分钟，0 = 关闭）。
@@ -623,6 +649,14 @@ pub enum SettingsActionField {
     OpenReleaseNotes,
     OpenFeedback,
     CopyQQ,
+    /// 检查更新（Linux：只检测版本并给出下载页）。
+    CheckUpdate,
+    /// 打开「发现新版本」对应的发布页。
+    OpenUpdatePage,
+    /// 把自动学词的三个参数恢复出厂值。
+    ResetVocabularyLearning,
+    /// 请系统弹出钥匙串解锁窗口（Secret Service `Prompt`）。
+    UnlockKeyring,
 }
 
 // ── Vocab types ─────────────────────────────────────────────────────────────
@@ -1179,6 +1213,16 @@ pub struct SettingsFields {
     pub start_minimized: bool,
     pub launch_at_login: bool,
     pub auto_update: bool,
+    /// 关于页的更新状态与所选频道（跟随 Tauri 的 `update_channel`）。
+    pub update_state: UpdateState,
+    pub update_beta_channel: bool,
+    /// 光标上下文开关（Core 偏好 `cursor_context_enabled`）。
+    pub cursor_context: bool,
+    /// 自动学词开关与三个参数（秒 / 秒 / 字符）。
+    pub vocabulary_learning: bool,
+    pub vocab_observation_seconds: String,
+    pub vocab_suggestion_seconds: String,
+    pub vocab_max_phrase_chars: String,
     pub remote_input: bool,
     pub remote_default_mode: usize,
     pub silence_auto_stop: bool,
@@ -1236,6 +1280,10 @@ pub struct SettingsFields {
     pub multimodal: bool,
     pub language: usize,
     pub theme: usize,
+    /// 中文正字法：0 = 跟随输入，1 = 简体，2 = 繁体（Core `ChineseScriptPreference`）。
+    pub chinese_script: usize,
+    /// 输出语言：0 = 跟随输入，1..=5 对应 `OutputLanguagePreference`。
+    pub output_language: usize,
     /// 历史保留天数（0 = 永久，输入框）。
     pub retention_days: String,
     pub remote_port: String,
@@ -1252,6 +1300,13 @@ impl Default for SettingsFields {
             start_minimized: false,
             launch_at_login: false,
             auto_update: false,
+            update_state: UpdateState::Idle,
+            update_beta_channel: false,
+            cursor_context: false,
+            vocabulary_learning: false,
+            vocab_observation_seconds: "60".into(),
+            vocab_suggestion_seconds: "10".into(),
+            vocab_max_phrase_chars: "12".into(),
             remote_input: false,
             remote_default_mode: 0,
             silence_auto_stop: false,
@@ -1291,6 +1346,8 @@ impl Default for SettingsFields {
             multimodal: false,
             language: 0,
             theme: 0,
+            chinese_script: 0,
+            output_language: 0,
             retention_days: "0".to_string(),
             remote_port: String::new(),
         }

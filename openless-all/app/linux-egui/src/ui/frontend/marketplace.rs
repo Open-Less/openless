@@ -726,7 +726,10 @@ fn marketplace_oauth(
         egui::Rect::from_center_size(body.center() + egui::vec2(OAUTH_CARD_SHIFT_X, 0.0), size);
     #[cfg(test)]
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::unique("openless-marketplace-oauth-card-rect"), card)
+        data.insert_temp(
+            egui::Id::unique("openless-marketplace-oauth-card-rect"),
+            card,
+        )
     });
     egui::Area::new(egui::Id::unique("openless-marketplace-oauth-modal"))
         .order(egui::Order::Tooltip)
@@ -775,7 +778,9 @@ fn marketplace_oauth(
                                     #[cfg(test)]
                                     ui.ctx().data_mut(|data| {
                                         data.insert_temp(
-                                            egui::Id::unique("openless-marketplace-oauth-close-rect"),
+                                            egui::Id::unique(
+                                                "openless-marketplace-oauth-close-rect",
+                                            ),
                                             close.rect,
                                         )
                                     });
@@ -1249,7 +1254,10 @@ fn marketplace_mine(
     let card = egui::Rect::from_center_size(body.center(), size);
     #[cfg(test)]
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::unique("openless-marketplace-mine-card-rect"), card)
+        data.insert_temp(
+            egui::Id::unique("openless-marketplace-mine-card-rect"),
+            card,
+        )
     });
     egui::Area::new(egui::Id::unique("openless-marketplace-mine-modal"))
         .order(egui::Order::Foreground)

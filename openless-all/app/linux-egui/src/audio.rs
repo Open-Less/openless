@@ -106,7 +106,8 @@ impl AudioProcessingWorker {
                 }
                 // 处理前的原始 PCM：只在需要时量化，避免常态多一次分配。
                 let write_raw =
-                    |frame: &RawAudioFrame, sink: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>| {
+                    |frame: &RawAudioFrame,
+                     sink: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>| {
                         let Some(writer) = sink.as_ref() else {
                             return;
                         };
@@ -412,8 +413,8 @@ fn start_linux_recording(
     };
     let mut reference_capture = None;
     if let Some(queue) = far_end.clone() {
-        let preferred = (!aec_reference_device_name.is_empty())
-            .then(|| aec_reference_device_name.clone());
+        let preferred =
+            (!aec_reference_device_name.is_empty()).then(|| aec_reference_device_name.clone());
         match start_reference_capture(preferred, queue) {
             Ok(capture) => reference_capture = Some(capture),
             // 没有回环源（典型是纯 ALSA）不该让整次录音失败：AEC 退化为无参考。
@@ -452,8 +453,9 @@ fn start_linux_recording(
                 Ok((writer, archive)) => {
                     // 两份都要时，另开一个 <session>.raw.wav 存处理前的 PCM。
                     let raw = if archive_processed && archive_raw {
-                        match LinuxWavWriter::create(directory.join(format!("{session_id}.raw.wav")))
-                        {
+                        match LinuxWavWriter::create(
+                            directory.join(format!("{session_id}.raw.wav")),
+                        ) {
                             Ok((raw_writer, _raw_archive)) => {
                                 Some(Arc::new(std::sync::Mutex::new(raw_writer)))
                             }
@@ -556,23 +558,22 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
         startup,
     } = args;
     let reference_slot = Arc::new(std::sync::Mutex::new(None));
-    let (processor, frame_tx) =
-        match AudioProcessingWorker::start(
-            audio_processing,
-            consumer,
-            progress,
-            writer,
-            write_processed,
-            raw_writer,
-            far_end,
-            Arc::clone(&reference_slot),
-        ) {
-            Ok(worker) => worker,
-            Err(error) => {
-                let _ = startup.send(Err(error));
-                return;
-            }
-        };
+    let (processor, frame_tx) = match AudioProcessingWorker::start(
+        audio_processing,
+        consumer,
+        progress,
+        writer,
+        write_processed,
+        raw_writer,
+        far_end,
+        Arc::clone(&reference_slot),
+    ) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let _ = startup.send(Err(error));
+            return;
+        }
+    };
     let mut result = Err(BackendError::new(
         BackendErrorCode::Platform,
         "no Linux audio backend is available",
@@ -707,8 +708,7 @@ pub struct ReferenceCapture {
 #[cfg(target_os = "linux")]
 impl Drop for ReferenceCapture {
     fn drop(&mut self) {
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -883,11 +883,15 @@ mod loopback_tests {
             "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
         ));
         // 部分版本带 "Monitor of" 前缀
-        assert!(is_loopback_device_name("Monitor of Built-in Audio Analog Stereo"));
+        assert!(is_loopback_device_name(
+            "Monitor of Built-in Audio Analog Stereo"
+        ));
         // ALSA 的 snd-aloop 模块
         assert!(is_loopback_device_name("Loopback, PCM Capture"));
         // 普通麦克风不能被误判成回环源，否则 AEC 会拿麦克风当参考
-        assert!(!is_loopback_device_name("alsa_input.pci-0000_00_1f.3.analog-stereo"));
+        assert!(!is_loopback_device_name(
+            "alsa_input.pci-0000_00_1f.3.analog-stereo"
+        ));
         assert!(!is_loopback_device_name("Yeti Stereo Microphone"));
     }
 }
