@@ -4130,10 +4130,32 @@ mod linux_app {
                 log::info!("[hotkey] QA panel toggle: showing");
                 if let Some(backend) = self.backend() {
                     self.qa_visible = true;
-                    // `show()` 只发 HostAction::ShowQa：Core 仍停在 Idle，不录音。
+                    // Tauri `handle_qa_hotkey_pressed`：录音中 → 结束这一问；
+                    // 其它情况 → **直接开一次语音提问**（药丸立刻进入录音态）。
+                    // 以前这里只 `qa.show()`，Core 停在 Idle，于是按热键什么都不录，
+                    // 用户看到的就是「连语音输入都没有」。
+                    let recording = self
+                        .qa_state
+                        .as_ref()
+                        .map(|state| state.kind == QaStateKind::Recording)
+                        .unwrap_or(false);
+                    let session_id = self.qa_state.as_ref().and_then(|state| {
+                        state
+                            .session_id
+                            .as_deref()
+                            .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+                            .map(openless_core::SessionId::from_uuid)
+                    });
                     self.spawn_hotkey(async move {
-                        backend.services().qa.show().await?;
-                        Ok(String::new())
+                        if recording {
+                            if let Some(session_id) = session_id {
+                                backend.services().qa.stop_recording(session_id).await?;
+                            }
+                            Ok(String::new())
+                        } else {
+                            backend.start_voice_question_from_recording_key().await?;
+                            Ok(String::new())
+                        }
                     });
                 }
             }
