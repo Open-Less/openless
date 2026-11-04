@@ -638,64 +638,86 @@ pub fn selection_ask(
                 action = compact_pill(ui, state, lang, recording);
                 return;
             }
-            // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
+            // ── CardHeader：Tauri `.qa-answer-header` —— `✳ OpenLess` **居中**，
+            // ✕（与图钉）在右；`min-height 49 / padding 0 19 / gap 7`。
             if !compact {
-                egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 12))
-                    .show(ui, |ui| {
-                        let row = ui
-                            .horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(tr_l10n(lang, "qa.title"))
-                                            .size(16.0)
-                                            .strong()
-                                            .color(theme::INK),
-                                    );
-                                    ui.add_space(2.0);
-                                    ui.label(
-                                        egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
-                                            .size(12.0)
-                                            .color(theme::INK_4),
-                                    );
-                                });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Min),
-                                    |ui| {
-                                        if icon_button(ui, icons::IconName::Close, theme::INK_3)
-                                            .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
-                                            .clicked()
-                                        {
-                                            action = QaAction::Dismiss;
-                                        }
-                                        // 图钉：固定后宿主不再自动收起（Tauri 的
-                                        // qa.pinTooltip / qa.unpinTooltip）。
-                                        let pin_color = if state.pinned {
-                                            theme::BLUE
-                                        } else {
-                                            theme::INK_4
-                                        };
-                                        let pin_tooltip = if state.pinned {
-                                            tr_l10n(lang, "qa.unpin_tooltip")
-                                        } else {
-                                            tr_l10n(lang, "qa.pin_tooltip")
-                                        };
-                                        if icon_button(ui, icons::IconName::Pin, pin_color)
-                                            .on_hover_text(pin_tooltip)
-                                            .clicked()
-                                        {
-                                            action = QaAction::SetPinned(!state.pinned);
-                                        }
-                                    },
-                                );
-                            })
-                            .response
-                            .interact(egui::Sense::drag());
-                        if row.drag_started() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                            super::layout::note_window_gesture_handoff(ui.ctx());
-                        }
-                    });
+                let header_width = ui.available_width();
+                let (header_rect, header_response) =
+                    ui.allocate_exact_size(egui::vec2(header_width, 49.0), egui::Sense::hover());
+                let center = header_rect.center();
+                let symbol = "✳";
+                let title = "OpenLess";
+                let symbol_width = layout::text_width(ui, symbol, 19.0);
+                let title_width = layout::text_width(ui, title, 12.0);
+                let group_width = symbol_width + 7.0 + title_width;
+                let left = center.x - group_width / 2.0;
+                ui.painter().text(
+                    egui::pos2(left, center.y),
+                    egui::Align2::LEFT_CENTER,
+                    symbol,
+                    egui::FontId::proportional(19.0),
+                    theme::BLUE,
+                );
+                ui.painter().text(
+                    egui::pos2(left + symbol_width + 7.0, center.y),
+                    egui::Align2::LEFT_CENTER,
+                    title,
+                    egui::FontId::proportional(12.0),
+                    theme::INK,
+                );
+                // 右侧操作区：✕ 在最右，图钉在它左边。
+                let close_rect = egui::Rect::from_center_size(
+                    egui::pos2(header_rect.right() - 19.0, center.y),
+                    egui::vec2(22.0, 22.0),
+                );
+                let pin_rect = egui::Rect::from_center_size(
+                    egui::pos2(header_rect.right() - 47.0, center.y),
+                    egui::vec2(22.0, 22.0),
+                );
+                let close = ui.interact(
+                    close_rect,
+                    ui.scope_id().with("openless-qa-close"),
+                    egui::Sense::click(),
+                );
+                icons::draw_icon(
+                    ui,
+                    close_rect.center(),
+                    icons::IconName::Close,
+                    theme::INK_3,
+                );
+                if close
+                    .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
+                    .clicked()
+                {
+                    action = QaAction::Dismiss;
+                }
+                let pin = ui.interact(
+                    pin_rect,
+                    ui.scope_id().with("openless-qa-pin"),
+                    egui::Sense::click(),
+                );
+                icons::draw_icon(
+                    ui,
+                    pin_rect.center(),
+                    icons::IconName::Pin,
+                    if state.pinned {
+                        theme::BLUE
+                    } else {
+                        theme::INK_4
+                    },
+                );
+                let pin_tooltip = if state.pinned {
+                    tr_l10n(lang, "qa.unpin_tooltip")
+                } else {
+                    tr_l10n(lang, "qa.pin_tooltip")
+                };
+                if pin.on_hover_text(pin_tooltip).clicked() {
+                    action = QaAction::SetPinned(!state.pinned);
+                }
+                if header_response.interact(egui::Sense::drag()).drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    super::layout::note_window_gesture_handoff(ui.ctx());
+                }
                 hairline(ui, theme::LINE_SOFT);
             }
 
@@ -750,9 +772,7 @@ pub fn selection_ask(
                                     ui.add_space(10.0);
                                 }
                                 if !state.streaming_answer.is_empty() {
-                                    assistant_row(ui, |ui| {
-                                        render_markdown(ui, &state.streaming_answer)
-                                    });
+                                    answer_card(ui, &state.streaming_answer, lang);
                                     ui.add_space(10.0);
                                 }
                                 if thinking_row {
@@ -1071,48 +1091,77 @@ fn message_row(
     message: &PopupChatMessage,
     width: f32,
     lang: Lang,
-    avatar: Option<&egui::TextureHandle>,
+    _avatar: Option<&egui::TextureHandle>,
 ) {
     if message.role.eq_ignore_ascii_case("user") {
+        // Tauri `qa-user-message`：左对齐；先一段引用块（选中的原文，左侧 2px
+        // 竖线），再是问句正文，复制按钮贴在内容右侧。
         let selection = message
             .selection_text
             .as_deref()
             .map(|text| truncate(text, 120))
             .filter(|text| !text.is_empty() && *text != message.content);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            user_avatar(ui, avatar);
-            ui.add_space(8.0);
-            let max_width = (width - 56.0).max(120.0) * 0.8;
-            ui.allocate_ui_with_layout(
-                egui::vec2(max_width, 0.0),
-                egui::Layout::top_down(egui::Align::Max),
-                |ui| {
-                    if let Some(selection) = selection {
-                        bubble(ui, theme::SURFACE_2, theme::INK_3, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("“{selection}”"))
-                                    .size(12.0)
-                                    .italics()
-                                    .color(theme::INK_3),
-                            );
-                        });
-                        ui.add_space(4.0);
-                    }
-                    bubble(ui, theme::INK, theme::SURFACE, |ui| {
-                        ui.label(
-                            egui::RichText::new(&message.content)
-                                .size(14.0)
-                                .color(theme::SURFACE),
-                        );
-                    });
-                },
-            );
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_max_width((width - 40.0).max(120.0));
+                if let Some(selection) = selection {
+                    let quote_width = (width - 48.0).max(120.0);
+                    let galley =
+                        layout::text_galley(ui, &selection, theme::INK_3, 11.5, quote_width, 4);
+                    let height = galley.rect.height() + 4.0;
+                    let (rect, _) = ui
+                        .allocate_exact_size(egui::vec2(quote_width, height), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+                        egui::CornerRadius::same(1),
+                        theme::LINE_STRONG,
+                    );
+                    ui.painter().galley(
+                        egui::pos2(rect.left() + 8.0, rect.top() + 2.0),
+                        galley,
+                        theme::INK_3,
+                    );
+                    ui.add_space(6.0);
+                }
+                ui.label(
+                    egui::RichText::new(&message.content)
+                        .size(13.0)
+                        .color(theme::INK),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                copy_message_button(ui, &message.content, lang);
+            });
         });
-        message_copy_row(ui, &message.content, lang);
         return;
     }
-    assistant_row(ui, |ui| render_markdown(ui, &message.content));
-    message_copy_row(ui, &message.content, lang);
+    answer_card(ui, &message.content, lang);
+}
+
+/// 回答卡片（Tauri `qa-assistant-message`）：浅底嵌套卡 + 「✳ OpenLess 回答」头
+/// + 右侧复制按钮，正文是 Markdown。
+fn answer_card(ui: &mut egui::Ui, markdown: &str, lang: Lang) {
+    egui::Frame::new()
+        .fill(theme::CONTENT_BG)
+        .stroke(egui::Stroke::new(0.5, theme::LINE))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("✳").size(12.0).color(theme::BLUE));
+                ui.label(
+                    egui::RichText::new(tr_l10n(lang, "qa.compact.answer"))
+                        .size(11.0)
+                        .color(theme::INK_3),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    copy_message_button(ui, markdown, lang);
+                });
+            });
+            ui.add_space(6.0);
+            render_markdown(ui, markdown);
+        });
 }
 
 /// 逐条消息的「复制」按钮（Tauri `CopyMessage`）。
@@ -1133,14 +1182,6 @@ fn copy_message_button(ui: &mut egui::Ui, text: &str, lang: Lang) {
     }
 }
 
-/// 助理消息下方右对齐的复制按钮。
-fn message_copy_row(ui: &mut egui::Ui, text: &str, lang: Lang) {
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            copy_message_button(ui, text, lang);
-        });
-    });
-}
 
 /// 助手行：深色思考头像 + 内容（内容由调用方渲染在头像右侧）。
 fn assistant_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
@@ -1154,20 +1195,6 @@ fn assistant_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-/// 一个聊天气泡：`rounded-3xl` = 24px，padding 12/10。
-fn bubble(
-    ui: &mut egui::Ui,
-    fill: egui::Color32,
-    ink: egui::Color32,
-    contents: impl FnOnce(&mut egui::Ui),
-) {
-    let _ = ink;
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(18))
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, contents);
-}
 
 /// 出错气泡（Tauri `variant="destructive"`）：红底红字。
 fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
@@ -1178,20 +1205,6 @@ fn destructive_bubble(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
         .show(ui, contents);
 }
 
-/// 用户头像：麦克风图标。
-///
-/// Tauri 在这次面板重写里把 GitHub 头像换成了 `MicIcon` —— 这条消息本来就是
-/// 用户**说**出来的，画头像反而误导（头像属于身份，不属于说话方式）。
-fn user_avatar(ui: &mut egui::Ui, _avatar: Option<&egui::TextureHandle>) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ROUND_BUTTON + 4.0, ROUND_BUTTON + 4.0),
-        egui::Sense::hover(),
-    );
-    let radius = (ROUND_BUTTON + 4.0) / 2.0;
-    ui.painter()
-        .circle_filled(rect.center(), radius, theme::SURFACE_2);
-    icons::draw_icon(ui, rect.center(), icons::IconName::Mic, theme::INK_2);
-}
 
 /// 输入区上方的整宽次级按钮（Tauri `Button variant="outline"`）。
 fn wide_button(ui: &mut egui::Ui, label: &str) -> bool {
