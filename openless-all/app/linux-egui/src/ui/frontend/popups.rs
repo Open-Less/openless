@@ -353,6 +353,55 @@ pub fn polish_result_mode(
 
 /// 划词追问面板：卡片头（标题 + 副行 + ✕）、消息流（空状态 / 对话 / 思考中 /
 /// 出错）、底部输入组（选区条 + 输入框 + 麦克风 + 发送）。
+/// 选区助手什么时候该长成完整面板（Tauri `QaPanel.tsx:373` 的同一个判定）。
+fn qa_wants_expanded(state: &QaPopupState, phase: &str) -> bool {
+    if state.polish.is_some() || state.error.is_some() {
+        return true;
+    }
+    if matches!(phase, "recording" | "thinking") {
+        return false;
+    }
+    // 流式正文已经在画了：再保持小窗就等于把答案藏在框外面。
+    if !state.streaming_answer.is_empty() {
+        return true;
+    }
+    state
+        .messages
+        .iter()
+        .any(|message| message.role.eq_ignore_ascii_case("assistant"))
+        || state.edit_apply_available
+        || state.edit_revert_available
+}
+
+/// 按当前阶段调整 QA 窗口尺寸，保持窗口中心不动。
+///
+/// 只在布局切换的那一帧发命令：每帧都发会让合成器不停重排。
+fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
+    let key = egui::Id::unique("openless-qa-window-expanded");
+    if ctx.data_mut(|data| data.get_temp::<bool>(key)) == Some(expanded) {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(key, expanded));
+    let (width, height) = if expanded {
+        openless_linux_egui::QA_WINDOW_SIZE
+    } else {
+        openless_linux_egui::QA_COMPACT_SIZE
+    };
+    let centre = ctx
+        .input(|input| input.viewport().outer_rect)
+        .map(|rect| rect.center());
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+        width as f32,
+        height as f32,
+    )));
+    if let Some(centre) = centre {
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            centre.x - width as f32 / 2.0,
+            centre.y - height as f32 / 2.0,
+        )));
+    }
+}
+
 pub fn selection_ask(
     root_ui: &mut egui::Ui,
     state: &QaPopupState,
@@ -370,6 +419,11 @@ pub fn selection_ask(
         "loading" | "thinking" | "awaiting_approval" | "answerdelta" | "answer"
     );
     let thinking_row = thinking && state.streaming_answer.is_empty();
+    // 两段式：Tauri 的 `expanded` 判定（QaPanel.tsx:373）。没有对话内容时只留
+    // 一条输入框的高度，有答案 / 润色结果 / 错误时才长成完整面板。
+    // 这里换的是**窗口尺寸**（winit `InnerSize`），不是重建进程。
+    let expanded = qa_wants_expanded(state, &phase);
+    sync_qa_window_size(root_ui.ctx(), expanded);
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
@@ -2665,6 +2719,58 @@ mod tests {
             &painted,
             tr_l10n(Lang::ZhCn, "qa.edit_revert_previous")
         ));
+    }
+
+    #[test]
+    /// 两句式布局的判定：录音/思考时是小窗（语音输入框），有答案/润色/错误/
+    /// 流式正文才长成完整面板。这条规则如果反了，用户按热键就看不到输入框。
+    fn qa_layout_grows_only_when_there_is_content() {
+        let mut state = QaPopupState::default();
+        assert!(
+            !qa_wants_expanded(&state, "recording"),
+            "recording stays compact"
+        );
+        assert!(
+            !qa_wants_expanded(&state, "thinking"),
+            "thinking stays compact"
+        );
+        assert!(
+            !qa_wants_expanded(&state, "idle"),
+            "an empty conversation stays compact"
+        );
+
+        state.streaming_answer = "hello".into();
+        assert!(
+            qa_wants_expanded(&state, "answerdelta"),
+            "streaming expands"
+        );
+
+        state.streaming_answer.clear();
+        state.messages.push(PopupChatMessage {
+            role: "user".into(),
+            content: "question".into(),
+            selection_text: None,
+        });
+        assert!(
+            !qa_wants_expanded(&state, "idle"),
+            "a user message alone does not grow the window"
+        );
+
+        state.messages.push(PopupChatMessage {
+            role: "assistant".into(),
+            content: "answer".into(),
+            selection_text: None,
+        });
+        assert!(qa_wants_expanded(&state, "idle"), "an answer expands");
+
+        let error = QaPopupState {
+            error: Some("boom".into()),
+            ..Default::default()
+        };
+        assert!(
+            qa_wants_expanded(&error, "recording"),
+            "errors always expand"
+        );
     }
 
     #[test]

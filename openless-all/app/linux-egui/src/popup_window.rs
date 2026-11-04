@@ -35,6 +35,12 @@ pub const CAPSULE_WINDOW_SIZE: (u32, u32) = (460, 228);
 pub const CAPSULE_BOTTOM_GAP: i32 = 12;
 /// Selection-ask panel size (the chat panel) — Tauri `qa` window is 420×540.
 pub const QA_WINDOW_SIZE: (u32, u32) = (420, 540);
+/// 选区助手的「语音输入」阶段：还没开始对话时只占一条输入框的高度。
+///
+/// Tauri 的 `qa-capsule-shell.is-capsule` 就是这个形态（输入框 + 麦克风药丸），
+/// 有答案/润色结果/错误时才 `is-expanded` 长成 420×540。Linux 用同一个窗口
+/// **换尺寸**实现（winit 的 `ViewportCommand::InnerSize`），不重建进程。
+pub const QA_COMPACT_SIZE: (u32, u32) = (420, 212);
 // 旧的独立润色预览窗口（Tauri `selection-polish-preview` 640×440 / min 480×320）
 // 连同 `PREVIEW_WINDOW_SIZE`、`PREVIEW_MIN_SIZE` 一起下线，Tauri 侧的独立窗口也已
 // 删除：润色结果现在由选区助手面板（420×540）承载，见 `HostToPopup::PolishPreview`。
