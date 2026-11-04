@@ -209,14 +209,16 @@ pub fn polish_result_mode(
         .show(ui, |ui| {
             let row = ui
                 .horizontal(|ui| {
-                    ui.vertical(|ui| {
+                    // Tauri `.qa-answer-header`：✳ 标题 副标题 ✕ 全在**一行**。
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("✳").size(13.0).color(theme::INK_3));
                         ui.label(
                             egui::RichText::new(tr_l10n(lang, "selection.polish_preview.title"))
                                 .size(16.0)
                                 .strong()
                                 .color(theme::INK),
                         );
-                        ui.add_space(2.0);
+                        ui.add_space(8.0);
                         ui.label(
                             egui::RichText::new(tr_l10n(lang, "selection.polish_preview.subtitle"))
                                 .size(12.0)
@@ -377,6 +379,9 @@ pub fn polish_result_mode(
 
 /// 划词追问面板：卡片头（标题 + 副行 + ✕）、消息流（空状态 / 对话 / 思考中 /
 /// 出错）、底部输入组（选区条 + 输入框 + 麦克风 + 发送）。
+/// 卡片宽度（Tauri 760 宽窗口里卡片约 560，两侧是透明留白）。
+const QA_CARD_WIDTH: f32 = 560.0;
+
 /// 选区助手什么时候该长成完整面板（Tauri `QaPanel.tsx:373` 的同一个判定）。
 fn qa_wants_expanded(state: &QaPopupState, phase: &str) -> bool {
     if state.polish.is_some() || state.error.is_some() {
@@ -619,12 +624,22 @@ pub fn selection_ask(
     // 「编辑指令」勾选框都不画 —— 212 px 高的小窗里画它们只会把输入框挤出去，
     // 用户会以为「手打输入的框没了」。
     let compact = !expanded;
+    // Tauri 的窗口是 760×416，但卡片只有约 560 宽、两侧是透明留白；这里照抄，
+    // 否则卡片在 760 宽里被拉成一张大白板（截图里就是这个观感）。
+    let card_width = QA_CARD_WIDTH.min(root_ui.available_width());
+    let side_inset = ((root_ui.available_width() - card_width) / 2.0).max(0.0);
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
                 .fill(theme::SURFACE)
                 .corner_radius(egui::CornerRadius::same(14))
-                .stroke(egui::Stroke::new(0.5, theme::LINE)),
+                .stroke(egui::Stroke::new(0.5, theme::LINE))
+                .outer_margin(egui::Margin {
+                    left: side_inset as i8,
+                    right: side_inset as i8,
+                    top: 8,
+                    bottom: 8,
+                }),
         )
         .show(root_ui, |ui| {
             // 首帧只编译不绘制地把三个程序编译好（进程内只排一次），
@@ -2601,12 +2616,13 @@ mod tests {
             "the polish mode must paint header + footer separators, got {:?}",
             polish_lines
         );
-        // 第一条（头部下方那条）必须与选区助手面板的位置与宽度一致。
-        let (py, px0, px1) = polish_lines[0];
-        let (ay, ax0, ax1) = ask_lines[0];
+        // 横向范围必须与选区助手面板一致（同一个卡片宽度）；纵向高度不同是正常的：
+        // 润色标题只有一行，选区助手的标题行是「标题 + 副标题」两行（Tauri 也一样）。
+        let (_, px0, px1) = polish_lines[0];
+        let (_, ax0, ax1) = ask_lines[0];
         assert!(
-            (py - ay).abs() < 0.5 && (px0 - ax0).abs() < 0.5 && (px1 - ax1).abs() < 0.5,
-            "the header separator must match the selection-ask panel: polish {:?} vs ask {:?}",
+            (px0 - ax0).abs() < 0.5 && (px1 - ax1).abs() < 0.5,
+            "both cards must share the same width: polish {:?} vs ask {:?}",
             polish_lines[0],
             ask_lines[0]
         );
