@@ -376,10 +376,17 @@ public:
     }
 
     std::string captureSelectionTarget(const std::string &ticket) {
-        if (ticket.empty() || !selectionIc_) {
+        if (ticket.empty()) {
             return std::string();
         }
-        const auto &surrounding = selectionIc_->surroundingText();
+        // 没有任何 fcitx5 输入上下文也要能抓选区：浏览器地址栏、终端、看片时的
+        // 字幕窗口等场景里，热键按下时焦点常常不在 IME 上下文上。以前这里直接
+        // `return ""`，于是 `[hotkey] selection polish had no captured selection`，
+        // 用户按 alt+X 什么都没发生——而合成器的 PRIMARY 里明明有选中的文字。
+        // 这种情况只做**只读预览**：`surroundingValid=false` 让替换安全地失败
+        // （换不了焦点窗口里的字，但面板能看到、能复制）。
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
         const std::string surroundingSelected =
             surrounding.isValid() ? surrounding.selectedText() : std::string();
         // 选区文本以**合成器此刻的 PRIMARY** 为准；应用自己报的 surrounding 只在探针
@@ -440,6 +447,10 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文（选区来自 PRIMARY）：只读预览，替换必须安全失败。
+            return false;
+        }
         const auto &surrounding = ic->surroundingText();
         const auto &captured = found->second;
         // PRIMARY can outlive the selection, and the same selected string may
@@ -465,6 +476,10 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文时谈不上「撤销替换」。
+            return false;
+        }
         const auto &replacement = found->second.replacement;
         const auto &surrounding = ic->surroundingText();
         if (!surrounding.isValid()) {
