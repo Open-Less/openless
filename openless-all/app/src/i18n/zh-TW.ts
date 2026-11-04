@@ -1588,11 +1588,6 @@ export const zhTW: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多數編輯器）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（聊天輸入框）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: '在鍵盤列表中顯示 OpenLess',
-      windowsShowOpenlessInKeyboardListDesc:
-        '關閉後 Win+Space 切換輸入法時不會出現 OpenLess；SendInput 與剪貼簿貼上插入不受影響。重新開啟本項可還原顯示。',
-      windowsShowOpenlessInKeyboardListError:
-        '無法更新鍵盤列表：系統拒絕更改 OpenLess 語言設定檔。',
       historyGroupTitle: '歷史與上下文',
       historyRetentionLabel: '歷史保留天數',
       historyRetentionDesc: '超過保留天數的歷史在寫入新條目時被清理；0 = 不按時間清理。',

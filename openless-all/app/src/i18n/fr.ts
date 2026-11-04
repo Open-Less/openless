@@ -1715,11 +1715,6 @@ export const fr: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (plupart des éditeurs)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (champs de discussion)',
       windowsSendInputNewlineModeCrLf: 'Unicode CR+LF',
-      windowsShowOpenlessInKeyboardListLabel: 'Afficher OpenLess dans la liste des claviers',
-      windowsShowOpenlessInKeyboardListDesc:
-        'Si cette option est désactivée, Win+Space ne passe plus par OpenLess. SendInput et le collage ne sont pas affectés. Réactivez-la pour restaurer l’entrée.',
-      windowsShowOpenlessInKeyboardListError:
-        'Impossible de mettre à jour la liste des claviers : le système a refusé la modification du profil linguistique d’OpenLess.',
       historyGroupTitle: 'Historique et contexte',
       historyRetentionLabel: 'Conservation de l’historique (jours)',
       historyRetentionDesc:

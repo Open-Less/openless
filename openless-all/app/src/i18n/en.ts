@@ -1671,11 +1671,6 @@ export const en: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (most editors)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (chat input boxes)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'Show OpenLess in keyboard list',
-      windowsShowOpenlessInKeyboardListDesc:
-        'When off, Win+Space will not cycle to OpenLess. SendInput and clipboard-paste insertion are unaffected. Turn this back on to restore the entry.',
-      windowsShowOpenlessInKeyboardListError:
-        'Could not update the keyboard list: the system rejected changing the OpenLess language profile.',
       historyGroupTitle: 'History & context',
       historyRetentionLabel: 'History retention (days)',
       historyRetentionDesc:
