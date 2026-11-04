@@ -3943,6 +3943,52 @@ mod linux_app {
                         self.selection_draft = preview_text.clone();
                         self.polish_result_visible = true;
                     }
+                    // 选区润色失败/取消：药丸要收掉，不能留一个永远「正在思考」的条。
+                    if matches!(
+                        snapshot.phase,
+                        SelectionPhase::Failed | SelectionPhase::Cancelled
+                    ) && !show_preview
+                    {
+                        self.hide_popup(
+                            PopupKind::Qa,
+                            snapshot
+                                .session_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "selection".to_string()),
+                            event_sequence.saturating_mul(2).saturating_add(1),
+                        );
+                    }
+                    // 选区润色进行中：先弹一个**药丸**（macOS mpv-shot0001 那个
+                    // "thinking" 小条），结果回来再长成面板（shot0002）。以前这一段
+                    // 什么都不画，用户按完热键只有干等。
+                    if snapshot.phase == SelectionPhase::Capturing {
+                        self.ensure_popup(PopupKind::Qa);
+                        self.send_popup(
+                            PopupKind::Qa,
+                            HostToPopup::QaSnapshot {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: snapshot
+                                    .session_id
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_else(|| "selection".to_string()),
+                                sequence: event_sequence.saturating_mul(2),
+                                phase: "thinking".to_string(),
+                                messages: Vec::new(),
+                                selection_preview: (!source_text.trim().is_empty())
+                                    .then(|| source_text.clone()),
+                                streaming_answer: String::new(),
+                                activity: None,
+                                activity_tool: None,
+                                audio_level: None,
+                                error: None,
+                                edit_instruction_mode: false,
+                                edit_apply_available: false,
+                                edit_revert_available: false,
+                                pinned: false,
+                                viewer_login: String::new(),
+                            },
+                        );
+                    }
                     if let Some(session_id) = snapshot.session_id {
                         if show_preview {
                             // 选区助手面板：润色结果以「润色结果」帧送进去。
