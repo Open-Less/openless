@@ -287,7 +287,7 @@ pub fn polish_result_mode(
                                     .desired_width(width - 24.0)
                                     .desired_rows(6)
                                     .text_color(theme::INK)
-                                    .font(egui::FontId::proportional(14.0)),
+                                    .font(egui::FontId::proportional(13.0)),
                             );
                             if response.changed() {
                                 ui.ctx().data_mut(|data| {
@@ -326,34 +326,36 @@ pub fn polish_result_mode(
                 let result_text = edited
                     .filter(|draft| !draft.trim().is_empty())
                     .unwrap_or_else(|| state.text.clone());
-                let confirm_width = layout::text_width(ui, confirm, 13.0) + 46.0;
+                let confirm_width = layout::text_width(ui, confirm, 11.0) + 40.0;
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(confirm_width, 34.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(confirm_width, 28.0), egui::Sense::click());
                 let fill = if response.hovered() {
                     theme::BLUE.gamma_multiply(0.9)
                 } else {
                     theme::BLUE
                 };
                 ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(7), fill);
-                icon_text(
+                    .rect_filled(rect, egui::CornerRadius::same(9), fill);
+                icon_text_sized(
                     ui,
                     rect,
                     Some(icons::IconName::Check),
                     confirm,
                     theme::SURFACE,
+                    11.0,
+                    13.0,
                 );
                 if response.clicked() {
                     action = PolishResultAction::Confirm(result_text.clone());
                 }
                 ui.add_space(8.0);
                 let cancel = tr_l10n(lang, "selection.polish_preview.cancel");
-                let cancel_width = layout::text_width(ui, cancel, 13.0) + 30.0;
+                let cancel_width = layout::text_width(ui, cancel, 11.0) + 26.0;
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(cancel_width, 34.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(cancel_width, 28.0), egui::Sense::click());
                 ui.painter().rect_filled(
                     rect,
-                    egui::CornerRadius::same(7),
+                    egui::CornerRadius::same(9),
                     if response.hovered() {
                         theme::SURFACE_2
                     } else {
@@ -362,11 +364,11 @@ pub fn polish_result_mode(
                 );
                 ui.painter().rect_stroke(
                     rect,
-                    egui::CornerRadius::same(7),
-                    egui::Stroke::new(0.5, theme::LINE_STRONG),
+                    egui::CornerRadius::same(9),
+                    egui::Stroke::new(1.0, theme::LINE_STRONG),
                     egui::StrokeKind::Inside,
                 );
-                icon_text(ui, rect, None, cancel, theme::INK_2);
+                icon_text_sized(ui, rect, None, cancel, theme::INK_2, 11.0, 13.0);
                 if response.clicked() {
                     action = PolishResultAction::Cancel;
                 }
@@ -2103,23 +2105,40 @@ fn icon_text(
     text: &str,
     color: egui::Color32,
 ) {
-    let text_width = layout::text_width(ui, text, 13.0);
-    let icon_width = if icon.is_some() { 16.0 } else { 0.0 };
-    let gap = if icon.is_some() { 6.0 } else { 0.0 };
+    icon_text_sized(ui, rect, icon, text, color, 13.0, 16.0);
+}
+
+/// 同 [`icon_text`]，但可以指定字号/图标大小。
+///
+/// Tauri 的 `.qa-edit-actions button` 是 11px 字号 + 13px 图标（润色面板的
+/// 取消 / 确认并替换），而普通按钮是 13px + 16px —— 两种都要能画出来。
+fn icon_text_sized(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    icon: Option<icons::IconName>,
+    text: &str,
+    color: egui::Color32,
+    font_size: f32,
+    icon_size: f32,
+) {
+    let text_width = layout::text_width(ui, text, font_size);
+    let icon_width = if icon.is_some() { icon_size } else { 0.0 };
+    let gap = if icon.is_some() { 5.0 } else { 0.0 };
     let start = rect.center().x - (text_width + gap + icon_width) / 2.0;
     if let Some(icon) = icon {
-        icons::draw_icon(
+        icons::draw_icon_sized(
             ui,
             egui::pos2(start + icon_width / 2.0, rect.center().y),
             icon,
             color,
+            icon_size,
         );
     }
     ui.painter().text(
         egui::pos2(start + icon_width + gap, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(font_size),
         color,
     );
 }
