@@ -3943,38 +3943,6 @@ mod linux_app {
                         self.selection_draft = preview_text.clone();
                         self.polish_result_visible = true;
                     }
-                    // 直接替换模式（`selectionPolishOutputMode = directReplace`）：
-                    // 没有预览面板，替换完就什么都不显示 —— 用户会觉得「按了没反应」。
-                    // 这里补一条胶囊确认，把「已经替换了」说出来。
-                    if snapshot.phase == SelectionPhase::Completed && !self.polish_result_visible {
-                        if let Some(session_id) = snapshot.session_id {
-                            if self.capsule_enabled() {
-                                let lang = self.lang;
-                                self.ensure_popup(PopupKind::Capsule);
-                                self.capsule_session = Some(session_id.to_string());
-                                self.send_popup(
-                                    PopupKind::Capsule,
-                                    HostToPopup::Capsule {
-                                        version: POPUP_PROTOCOL_VERSION,
-                                        session_id: session_id.to_string(),
-                                        sequence: event_sequence.saturating_mul(2),
-                                        phase: "completed".to_string(),
-                                        text: tr_l10n(lang, "selection.replaced").to_string(),
-                                        transcript: String::new(),
-                                        transcript_font_size: 14,
-                                        audio_level: None,
-                                        translation_active: false,
-                                        style: self.capsule_style_tag(),
-                                        suggestions: Vec::new(),
-                                    },
-                                );
-                                self.schedule_capsule_dismissal(
-                                    &session_id.to_string(),
-                                    DictationPhase::Completed,
-                                );
-                            }
-                        }
-                    }
                     // 选区润色失败/取消：药丸要收掉，不能留一个永远「正在思考」的条。
                     if matches!(
                         snapshot.phase,
