@@ -63,66 +63,11 @@ struct LinuxSelectionTarget {
     // it before touching the retained native input context in the plugin.
     session_id: SessionId,
     source_text: String,
-    /// 选区只从合成器 PRIMARY 读到（本次热键按下时焦点不在 fcitx5 的输入上下文里）：
-    /// 可以预览/编辑/复制，但**无法回写替换**（没有输入上下文可 commit）。
-    primary_only: bool,
     // Retained only after an acknowledged apply, so revert cannot delete text
     // for a preview that was never committed.
     replacement_text: Option<String>,
 }
 
-/// 直接读合成器的 PRIMARY 选区。
-///
-/// 为什么需要它：fcitx5 插件只在「热键按下时焦点在 IME 输入上下文里」时才拿得到
-/// 选区（`selectionIc_`）。浏览器地址栏、终端、看片窗口这些地方它没有上下文，
-/// 于是选区润色整条流程直接失败（日志：`selection polish had no captured
-/// selection`），而 `wl-paste --primary` 明明读得到。这里做宿主侧兜底。
-fn read_primary_selection() -> Option<String> {
-    use std::process::{Command, Stdio};
-    let candidates: [(&str, &[&str]); 2] = [
-        ("wl-paste", &["--primary", "--no-newline"]),
-        ("xclip", &["-o", "-selection", "primary"]),
-    ];
-    for (program, args) in candidates {
-        let Ok(mut child) = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            continue;
-        };
-        // 没选区时 `wl-paste` 会一直阻塞等数据：给一个上限，然后杀掉。
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                _ => {
-                    let _ = child.kill();
-                    break;
-                }
-            }
-        }
-        if let Some(output) = child.stdout.take() {
-            use std::io::Read;
-            let mut text = String::new();
-            let mut output = output;
-            let _ = output.read_to_string(&mut text);
-            let text = text.trim_end_matches(['\n', '\r']).to_string();
-            if !text.trim().is_empty() {
-                return Some(text);
-            }
-        }
-    }
-    None
-}
-
-#[derive(Clone)]
 pub struct LinuxSelectionRuntime {
     bridge: Arc<dyn LinuxSelectionBridge>,
     // Core owns Capturing/Preview/Applying/Completed. This mutex serializes the
@@ -179,17 +124,8 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                 if let Some(previous) = target.take() {
                     let _ = bridge.cancel_target(previous.session_id);
                 }
+                // 只有一条来源：fcitx5 插件（内部直接问 clipboard addon 要 PRIMARY）。
                 let text = bridge.capture_target(session_id)?;
-                // 插件拿不到（焦点不在 IME 上下文）时，用合成器 PRIMARY 兜底：
-                // 面板能出来、结果能看能复制，但替换会被明确拒绝（见 `apply`）。
-                let (text, primary_only) = if text.trim().is_empty() {
-                    match read_primary_selection() {
-                        Some(primary) => (primary, true),
-                        None => (text, false),
-                    }
-                } else {
-                    (text, false)
-                };
                 if let Err(error) = validate_selection_replacement_source(&text) {
                     let _ = bridge.cancel_target(session_id);
                     return Err(error);
@@ -197,7 +133,6 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                 *target = Some(LinuxSelectionTarget {
                     session_id,
                     source_text: text.clone(),
-                    primary_only,
                     replacement_text: None,
                 });
                 // Honest `source_app`: fcitx5 exposes the surrounding text via
@@ -248,14 +183,6 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                     return Err(BackendError::new(
                         BackendErrorCode::Cancelled,
                         "the Linux selection changed before replacement",
-                    ));
-                }
-                if active.primary_only {
-                    // 选区只从 PRIMARY 读到：这个窗口没有可写回的输入上下文。
-                    // 明确拒绝，而不是假装成功或往别的窗口写字。
-                    return Err(BackendError::new(
-                        BackendErrorCode::Unsupported,
-                        "This window cannot be written back (the selection came from the system PRIMARY buffer). Copy the result instead.",
                     ));
                 }
                 bridge.apply_target(session_id, &source_text, &replacement_text)?;
