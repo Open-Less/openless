@@ -382,24 +382,46 @@ fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
         return;
     }
     ctx.data_mut(|data| data.insert_temp(key, expanded));
+
+    // Tauri `set_qa_window_expanded`：宽度 + 高度按状态取常量，位置按
+    // 「水平中心不动、底边不动（展开时再上抬 40）」重算，然后夹回工作区。
     let (width, height) = if expanded {
-        openless_linux_egui::QA_WINDOW_SIZE
+        openless_linux_egui::QA_EXPANDED_SIZE
     } else {
         openless_linux_egui::QA_COMPACT_SIZE
     };
-    let centre = ctx
-        .input(|input| input.viewport().outer_rect)
-        .map(|rect| rect.center());
+    let viewport = ctx.input(|input| input.viewport().clone());
+    let old_size = viewport
+        .inner_rect
+        .map(|rect| rect.size())
+        .unwrap_or(egui::vec2(width as f32, height as f32));
+    let old_pos = viewport.outer_rect.map(|rect| rect.min);
+    let lift = if expanded {
+        openless_linux_egui::QA_EXPANDED_LIFT as f32
+    } else {
+        0.0
+    };
     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
         width as f32,
         height as f32,
     )));
-    if let Some(centre) = centre {
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-            centre.x - width as f32 / 2.0,
-            centre.y - height as f32 / 2.0,
-        )));
+    let Some(old_pos) = old_pos else {
+        return;
+    };
+    let mut pos = egui::pos2(
+        old_pos.x + (old_size.x - width as f32) / 2.0,
+        old_pos.y + old_size.y - height as f32 - lift,
+    );
+    // 夹回工作区：egui 只给得到整块显示器尺寸（Linux 上 winit 的 work area
+    // 就等于显示器），底部留 8px，和 Tauri 的 `position_qa_window` 一致。
+    if let Some(monitor) = viewport.monitor_size {
+        let inset = openless_linux_egui::QA_BOTTOM_INSET as f32;
+        let max_x = (monitor.x - width as f32).max(0.0);
+        let max_y = (monitor.y - height as f32 - inset).max(0.0);
+        pos.x = pos.x.clamp(0.0, max_x);
+        pos.y = pos.y.clamp(0.0, max_y);
     }
+    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
 }
 
 pub fn selection_ask(

@@ -9943,10 +9943,11 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
         // 胶囊窗口贴着药丸尺寸（Tauri 经典药丸 176×42），并用透明背景让圆角
         // 真正透出桌面；QA / 预览是实心卡片窗口。
         let size = match kind {
-            // 面板尺寸一律取自共享常量（Tauri：qa 420×540）。
+            // 出生即紧凑态（Tauri：qa 480×80，贴底居中）；有内容时由弹窗自己
+            // 用 `ViewportCommand::InnerSize` 展开成 760×416。
             PopupKind::Qa => [
-                openless_linux_egui::QA_WINDOW_SIZE.0 as f32,
-                openless_linux_egui::QA_WINDOW_SIZE.1 as f32,
+                openless_linux_egui::QA_COMPACT_SIZE.0 as f32,
+                openless_linux_egui::QA_COMPACT_SIZE.1 as f32,
             ],
             // Recording keeps a fixed 460x180 Siri stage plus the transcript rail;
             // only an idle vocabulary card changes the host size and placement.
