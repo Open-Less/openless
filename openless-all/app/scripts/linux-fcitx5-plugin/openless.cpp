@@ -389,23 +389,17 @@ public:
                                                : fcitx::SurroundingText();
         const std::string surroundingSelected =
             surrounding.isValid() ? surrounding.selectedText() : std::string();
-        // 选区文本以**合成器此刻的 PRIMARY** 为准；应用自己报的 surrounding 只在探针
-        // 给不出结论时兜底（规则见 primary_selection.h 的 chooseSelectionSource）。
-        // 旧实现反过来——先信 surrounding，再退到 clipboard addon 的缓存——于是
-        // “新选区没有 text mime”时会把上一次的选区文本当成当前选区。
-        const auto primary = primarySelectionReader_();
-        auto source =
+        // 来源顺序（按用户要求：**完全走 fcitx5，不依赖合成器**）：
+        //   1. clipboard addon 的 PRIMARY 缓存 —— fcitx5 自己在 IME 内观察到的选区，
+        //      与 compositor 无关，KWin/GNOME/Sway 都一样；
+        //   2. 合成器探针（ext-data-control）—— 只在缓存为空时补一刀，负责“刚选中、
+        //      缓存还旧”的时序；
+        //   3. 应用自报的 surrounding.selectedText()。
+        const std::string cached = selectionCacheReader_();
+        const auto primary = cached.empty() ? primarySelectionReader_()
+                                            : openless_selection::cachedSnapshot(cached);
+        const auto source =
             openless_selection::chooseSelectionSource(primary, surroundingSelected);
-        if (source.text.empty() &&
-            primary.status == openless_selection::PrimarySelectionStatus::Unsupported) {
-            // 最后一级兜底：探针**不可用**（X11 会话、合成器没有 ext-data-control）
-            // 且应用自己也没报选中文本时，才用 clipboard addon 的缓存——那是本机
-            // 唯一剩下的来源，也是这次改动之前的行为（否则无 surrounding 的 XIM 类
-            // 应用在 X11 会话下会彻底拿不到选区）。
-            // 边界：探针**给出结论**时（NoText / NoSelection）绝不走这里，
-            // 否则“新选区不是文本”依旧会落到旧文本上，② 就白修了。
-            source = {selectionCacheReader_(), "clipboard-cache-fallback"};
-        }
         logSelectionCapture(primary, source, surroundingSelected);
         if (source.text.empty()) {
             return std::string();
@@ -709,6 +703,14 @@ public:
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
         using Status = openless_selection::PrimarySelectionStatus;
+        // 先问 fcitx5 自己（clipboard addon 的 PRIMARY 缓存），再退到合成器探针。
+        const std::string cached = selectionCacheReader_();
+        if (!cached.empty()) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSelectionText: clipboard addon cache read " << cached.size()
+                << " chars";
+            return cached;
+        }
         const auto primary = primarySelectionReader_();
         if (primary.status == Status::Text) {
             FCITX_LOGC(openless, Debug)
