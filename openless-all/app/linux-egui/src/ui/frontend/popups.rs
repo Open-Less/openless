@@ -424,6 +424,144 @@ fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
 }
 
+/// 紧凑形态的唯一一行：输入框 + 麦克风 + 发送。
+///
+/// Tauri 的紧凑窗（480×80）只放一个 `OpenLessPill`：取消 / 波形 / 确认，没有
+/// 输入框——macOS 打字走辅助键。Linux 没有那个入口，所以这一行保留输入框，
+/// 高度仍是 80（一行 48px 的药丸 + 16px 上下留白）。
+fn compact_composer(
+    ui: &mut egui::Ui,
+    state: &QaPopupState,
+    composer: &mut String,
+    lang: Lang,
+    recording: bool,
+) -> QaAction {
+    let mut action = QaAction::None;
+    let height = COMPOSER_HEIGHT;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(12),
+        egui::Stroke::new(
+            0.5,
+            if recording {
+                theme::ERR
+            } else {
+                theme::LINE_STRONG
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    let inner = rect.shrink2(egui::vec2(12.0, 6.0));
+    let mic_rect = egui::Rect::from_center_size(
+        egui::pos2(inner.right() - ROUND_BUTTON / 2.0, rect.center().y),
+        egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+    );
+    let send_rect = egui::Rect::from_center_size(
+        egui::pos2(inner.right() - ROUND_BUTTON * 1.5 - 4.0, rect.center().y),
+        egui::vec2(ROUND_BUTTON, ROUND_BUTTON),
+    );
+    let input_rect = egui::Rect::from_min_max(
+        inner.min,
+        egui::pos2(send_rect.left() - 6.0, inner.bottom()),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("openless-qa-compact-input")
+            .max_rect(input_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.set_clip_rect(child.clip_rect().intersect(input_rect));
+    let response = child.add(
+        egui::TextEdit::singleline(composer)
+            .id(egui::Id::unique("openless-qa-compact-composer"))
+            .frame(egui::Frame::NONE)
+            .text_color(theme::INK)
+            .font(egui::FontId::proportional(13.5))
+            .hint_text(if recording {
+                state
+                    .selection_preview
+                    .as_deref()
+                    .map(|text| format!("{} · {}", tr_l10n(lang, "qa.selection_preview"), truncate(text, 60)))
+                    .unwrap_or_else(|| tr_l10n(lang, "qa.composer_placeholder").to_string())
+            } else {
+                tr_l10n(lang, "qa.composer_placeholder").to_string()
+            })
+            .desired_width(input_rect.width()),
+    );
+    if response.lost_focus()
+        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+        && !composer.trim().is_empty()
+    {
+        action = QaAction::Submit(std::mem::take(composer));
+    }
+    let mic = ui.interact(
+        mic_rect,
+        ui.scope_id().with("openless-qa-compact-mic"),
+        egui::Sense::click(),
+    );
+    if recording {
+        ui.painter()
+            .circle_filled(mic_rect.center(), ROUND_BUTTON / 2.0, theme::ERR);
+    } else if mic.hovered() {
+        ui.painter()
+            .circle_filled(mic_rect.center(), ROUND_BUTTON / 2.0, theme::SURFACE_2);
+    }
+    icons::draw_icon(
+        ui,
+        mic_rect.center(),
+        if recording {
+            icons::IconName::Stop
+        } else {
+            icons::IconName::Mic
+        },
+        if recording {
+            theme::SURFACE
+        } else {
+            theme::INK_2
+        },
+    );
+    if mic.clicked() {
+        action = QaAction::ToggleRecording;
+    }
+    let can_send = !composer.trim().is_empty();
+    let send = ui.interact(
+        send_rect,
+        ui.scope_id().with("openless-qa-compact-send"),
+        egui::Sense::click(),
+    );
+    ui.painter().circle_filled(
+        send_rect.center(),
+        ROUND_BUTTON / 2.0,
+        if can_send {
+            theme::INK
+        } else {
+            theme::SURFACE_2
+        },
+    );
+    icons::draw_icon(
+        ui,
+        send_rect.center(),
+        icons::IconName::Send,
+        if can_send {
+            theme::SURFACE
+        } else {
+            theme::INK_4
+        },
+    );
+    if send.clicked() && can_send {
+        action = QaAction::Submit(std::mem::take(composer));
+    }
+    // Esc 收起：紧凑态没有标题栏，给一个键盘出口。
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        action = QaAction::Dismiss;
+    }
+    action
+}
+
 pub fn selection_ask(
     root_ui: &mut egui::Ui,
     state: &QaPopupState,
@@ -470,42 +608,14 @@ pub fn selection_ask(
                 return;
             }
             if compact {
-                // 紧凑形态的顶条：只有拖动手柄 + 关闭，尽量把高度留给输入框。
+                // 紧凑形态 = 一条输入行（Tauri 的紧凑窗只有 480×80：一个药丸的高度）。
+                // 说明文字不占位，输入的提示在输入框自己的 placeholder 里。
                 egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 6))
+                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 16))
                     .show(ui, |ui| {
-                        let bar = ui
-                            .horizontal(|ui| {
-                                ui.add_space(ui.available_width() - 24.0);
-                                if icon_button(ui, icons::IconName::Close, theme::INK_3)
-                                    .on_hover_text(tr_l10n(lang, "qa.close_tooltip"))
-                                    .clicked()
-                                {
-                                    action = QaAction::Dismiss;
-                                }
-                            })
-                            .response
-                            .interact(egui::Sense::drag());
-                        if bar.drag_started() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                            super::layout::note_window_gesture_handoff(ui.ctx());
-                        }
+                        action = compact_composer(ui, state, composer, lang, recording);
                     });
-                hairline(ui, theme::LINE_SOFT);
-                egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(CARD_SPACING as i8, 8))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(tr_l10n(lang, "qa.empty_title"))
-                                .size(13.0)
-                                .color(theme::INK_2),
-                        );
-                        ui.label(
-                            egui::RichText::new(tr_l10n(lang, "qa.empty_desc"))
-                                .size(11.0)
-                                .color(theme::INK_4),
-                        );
-                    });
+                return;
             }
             // ── CardHeader：整条可拖，✕ 在右 ─────────────────────────────
             if !compact {
@@ -2565,21 +2675,17 @@ mod tests {
             selection_ask(ctx, &empty, &mut composer, Lang::ZhCn, None);
             String::new()
         });
-        // 空对话现在是**紧凑形态**：没有标题行，只有说明 + 输入框。
-        for expected in [
-            tr_l10n(Lang::ZhCn, "qa.empty_title"),
-            tr_l10n(Lang::ZhCn, "qa.empty_desc"),
-            tr_l10n(Lang::ZhCn, "qa.composer_placeholder"),
-        ] {
+        // 空对话现在是**紧凑形态**：只有一行输入框（Tauri 紧凑窗就一个药丸高）。
+        assert!(
+            has(&painted, tr_l10n(Lang::ZhCn, "qa.composer_placeholder")),
+            "the compact ask panel must still offer typing\n{painted}"
+        );
+        for absent in ["qa.title", "qa.empty_title"] {
             assert!(
-                has(&painted, expected),
-                "compact ask panel must paint {expected:?}\n{painted}"
+                !has(&painted, tr_l10n(Lang::ZhCn, absent)),
+                "the compact layout must not spend height on {absent}\n{painted}"
             );
         }
-        assert!(
-            !has(&painted, tr_l10n(Lang::ZhCn, "qa.title")),
-            "the compact layout must not spend height on the header\n{painted}"
-        );
 
         let thread = QaPopupState {
             polish: None,
@@ -2624,6 +2730,8 @@ mod tests {
 
     #[test]
     fn ask_panel_recording_shows_selection_chip_and_ring() {
+        // 选区条只在**展开态**（录音中 + 有选区预览）画；这里用助手消息把它撑开。
+        // 紧凑态（480×80）没有第二行放选区条：选区摘要进输入框的 placeholder。
         let state = QaPopupState {
             phase: "recording".to_string(),
             selection_preview: Some("selection shown while recording".to_string()),
@@ -2907,13 +3015,21 @@ mod tests {
         let ctx = egui::Context::default();
         let image = egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]);
         let texture = ctx.load_texture("test-avatar", image, egui::TextureOptions::LINEAR);
+        // 消息线程只在展开态渲染：补一条助手消息把窗口撑开。
         let state = QaPopupState {
             phase: "idle".to_string(),
-            messages: vec![PopupChatMessage {
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                selection_text: None,
-            }],
+            messages: vec![
+                PopupChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                    selection_text: None,
+                },
+                PopupChatMessage {
+                    role: "assistant".to_string(),
+                    content: "hi".to_string(),
+                    selection_text: None,
+                },
+            ],
             ..Default::default()
         };
         let mut composer = String::new();

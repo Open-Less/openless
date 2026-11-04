@@ -1069,10 +1069,7 @@ mod tests {
         };
         // 480×140 的紧凑面板放进 400×300 的假工作区：按贴底锚点算完再夹回，
         // 结果仍在工作区左上（宽超出，横向夹到 0；纵向贴底 = 300-8-140）。
-        assert_eq!(
-            popup_position(&environment, PopupKind::Qa),
-            Some((0, 152)),
-        );
+        assert_eq!(popup_position(&environment, PopupKind::Qa), Some((0, 152)),);
         assert_eq!(
             popup_position(&environment, PopupKind::Capsule),
             Some((0, 60)),
