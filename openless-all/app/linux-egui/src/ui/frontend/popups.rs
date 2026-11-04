@@ -268,15 +268,30 @@ pub fn polish_result_mode(
                         .max_height((editor_height - 24.0).max(60.0))
                         .show(ui, |ui| {
                             ui.set_min_width(width - 24.0);
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&state.text)
-                                        .size(14.0)
-                                        .color(theme::INK),
-                                )
-                                .wrap()
-                                .selectable(true),
+                            // 副标题写的是「可直接编辑」，那就必须真的能编辑：Tauri
+                            // `qa-polish-editor` 也是一个 textarea。草稿放在 ctx 里，
+                            // 换了新的润色结果（text 变了）就重置。
+                            let draft_id = egui::Id::unique("openless-polish-draft");
+                            let mut draft: String = ui.ctx().data_mut(|data| {
+                                match data.get_temp::<(String, String)>(draft_id) {
+                                    Some((source, draft)) if source == state.text => draft,
+                                    _ => state.text.clone(),
+                                }
+                            });
+                            let response = ui.add(
+                                egui::TextEdit::multiline(&mut draft)
+                                    .id(egui::Id::unique("openless-polish-editor"))
+                                    .frame(egui::Frame::NONE)
+                                    .desired_width(width - 24.0)
+                                    .desired_rows(6)
+                                    .text_color(theme::INK)
+                                    .font(egui::FontId::proportional(14.0)),
                             );
+                            if response.changed() {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(draft_id, (state.text.clone(), draft.clone()))
+                                });
+                            }
                         });
                 });
 
@@ -300,6 +315,15 @@ pub fn polish_result_mode(
         .show(ui, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let confirm = tr_l10n(lang, "selection.polish_preview.confirm_replace");
+                // 确认送回去的是**编辑后的**草稿（没改过就等于原文）。
+                let edited = ui.ctx().data_mut(|data| {
+                    data.get_temp::<(String, String)>(egui::Id::unique("openless-polish-draft"))
+                        .filter(|(source, _)| *source == state.text)
+                        .map(|(_, draft)| draft)
+                });
+                let result_text = edited
+                    .filter(|draft| !draft.trim().is_empty())
+                    .unwrap_or_else(|| state.text.clone());
                 let confirm_width = layout::text_width(ui, confirm, 13.0) + 46.0;
                 let (rect, response) =
                     ui.allocate_exact_size(egui::vec2(confirm_width, 34.0), egui::Sense::click());
@@ -318,7 +342,7 @@ pub fn polish_result_mode(
                     theme::SURFACE,
                 );
                 if response.clicked() {
-                    action = PolishResultAction::Confirm(state.text.clone());
+                    action = PolishResultAction::Confirm(result_text.clone());
                 }
                 ui.add_space(8.0);
                 let cancel = tr_l10n(lang, "selection.polish_preview.cancel");
@@ -377,24 +401,27 @@ fn qa_wants_expanded(state: &QaPopupState, phase: &str) -> bool {
 ///
 /// 只在布局切换的那一帧发命令：每帧都发会让合成器不停重排。
 fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
-    let key = egui::Id::unique("openless-qa-window-expanded");
-    if ctx.data_mut(|data| data.get_temp::<bool>(key)) == Some(expanded) {
-        return;
-    }
-    ctx.data_mut(|data| data.insert_temp(key, expanded));
-
-    // Tauri `set_qa_window_expanded`：宽度 + 高度按状态取常量，位置按
-    // 「水平中心不动、底边不动（展开时再上抬 40）」重算，然后夹回工作区。
     let (width, height) = if expanded {
         openless_linux_egui::QA_EXPANDED_SIZE
     } else {
         openless_linux_egui::QA_COMPACT_SIZE
     };
     let viewport = ctx.input(|input| input.viewport().clone());
-    let old_size = viewport
-        .inner_rect
-        .map(|rect| rect.size())
-        .unwrap_or(egui::vec2(width as f32, height as f32));
+    let current = viewport.inner_rect.map(|rect| rect.size());
+
+    // 判据是**真实窗口尺寸**，不是记在上一次的标记里：弹窗进程会被宿主重建，
+    // 重建后窗口回到出生尺寸（紧凑态），而 ctx 里记的「已展开」还在——那样
+    // 润色预览就会挤在一个 480×140 的窗里被裁掉。
+    let already = current.is_some_and(|size| {
+        (size.x - width as f32).abs() <= 8.0 && (size.y - height as f32).abs() <= 8.0
+    });
+    if already {
+        return;
+    }
+
+    // Tauri `set_qa_window_expanded`：水平中心不动、底边不动（展开再上抬 40），
+    // 然后夹回工作区。
+    let old_size = current.unwrap_or(egui::vec2(width as f32, height as f32));
     let old_pos = viewport.outer_rect.map(|rect| rect.min);
     let lift = if expanded {
         openless_linux_egui::QA_EXPANDED_LIFT as f32
@@ -412,8 +439,6 @@ fn sync_qa_window_size(ctx: &egui::Context, expanded: bool) {
         old_pos.x + (old_size.x - width as f32) / 2.0,
         old_pos.y + old_size.y - height as f32 - lift,
     );
-    // 夹回工作区：egui 只给得到整块显示器尺寸（Linux 上 winit 的 work area
-    // 就等于显示器），底部留 8px，和 Tauri 的 `position_qa_window` 一致。
     if let Some(monitor) = viewport.monitor_size {
         let inset = openless_linux_egui::QA_BOTTOM_INSET as f32;
         let max_x = (monitor.x - width as f32).max(0.0);
@@ -485,7 +510,13 @@ fn compact_composer(
                 state
                     .selection_preview
                     .as_deref()
-                    .map(|text| format!("{} · {}", tr_l10n(lang, "qa.selection_preview"), truncate(text, 60)))
+                    .map(|text| {
+                        format!(
+                            "{} · {}",
+                            tr_l10n(lang, "qa.selection_preview"),
+                            truncate(text, 60)
+                        )
+                    })
                     .unwrap_or_else(|| tr_l10n(lang, "qa.composer_placeholder").to_string())
             } else {
                 tr_l10n(lang, "qa.composer_placeholder").to_string()
@@ -2985,6 +3016,52 @@ mod tests {
             });
             // 图钉只在展开态的标题行里；这里只要整帧有内容即可，动作由协议测试覆盖。
             assert!(!painted.is_empty(), "pinned={pinned}\n{painted}");
+        }
+    }
+
+    /// 润色预览在展开尺寸（760×416）下必须把「取消 / 确认并替换」画进窗口：
+    /// 这两个按钮是选区润色的唯一出口，被裁掉就等于功能消失。
+    #[test]
+    fn polish_preview_fits_the_expanded_window() {
+        let (w, h) = openless_linux_egui::QA_EXPANDED_SIZE;
+        let state = QaPopupState {
+            phase: "idle".to_string(),
+            polish: Some(QaPolishState {
+                text: "XBRK-HI3YM".into(),
+                source: "source paragraph".into(),
+            }),
+            ..Default::default()
+        };
+        let mut composer = String::new();
+        let ctx = egui::Context::default();
+        let output = crate::ui::frontend::run_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w as f32, h as f32),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                selection_ask(ui, &state, &mut composer, Lang::ZhCn, None);
+            },
+        );
+        let mut text = String::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                text.push_str(&t.galley.job.text);
+                text.push('\n');
+            }
+        }
+        for expected in [
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.cancel"),
+            tr_l10n(Lang::ZhCn, "selection.polish_preview.confirm_replace"),
+        ] {
+            assert!(
+                text.contains(expected),
+                "missing {expected:?} at {w}x{h}: {text}"
+            );
         }
     }
 
