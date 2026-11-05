@@ -11,11 +11,16 @@ for (const os of ['mac', 'win']) {
     const categoryNav = dialog.getByRole('navigation', { name: '设置分类' });
     const inputCategory = categoryNav.getByRole('button', { name: '录音与输入', exact: true });
     const appearanceCategory = dialog.getByRole('button', { name: '外观与语言', exact: true });
+    const openRecording = async () => {
+      await inputCategory.click();
+      await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+    };
     const remountInputSection = async () => {
       await appearanceCategory.click();
-      await inputCategory.click();
+      await openRecording();
     };
 
+    await openRecording();
     await expect(control).toContainText('鼠标所在屏幕');
     await control.click();
     if (os === 'win') {

@@ -56,9 +56,8 @@ test('trackpad input stays native, scrollbar chrome is hidden and scrolling sett
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '录音与输入', exact: true })
     .click();
-  await expect(
-    content.locator('[data-section="general"] .ol-shortcut-binding').first(),
-  ).toBeVisible();
+  await page.getByRole('button', { name: /麦克风与录音/ }).click();
+  await expect(content.locator('.ol-shortcut-binding').first()).toBeVisible();
   await content.hover();
   const destination = await content.evaluate((el) =>
     Math.min(el.scrollTop + 450, el.scrollHeight - el.clientHeight),
@@ -177,7 +176,7 @@ test('every main destination and settings category stays readable on desktop and
   for (const name of [
     '录音与输入',
     '快捷键',
-    'AI 服务与模型',
+    'AI 与模型',
     '外观与语言',
     '权限与数据',
     '实验与扩展',
