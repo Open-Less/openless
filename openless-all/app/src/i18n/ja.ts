@@ -1174,9 +1174,9 @@ export const ja: typeof zhCN = {
     target: {
       title: '翻訳ターゲット言語',
       desc: '録音中に Shift で翻訳を起動。「無効」で Shift 無効化。',
-      disabled: '無効（Shift で翻訳を発動しない）',
+      disabled: '無効（{{shortcut}} で翻訳を発動しない）',
       sameAsWorking:
-        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
+        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（{{shortcut}} を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
     },
     style: {
       title: '翻訳スタイル',
@@ -1197,7 +1197,7 @@ export const ja: typeof zhCN = {
       step4: '再度 {{trigger}} を押して停止。',
       step5: '翻訳結果がカーソル位置に挿入されます。',
       indicatorTitle: '翻訳モードの確認方法',
-      indicatorDesc: 'Shift を押すと画面下部に青い「翻訳中」表示が出ます。',
+      indicatorDesc: '{{shortcut}} を押すと画面下部に青い「翻訳中」表示が出ます。',
       fallbackTitle: 'セーフティフォールバック',
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },

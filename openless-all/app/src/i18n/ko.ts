@@ -1168,9 +1168,9 @@ export const ko: typeof zhCN = {
     target: {
       title: '번역 대상 언어',
       desc: '녹음 중 Shift 로 번역 실행. "비활성화" 시 Shift 무효.',
-      disabled: '비활성화 (Shift 로 번역 발동 안 함)',
+      disabled: '비활성화 ({{shortcut}} 로 번역 발동 안 함)',
       sameAsWorking:
-        '대상 언어가 유일한 작업 언어와 같아 번역이 실행되지 않습니다. Shift 를 눌러도 일반 정리로 처리됩니다. 다른 대상 언어를 고르거나 위에서 작업 언어를 추가하세요.',
+        '대상 언어가 유일한 작업 언어와 같아 번역이 실행되지 않습니다. {{shortcut}} 를 눌러도 일반 정리로 처리됩니다. 다른 대상 언어를 고르거나 위에서 작업 언어를 추가하세요.',
     },
     style: {
       title: '번역 스타일',
@@ -1191,7 +1191,7 @@ export const ko: typeof zhCN = {
       step4: '다시 {{trigger}} 를 눌러 정지.',
       step5: '번역 결과가 커서 위치에 삽입됩니다.',
       indicatorTitle: '번역 모드 활성화 확인 방법',
-      indicatorDesc: 'Shift 를 누르면 화면 하단에 파란색 "번역 중" 표시가 나타납니다.',
+      indicatorDesc: '{{shortcut}} 를 누르면 화면 하단에 파란색 "번역 중" 표시가 나타납니다.',
       fallbackTitle: '안전 폴백',
       fallbackDesc: '번역 실패 시 원본 전사가 삽입됩니다.',
     },

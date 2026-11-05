@@ -1198,9 +1198,9 @@ export const es: typeof zhCN = {
     target: {
       title: 'Idioma de destino',
       desc: 'Pulsa Mayús mientras grabas para traducir. Con «Desactivada», Mayús no hace nada.',
-      disabled: 'Desactivada (Mayús no hace nada)',
+      disabled: 'Desactivada ({{shortcut}} no hace nada)',
       sameAsWorking:
-        'El destino coincide con tu único idioma habitual, por lo que la traducción no tendrá efecto: Mayús solo mejorará el texto. Elige otro destino o añade otro idioma habitual arriba.',
+        'El destino coincide con tu único idioma habitual, por lo que la traducción no tendrá efecto: {{shortcut}} solo mejorará el texto. Elige otro destino o añade otro idioma habitual arriba.',
     },
     style: {
       title: 'Estilo de traducción',
@@ -1223,7 +1223,7 @@ export const es: typeof zhCN = {
       step5: 'La traducción se insertará donde esté el cursor.',
       indicatorTitle: 'Cómo saber si la traducción está activada',
       indicatorDesc:
-        'Después de pulsar Mayús, aparece un indicador azul de «Traduciendo» en la parte inferior de la pantalla.',
+        'Después de pulsar {{shortcut}}, aparece un indicador azul de «Traduciendo» en la parte inferior de la pantalla.',
       fallbackTitle: 'Alternativa en caso de error',
       fallbackDesc: 'Si la traducción falla, se inserta la transcripción original.',
     },

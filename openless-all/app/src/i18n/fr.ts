@@ -1215,9 +1215,9 @@ export const fr: typeof zhCN = {
     target: {
       title: 'Langue de traduction',
       desc: 'Appuyez sur Maj pendant l’enregistrement pour traduire. Si la traduction est désactivée, Maj n’a aucun effet.',
-      disabled: 'Désactivée (Maj sans effet)',
+      disabled: 'Désactivée ({{shortcut}} sans effet)',
       sameAsWorking:
-        'La langue cible correspond à votre seule langue habituelle : la traduction sera sans effet et Maj améliorera simplement le texte. Choisissez une autre cible ou ajoutez une langue habituelle ci-dessus.',
+        'La langue cible correspond à votre seule langue habituelle : la traduction sera sans effet et {{shortcut}} améliorera simplement le texte. Choisissez une autre cible ou ajoutez une langue habituelle ci-dessus.',
     },
     style: {
       title: 'Style de traduction',
@@ -1241,7 +1241,7 @@ export const fr: typeof zhCN = {
       step5: 'Le texte traduit est inséré à l’emplacement du curseur.',
       indicatorTitle: 'Comment vérifier que la traduction est active',
       indicatorDesc:
-        'Un indicateur bleu « Traduction » apparaît en bas de l’écran après avoir appuyé sur Maj.',
+        'Un indicateur bleu « Traduction » apparaît en bas de l’écran après avoir appuyé sur {{shortcut}}.',
       fallbackTitle: 'Solution de repli',
       fallbackDesc: 'Si la traduction échoue, la transcription brute est insérée à la place.',
     },
