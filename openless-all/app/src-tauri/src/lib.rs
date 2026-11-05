@@ -1928,7 +1928,13 @@ fn reset_tcc_for_beta_restart() {
     // Beta builds are currently ad-hoc signed. Their code hash changes across builds, so
     // old TCC rows can leave System Settings checked while AXIsProcessTrusted() is false.
     reset_tcc_service_for_restart("Accessibility", "beta ad-hoc identity refresh");
-    reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    // A granted microphone must survive the restart. Resetting it marks that grant missing.
+    let microphone = permissions::check_microphone();
+    if permissions::should_reset_microphone_tcc(microphone) {
+        reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    } else {
+        log::info!("[tcc] microphone already granted; skipping TCC reset");
+    }
 }
 
 #[cfg(target_os = "macos")]

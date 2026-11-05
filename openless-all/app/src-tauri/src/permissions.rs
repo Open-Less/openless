@@ -6,7 +6,8 @@
 //! - macOS Accessibility: `AXIsProcessTrusted` check;
 //!   `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})` shows the system
 //!   authorization dialog.
-//! - macOS Microphone: `AVAudioApplication.shared.recordPermission` + requestRecordPermission.
+//! - macOS Microphone: `AVAudioApplication.shared.recordPermission`, with
+//!   `AVCaptureDevice.authorizationStatus` when that reading is not granted.
 //! - Windows: cpal needs no Accessibility-equivalent permission; the mic shows the one-time
 //!   system prompt on Win10+ at first use. With no available input device, return `NoDevice`
 //!   (distinct from permission `Denied`) so "no microphone plugged in" is not misreported as
@@ -43,6 +44,75 @@ pub(crate) fn is_no_device_error(lower: &str) -> bool {
     ]
     .iter()
     .any(|pattern| lower.contains(pattern))
+}
+
+// AVAudioApplicationRecordPermission FourCC raw values (NSInteger).
+const RECORD_PERMISSION_GRANTED: i64 = 0x6772_6e74; // 'grnt'
+const RECORD_PERMISSION_DENIED: i64 = 0x6465_6e79; // 'deny'
+const RECORD_PERMISSION_UNDETERMINED: i64 = 0x756e_6474; // 'undt'
+
+/// Map `AVAudioApplication.recordPermission`. Unknown values stay undetermined;
+/// they are not a granted TCC status.
+pub(crate) fn map_record_permission(raw: i64) -> PermissionStatus {
+    match raw {
+        RECORD_PERMISSION_GRANTED => PermissionStatus::Granted,
+        RECORD_PERMISSION_DENIED => PermissionStatus::Denied,
+        RECORD_PERMISSION_UNDETERMINED => PermissionStatus::NotDetermined,
+        _ => PermissionStatus::NotDetermined,
+    }
+}
+
+/// Map `AVCaptureDevice.authorizationStatus` (`AVAuthorizationStatus`).
+pub(crate) fn map_capture_authorization(raw: i64) -> PermissionStatus {
+    match raw {
+        3 => PermissionStatus::Granted,
+        2 => PermissionStatus::Denied,
+        1 => PermissionStatus::Restricted,
+        0 => PermissionStatus::NotDetermined,
+        _ => PermissionStatus::NotDetermined,
+    }
+}
+
+/// A granted reading from either source is authoritative. `recordPermission`
+/// can stay undetermined after TCC has already authorized the microphone.
+pub(crate) fn resolve_microphone_permission(
+    audio_app: Option<PermissionStatus>,
+    capture: PermissionStatus,
+) -> PermissionStatus {
+    if audio_app == Some(PermissionStatus::Granted) || capture == PermissionStatus::Granted {
+        return PermissionStatus::Granted;
+    }
+    match (audio_app, capture) {
+        (Some(PermissionStatus::Denied), _) | (_, PermissionStatus::Denied) => {
+            PermissionStatus::Denied
+        }
+        (Some(PermissionStatus::Restricted), _) | (_, PermissionStatus::Restricted) => {
+            PermissionStatus::Restricted
+        }
+        (Some(status), _) => status,
+        (None, status) => status,
+    }
+}
+
+/// Reset and re-request must not replace an already-granted status.
+pub(crate) fn microphone_status_after_request(
+    before: PermissionStatus,
+    requested: PermissionStatus,
+    reread: PermissionStatus,
+) -> PermissionStatus {
+    if before == PermissionStatus::Granted
+        || requested == PermissionStatus::Granted
+        || reread == PermissionStatus::Granted
+    {
+        PermissionStatus::Granted
+    } else {
+        requested
+    }
+}
+
+/// `tccutil reset Microphone` drops a real grant. Skip it once the status is granted.
+pub(crate) fn should_reset_microphone_tcc(status: PermissionStatus) -> bool {
+    status != PermissionStatus::Granted
 }
 
 // ─────────────────────────── macOS ───────────────────────────
@@ -84,9 +154,8 @@ mod platform {
         static AVMediaTypeAudio: *const c_void;
     }
 
-    // AVAudioApplication lives in the AVFAudio framework (macOS 14+). The Swift original
-    // MicrophonePermission.swift takes this path; it is the single source of truth for
-    // pre-recording permission checks.
+    // AVAudioApplication lives in the AVFAudio framework (macOS 14+). A non-granted
+    // recordPermission is not authoritative: TCC may already allow capture.
     #[link(name = "AVFAudio", kind = "framework")]
     extern "C" {}
 
@@ -126,19 +195,28 @@ mod platform {
     }
 
     pub fn check_microphone() -> PermissionStatus {
-        // Mirrors Swift `MicrophonePermission.isGranted()`.
-        if let Some(status) = check_microphone_via_avaudio_application() {
-            return status;
+        // Mirrors Swift `MicrophonePermission.isGranted()`, but a granted
+        // AVCaptureDevice status wins over a stale non-granted recordPermission.
+        let audio_app = check_microphone_via_avaudio_application();
+        if audio_app == Some(super::PermissionStatus::Granted) {
+            return super::PermissionStatus::Granted;
         }
-        check_microphone_via_avcapture_device()
+        let capture = check_microphone_via_avcapture_device();
+        super::resolve_microphone_permission(audio_app, capture)
     }
 
     pub fn request_microphone() -> PermissionStatus {
         // Mirrors Swift `MicrophonePermission.request()`, with an 8s fallback.
-        if let Some(status) = request_microphone_via_avaudio_application() {
-            return status;
+        // Do not prompt, and do not keep a negative callback, when a source
+        // already reports the microphone as granted.
+        let before = check_microphone();
+        if before == super::PermissionStatus::Granted {
+            return super::PermissionStatus::Granted;
         }
-        request_microphone_via_avcapture_device()
+        let requested = request_microphone_via_avaudio_application()
+            .unwrap_or_else(request_microphone_via_avcapture_device);
+        let reread = check_microphone();
+        super::microphone_status_after_request(before, requested, reread)
     }
 
     fn check_microphone_via_avaudio_application() -> Option<PermissionStatus> {
@@ -157,12 +235,7 @@ mod platform {
         //   'deny' = 0x64656e79 = 1684368761
         //   'undt' = 0x756e6474 = 1970168948
         let perm: i64 = unsafe { msg_send![shared, recordPermission] };
-        let mapped = match perm {
-            0x6772_6e74 => PermissionStatus::Granted,
-            0x6465_6e79 => PermissionStatus::Denied,
-            0x756e_6474 => PermissionStatus::NotDetermined,
-            _ => PermissionStatus::NotDetermined,
-        };
+        let mapped = super::map_record_permission(perm);
         log::info!(
             "[mic] AVAudioApplication.recordPermission raw=0x{:x} ({}) → {:?}",
             perm,
@@ -218,13 +291,7 @@ mod platform {
         };
         let status: i64 =
             unsafe { msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio] };
-        let mapped = match status {
-            3 => PermissionStatus::Granted,
-            2 => PermissionStatus::Denied,
-            1 => PermissionStatus::Restricted,
-            0 => PermissionStatus::NotDetermined,
-            _ => PermissionStatus::NotDetermined,
-        };
+        let mapped = super::map_capture_authorization(status);
         log::info!(
             "[mic] AVCaptureDevice.authStatus raw={} → {:?}",
             status,
@@ -515,7 +582,12 @@ pub fn windows_microphone_access_explicitly_denied() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_no_device_error;
+    use super::{
+        is_no_device_error, map_capture_authorization, map_record_permission,
+        microphone_status_after_request, resolve_microphone_permission,
+        should_reset_microphone_tcc, PermissionStatus, RECORD_PERMISSION_DENIED,
+        RECORD_PERMISSION_GRANTED, RECORD_PERMISSION_UNDETERMINED,
+    };
 
     #[test]
     fn no_device_errors_are_recognized() {
@@ -541,5 +613,93 @@ mod tests {
                 "should NOT classify as no-device: {message}"
             );
         }
+    }
+
+    #[test]
+    fn record_permission_fourcc_values_keep_granted_distinct() {
+        assert_eq!(
+            map_record_permission(RECORD_PERMISSION_GRANTED),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            map_record_permission(RECORD_PERMISSION_DENIED),
+            PermissionStatus::Denied
+        );
+        assert_eq!(
+            map_record_permission(RECORD_PERMISSION_UNDETERMINED),
+            PermissionStatus::NotDetermined
+        );
+        assert_eq!(map_record_permission(3), PermissionStatus::NotDetermined);
+    }
+
+    #[test]
+    fn capture_authorization_maps_authorized_to_granted() {
+        assert_eq!(map_capture_authorization(3), PermissionStatus::Granted);
+        assert_eq!(map_capture_authorization(2), PermissionStatus::Denied);
+        assert_eq!(map_capture_authorization(1), PermissionStatus::Restricted);
+        assert_eq!(
+            map_capture_authorization(0),
+            PermissionStatus::NotDetermined
+        );
+    }
+
+    #[test]
+    fn granted_capture_status_is_not_hidden_by_record_permission() {
+        assert_eq!(
+            resolve_microphone_permission(
+                Some(PermissionStatus::NotDetermined),
+                PermissionStatus::Granted
+            ),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            resolve_microphone_permission(
+                Some(PermissionStatus::Denied),
+                PermissionStatus::Granted
+            ),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            resolve_microphone_permission(None, PermissionStatus::Granted),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            resolve_microphone_permission(
+                Some(PermissionStatus::NotDetermined),
+                PermissionStatus::Denied
+            ),
+            PermissionStatus::Denied
+        );
+    }
+
+    #[test]
+    fn re_request_and_reset_keep_an_already_granted_microphone() {
+        assert_eq!(
+            microphone_status_after_request(
+                PermissionStatus::Granted,
+                PermissionStatus::Denied,
+                PermissionStatus::NotDetermined
+            ),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            microphone_status_after_request(
+                PermissionStatus::NotDetermined,
+                PermissionStatus::Denied,
+                PermissionStatus::Granted
+            ),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            microphone_status_after_request(
+                PermissionStatus::NotDetermined,
+                PermissionStatus::Denied,
+                PermissionStatus::Denied
+            ),
+            PermissionStatus::Denied
+        );
+        assert!(!should_reset_microphone_tcc(PermissionStatus::Granted));
+        assert!(should_reset_microphone_tcc(PermissionStatus::NotDetermined));
+        assert!(should_reset_microphone_tcc(PermissionStatus::Denied));
     }
 }
