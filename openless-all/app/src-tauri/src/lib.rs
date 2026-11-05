@@ -170,6 +170,15 @@ static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static QA_WINDOW_CREATE_LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn qa_window_create_lock() -> &'static parking_lot::Mutex<()> {
+    QA_WINDOW_CREATE_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -3077,6 +3086,9 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
 /// at creation time here, otherwise the lazily created QA window can't be dragged on macOS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    // ShowQa can arrive concurrently from independent Core workflows. Keep the existing-window
+    // lookup and first build in one critical section so two callers cannot create two qa HWNDs.
+    let _creation_guard = qa_window_create_lock().lock();
     if let Some(w) = app.get_webview_window("qa") {
         return Some(w);
     }
