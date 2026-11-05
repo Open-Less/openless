@@ -132,7 +132,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - name: Run Chromium and WebKit UI motion checks
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: npm run test:ui-motion
       - uses: actions/upload-artifact@v4
         if: failure()

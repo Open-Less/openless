@@ -242,6 +242,27 @@ test('every settings switch slides between on and off', async ({ page }) => {
       }
       continue;
     }
+    const categoryEntries = dialog.locator('.ol-settings-category-entry');
+    const categoryCount = await categoryEntries.count();
+    if (categoryCount > 0) {
+      for (let index = 0; index < categoryCount; index++) {
+        await categoryEntries.nth(index).click();
+        const back = dialog.locator('.ol-settings-back-button');
+        await expect(back).toBeVisible();
+        const subHeaders = dialog.locator('[data-ol-toggle-group] > button[aria-expanded]');
+        for (let headerIndex = 0; headerIndex < (await subHeaders.count()); headerIndex++) {
+          const header = subHeaders.nth(headerIndex);
+          if ((await header.getAttribute('aria-expanded')) !== 'false') continue;
+          await header.click();
+          await expect(header).toHaveAttribute('aria-expanded', 'true');
+        }
+        total += await exerciseVisibleSwitches(dialog, `${section}:${index}`);
+        await back.click();
+        await expect(categoryEntries.first()).toBeVisible();
+        await settleNavigation(dialog);
+      }
+      continue;
+    }
     total += await exerciseVisibleSwitches(dialog, section);
   }
   expect(total).toBeGreaterThan(15);
@@ -249,7 +270,7 @@ test('every settings switch slides between on and off', async ({ page }) => {
 
 test('channel enable switches slide in every services list', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   let total = 0;
   for (const view of ['语言模型', '语音识别']) {
     await dialog
@@ -265,7 +286,7 @@ test('channel enable switches slide in every services list', async ({ page }) =>
 
 test('channel sorting waits for a slow knob transition to finish', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   await page.addStyleTag({
     content: '.ol-switch-thumb { transition-duration: 700ms !important; }',
   });
@@ -301,6 +322,8 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
   page,
 }) => {
   const dialog = await openSettings(page);
+  await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
   const neighbourMoves = async (group: Locator) => {
     const switches = group.locator('[role="switch"]');
     await expect(switches.nth(1)).toBeVisible();
@@ -313,7 +336,7 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
   const startupGroup = startup.locator('xpath=..');
   await expect(startupGroup).toHaveAttribute('data-ol-toggle-group', '');
   expect(await neighbourMoves(startupGroup)).toBeGreaterThan(0);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   const channels = dialog.locator('.ol-reorder-list[data-ol-toggle-group]');
   expect(await neighbourMoves(channels)).toBeGreaterThan(0);
 });

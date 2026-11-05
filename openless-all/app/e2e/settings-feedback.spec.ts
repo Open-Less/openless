@@ -40,7 +40,7 @@ async function expectInViewport(page: Page) {
 test('explanatory labels replace help badges, open beside the words and dismiss with Escape', async ({
   page,
 }) => {
-  await settings(page, 'AI 服务与模型');
+  await settings(page, 'AI 与模型');
   const label = page.getByRole('button', { name: '识别管线', exact: true });
   const row = page.locator('.ol-service-pipeline-row');
   await expect(label).toHaveCSS('text-decoration-style', 'dotted');
@@ -195,7 +195,7 @@ test('style card lists mount and switch without the React 18 PopChild ref warnin
 test('Gemini Omni exposes the shared thinking setting and hides it for transcription models', async ({
   page,
 }, testInfo) => {
-  await settings(page, 'AI 服务与模型');
+  await settings(page, 'AI 与模型');
   await page.getByRole('button', { name: '多模态模式', exact: true }).click();
   const card = page.locator('.ol-omni-settings');
   await card.getByRole('combobox', { name: '供应商', exact: true }).click();
