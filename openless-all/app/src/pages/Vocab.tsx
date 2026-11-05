@@ -407,7 +407,7 @@ export function Vocab() {
         title={t('vocab.title')}
         desc={t('vocab.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             {selectedIds.size > 0 && (
               <button
                 type="button"
