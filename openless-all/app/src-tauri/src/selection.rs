@@ -125,6 +125,7 @@ pub(crate) enum SelectionCaptureMissReason {
     PrefetchHit,
     PrefetchMissLiveOk,
     ClipboardInitFailed,
+    #[cfg(any(target_os = "macos", test))]
     ClipboardSentinelWriteFailed,
     CopyShortcutFailed,
     ClipboardUnchangedSentinel,
@@ -141,6 +142,7 @@ impl SelectionCaptureMissReason {
             Self::PrefetchHit => "prefetch_hit",
             Self::PrefetchMissLiveOk => "prefetch_miss_live_ok",
             Self::ClipboardInitFailed => "clipboard_init_failed",
+            #[cfg(any(target_os = "macos", test))]
             Self::ClipboardSentinelWriteFailed => "clipboard_sentinel_write_failed",
             Self::CopyShortcutFailed => "copy_shortcut_failed",
             Self::ClipboardUnchangedSentinel => "clipboard_unchanged_sentinel",
@@ -762,6 +764,98 @@ fn simulate_copy_and_read() -> Option<String> {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_simulate_copy_and_read_diag()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_simulate_copy_and_read_diag()
+    }
+}
+
+/// Windows: detect the simulated Ctrl+C by watching the clipboard sequence number instead of
+/// writing a sentinel first. The sentinel used to land in Windows Clipboard History (Win+V) as
+/// `__openless_qa_sentinel_*__` entries on every capture (issues #1331 / #1335), and writing it
+/// woke the history listener mid-capture. Watching the sequence number keeps the user's clipboard
+/// history clean and removes that extra clipboard write.
+#[cfg(target_os = "windows")]
+fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
+    // a) Snapshot the current clipboard (backup used to restore the original state)
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[selection] clipboard init failed: {e}");
+            return Err(SelectionCaptureMissReason::ClipboardInitFailed);
+        }
+    };
+    let original = match clipboard.get_text() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::info!("[selection] clipboard get_text returned err (likely empty): {e}");
+            None
+        }
+    };
+    let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
+
+    // b) Simulate Ctrl+C
+    let mut post_ok = post_copy_shortcut();
+    log::info!(
+        "[selection] post_copy: post_ok={} original_was_some={}",
+        post_ok,
+        original.is_some()
+    );
+    if !post_ok {
+        log::warn!("[selection] post_copy_shortcut failed");
+        // Do not return immediately: restore the clipboard via the flow below.
+    }
+
+    // c) Wait for the clipboard to change; re-send Ctrl+C once if the first chord was lost.
+    let outcome =
+        windows_poll_clipboard_after_copy(&mut clipboard, baseline_sequence, &mut post_ok);
+
+    // d) Restore the original clipboard only when the simulated copy actually replaced it.
+    //    Skipping the no-op restore matters on Windows: every clipboard write becomes a new
+    //    Clipboard History entry, so writing the same text back would duplicate the user's
+    //    clipboard item — the pollution reported in #1331 / #1335.
+    let needs_restore = match &outcome {
+        ClipboardPollOutcome::Unchanged => false,
+        ClipboardPollOutcome::Captured(text) => original.as_deref() != Some(text.as_str()),
+        ClipboardPollOutcome::Unreadable => true,
+    };
+    if needs_restore {
+        if let Some(ref prev) = original {
+            if let Err(e) = clipboard.set_text(prev) {
+                log::warn!("[selection] clipboard restore failed: {e}");
+            }
+        } else if let Err(e) = clipboard.set_text("") {
+            // The user's original clipboard was empty → clear the selection copy.
+            log::warn!("[selection] clipboard clear failed: {e}");
+        }
+    }
+
+    if !post_ok {
+        return Err(SelectionCaptureMissReason::CopyShortcutFailed);
+    }
+    match outcome {
+        // The sequence never moved → Ctrl+C did not take effect or the target has no selection.
+        ClipboardPollOutcome::Unchanged => {
+            Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel)
+        }
+        ClipboardPollOutcome::Unreadable => Err(SelectionCaptureMissReason::ClipboardReadFailed),
+        ClipboardPollOutcome::Captured(text) if text.is_empty() => {
+            Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy)
+        }
+        ClipboardPollOutcome::Captured(text) => Ok(text),
+    }
+}
+
+/// macOS: write a sentinel so a failed Cmd+C can be told apart from a target app that has no
+/// selection, then restore the user's clipboard.
+#[cfg(target_os = "macos")]
+fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     // a) Snapshot the current clipboard (backup used to restore the original state)
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -787,13 +881,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         return Err(SelectionCaptureMissReason::ClipboardSentinelWriteFailed);
     }
 
-    // Windows + Clipboard History: writing the sentinel wakes an async listener that may
-    // briefly own/open the clipboard. Target-app Ctrl+C then fails silently and leaves
-    // the sentinel in place (user A/B: history OFF → OK, history ON → fail). Settle first.
-    #[cfg(target_os = "windows")]
-    windows_wait_clipboard_settle_after_write();
-
-    // c) Simulate Cmd+C / Ctrl+C
+    // c) Simulate Cmd+C
     let mut post_ok = post_copy_shortcut();
     log::info!(
         "[selection] post_copy: post_ok={} original_was_some={}",
@@ -806,19 +894,10 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         // restore it via the flow below.
     }
 
-    // d) Wait for the clipboard to update; Windows with clipboard history needs polling and,
-    //    if necessary, re-sending Ctrl+C.
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::thread::sleep(Duration::from_millis(80));
-    }
-
-    #[cfg(target_os = "windows")]
-    let captured = windows_poll_clipboard_after_copy(&mut clipboard, &sentinel, &mut post_ok);
-    #[cfg(not(target_os = "windows"))]
+    std::thread::sleep(Duration::from_millis(80));
     let captured = clipboard.get_text().ok();
 
-    // f) Restore the original clipboard
+    // d) Restore the original clipboard
     if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
             log::warn!("[selection] clipboard restore failed: {e}");
@@ -834,6 +913,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     classify_simulated_copy_result(post_ok, captured, &sentinel)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn classify_simulated_copy_result(
     post_ok: bool,
     captured: Option<String>,
@@ -923,7 +1003,7 @@ fn windows_selection_targets_match(
     captured == current
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn uuid_like_token() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -1159,108 +1239,79 @@ mod macos_paste {
 
 // ─────────────────────────── Windows Ctrl+C send ───────────────────────────
 
-/// After we write a sentinel, Clipboard History (and other listeners) may briefly open
-/// the clipboard. Wait until nobody holds it and the sequence number stops moving.
+/// Result of waiting for the target app's Ctrl+C to land on the clipboard.
 #[cfg(target_os = "windows")]
-fn windows_wait_clipboard_settle_after_write() {
-    use windows::Win32::System::DataExchange::{
-        GetClipboardSequenceNumber, GetOpenClipboardWindow,
-    };
-
-    const MAX_MS: u64 = 250;
-    const STEP_MS: u64 = 10;
-    let start = std::time::Instant::now();
-    let mut last_seq = unsafe { GetClipboardSequenceNumber() };
-    let mut stable_rounds = 0u32;
-    let mut open_cleared = false;
-    let mut seq_stable = false;
-
-    while (start.elapsed().as_millis() as u64) < MAX_MS {
-        let open_is_free = match unsafe { GetOpenClipboardWindow() } {
-            Ok(hwnd) => hwnd.0.is_null(),
-            Err(_) => true,
-        };
-        let seq = unsafe { GetClipboardSequenceNumber() };
-        if open_is_free {
-            open_cleared = true;
-            if seq == last_seq {
-                stable_rounds += 1;
-                // ~30ms of unchanged seq with clipboard free → history likely caught up.
-                if stable_rounds >= 3 {
-                    seq_stable = true;
-                    break;
-                }
-            } else {
-                stable_rounds = 0;
-                last_seq = seq;
-            }
-        } else {
-            open_cleared = false;
-            stable_rounds = 0;
-            last_seq = seq;
-        }
-        std::thread::sleep(Duration::from_millis(STEP_MS));
-    }
-
-    let waited_ms = start.elapsed().as_millis() as u64;
-    log::info!(
-        "[selection] clipboard_settle: waited_ms={} open_cleared={} seq_stable={}",
-        waited_ms,
-        open_cleared,
-        seq_stable
-    );
+enum ClipboardPollOutcome {
+    /// The clipboard changed and its text was read successfully.
+    Captured(String),
+    /// The clipboard sequence never moved: the target app did not copy anything.
+    Unchanged,
+    /// The clipboard changed, but its text could not be read before the deadline.
+    Unreadable,
 }
 
-/// Poll until clipboard leaves the sentinel (selection copy landed). One Ctrl+C resend
+/// Poll the clipboard sequence number (not its text) until the target app's Ctrl+C lands.
+/// Watching the sequence avoids writing a sentinel — the old sentinel showed up in Windows
+/// Clipboard History as `__openless_qa_sentinel_*__` entries (#1331 / #1335). One Ctrl+C resend
 /// mid-window covers the case where the first chord hit a still-busy clipboard.
 #[cfg(target_os = "windows")]
 fn windows_poll_clipboard_after_copy(
     clipboard: &mut arboard::Clipboard,
-    sentinel: &str,
+    baseline_sequence: u32,
     post_ok: &mut bool,
-) -> Option<String> {
+) -> ClipboardPollOutcome {
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
     const MAX_MS: u64 = 450;
     const STEP_MS: u64 = 25;
     let start = std::time::Instant::now();
     let mut attempts = 0u32;
     let mut resent_ctrl_c = false;
-    let mut captured = None;
+    let mut changed = false;
 
-    while (start.elapsed().as_millis() as u64) < MAX_MS {
+    loop {
         attempts += 1;
-        match clipboard.get_text() {
-            Ok(text) if text != sentinel => {
-                captured = Some(text);
-                break;
-            }
-            Ok(text) => {
-                captured = Some(text);
-            }
-            Err(_) => {
-                captured = None;
+        if unsafe { GetClipboardSequenceNumber() } != baseline_sequence {
+            changed = true;
+            // The clipboard may be transiently held by another process (Clipboard History,
+            // cloud clipboard). Keep polling until the deadline instead of failing immediately.
+            if let Ok(text) = clipboard.get_text() {
+                log::info!(
+                    "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed=true",
+                    start.elapsed().as_millis() as u64,
+                    attempts,
+                    resent_ctrl_c
+                );
+                return ClipboardPollOutcome::Captured(text);
             }
         }
 
-        // Halfway through: if still on sentinel, resend Ctrl+C once.
-        if !resent_ctrl_c && (start.elapsed().as_millis() as u64) >= 150 {
+        if start.elapsed().as_millis() as u64 >= MAX_MS {
+            break;
+        }
+        // Halfway through: if nothing landed yet, resend Ctrl+C once.
+        if !resent_ctrl_c && start.elapsed().as_millis() as u64 >= 150 {
             if post_copy_shortcut() {
                 *post_ok = true;
                 resent_ctrl_c = true;
-                log::info!("[selection] clipboard_poll: resent Ctrl+C after settle miss");
+                log::info!("[selection] clipboard_poll: resent Ctrl+C after sequence miss");
             }
         }
         std::thread::sleep(Duration::from_millis(STEP_MS));
     }
 
-    let waited_ms = start.elapsed().as_millis() as u64;
     log::info!(
-        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} still_sentinel={}",
-        waited_ms,
+        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} changed={}",
+        start.elapsed().as_millis() as u64,
         attempts,
         resent_ctrl_c,
-        captured.as_deref() == Some(sentinel)
+        changed
     );
-    captured
+    if changed {
+        ClipboardPollOutcome::Unreadable
+    } else {
+        ClipboardPollOutcome::Unchanged
+    }
 }
 
 #[cfg(target_os = "windows")]
