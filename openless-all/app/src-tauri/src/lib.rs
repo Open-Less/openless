@@ -1857,22 +1857,18 @@ fn restart_on_main_thread(app: AppHandle) {
 }
 
 /// How long a tray-initiated quit may take before the process is forced down.
-/// `AppHandle::exit` is dispatched through the main event loop, so a stuck
-/// backend/event loop never processes it — the tray "quit" item then looks dead
-/// (#1337). The watchdog only fires after this grace period.
+/// Once the tray callback runs, the watchdog bounds a stalled exit (#1337).
+/// The callback itself still needs a responsive event loop to arm the watchdog.
 const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
 
-/// Quit on explicit user intent, even when the event loop is unresponsive.
+/// Arm the fallback before requesting graceful exit on explicit user intent.
 fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let handle = app.clone();
-    std::thread::spawn(move || {
+    std::thread::spawn(|| {
         std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
-        log::warn!(
-            "[quit] graceful exit did not finish within {QUIT_FORCE_EXIT_GRACE:?}; forcing process exit"
-        );
-        // A stuck event loop cannot drain another `exit` request; process exit
-        // is the only reliable path left. A healthy exit never reaches here.
-        let _ = handle.exit(0);
+        // Keep the deadline path independent of application locks: synchronous
+        // logging can block on I/O, and AppHandle::exit can enter synchronous
+        // cleanup if sending the exit request fails. A healthy exit never
+        // reaches here.
         std::process::exit(0);
     });
     app.exit(0);
