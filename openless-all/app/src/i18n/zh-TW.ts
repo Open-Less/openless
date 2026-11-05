@@ -1136,9 +1136,9 @@ export const zhTW: typeof zhCN = {
     target: {
       title: '翻譯目標語言',
       desc: '錄音時按 Shift 觸發翻譯。選「不啟用」則 Shift 無效。',
-      disabled: '不啟用（Shift 按下不觸發翻譯）',
+      disabled: '不啟用（{{shortcut}} 按下不觸發翻譯）',
       sameAsWorking:
-        '目標語言與你唯一的工作語言相同，翻譯不會生效：按 Shift 仍按普通潤色處理。換一個目標語言，或在上方多勾選一個工作語言。',
+        '目標語言與你唯一的工作語言相同，翻譯不會生效：按 {{shortcut}} 仍按普通潤色處理。換一個目標語言，或在上方多勾選一個工作語言。',
     },
     style: {
       title: '翻譯風格',
@@ -1159,7 +1159,7 @@ export const zhTW: typeof zhCN = {
       step4: '再按 {{trigger}} 停止錄音。',
       step5: '翻譯結果自動插入到遊標位置。',
       indicatorTitle: '怎麼知道翻譯模式生效了',
-      indicatorDesc: '按 Shift 後螢幕底部會顯示藍色「正在翻譯」標識。',
+      indicatorDesc: '按 {{shortcut}} 後螢幕底部會顯示藍色「正在翻譯」標識。',
       fallbackTitle: '安全兜底',
       fallbackDesc: '翻譯失敗時回退為插入原始轉寫，不會丟字。',
     },

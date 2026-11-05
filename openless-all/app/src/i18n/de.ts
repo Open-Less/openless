@@ -1203,9 +1203,9 @@ export const de: typeof zhCN = {
     target: {
       title: 'Zielsprache der Übersetzung',
       desc: 'Drücke während der Aufnahme Shift, um die Übersetzung zu aktivieren. Bei „Deaktiviert“ hat Shift keine Wirkung.',
-      disabled: 'Deaktiviert (Shift ohne Wirkung)',
+      disabled: 'Deaktiviert ({{shortcut}} ohne Wirkung)',
       sameAsWorking:
-        'Das Übersetzungsziel entspricht deiner einzigen Arbeitssprache. Shift löst deshalb nur die normale Textüberarbeitung aus. Wähle eine andere Zielsprache oder füge oben eine weitere Arbeitssprache hinzu.',
+        'Das Übersetzungsziel entspricht deiner einzigen Arbeitssprache. {{shortcut}} löst deshalb nur die normale Textüberarbeitung aus. Wähle eine andere Zielsprache oder füge oben eine weitere Arbeitssprache hinzu.',
     },
     style: {
       title: 'Übersetzungsstil',
@@ -1229,7 +1229,7 @@ export const de: typeof zhCN = {
       step5: 'Der übersetzte Text wird an der Cursorposition eingefügt.',
       indicatorTitle: 'So erkennst du den Übersetzungsmodus',
       indicatorDesc:
-        'Nach dem Drücken von Shift erscheint unten auf dem Bildschirm die blaue Anzeige „Wird übersetzt“.',
+        'Nach dem Drücken von {{shortcut}} erscheint unten auf dem Bildschirm die blaue Anzeige „Wird übersetzt“.',
       fallbackTitle: 'Verhalten bei Fehlern',
       fallbackDesc:
         'Schlägt die Übersetzung fehl, wird stattdessen das ursprüngliche Transkript eingefügt.',

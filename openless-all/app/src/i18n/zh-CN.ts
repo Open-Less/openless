@@ -1135,9 +1135,9 @@ export const zhCN = {
     target: {
       title: '翻译目标语言',
       desc: '录音时按 Shift 触发翻译。选「不启用」则 Shift 无效。',
-      disabled: '不启用（Shift 按下不触发翻译）',
+      disabled: '不启用（{{shortcut}} 按下不触发翻译）',
       sameAsWorking:
-        '目标语言与你唯一的工作语言相同，翻译不会生效：按 Shift 仍按普通润色处理。换一个目标语言，或在上方多勾选一个工作语言。',
+        '目标语言与你唯一的工作语言相同，翻译不会生效：按 {{shortcut}} 仍按普通润色处理。换一个目标语言，或在上方多勾选一个工作语言。',
     },
     style: {
       title: '翻译风格',
@@ -1158,7 +1158,7 @@ export const zhCN = {
       step4: '再按 {{trigger}} 停止录音。',
       step5: '翻译结果自动插入到光标位置。',
       indicatorTitle: '翻译模式指示',
-      indicatorDesc: '按 Shift 后屏幕底部会显示蓝色「正在翻译」标识。',
+      indicatorDesc: '按 {{shortcut}} 后屏幕底部会显示蓝色「正在翻译」标识。',
       fallbackTitle: '安全兜底',
       fallbackDesc: '翻译失败时回退为插入原始转写，不会丢字。',
     },

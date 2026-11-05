@@ -1183,9 +1183,9 @@ export const en: typeof zhCN = {
     target: {
       title: 'Translation target language',
       desc: 'Press Shift during recording to trigger translation. "Disabled" makes Shift a no-op.',
-      disabled: 'Disabled (Shift does nothing)',
+      disabled: 'Disabled ({{shortcut}} does nothing)',
       sameAsWorking:
-        'The target matches your only working language, so translation cannot take effect — Shift will just run a normal polish. Pick a different target, or add another working language above.',
+        'The target matches your only working language, so translation cannot take effect — {{shortcut}} will just run a normal polish. Pick a different target, or add another working language above.',
     },
     style: {
       title: 'Translation style',
@@ -1208,7 +1208,7 @@ export const en: typeof zhCN = {
       step5: 'Translated text is inserted at the cursor.',
       indicatorTitle: 'How to confirm translation mode is on',
       indicatorDesc:
-        'A blue "Translating" indicator appears at the bottom of the screen after pressing Shift.',
+        'A blue "Translating" indicator appears at the bottom of the screen after pressing {{shortcut}}.',
       fallbackTitle: 'Safety fallbacks',
       fallbackDesc: 'If translation fails, the raw transcript is inserted instead.',
     },
