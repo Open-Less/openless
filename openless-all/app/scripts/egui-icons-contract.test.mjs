@@ -66,7 +66,7 @@ for (const [name, glyph] of Object.entries(icons)) {
 for (const [section, icon] of Object.entries({
   General: 'Mic',
   Shortcuts: 'Bolt',
-  Services: 'Cloud',
+  Services: 'Sparkle',
   Appearance: 'Settings',
   Privacy: 'Shield',
   Advanced: 'Sparkle',
