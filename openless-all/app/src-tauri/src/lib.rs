@@ -1042,7 +1042,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => app.exit(0),
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -1854,6 +1854,28 @@ fn restart_app(app: AppHandle) {
 fn restart_on_main_thread(app: AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || handle.restart());
+}
+
+/// How long a tray-initiated quit may take before the process is forced down.
+/// `AppHandle::exit` is dispatched through the main event loop, so a stuck
+/// backend/event loop never processes it — the tray "quit" item then looks dead
+/// (#1337). The watchdog only fires after this grace period.
+const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Quit on explicit user intent, even when the event loop is unresponsive.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
+        log::warn!(
+            "[quit] graceful exit did not finish within {QUIT_FORCE_EXIT_GRACE:?}; forcing process exit"
+        );
+        // A stuck event loop cannot drain another `exit` request; process exit
+        // is the only reliable path left. A healthy exit never reaches here.
+        let _ = handle.exit(0);
+        std::process::exit(0);
+    });
+    app.exit(0);
 }
 
 #[tauri::command]
