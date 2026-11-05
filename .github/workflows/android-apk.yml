@@ -150,8 +150,10 @@ jobs:
   build-android-apk:
     name: Build Android (${{ matrix.abi }})
     needs: plan
+    # Publishing is `publish-android-release`. Branch and schedule builds only
+    # produce artifacts, so they do not get contents: write.
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

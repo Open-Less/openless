@@ -85,10 +85,18 @@ assert.equal(
   ).length,
   2,
 );
-const publisher = steps.find((s) => s.uses?.startsWith('softprops/action-gh-release@'));
+const publishSteps = workflow.jobs.publish.steps;
+const publisher = publishSteps.find((s) => s.uses?.startsWith('softprops/action-gh-release@'));
 assert.equal(publisher.with.tag_name, '${{ env.OPENLESS_RELEASE_TAG }}');
 assert.equal(publisher.with.draft, true);
-assert.ok(steps.find((s) => s.name === 'Confirm repair target remains draft'));
+assert.equal(workflow.jobs.build.permissions.contents, 'read');
+assert.equal(workflow.jobs.publish.permissions.contents, 'write');
+assert.equal(
+  steps.find((s) => s.uses?.startsWith('softprops/action-gh-release@')),
+  undefined,
+  'the read-only build job must not publish',
+);
+assert.ok(publishSteps.find((s) => s.name === 'Confirm repair target remains draft'));
 const smokeTooling = steps.find((s) => s.name === 'Fetch installer smoke tooling');
 assert.ok(
   smokeTooling,
