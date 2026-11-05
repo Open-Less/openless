@@ -1,4 +1,4 @@
-import { settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
@@ -56,7 +56,7 @@ test('trackpad input stays native, scrollbar chrome is hidden and scrolling sett
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '录音与输入', exact: true })
     .click();
-  await page.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(page);
   await expect(content.locator('.ol-shortcut-binding').first()).toBeVisible();
   await content.hover();
   const destination = await content.evaluate((el) =>

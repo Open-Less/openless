@@ -1,4 +1,4 @@
-import { settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
@@ -51,10 +51,15 @@ test('returning to recording at 100% has stable control geometry and one shortcu
       .getByRole('navigation', { name: '设置分类' })
       .getByRole('button', { name: '录音与输入', exact: true })
       .click();
-    await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+    await openMicrophoneSettings(dialog);
     await settleNavigation(dialog);
     const key = dialog.locator('.ol-shortcut-binding').first();
     await expect(key).toBeVisible();
+    await key.evaluate(async (element) => {
+      await Promise.all(
+        element.ownerDocument.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+      );
+    });
     const positions = await key.evaluate(async (element) => {
       const values: number[] = [];
       for (let frame = 0; frame < 18; frame++) {
@@ -255,7 +260,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   const models = dialog.locator('.ol-service-views').getByRole('button', { name: /^本地模型/ });
   await expect(models).toBeDisabled();
   await categories.locator('button.ol-settings-rail-btn', { hasText: '录音与输入' }).click();
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
   const download = dialog.getByRole('button', {
     name: '前往 AI 与模型下载 Zipformer',
@@ -291,7 +296,7 @@ test('voice activation opens model setup without leaving the multimodal pipeline
   expect(await providerState()).toEqual(before);
   await page.screenshot({ path: testInfo.outputPath('voice-activation-model-setup.png') });
   await categories.locator('button.ol-settings-rail-btn', { hasText: '录音与输入' }).click();
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   await dialog.getByRole('switch', { name: '语音唤醒听写', exact: true }).click();
   await categories.locator('button.ol-settings-rail-btn', { hasText: 'AI 与模型' }).click();
   await expect(models).toBeDisabled();
@@ -301,7 +306,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   page,
 }, testInfo) => {
   const dialog = await openSettings(page);
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   const mute = dialog.getByRole('switch', { name: '录音时静音', exact: true });
   await expect(mute).toBeVisible();
   const muted = await mute.isChecked();
@@ -312,7 +317,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   await cancellation.click();
   await expect(cancellation).toBeChecked();
   await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   await expect(mute).toHaveAttribute('aria-checked', String(muted));
   await dialog.getByRole('button', { name: '实验与扩展', exact: true }).click();
   await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
