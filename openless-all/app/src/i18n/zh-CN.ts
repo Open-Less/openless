@@ -279,6 +279,7 @@ export const zhCN = {
     show: '显示',
     hide: '隐藏',
     saved: '已保存',
+    refreshed: '已刷新',
     saving: '保存中',
     experimental: '实验性',
     copied: '已复制',

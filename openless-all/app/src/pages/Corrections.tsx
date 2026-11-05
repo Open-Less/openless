@@ -4,7 +4,7 @@
 // same trust premise as the dictionary page's "auto-added" filter: the user can always inspect and
 // revoke them in bulk.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   addCorrectionRule,
@@ -15,6 +15,7 @@ import {
 } from '../lib/ipc';
 import type { CorrectionRule } from '../lib/types';
 import { useMobileLayout } from '../lib/useMobileLayout';
+import { SavedToast, type SaveToastState } from '../components/SavedToast';
 import { Btn, Card, PageHeader } from './_atoms';
 
 const NUM_TOKEN = '{num}';
@@ -39,13 +40,24 @@ export function Corrections() {
   const [onlyLearnedRules, setOnlyLearnedRules] = useState(false);
   const [rulePatternDraft, setRulePatternDraft] = useState('');
   const [ruleReplacementDraft, setRuleReplacementDraft] = useState('');
+  const refreshSeq = useRef(0);
+  const [refreshNotice, setRefreshNotice] = useState<{ id: number; state: SaveToastState }>({
+    id: 0,
+    state: 'idle',
+  });
 
-  const refresh = async () => {
+  const refresh = async (notify = false) => {
+    const seq = ++refreshSeq.current;
     try {
       const data = await listCorrectionRules();
+      if (seq !== refreshSeq.current) return;
       setRules(data);
+      setError(null);
+      if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'saved' }));
     } catch (e) {
+      if (seq !== refreshSeq.current) return;
       setError(e instanceof Error ? e.message : String(e));
+      if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'failed' }));
     }
   };
 
@@ -134,10 +146,17 @@ export function Corrections() {
         desc={t('vocab.corrections.tip')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh()}>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
               {t('common.refresh')}
             </Btn>
           </div>
+        }
+      />
+      <SavedToast
+        saveState={refreshNotice.state}
+        replayKey={refreshNotice.id}
+        message={
+          refreshNotice.state === 'failed' ? t('common.operationFailed') : t('common.refreshed')
         }
       />
       <Card>

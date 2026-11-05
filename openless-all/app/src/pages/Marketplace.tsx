@@ -77,6 +77,7 @@ export function Marketplace() {
   const [detail, setDetail] = useState<MarketplaceDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [toastReplay, setToastReplay] = useState(0);
   const [installingPackId, setInstallingPackId] = useState<string | null>(null);
   const [downloadingPackId, setDownloadingPackId] = useState<string | null>(null);
   const [installError, setInstallError] = useState<MarketplaceInstallError | null>(null);
@@ -137,28 +138,39 @@ export function Marketplace() {
   // query / switches packs, an old request's response may arrive after the new one; compare seq and drop stale results.
   const reqSeqRef = useRef(0);
   const detailSeqRef = useRef(0);
-  const refresh = useCallback(async () => {
-    const seq = ++reqSeqRef.current;
-    setLoading(true);
-    setLoadError(null);
-    try {
-      // The backend only understands popular/new — 'liked' fetches via popular and filters on the frontend.
-      const serverSort: 'popular' | 'new' = sort === 'liked' ? 'popular' : sort;
-      const list = await listMarketplace({ query: debouncedQuery, sort: serverSort, limit: 50 });
-      if (seq !== reqSeqRef.current) return; // stale response
-      setItems(list);
-      // Cache only the "default view" (popular + empty query) so reopening is instant.
-      if (serverSort === 'popular' && debouncedQuery.trim() === '') {
-        writeMarketplaceListCache(list);
+  const refresh = useCallback(
+    async (notify = false) => {
+      const seq = ++reqSeqRef.current;
+      setLoading(true);
+      setLoadError(null);
+      try {
+        // The backend only understands popular/new — 'liked' fetches via popular and filters on the frontend.
+        const serverSort: 'popular' | 'new' = sort === 'liked' ? 'popular' : sort;
+        const list = await listMarketplace({ query: debouncedQuery, sort: serverSort, limit: 50 });
+        if (seq !== reqSeqRef.current) return; // stale response
+        setItems(list);
+        // Cache only the "default view" (popular + empty query) so reopening is instant.
+        if (serverSort === 'popular' && debouncedQuery.trim() === '') {
+          writeMarketplaceListCache(list);
+        }
+        if (notify) {
+          setToastReplay((current) => current + 1);
+          setActionMsg({ kind: 'ok', text: t('common.refreshed') });
+        }
+      } catch (error) {
+        if (seq !== reqSeqRef.current) return;
+        console.error('[marketplace] list failed', error);
+        setLoadError(errorMessage(error));
+        if (notify) {
+          setToastReplay((current) => current + 1);
+          setActionMsg({ kind: 'err', text: t('common.operationFailed') });
+        }
+      } finally {
+        if (seq === reqSeqRef.current) setLoading(false);
       }
-    } catch (error) {
-      if (seq !== reqSeqRef.current) return;
-      console.error('[marketplace] list failed', error);
-      setLoadError(errorMessage(error));
-    } finally {
-      if (seq === reqSeqRef.current) setLoading(false);
-    }
-  }, [debouncedQuery, sort]);
+    },
+    [debouncedQuery, sort, t],
+  );
 
   const visibleItems = useMemo(() => {
     if (sort === 'liked') return items.filter((it) => likedIds.has(it.id));
@@ -214,29 +226,36 @@ export function Marketplace() {
     };
   }, [marketplaceSignedIn, refreshAuthStatus]);
 
-  const refreshMyPacks = useCallback(async () => {
-    if (!marketplaceSignedIn) {
-      setMyPacks([]);
-      setMyPacksLoading(false);
+  const refreshMyPacks = useCallback(
+    async (notify = false) => {
+      if (!marketplaceSignedIn) {
+        setMyPacks([]);
+        setMyPacksLoading(false);
+        setMyPacksError(null);
+        return;
+      }
+      setMyPacksLoading(true);
       setMyPacksError(null);
-      return;
-    }
-    setMyPacksLoading(true);
-    setMyPacksError(null);
-    try {
-      const packs = await marketplaceMyPacks();
-      setMyPacks(packs);
-    } catch (error) {
-      void refreshAuthStatus();
-      console.warn('[marketplace] fetch my-packs failed', error);
-      const msg = errorMessage(error);
-      setMyPacksError(msg);
-      // Still toast for behavior compatibility; the inline error lets users retry directly in the dialog.
-      setActionMsg({ kind: 'err', text: t('marketplace.myPacks.loadFailed', { err: msg }) });
-    } finally {
-      setMyPacksLoading(false);
-    }
-  }, [marketplaceSignedIn, refreshAuthStatus, t]);
+      try {
+        const packs = await marketplaceMyPacks();
+        setMyPacks(packs);
+        if (notify) {
+          setToastReplay((current) => current + 1);
+          setActionMsg({ kind: 'ok', text: t('common.refreshed') });
+        }
+      } catch (error) {
+        void refreshAuthStatus();
+        console.warn('[marketplace] fetch my-packs failed', error);
+        const msg = errorMessage(error);
+        setMyPacksError(msg);
+        // Still toast for behavior compatibility; the inline error lets users retry directly in the dialog.
+        setActionMsg({ kind: 'err', text: t('marketplace.myPacks.loadFailed', { err: msg }) });
+      } finally {
+        setMyPacksLoading(false);
+      }
+    },
+    [marketplaceSignedIn, refreshAuthStatus, t],
+  );
 
   useEffect(() => {
     void refreshMyPacks();
@@ -617,7 +636,7 @@ export function Marketplace() {
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
             </button>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh()}>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
               {t('common.refresh')}
             </Btn>
           </div>
@@ -691,6 +710,7 @@ export function Marketplace() {
         <SavedToast
           saveState={actionMsg.kind === 'ok' ? 'saved' : 'failed'}
           message={actionMsg.text}
+          replayKey={toastReplay}
         />
       )}
 
@@ -1410,7 +1430,7 @@ export function Marketplace() {
                     icon="refresh"
                     variant="ghost"
                     size="sm"
-                    onClick={() => void refreshMyPacks()}
+                    onClick={() => void refreshMyPacks(true)}
                     disabled={!marketplaceSignedIn || myPacksLoading}
                   >
                     {t('common.refresh')}

@@ -541,19 +541,29 @@ function FloatingShellBody({
               //     at normal size the content fits exactly → no scrollbar; a thin
               //     scrollbar appears only when it truly overflows.
               //   - Other tabs use the thin scrollbar too.
-              className="ol-thinscroll ol-scroll-fade"
+              // Overview skips the scroll-fade mask: that mask hides the bottom of the
+              // year heatmap even when the page itself is not scrolling.
+              className={
+                displayTab === 'overview' ? 'ol-thinscroll' : 'ol-thinscroll ol-scroll-fade'
+              }
               // Overview is a fixed single-screen dashboard. Its cards own any internal
-              // scrolling; the page surface itself never becomes a scroll container.
+              // scrolling; the page surface scrolls only if a short window still overflows.
               style={{
                 flex: 1,
                 minHeight: 0,
-                overflow: displayTab === 'overview' ? 'hidden' : 'auto',
+                overflow: 'auto',
                 boxSizing: 'border-box',
+                // macOS: 26px title vs 15px wordmark, so the title starts 6px above the
+                // traffic-light clearance and lines up with "OpenLess". Other desktops
+                // keep a positive inset and never subtract the native caption height,
+                // so a Windows overlay title bar cannot cover the title.
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
-                  : displayTab === 'overview'
-                    ? `${os === 'mac' ? 80 : 56}px 28px 24px`
-                    : `${os === 'mac' ? 80 : 56}px 28px 32px`,
+                  : `${
+                      os === 'mac'
+                        ? `${MAC_TRAFFIC_LIGHT_CLEARANCE - 6}px`
+                        : 'max(8px, calc(var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)))'
+                    } 18px ${displayTab === 'overview' ? 12 : 32}px`,
                 // position:relative lets the page's "saved" toast anchor at absolute
                 // top:16 right:16 to this console card's corner instead of stretching
                 // across the page header as a full-width banner.

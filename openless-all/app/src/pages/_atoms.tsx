@@ -36,7 +36,7 @@ export function PageHeader({
         alignItems: 'flex-start',
         justifyContent: 'space-between',
         gap: stackLayout ? 12 : mobile ? 12 : 24,
-        marginBottom: compact ? 8 : stackLayout ? 16 : mobile ? 16 : 24,
+        marginBottom: compact ? 2 : stackLayout ? 16 : mobile ? 16 : 24,
         flexWrap: 'wrap',
         flexShrink: 0,
       }}

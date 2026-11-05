@@ -306,6 +306,7 @@ export const es: typeof zhCN = {
     show: 'Mostrar',
     hide: 'Ocultar',
     saved: 'Guardado',
+    refreshed: 'Actualizado',
     saving: 'Guardando…',
     experimental: 'Experimental',
     copied: 'Copiado',

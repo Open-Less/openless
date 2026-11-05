@@ -22,6 +22,8 @@ interface SavedToastProps {
   actionLabel?: string;
   onAction?: () => void;
   durationMs?: number;
+  /** Bump to show the same state again; identical saveState/message would otherwise no-op. */
+  replayKey?: number;
 }
 
 export function SavedToast({
@@ -32,6 +34,7 @@ export function SavedToast({
   actionLabel,
   onAction,
   durationMs,
+  replayKey = 0,
 }: SavedToastProps) {
   // Internal state lets the toast time itself out (even if the parent's timer runs
   // longer than 0.8s).
@@ -49,7 +52,7 @@ export function SavedToast({
       return () => window.clearTimeout(timer);
     }
     setInternalVisible(false);
-  }, [saveState, message, durationMs, onAction]);
+  }, [saveState, message, durationMs, onAction, replayKey]);
 
   const failed = saveState === 'failed';
 
