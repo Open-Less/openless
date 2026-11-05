@@ -1,4 +1,4 @@
-import { settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type ElementHandle, type Locator, type Page } from '@playwright/test';
 
 // Every switch the user can reach in Settings (plus the services channel lists and the
@@ -322,8 +322,7 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
   page,
 }) => {
   const dialog = await openSettings(page);
-  await dialog.getByRole('button', { name: '录音与输入', exact: true }).click();
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   const neighbourMoves = async (group: Locator) => {
     const switches = group.locator('[role="switch"]');
     await expect(switches.nth(1)).toBeVisible();

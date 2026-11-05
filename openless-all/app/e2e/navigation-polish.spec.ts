@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openMicrophoneSettings } from './support/navigation';
 
 async function settings(page: Page) {
   await page.goto('/?os=mac');
@@ -143,7 +144,7 @@ test('dictation shortcuts hug the key label and coarse wheel scrolling has inter
   page,
 }) => {
   const dialog = await settings(page);
-  await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+  await openMicrophoneSettings(dialog);
   const recorder = dialog.locator('.ol-shortcut-recorder').first();
   const binding = recorder.locator('.ol-shortcut-binding');
   await expect(binding).toContainText('右 Ctrl');

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openMicrophoneSettings } from './support/navigation';
 
 for (const os of ['mac', 'win']) {
   test(`capsule display preference preserves supported modes across remount on ${os}`, async ({
@@ -13,7 +14,7 @@ for (const os of ['mac', 'win']) {
     const appearanceCategory = dialog.getByRole('button', { name: '外观与语言', exact: true });
     const openRecording = async () => {
       await inputCategory.click();
-      await dialog.getByRole('button', { name: /麦克风与录音/ }).click();
+      await openMicrophoneSettings(dialog);
     };
     const remountInputSection = async () => {
       await appearanceCategory.click();
