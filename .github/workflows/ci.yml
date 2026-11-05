@@ -82,7 +82,8 @@ jobs:
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
-    timeout-minutes: 45
+    # Setup plus the 12 minute dependency cap and the 30 minute browser cap.
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: openless-all/app
@@ -112,14 +113,18 @@ jobs:
           # Browser revisions follow Playwright, not unrelated npm lock changes.
           key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
       - name: Install Playwright system dependencies
-        timeout-minutes: 8
+        # Browser libraries are about 114MB. Eight minutes dies while a trickling
+        # mirror is still transferring fonts, before Playwright starts.
+        timeout-minutes: 12
         run: |
           # Keep regional mirror stalls from blocking browser validation indefinitely.
+          # ubuntu.sources uses mirror+file:/etc/apt/apt-mirrors.txt, so the Azure
+          # host is not in *.list or *.sources.
           printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
             sudo tee /etc/apt/apt.conf.d/80-openless-ci-network >/dev/null
           while IFS= read -r -d '' apt_source; do
             sudo sed -i -E 's#https?://azure[.]archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
-          done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+          done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' -o -name 'apt-mirrors.txt' \) -print0)
           npx playwright install-deps chromium webkit
       - name: Install Playwright browsers on cache miss
         if: steps.playwright_cache.outputs.cache-hit != 'true'
