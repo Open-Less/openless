@@ -20,6 +20,7 @@ import {
   GeneralTab,
   InputMethodTab,
   ServicesTab,
+  CloudServicesTab,
   PrivacyTab,
   AdvancedTab,
   ShortcutsTab,
@@ -692,6 +693,7 @@ export function SettingsModal({
                           initialView={requestedServiceView}
                         />
                       )}
+                      {section === 'cloudServices' && <CloudServicesTab />}
                       {section === 'privacy' && <PrivacyTab />}
                       {section === 'advanced' && (
                         <AdvancedTab

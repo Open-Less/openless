@@ -742,7 +742,7 @@ export const es: typeof zhCN = {
     },
     actions: {
       refresh: 'Reintentar',
-      services: 'Servicios y modelos de IA',
+      services: 'IA y modelos',
       general: 'Grabación y entrada',
       shortcuts: 'Atajos',
       privacy: 'Permisos y datos',
@@ -752,7 +752,7 @@ export const es: typeof zhCN = {
       loadingTitle: 'Leyendo tu configuración',
       loadingDesc: 'En breve aparecerán tus servicios actuales y el siguiente paso.',
       unavailableTitle: 'El estado de los servicios no está disponible',
-      unavailableDesc: 'Vuelve a consultarlo o abre Servicios de IA para revisar la configuración.',
+      unavailableDesc: 'Vuelve a consultarlo o abre IA y modelos para revisar la configuración.',
       servicesTitle: 'Configura tus servicios de voz',
       servicesDesc:
         'Empieza eligiendo servicios de reconocimiento de voz y procesamiento de texto. En modo Omni, basta con configurar el modelo multimodal activo.',
@@ -1290,6 +1290,28 @@ export const es: typeof zhCN = {
     cancelledTitle: 'Grabación cancelada',
   },
   settings: {
+    generalPages: {
+      recordingTitle: 'Micrófono y grabación',
+      recordingDesc:
+        'Elige el micrófono, el modo de grabación, la cápsula, la inserción y el inicio.',
+      textInputTitle: 'Entrada de texto',
+      textInputDesc: 'Configura las acciones de selección y cómo se reescribe el texto.',
+      phoneTitle: 'Teléfono y entrada remota',
+      phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
+      cursorContextTitle: 'Contexto del cursor y frases cortas',
+      startupDiagnosticsTitle: 'Diagnóstico de inicio',
+      cursorContextHint:
+        'El contexto del cursor está activado de forma predeterminada. Desactívalo aquí si no quieres enviar el texto cercano con las solicitudes de mejora.',
+    },
+    advancedGroups: {
+      recording: 'Grabación',
+      text: 'Texto y contexto',
+      diagnostics: 'Diagnóstico',
+    },
+
     testingFeatures: {
       title: 'Funciones en fase de pruebas',
       enable: 'Activar funciones en fase de pruebas',
@@ -1643,6 +1665,10 @@ export const es: typeof zhCN = {
       audioCueDesc:
         'Reproduce un breve sonido sintetizado al pulsar el atajo para empezar a grabar, incluso si la cápsula está oculta.',
       audioCuePreview: 'Escuchar',
+      captureGroupTitle: 'Grabación',
+      capsuleGroupTitle: 'Cápsula en pantalla',
+      recognitionGroupTitle: 'Reconocimiento',
+      feedbackGroupTitle: 'Supervisión y avisos',
       insertGroupTitle: 'Inserción y portapapeles',
       restoreClipboardLabel: 'Restaurar el portapapeles tras insertar',
       restoreClipboardDesc:
@@ -1817,8 +1843,7 @@ export const es: typeof zhCN = {
       minutesAgo: 'hace {{count}}min',
       hoursAgo: 'hace {{count}}h',
       daysAgo: 'hace {{count}}d',
-      localEngineModelHint:
-        'Descarga y cambia modelos locales en Servicios y modelos de IA → Modelos locales.',
+      localEngineModelHint: 'Descarga y cambia modelos locales en IA y modelos → Modelos locales.',
     },
     providers: {
       localEngineNoCredentials: 'Los motores locales no necesitan una clave API ni una dirección.',
@@ -2579,6 +2604,7 @@ export const es: typeof zhCN = {
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
+    back: 'Atrás',
     backToTestingFeatures: 'Volver a funciones en fase de pruebas',
     advancedPages: {
       customSyncServer:
@@ -2592,6 +2618,12 @@ export const es: typeof zhCN = {
       multimodal: 'Administra la activación del reconocimiento multimodal experimental.',
       debug:
         'Conserva grabaciones de depuración, inspecciona el contexto del cursor y exporta registros.',
+      voiceEnhancement:
+        'Configura el procesamiento de audio avanzado, la reducción de ruido y la supresión del eco de reproducción.',
+      cursorContext:
+        'Configura el contexto alrededor del cursor para las mejoras y el manejo de entradas cortas.',
+      startupDiagnostics:
+        'Revisa los tiempos de inicio, los intercambios con el backend y las sondas diferidas.',
     },
     descriptions: {
       general: 'Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.',
@@ -2599,11 +2631,12 @@ export const es: typeof zhCN = {
       shortcuts: 'Configura atajos y elige qué sucede al seleccionar texto.',
       services:
         'Elige servicios de reconocimiento de voz y procesamiento de texto. Administra canales, modelos locales y conexiones.',
+      cloudServices:
+        'Administra el mercado de extensiones, el inicio de sesión de GitHub y la sincronización cifrada en la nube.',
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced:
-        'Configurar funciones de prueba, aprendizaje de vocabulario y herramientas de depuración.',
+      advanced: 'Configura funciones en prueba, diagnósticos y herramientas de depuración.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
@@ -2613,6 +2646,7 @@ export const es: typeof zhCN = {
       shortcuts: 'atajo tecla combinación selección mejorar voz edición',
       services:
         'ASR LLM API canal modelo nube local sin conexión red proxy catálogo multimodal canalización Omni',
+      cloudServices: 'nube sincronización cifrada mercado GitHub inicio sesión servicio oficial',
       appearance: 'tema oscuro claro idioma fuente texto tamaño diseño mapa actividad',
       privacy:
         'permiso micrófono accesibilidad historial grabación almacenamiento privacidad exportar',
@@ -2625,7 +2659,8 @@ export const es: typeof zhCN = {
       shortcuts: 'Atajos y selección',
       general: 'Grabación y entrada',
       inputMethod: 'Método de entrada',
-      services: 'Servicios y modelos de IA',
+      services: 'IA y modelos',
+      cloudServices: 'Servicios en la nube',
       privacy: 'Permisos y datos',
       advanced: 'Experimentos y extensiones',
       personalize: 'Personalización',

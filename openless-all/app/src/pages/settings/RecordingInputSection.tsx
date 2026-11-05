@@ -44,7 +44,6 @@ import { Card, Collapsible, Btn } from '../_atoms';
 import { Segmented } from '../../components/ui/Segmented';
 import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
-import { AudioDspSettings } from './AudioDspSettings';
 import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
@@ -244,10 +243,6 @@ export function RecordingInputSection({
   const onAudioCueChange = (audioCueOnRecord: boolean) => savePrefs({ ...prefs, audioCueOnRecord });
   const onLowLatencyDictationChange = (lowLatencyDictationEnabled: boolean) =>
     savePrefs({ ...prefs, lowLatencyDictationEnabled });
-  const onAudioEnhancementChange = (audioEnhancementEnabled: boolean) =>
-    savePrefs({ ...prefs, audioEnhancementEnabled });
-  const onEchoCancellationChange = (echoCancellationEnabled: boolean) =>
-    savePrefs({ ...prefs, echoCancellationEnabled });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
     savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -294,7 +289,7 @@ export function RecordingInputSection({
     <>
       <Card>
         <SectionTitle hint={t('settings.recording.desc')}>
-          {t('settings.recording.title')}
+          {t('settings.recording.captureGroupTitle')}
         </SectionTitle>
         {isHotkeyModeMigrationNoticeActive() && showDesktopHotkey && (
           <div
@@ -457,74 +452,51 @@ export function RecordingInputSection({
             )}
           </div>
         </SettingRow>
-        {platformCaps?.platform === 'desktop' && (
-          <SettingRow
-            label={t('settings.recording.echoCancellationLabel')}
-            desc={t('settings.recording.echoCancellationDesc')}
-          >
-            <Toggle
-              on={prefs.echoCancellationEnabled ?? false}
-              onToggle={onEchoCancellationChange}
-            />
-          </SettingRow>
-        )}
-        <>
-          <SettingRow
-            label={t('settings.recording.audioEnhancementLabel')}
-            desc={t('settings.recording.audioEnhancementDesc')}
-          >
-            <Toggle on={prefs.audioEnhancementEnabled} onToggle={onAudioEnhancementChange} />
-          </SettingRow>
-          {prefs.audioEnhancementEnabled && (
-            <AudioDspSettings
-              value={prefs.audioDsp}
-              onChange={(audioDsp) => void savePrefs({ ...prefs, audioDsp })}
-            />
-          )}
-        </>
-        {!isAndroid && (
+      </Card>
+
+      {!isAndroid && (
+        <Card>
+          <SectionTitle>{t('settings.recording.capsuleGroupTitle')}</SectionTitle>
           <SettingRow
             label={t('settings.recording.capsuleLabel')}
             desc={t('settings.recording.capsuleDesc')}
           >
             <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
           </SettingRow>
-        )}
-        {!isAndroid && (os === 'mac' || os === 'win') && (
-          <SettingRow
-            label={t('settings.recording.capsuleDisplayModeLabel')}
-            desc={t('settings.recording.capsuleDisplayModeDesc')}
-          >
-            <SelectLite
-              value={effectiveCapsuleDisplayMode}
-              onChange={(next) =>
-                void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
-              }
-              options={[
-                {
-                  value: 'cursorScreen',
-                  label: t('settings.recording.capsuleDisplayCursorScreen'),
-                },
-                ...(os === 'win'
-                  ? [
-                      {
-                        value: 'primaryScreen',
-                        label: t('settings.recording.capsuleDisplayPrimaryScreen'),
-                      },
-                      {
-                        value: 'foregroundWindowScreen',
-                        label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
-                      },
-                    ]
-                  : []),
-                { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
-              ]}
-              ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
-              style={{ maxWidth: 240, minWidth: 200 }}
-            />
-          </SettingRow>
-        )}
-        {!isAndroid && (
+          {(os === 'mac' || os === 'win') && (
+            <SettingRow
+              label={t('settings.recording.capsuleDisplayModeLabel')}
+              desc={t('settings.recording.capsuleDisplayModeDesc')}
+            >
+              <SelectLite
+                value={effectiveCapsuleDisplayMode}
+                onChange={(next) =>
+                  void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
+                }
+                options={[
+                  {
+                    value: 'cursorScreen',
+                    label: t('settings.recording.capsuleDisplayCursorScreen'),
+                  },
+                  ...(os === 'win'
+                    ? [
+                        {
+                          value: 'primaryScreen',
+                          label: t('settings.recording.capsuleDisplayPrimaryScreen'),
+                        },
+                        {
+                          value: 'foregroundWindowScreen',
+                          label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
+                        },
+                      ]
+                    : []),
+                  { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
+                ]}
+                ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
+                style={{ maxWidth: 240, minWidth: 200 }}
+              />
+            </SettingRow>
+          )}
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
               <Segmented
@@ -540,8 +512,6 @@ export function RecordingInputSection({
               <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
             </div>
           </SettingRow>
-        )}
-        {!isAndroid && (
           <>
             <SettingRow
               label={t('settings.recording.capsuleTranscriptLabel')}
@@ -568,7 +538,11 @@ export function RecordingInputSection({
               </SettingRow>
             )}
           </>
-        )}
+        </Card>
+      )}
+
+      <Card>
+        <SectionTitle>{t('settings.recording.recognitionGroupTitle')}</SectionTitle>
         <SettingRow
           label={t('settings.recording.stableTranscriptionLabel')}
           desc={t('settings.recording.stableTranscriptionDesc')}
@@ -707,6 +681,10 @@ export function RecordingInputSection({
             )}
           </>
         )}
+      </Card>
+
+      <Card>
+        <SectionTitle>{t('settings.recording.feedbackGroupTitle')}</SectionTitle>
         <SettingRow
           label={t('settings.recording.muteDuringRecordingLabel')}
           desc={t('settings.recording.muteDuringRecordingDesc')}
@@ -758,7 +736,7 @@ export function RecordingInputSection({
               <SelectLite
                 value={prefs.pasteShortcut}
                 onChange={(next) => onPasteShortcutChange(next as PasteShortcut)}
-                // 纯文本插入模式开启时，Shift+Insert 由开关接管，这里只读展示。
+                // Plain-text insertion owns Shift+Insert, so this control stays read-only.
                 disabled={plainTextInsertionOn}
                 options={
                   plainTextInsertionOn

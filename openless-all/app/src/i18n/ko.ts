@@ -717,7 +717,7 @@ export const ko: typeof zhCN = {
     },
     actions: {
       refresh: '다시 불러오기',
-      services: 'AI 서비스 및 모델',
+      services: 'AI와 모델',
       general: '녹음 및 입력',
       shortcuts: '단축키',
       privacy: '권한 및 데이터',
@@ -727,7 +727,7 @@ export const ko: typeof zhCN = {
       loadingTitle: '설정을 불러오고 있어요',
       loadingDesc: '잠시 후 현재 서비스와 다음 할 일을 보여 드릴게요.',
       unavailableTitle: '서비스 상태를 불러올 수 없어요',
-      unavailableDesc: '다시 불러오거나 AI 서비스에서 설정을 확인해 주세요.',
+      unavailableDesc: '다시 불러오거나 AI와 모델에서 설정을 확인해 주세요.',
       servicesTitle: '먼저 음성 서비스를 설정하세요',
       servicesDesc:
         '여기서 시작하는 것을 추천해요. 음성 인식과 텍스트 처리 서비스를 선택하세요. Omni 모드에서는 사용할 멀티모달 모델만 설정하면 됩니다.',
@@ -1256,6 +1256,27 @@ export const ko: typeof zhCN = {
     cancelledTitle: '녹음이 취소됨',
   },
   settings: {
+    generalPages: {
+      recordingTitle: '마이크와 녹음',
+      recordingDesc: '마이크, 녹음 방식, 캡슐, 삽입, 시작을 설정합니다.',
+      textInputTitle: '텍스트 입력',
+      textInputDesc: '선택 영역 동작과 텍스트 다시 쓰기를 설정합니다.',
+      phoneTitle: '휴대폰과 원격 입력',
+      phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: '음성 향상과 재생 억제',
+      cursorContextTitle: '커서 문맥과 짧은 입력',
+      startupDiagnosticsTitle: '시작 진단',
+      cursorContextHint:
+        '커서 문맥은 기본적으로 켜져 있습니다. 주변 텍스트를 다듬기 요청에 포함하지 않으려면 여기서 끄세요.',
+    },
+    advancedGroups: {
+      recording: '녹음',
+      text: '텍스트와 문맥',
+      diagnostics: '진단',
+    },
+
     testingFeatures: {
       title: '테스트 중인 기능',
       enable: '테스트 중인 기능 활성화',
@@ -1596,6 +1617,10 @@ export const ko: typeof zhCN = {
       audioCueDesc:
         '단축키로 녹음을 시작할 때 합성된 짧은 알림음을 재생합니다. 캡슐이 숨겨져 있어도 재생됩니다.',
       audioCuePreview: '미리듣기',
+      captureGroupTitle: '녹음',
+      capsuleGroupTitle: '화면 캡슐',
+      recognitionGroupTitle: '인식',
+      feedbackGroupTitle: '모니터링과 알림음',
       insertGroupTitle: '삽입 및 클립보드',
       restoreClipboardLabel: '입력 후 클립보드 복원',
       restoreClipboardDesc:
@@ -1765,7 +1790,7 @@ export const ko: typeof zhCN = {
       minutesAgo: '{{count}}분 전',
       hoursAgo: '{{count}}시간 전',
       daysAgo: '{{count}}일 전',
-      localEngineModelHint: 'AI 서비스 및 모델 → 로컬 모델에서 모델을 내려받고 전환할 수 있습니다.',
+      localEngineModelHint: 'AI와 모델 → 로컬 모델에서 모델을 내려받고 전환할 수 있습니다.',
     },
     providers: {
       localEngineNoCredentials: '로컬 엔진은 API 키나 엔드포인트가 필요 없습니다.',
@@ -2481,6 +2506,7 @@ export const ko: typeof zhCN = {
     noResults: '일치하는 카테고리가 없습니다. “마이크”, “모델” 또는 “테마”를 검색해 보세요.',
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
+    back: '뒤로',
     backToTestingFeatures: '테스트 중인 기능으로 돌아가기',
     advancedPages: {
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',
@@ -2492,15 +2518,19 @@ export const ko: typeof zhCN = {
       claudeConsole: 'Claude Code를 감지하고 테스트 작업의 실행 출력을 확인합니다.',
       multimodal: '실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.',
       debug: '디버그 녹음을 보관하고 커서 문맥을 확인하며 로그를 내보냅니다.',
+      voiceEnhancement: '고급 오디오 처리, 소음 감소, 재생 에코 억제를 설정합니다.',
+      cursorContext: '다듬기 요청에 쓰는 커서 주변 문맥과 짧은 입력 처리를 설정합니다.',
+      startupDiagnostics: '시작 시간, 백엔드 연결, 지연 검사를 확인합니다.',
     },
     descriptions: {
       general: '마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.',
       inputMethod: 'Android 오버레이와 입력 방법을 설정합니다.',
       shortcuts: '기능별 단축키와 텍스트 선택 후 동작을 설정합니다.',
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
+      cloudServices: '확장 마켓, GitHub 로그인, 암호화된 클라우드 동기화를 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '테스트 기능, 어휘 학습 및 디버깅 도구를 설정합니다.',
+      advanced: '테스트 기능, 진단, 디버그 도구를 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {
@@ -2509,6 +2539,7 @@ export const ko: typeof zhCN = {
       shortcuts: '단축키 핫키 키 조합 선택 다듬기 음성 편집',
       services:
         'ASR LLM API 채널 모델 클라우드 로컬 네트워크 프록시 마켓 멀티모달 인식 파이프라인 Omni',
+      cloudServices: '클라우드 동기화 암호화 마켓 GitHub 로그인 공식',
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
       privacy: '권한 마이크 접근성 기록 녹음 저장 개인정보 내보내기',
       advanced:
@@ -2521,7 +2552,8 @@ export const ko: typeof zhCN = {
       shortcuts: '단축키 및 선택',
       general: '녹음 및 입력',
       inputMethod: '입력 방법',
-      services: 'AI 서비스 및 모델',
+      services: 'AI와 모델',
+      cloudServices: '클라우드 서비스',
       privacy: '권한 및 데이터',
       advanced: '실험 기능 및 확장',
       personalize: '개인 설정',

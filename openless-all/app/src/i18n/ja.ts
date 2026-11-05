@@ -724,7 +724,7 @@ export const ja: typeof zhCN = {
     },
     actions: {
       refresh: '再読み込み',
-      services: 'AI サービスとモデル',
+      services: 'AI とモデル',
       general: '録音と入力',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
@@ -734,7 +734,7 @@ export const ja: typeof zhCN = {
       loadingTitle: '設定を読み込んでいます',
       loadingDesc: '使用中のサービスと次の操作をまもなく表示します。',
       unavailableTitle: 'サービスの状態を読み込めません',
-      unavailableDesc: '再読み込みするか、AI サービスで設定を確認してください。',
+      unavailableDesc: '再読み込みするか、AI とモデルで設定を確認してください。',
       servicesTitle: 'まず音声サービスを設定しましょう',
       servicesDesc:
         'ここから始めるのがおすすめです。音声認識とテキスト処理のサービスを選びましょう。Omni モードでは、使用するマルチモーダルモデルだけを設定します。',
@@ -1263,6 +1263,27 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
+    generalPages: {
+      recordingTitle: 'マイクと録音',
+      recordingDesc: 'マイク、録音方法、カプセル、挿入、起動を設定します。',
+      textInputTitle: '文字入力',
+      textInputDesc: '選択範囲の操作と文字の書き換えを設定します。',
+      phoneTitle: 'スマホとリモート入力',
+      phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: '音声強調と再生抑制',
+      cursorContextTitle: 'カーソル文脈と短文の動作',
+      startupDiagnosticsTitle: '起動診断',
+      cursorContextHint:
+        'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
+    },
+    advancedGroups: {
+      recording: '録音',
+      text: 'テキストと文脈',
+      diagnostics: '診断',
+    },
+
     testingFeatures: {
       title: 'テスト中の機能',
       enable: 'テスト中の機能を有効にする',
@@ -1609,6 +1630,10 @@ export const ja: typeof zhCN = {
       audioCueDesc:
         'ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。',
       audioCuePreview: '試聴',
+      captureGroupTitle: '録音',
+      capsuleGroupTitle: '画面上のカプセル',
+      recognitionGroupTitle: '認識',
+      feedbackGroupTitle: '監視と通知音',
       insertGroupTitle: '挿入とクリップボード',
       restoreClipboardLabel: '入力後にクリップボードを復元',
       restoreClipboardDesc:
@@ -1778,7 +1803,7 @@ export const ja: typeof zhCN = {
       hoursAgo: '{{count}}時間前',
       daysAgo: '{{count}}日前',
       localEngineModelHint:
-        '「AI サービスとモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
+        '「AI とモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
     },
     providers: {
       localEngineNoCredentials: 'ローカルエンジンに API キーやエンドポイントは不要です。',
@@ -2501,6 +2526,7 @@ export const ja: typeof zhCN = {
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
+    back: '戻る',
     backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
@@ -2512,15 +2538,19 @@ export const ja: typeof zhCN = {
       claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
       debug: 'デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。',
+      voiceEnhancement: '高度な音声処理、ノイズ低減、再生エコーの抑制を設定します。',
+      cursorContext: '推敲リクエストに使うカーソル付近の文脈と、短い入力の扱いを設定します。',
+      startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {
       general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
       inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
+      cloudServices: '拡張マーケット、GitHub ログイン、暗号化クラウド同期を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
+      advanced: 'テスト機能、診断、デバッグツールを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2529,6 +2559,7 @@ export const ja: typeof zhCN = {
       shortcuts: 'ショートカット ホットキー キー 選択 推敲 音声編集',
       services:
         'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット マルチモーダル 認識パイプライン Omni',
+      cloudServices: 'クラウド 同期 暗号化 マーケット GitHub ログイン 公式',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
@@ -2541,7 +2572,8 @@ export const ja: typeof zhCN = {
       shortcuts: 'ショートカットと選択',
       general: '録音と入力',
       inputMethod: '入力方法',
-      services: 'AI サービスとモデル',
+      services: 'AI とモデル',
+      cloudServices: 'クラウドサービス',
       privacy: '権限とデータ',
       advanced: '実験機能と拡張',
       personalize: 'パーソナライズ',

@@ -26,7 +26,7 @@ import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
-import { VocabularyLearningSection } from './VocabularyLearningSection';
+import { AudioDspSettings } from './AudioDspSettings';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
@@ -39,16 +39,18 @@ import type { PlatformCapabilities } from '../../lib/types';
 import { type OS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
-import { SettingRow, Toggle, ExperimentalSectionTitle } from './shared';
+import { SettingRow, Toggle, ExperimentalSectionTitle, inputStyle } from './shared';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import { useSelectionMotion } from '../../lib/motion';
+import { useContentMotion, useSelectionMotion } from '../../lib/motion';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
+  advancedPageGroup,
   availableServiceViews,
   isTestingFeaturePage,
   isServiceViewInactive,
   resolveServiceView,
+  showsCursorContextControl,
   type ServiceViewId,
   type AdvancedPage,
   type AdvancedPageId,
@@ -72,13 +74,106 @@ export function GeneralTab({
 }: { os?: OS; onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
-
+  const [page, setPage] = useState<'root' | 'recording' | 'textInput' | 'phone'>('root');
+  const activePage = page === 'phone' && !showRemoteInput ? 'root' : page;
+  const contentRef = useRef<HTMLDivElement>(null);
+  useContentMotion(contentRef, activePage);
+  const categories = [
+    {
+      id: 'recording' as const,
+      icon: 'mic',
+      title: 'settings.generalPages.recordingTitle',
+      description: 'settings.generalPages.recordingDesc',
+    },
+    {
+      id: 'textInput' as const,
+      icon: 'pencil',
+      title: 'settings.generalPages.textInputTitle',
+      description: 'settings.generalPages.textInputDesc',
+    },
+    {
+      id: 'phone' as const,
+      icon: 'link',
+      title: 'settings.generalPages.phoneTitle',
+      description: 'settings.generalPages.phoneDesc',
+    },
+  ].filter((item) => item.id !== 'phone' || showRemoteInput);
+  if (activePage !== 'root') {
+    return (
+      <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <SettingsSubpageHeader
+          onBack={() => setPage('root')}
+          title={
+            activePage === 'recording'
+              ? 'settings.generalPages.recordingTitle'
+              : activePage === 'textInput'
+                ? 'settings.generalPages.textInputTitle'
+                : 'settings.generalPages.phoneTitle'
+          }
+        />
+        {activePage === 'recording' && (
+          <RecordingInputSection forcedOs={os} onOpenLocalModels={onOpenLocalModels} />
+        )}
+        {activePage === 'textInput' && <SelectionWorkspaceSection showShortcut={false} />}
+        {activePage === 'phone' && <RemoteInputSection />}
+      </div>
+    );
+  }
   return (
-    <>
-      <RecordingInputSection forcedOs={os} onOpenLocalModels={onOpenLocalModels} />
-      <SelectionWorkspaceSection showShortcut={false} />
-      {showRemoteInput && <RemoteInputSection />}
-    </>
+    <div ref={contentRef} className="ol-settings-category-list">
+      {categories.map((item) => (
+        <SettingsCategoryEntry
+          key={item.id}
+          icon={item.icon}
+          title={item.title}
+          description={item.description}
+          onClick={() => setPage(item.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SettingsSubpageHeader({ title, onBack }: { title: string; onBack?: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {onBack && (
+        <button type="button" className="ol-settings-back-button" onClick={onBack}>
+          <Icon name="chevLeft" size={16} />
+          {t('modal.back')}
+        </button>
+      )}
+      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+        {t(title)}
+      </h2>
+    </div>
+  );
+}
+
+function SettingsCategoryEntry({
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <button type="button" className="ol-settings-category-entry" onClick={onClick}>
+      <span className="ol-settings-category-icon">
+        <Icon name={icon} size={18} />
+      </span>
+      <span className="ol-settings-category-copy">
+        <strong>{t(title)}</strong>
+        <span>{t(description)}</span>
+      </span>
+      <Icon name="chevRight" size={17} />
+    </button>
   );
 }
 
@@ -345,12 +440,7 @@ export function ServicesTab({
                 <LocalModelsSection />
               </>
             )}
-            {selectedView === 'connections' && (
-              <>
-                <NetworkSection />
-                <MarketplaceSection />
-              </>
-            )}
+            {selectedView === 'connections' && <NetworkSection />}
           </LocalModelsNavContext.Provider>
           {(selectedView === 'llm' || selectedView === 'asr') && (
             <p className="ol-service-storage-note">
@@ -360,6 +450,112 @@ export function ServicesTab({
         </TransitionViewport>
       </div>
     </>
+  );
+}
+
+export function CloudServicesTab() {
+  return (
+    <>
+      <MarketplaceSection />
+      <CloudSyncSection />
+    </>
+  );
+}
+
+function VoiceEnhancementSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const platformCaps = usePlatformCaps();
+  if (!prefs) return null;
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge={t('common.experimental')}>
+        {t('settings.advancedPages.voiceEnhancementTitle')}
+      </ExperimentalSectionTitle>
+      {platformCaps?.platform === 'desktop' && (
+        <SettingRow
+          label={t('settings.recording.echoCancellationLabel')}
+          desc={t('settings.recording.echoCancellationDesc')}
+        >
+          <Toggle
+            on={prefs.echoCancellationEnabled ?? false}
+            onToggle={(next) =>
+              void updatePrefs((current) => ({ ...current, echoCancellationEnabled: next }))
+            }
+          />
+        </SettingRow>
+      )}
+      <SettingRow
+        label={t('settings.recording.audioEnhancementLabel')}
+        desc={t('settings.recording.audioEnhancementDesc')}
+      >
+        <Toggle
+          on={prefs.audioEnhancementEnabled}
+          onToggle={(next) =>
+            void updatePrefs((current) => ({ ...current, audioEnhancementEnabled: next }))
+          }
+        />
+      </SettingRow>
+      {prefs.audioEnhancementEnabled && (
+        <AudioDspSettings
+          value={prefs.audioDsp}
+          onChange={(audioDsp) => void updatePrefs((current) => ({ ...current, audioDsp }))}
+        />
+      )}
+    </Card>
+  );
+}
+
+function CursorContextSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const platformCaps = usePlatformCaps();
+  if (!prefs) return null;
+  const showCursor = showsCursorContextControl(platformCaps?.platform, detectOS());
+  // Empty input rolls back to off. 50 characters keeps the skip on short fragments.
+  const onPolishSkipMaxCharsChange = (raw: string) => {
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return;
+    void updatePrefs((current) => ({
+      ...current,
+      polishSkipMaxChars: Math.max(0, Math.min(50, parsed)),
+    }));
+  };
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge={t('common.experimental')}>
+        {t('settings.advancedPages.cursorContextTitle')}
+      </ExperimentalSectionTitle>
+      {showCursor && (
+        <SettingRow
+          label={t('settings.dataStorage.cursorContextLabel')}
+          desc={t('settings.dataStorage.cursorContextDesc')}
+        >
+          <Toggle
+            on={prefs.cursorContextEnabled}
+            onToggle={(next) =>
+              void updatePrefs((current) => ({ ...current, cursorContextEnabled: next }))
+            }
+          />
+        </SettingRow>
+      )}
+      {showCursor && (
+        <p className="ol-section-note">{t('settings.advancedPages.cursorContextHint')}</p>
+      )}
+      <SettingRow
+        label={t('settings.recording.polishSkipMaxCharsLabel')}
+        desc={t('settings.recording.polishSkipMaxCharsDesc')}
+      >
+        <input
+          type="number"
+          min={0}
+          max={50}
+          value={prefs.polishSkipMaxChars}
+          onChange={(event) => onPolishSkipMaxCharsChange(event.target.value)}
+          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+    </Card>
   );
 }
 
@@ -399,7 +595,6 @@ export function PrivacyTab() {
       <PermissionsSection />
       <DataStorageSection />
       <LocalMigrationSection />
-      <CloudSyncSection />
     </>
   );
 }
@@ -434,29 +629,40 @@ export function AdvancedTab({
   );
   const list = (
     <div className="ol-advanced-settings-list">
-      {entries.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className="ol-advanced-settings-entry"
-          data-ol-advanced-entry={item.id}
-          onClick={() => onOpenPage(item.id)}
-        >
-          <span className="ol-advanced-entry-icon">
-            <Icon name={item.icon} size={19} />
-          </span>
-          <span className="ol-advanced-entry-copy">
-            <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-            <span className="ol-advanced-entry-description">
-              {t(`modal.advancedPages.${item.id}`)}
-            </span>
-          </span>
-          {item.id === 'testingFeatures' && (
-            <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
-          )}
-          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-        </button>
-      ))}
+      {entries.map((item, index) => {
+        const group = advancedPageGroup(item);
+        const previous = index > 0 ? advancedPageGroup(entries[index - 1]) : undefined;
+        const showGroup = group !== undefined && group !== previous;
+        return (
+          <div key={item.id}>
+            {showGroup && (
+              <div className="ol-advanced-settings-group-title">
+                {t(`settings.advancedGroups.${group}`)}
+              </div>
+            )}
+            <button
+              type="button"
+              className="ol-advanced-settings-entry"
+              data-ol-advanced-entry={item.id}
+              onClick={() => onOpenPage(item.id)}
+            >
+              <span className="ol-advanced-entry-icon">
+                <Icon name={item.icon} size={19} />
+              </span>
+              <span className="ol-advanced-entry-copy">
+                <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
+                <span className="ol-advanced-entry-description">
+                  {t(`modal.advancedPages.${item.id}`)}
+                </span>
+              </span>
+              {item.id === 'testingFeatures' && (
+                <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
+              )}
+              <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
   return (
@@ -510,7 +716,9 @@ export function AdvancedTab({
             )}
             {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
             {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
-            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
+            {item.id === 'cursorContext' && <CursorContextSection />}
+            {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}
           </section>
@@ -527,7 +735,6 @@ export function AboutTab() {
   return (
     <>
       <AboutSection />
-      <StartupDiagnostics />
       {showUpdateControls && <BetaChannelSection />}
       {showUpdateControls && <AutoUpdateSection />}
     </>
