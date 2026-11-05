@@ -291,6 +291,7 @@ export const ko: typeof zhCN = {
     show: '표시',
     hide: '숨기기',
     saved: '저장됨',
+    refreshed: '새로고침했습니다',
     saving: '저장 중',
     experimental: '실험적',
     copied: '복사됨',

@@ -311,6 +311,7 @@ export const fr: typeof zhCN = {
     show: 'Afficher',
     hide: 'Masquer',
     saved: 'Enregistré',
+    refreshed: 'Actualisé',
     saving: 'Enregistrement…',
     experimental: 'Expérimental',
     copied: 'Copié',

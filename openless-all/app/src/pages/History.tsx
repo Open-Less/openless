@@ -31,6 +31,7 @@ import type { DictationSession, PolishMode, StylePack } from '../lib/types';
 import { formatHistoryTime, formatLocaleDecimal, formatLocaleNumber } from '../lib/localeFormat';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import { SavedToast, type SaveToastState } from '../components/SavedToast';
 import { SelectLite } from '../components/ui/SelectLite';
 
 function useModeLabel(): Record<PolishMode, string> {
@@ -130,24 +131,43 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
   const [allPacks, setAllPacks] = useState<StylePack[] | null>(null);
   const [packsError, setPacksError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await listHistory();
-      const visible = quickNotesOnly ? data.filter((entry) => entry.source === 'quick_note') : data;
-      setItems(visible);
-      setActionError(null);
-      setSelectedId((prev) =>
-        prev && visible.some((s) => s.id === prev) ? prev : (visible[0]?.id ?? null),
-      );
-    } catch (error) {
-      console.error('[history] failed to load history', error);
-      setLoadError(errorMessage(error));
-    } finally {
-      setLoading(false);
-    }
-  }, [quickNotesOnly]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const refreshSeq = useRef(0);
+  const [refreshNotice, setRefreshNotice] = useState<{ id: number; state: SaveToastState }>({
+    id: 0,
+    state: 'idle',
+  });
+
+  const refresh = useCallback(
+    async (notify = false) => {
+      const seq = ++refreshSeq.current;
+      // A later refresh keeps the list and detail. The loading placeholder is only the empty first paint.
+      if (itemsRef.current.length === 0) setLoading(true);
+      setLoadError(null);
+      try {
+        const data = await listHistory();
+        if (seq !== refreshSeq.current) return;
+        const visible = quickNotesOnly
+          ? data.filter((entry) => entry.source === 'quick_note')
+          : data;
+        setItems(visible);
+        setActionError(null);
+        setSelectedId((prev) =>
+          prev && visible.some((s) => s.id === prev) ? prev : (visible[0]?.id ?? null),
+        );
+        if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'saved' }));
+      } catch (error) {
+        if (seq !== refreshSeq.current) return;
+        console.error('[history] failed to load history', error);
+        setLoadError(errorMessage(error));
+        if (notify) setRefreshNotice((current) => ({ id: current.id + 1, state: 'failed' }));
+      } finally {
+        if (seq === refreshSeq.current) setLoading(false);
+      }
+    },
+    [quickNotesOnly],
+  );
 
   useEffect(() => {
     void refresh();
@@ -197,7 +217,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
-        void refresh();
+        void refresh(true);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -447,7 +467,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh()}>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh(true)}>
               {t('common.refresh')}
             </Btn>
             {!quickNotesOnly && (
@@ -456,6 +476,13 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
               </Btn>
             )}
           </div>
+        }
+      />
+      <SavedToast
+        saveState={refreshNotice.state}
+        replayKey={refreshNotice.id}
+        message={
+          refreshNotice.state === 'failed' ? t('common.operationFailed') : t('common.refreshed')
         }
       />
       <div
@@ -553,7 +580,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     }}
                   >
                     <span>{t('history.loadFailed', { err: loadError })}</span>
-                    <Btn size="sm" variant="ghost" onClick={() => void refresh()}>
+                    <Btn size="sm" variant="ghost" onClick={() => void refresh(true)}>
                       {t('history.retry')}
                     </Btn>
                   </div>

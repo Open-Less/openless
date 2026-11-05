@@ -297,6 +297,7 @@ export const ja: typeof zhCN = {
     show: '表示',
     hide: '非表示',
     saved: '保存しました',
+    refreshed: '更新しました',
     saving: '保存中',
     experimental: '実験的',
     copied: 'コピーしました',

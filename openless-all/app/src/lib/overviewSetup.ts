@@ -42,8 +42,13 @@ export function getOverviewSetup({
   hotkeyAvailable: boolean | null;
   hasShortcut: boolean;
 }): OverviewSetup {
-  if (loading) return { step: 'loading', action: null, providers: [] };
-  if (error || !credentials) return { step: 'unavailable', action: 'refresh', providers: [] };
+  // The first read has nothing to show. A later refresh must keep the last cards:
+  // clearing them for `loading` or `error` is what flashes the lower dashboard.
+  if (!credentials) {
+    return loading
+      ? { step: 'loading', action: null, providers: [] }
+      : { step: 'unavailable', action: 'refresh', providers: [] };
+  }
 
   const providers: OverviewProvider[] =
     credentials.pipelineMode === 'multimodal'
@@ -67,6 +72,8 @@ export function getOverviewSetup({
           },
         ];
 
+  if (loading) return { step: 'loading', action: null, providers };
+  if (error) return { step: 'unavailable', action: 'refresh', providers };
   if (!areProvidersConfigured(credentials))
     return { step: 'services', action: 'services', providers };
   if (!desktop) return { step: 'recording', action: 'general', providers };

@@ -279,6 +279,7 @@ export const zhTW: typeof zhCN = {
     show: '顯示',
     hide: '隱藏',
     saved: '已儲存',
+    refreshed: '已重新整理',
     saving: '儲存中',
     experimental: '實驗性',
     copied: '已複製',
