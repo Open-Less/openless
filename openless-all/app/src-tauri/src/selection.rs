@@ -20,6 +20,12 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
+#[cfg(any(target_os = "windows", test))]
+#[path = "selection/clipboard_capture.rs"]
+mod clipboard_capture;
+#[cfg(target_os = "windows")]
+use clipboard_capture::ClipboardPollOutcome;
+
 const SELECTION_MAX_CHARS: usize = 4000;
 const SELECTION_TRUNCATE_HEAD: usize = 2000;
 const SELECTION_TRUNCATE_TAIL: usize = 2000;
@@ -777,13 +783,10 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
 /// Windows: detect the simulated Ctrl+C by watching the clipboard sequence number instead of
 /// writing a sentinel first. The sentinel used to land in Windows Clipboard History (Win+V) as
 /// `__openless_qa_sentinel_*__` entries on every capture (issues #1331 / #1335), and writing it
-/// woke the history listener mid-capture. Watching the sequence number keeps the user's clipboard
-/// history clean and removes that extra clipboard write.
+/// woke the history listener mid-capture. Watching the sequence number removes that extra write
+/// and keeps these internal markers out of the user's clipboard history.
 #[cfg(target_os = "windows")]
 fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
-    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
-
-    // a) Snapshot the current clipboard (backup used to restore the original state)
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
@@ -791,50 +794,11 @@ fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissR
             return Err(SelectionCaptureMissReason::ClipboardInitFailed);
         }
     };
-    let original = match clipboard.get_text() {
-        Ok(t) => Some(t),
-        Err(e) => {
-            log::info!("[selection] clipboard get_text returned err (likely empty): {e}");
-            None
-        }
-    };
-    let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
-
-    // b) Simulate Ctrl+C
-    let mut post_ok = post_copy_shortcut();
-    log::info!(
-        "[selection] post_copy: post_ok={} original_was_some={}",
-        post_ok,
-        original.is_some()
-    );
-    if !post_ok {
-        log::warn!("[selection] post_copy_shortcut failed");
-        // Do not return immediately: restore the clipboard via the flow below.
-    }
-
-    // c) Wait for the clipboard to change; re-send Ctrl+C once if the first chord was lost.
-    let outcome =
-        windows_poll_clipboard_after_copy(&mut clipboard, baseline_sequence, &mut post_ok);
-
-    // d) Restore the original clipboard only when the simulated copy actually replaced it.
-    //    Skipping the no-op restore matters on Windows: every clipboard write becomes a new
-    //    Clipboard History entry, so writing the same text back would duplicate the user's
-    //    clipboard item — the pollution reported in #1331 / #1335.
-    let needs_restore = match &outcome {
-        ClipboardPollOutcome::Unchanged => false,
-        ClipboardPollOutcome::Captured(text) => original.as_deref() != Some(text.as_str()),
-        ClipboardPollOutcome::Unreadable => true,
-    };
-    if needs_restore {
-        if let Some(ref prev) = original {
-            if let Err(e) = clipboard.set_text(prev) {
-                log::warn!("[selection] clipboard restore failed: {e}");
-            }
-        } else if let Err(e) = clipboard.set_text("") {
-            // The user's original clipboard was empty → clear the selection copy.
-            log::warn!("[selection] clipboard clear failed: {e}");
-        }
-    }
+    let (post_ok, outcome) =
+        clipboard_capture::capture_with_restore(&mut clipboard).map_err(|e| {
+            log::warn!("[selection] clipboard backup failed; skipping simulated copy: {e}");
+            SelectionCaptureMissReason::ClipboardReadFailed
+        })?;
 
     if !post_ok {
         return Err(SelectionCaptureMissReason::CopyShortcutFailed);
@@ -849,6 +813,40 @@ fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissR
             Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy)
         }
         ClipboardPollOutcome::Captured(text) => Ok(text),
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
+    type Error = arboard::Error;
+
+    fn backup_text(&mut self) -> Result<Option<String>, Self::Error> {
+        match self.get_text() {
+            Ok(text) => Ok(Some(text)),
+            // Only a missing text format may be treated as an absent text backup. Contention
+            // and other access failures must stop capture before Ctrl+C overwrites the user data.
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome) {
+        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
+        let baseline_sequence = unsafe { GetClipboardSequenceNumber() };
+        let mut post_ok = post_copy_shortcut();
+        log::info!("[selection] post_copy: post_ok={post_ok}");
+        if !post_ok {
+            log::warn!("[selection] post_copy_shortcut failed");
+        }
+        let outcome = windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
+        (post_ok, outcome)
+    }
+
+    fn restore_text(&mut self, text: &str) {
+        if let Err(error) = self.set_text(text) {
+            log::warn!("[selection] clipboard restore failed: {error}");
+        }
     }
 }
 
@@ -1238,17 +1236,6 @@ mod macos_paste {
 }
 
 // ─────────────────────────── Windows Ctrl+C send ───────────────────────────
-
-/// Result of waiting for the target app's Ctrl+C to land on the clipboard.
-#[cfg(target_os = "windows")]
-enum ClipboardPollOutcome {
-    /// The clipboard changed and its text was read successfully.
-    Captured(String),
-    /// The clipboard sequence never moved: the target app did not copy anything.
-    Unchanged,
-    /// The clipboard changed, but its text could not be read before the deadline.
-    Unreadable,
-}
 
 /// Poll the clipboard sequence number (not its text) until the target app's Ctrl+C lands.
 /// Watching the sequence avoids writing a sentinel — the old sentinel showed up in Windows
