@@ -3333,6 +3333,9 @@ impl OpenLessBackend {
         deps.services
             .remote_input
             .bind_event_publisher(BackendEventPublisher::new(Arc::clone(&events)));
+        deps.services
+            .remote_input
+            .bind_task_spawner(Arc::clone(&deps.task_spawner));
         {
             let store = &local_migration_store;
             let guard: crate::domains::RuntimeRestoreGuard = restore_guard.unwrap_or_else(|| {

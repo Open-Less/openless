@@ -51,6 +51,22 @@ pub async fn list_local_ips(core: CoreState<'_>) -> Result<Vec<String>, String> 
 }
 
 #[tauri::command]
+pub async fn rotate_remote_pin(core: CoreState<'_>) -> Result<String, String> {
+    core.services()
+        .remote_input
+        .rotate_pairing_pin()
+        .await
+        .map_err(|error| error.message)?;
+    core.services()
+        .remote_input
+        .read_pairing_pin()
+        .await
+        .map(openless_core::SecretValue::into_exposed)
+        .map_err(|error| error.message)
+}
+
+/// Explicit revocation: unlike admission-only rotation, disconnect every phone.
+#[tauri::command]
 pub async fn regenerate_remote_pin(core: CoreState<'_>) -> Result<String, String> {
     core.services()
         .remote_input

@@ -22,6 +22,9 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+axum = { version = "0.7", features = ["ws"] }
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # The standalone TextStream process helper uses only OS process-group cleanup.
 libc = "0.2"
 log = "0.4"

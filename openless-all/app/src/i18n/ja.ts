@@ -2209,6 +2209,11 @@ export const ja: typeof zhCN = {
       urlLabel: 'アクセス URL',
       pinLabel: 'ペアリングコード',
       regeneratePin: '再生成',
+      refreshPin: 'コードを更新',
+      revokePairings: 'すべてのペアリングを解除',
+      revokeHint: 'すべての端末を切断し、録音を停止します。再接続にはペアリングが必要です。',
+      pinRotationHint:
+        'コードは10分ごと、およびペアリング成功後に更新されます。接続中の端末には影響しません。再接続の認証はアプリの再起動まで、最大24時間有効です。',
       portInUse: 'ポート {{port}} は使用中です。変更してください',
       startError: 'リモート入力サービスの起動に失敗しました：{{reason}}',
       securityHint:

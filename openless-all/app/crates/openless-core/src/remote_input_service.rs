@@ -2,11 +2,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
+use sha2::{Digest, Sha256};
+use tokio::time::Instant as CredentialInstant;
 
+use crate::config::{TaskSpawner, TokioTaskSpawner};
 use crate::credentials::SecretValue;
 use crate::domains::{
-    RemoteAuthResult, RemoteInputApi, RemoteInputConfig, RemoteInputRecovery,
-    RemoteInputRuntimeAdapter, RemoteInputServerConfig, RemoteInputStatus,
+    RemoteAuthResult, RemoteInputApi, RemoteInputAuthentication, RemoteInputConfig,
+    RemoteInputCredential, RemoteInputRecovery, RemoteInputRuntimeAdapter, RemoteInputServerConfig,
+    RemoteInputStatus,
 };
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{
@@ -26,6 +30,58 @@ const PIN_GLOBAL_MAX_FAILS: u32 = 20;
 const PIN_GLOBAL_WINDOW_SECS: u64 = 60;
 const RECOVERY_SESSION_CAP: usize = 64;
 const RECOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+const PAIRING_PIN_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const RECONNECT_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+const RECONNECT_TOKEN_CAP: usize = 64;
+
+/// Shared by both native WebSocket hosts. Secrets are returned only in the direct
+/// authentication reply, never through the backend event bus.
+pub async fn authenticate_remote_input_hello(
+    remote: &dyn RemoteInputApi,
+    connection_id: SessionId,
+    peer: String,
+    text: &str,
+) -> Result<serde_json::Value, BackendError> {
+    let hello = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .filter(|value| value.get("type").and_then(serde_json::Value::as_str) == Some("hello"));
+    let token_field = hello.as_ref().and_then(|value| value.get("reconnectToken"));
+    let credential = match token_field {
+        Some(token) => RemoteInputCredential::ReconnectToken(SecretValue::new(
+            token.as_str().unwrap_or_default(),
+        )),
+        None => RemoteInputCredential::PairingPin(SecretValue::new(
+            hello
+                .as_ref()
+                .and_then(|value| value.get("pin"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+        )),
+    };
+    let authentication = remote
+        .authenticate_connection(connection_id, peer, credential)
+        .await?;
+    let mut reply = serde_json::json!({
+        "type": "auth",
+        "ok": authentication.result == RemoteAuthResult::Ok,
+    });
+    match authentication.result {
+        RemoteAuthResult::Ok => {
+            if let Some(token) = authentication.reconnect_token {
+                reply["reconnectToken"] = serde_json::Value::String(token.into_exposed());
+            }
+        }
+        RemoteAuthResult::BadPin => {
+            reply["reason"] = serde_json::json!(if token_field.is_some() {
+                "bad-token"
+            } else {
+                "bad-pin"
+            })
+        }
+        RemoteAuthResult::Locked => reply["reason"] = serde_json::json!("locked"),
+    }
+    Ok(reply)
+}
 
 /// After an unexpected disconnect the host keeps polling the original stop, so the
 /// recognition and history close-out are not discarded. Deliberate cancellation and
@@ -143,6 +199,9 @@ struct RemoteInputState {
     ca_fingerprint_sha256: Option<String>,
     locale: String,
     pairing_pin: Option<SecretValue>,
+    pin_deadline: Option<CredentialInstant>,
+    pin_timer: Option<tokio::sync::watch::Sender<CredentialInstant>>,
+    reconnect_tokens: Vec<([u8; 32], CredentialInstant)>,
     connections: HashMap<SessionId, RemoteConnectionState>,
     // Credential recovery is separate from sessions; session IDs in the public state
     // must not grant access to text.
@@ -169,6 +228,7 @@ pub struct RemoteInputService {
     events: Arc<Mutex<Option<BackendEventPublisher>>>,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
     state: Arc<Mutex<RemoteInputState>>,
+    task_spawner: Arc<Mutex<Arc<dyn TaskSpawner>>>,
 }
 
 impl RemoteInputService {
@@ -184,6 +244,7 @@ impl RemoteInputService {
             runtime,
             events: Arc::new(Mutex::new(None)),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+            task_spawner: Arc::new(Mutex::new(Arc::new(TokioTaskSpawner))),
             state: Arc::new(Mutex::new(RemoteInputState {
                 enabled: false,
                 running: false,
@@ -194,6 +255,9 @@ impl RemoteInputService {
                 ca_fingerprint_sha256: None,
                 locale,
                 pairing_pin: None,
+                pin_deadline: None,
+                pin_timer: None,
+                reconnect_tokens: Vec::new(),
                 connections: HashMap::new(),
                 recoverable_sessions: VecDeque::new(),
                 pin_fails: HashMap::new(),
@@ -211,29 +275,56 @@ impl RemoteInputService {
     }
 
     async fn ensure_pairing_pin(&self) -> Result<SecretValue, BackendError> {
-        if let Some(pin) = self
-            .state
-            .lock()
-            .expect("remote input state lock poisoned")
-            .pairing_pin
-            .clone()
-        {
-            return Ok(pin);
-        }
-        let loaded = self.runtime.load_pairing_pin().await?;
-        let pin = match loaded.filter(is_valid_pin) {
-            Some(pin) => pin,
-            None => {
-                let pin = SecretValue::new(generate_pairing_pin());
-                self.runtime.persist_pairing_pin(pin.clone()).await?;
-                pin
-            }
+        let (pin, changed) = {
+            let mut state = self.state.lock().expect("remote input state lock poisoned");
+            let changed = refresh_expired_pin(&mut state, CredentialInstant::now());
+            (state.pairing_pin.clone().expect("PIN initialized"), changed)
         };
-        self.state
-            .lock()
-            .expect("remote input state lock poisoned")
-            .pairing_pin = Some(pin.clone());
+        if changed {
+            self.publish_status();
+        }
         Ok(pin)
+    }
+
+    fn start_pin_timer(&self) {
+        let mut changed = {
+            let mut state = self.state.lock().expect("remote input state lock poisoned");
+            let (sender, receiver) =
+                tokio::sync::watch::channel(state.pin_deadline.expect("running server has a PIN"));
+            state.pin_timer = Some(sender);
+            receiver
+        };
+        // The timer must neither retain the service/backend nor outlive a stopped listener.
+        let state = Arc::downgrade(&self.state);
+        let events = Arc::downgrade(&self.events);
+        let task = Box::pin(async move {
+            loop {
+                let deadline = *changed.borrow_and_update();
+                tokio::select! {
+                    result = changed.changed() => {
+                        if result.is_err() { break; }
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        let Some(state) = state.upgrade() else { break };
+                        let event = {
+                            let mut state = state.lock().expect("remote input state lock poisoned");
+                            if !state.running || changed.has_changed().is_err() { break; }
+                            refresh_expired_pin(&mut state, CredentialInstant::now())
+                                .then(|| runtime_event(&state))
+                        };
+                        if let (Some(event), Some(events)) = (event, events.upgrade()) {
+                            if let Some(publisher) = events.lock().expect("remote event lock poisoned").clone() {
+                                publisher.publish(None, BackendEventKind::RemoteInputStatusChanged(event));
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        self.task_spawner
+            .lock()
+            .expect("remote task spawner lock poisoned")
+            .spawn(task);
     }
 
     async fn stop_server_and_sessions(&self) -> Result<(), BackendError> {
@@ -246,6 +337,8 @@ impl RemoteInputService {
                 .collect::<Vec<_>>();
             state.connections.clear();
             state.recoverable_sessions.clear();
+            state.reconnect_tokens.clear();
+            state.pin_timer = None;
             state.running = false;
             state.starting = false;
             state.urls.clear();
@@ -294,6 +387,7 @@ impl RemoteInputService {
                 state.urls_stale = binding.urls_stale;
                 state.ca_fingerprint_sha256 = binding.ca_fingerprint_sha256;
                 drop(state);
+                self.start_pin_timer();
                 self.publish_status();
                 Ok(())
             }
@@ -323,11 +417,7 @@ impl RemoteInputService {
         let state = self.state.lock().expect("remote input state lock poisoned");
         self.event_publisher().publish(
             None,
-            BackendEventKind::RemoteInputStatusChanged(RemoteInputRuntimeEvent {
-                running: state.running,
-                port: state.running.then_some(state.port),
-                urls: state.urls.clone(),
-            }),
+            BackendEventKind::RemoteInputStatusChanged(runtime_event(&state)),
         );
     }
 
@@ -362,20 +452,17 @@ impl RemoteInputService {
 
     async fn regenerate_pairing_pin_inner(&self) -> Result<(), BackendError> {
         let _lifecycle = self.lifecycle.lock().await;
-        let pin = SecretValue::new(generate_pairing_pin());
-        self.runtime
-            .persist_pairing_pin(pin.clone())
-            .await
-            .map_err(|error| public_remote_error(&error))?;
         let (restart, port) = {
             let mut state = self.state.lock().expect("remote input state lock poisoned");
-            state.pairing_pin = Some(pin);
+            replace_pairing_pin(&mut state, CredentialInstant::now());
+            state.reconnect_tokens.clear();
             (state.running && state.enabled, state.port)
         };
         if restart {
             self.stop_server_and_sessions().await?;
             self.start_server(port).await?;
         }
+        self.publish_status();
         Ok(())
     }
 
@@ -383,13 +470,9 @@ impl RemoteInputService {
         &self,
         connection_id: SessionId,
         peer: String,
-        candidate: SecretValue,
-    ) -> Result<RemoteAuthResult, BackendError> {
+        credential: RemoteInputCredential,
+    ) -> Result<RemoteInputAuthentication, BackendError> {
         let _lifecycle = self.lifecycle.lock().await;
-        // PIN rotation holds this same gate through persistence and server
-        // restart. Read the secret only after acquiring it: otherwise an auth
-        // queued during rotation can accept the old PIN on the new server.
-        let expected = self.ensure_pairing_pin().await?;
         let mut state = self.state.lock().expect("remote input state lock poisoned");
         if !state.running {
             return Err(BackendError::new(
@@ -397,24 +480,82 @@ impl RemoteInputService {
                 "remote input server is not running",
             ));
         }
+        let credential_now = CredentialInstant::now();
+        // Expiration is enforced at admission even after system sleep or a delayed timer.
+        let pin_changed = refresh_expired_pin(&mut state, credential_now);
+        if pin_changed {
+            self.event_publisher().publish(
+                None,
+                BackendEventKind::RemoteInputStatusChanged(runtime_event(&state)),
+            );
+        }
+        state
+            .reconnect_tokens
+            .retain(|(_, deadline)| *deadline > credential_now);
         let now = std::time::Instant::now();
         if now.duration_since(state.global_pin_fails.1).as_secs() >= PIN_GLOBAL_WINDOW_SECS {
             state.global_pin_fails = (0, now);
         }
         if state.global_pin_fails.0 >= PIN_GLOBAL_MAX_FAILS {
-            return Ok(RemoteAuthResult::Locked);
+            return Ok(authentication_result(RemoteAuthResult::Locked));
         }
         if let Some((_, Some(until))) = state.pin_fails.get(&peer) {
             if now < *until {
-                return Ok(RemoteAuthResult::Locked);
+                return Ok(authentication_result(RemoteAuthResult::Locked));
             }
             state.pin_fails.remove(&peer);
         }
-        let pin_ok = constant_time_eq(
-            candidate.expose_secret().as_bytes(),
-            expected.expose_secret().as_bytes(),
-        );
+        let pin_ok = match &credential {
+            RemoteInputCredential::PairingPin(candidate) => constant_time_eq(
+                candidate.expose_secret().as_bytes(),
+                state
+                    .pairing_pin
+                    .as_ref()
+                    .expect("PIN initialized")
+                    .expose_secret()
+                    .as_bytes(),
+            ),
+            RemoteInputCredential::ReconnectToken(token) => {
+                let digest: [u8; 32] = Sha256::digest(token.expose_secret().as_bytes()).into();
+                token.expose_secret().len() == 64
+                    && state
+                        .reconnect_tokens
+                        .iter()
+                        .any(|(expected, _)| constant_time_eq(&digest, expected))
+            }
+        };
         if pin_ok {
+            if state.connections.contains_key(&connection_id) {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "connection is already authenticated",
+                ));
+            }
+            let reconnect_token = if matches!(credential, RemoteInputCredential::PairingPin(_)) {
+                if state.reconnect_tokens.len() >= RECONNECT_TOKEN_CAP {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Busy,
+                        "remote pairing capacity reached",
+                    ));
+                }
+                let mut bytes = [0u8; 32];
+                getrandom::fill(&mut bytes).map_err(|_| {
+                    BackendError::new(
+                        BackendErrorCode::Platform,
+                        "remote credential generation failed",
+                    )
+                })?;
+                let token = SecretValue::new(hex::encode(bytes));
+                state.reconnect_tokens.push((
+                    Sha256::digest(token.expose_secret().as_bytes()).into(),
+                    credential_now + RECONNECT_TOKEN_TTL,
+                ));
+                // Compare, authorize and consume under one lock: a PIN admits only one phone.
+                replace_pairing_pin(&mut state, credential_now);
+                Some(token)
+            } else {
+                None
+            };
             state.pin_fails.remove(&peer);
             state.global_pin_fails.0 = 0;
             state.connections.insert(
@@ -426,11 +567,14 @@ impl RemoteInputService {
             );
             drop(state);
             self.publish_status();
-            return Ok(RemoteAuthResult::Ok);
+            return Ok(RemoteInputAuthentication {
+                result: RemoteAuthResult::Ok,
+                reconnect_token,
+            });
         }
         state.global_pin_fails.0 = state.global_pin_fails.0.saturating_add(1);
         if state.global_pin_fails.0 >= PIN_GLOBAL_MAX_FAILS {
-            return Ok(RemoteAuthResult::Locked);
+            return Ok(authentication_result(RemoteAuthResult::Locked));
         }
         if state.pin_fails.len() >= PIN_FAILS_MAX_ENTRIES {
             state
@@ -442,7 +586,8 @@ impl RemoteInputService {
         if failure.0 >= PIN_MAX_FAILS {
             failure.1 = Some(now + std::time::Duration::from_secs(PIN_LOCK_SECS));
         }
-        Ok(RemoteAuthResult::BadPin)
+        drop(state);
+        Ok(authentication_result(RemoteAuthResult::BadPin))
     }
 
     async fn disconnect_inner(&self, connection_id: SessionId) -> Result<(), BackendError> {
@@ -632,6 +777,13 @@ impl RemoteInputService {
 }
 
 impl RemoteInputApi for RemoteInputService {
+    fn bind_task_spawner(&self, spawner: Arc<dyn TaskSpawner>) {
+        *self
+            .task_spawner
+            .lock()
+            .expect("remote task spawner lock poisoned") = spawner;
+    }
+
     fn bind_event_publisher(&self, publisher: BackendEventPublisher) {
         *self
             .events
@@ -660,15 +812,41 @@ impl RemoteInputApi for RemoteInputService {
 
     fn read_pairing_pin(&self) -> BoxFuture<'static, Result<SecretValue, BackendError>> {
         let service = self.clone();
-        Box::pin(async move {
-            let _lifecycle = service.lifecycle.lock().await;
-            service.ensure_pairing_pin().await
-        })
+        Box::pin(async move { service.ensure_pairing_pin().await })
     }
 
     fn regenerate_pairing_pin(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move { service.regenerate_pairing_pin_inner().await })
+    }
+
+    fn rotate_pairing_pin(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        let service = self.clone();
+        Box::pin(async move {
+            {
+                let mut state = service
+                    .state
+                    .lock()
+                    .expect("remote input state lock poisoned");
+                replace_pairing_pin(&mut state, CredentialInstant::now());
+            }
+            service.publish_status();
+            Ok(())
+        })
+    }
+
+    fn authenticate_connection(
+        &self,
+        connection_id: SessionId,
+        peer: String,
+        credential: RemoteInputCredential,
+    ) -> BoxFuture<'static, Result<RemoteInputAuthentication, BackendError>> {
+        let service = self.clone();
+        Box::pin(async move {
+            service
+                .authenticate_inner(connection_id, peer, credential)
+                .await
+        })
     }
 
     fn set_locale(&self, locale: String) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -707,7 +885,12 @@ impl RemoteInputApi for RemoteInputService {
         pin: SecretValue,
     ) -> BoxFuture<'static, Result<RemoteAuthResult, BackendError>> {
         let service = self.clone();
-        Box::pin(async move { service.authenticate_inner(connection_id, peer, pin).await })
+        Box::pin(async move {
+            service
+                .authenticate_inner(connection_id, peer, RemoteInputCredential::PairingPin(pin))
+                .await
+                .map(|authentication| authentication.result)
+        })
     }
 
     fn disconnect(&self, connection_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -900,6 +1083,7 @@ impl Clone for RemoteInputService {
             events: Arc::clone(&self.events),
             lifecycle: Arc::clone(&self.lifecycle),
             state: Arc::clone(&self.state),
+            task_spawner: Arc::clone(&self.task_spawner),
         }
     }
 }
@@ -961,9 +1145,47 @@ fn validate_remote_locale(locale: &str) -> Result<(), BackendError> {
     Ok(())
 }
 
-fn is_valid_pin(pin: &SecretValue) -> bool {
-    let value = pin.expose_secret();
-    validate_pairing_pin(value)
+fn authentication_result(result: RemoteAuthResult) -> RemoteInputAuthentication {
+    RemoteInputAuthentication {
+        result,
+        reconnect_token: None,
+    }
+}
+
+fn runtime_event(state: &RemoteInputState) -> RemoteInputRuntimeEvent {
+    RemoteInputRuntimeEvent {
+        running: state.running,
+        port: state.running.then_some(state.port),
+        urls: state.urls.clone(),
+    }
+}
+
+fn refresh_expired_pin(state: &mut RemoteInputState, now: CredentialInstant) -> bool {
+    if state.pin_deadline.is_none_or(|deadline| deadline <= now) {
+        replace_pairing_pin(state, now);
+        true
+    } else {
+        false
+    }
+}
+
+fn replace_pairing_pin(state: &mut RemoteInputState, now: CredentialInstant) {
+    let pin = loop {
+        let pin = generate_pairing_pin();
+        if state
+            .pairing_pin
+            .as_ref()
+            .is_none_or(|previous| previous.expose_secret() != pin)
+        {
+            break pin;
+        }
+    };
+    state.pairing_pin = Some(SecretValue::new(pin));
+    let deadline = now + PAIRING_PIN_TTL;
+    state.pin_deadline = Some(deadline);
+    if let Some(timer) = &state.pin_timer {
+        timer.send_replace(deadline);
+    }
 }
 
 fn generate_pairing_pin() -> String {

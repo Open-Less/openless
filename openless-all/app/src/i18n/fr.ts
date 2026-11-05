@@ -2313,6 +2313,12 @@ export const fr: typeof zhCN = {
       urlLabel: 'URL d’accès',
       pinLabel: 'Code d’association',
       regeneratePin: 'Régénérer',
+      refreshPin: 'Actualiser le code',
+      revokePairings: 'Révoquer les associations',
+      revokeHint:
+        'Déconnecte tous les téléphones et arrête les enregistrements. Une nouvelle association sera nécessaire.',
+      pinRotationHint:
+        'Le code change toutes les 10 minutes et après une association, sans interrompre les connexions. La reconnexion reste autorisée au plus 24 heures, jusqu’au redémarrage de l’application.',
       portInUse: 'Le port {{port}} est utilisé. Choisissez-en un autre',
       startError: 'Impossible de démarrer la saisie à distance : {{reason}}',
       securityHint:

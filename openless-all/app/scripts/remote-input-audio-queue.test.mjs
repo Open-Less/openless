@@ -141,7 +141,7 @@ async function openRemotePage({
     document,
     isNaN,
     localStorage: storage([
-      ['ol_remote_pin', '123456'],
+      ['ol_remote_reconnect_token', 'a'.repeat(64)],
       ...(savedMode === undefined ? [] : [['ol_remote_mode', savedMode]]),
       ...(savedWakeLock === undefined ? [] : [['ol_remote_wake_lock', savedWakeLock]]),
       ...(savedRecovery === undefined

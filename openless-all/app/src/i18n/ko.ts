@@ -2195,6 +2195,11 @@ export const ko: typeof zhCN = {
       urlLabel: '접속 URL',
       pinLabel: '페어링 코드',
       regeneratePin: '재생성',
+      refreshPin: '코드 새로 고침',
+      revokePairings: '모든 페어링 해제',
+      revokeHint: '모든 휴대폰 연결과 녹음을 종료합니다. 다시 페어링해야 합니다.',
+      pinRotationHint:
+        '코드는 10분마다 또는 페어링 후 갱신되며 연결된 휴대폰은 유지됩니다. 재연결 자격 증명은 앱 재시작 전까지 최대 24시간 유효합니다.',
       portInUse: '포트 {{port}}이(가) 사용 중입니다. 변경하세요',
       startError: '원격 입력 서비스 시작에 실패했습니다: {{reason}}',
       securityHint:

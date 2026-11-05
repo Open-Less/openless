@@ -31,6 +31,10 @@ export function regenerateRemotePin(): Promise<string> {
   return invokeOrMock('regenerate_remote_pin', undefined, () => '123456');
 }
 
+export function rotateRemotePin(): Promise<string> {
+  return invokeOrMock('rotate_remote_pin', undefined, () => '654321');
+}
+
 /** Syncs the PC UI language to the remote input service so the H5 recording page displays that language. */
 export function setRemoteLocale(locale: string): Promise<void> {
   return invokeOrMock('set_remote_locale', { locale }, () => undefined);

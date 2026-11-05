@@ -482,29 +482,28 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
     let connection_id = SessionId::new();
     let auth = match tokio::time::timeout(Duration::from_secs(15), socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
-            state
-                .backend
-                .services()
-                .remote_input
-                .authenticate(connection_id, peer.to_string(), hello_pin(&text))
-                .await
+            openless_core::authenticate_remote_input_hello(
+                state.backend.services().remote_input.as_ref(),
+                connection_id,
+                peer.to_string(),
+                &text,
+            )
+            .await
         }
         _ => return,
     };
-    let Ok(auth) = auth else { return };
-    let (ok, reason) = match auth {
-        openless_core::RemoteAuthResult::Ok => (true, None),
-        openless_core::RemoteAuthResult::BadPin => (false, Some("bad-pin")),
-        openless_core::RemoteAuthResult::Locked => (false, Some("locked")),
-    };
-    let _ = socket
-        .send(json_message(serde_json::json!({
-            "type": "auth",
-            "ok": ok,
-            "reason": reason,
-        })))
-        .await;
-    if !ok {
+    let Ok(reply) = auth else { return };
+    let accepted = reply["ok"] == true;
+    if socket.send(json_message(reply)).await.is_err() {
+        let _ = state
+            .backend
+            .services()
+            .remote_input
+            .disconnect(connection_id)
+            .await;
+        return;
+    }
+    if !accepted {
         return;
     }
 
@@ -635,21 +634,6 @@ async fn websocket_session(mut socket: WebSocket, state: Arc<WebState>, peer: Ip
 #[cfg(target_os = "linux")]
 fn json_message(value: serde_json::Value) -> Message {
     Message::Text(value.to_string().into())
-}
-
-#[cfg(target_os = "linux")]
-fn hello_pin(text: &str) -> SecretValue {
-    let pin = serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .filter(|value| value.get("type").and_then(serde_json::Value::as_str) == Some("hello"))
-        .and_then(|value| {
-            value
-                .get("pin")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_default();
-    SecretValue::new(pin)
 }
 
 #[cfg(target_os = "linux")]
@@ -795,18 +779,6 @@ mod tests {
         assert_eq!(remote_input_locale("ja_JP"), "ja");
         assert_eq!(remote_input_locale("ko_KR"), "ko");
         assert_eq!(remote_input_locale("fr_FR.UTF-8"), "en");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn hello_requires_the_typed_handshake() {
-        assert_eq!(
-            hello_pin(r#"{"type":"hello","pin":"123456"}"#).expose_secret(),
-            "123456"
-        );
-        assert!(hello_pin(r#"{"type":"other","pin":"123456"}"#)
-            .expose_secret()
-            .is_empty());
     }
 
     #[cfg(target_os = "linux")]

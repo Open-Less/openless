@@ -2113,6 +2113,11 @@ export const zhCN = {
       urlLabel: '访问网址',
       pinLabel: '配对码',
       regeneratePin: '重新生成',
+      refreshPin: '刷新配对码',
+      revokePairings: '撤销所有配对',
+      revokeHint: '断开所有手机并停止正在进行的录音，下次连接需要重新配对。',
+      pinRotationHint:
+        '配对码每 10 分钟或成功配对后自动刷新，已连接手机不受影响。重连凭证在本次电脑运行期间有效，最长 24 小时。',
       portInUse: '端口 {{port}} 被占用，请更换',
       startError: '远程输入服务启动失败：{{reason}}',
       securityHint: '仅同一局域网可访问，需输入配对码；不用时建议关闭。',
