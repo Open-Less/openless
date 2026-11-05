@@ -1950,6 +1950,42 @@ fn validate_omni_context(
     Ok(())
 }
 
+/// Plain-text completion on the Omni channel. Selection helpers use this when
+/// the active pipeline is multimodal, so a traditional LLM is not required.
+pub(crate) async fn polish_with_omni_text(
+    credentials: &dyn CredentialStore,
+    context: &DictationContext,
+    raw_text: &str,
+) -> Result<PolishOutput, BackendError> {
+    if raw_text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidArgument,
+            "polish input must not be empty",
+        ));
+    }
+    let (system_prompt, user_prompt) = context.effective_polish_prompts(raw_text);
+    let provider = build_omni_provider(credentials, context).await?;
+    let polished = provider
+        .complete(&system_prompt, &user_prompt, None)
+        .await
+        .map_err(map_omni_error)?;
+    let cleaned = crate::output_cleaning::clean_polish_output(&polished);
+    let text = if context.polish.translation_active {
+        crate::split_polish_translate_output(&cleaned)
+            .map(|(_, translation)| translation)
+            .unwrap_or(cleaned)
+    } else {
+        cleaned
+    };
+    if text.trim().is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::Provider,
+            "Omni provider returned empty polish output",
+        ));
+    }
+    Ok(PolishOutput::text(text))
+}
+
 /// Validate an Omni provider using the same construction and request path as
 /// dictation. Dedicated transcription uses synthetic silence; general-purpose
 /// models use a text probe, which does not prove audio support (issue #1118).
@@ -1985,9 +2021,9 @@ pub async fn validate_shared_omni_provider(
     Ok(())
 }
 
-/// First-stage Omni for Selection Voice / Less Computer (#1119 product B):
-/// audio + prompt → instruction/command text. Downstream intent / EditPlan /
-/// Agent submit still use their existing LLM (or Agent) paths.
+/// First-stage Omni audio for Selection Voice / Less Computer (#1119):
+/// audio + prompt → instruction text. Later selection text tasks follow the
+/// active pipeline; Agent submit keeps its own path.
 ///
 /// Empty Omni output is returned as `Ok("")` so callers can apply product
 /// policy (e.g. Less Computer Dictate → `Empty` outcome without a chat error;
