@@ -745,7 +745,7 @@ export const de: typeof zhCN = {
     },
     actions: {
       refresh: 'Erneut versuchen',
-      services: 'KI-Dienste und Modelle',
+      services: 'KI & Modelle',
       general: 'Aufnahme und Eingabe',
       shortcuts: 'Kurzbefehle',
       privacy: 'Berechtigungen und Daten',
@@ -755,7 +755,8 @@ export const de: typeof zhCN = {
       loadingTitle: 'Deine Konfiguration wird gelesen',
       loadingDesc: 'Deine aktuellen Dienste und der nächste Schritt erscheinen gleich.',
       unavailableTitle: 'Dienststatus nicht verfügbar',
-      unavailableDesc: 'Lies den Status erneut oder prüfe deine Konfiguration unter „KI-Dienste“.',
+      unavailableDesc:
+        'Lies den Status erneut oder prüfe deine Konfiguration unter „KI & Modelle“.',
       servicesTitle: 'Sprachdienste einrichten',
       servicesDesc:
         'Beginne hier: Wähle Dienste für Spracherkennung und Textverarbeitung. Im Omni-Modus muss nur das aktive multimodale Modell eingerichtet werden.',
@@ -1298,6 +1299,27 @@ export const de: typeof zhCN = {
     cancelledTitle: 'Aufnahme abgebrochen',
   },
   settings: {
+    generalPages: {
+      recordingTitle: 'Mikrofon und Aufnahme',
+      recordingDesc: 'Mikrofon, Aufnahmemodus, Kapsel, Einfügen und Start festlegen.',
+      textInputTitle: 'Texteingabe',
+      textInputDesc: 'Auswahlaktionen und das Umschreiben von Text festlegen.',
+      phoneTitle: 'Telefon und Ferneingabe',
+      phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
+      cursorContextTitle: 'Cursorkontext und kurze Eingaben',
+      startupDiagnosticsTitle: 'Startdiagnose',
+      cursorContextHint:
+        'Der Cursorkontext ist standardmäßig aktiv. Hier deaktivieren, wenn naher Text nicht mit Überarbeitungsanfragen gesendet werden soll.',
+    },
+    advancedGroups: {
+      recording: 'Aufnahme',
+      text: 'Text und Kontext',
+      diagnostics: 'Diagnose',
+    },
+
     testingFeatures: {
       title: 'Funktionen im Test',
       enable: 'Funktionen im Test aktivieren',
@@ -1652,6 +1674,10 @@ export const de: typeof zhCN = {
       audioCueDesc:
         'Spielt einen kurzen synthetischen Ton ab, wenn du die Aufnahme per Kurzbefehl startest. Auch bei ausgeblendeter Kapsel.',
       audioCuePreview: 'Anhören',
+      captureGroupTitle: 'Aufnahme',
+      capsuleGroupTitle: 'Bildschirmkapsel',
+      recognitionGroupTitle: 'Erkennung',
+      feedbackGroupTitle: 'Überwachung und Signale',
       insertGroupTitle: 'Einfügen und Zwischenablage',
       restoreClipboardLabel: 'Zwischenablage nach dem Einfügen wiederherstellen',
       restoreClipboardDesc:
@@ -1829,7 +1855,7 @@ export const de: typeof zhCN = {
       hoursAgo: 'vor {{count}} Std.',
       daysAgo: 'vor {{count}} Tagen',
       localEngineModelHint:
-        'Lokale Modelle lassen sich unter KI-Dienste und Modelle → Lokale Modelle herunterladen und wechseln.',
+        'Lokale Modelle lassen sich unter KI & Modelle → Lokale Modelle herunterladen und wechseln.',
     },
     providers: {
       localEngineNoCredentials: 'Lokale Engines benötigen weder API-Schlüssel noch Endpunkt.',
@@ -2600,6 +2626,7 @@ export const de: typeof zhCN = {
     noResults: 'Keine passenden Kategorien. Versuche „Mikrofon“, „Modelle“ oder „Design“.',
     autoSaveHint: 'Änderungen werden automatisch gespeichert',
     backToAdvanced: 'Zurück zu Experimente und Erweiterungen',
+    back: 'Zurück',
     backToTestingFeatures: 'Zurück zu Funktionen im Test',
     advancedPages: {
       customSyncServer:
@@ -2613,6 +2640,11 @@ export const de: typeof zhCN = {
       claudeConsole: 'Erkenne Claude Code und prüfe die Ausgabe von Testaufträgen.',
       multimodal: 'Verwalte die experimentelle multimodale Spracherkennung.',
       debug: 'Diagnoseaufnahmen speichern, Cursorkontext prüfen und Protokolle exportieren.',
+      voiceEnhancement:
+        'Erweiterte Audioverarbeitung, Rauschunterdrückung und Unterdrückung von Wiedergabehall festlegen.',
+      cursorContext:
+        'Den Kontext um den Cursor für Überarbeitungsanfragen und den Umgang mit kurzen Eingaben festlegen.',
+      startupDiagnostics: 'Startzeiten, Backend-Verbindungen und verzögerte Prüfungen ansehen.',
     },
     descriptions: {
       general: 'Mikrofon wählen, Aufnahme und Texteingabe anpassen oder dein Smartphone verbinden.',
@@ -2620,10 +2652,12 @@ export const de: typeof zhCN = {
       shortcuts: 'Kurzbefehle einrichten und Aktionen für ausgewählten Text festlegen.',
       services:
         'Spracherkennungs- und Textverarbeitungsdienste wählen. Kanäle, lokale Modelle und Verbindungen verwalten.',
+      cloudServices:
+        'Erweiterungsmarkt, GitHub-Anmeldung und verschlüsselte Cloud-Synchronisierung verwalten.',
       appearance: 'Design, Seitenlayout und Sprache der Oberfläche für angenehmes Lesen anpassen.',
       privacy:
         'Systemberechtigungen und Verbindungen prüfen. Verlauf, Aufnahmen und lokale Daten verwalten.',
-      advanced: 'Testfunktionen, Vokabellernen und Debugging-Werkzeuge konfigurieren.',
+      advanced: 'Testfunktionen, Diagnose und Debugging-Werkzeuge konfigurieren.',
       about: 'Version, Updatekanal und automatische Updateeinstellungen anzeigen.',
     },
     searchKeywords: {
@@ -2634,6 +2668,7 @@ export const de: typeof zhCN = {
         'Kurzbefehl Hotkey Taste Tastenkombination Auswahl Überarbeitung Sprachbearbeitung',
       services:
         'ASR LLM API Kanal Modell Cloud Lokal Offline Netzwerk Proxy Marktplatz Multimodal Pipeline Omni',
+      cloudServices: 'Cloud Synchronisierung verschlüsselt Marktplatz GitHub Anmeldung offiziell',
       appearance: 'Design Dunkel Hell Sprache Schrift Textgröße Layout Aktivitätsübersicht',
       privacy:
         'Berechtigung Mikrofon Bedienungshilfen Verlauf Aufnahme Speicher Datenschutz Export',
@@ -2646,7 +2681,8 @@ export const de: typeof zhCN = {
       shortcuts: 'Kurzbefehle und Auswahl',
       general: 'Aufnahme und Eingabe',
       inputMethod: 'Eingabemethode',
-      services: 'KI-Dienste und Modelle',
+      services: 'KI & Modelle',
+      cloudServices: 'Cloud-Dienste',
       privacy: 'Berechtigungen und Daten',
       advanced: 'Experimente und Erweiterungen',
       personalize: 'Anpassen',

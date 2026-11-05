@@ -396,11 +396,92 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   outline: 2px solid var(--ol-blue);
   outline-offset: 3px;
 }
+.ol-settings-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px 5px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ol-blue);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ol-settings-back-button:hover {
+  background: var(--ol-blue-soft);
+}
+.ol-settings-category-list {
+  border: 1px solid var(--ol-line);
+  border-radius: 14px;
+  background: var(--ol-surface);
+  overflow: hidden;
+}
+.ol-settings-category-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ol-ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.ol-settings-category-list > .ol-settings-category-entry + .ol-settings-category-entry {
+  border-top: 1px solid var(--ol-line-soft);
+}
+.ol-settings-category-entry:hover {
+  background: var(--ol-surface-2);
+}
+.ol-settings-category-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--ol-surface-2);
+  color: var(--ol-blue);
+}
+.ol-settings-category-copy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.ol-settings-category-copy strong {
+  font-size: 14px;
+  font-weight: var(--ol-font-weight-semibold);
+}
+.ol-settings-category-copy span {
+  color: var(--ol-ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-settings-category-entry {
+    transition: none;
+  }
+}
 .ol-advanced-settings-list {
   border: 1px solid var(--ol-line);
   border-radius: 14px;
   background: var(--ol-surface);
   overflow: hidden;
+}
+.ol-advanced-settings-group-title {
+  padding: 13px 18px 7px;
+  color: var(--ol-ink-4);
+  font-size: 11px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--ol-surface-2);
 }
 .ol-advanced-settings-entry {
   display: flex;
@@ -416,7 +497,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   cursor: pointer;
   transition: background 160ms ease;
 }
-.ol-advanced-settings-entry + .ol-advanced-settings-entry {
+.ol-advanced-settings-list > div + div {
   border-top: 1px solid var(--ol-line-soft);
 }
 .ol-advanced-settings-entry:hover {

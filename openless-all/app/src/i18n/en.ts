@@ -732,7 +732,7 @@ export const en: typeof zhCN = {
     },
     actions: {
       refresh: 'Try again',
-      services: 'AI services & models',
+      services: 'AI & models',
       general: 'Recording & input',
       shortcuts: 'Shortcuts',
       privacy: 'Permissions & data',
@@ -742,7 +742,7 @@ export const en: typeof zhCN = {
       loadingTitle: 'Reading your configuration',
       loadingDesc: 'Your current services and next step will appear shortly.',
       unavailableTitle: 'Service status is unavailable',
-      unavailableDesc: 'Try reading it again, or open AI services to review your configuration.',
+      unavailableDesc: 'Try reading it again, or open AI & models to review your configuration.',
       servicesTitle: 'Set up your voice services',
       servicesDesc:
         'Start here: choose services for speech recognition and text processing. In Omni mode, only the active multimodal model needs configuration.',
@@ -1337,6 +1337,26 @@ export const en: typeof zhCN = {
       useSystemProxyDesc:
         'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
     },
+    generalPages: {
+      recordingTitle: 'Microphone and recording',
+      recordingDesc: 'Microphone, recording mode, capsule, insertion, and startup.',
+      textInputTitle: 'Text input',
+      textInputDesc: 'Configure selection actions and how selected text is rewritten.',
+      phoneTitle: 'Phone and remote input',
+      phoneDesc: 'Connect a phone or another device for remote input.',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: 'Voice enhancement and playback suppression',
+      cursorContextTitle: 'Cursor context and short-input behavior',
+      startupDiagnosticsTitle: 'Startup diagnostics',
+      cursorContextHint:
+        'Cursor context is enabled by default. Disable it if you do not want nearby text sent with polish requests.',
+    },
+    advancedGroups: {
+      recording: 'Recording',
+      text: 'Text and context',
+      diagnostics: 'Diagnostics',
+    },
     vocabularyLearning: {
       title: 'Learn from corrections',
       enabled: 'Enable learning from corrections',
@@ -1621,6 +1641,10 @@ export const en: typeof zhCN = {
       audioCueDesc:
         'Play a short synthesized chime when you press the hotkey to start recording. Plays even when the capsule is hidden.',
       audioCuePreview: 'Preview',
+      captureGroupTitle: 'Recording',
+      capsuleGroupTitle: 'On-screen capsule',
+      recognitionGroupTitle: 'Recognition',
+      feedbackGroupTitle: 'Monitoring and cues',
       insertGroupTitle: 'Insertion & clipboard',
       restoreClipboardLabel: 'Restore clipboard after insert',
       restoreClipboardDesc:
@@ -1790,8 +1814,7 @@ export const en: typeof zhCN = {
       minutesAgo: '{{count}}m ago',
       hoursAgo: '{{count}}h ago',
       daysAgo: '{{count}}d ago',
-      localEngineModelHint:
-        'Download and switch local models under AI services & models → Local models.',
+      localEngineModelHint: 'Download and switch local models under AI & models → Local models.',
     },
     providers: {
       localEngineNoCredentials: 'Local engines need no API key or endpoint.',
@@ -2533,6 +2556,7 @@ export const en: typeof zhCN = {
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
     backToTestingFeatures: 'Back to features under testing',
+    back: 'Back',
     advancedPages: {
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
       localModels: experimentalAsr.description,
@@ -2543,6 +2567,10 @@ export const en: typeof zhCN = {
       claudeConsole: 'Detect Claude Code and view output from test tasks.',
       multimodal: 'Manage the experimental multimodal recognition switch.',
       debug: 'Keep debug recordings, inspect cursor context, and export logs.',
+      voiceEnhancement: 'Advanced audio processing, noise reduction and playback echo suppression.',
+      cursorContext:
+        'Configure context captured around the cursor for polish requests and short-input handling.',
+      startupDiagnostics: 'Inspect startup timings, backend handshakes, and delayed probes.',
     },
     descriptions: {
       general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
@@ -2550,21 +2578,23 @@ export const en: typeof zhCN = {
       shortcuts: 'Search, browse and customize keyboard shortcuts.',
       services:
         'Choose speech recognition and text processing services. Manage channels, local models and connections.',
+      cloudServices: 'Manage the extension marketplace, GitHub sign-in, and encrypted cloud sync.',
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure testing features, vocabulary learning, and debugging tools.',
+      advanced: 'Configure testing features, diagnostics, and debugging tools.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {
       general: 'microphone recording input phone remote LAN PIN capsule mute startup autostart',
       inputMethod: 'input method IME keyboard overlay Android',
       shortcuts: 'shortcut hotkey key combination selection polish voice editing',
-      services:
-        'ASR LLM API channel model cloud local offline network proxy marketplace multimodal pipeline Omni',
+      services: 'ASR LLM API channel model local offline network proxy multimodal pipeline Omni',
+      cloudServices: 'cloud sync encrypted marketplace GitHub login official extension',
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
-      advanced: 'Less Computer Claude Agent debug logs experiment vocabulary learning',
+      advanced:
+        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics',
       about: 'version Beta stable update upgrade',
     },
 
@@ -2573,7 +2603,8 @@ export const en: typeof zhCN = {
       shortcuts: 'Shortcuts',
       general: 'Recording & input',
       inputMethod: 'Input method',
-      services: 'AI services & models',
+      services: 'AI & models',
+      cloudServices: 'Cloud services',
       privacy: 'Permissions & data',
       advanced: 'Experiments & extensions',
       personalize: 'Personalize',
