@@ -334,11 +334,13 @@ mod tests {
             .unwrap();
 
         let credential_store: Arc<dyn CredentialStore> = store.clone();
-        let mut preferences = UserPreferences::default();
-        preferences.multimodal_pipeline_enabled = true;
-        preferences.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
-        preferences.active_llm_provider = "stale-llm".into();
-        preferences.active_omni_provider = "stale-omni".into();
+        let mut preferences = UserPreferences {
+            multimodal_pipeline_enabled: true,
+            pipeline_mode: crate::shared_types::PipelineMode::Traditional,
+            active_llm_provider: "stale-llm".into(),
+            active_omni_provider: "stale-omni".into(),
+            ..Default::default()
+        };
 
         let traditional = resolve_selection_text_provider(&credential_store, &preferences)
             .await
