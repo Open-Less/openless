@@ -6,7 +6,7 @@ use futures_util::future::BoxFuture;
 
 use crate::config::Clock;
 use crate::correction::apply_correction_rules;
-use crate::credentials::{CredentialStore, ProviderSlot};
+use crate::credentials::CredentialStore;
 use crate::dictation_context::{
     DictationContext, DictationProviderInvocations, DictationStartOptions, ProviderInvocation,
 };
@@ -27,7 +27,7 @@ use crate::selection_voice_intent::{
     clean_selection_voice_translation_output, infer_selection_voice_translation_target,
     selection_voice_instruction_looks_like_translation, SelectionVoiceIntent,
 };
-use crate::shared_types::SelectionPolishOutputMode;
+use crate::shared_types::{PipelineMode, SelectionPolishOutputMode};
 use crate::style_pack_store::StylePackStore;
 use crate::style_packs::{style_pack_prompt, StylePromptKind};
 use crate::types::{
@@ -378,22 +378,26 @@ impl SelectionVoiceWorkflow {
         translation_target: Option<&str>,
         edit_plan_input: bool,
     ) -> Result<String, BackendError> {
-        let polisher = self.polisher.as_ref().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::Unsupported,
-                "selection voice model runtime is not configured",
-            )
-        })?;
-        // #1119 product B: first-stage instruction text may already come from Omni
-        // (audio→text in VoiceTranscriptionSession). Intent classification and
-        // EditPlan still use this traditional LLM polisher; SharedAuxiliaryTextPolisher
-        // is intentionally not required for correctness of capture alignment.
-        let llm = crate::provider_resolution::resolve_session_provider(
+        let text = crate::provider_resolution::resolve_selection_text_provider(
             &self.credential_store,
-            ProviderSlot::Llm,
-            &preferences.active_llm_provider,
+            preferences,
         )
         .await?;
+        let mode = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        );
+        // Only the active pipeline's text channel is required.
+        let (llm, omni) = match mode {
+            PipelineMode::Multimodal => (
+                ProviderInvocation::for_provider("selection-voice-unused-llm"),
+                text,
+            ),
+            PipelineMode::Traditional => (
+                text,
+                ProviderInvocation::for_provider("selection-voice-unused-omni"),
+            ),
+        };
         let translation_only = translation_target.is_some();
         let style_pack = crate::style_packs::builtin_style_pack_for_mode(if translation_only {
             PolishMode::Raw
@@ -406,7 +410,7 @@ impl SelectionVoiceWorkflow {
             DictationProviderInvocations::new(
                 ProviderInvocation::for_provider("selection-voice-unused-asr"),
                 llm,
-                ProviderInvocation::for_provider("selection-voice-unused-omni"),
+                omni,
             ),
             Vec::new(),
             Vec::new(),
@@ -430,14 +434,29 @@ impl SelectionVoiceWorkflow {
         context.polish.cursor_context = None;
         context.polish.context_window_minutes = 0;
         context.polish.prior_turns.clear();
-        let output = polisher
-            .polish(
-                session_id,
-                Arc::new(context),
-                input,
-                Arc::new(DiscardTextStream),
+        let output = if context.pipeline_mode == PipelineMode::Multimodal {
+            crate::cloud_providers::polish_with_omni_text(
+                self.credential_store.as_ref(),
+                &context,
+                &input,
             )
-            .await?;
+            .await?
+        } else {
+            let polisher = self.polisher.as_ref().ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "selection voice model runtime is not configured",
+                )
+            })?;
+            polisher
+                .polish(
+                    session_id,
+                    Arc::new(context),
+                    input,
+                    Arc::new(DiscardTextStream),
+                )
+                .await?
+        };
         let text = output.text.trim().to_string();
         if text.is_empty() {
             return Err(BackendError::new(
