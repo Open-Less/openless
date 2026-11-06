@@ -421,6 +421,9 @@ pub struct UserPreferences {
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     pub capsule_transcript_font_size: u8,
+    /// Recording capsule animation sensitivity multiplier (0.5..2.5, default 1.0).
+    #[serde(default = "default_capsule_sensitivity")]
+    pub capsule_sensitivity: f32,
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -1038,6 +1041,8 @@ struct UserPreferencesWire {
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     capsule_transcript_font_size: u8,
+    #[serde(default = "default_capsule_sensitivity")]
+    capsule_sensitivity: f32,
     #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
@@ -1333,6 +1338,7 @@ impl Default for UserPreferencesWire {
             capsule_display_mode_v2: prefs.capsule_display_mode_v2,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
+            capsule_sensitivity: prefs.capsule_sensitivity,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             echo_cancellation_enabled: prefs.echo_cancellation_enabled,
@@ -1557,6 +1563,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
+            capsule_sensitivity: if wire.capsule_sensitivity.is_finite() {
+                wire.capsule_sensitivity.clamp(0.5, 2.5)
+            } else {
+                1.0
+            },
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
             echo_cancellation_enabled: wire.echo_cancellation_enabled,
@@ -1959,6 +1970,7 @@ impl Default for UserPreferences {
             capsule_display_mode_v2: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
+            capsule_sensitivity: default_capsule_sensitivity(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
             echo_cancellation_enabled: false,
@@ -2863,12 +2875,20 @@ pub struct CapsulePayload {
     /// without an extra request from the capsule webview.
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
+    /// Capsule animation sensitivity multiplier (0.5..2.5, default 1.0).
+    #[serde(default = "default_capsule_sensitivity")]
+    pub capsule_sensitivity: f32,
     /// Lightweight feedback flag for selection polish. Shares the same
     /// non-focus-stealing capsule window as voice/QA sessions, but the
     /// frontend switches to a one-line status hint so existing voice glow
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    /// Seconds left before the hard recording cap, only present during the final
+    /// minute of a recording (see `recording_limit`). The frontend renders it as
+    /// a countdown badge so the user can wrap up before the session auto-stops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub countdown_seconds: Option<u32>,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -4015,6 +4035,10 @@ fn default_capsule_transcript_font_size() -> u8 {
     14
 }
 
+pub fn default_capsule_sensitivity() -> f32 {
+    1.0
+}
+
 #[cfg(test)]
 mod capsule_transcript_preferences_tests {
     use super::*;
@@ -4046,6 +4070,32 @@ mod capsule_transcript_preferences_tests {
                 .unwrap()
                 .capsule_transcript_font_size,
             12
+        );
+    }
+
+    #[test]
+    fn capsule_sensitivity_defaults_and_roundtrip() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("capsuleSensitivity");
+        let old: UserPreferences = serde_json::from_value(value).unwrap();
+        assert_eq!(old.capsule_sensitivity, 1.0);
+
+        let mut prefs = old;
+        prefs.capsule_sensitivity = 1.8;
+        let restored: UserPreferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.capsule_sensitivity, 1.8);
+
+        let mut value = serde_json::to_value(prefs).unwrap();
+        value["capsuleSensitivity"] = 99.0.into();
+        assert_eq!(
+            serde_json::from_value::<UserPreferences>(value)
+                .unwrap()
+                .capsule_sensitivity,
+            2.5
         );
     }
 }

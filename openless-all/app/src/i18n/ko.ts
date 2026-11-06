@@ -310,6 +310,7 @@ export const ko: typeof zhCN = {
     translateTo: '번역 언어',
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
+    recordingCountdown: '{{time}} 후에 중지됩니다',
     selectionPolish: {
       polishing: '다듬는 중...',
       replaced: '교체됨',
@@ -1545,6 +1546,8 @@ export const ko: typeof zhCN = {
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: '기본 스타일',
+      capsuleSensitivityLabel: '민감도',
+      capsuleSensitivityTooltip: '애니메이션 반응 민감도 (더블 클릭하여 1.0×으로 재설정)',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',

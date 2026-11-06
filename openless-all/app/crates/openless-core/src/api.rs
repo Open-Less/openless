@@ -1795,6 +1795,10 @@ struct MutableState {
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
     recording_fault_cleanup: Option<SessionId>,
     silence_monitor: Option<SilenceMonitor>,
+    /// Latched once the hard recording cap has asked the host to stop. Level
+    /// frames keep arriving until that stop lands, so the request must fire
+    /// exactly once per session.
+    recording_limit_requested: bool,
 }
 
 struct SilenceMonitor {
@@ -2371,6 +2375,15 @@ impl EngineProgressSink for BackendEngineProgress {
                             monitor.started_at + std::time::Duration::from_millis(elapsed_ms),
                         )
                     });
+                let recording_limit_stop =
+                    if crate::recording_limit::recording_limit_reached(elapsed_ms)
+                        && !state.recording_limit_requested
+                    {
+                        state.recording_limit_requested = true;
+                        true
+                    } else {
+                        false
+                    };
                 if !state.dictation.recording_ready
                     || state.dictation.elapsed_ms != elapsed_ms
                     || state.dictation.level != level
@@ -2386,6 +2399,26 @@ impl EngineProgressSink for BackendEngineProgress {
                     );
                 }
                 drop(state);
+                // Hard recording cap (Typeless parity): once the capture has run
+                // for the full allowance, request the ordinary stop path so the
+                // audio is transcribed instead of dropped. `LimitReached` from the
+                // recorder keeps its own PCM-buffer meaning; this one is purely
+                // wall-clock and therefore lives next to the level frames.
+                //
+                // Level frames arrive at the audio callback rate, so the request
+                // must be latched: the session keeps publishing until the host's
+                // stop actually lands.
+                if recording_limit_stop {
+                    self.events.publish(
+                        Some(session_id),
+                        BackendEventKind::RecordingControlRequested(
+                            crate::events::RecordingControlRequest {
+                                session_id,
+                                action: crate::events::RecordingControlAction::Stop,
+                            },
+                        ),
+                    );
+                }
                 if let Some(decision) = silence_decision {
                     let action = match decision {
                         crate::silence_auto_stop::SilenceDecision::Stop => {
@@ -3353,6 +3386,7 @@ impl OpenLessBackend {
                 transcripts: HashMap::new(),
                 recording_fault_cleanup: None,
                 silence_monitor: None,
+                recording_limit_requested: false,
             })),
             phase_changed: Arc::new(tokio::sync::Notify::new()),
             hotkey: Mutex::new(crate::hotkey_interpreter::HotkeyInterpreter::default()),
@@ -5086,6 +5120,7 @@ impl OpenLessBackend {
                 state.dictation_context = None;
                 state.dictation_start_output_target = None;
                 state.silence_monitor = None;
+                state.recording_limit_requested = false;
                 state.transcripts.clear();
                 self.phase_changed.notify_waiters();
                 (active_session, preserve_quick_note, true)
@@ -7668,6 +7703,10 @@ impl OpenLessBackend {
             state.dictation_start_output_target = Some(output_target);
             state.dictation_translation_requested = None;
             state.dictation_destination_changed = false;
+            // Every session starts with a fresh cap latch. Termination paths clear it
+            // too, but a new session must never inherit a spent allowance even if some
+            // future terminal path forgets.
+            state.recording_limit_requested = false;
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -8851,6 +8890,7 @@ impl OpenLessBackend {
         state.dictation_context = None;
         state.dictation_start_output_target = None;
         state.silence_monitor = None;
+        state.recording_limit_requested = false;
         state.transcripts.remove(&session_id);
         state.recording_fault_cleanup = None;
         hotkey.terminal(std::time::Instant::now());
@@ -9147,6 +9187,7 @@ impl OpenLessBackend {
             state.dictation_context = None;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
+            state.recording_limit_requested = false;
             state.transcripts.remove(&active);
             self.phase_changed.notify_waiters();
             (active, preserve_quick_note)
@@ -14686,6 +14727,87 @@ mod tests {
         );
 
         backend.cancel_dictation(Some(session_id)).await.unwrap();
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recording_level_frames_stop_exactly_once_at_the_nine_minute_cap() {
+        let (backend, _) = backend();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+        let progress = backend.engine_progress_sink();
+        let stop_requests = || {
+            backend
+                .replay_events_after(0)
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        &event.kind,
+                        BackendEventKind::RecordingControlRequested(request)
+                            if request.session_id == session_id
+                                && request.action
+                                    == crate::events::RecordingControlAction::Stop
+                    )
+                })
+                .count()
+        };
+        let publish = |elapsed_ms: u64| {
+            progress
+                .publish(
+                    session_id,
+                    EngineProgress::RecordingLevel {
+                        elapsed_ms,
+                        level: 0.1,
+                    },
+                )
+                .unwrap();
+        };
+
+        // One millisecond before the cap nothing happens; the countdown is only a
+        // presentation detail derived by the host from elapsed_ms.
+        publish(9 * 60 * 1_000 - 1);
+        assert_eq!(stop_requests(), 0);
+
+        // The cap itself asks for the ordinary stop path...
+        publish(9 * 60 * 1_000);
+        assert_eq!(stop_requests(), 1);
+
+        // ...exactly once. Level frames keep arriving at the audio callback rate
+        // until the host's stop lands; a second request would re-enter finalization.
+        publish(9 * 60 * 1_000 + 16);
+        publish(9 * 60 * 1_000 + 32);
+        assert_eq!(stop_requests(), 1);
+
+        // A new session gets a fresh allowance: the latch is per session, not global.
+        backend.cancel_dictation(Some(session_id)).await.unwrap();
+        let next_session = backend.start_dictation().await.unwrap();
+        let next_progress = backend.engine_progress_sink();
+        next_progress
+            .publish(
+                next_session,
+                EngineProgress::RecordingLevel {
+                    elapsed_ms: 9 * 60 * 1_000,
+                    level: 0.1,
+                },
+            )
+            .unwrap();
+        let next_stops = backend
+            .replay_events_after(0)
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    BackendEventKind::RecordingControlRequested(request)
+                        if request.session_id == next_session
+                            && request.action == crate::events::RecordingControlAction::Stop
+                )
+            })
+            .count();
+        assert_eq!(next_stops, 1);
+
+        backend.cancel_dictation(Some(next_session)).await.unwrap();
         backend.shutdown().await.unwrap();
     }
 
