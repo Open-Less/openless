@@ -170,6 +170,18 @@ assert(
   (await readCredential('ark.service_tier', first)) === null,
   'Changing preset clears the ARK-only low-latency option',
 );
+const openai = await createChannel('llm', 'openai', 'openai-fast');
+await setCredential('ark.service_tier', 'fast', openai);
+assert(
+  (await readCredential('ark.service_tier', openai)) === 'fast',
+  'OpenAI Fast mode must survive reload on that channel',
+);
+await setChannelProviderType('llm', openai, 'custom');
+assert(
+  (await readCredential('ark.service_tier', openai)) === null,
+  'Switching an OpenAI channel to custom clears Fast mode',
+);
+await deleteChannel('llm', openai);
 assert(
   (await readCredential('ark.api_key', first)) === 'fixture-key',
   'Changing preset preserves the key',

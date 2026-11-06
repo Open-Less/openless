@@ -856,6 +856,18 @@ impl OpenAICompatibleLLMProvider {
         body
     }
 
+    /// `fast` only when this request body actually carries the field.
+    fn requested_service_tier_label(body: &Value) -> &'static str {
+        if body
+            .get("service_tier")
+            .is_some_and(|value| !value.is_null())
+        {
+            "fast"
+        } else {
+            "off"
+        }
+    }
+
     /// Shared HTTP send + body parsing. chat_completion / chat_completion_with_polish_history
     /// both call here after building their body, avoiding a 30-line send/parse duplication.
     /// `budget` is the total budget for this call, chosen by the caller: polish scales
@@ -947,8 +959,14 @@ impl OpenAICompatibleLLMProvider {
         let extracted =
             crate::llm_protocol::extract_text_raw(self.config.protocol.format, &body_text)?;
         let cleaned = clean_polish_output(&extracted);
+        let response_tier = serde_json::from_str::<Value>(&body_text)
+            .ok()
+            .and_then(|value| {
+                crate::llm_protocol::observed_response_service_tier(&value).map(str::to_string)
+            })
+            .unwrap_or_else(|| "absent".to_string());
         log::info!(
-            "[llm] request_id={} response provider={} model={} protocol={:?} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            "[llm] request_id={} response provider={} model={} protocol={:?} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={} requested_service_tier={} response_service_tier={}",
             request_id,
             self.config.provider_id,
             self.config.model,
@@ -959,6 +977,8 @@ impl OpenAICompatibleLLMProvider {
             privacy_text_hash(&cleaned),
             find_adjacent_near_duplicates(&extracted).len(),
             find_adjacent_near_duplicates(&cleaned).len(),
+            Self::requested_service_tier_label(body),
+            response_tier,
         );
         Ok(cleaned)
     }
@@ -1129,8 +1149,13 @@ impl OpenAICompatibleLLMProvider {
             events.finish()?;
         }
         let cleaned = clean_polish_output(&full_text);
+        let response_tier = events
+            .response_service_tier
+            .as_deref()
+            .filter(|tier| !tier.is_empty())
+            .unwrap_or("absent");
         log::info!(
-            "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={} requested_service_tier={} response_service_tier={}",
             request_id,
             cancelled,
             delta_count,
@@ -1140,6 +1165,8 @@ impl OpenAICompatibleLLMProvider {
             privacy_text_hash(&cleaned),
             find_adjacent_near_duplicates(&full_text).len(),
             find_adjacent_near_duplicates(&cleaned).len(),
+            Self::requested_service_tier_label(&body),
+            response_tier,
         );
         if full_text.is_empty() {
             return Err(LLMError::InvalidResponse {
@@ -3557,6 +3584,234 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["service_tier"], "fast");
+    }
+
+    #[test]
+    fn openai_chat_body_includes_fast_service_tier_beside_reasoning_fields() {
+        for (tier, fast) in [
+            (crate::llm_protocol::LlmServiceTier::Fast, true),
+            (crate::llm_protocol::LlmServiceTier::Off, false),
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    "gpt-5.4",
+                )
+                .with_thinking_enabled(true)
+                .with_protocol(LlmProtocolConfig {
+                    service_tier: tier,
+                    ..Default::default()
+                }),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["model"], "gpt-5.4");
+            assert_eq!(body["messages"][0]["content"], "hi");
+            assert_eq!(body["reasoning_effort"], "medium");
+            if fast {
+                assert_eq!(body["service_tier"], "fast");
+            } else {
+                assert!(body.get("service_tier").is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn service_tier_diagnostics_follow_the_request_and_response() {
+        crate::testing::logging::start();
+        for (tier, response_has_tier, requested, returned) in [
+            (
+                crate::llm_protocol::LlmServiceTier::Fast,
+                true,
+                "requested_service_tier=fast",
+                "response_service_tier=fast",
+            ),
+            (
+                crate::llm_protocol::LlmServiceTier::Off,
+                false,
+                "requested_service_tier=off",
+                "response_service_tier=absent",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_http_request(&mut stream);
+                let body = if response_has_tier {
+                    r#"{"service_tier":"fast","choices":[{"message":{"content":"ok"}}]}"#
+                } else {
+                    r#"{"choices":[{"message":{"content":"ok"}}]}"#
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+            let session_id = crate::types::SessionId::new();
+            let mut provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    format!("http://{addr}"),
+                    "k",
+                    "gpt-5.4",
+                )
+                .with_protocol(LlmProtocolConfig {
+                    service_tier: tier,
+                    ..Default::default()
+                }),
+            );
+            provider.set_dictation_session(session_id);
+            let output = provider
+                .chat_completion("sys", "user", std::time::Duration::from_secs(30))
+                .await
+                .unwrap();
+            assert_eq!(output, "ok");
+            server.join().unwrap();
+            let line = response_log_line(session_id);
+            assert!(line.contains(requested), "{line}");
+            assert!(line.contains(returned), "{line}");
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_done_logs_service_tier_literal_or_absent() {
+        crate::testing::logging::start();
+        let cases = [
+            (
+                LlmRequestFormat::ChatCompletions,
+                crate::llm_protocol::LlmServiceTier::Fast,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"service_tier\":\"fast\"}\n\ndata: [DONE]\n\n",
+                "requested_service_tier=fast",
+                "response_service_tier=fast",
+            ),
+            (
+                LlmRequestFormat::Responses,
+                crate::llm_protocol::LlmServiceTier::Fast,
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\",\"service_tier\":\"fast\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"service_tier\":\"priority\"}}\n\n",
+                "requested_service_tier=fast",
+                "response_service_tier=priority",
+            ),
+            (
+                LlmRequestFormat::ChatCompletions,
+                crate::llm_protocol::LlmServiceTier::Off,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+                "requested_service_tier=off",
+                "response_service_tier=absent",
+            ),
+        ];
+        for (format, tier, sse, requested, returned) in cases {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let payload = sse.to_string();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_http_request(&mut stream);
+                write_chunked_sse_response(&mut stream, &[payload.as_bytes()]);
+            });
+            let session_id = crate::types::SessionId::new();
+            let mut provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    format!("http://{addr}"),
+                    "k",
+                    "gpt-5.4",
+                )
+                .with_protocol(LlmProtocolConfig {
+                    format,
+                    service_tier: tier,
+                    ..Default::default()
+                }),
+            );
+            provider.set_dictation_session(session_id);
+            let output = provider
+                .chat_completion_messages_streaming(
+                    test_messages(),
+                    StreamingTimeouts::for_input(1),
+                    |_| {},
+                    || false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(output, "ok");
+            server.join().unwrap();
+            let line = stream_done_log_line(session_id);
+            assert!(line.contains(requested), "{line}");
+            assert!(line.contains(returned), "{line}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_service_tier_stays_invalid_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let body = r#"{"error":{"message":"unsupported service_tier","param":"service_tier"}}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "openai",
+                "OpenAI",
+                format!("http://{addr}"),
+                "k",
+                "gpt-5.4",
+            )
+            .with_protocol(LlmProtocolConfig {
+                service_tier: crate::llm_protocol::LlmServiceTier::Fast,
+                ..Default::default()
+            }),
+        );
+        let error = provider
+            .chat_completion("sys", "user", std::time::Duration::from_secs(30))
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+        let message = error.to_string();
+        match error {
+            LLMError::InvalidResponse { status, body } => {
+                assert_eq!(status, 400);
+                assert!(body.contains("unsupported service_tier"));
+                assert!(message.starts_with("invalid response: status 400, body:"));
+                assert!(message.contains("service_tier"));
+            }
+            other => panic!("expected InvalidResponse, got {other:?}"),
+        }
+    }
+
+    fn response_log_line(session_id: crate::types::SessionId) -> String {
+        let logs = crate::testing::logging::matching(&format!("session_id={session_id} "));
+        let request_id = logs[0]
+            .split_whitespace()
+            .find(|field| field.starts_with("request_id="))
+            .unwrap();
+        crate::testing::logging::matching(request_id)
+            .into_iter()
+            .find(|line| line.contains(" response provider="))
+            .expect("response diagnostic")
+    }
+
+    fn stream_done_log_line(session_id: crate::types::SessionId) -> String {
+        let logs = crate::testing::logging::matching(&format!("session_id={session_id} "));
+        let request_id = logs[0]
+            .split_whitespace()
+            .find(|field| field.starts_with("request_id="))
+            .unwrap();
+        crate::testing::logging::matching(request_id)
+            .into_iter()
+            .find(|line| line.contains("[llm] stream done"))
+            .expect("stream diagnostic")
     }
 
     #[test]
