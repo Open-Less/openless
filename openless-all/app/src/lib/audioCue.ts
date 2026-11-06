@@ -69,6 +69,12 @@ let stopSeq = 0;
 const DEFERRED_CUE_LATE_THRESHOLD_MS = 400;
 const RESUME_TIMEOUT_MS = 250;
 let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let stopTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearStopTimer(): void {
+  clearTimeout(stopTimer);
+  stopTimer = undefined;
+}
 
 function clearRecoveryTimer(): void {
   clearTimeout(recoveryTimer);
@@ -217,13 +223,34 @@ function stopVoices(): void {
 /** Close/stop the cue: stop playing nodes and mark "a stop happened meanwhile" so pending resume callbacks can judge lateness. */
 export function stopAudioCue(): void {
   stopSeq++;
+  const ctx = sharedCtx;
+  const wasPlaying = activeVoices.length > 0;
   stopVoices();
+  // Allow the short release ramp to finish. A pending resume keeps its existing bounded
+  // recovery window so quick recordings still receive their start feedback.
+  if (ctx && wasPlaying) {
+    clearRecoveryTimer();
+    clearStopTimer();
+    const myPlay = playSeq;
+    stopTimer = setTimeout(() => {
+      if (myPlay === playSeq && sharedCtx === ctx) discardContext(ctx);
+    }, 30);
+  }
+}
+
+/** Disable/unmount: cancel even pending resumes, without creating an audio context. */
+export function disposeAudioCue(): void {
+  playSeq++;
+  stopSeq++;
+  clearRecoveryTimer();
+  clearStopTimer();
+  if (sharedCtx) discardContext(sharedCtx);
 }
 
 // Actually schedule the synthesis nodes. Must be called while the AudioContext is running
 // (not suspended): when suspended, currentTime is frozen at the pause moment, so nodes would
 // be scheduled at stale timestamps -> silent and piling up.
-function scheduleCueVoices(ctx: AudioContext): void {
+function scheduleCueVoices(ctx: AudioContext, onComplete: () => void): void {
   // On rapid hotkey presses, stop the previous round first to keep overlap from building up.
   // Use stopVoices, not stopAudioCue: this must not invalidate its own generation.
   stopVoices();
@@ -255,6 +282,7 @@ function scheduleCueVoices(ctx: AudioContext): void {
         } catch {
           // noop
         }
+        if (activeVoices.length === 0) onComplete();
       };
     } catch {
       // One tone failing to create/schedule must not affect the rest.
@@ -262,32 +290,10 @@ function scheduleCueVoices(ctx: AudioContext): void {
   }
 }
 
-/**
- * Prime the AudioContext: create and resume early so the ctx is already running when recording
- * actually starts and playRecordStartCue can schedule synchronously, bypassing the
- * suspended->resume async race — the root cause of lost cues on quick recordings.
- * Note: under a strict autoplay policy a resume without a user gesture may be rejected
- * (silently degraded), in which case priming does nothing and the playSeq/stopSeq + late
- * threshold fallback in playRecordStartCue applies. Tauri WebViews are usually lenient about
- * the first resume, so priming typically lets the common path take the synchronous branch.
- * Call once when the capsule window mounts.
- */
-export function primeAudioCue(): void {
-  // getContext already rebuilds a closed ctx; here we only need to wake suspended/interrupted.
-  const ctx = getContext();
-  if (!ctx) return;
-  if (audioContextActionForState(ctx.state) === 'resume') {
-    try {
-      void ctx.resume().catch(() => undefined);
-    } catch {
-      discardContext(ctx);
-    }
-  }
-}
-
 /** Play the "recording started" cue. Silently degrades when Web Audio is unavailable or the context is suspended and cannot be resumed. */
 export function playRecordStartCue(): void {
   clearRecoveryTimer();
+  clearStopTimer();
   const myPlay = ++playSeq;
   const stopAtRequest = stopSeq;
   const requestedAt = nowMs();
@@ -318,12 +324,21 @@ function playRecordStartCueOnce(
   };
   const schedule = () => {
     const startedAt = ctx.currentTime;
-    scheduleCueVoices(ctx);
+    scheduleCueVoices(ctx, () => {
+      if (myPlay !== playSeq || sharedCtx !== ctx) return;
+      clearRecoveryTimer();
+      discardContext(ctx);
+    });
     // Some audio interruptions still report running while the audio clock is frozen;
     // proactively retire the ctx before the next keypress.
     recoveryTimer = setTimeout(
       () => {
+        if (myPlay !== playSeq || sharedCtx !== ctx) return;
         if (ctx.currentTime <= startedAt) recover();
+        // A connected, silent AudioContext still holds the system output device (and on
+        // macOS prevents idle sleep). Close after the cue tail and clock-health check,
+        // including when onended is delayed or synthesis failed. Next play is lazy.
+        else discardContext(ctx);
       },
       cueTotalDurationMs(recordStartCueTones()) + 50,
     );
@@ -351,6 +366,9 @@ function playRecordStartCueOnce(
     } else if (!runningAfterResume) {
       // Even if this round is already late, clear the bad context so the next recording can recover.
       recover();
+    } else {
+      // A resumed but already-late cue must not leave a silent output stream alive.
+      discardContext(ctx);
     }
   };
 
