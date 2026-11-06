@@ -836,15 +836,15 @@ impl EncryptedSyncService {
             {
                 Ok(session) => session,
                 Err(error) => {
-                    if let protocol::Error::Api { status, code, .. } = &error {
+                    if let super::protocol::Error::Api { status, code, .. } = &error {
                         log::warn!(
                             "[e2ee-token] GitHub exchange rejected by sync service status={status} code={code:?}"
                         );
-                        if matches!(status, 401 | 403) {
+                        if matches!(*status, 401 | 403) {
                             // The GitHub token was just verified above. A rejection from the
                             // sync exchange therefore means this account is not allowed by
                             // the service, not that the user needs another GitHub login.
-                            return Err(error("service_access_denied"));
+                            return Err(super::error("service_access_denied"));
                         }
                     } else {
                         log::warn!("[e2ee-token] GitHub exchange failed: {error:?}");
