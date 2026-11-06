@@ -71,6 +71,7 @@ jobs:
         if: inputs.scope != 'none'
         # Same list as the packaging job: the fcitx5 plugin build and the
         # `pwsh` contract scripts both live here now.
+        timeout-minutes: 10
         uses: ./.github/actions/setup-linux-dependencies
 
       - uses: swatinem/rust-cache@v2
@@ -155,6 +156,7 @@ jobs:
 
       - name: Install native build and packaging dependencies
         if: inputs.scope != 'none'
+        timeout-minutes: 10
         uses: ./.github/actions/setup-linux-dependencies
 
       - uses: dtolnay/rust-toolchain@stable

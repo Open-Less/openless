@@ -4,7 +4,6 @@ runs:
   using: composite
   steps:
     - name: Install Ubuntu build dependencies
-      timeout-minutes: 10
       shell: bash
       run: |
         set -euo pipefail
