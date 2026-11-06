@@ -424,7 +424,8 @@ body {
   overscroll-behavior: contain;
 }
 /* 概览是 overflow:hidden 的单屏固定页，永远不会有滚动条 —— 不占槽位。 */
-.ol-thinscroll[data-ol-page-fixed] {
+.ol-thinscroll[data-ol-page-fixed],
+.ol-thinscroll.ol-page-fixed {
   scrollbar-gutter: auto;
 }
 .ol-thinscroll::-webkit-scrollbar {

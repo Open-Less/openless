@@ -30,6 +30,7 @@ for (const [name, glyph] of Object.entries(icons)) {
     Settings: 'settings',
     Mic: 'mic',
     Sparkle: 'sparkle',
+    Flask: 'flask',
     Hash: 'hash',
     Clock: 'clock',
     Bolt: 'bolt',
@@ -69,7 +70,7 @@ for (const [section, icon] of Object.entries({
   Services: 'Sparkle',
   Appearance: 'Settings',
   Privacy: 'Shield',
-  Advanced: 'Sparkle',
+  Advanced: 'Flask',
   About: 'Info',
 })) {
   assert.ok(

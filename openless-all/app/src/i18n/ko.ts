@@ -719,7 +719,7 @@ export const ko: typeof zhCN = {
     actions: {
       refresh: '다시 불러오기',
       services: 'AI와 모델',
-      general: '녹음 및 입력',
+      general: '일반',
       shortcuts: '단축키',
       privacy: '권한 및 데이터',
     },
@@ -1259,9 +1259,11 @@ export const ko: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: '마이크와 녹음',
-      recordingDesc: '마이크, 녹음 방식, 캡슐, 삽입, 시작을 설정합니다.',
-      textInputTitle: '텍스트 입력',
-      textInputDesc: '선택 영역 동작과 텍스트 다시 쓰기를 설정합니다.',
+      recordingDesc: '마이크 모니터링과 인식, 그리고 모니터링과 알림입니다.',
+      capsuleTitle: '캡슐 스타일',
+      capsuleDesc: '캡슐 스위치, 여러 화면 표시, 스타일, 원문 스트리밍 표시.',
+      textInputTitle: '텍스트 삽입',
+      textInputDesc: '선택 도우미, 삽입과 클립보드, 시작.',
       phoneTitle: '휴대폰과 원격 입력',
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
@@ -1493,7 +1495,7 @@ export const ko: typeof zhCN = {
       },
     },
     recording: {
-      title: '녹음 및 입력',
+      title: '일반',
       desc: '전역 녹음의 단축키와 트리거 방식을 정의합니다.',
       hotkeyLabel: '녹음 단축키',
       hotkeyDescAcc: '누르면 음성 캡처 시작(전역). 접근성 권한이 필요합니다.',
@@ -1618,9 +1620,9 @@ export const ko: typeof zhCN = {
       audioCueDesc:
         '단축키로 녹음을 시작할 때 합성된 짧은 알림음을 재생합니다. 캡슐이 숨겨져 있어도 재생됩니다.',
       audioCuePreview: '미리듣기',
-      captureGroupTitle: '녹음',
-      capsuleGroupTitle: '화면 캡슐',
-      recognitionGroupTitle: '인식',
+      captureGroupTitle: '마이크 모니터링 및 인식',
+      capsuleGroupTitle: '캡슐 스타일',
+      recognitionGroupTitle: '모니터링과 알림음',
       feedbackGroupTitle: '모니터링과 알림음',
       insertGroupTitle: '삽입 및 클립보드',
       restoreClipboardLabel: '입력 후 클립보드 복원',
@@ -2524,7 +2526,7 @@ export const ko: typeof zhCN = {
       startupDiagnostics: '시작 시간, 백엔드 연결, 지연 검사를 확인합니다.',
     },
     descriptions: {
-      general: '마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.',
+      general: '마이크 모니터링, 캡슐 스타일, 텍스트 삽입, 원격 입력.',
       inputMethod: 'Android 오버레이와 입력 방법을 설정합니다.',
       shortcuts: '기능별 단축키와 텍스트 선택 후 동작을 설정합니다.',
       services: '음성 인식과 텍스트 처리 서비스, 채널, 로컬 모델 및 연결을 관리합니다.',
@@ -2551,7 +2553,7 @@ export const ko: typeof zhCN = {
     sections: {
       appearance: '모양 및 언어',
       shortcuts: '단축키 및 선택',
-      general: '녹음 및 입력',
+      general: '일반',
       inputMethod: '입력 방법',
       services: 'AI와 모델',
       cloudServices: '클라우드 서비스',

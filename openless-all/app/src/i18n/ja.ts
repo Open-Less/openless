@@ -726,7 +726,7 @@ export const ja: typeof zhCN = {
     actions: {
       refresh: '再読み込み',
       services: 'AI とモデル',
-      general: '録音と入力',
+      general: '一般',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
     },
@@ -1266,9 +1266,11 @@ export const ja: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'マイクと録音',
-      recordingDesc: 'マイク、録音方法、カプセル、挿入、起動を設定します。',
-      textInputTitle: '文字入力',
-      textInputDesc: '選択範囲の操作と文字の書き換えを設定します。',
+      recordingDesc: 'マイクの監視と認識、および監視と通知です。',
+      capsuleTitle: 'カプセルのスタイル',
+      capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
+      textInputTitle: '文字の挿入',
+      textInputDesc: '選択アシスタント、挿入とクリップボード、起動。',
       phoneTitle: 'スマホとリモート入力',
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
@@ -1505,7 +1507,7 @@ export const ja: typeof zhCN = {
       },
     },
     recording: {
-      title: '録音と入力',
+      title: '一般',
       desc: 'グローバル録音のショートカットとトリガー方式を定義します。',
       hotkeyLabel: '録音ショートカット',
       hotkeyDescAcc: '押すと音声キャプチャを開始（グローバル）。アクセシビリティ権限が必要です。',
@@ -1631,9 +1633,9 @@ export const ja: typeof zhCN = {
       audioCueDesc:
         'ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。',
       audioCuePreview: '試聴',
-      captureGroupTitle: '録音',
-      capsuleGroupTitle: '画面上のカプセル',
-      recognitionGroupTitle: '認識',
+      captureGroupTitle: 'マイク監視と認識',
+      capsuleGroupTitle: 'カプセルのスタイル',
+      recognitionGroupTitle: '監視と通知音',
       feedbackGroupTitle: '監視と通知音',
       insertGroupTitle: '挿入とクリップボード',
       restoreClipboardLabel: '入力後にクリップボードを復元',
@@ -2544,7 +2546,7 @@ export const ja: typeof zhCN = {
       startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {
-      general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
+      general: 'マイク監視、カプセルのスタイル、文字の挿入、リモート入力。',
       inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
@@ -2571,7 +2573,7 @@ export const ja: typeof zhCN = {
     sections: {
       appearance: '外観と言語',
       shortcuts: 'ショートカットと選択',
-      general: '録音と入力',
+      general: '一般',
       inputMethod: '入力方法',
       services: 'AI とモデル',
       cloudServices: 'クラウドサービス',

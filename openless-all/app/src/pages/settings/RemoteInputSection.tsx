@@ -1,15 +1,15 @@
 // Remote input: on the LAN, a phone/tablet browser opens a recording page and streams voice
 // back to the PC in real time, reusing the existing "record -> ASR -> polish -> insert at
-// cursor" pipeline. Lives in the "General" tab as a collapsible group (like "Launch", collapsed
-// by default): start/stop switch, listening port, access URLs (one-click copy, with pairing
+// cursor" pipeline. This is already a second-level page, so the controls stay expanded:
+// start/stop switch, listening port, access URLs (one-click copy, with pairing
 // code), pairing code (resettable), default recording mode, and certificate/security notes.
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Segmented } from '../../components/ui/Segmented';
-import { Collapsible } from '../_atoms';
-import { SettingRow, Toggle, inputStyle } from './shared';
+import { Card } from '../_atoms';
+import { SectionTitle, SettingRow, Toggle, inputStyle } from './shared';
 import {
   getRemoteInputStatus,
   regenerateRemotePin,
@@ -149,7 +149,8 @@ export function RemoteInputSection() {
   };
 
   return (
-    <Collapsible title={t('settings.remoteInput.title')}>
+    <Card>
+      <SectionTitle>{t('settings.remoteInput.title')}</SectionTitle>
       <SettingRow
         label={t('settings.remoteInput.enableLabel')}
         desc={t('settings.remoteInput.enableDesc')}
@@ -361,6 +362,6 @@ export function RemoteInputSection() {
         <br />
         {t('settings.remoteInput.certTrustWarning')}
       </div>
-    </Collapsible>
+    </Card>
   );
 }

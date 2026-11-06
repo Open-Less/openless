@@ -158,6 +158,8 @@ jobs:
           shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           cache-on-failure: true
+          # Branch dispatches restore this shared tree and must not replace it.
+          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
 
       - name: Cache macOS release dependencies
         if: startsWith(matrix.platform, 'macos')
@@ -169,6 +171,8 @@ jobs:
           prefix-key: v0-rust-${{ matrix.rust-target }}
           shared-key: tauri-macos
           workspaces: 'openless-all/app/src-tauri -> target'
+          # Branch dispatches restore this shared tree and must not replace it.
+          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
 
       - name: Prepare Windows Sherpa static libraries
         if: matrix.platform == 'windows-latest'
