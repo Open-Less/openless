@@ -1051,7 +1051,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => app.exit(0),
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -1863,6 +1863,24 @@ fn restart_app(app: AppHandle) {
 fn restart_on_main_thread(app: AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || handle.restart());
+}
+
+/// How long a tray-initiated quit may take before the process is forced down.
+/// Once the tray callback runs, the watchdog bounds a stalled exit (#1337).
+/// The callback itself still needs a responsive event loop to arm the watchdog.
+const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Arm the fallback before requesting graceful exit on explicit user intent.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    std::thread::spawn(|| {
+        std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
+        // Keep the deadline path independent of application locks: synchronous
+        // logging can block on I/O, and AppHandle::exit can enter synchronous
+        // cleanup if sending the exit request fails. A healthy exit never
+        // reaches here.
+        std::process::exit(0);
+    });
+    app.exit(0);
 }
 
 #[tauri::command]
