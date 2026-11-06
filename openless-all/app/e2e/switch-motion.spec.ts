@@ -332,9 +332,11 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
   };
   // Startup is no longer a collapsible on the microphone page. The recognition
   // card still groups its switches, and that group is what ripples.
+  // The inner locator is queried from each group. A dialog-scoped switch looks
+  // for a nested dialog and matches nothing, even when the switch is visible.
   const recognition = dialog
     .locator('[data-ol-toggle-group]')
-    .filter({ has: dialog.getByRole('switch', { name: '录音时静音', exact: true }) });
+    .filter({ has: page.getByRole('switch', { name: '录音时静音', exact: true }) });
   await expect(recognition).toBeVisible();
   expect(await neighbourMoves(recognition)).toBeGreaterThan(0);
   await openSection(dialog, 'AI 与模型');

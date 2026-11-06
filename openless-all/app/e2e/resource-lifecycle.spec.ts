@@ -26,14 +26,27 @@ test('offscreen WebGL preview releases its animation clock and resumes only when
   await page.getByRole('group', { name: '胶囊样式' }).getByRole('button', { name: /Siri/ }).click();
   const draws = () => page.evaluate(() => (window as Window & { draws: number }).draws);
   await expect.poll(draws).toBeGreaterThan(5);
-  await page.locator('.ol-settings-scroll').evaluate((element) => {
+  // The capsule-style page is shorter than the settings pane, so scrolling to
+  // the bottom never moves the WebGL host out of the scrollport.
+  const scroll = page.locator('.ol-settings-scroll[data-transition-phase="settled"]');
+  const hidden = await scroll.evaluate((element) => {
+    const spacer = document.createElement('div');
+    spacer.setAttribute('data-testid', 'webgl-offscreen-spacer');
+    spacer.style.height = `${element.clientHeight + 48}px`;
+    element.appendChild(spacer);
     element.scrollTop = element.scrollHeight;
+    const host = element.querySelector('.ol-siri-capsule-preview');
+    if (!(host instanceof HTMLElement)) return false;
+    const pane = element.getBoundingClientRect();
+    const box = host.getBoundingClientRect();
+    return box.bottom <= pane.top + 1;
   });
+  expect(hidden).toBe(true);
   await page.waitForTimeout(300);
   const offscreen = await draws();
   await page.waitForTimeout(300);
   expect(await draws()).toBe(offscreen);
-  await page.locator('.ol-settings-scroll').evaluate((element) => {
+  await scroll.evaluate((element) => {
     element.scrollTop = 0;
   });
   await expect.poll(draws).toBeGreaterThan(offscreen + 5);
