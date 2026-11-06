@@ -150,6 +150,7 @@ function FloatingShellBody({
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
+  const [settingsPainted, setSettingsPainted] = useState(false);
   const providerPromptMount = useExitMount(providerPromptOpen);
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -306,7 +307,8 @@ function FloatingShellBody({
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
         ref={shellRef}
-        data-ol-settings-open={settingsMount.mounted ? 'true' : undefined}
+        data-ol-settings-open={settingsOpen ? 'true' : undefined}
+        data-ol-settings-occluded={settingsOpen && settingsPainted ? 'true' : undefined}
         className="ol-app-shell-bg ol-shell-depth"
         style={{
           flex: 1,
@@ -652,6 +654,7 @@ function FloatingShellBody({
             key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
             os={os}
             closing={settingsMount.closing}
+            onPaintedChange={setSettingsPainted}
             initialSettingsSection={settingsInitialSection}
             initialServiceView={settingsInitialServiceView}
             onClose={() => setSettingsOpen(false)}

@@ -37,10 +37,6 @@ for (const [locale, translation] of Object.entries({
   await i18n.init({ lng: locale, fallbackLng: false, resources: { [locale]: { translation } } });
   for (const key of [
     'modal.backToAdvanced',
-    'modal.backToTestingFeatures',
-    ...['title', 'enable', 'description', 'unavailable'].map(
-      (key) => `settings.testingFeatures.${key}`,
-    ),
     ...ADVANCED_PAGES.flatMap((page) => [page.titleKey, `modal.advancedPages.${page.id}`]),
   ]) {
     if (!i18n.exists(key)) throw new Error(`${locale}: missing advanced navigation label ${key}`);

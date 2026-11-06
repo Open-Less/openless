@@ -422,7 +422,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-settings-category-list {
   border: 0;
   border-radius: var(--ol-card-radius);
-  background: var(--ol-surface);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
 .ol-settings-category-entry {
@@ -478,18 +478,10 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-advanced-settings-list {
   border: 0;
   border-radius: var(--ol-card-radius);
-  background: var(--ol-surface);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
-.ol-advanced-settings-group-title {
-  padding: 13px 18px 7px;
-  color: var(--ol-ink-4);
-  font-size: 11px;
-  font-weight: var(--ol-font-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: var(--ol-surface-2);
-}
+
 .ol-advanced-settings-entry {
   display: flex;
   align-items: center;
@@ -2295,7 +2287,7 @@ body {
   }
 }
 
-/* The opaque settings workspace covers this surface throughout its exit as well. */
-.ol-shell-depth[data-ol-settings-open='true'] {
+/* Entry and exit paint the background; only the settled opaque workspace suspends it. */
+.ol-shell-depth[data-ol-settings-occluded='true'] {
   content-visibility: hidden;
 }

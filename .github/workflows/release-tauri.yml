@@ -125,6 +125,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOOLING_SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
@@ -135,7 +136,9 @@ jobs:
           ci_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$source_sha&status=success&per_page=100" --jq "[.workflow_runs[] | select(.name == \"CI\" and .head_sha == \"$source_sha\" and .conclusion == \"success\")][0].id")
           [[ "$ci_id" =~ ^[0-9]+$ ]] || { echo "::error::No green CI for the exact tagged commit"; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/release-ci-jobs.json"
-          node openless-all/app/scripts/verify-release-ci.mjs "$RUNNER_TEMP/release-ci-jobs.json"
+          # The repaired tag may predate this verifier; use the immutable workflow source.
+          gh api "repos/$GITHUB_REPOSITORY/contents/openless-all/app/scripts/verify-release-ci.mjs?ref=$TOOLING_SOURCE_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/verify-release-ci.mjs"
+          node "$RUNNER_TEMP/verify-release-ci.mjs" "$RUNNER_TEMP/release-ci-jobs.json"
           echo "Repair source verified: $source_sha ($version)"
 
       - uses: dtolnay/rust-toolchain@stable

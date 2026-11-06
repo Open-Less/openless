@@ -96,7 +96,7 @@ export function AboutSection() {
               {t('modal.about.tagline')} · {APP_VERSION_LABEL}
             </div>
           </div>
-          {/* Top right of the icon: stable-channel check-updates button. Beta channel lives on the Advanced page. */}
+          {/* Top right of the icon: stable-channel check-updates button. The Beta section has its own channel check. */}
           {platformCaps?.supportsAutoUpdate === true && (
             <CheckUpdateButton channel="stable" compact={compactLayout} />
           )}

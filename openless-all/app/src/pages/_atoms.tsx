@@ -118,7 +118,7 @@ export function Card({ children, style, padding = 18, glassy = false, className 
       className={['ol-card', className].filter(Boolean).join(' ')}
       data-ol-toggle-group=""
       style={{
-        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface)',
+        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface-raised)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         WebkitBackdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         border: 0,

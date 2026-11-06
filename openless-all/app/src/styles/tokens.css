@@ -20,6 +20,7 @@
   --ol-canvas: #ffffff;
   --ol-surface: #ffffff;
   --ol-surface-2: #f4f4f5;
+  --ol-surface-raised: var(--ol-surface-2);
   --ol-surface-solid: #ffffff;
   --ol-line: #e4e4e7;
   --ol-line-strong: #d4d4d8;
@@ -487,4 +488,10 @@ body {
 .ol-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--ol-blue-ring);
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+  :root {
+    --ol-surface-raised: color-mix(in srgb, var(--ol-surface) 97%, var(--ol-ink) 3%);
+  }
 }

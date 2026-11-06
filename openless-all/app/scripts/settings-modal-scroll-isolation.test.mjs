@@ -28,11 +28,7 @@ const lockAttributeIndex = lockAttributeMatch.index;
 const backgroundScrollerIndex = floatingShellTsx.indexOf('ol-thinscroll', lockAttributeIndex);
 const settingsModalIndex = floatingShellTsx.indexOf('<SettingsModal', lockAttributeIndex);
 
-assertMatch(
-  lockAttributeExpression,
-  /settingsMount\.mounted/,
-  '背景滚动锁标记应由设置弹窗状态控制',
-);
+assertMatch(lockAttributeExpression, /\bsettingsOpen\b/, '背景滚动锁标记应由设置弹窗状态控制');
 assertMatch(lockAttributeExpression, /\bundefined\b/, '设置弹窗关闭时应移除背景滚动锁标记');
 if (!(
   lockAttributeIndex < backgroundScrollerIndex && backgroundScrollerIndex < settingsModalIndex

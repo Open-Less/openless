@@ -622,49 +622,10 @@ pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
 
 // ─────────────────────── coding agent hotkey supervisor ───────────────────────
 
-pub(super) fn coding_agent_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    // The global-hotkey monitor is a Tauri desktop adapter; Linux egui uses its
-    // fcitx5 listener and the same Core edge interpreter.
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = update_coding_agent_hotkey_binding_now(&inner);
-    }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let registration =
-            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::CodingHotkey);
-        if inner.backend.ensure_runtime_ready().is_err() {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        if let Err(error) = update_coding_agent_hotkey_binding_now(&inner) {
-            log::warn!("[less-computer] hotkey registration failed: {error}");
-        }
-        drop(registration);
-        std::thread::sleep(std::time::Duration::from_secs(5));
-    }
-}
-
-/// Whether "Less Computer voice hotkey disabled" has already been logged.
-///
-/// The supervisor polls every 5s, so users without a voice hotkey hit the same
-/// disabled branch every round; unconditional logging produces a steady 720
-/// identical lines per hour that drowns out useful session logs and triggers
-/// log rotation early. Log once when the state flips to disabled; cleared when
-/// the hotkey is installed again so the next disable logs once more.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-static LESS_COMPUTER_HOTKEY_DISABLED_LOGGED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
 pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) -> Result<(), String> {
     // Legacy saved bindings must never install a retired feature's listener.
-        take_coding_agent_hotkeys_on_main_thread(inner);
-                Ok(())
+    take_coding_agent_hotkeys_on_main_thread(inner);
+    Ok(())
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -2621,51 +2582,22 @@ mod less_computer_panel_tests {
     }
 
     #[tokio::test]
-    async fn panel_dictation_bypasses_hotkeys_and_a_toggle_press_only_commits_text() {
-        use openless_core::{
-            LessComputerEventKind, LessComputerVoiceMode, LessComputerVoiceOutcome,
-        };
+    async fn retired_agent_shortcut_is_inert_for_old_enabled_preferences() {
         let (coordinator, recorder, data_dir) =
             fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
         let mut events = coordinator.backend().subscribe();
-        coordinator
-            .start_less_computer_voice_from_panel(LessComputerVoiceMode::Dictate)
-            .await
-            .unwrap();
+        let prefs = coordinator.backend().get_preferences();
+        assert!(prefs.testing_features_enabled && prefs.coding_agent_enabled);
         let inner = &coordinator.inner;
-        assert_eq!(
-            inner.less_computer_press_generation.load(Ordering::SeqCst),
-            0
-        );
-        assert!(matches!(
-            inner.less_computer_voice.lock().as_ref(),
-            Some(LessComputerHostCapture::Recording(session))
-                if session.mode() == LessComputerVoiceMode::Dictate
-        ));
-        assert!(coordinator
-            .start_less_computer_voice_from_panel(LessComputerVoiceMode::Submit)
-            .await
-            .is_err());
-
-        // A toggle press ends the panel capture with the panel's own delivery mode.
-        assert!(
-            handle_less_computer_pressed(inner, 7, std::time::Instant::now())
-                .await
-                .is_none()
-        );
-        wait_for_released_capture(&coordinator, &recorder, 1).await;
-        let kinds = voice_states(&mut events);
-        assert!(!kinds
-            .iter()
-            .any(|kind| matches!(kind, LessComputerEventKind::User { .. })));
-        assert!(kinds.iter().any(|kind| matches!(
-            kind,
-            LessComputerEventKind::VoiceState {
-                outcome: Some(LessComputerVoiceOutcome::Committed),
-                transcript,
-                ..
-            } if transcript == "voice"
-        )));
+        let target = hotkey_runtime_target(inner);
+        assert!(!target.coding_agent_enabled);
+        assert!(target.coding_agent_voice.is_none());
+        assert!(handle_less_computer_pressed(inner, 7, std::time::Instant::now()).await.is_none());
+        assert_eq!(inner.less_computer_press_generation.load(Ordering::SeqCst), 0);
+        assert!(inner.less_computer_voice.lock().is_none());
+        assert!(coordinator.backend().less_computer_active_session().is_none());
+        assert_eq!(recorder.stop_count(), 0);
+        assert!(voice_states(&mut events).is_empty());
         drop(coordinator);
         std::fs::remove_dir_all(data_dir).unwrap();
     }

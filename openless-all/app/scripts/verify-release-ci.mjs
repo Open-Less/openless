@@ -1,20 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const REQUIRED_RELEASE_GATES = [
-  'Changed areas',
-  'macOS checks',
-  'Windows checks',
-  'Windows frontend and contracts',
-  'Android cargo check',
-  'Harmony (ArkTS contracts, Rust host, HAP)',
-  'macOS Rust 1.99 MSRV',
-  'UI motion (Chromium + WebKit)',
-  'Native capsule (macos-latest)',
-  'Native capsule (windows-latest)',
-  'Linux Core, egui and deb/rpm checks / test-linux-egui',
-  'Linux Core, egui and deb/rpm checks / build-linux-egui',
-];
+// These platform gates distinguish a full source run from a macOS-only dispatch.
+// Every other job defined by that immutable source must also have succeeded.
+export const REQUIRED_RELEASE_GATES = ['macOS checks', 'Windows checks', 'Android cargo check'];
 
 export function verifyReleaseCi(report) {
   if (!Array.isArray(report.jobs) || report.total_count !== report.jobs.length)

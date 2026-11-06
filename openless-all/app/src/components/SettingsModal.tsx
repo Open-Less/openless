@@ -54,6 +54,7 @@ interface SettingsModalProps {
   initialServiceView?: ServiceViewId;
   /** Keeps the closing surface mounted until its exit finishes. */
   closing?: boolean;
+  onPaintedChange?: (ready: boolean) => void;
 }
 
 const LINKS = [
@@ -67,6 +68,7 @@ export function SettingsModal({
   initialSettingsSection,
   initialServiceView,
   closing = false,
+  onPaintedChange,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   // The provider form's writes settle before close/section switch (async saves don't
@@ -104,6 +106,20 @@ export function SettingsModal({
   // Animate the opaque workspace as one surface so its backdrop follows the
   // same interrupted entry and exit lifecycle as the settings content.
   useOverlayMotion(overlayRef, closing, 'backdrop', true, 'settings');
+  useLayoutEffect(() => {
+    onPaintedChange?.(false);
+    if (closing) return;
+    let cancelled = false;
+    const animations = overlayRef.current?.getAnimations?.() ?? [];
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+      if (!cancelled) onPaintedChange?.(true);
+    });
+    return () => {
+      cancelled = true;
+      onPaintedChange?.(false);
+    };
+  }, [closing, onPaintedChange]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const destination = `${requestedSection}:${requestedAdvancedPage ?? ''}`;
   const [sectionKey, advancedKey] = destination.split(':');

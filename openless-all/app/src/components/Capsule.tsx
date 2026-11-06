@@ -1,3 +1,4 @@
+import { collectCapsuleInputRegions } from '../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
@@ -769,24 +770,15 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (stopped) return;
       const interactive =
         !!insertFallback || suggestions.length > 0 || (state !== 'idle' && !leaving);
-      const rects = interactive
-        ? Array.from(
-            document.querySelectorAll<HTMLElement>(
-              'button:not(:disabled), input, select, textarea, [role="button"], [role="menuitem"]',
-            ),
-          )
-            .filter((node) => node.getClientRects().length > 0)
-            .map((node) => {
-              const r = node.getBoundingClientRect();
-              return { left: r.left, top: r.top, width: r.width, height: r.height };
-            })
-            .filter((r) => r.width > 0 && r.height > 0)
-        : [];
+      const rects = interactive ? collectCapsuleInputRegions(document) : [];
       const serialized = JSON.stringify(rects);
       if (serialized !== last) {
         last = serialized;
         const { invoke } = await import('@tauri-apps/api/core');
-        if (!stopped) await invoke('set_capsule_interactive_regions', { rects }).catch(() => {});
+        if (!stopped)
+          await invoke('set_capsule_interactive_regions', { rects }).catch((error) =>
+            console.warn('[capsule] input region sync failed', error),
+          );
       }
     };
     const schedule = () => {
@@ -800,7 +792,21 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['style', 'class', 'hidden', 'disabled'],
+      attributeFilter: [
+        'style',
+        'class',
+        'hidden',
+        'disabled',
+        'aria-hidden',
+        'aria-disabled',
+        'aria-expanded',
+        'inert',
+        'data-state',
+        'data-open',
+        'data-closed',
+        'data-starting-style',
+        'data-ending-style',
+      ],
     });
     window.addEventListener('resize', schedule);
     schedule();

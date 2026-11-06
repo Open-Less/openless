@@ -781,11 +781,11 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 
     let prefs = coord.backend().get_preferences();
     let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
+    let check_timeout =
+        std::time::Duration::from_millis(timeout_ms.unwrap_or(8000).clamp(1000, 15000));
     let builder = webview
         .updater_builder()
-        .timeout(std::time::Duration::from_millis(
-            timeout_ms.unwrap_or(8000).clamp(1000, 15000),
-        ))
+        .timeout(check_timeout)
         .endpoints(vec![url::Url::parse(
             &crate::update_source::endpoint_template(channel),
         )
@@ -793,8 +793,12 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         .map_err(|e| e.to_string())?;
     let updater = builder.build().map_err(|e| format!("build updater: {e}"))?;
     let (mirror, github) = tokio::join!(updater.check(), async {
-        let manifest = crate::update_source::github_manifest(channel).await?;
-        updater.restore_update(manifest).map_err(|e| e.to_string())
+        tokio::time::timeout(check_timeout, async {
+            let manifest = crate::update_source::github_manifest(channel).await?;
+            updater.restore_update(manifest).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|_| "GitHub update check timed out".to_string())?
     });
     let update = match (mirror, github) {
         (Ok(Some(mirror)), Ok(Some(github))) => {

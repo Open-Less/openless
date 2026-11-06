@@ -175,19 +175,7 @@ pub(crate) async fn github_manifest(channel: UpdateChannel) -> Result<serde_json
         .await
         .map_err(|e| e.to_string())?;
     let release = if matches!(channel, UpdateChannel::Beta) {
-        value
-            .as_array()
-            .and_then(|list| {
-                list.iter()
-                    .filter(|v| v["draft"] == false && v["prerelease"] == true)
-                    .filter(|v| {
-                        v["tag_name"]
-                            .as_str()
-                            .is_some_and(|tag| tag.ends_with("-tauri"))
-                    })
-                    .max_by_key(|v| v["published_at"].as_str().unwrap_or(""))
-            })
-            .ok_or("no published GitHub beta release")?
+        latest_github_beta(&value).ok_or("no published GitHub beta release")?
     } else {
         &value
     };
@@ -295,5 +283,43 @@ mod signed_version_tests {
         );
         assert!(github_signed_version(&signature, "2.0.2-Beta.3").is_err());
         assert!(github_signed_version("bad base64", "2.0.2").is_err());
+    }
+}
+
+#[cfg(not(mobile))]
+fn latest_github_beta(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .as_array()?
+        .iter()
+        .filter_map(|release| {
+            if release["draft"] != false || release["prerelease"] != true {
+                return None;
+            }
+            let tag = release["tag_name"]
+                .as_str()?
+                .strip_prefix('v')?
+                .strip_suffix("-tauri")?;
+            Some((semver::Version::parse(tag).ok()?, release))
+        })
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, release)| release)
+}
+
+#[cfg(all(test, not(mobile)))]
+mod release_freshness_tests {
+    use super::*;
+    #[test]
+    fn beta_freshness_uses_versions_and_never_drafts_or_stable_releases() {
+        let releases = serde_json::json!([
+            {"tag_name":"v2.0.2-Beta.9-tauri","draft":false,"prerelease":true,"published_at":"2026-11-07T00:00:00Z"},
+            {"tag_name":"v2.0.2-Beta.10-tauri","draft":false,"prerelease":true,"published_at":"2026-11-06T00:00:00Z"},
+            {"tag_name":"v2.2.0-tauri","draft":false,"prerelease":false},
+            {"tag_name":"v2.3.0-Beta.1-tauri","draft":true,"prerelease":true},
+            {"tag_name":"v9.0.0-ios","draft":false,"prerelease":true}
+        ]);
+        assert_eq!(
+            latest_github_beta(&releases).unwrap()["tag_name"],
+            "v2.0.2-Beta.10-tauri"
+        );
     }
 }
