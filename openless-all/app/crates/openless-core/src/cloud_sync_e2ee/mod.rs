@@ -43,6 +43,43 @@ pub(crate) fn error(reason: &'static str) -> BackendError {
     error
 }
 
+// Authentication expires only on an explicit missing/rejected credential, not
+// on an offline/rate-limited GitHub identity lookup (#1384).
+pub(crate) fn marketplace_error(value: BackendError) -> BackendError {
+    let reason = match value
+        .details
+        .as_ref()
+        .and_then(|v| v.get("reason"))
+        .and_then(|v| v.as_str())
+    {
+        Some("sign_in_required") => "sign_in_required",
+        Some("account_changed") => "account_changed",
+        Some("transport_failed") => "transport_failed",
+        Some("rate_limited") => "rate_limited",
+        Some("service_failed") => "service_failed",
+        Some("invalid_response") => "invalid_response",
+        _ => match value.code {
+            BackendErrorCode::PermissionDenied => "secure_storage_denied",
+            BackendErrorCode::Cancelled => "cancelled",
+            BackendErrorCode::Busy => "busy",
+            _ => "transport_failed",
+        },
+    };
+    let mut mapped = error(reason).retryable(value.retryable);
+    if let Some(seconds) = value
+        .details
+        .as_ref()
+        .and_then(|v| v.get("retryAfterSeconds"))
+        .and_then(|v| v.as_u64())
+    {
+        mapped.details = Some(serde_json::json!({
+            "reason": reason,
+            "retryAfterSeconds": seconds.min(3600)
+        }));
+    }
+    mapped
+}
+
 pub(crate) fn protocol_error(value: protocol::Error) -> BackendError {
     use protocol::Error as E;
     let reason = match &value {

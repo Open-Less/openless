@@ -316,7 +316,7 @@ impl EncryptedSyncService {
                         .marketplace
                         .read_access_token()
                         .await
-                        .map_err(|_| error("sign_in_required"))?
+                        .map_err(super::marketplace_error)?
                         == *token
             }
             ConnectionCredential::CustomToken(token) => custom.as_ref() == Some(token),
@@ -828,7 +828,7 @@ impl EncryptedSyncService {
                 .marketplace
                 .sync_identity()
                 .await
-                .map_err(|_| error("sign_in_required"))?;
+                .map_err(super::marketplace_error)?;
             self.check_cancelled()?;
             let session = transport
                 .exchange(token.expose_secret(), &account.github_id)
@@ -844,7 +844,7 @@ impl EncryptedSyncService {
                 .marketplace
                 .read_access_token()
                 .await
-                .map_err(|_| error("sign_in_required"))?
+                .map_err(super::marketplace_error)?
                 != token
             {
                 return Err(error("account_changed"));
@@ -2274,7 +2274,7 @@ impl EncryptedSyncService {
             .marketplace
             .start_device_flow()
             .await
-            .map_err(|_| error("sign_in_required"))?;
+            .map_err(super::marketplace_error)?;
         if flow.verification_uri != "https://github.com/login/device" {
             return Err(error("invalid_response"));
         }
@@ -2324,7 +2324,7 @@ impl EncryptedSyncService {
             .marketplace
             .poll_device_flow(session)
             .await
-            .map_err(|_| error("sign_in_required"))?
+            .map_err(super::marketplace_error)?
         {
             OAuthPollResult::Authorized { .. } => {
                 let (_, account) = self
@@ -2332,7 +2332,7 @@ impl EncryptedSyncService {
                     .marketplace
                     .sync_identity()
                     .await
-                    .map_err(|_| error("sign_in_required"))?;
+                    .map_err(super::marketplace_error)?;
                 Ok(EncryptedSyncSignInResult::SignedIn {
                     account: SyncAccount {
                         github_id: account.github_id.as_str().into(),

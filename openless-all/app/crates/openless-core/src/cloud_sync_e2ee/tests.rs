@@ -343,6 +343,8 @@ struct Remote {
     drop_metadata_response: bool,
     github_auth_requests: usize,
     token_auth_requests: usize,
+    identity_failure: Option<u16>,
+    identity_rate_limited: bool,
 }
 struct Server {
     origin: String,
@@ -402,6 +404,29 @@ impl Server {
                     bytes.extend_from_slice(&buffer[..size]);
                 }
                 let body = &bytes[header_end..header_end + length];
+                if path == "/github/user" {
+                    let (failure, rate_limited) = {
+                        let mut remote = shared.lock().unwrap();
+                        (remote.identity_failure.take(), remote.identity_rate_limited)
+                    };
+                    if let Some(status) = failure {
+                        if status == 0 {
+                            // Simulate a connection lost while reading the identity body.
+                            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{").await.unwrap();
+                        } else {
+                            let payload = b"not-a-github-user";
+                            let extra = if rate_limited {
+                                "X-RateLimit-Remaining: 0\r\n"
+                            } else {
+                                ""
+                            };
+                            let head = format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nRetry-After: 0\r\n{extra}Connection: close\r\n\r\n", payload.len());
+                            socket.write_all(head.as_bytes()).await.unwrap();
+                            socket.write_all(payload).await.unwrap();
+                        }
+                        continue;
+                    }
+                }
                 if method == "DELETE" && path == "/v1/auth/session" {
                     socket.write_all(b"HTTP/1.1 204 No Content\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
                     continue;
@@ -519,6 +544,70 @@ impl Server {
             allow_upload,
             task,
         }
+    }
+}
+
+#[tokio::test]
+async fn issue1384_identity_outage_can_retry_without_another_github_login() {
+    for (status, limited, expected) in [
+        (503, false, "service_failed"),
+        (403, false, "service_failed"),
+        (429, false, "rate_limited"),
+        (403, true, "rate_limited"),
+        (200, false, "invalid_response"),
+        (0, false, "transport_failed"),
+    ] {
+        let server = Server::start().await;
+        let fixture = Fixture::new(&server).await;
+        {
+            let mut remote = server.state.lock().unwrap();
+            remote.identity_failure = Some(status);
+            remote.identity_rate_limited = limited;
+        }
+        let failure = fixture
+            .service
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap_err();
+        assert_eq!(failure.message, expected, "HTTP {status}");
+        assert_ne!(fixture.service.status().auth_state, AuthState::Expired);
+        assert_ne!(fixture.service.status().sync_state, SyncState::SignInRequired);
+        assert_eq!(
+            fixture.marketplace.read_access_token().await.unwrap().expose_secret(),
+            "fixture-github-token"
+        );
+        // Recovering the endpoint is enough; no OAuth/device flow or credential rewrite.
+        fixture.prepare().await;
+        assert_eq!(fixture.service.status().auth_state, AuthState::SignedIn);
+    }
+}
+
+#[tokio::test]
+async fn issue1384_rejected_or_missing_credentials_still_require_login() {
+    for missing in [false, true] {
+        let server = Server::start().await;
+        let fixture = Fixture::new(&server).await;
+        if missing {
+            fixture
+                .vault
+                .ordinary
+                .remove(
+                    CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token")
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        } else {
+            server.state.lock().unwrap().identity_failure = Some(401);
+        }
+        let failure = fixture
+            .service
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap_err();
+        assert_eq!(failure.message, "sign_in_required");
+        assert_eq!(fixture.service.status().auth_state, AuthState::Expired);
+        assert_eq!(fixture.service.status().sync_state, SyncState::SignInRequired);
     }
 }
 

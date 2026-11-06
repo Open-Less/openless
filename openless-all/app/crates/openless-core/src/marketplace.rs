@@ -444,10 +444,25 @@ impl MarketplaceService {
     }
 
     fn authentication_required() -> BackendError {
-        BackendError::new(
+        let mut error = BackendError::new(
             BackendErrorCode::PermissionDenied,
             "marketplace_auth_required: GitHub sign-in expired or is missing; sign in again",
+        );
+        error.details = Some(serde_json::json!({"reason": "sign_in_required"}));
+        error
+    }
+
+    fn sync_identity_failure(reason: &'static str) -> BackendError {
+        let mut error = BackendError::new(
+            BackendErrorCode::Provider,
+            "GitHub identity could not be verified; retry without signing out",
         )
+        .retryable(matches!(
+            reason,
+            "transport_failed" | "service_failed" | "rate_limited"
+        ));
+        error.details = Some(serde_json::json!({"reason": reason}));
+        error
     }
 
     pub(crate) async fn read_access_token(&self) -> Result<SecretValue, BackendError> {
@@ -476,16 +491,39 @@ impl MarketplaceService {
             .bearer_auth(token.expose_secret())
             .send()
             .await
-            .map_err(|_| Self::authentication_required())?;
-        if !response.status().is_success() {
+            .map_err(|_| Self::sync_identity_failure("transport_failed"))?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(Self::authentication_required());
+        }
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || (response.status() == reqwest::StatusCode::FORBIDDEN
+                && response
+                    .headers()
+                    .get("x-ratelimit-remaining")
+                    .is_some_and(|v| v == "0"))
+        {
+            let mut error = Self::sync_identity_failure("rate_limited");
+            if let Some(seconds) = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                error.details = Some(serde_json::json!({
+                    "reason": "rate_limited", "retryAfterSeconds": seconds.min(3600)
+                }));
+            }
+            return Err(error);
+        }
+        if !response.status().is_success() {
+            return Err(Self::sync_identity_failure("service_failed"));
         }
         let mut bytes = Vec::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|_| Self::authentication_required())?;
+            let chunk = chunk.map_err(|_| Self::sync_identity_failure("transport_failed"))?;
             if bytes.len().saturating_add(chunk.len()) > 16 * 1024 {
-                return Err(Self::authentication_required());
+                return Err(Self::sync_identity_failure("invalid_response"));
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -494,16 +532,18 @@ impl MarketplaceService {
             id: u64,
             login: String,
         }
-        let user: User =
-            serde_json::from_slice(&bytes).map_err(|_| Self::authentication_required())?;
-        if user.login.is_empty()
-            || user.login.len() > 128
-            || self.read_access_token().await? != token
-        {
-            return Err(Self::authentication_required());
+        let user: User = serde_json::from_slice(&bytes)
+            .map_err(|_| Self::sync_identity_failure("invalid_response"))?;
+        if user.login.is_empty() || user.login.len() > 128 {
+            return Err(Self::sync_identity_failure("invalid_response"));
         }
-        let github_id =
-            GithubId::parse(&user.id.to_string()).map_err(|_| Self::authentication_required())?;
+        if self.read_access_token().await? != token {
+            let mut error = BackendError::new(BackendErrorCode::Cancelled, "GitHub account changed");
+            error.details = Some(serde_json::json!({"reason": "account_changed"}));
+            return Err(error);
+        }
+        let github_id = GithubId::parse(&user.id.to_string())
+            .map_err(|_| Self::sync_identity_failure("invalid_response"))?;
         Ok((
             token,
             Account {
