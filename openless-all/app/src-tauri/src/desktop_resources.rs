@@ -121,16 +121,42 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             state.position = window.outer_position().ok();
         }
     }
-    if let Err(error) = window.destroy() {
-        if let Some(lifecycle) = app.try_state::<MainWindowLifecycle>() {
-            // The window survived: drop any reopen queued against the failed
-            // destroy, or it would resurface on the next successful one.
-            let mut state = lifecycle.lock();
-            state.closing = false;
-            state.reopen_pending = false;
-        }
-        log::warn!("[main] destroy failed: {error}");
-    }
+    // Let the WebView unload its document before destroying the native window. WebKit can
+    // otherwise keep the page's JS/DOM allocator in the shared content process used by the
+    // resident capsule, which makes a closed main window look like a memory leak.
+    let _ = window.hide();
+    let _ = window.eval("window.stop(); location.replace('about:blank');");
+    let app_for_destroy = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let app_for_main = app_for_destroy.clone();
+        let _ = app_for_destroy.run_on_main_thread(move || {
+            let Some(window) = app_for_main.get_webview_window("main") else {
+                return;
+            };
+            if let Err(error) = window.destroy() {
+                let reopen = if let Some(lifecycle) = app_for_main.try_state::<MainWindowLifecycle>() {
+                    let mut state = lifecycle.lock();
+                    let reopen = state.reopen_pending;
+                    state.closing = false;
+                    state.reopen_pending = false;
+                    reopen
+                } else {
+                    false
+                };
+                // The unload step intentionally replaced the document before destroy. If the
+                // native destroy fails, restore the main document before the next open instead
+                // of leaving a hidden, reusable about:blank WebView behind.
+                let _ = window.eval("location.replace('index.html')");
+                if reopen {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+                log::warn!("[main] destroy after WebView unload failed: {error}");
+            }
+        });
+    });
 }
 
 /// How long a hidden WebView remains alive before a real destroy, so accidental

@@ -311,6 +311,7 @@ export const fr: typeof zhCN = {
     show: 'Afficher',
     hide: 'Masquer',
     saved: 'Enregistré',
+    refreshed: 'Actualisé',
     saving: 'Enregistrement…',
     experimental: 'Expérimental',
     copied: 'Copié',
@@ -567,7 +568,7 @@ export const fr: typeof zhCN = {
     },
     sortLiked: 'Aimés',
     likedEmpty: 'Vous n’avez pas encore aimé de pack de styles',
-    likedEmptyHint: 'Ouvrez un pack et cliquez sur l’étoile ; les packs aimés apparaîtront ici',
+    likedEmptyHint: 'Ouvrez un pack et touchez le cœur ; les packs aimés apparaîtront ici',
     derivativeBadge: 'Dérivé de @{{login}}',
     detail: {
       withdrawBtn: 'Retirer',
@@ -754,8 +755,8 @@ export const fr: typeof zhCN = {
     },
     actions: {
       refresh: 'Réessayer',
-      services: 'Services et modèles d’IA',
-      general: 'Enregistrement et saisie',
+      services: 'IA et modèles',
+      general: 'Général',
       shortcuts: 'Raccourcis',
       privacy: 'Autorisations et données',
     },
@@ -764,7 +765,7 @@ export const fr: typeof zhCN = {
       loadingTitle: 'Lecture de votre configuration',
       loadingDesc: 'Vos services actuels et la prochaine étape apparaîtront dans un instant.',
       unavailableTitle: 'L’état des services est indisponible',
-      unavailableDesc: 'Réessayez ou ouvrez les services d’IA pour vérifier votre configuration.',
+      unavailableDesc: 'Réessayez ou ouvrez IA et modèles pour vérifier votre configuration.',
       servicesTitle: 'Configurez vos services vocaux',
       servicesDesc:
         'Commencez par choisir les services de reconnaissance vocale et de traitement du texte. En mode Omni, seul le modèle multimodal actif doit être configuré.',
@@ -1215,9 +1216,9 @@ export const fr: typeof zhCN = {
     target: {
       title: 'Langue de traduction',
       desc: 'Appuyez sur Maj pendant l’enregistrement pour traduire. Si la traduction est désactivée, Maj n’a aucun effet.',
-      disabled: 'Désactivée (Maj sans effet)',
+      disabled: 'Désactivée ({{shortcut}} sans effet)',
       sameAsWorking:
-        'La langue cible correspond à votre seule langue habituelle : la traduction sera sans effet et Maj améliorera simplement le texte. Choisissez une autre cible ou ajoutez une langue habituelle ci-dessus.',
+        'La langue cible correspond à votre seule langue habituelle : la traduction sera sans effet et {{shortcut}} améliorera simplement le texte. Choisissez une autre cible ou ajoutez une langue habituelle ci-dessus.',
     },
     style: {
       title: 'Style de traduction',
@@ -1241,7 +1242,7 @@ export const fr: typeof zhCN = {
       step5: 'Le texte traduit est inséré à l’emplacement du curseur.',
       indicatorTitle: 'Comment vérifier que la traduction est active',
       indicatorDesc:
-        'Un indicateur bleu « Traduction » apparaît en bas de l’écran après avoir appuyé sur Maj.',
+        'Un indicateur bleu « Traduction » apparaît en bas de l’écran après avoir appuyé sur {{shortcut}}.',
       fallbackTitle: 'Solution de repli',
       fallbackDesc: 'Si la traduction échoue, la transcription brute est insérée à la place.',
     },
@@ -1310,6 +1311,30 @@ export const fr: typeof zhCN = {
     cancelledTitle: 'Enregistrement annulé',
   },
   settings: {
+    generalPages: {
+      recordingTitle: 'Microphone et enregistrement',
+      recordingDesc: 'Surveillance et reconnaissance du micro, puis surveillance et signaux.',
+      capsuleTitle: 'Style de la capsule',
+      capsuleDesc:
+        'Activation de la capsule, multi-écran, style et affichage du texte original en flux.',
+      textInputTitle: 'Insertion de texte',
+      textInputDesc: 'Assistant de sélection, insertion et presse-papiers, et démarrage.',
+      phoneTitle: 'Téléphone et saisie à distance',
+      phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
+      cursorContextTitle: 'Contexte du curseur et phrases courtes',
+      startupDiagnosticsTitle: 'Diagnostic de démarrage',
+      cursorContextHint:
+        'Le contexte du curseur est activé par défaut. Désactivez-le ici si le texte voisin ne doit pas partir avec les demandes de reformulation.',
+    },
+    advancedGroups: {
+      recording: 'Enregistrement',
+      text: 'Texte et contexte',
+      diagnostics: 'Diagnostic',
+    },
+
     testingFeatures: {
       title: 'Fonctionnalités en cours de test',
       enable: 'Activer les fonctionnalités en cours de test',
@@ -1537,7 +1562,7 @@ export const fr: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Enregistrement et saisie',
+      title: 'Général',
       desc: 'Raccourci global d’enregistrement et mode de déclenchement.',
       hotkeyLabel: 'Raccourci d’enregistrement',
       hotkeyDescAcc:
@@ -1664,6 +1689,10 @@ export const fr: typeof zhCN = {
       audioCueDesc:
         'Joue un bref son synthétisé lorsque vous appuyez sur le raccourci pour enregistrer, même si la capsule est masquée.',
       audioCuePreview: 'Écouter',
+      captureGroupTitle: 'Surveillance et reconnaissance du micro',
+      capsuleGroupTitle: 'Style de la capsule',
+      recognitionGroupTitle: 'Surveillance et signaux',
+      feedbackGroupTitle: 'Surveillance et signaux',
       insertGroupTitle: 'Insertion et presse-papiers',
       restoreClipboardLabel: 'Restaurer le presse-papiers après insertion',
       restoreClipboardDesc:
@@ -1735,9 +1764,11 @@ export const fr: typeof zhCN = {
       polishContextWindowDesc:
         'Utilise les transcriptions améliorées des N dernières minutes comme contexte de plusieurs interventions. 0 = désactivé.',
       debugArchiveProcessedLabel: 'Conserver l’audio traité',
-      debugArchiveProcessedDesc: 'La version après réduction de bruit et gain, toujours dans le fichier d’enregistrement existant.',
+      debugArchiveProcessedDesc:
+        'La version après réduction de bruit et gain, toujours dans le fichier d’enregistrement existant.',
       debugArchiveRawLabel: 'Conserver aussi l’audio avant traitement',
-      debugArchiveRawDesc: 'Écrit aussi <session>.raw.wav à côté. Si seule cette option est active, l’audio brut va dans l’archive principale.',
+      debugArchiveRawDesc:
+        'Écrit aussi <session>.raw.wav à côté. Si seule cette option est active, l’audio brut va dans l’archive principale.',
       recordAudioForDebugLabel: 'Conserver l’enregistrement brut (débogage)',
       recordAudioForDebugDesc:
         'Enregistre l’audio brut du microphone en WAV pour diagnostiquer les problèmes de reconnaissance.',
@@ -1841,7 +1872,7 @@ export const fr: typeof zhCN = {
       hoursAgo: 'il y a {{count}}h',
       daysAgo: 'il y a {{count}}j',
       localEngineModelHint:
-        'Téléchargez et changez les modèles locaux dans Services et modèles d’IA → Modèles locaux.',
+        'Téléchargez et changez les modèles locaux dans IA et modèles → Modèles locaux.',
     },
     providers: {
       localEngineNoCredentials: 'Les moteurs locaux n’ont besoin ni de clé API ni d’adresse.',
@@ -2610,6 +2641,7 @@ export const fr: typeof zhCN = {
     noResults: 'Aucune catégorie correspondante. Essayez « microphone », « modèles » ou « thème ».',
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
     backToAdvanced: 'Retour à Expériences et extensions',
+    back: 'Retour',
     backToTestingFeatures: 'Retour aux fonctionnalités en cours de test',
     advancedPages: {
       customSyncServer:
@@ -2624,20 +2656,27 @@ export const fr: typeof zhCN = {
       multimodal: 'Gérez l’activation de la reconnaissance multimodale expérimentale.',
       debug:
         'Conservez des enregistrements de débogage, inspectez le contexte du curseur et exportez des journaux.',
+      voiceEnhancement:
+        'Configurer le traitement audio avancé, la réduction du bruit et la suppression de l’écho de lecture.',
+      cursorContext:
+        'Configurer le contexte autour du curseur pour les reformulations et le traitement des saisies courtes.',
+      startupDiagnostics:
+        'Consulter les durées de démarrage, les échanges avec le backend et les sondes différées.',
     },
     descriptions: {
       general:
-        'Choisissez un microphone, réglez l’enregistrement et la saisie de texte, ou connectez votre téléphone.',
+        'Surveillance du micro, style de la capsule, insertion de texte et saisie à distance.',
       inputMethod: 'Configurez la fenêtre flottante et la méthode de saisie Android.',
       shortcuts: 'Configurez les raccourcis et choisissez l’action appliquée au texte sélectionné.',
       services:
         'Choisissez les services de reconnaissance vocale et de traitement du texte. Gérez les canaux, modèles locaux et connexions.',
+      cloudServices:
+        'Gérer le marché d’extensions, la connexion GitHub et la synchronisation cloud chiffrée.',
       appearance:
         'Réglez le thème, la disposition et la langue de l’interface pour une lecture confortable.',
       privacy:
         'Vérifiez les autorisations et les connexions. Gérez l’historique, les enregistrements et les données locales.',
-      advanced:
-        'Configurer les fonctions de test, l’apprentissage du vocabulaire et les outils de débogage.',
+      advanced: 'Configurer les fonctions en test, le diagnostic et les outils de débogage.',
       about: 'Consultez votre version, le canal et les réglages de mise à jour automatique.',
     },
     searchKeywords: {
@@ -2647,6 +2686,7 @@ export const fr: typeof zhCN = {
       shortcuts: 'raccourci touche combinaison sélection amélioration voix modification',
       services:
         'ASR LLM API canal modèle cloud local hors ligne réseau proxy catalogue multimodal pipeline Omni',
+      cloudServices: 'cloud synchronisation chiffrée marché GitHub connexion service officiel',
       appearance: 'thème sombre clair langue police texte taille disposition carte activité',
       privacy:
         'autorisation microphone accessibilité historique enregistrement stockage confidentialité exporter',
@@ -2657,9 +2697,10 @@ export const fr: typeof zhCN = {
     sections: {
       appearance: 'Apparence et langue',
       shortcuts: 'Raccourcis et sélection',
-      general: 'Enregistrement et saisie',
+      general: 'Général',
       inputMethod: 'Méthode de saisie',
-      services: 'Services et modèles d’IA',
+      services: 'IA et modèles',
+      cloudServices: 'Services cloud',
       privacy: 'Autorisations et données',
       advanced: 'Expériences et extensions',
       personalize: 'Personnalisation',

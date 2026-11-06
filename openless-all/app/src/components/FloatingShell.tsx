@@ -16,8 +16,8 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Tooltip } from './Tooltip';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
-import { AudioCueListener } from './AudioCue';
 import { SettingsModal, type SettingsSectionId } from './SettingsModal';
+import type { ServiceViewId } from '../pages/settings/navigation';
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
 const History = lazy(() => import('../pages/History').then((m) => ({ default: m.History })));
@@ -146,6 +146,7 @@ function FloatingShellBody({
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSectionId | undefined
   >();
+  const [settingsInitialServiceView, setSettingsInitialServiceView] = useState<ServiceViewId>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
@@ -238,8 +239,9 @@ function FloatingShellBody({
     setHotkeyModePromptOpen(false);
   };
 
-  const openSettings = (section?: SettingsSectionId) => {
+  const openSettings = (section?: SettingsSectionId, serviceView?: ServiceViewId) => {
     setSettingsInitialSection(section);
+    setSettingsInitialServiceView(serviceView);
     setSettingsOpen(true);
     setMoreOpen(false);
     setStyleOpen(false);
@@ -532,28 +534,32 @@ function FloatingShellBody({
               scrollRef={pageRef}
               contentKey={displayTab}
               page={displayTab}
-              // issue #243: all tabs allow overflow:auto so bottom content stays
-              //   reachable when the window shrinks or copy grows (Codex P1: overview
-              //   used hidden, leaving the Recent card fully invisible after shrinking).
-              //   - Overview uses its internal flex to grow the bottom row to fill;
-              //     at normal size the content fits exactly → no scrollbar; a thin
-              //     scrollbar appears only when it truly overflows.
-              //   - Other tabs use the thin scrollbar too.
-              className="ol-thinscroll ol-scroll-fade"
-              // Overview is a fixed single-screen page (overflow hidden, never scrolls):
-              // no scrollbar gutter reserved.
+              // Other tabs scroll the page. Desktop overview is one dashboard: the
+              // page surface does not scroll, and only the recent-recognition list does.
+              // Mobile overview stays a growing column because the same blocks stack.
+              className={
+                displayTab === 'overview' && !mobile
+                  ? 'ol-thinscroll ol-page-fixed'
+                  : displayTab === 'overview'
+                    ? 'ol-thinscroll'
+                    : 'ol-thinscroll ol-scroll-fade'
+              }
               style={{
                 flex: 1,
                 minHeight: 0,
-                // Overview is a fixed single-screen page: no scrolling; all dashboards
-                // fit one screen with heights distributed by Overview.tsx's internal
-                // flex; other pages keep the thin scrollbar.
-                overflow: 'auto',
+                overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
+                boxSizing: 'border-box',
+                // macOS: 26px title vs 15px wordmark, so the title starts 6px above the
+                // traffic-light clearance and lines up with "OpenLess". Other desktops
+                // keep a positive inset and never subtract the native caption height,
+                // so a Windows overlay title bar cannot cover the title.
                 padding: mobile
                   ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px) + 56px)'
-                  : displayTab === 'overview'
-                    ? `${os === 'mac' ? 80 : 56}px 28px 24px`
-                    : `${os === 'mac' ? 80 : 56}px 28px 32px`,
+                  : `${
+                      os === 'mac'
+                        ? `${MAC_TRAFFIC_LIGHT_CLEARANCE - 6}px`
+                        : 'max(8px, calc(var(--ol-window-titlebar-height, 0px) / var(--ol-interface-scale, 1)))'
+                    } 18px ${displayTab === 'overview' ? 12 : 32}px`,
                 // position:relative lets the page's "saved" toast anchor at absolute
                 // top:16 right:16 to this console card's corner instead of stretching
                 // across the page header as a full-width banner.
@@ -643,10 +649,11 @@ function FloatingShellBody({
           fallback={<div className="ol-settings-placeholder" aria-hidden="true" />}
         >
           <SettingsModal
-            key={settingsInitialSection ?? 'default'}
+            key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
             os={os}
             closing={settingsMount.closing}
             initialSettingsSection={settingsInitialSection}
+            initialServiceView={settingsInitialServiceView}
             onClose={() => setSettingsOpen(false)}
           />
         </Suspense>
@@ -678,8 +685,6 @@ function FloatingShellBody({
         }
         onSetup={() => openSettings('privacy')}
       />
-      <AudioCueListener />
-
       {/* Enter keyframes shared by tab switching, the provider prompt, and the footer popover */}
       <style>{`
         /* Sidebar nav speaks the shared selection language (tokens.css --ol-choice-*),

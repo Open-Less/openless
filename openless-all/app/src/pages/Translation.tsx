@@ -34,6 +34,11 @@ export function Translation() {
   const statusTimer = useRef<number | null>(null);
   const [languageQuery, setLanguageQuery] = useState('');
   const locale = i18n.resolvedLanguage ?? i18n.language;
+  // The translation trigger key is user-configurable; UI text must not hardcode
+  // "Shift" (issue #1358).
+  const translationShortcutLabel = formatComboLabel(
+    prefs?.translationHotkey ?? { primary: 'Shift', modifiers: [] },
+  );
   const languages = useMemo(
     () =>
       localizedLanguages(locale, [
@@ -58,8 +63,17 @@ export function Translation() {
       );
       options.unshift({ value: selected, label: language?.label ?? selected });
     }
-    return [{ value: '', label: t('translation.target.disabled') }, ...options];
-  }, [filteredLanguages, languages, prefs?.translationTargetLanguage, t]);
+    return [
+      { value: '', label: t('translation.target.disabled', { shortcut: translationShortcutLabel }) },
+      ...options,
+    ];
+  }, [
+    filteredLanguages,
+    languages,
+    prefs?.translationTargetLanguage,
+    t,
+    translationShortcutLabel,
+  ]);
 
   useEffect(
     () => () => {
@@ -201,7 +215,7 @@ export function Translation() {
   };
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
-  const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
+  const translationHotkeyLabel = translationShortcutLabel;
   // "Enabled" = a target language is chosen **and** that target really triggers translation.
   // When the target equals the only working language the backend does plain polishing, so the
   // status light must not claim enabled (otherwise pressing Shift does nothing and gives the
@@ -370,7 +384,9 @@ export function Translation() {
               value={prefs.translationTargetLanguage}
               onChange={onTargetChange}
               options={targetOptions}
-              placeholder={t('translation.target.disabled')}
+              placeholder={t('translation.target.disabled', {
+                shortcut: translationShortcutLabel,
+              })}
               ariaLabel={t('translation.target.title')}
               style={{ width: '100%', fontSize: 13 }}
             />
@@ -437,7 +453,7 @@ export function Translation() {
                   lineHeight: 1.55,
                 }}
               >
-                {t('translation.target.sameAsWorking')}
+                {t('translation.target.sameAsWorking', { shortcut: translationShortcutLabel })}
               </div>
             )}
           </Card>

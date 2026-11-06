@@ -1,5 +1,9 @@
 import {
+  ADVANCED_PAGES,
+  SETTINGS_SECTIONS,
+  advancedPageGroup,
   searchSettingsSections,
+  showsCursorContextControl,
   visibleSettingsSections,
   availableServiceViews,
   isServiceViewInactive,
@@ -91,20 +95,79 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
+  [
+    'voiceEnhancement',
+    'cursorContext',
+    'startupDiagnostics',
+    'testingFeatures',
+    'customSyncServer',
+    'debug',
+  ],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
 
 assert.equal(
-  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'vocabularyLearning'),
-  false,
-  'generic mobile hosts without a native observer do not expose learning configuration',
+  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'cursorContext'),
+  true,
+  'short-input settings stay on the text experiments page without a native cursor reader',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'vocabularyLearning'),
-  true,
-  'macOS retains its native correction observer settings',
+  showsCursorContextControl('mobile', 'mac'),
+  false,
+  'generic mobile hosts without a native cursor reader do not expose cursor context',
+);
+assert.equal(showsCursorContextControl('desktop', 'mac'), true, 'macOS keeps cursor context');
+assert.equal(showsCursorContextControl('desktop', 'win'), true, 'Windows keeps cursor context');
+assert.equal(showsCursorContextControl('android', 'android'), true, 'Android keeps cursor context');
+assert.equal(
+  showsCursorContextControl('harmony', 'harmony'),
+  false,
+  'Harmony has no cursor-context reader',
+);
+const advancedIds: readonly string[] = ADVANCED_PAGES.map((item) => item.id);
+assert.equal(
+  advancedIds.includes('vocabularyLearning'),
+  false,
+  'vocabulary learning is not a settings route',
+);
+assert.deepEqual(
+  ADVANCED_PAGES.flatMap((item) => {
+    const group = advancedPageGroup(item);
+    return group ? [[item.id, group]] : [];
+  }),
+  [
+    ['voiceEnhancement', 'recording'],
+    ['cursorContext', 'text'],
+    ['startupDiagnostics', 'diagnostics'],
+  ],
+  'recording, text, and diagnostics experiments stay grouped',
+);
+const sectionIds = SETTINGS_SECTIONS.map((item) => item.id);
+assert.equal(
+  sectionIds.indexOf('cloudServices'),
+  sectionIds.indexOf('services') + 1,
+  'cloud services follows AI',
+);
+assert.equal(
+  sectionIds[sectionIds.indexOf('cloudServices') + 1],
+  'appearance',
+  'cloud services precedes appearance',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'services')?.icon,
+  'sparkle',
+  'AI does not use the cloud icon',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'advanced')?.icon,
+  'flask',
+  'experiments do not reuse the AI sparkle icon',
+);
+assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'cloudServices')?.icon,
+  'cloud',
+  'the cloud icon belongs to cloud services',
 );
 
 assert.equal(
@@ -214,7 +277,14 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
-  ['testingFeatures', 'vocabularyLearning', 'customSyncServer', 'debug'],
+  [
+    'voiceEnhancement',
+    'cursorContext',
+    'startupDiagnostics',
+    'testingFeatures',
+    'customSyncServer',
+    'debug',
+  ],
   'Harmony retains shared utility settings without desktop coding-agent controls',
 );
 for (const os of ['mac', 'win', 'android'] as const) {

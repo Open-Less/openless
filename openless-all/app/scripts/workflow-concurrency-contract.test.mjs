@@ -17,19 +17,30 @@ const isolatedManualGroup =
   "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}";
 const cancelSupersededTagPush = "cancel-in-progress: ${{ github.event_name == 'push' }}";
 
-for (const [name, source] of [
-  ['Android release', workflows.android],
-  ['Tauri release', workflows.tauriRelease],
-]) {
-  assert.ok(
-    source.includes(isolatedManualGroup),
-    `${name} workflow must isolate manual runs while grouping repeated pushes of the same tag`,
-  );
-  assert.ok(
-    source.includes(cancelSupersededTagPush),
-    `${name} workflow must cancel an older run when the same tag is pushed again`,
-  );
-}
+assert.ok(
+  workflows.android.includes(isolatedManualGroup),
+  'Android release must isolate manual runs while grouping repeated pushes of the same tag',
+);
+assert.ok(
+  workflows.android.includes(cancelSupersededTagPush),
+  'Android release must cancel an older run when the same tag is pushed again',
+);
+assert.ok(
+  workflows.tauriRelease.includes(
+    "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' && github.ref || format('{0}-{1}', github.ref, github.run_id) }}",
+  ),
+  'manual Tauri branch builds for one ref must share a group so older DMG builds are cancelled',
+);
+assert.ok(
+  workflows.tauriRelease.includes(
+    "cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' }}",
+  ),
+  'only manual Tauri branch builds cancel; tag publishes and draft repairs must keep running',
+);
+assert.ok(
+  !workflows.tauriRelease.includes(cancelSupersededTagPush),
+  'Tauri tag publishes must not cancel an in-progress release',
+);
 
 assert.ok(
   workflows.ci.includes(isolatedManualGroup),

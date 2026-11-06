@@ -36,7 +36,7 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await settings(page);
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   const retired = page
     .locator('.ol-service-views')
     .getByRole('button', { name: '本地模型', exact: true });
@@ -92,7 +92,7 @@ test('Apple system recognition remains selectable without local-model controls',
   page,
 }) => {
   await settings(page);
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await page.getByRole('button', { name: /^语音识别。/ }).click();
   await page.getByRole('button', { name: '添加渠道', exact: true }).click();
   const form = page.getByRole('dialog', { name: '添加渠道', exact: true });
@@ -144,7 +144,7 @@ test('Windows retains its model manager and does not expose the Mac experiments 
   page,
 }) => {
   await settings(page, 'win');
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await expect(
     page.locator('.ol-service-views').getByRole('button', { name: '本地模型', exact: true }),
   ).toBeVisible();

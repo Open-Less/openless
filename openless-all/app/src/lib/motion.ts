@@ -32,6 +32,13 @@ export function useReducedMotion() {
 type Frame = { opacity: string | number; transform: string };
 const VISIBLE: Frame = { opacity: 1, transform: 'none' };
 const FADED: Frame = { opacity: 0, transform: 'none' };
+const POP_HIDDEN: Frame = { opacity: 0, transform: 'translate3d(0, 18px, 0) scale(0.84)' };
+const POP_ENTER_MS = 520;
+const POP_ENTER: Keyframe[] = [
+  { opacity: 0, transform: 'translate3d(0, 18px, 0) scale(0.84)', offset: 0 },
+  { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1.045)', offset: 0.74 },
+  { opacity: 1, transform: 'none', offset: 1 },
+];
 
 function currentFrame(element: HTMLElement): Frame {
   const style = getComputedStyle(element);
@@ -45,17 +52,22 @@ function animate(
   duration: number,
   exiting: boolean,
   easingToken = exiting ? '--ol-motion-exit' : '--ol-motion-spring',
+  frames?: Keyframe[],
 ) {
   const style = getComputedStyle(element);
   const easing = style.getPropertyValue(easingToken).trim();
   const previousWillChange = element.style.willChange;
+  const sequence = frames ?? [from, to];
+  const transforms = sequence.map((frame) => frame.transform);
   // A flat page/backdrop fade must not create a transform containing block or
   // promote its text as if it were scaling. Cards/indicators still need both.
-  element.style.willChange =
-    from.transform === 'none' && to.transform === 'none' ? 'opacity' : 'opacity, transform';
-  const animation = element.animate([from, to], {
+  element.style.willChange = transforms.every((value) => value === 'none' || value == null)
+    ? 'opacity'
+    : 'opacity, transform';
+  const animation = element.animate(sequence, {
     duration,
-    easing: easing || 'cubic-bezier(0.23, 1, 0.32, 1)',
+    // Custom frames already carry the overshoot. A second ease would flatten it.
+    easing: frames ? 'linear' : easing || 'cubic-bezier(0.23, 1, 0.32, 1)',
     fill: 'both',
   });
   animation.id = exiting ? 'ol-surface-exit' : 'ol-surface-enter';
@@ -79,7 +91,7 @@ function animate(
 export function useOverlayMotion(
   ref: RefObject<HTMLElement>,
   closing: boolean,
-  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' = 'card',
+  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' | 'pop' = 'card',
   enabled = true,
   entrance: 'default' | 'settings' = 'default',
 ) {
@@ -93,21 +105,23 @@ export function useOverlayMotion(
     }
     const settingsEntrance = entrance === 'settings';
     const hidden =
-      variant === 'backdrop'
-        ? settingsEntrance
-          ? { opacity: 0, transform: 'translate3d(0, 10px, 0) scale(0.965)' }
-          : FADED
-        : {
-            opacity: 0,
-            transform:
-              variant === 'drawer'
-                ? 'translate3d(12px, 0, 0)'
-                : variant === 'sheet'
-                  ? 'translate3d(0, 16px, 0)'
-                  : settingsEntrance
-                    ? 'translate3d(0, 20px, 0) scale(0.96)'
-                    : 'translate3d(0, 10px, 0) scale(0.95)',
-          };
+      variant === 'pop'
+        ? POP_HIDDEN
+        : variant === 'backdrop'
+          ? settingsEntrance
+            ? { opacity: 0, transform: 'translate3d(0, 10px, 0) scale(0.965)' }
+            : FADED
+          : {
+              opacity: 0,
+              transform:
+                variant === 'drawer'
+                  ? 'translate3d(12px, 0, 0)'
+                  : variant === 'sheet'
+                    ? 'translate3d(0, 16px, 0)'
+                    : settingsEntrance
+                      ? 'translate3d(0, 20px, 0) scale(0.96)'
+                      : 'translate3d(0, 10px, 0) scale(0.95)',
+            };
     const from =
       interrupted.current?.element === element
         ? interrupted.current.frame
@@ -115,21 +129,25 @@ export function useOverlayMotion(
           ? currentFrame(element)
           : hidden;
     interrupted.current = null;
+    const popEnter = variant === 'pop' && !closing && from === hidden;
     const motion = animate(
       element,
       from,
       closing ? hidden : VISIBLE,
       closing
         ? OVERLAY_EXIT_MS
-        : settingsEntrance
-          ? variant === 'backdrop'
-            ? SETTINGS_BACKDROP_MS
-            : SETTINGS_ENTER_MS
-          : variant === 'backdrop'
-            ? CONTENT_MS
-            : ENTER_MS,
+        : popEnter
+          ? POP_ENTER_MS
+          : settingsEntrance
+            ? variant === 'backdrop'
+              ? SETTINGS_BACKDROP_MS
+              : SETTINGS_ENTER_MS
+            : variant === 'backdrop'
+              ? CONTENT_MS
+              : ENTER_MS,
       closing,
       closing ? '--ol-motion-exit' : settingsEntrance ? '--ol-motion-soft' : '--ol-motion-spring',
+      popEnter ? POP_ENTER : undefined,
     );
     let cancelled = false;
     let entryFrame: number | undefined;
@@ -154,7 +172,10 @@ export function useOverlayMotion(
     return () => {
       cancelled = true;
       if (entryFrame !== undefined) window.cancelAnimationFrame(entryFrame);
-      interrupted.current = { element, frame: currentFrame(element) };
+      const elapsed = Number(motion.animation.currentTime ?? 0);
+      // StrictMode runs this effect twice before paint. A zero-progress cancel
+      // must not replace the pop entrance with a plain ease to rest.
+      interrupted.current = elapsed > 32 ? { element, frame: currentFrame(element) } : null;
       motion.cancel();
     };
   }, [ref, closing, variant, enabled, entrance, reduced]);

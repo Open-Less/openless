@@ -77,7 +77,12 @@ export function AudioCueListener() {
       const { listen } = await import('@tauri-apps/api/event');
       const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
       if (cancelled) return;
-      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
+      const currentWindow = getCurrentWebviewWindow();
+      // The cue belongs to the resident recording capsule only. The main window must not
+      // prime an AudioContext or replay the current recording edge when it is opened during
+      // an active session.
+      if (currentWindow.label !== 'capsule') return;
+      const target = { kind: 'WebviewWindow' as const, label: currentWindow.label };
       listen<CapsulePayload>(
         'capsule:state',
         (event) => {
@@ -102,6 +107,7 @@ export function AudioCueListener() {
     return () => {
       cancelled = true;
       unlisten?.();
+      stopAudioCue();
     };
   }, [audioCueRuntimeEnabled]);
 

@@ -101,7 +101,11 @@ assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 // 2.0.x Release shipped without a `.deb` or `.rpm`. Publishing stays implicit in
 // the hand-off (`publish=true`), which is safe because the tag is admin-created
 // after acceptance.
-assert.match(tauri, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+assert.match(
+  tauri,
+  /^  dispatch-platform-releases:$/m,
+  'release-tauri.yml must hand the tag to this workflow',
+);
 assert.match(
   tauri,
   /gh workflow run release-linux-egui\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,

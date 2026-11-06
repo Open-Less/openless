@@ -72,6 +72,8 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -168,6 +170,15 @@ static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static QA_WINDOW_CREATE_LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn qa_window_create_lock() -> &'static parking_lot::Mutex<()> {
+    QA_WINDOW_CREATE_LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -276,6 +287,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::app_check_update_with_channel,
             commands::check_network,
             commands::take_splash_playback,
+            commands::get_desktop_onboarding_state,
+            commands::set_desktop_onboarding_finished,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::set_shortcut_recording_active,
@@ -570,6 +583,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_settings,
             $crate::commands::check_network,
             $crate::commands::take_splash_playback,
+            $crate::commands::get_desktop_onboarding_state,
+            $crate::commands::set_desktop_onboarding_finished,
             $crate::commands::get_platform_capabilities,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
@@ -1036,7 +1051,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => app.exit(0),
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -1850,6 +1865,24 @@ fn restart_on_main_thread(app: AppHandle) {
     let _ = app.run_on_main_thread(move || handle.restart());
 }
 
+/// How long a tray-initiated quit may take before the process is forced down.
+/// Once the tray callback runs, the watchdog bounds a stalled exit (#1337).
+/// The callback itself still needs a responsive event loop to arm the watchdog.
+const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Arm the fallback before requesting graceful exit on explicit user intent.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    std::thread::spawn(|| {
+        std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
+        // Keep the deadline path independent of application locks: synchronous
+        // logging can block on I/O, and AppHandle::exit can enter synchronous
+        // cleanup if sending the exit request fails. A healthy exit never
+        // reaches here.
+        std::process::exit(0);
+    });
+    app.exit(0);
+}
+
 #[tauri::command]
 fn reset_accessibility_permission_and_restart_app(app: AppHandle) {
     prepare_for_restart();
@@ -1913,7 +1946,13 @@ fn reset_tcc_for_beta_restart() {
     // Beta builds are currently ad-hoc signed. Their code hash changes across builds, so
     // old TCC rows can leave System Settings checked while AXIsProcessTrusted() is false.
     reset_tcc_service_for_restart("Accessibility", "beta ad-hoc identity refresh");
-    reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    // A granted microphone must survive the restart. Resetting it marks that grant missing.
+    let microphone = permissions::check_microphone();
+    if permissions::should_reset_microphone_tcc(microphone) {
+        reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
+    } else {
+        log::info!("[tcc] microphone already granted; skipping TCC reset");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -3071,6 +3110,9 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
 /// at creation time here, otherwise the lazily created QA window can't be dragged on macOS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    // ShowQa can arrive concurrently from independent Core workflows. Keep the existing-window
+    // lookup and first build in one critical section so two callers cannot create two qa HWNDs.
+    let _creation_guard = qa_window_create_lock().lock();
     if let Some(w) = app.get_webview_window("qa") {
         return Some(w);
     }

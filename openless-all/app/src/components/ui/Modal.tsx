@@ -23,6 +23,8 @@ interface ModalProps {
   /** Lets the host window customize overlay/card look (e.g. a rounded floating window needs a rounded overlay). */
   overlayClassName?: string;
   labelledBy?: string;
+  /** `pop` enlarges, overshoots once, then settles. Other dialogs keep the card fade. */
+  motionVariant?: 'card' | 'pop';
 }
 
 const FOCUSABLE =
@@ -46,13 +48,14 @@ export function Modal({
   closing = false,
   overlayClassName,
   labelledBy,
+  motionVariant = 'card',
 }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useOverlayMotion(overlayRef, closing, 'backdrop');
-  useOverlayMotion(cardRef, closing);
+  useOverlayMotion(cardRef, closing, motionVariant);
   useLayoutEffect(() => {
     if (cardRef.current) cardRef.current.inert = closing;
   }, [closing]);

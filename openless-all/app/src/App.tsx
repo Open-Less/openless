@@ -25,12 +25,16 @@ import { withStartupDeadline } from './lib/startupProbe';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 import {
   needsDesktopGuide,
+  permissionGate,
   newGuideProgress,
   readGuideProgress,
   REOPEN_ONBOARDING_EVENT,
+  getDesktopOnboardingState,
   saveGuideProgress,
+  setDesktopOnboardingFinished,
 } from './lib/desktopOnboarding';
 import { useReducedMotion } from './lib/motion';
+import { AudioCueListener } from './components/AudioCue';
 
 // Lazy-load pages per WebView by window purpose to cut resident memory. The capsule
 // gives instant recording feedback — small and first-frame-latency sensitive — so it
@@ -130,7 +134,12 @@ function ReadyApp({
     return <CapsuleTranscriptOverlay />;
   }
   if (isCapsule) {
-    return <Capsule os={forcedOs} />;
+    return (
+      <>
+        <Capsule os={forcedOs} />
+        <AudioCueListener />
+      </>
+    );
   }
   if (isQa) {
     return (
@@ -202,7 +211,12 @@ function ReadyApp({
   }, [onboardingHandoff, reducedMotion]);
   useEffect(() => {
     const reopen = () => {
-      if (isTauri) saveGuideProgress(newGuideProgress());
+      if (isTauri) {
+        saveGuideProgress(newGuideProgress());
+        void setDesktopOnboardingFinished(false).catch((error) =>
+          console.warn('[onboarding] clear persisted completion failed', error),
+        );
+      }
       setGate('onboarding');
     };
     window.addEventListener(REOPEN_ONBOARDING_EVENT, reopen);
@@ -382,9 +396,15 @@ function ReadyApp({
       }
 
       const progress = readGuideProgress();
-      const credentials = await withStartupDeadline(getCredentials(), startupProbe.signal);
+      const [credentials, persistedOnboarding] = await Promise.all([
+        withStartupDeadline(getCredentials(), startupProbe.signal),
+        withStartupDeadline(getDesktopOnboardingState(), startupProbe.signal).catch((error) => {
+          console.warn('[startup] persisted onboarding state unavailable', error);
+          return { finished: false };
+        }),
+      ]);
       if (cancelled) return;
-      if (needsDesktopGuide(progress, credentials)) {
+      if (needsDesktopGuide(progress, credentials, persistedOnboarding.finished)) {
         setGate('onboarding');
         return;
       }
@@ -430,17 +450,21 @@ function ReadyApp({
         checkMicrophonePermission(),
       ]);
       if (cancelled) return;
-      const aOk = a === 'granted' || a === 'notApplicable';
       // noDevice (no mic present) isn't a permission issue: don't trap the user on
       // onboarding; let them in and show the clear "no microphone detected" notice on
       // the permissions page. See issue #779.
-      const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
-      if (aOk && mOk) {
+      const next = permissionGate({
+        os,
+        persistedFinished: persistedOnboarding.finished,
+        accessibility: a,
+        microphone: m,
+      });
+      if (next.gate === 'ready') {
         setGate('ready');
       } else {
         saveGuideProgress({
           ...(progress ?? newGuideProgress()),
-          step: !aOk && os === 'mac' ? 'accessibility' : 'microphone',
+          step: next.step,
           finished: false,
         });
         setGate('onboarding');

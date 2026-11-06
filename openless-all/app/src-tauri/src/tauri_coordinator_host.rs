@@ -731,6 +731,55 @@ fn capsule_window_action(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleCursorUpdate {
+    Keep,
+    SetPassthrough(bool),
+    /// Close is still on screen (or just hidden). Do not enable passthrough yet.
+    SuspendHitsUntilInteractive,
+}
+
+/// Cursor policy for one capsule frame.
+///
+/// Terminal frames stay visible for the exit animation. Enabling passthrough
+/// calls `set_ignore_cursor_events`, and on Windows tao reapplies `WS_CAPTION`
+/// plus `WS_EX_WINDOWEDGE` with `SWP_FRAMECHANGED`. That paints the classic
+/// non-client frame for one frame, and clearing the window region makes the
+/// full rectangle visible. Keep the undecorated styles and region; suspend
+/// hit testing instead until the next interactive frame.
+fn capsule_cursor_update(
+    style: CapsuleStyle,
+    state: CapsuleState,
+    selection_polish: bool,
+    current_passthrough: bool,
+    close_hits_suspended: bool,
+) -> CapsuleCursorUpdate {
+    let interactive = style != CapsuleStyle::Siri
+        && !selection_polish
+        && matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        );
+    let want_passthrough = !interactive;
+    if close_hits_suspended && !want_passthrough {
+        return CapsuleCursorUpdate::SetPassthrough(false);
+    }
+    if want_passthrough
+        && !current_passthrough
+        && matches!(
+            state,
+            CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error | CapsuleState::Idle
+        )
+    {
+        return CapsuleCursorUpdate::SuspendHitsUntilInteractive;
+    }
+    if current_passthrough == want_passthrough {
+        CapsuleCursorUpdate::Keep
+    } else {
+        CapsuleCursorUpdate::SetPassthrough(want_passthrough)
+    }
+}
+
 fn should_present_capsule_window(window_visible_before: bool) -> bool {
     !window_visible_before
 }
@@ -783,6 +832,8 @@ struct CapsuleWindowState {
     qa_voice_active: AtomicBool,
     translation_menu: Mutex<Option<CapsuleMenuFrame>>,
     cursor_passthrough: AtomicBool,
+    /// Close suspended hit testing without changing native window styles.
+    close_hits_suspended: AtomicBool,
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
     style: AtomicU8,
@@ -812,6 +863,7 @@ impl Default for CapsuleWindowState {
             qa_voice_active: AtomicBool::new(false),
             translation_menu: Mutex::new(None),
             cursor_passthrough: AtomicBool::new(true),
+            close_hits_suspended: AtomicBool::new(false),
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
@@ -1862,19 +1914,71 @@ impl TauriCapsuleWindow {
     fn update_cursor_for_payload(&self, payload: &CapsulePayload, style: CapsuleStyle) {
         #[cfg(not(mobile))]
         {
-            let interactive = style != CapsuleStyle::Siri
-                && !payload.selection_polish
-                && matches!(
-                    payload.state,
-                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-                );
-            let want_passthrough = !interactive;
-            if self.state.cursor_passthrough.load(Ordering::SeqCst) != want_passthrough {
-                if let Err(error) = self.set_cursor_passthrough(want_passthrough) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+            let update = capsule_cursor_update(
+                style,
+                payload.state,
+                payload.selection_polish,
+                self.state.cursor_passthrough.load(Ordering::SeqCst),
+                self.state.close_hits_suspended.load(Ordering::SeqCst),
+            );
+            match update {
+                CapsuleCursorUpdate::Keep => {}
+                CapsuleCursorUpdate::SetPassthrough(passthrough) => {
+                    self.state
+                        .close_hits_suspended
+                        .store(false, Ordering::SeqCst);
+                    if let Err(error) = self.set_cursor_passthrough(passthrough) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
+                }
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive => {
+                    if self.state.close_hits_suspended.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    // Windows: do not clear the region or call
+                    // set_ignore_cursor_events while the exit frame can be seen.
+                    // Other platforms have no classic non-client frame.
+                    #[cfg(target_os = "windows")]
+                    self.suspend_close_hit_testing();
+                    #[cfg(not(target_os = "windows"))]
+                    if let Err(error) = self.set_cursor_passthrough(true) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
                 }
             }
         }
+    }
+
+    /// Pass clicks through during close without changing window styles.
+    ///
+    /// `SetWindowRgn(NULL)` and tao's decoration refresh both paint the classic
+    /// frame. An empty hit rect keeps the existing undecorated region.
+    #[cfg(target_os = "windows")]
+    fn suspend_close_hit_testing(&self) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Some(window) = self.window() else {
+            return;
+        };
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+        if hwnd.0.is_null() {
+            return;
+        }
+        let _ = install_capsule_hit_test_proc(
+            hwnd,
+            CapsuleHitTestRect {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            },
+        );
     }
 
     fn refresh_style(&self) {
@@ -1939,6 +2043,22 @@ impl TauriCapsuleWindow {
                 self.invalidate_layout();
             }
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            // Hide before any cursor or style change. The exit frames below
+            // must not enable passthrough while this HWND is still visible.
+            if action == CapsuleWindowAction::HideCapsule {
+                self.stop_layout_watch();
+                if !show_capsule
+                    && !matches!(payload.state, CapsuleState::Idle)
+                    && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
+                {
+                    log::info!(
+                        "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
+                        capsule_state_log_name(payload.state)
+                    );
+                }
+                hide_capsule_window_if_present();
+                let _ = self.hide();
+            }
             self.update_cursor_for_payload(payload, style);
             self.sync_capsule_mirrors();
 
@@ -1968,18 +2088,6 @@ impl TauriCapsuleWindow {
                     crate::restore_main_window_key_if_active(&self.app);
                 }
                 CapsuleWindowAction::HideCapsule => {
-                    self.stop_layout_watch();
-                    if !show_capsule
-                        && !matches!(payload.state, CapsuleState::Idle)
-                        && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
-                    {
-                        log::info!(
-                            "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
-                            capsule_state_log_name(payload.state)
-                        );
-                    }
-                    hide_capsule_window_if_present();
-                    let _ = self.hide();
                     if matches!(
                         payload.state,
                         CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error
@@ -2688,6 +2796,65 @@ mod tests {
                 CapsuleWindowAction::PreserveFallbackCard
             );
         }
+    }
+
+    #[test]
+    fn closing_openless_capsule_does_not_enable_passthrough_while_visible() {
+        // Classic is the OpenLess default. It is interactive while recording, so
+        // close used to flip passthrough on and tao repainted the caption frame.
+        for state in [
+            CapsuleState::Done,
+            CapsuleState::Cancelled,
+            CapsuleState::Error,
+            CapsuleState::Idle,
+        ] {
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Classic, state, false, false, false),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive,
+                "close must not call set_ignore_cursor_events for {state:?}"
+            );
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Typeless, state, false, false, true),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive
+            );
+        }
+        // The next interactive frame restores hit testing without a passthrough edge.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                false,
+                true
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        // Siri is already click-through, so close does not touch window styles.
+        assert_eq!(
+            capsule_cursor_update(CapsuleStyle::Siri, CapsuleState::Done, false, true, false),
+            CapsuleCursorUpdate::Keep
+        );
+        // Non-close transitions still update passthrough.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                true,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                true,
+                false,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(true)
+        );
     }
 
     #[test]

@@ -86,7 +86,9 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
   useEffect(() => {
     if (isHarmonyHost) {
-      const refresh = () => { void reloadPreferences().catch((error) => setError(errorMessage(error))); };
+      const refresh = () => {
+        void reloadPreferences().catch((error) => setError(errorMessage(error)));
+      };
       window.addEventListener('openless:harmony-backend-change', refresh);
       return () => window.removeEventListener('openless:harmony-backend-change', refresh);
     }

@@ -1,10 +1,30 @@
 import type { CredentialsStatus } from './types';
+import { invokeOrMock } from './ipc/shared';
 import { areProvidersConfigured, PROVIDER_SETUP_PROMPT_DEFERRED_KEY } from './providerSetup';
 import { HOTKEY_MODE_MIGRATION_DEFERRED_KEY } from './hotkeyMigration';
 
 export const DESKTOP_ONBOARDING_KEY = 'ol.desktopOnboarding.v1';
 export const REOPEN_ONBOARDING_EVENT = 'openless:reopen-onboarding';
 export const ONBOARDING_SESSION_KEY = 'ol.onboardingFinishedThisSession';
+
+export interface DesktopOnboardingState {
+  finished: boolean;
+}
+
+export function getDesktopOnboardingState(): Promise<DesktopOnboardingState> {
+  return invokeOrMock<unknown>('get_desktop_onboarding_state', undefined, () => ({
+    finished: false,
+  })).then((value) => ({
+    finished:
+      typeof value === 'object' && value !== null && 'finished' in value
+        ? (value as { finished?: unknown }).finished === true
+        : false,
+  }));
+}
+
+export function setDesktopOnboardingFinished(finished: boolean): Promise<void> {
+  return invokeOrMock('set_desktop_onboarding_finished', { finished }, () => undefined);
+}
 export const GUIDE_STEPS = [
   'welcome',
   'microphone',
@@ -71,10 +91,41 @@ export function guideSteps(mac: boolean, multimodal: boolean): GuideStep[] {
     (step) => (mac || step !== 'accessibility') && (!multimodal || step !== 'polish'),
   );
 }
+export type PermissionGate =
+  { gate: 'ready' } | { gate: 'onboarding'; step: 'microphone' | 'accessibility' };
+
+// A finished install must not reopen the microphone prompt when the status
+// read is still undetermined. Closing the main window destroys the WebView,
+// and the next open can observe NotDetermined even though TCC already granted
+// the microphone. Denied and restricted still return to onboarding.
+export function permissionGate(input: {
+  os: string;
+  persistedFinished: boolean;
+  accessibility: string;
+  microphone: string;
+}): PermissionGate {
+  const accessibilityOk =
+    input.accessibility === 'granted' || input.accessibility === 'notApplicable';
+  const microphoneOk =
+    input.microphone === 'granted' ||
+    input.microphone === 'notApplicable' ||
+    input.microphone === 'noDevice';
+  if (accessibilityOk && microphoneOk) return { gate: 'ready' };
+  if (input.persistedFinished && accessibilityOk && input.microphone === 'notDetermined') {
+    return { gate: 'ready' };
+  }
+  return {
+    gate: 'onboarding',
+    step: !accessibilityOk && input.os === 'mac' ? 'accessibility' : 'microphone',
+  };
+}
+
 export function needsDesktopGuide(
   progress: GuideProgress | null,
   credentials: CredentialsStatus,
+  persistedFinished = false,
 ): boolean {
+  if (persistedFinished) return false;
   // Existing configured installations retain their normal startup. An unfinished
   // guide resumes even when credentials were configured during an earlier step.
   return progress ? !progress.finished : !areProvidersConfigured(credentials);

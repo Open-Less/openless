@@ -52,6 +52,17 @@ pub fn take_splash_playback(core: CoreState<'_>) -> bool {
 }
 
 #[tauri::command]
+pub fn get_desktop_onboarding_state() -> Result<crate::persistence::DesktopOnboardingState, String> {
+    crate::persistence::desktop_onboarding_state().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_desktop_onboarding_finished(finished: bool) -> Result<(), String> {
+    crate::persistence::set_desktop_onboarding_finished(finished)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn get_hotkey_status(core: CoreState<'_>) -> Result<HotkeyStatus, String> {
     Ok(core
         .services()

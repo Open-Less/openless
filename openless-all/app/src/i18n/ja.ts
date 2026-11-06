@@ -297,6 +297,7 @@ export const ja: typeof zhCN = {
     show: '表示',
     hide: '非表示',
     saved: '保存しました',
+    refreshed: '更新しました',
     saving: '保存中',
     experimental: '実験的',
     copied: 'コピーしました',
@@ -549,7 +550,7 @@ export const ja: typeof zhCN = {
     },
     sortLiked: 'いいね済み',
     likedEmpty: 'まだいいねしたパックがありません',
-    likedEmptyHint: 'パックを開いて星をタップするとここに表示されます',
+    likedEmptyHint: 'パックを開いてハートをタップするとここに表示されます',
     derivativeBadge: '@{{login}} から派生',
     detail: {
       withdrawBtn: '公開を取り下げる',
@@ -724,8 +725,8 @@ export const ja: typeof zhCN = {
     },
     actions: {
       refresh: '再読み込み',
-      services: 'AI サービスとモデル',
-      general: '録音と入力',
+      services: 'AI とモデル',
+      general: '一般',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
     },
@@ -734,7 +735,7 @@ export const ja: typeof zhCN = {
       loadingTitle: '設定を読み込んでいます',
       loadingDesc: '使用中のサービスと次の操作をまもなく表示します。',
       unavailableTitle: 'サービスの状態を読み込めません',
-      unavailableDesc: '再読み込みするか、AI サービスで設定を確認してください。',
+      unavailableDesc: '再読み込みするか、AI とモデルで設定を確認してください。',
       servicesTitle: 'まず音声サービスを設定しましょう',
       servicesDesc:
         'ここから始めるのがおすすめです。音声認識とテキスト処理のサービスを選びましょう。Omni モードでは、使用するマルチモーダルモデルだけを設定します。',
@@ -1174,9 +1175,9 @@ export const ja: typeof zhCN = {
     target: {
       title: '翻訳ターゲット言語',
       desc: '録音中に Shift で翻訳を起動。「無効」で Shift 無効化。',
-      disabled: '無効（Shift で翻訳を発動しない）',
+      disabled: '無効（{{shortcut}} で翻訳を発動しない）',
       sameAsWorking:
-        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
+        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（{{shortcut}} を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
     },
     style: {
       title: '翻訳スタイル',
@@ -1197,7 +1198,7 @@ export const ja: typeof zhCN = {
       step4: '再度 {{trigger}} を押して停止。',
       step5: '翻訳結果がカーソル位置に挿入されます。',
       indicatorTitle: '翻訳モードの確認方法',
-      indicatorDesc: 'Shift を押すと画面下部に青い「翻訳中」表示が出ます。',
+      indicatorDesc: '{{shortcut}} を押すと画面下部に青い「翻訳中」表示が出ます。',
       fallbackTitle: 'セーフティフォールバック',
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
@@ -1263,6 +1264,29 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
+    generalPages: {
+      recordingTitle: 'マイクと録音',
+      recordingDesc: 'マイクの監視と認識、および監視と通知です。',
+      capsuleTitle: 'カプセルのスタイル',
+      capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
+      textInputTitle: '文字の挿入',
+      textInputDesc: '選択アシスタント、挿入とクリップボード、起動。',
+      phoneTitle: 'スマホとリモート入力',
+      phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
+    },
+    advancedPages: {
+      voiceEnhancementTitle: '音声強調と再生抑制',
+      cursorContextTitle: 'カーソル文脈と短文の動作',
+      startupDiagnosticsTitle: '起動診断',
+      cursorContextHint:
+        'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
+    },
+    advancedGroups: {
+      recording: '録音',
+      text: 'テキストと文脈',
+      diagnostics: '診断',
+    },
+
     testingFeatures: {
       title: 'テスト中の機能',
       enable: 'テスト中の機能を有効にする',
@@ -1483,7 +1507,7 @@ export const ja: typeof zhCN = {
       },
     },
     recording: {
-      title: '録音と入力',
+      title: '一般',
       desc: 'グローバル録音のショートカットとトリガー方式を定義します。',
       hotkeyLabel: '録音ショートカット',
       hotkeyDescAcc: '押すと音声キャプチャを開始（グローバル）。アクセシビリティ権限が必要です。',
@@ -1610,6 +1634,10 @@ export const ja: typeof zhCN = {
       audioCueDesc:
         'ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。',
       audioCuePreview: '試聴',
+      captureGroupTitle: 'マイク監視と認識',
+      capsuleGroupTitle: 'カプセルのスタイル',
+      recognitionGroupTitle: '監視と通知音',
+      feedbackGroupTitle: '監視と通知音',
       insertGroupTitle: '挿入とクリップボード',
       restoreClipboardLabel: '入力後にクリップボードを復元',
       restoreClipboardDesc:
@@ -1678,9 +1706,11 @@ export const ja: typeof zhCN = {
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
       debugArchiveProcessedLabel: '処理後の音声を保存',
-      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveProcessedDesc:
+        'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
       debugArchiveRawLabel: '処理前の音声も保存',
-      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
+      debugArchiveRawDesc:
+        '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
@@ -1777,7 +1807,7 @@ export const ja: typeof zhCN = {
       hoursAgo: '{{count}}時間前',
       daysAgo: '{{count}}日前',
       localEngineModelHint:
-        '「AI サービスとモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
+        '「AI とモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
     },
     providers: {
       localEngineNoCredentials: 'ローカルエンジンに API キーやエンドポイントは不要です。',
@@ -2500,6 +2530,7 @@ export const ja: typeof zhCN = {
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
+    back: '戻る',
     backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
@@ -2511,15 +2542,19 @@ export const ja: typeof zhCN = {
       claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
       debug: 'デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。',
+      voiceEnhancement: '高度な音声処理、ノイズ低減、再生エコーの抑制を設定します。',
+      cursorContext: '推敲リクエストに使うカーソル付近の文脈と、短い入力の扱いを設定します。',
+      startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {
-      general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
+      general: 'マイク監視、カプセルのスタイル、文字の挿入、リモート入力。',
       inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
+      cloudServices: '拡張マーケット、GitHub ログイン、暗号化クラウド同期を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
+      advanced: 'テスト機能、診断、デバッグツールを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2528,6 +2563,7 @@ export const ja: typeof zhCN = {
       shortcuts: 'ショートカット ホットキー キー 選択 推敲 音声編集',
       services:
         'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット マルチモーダル 認識パイプライン Omni',
+      cloudServices: 'クラウド 同期 暗号化 マーケット GitHub ログイン 公式',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
@@ -2538,9 +2574,10 @@ export const ja: typeof zhCN = {
     sections: {
       appearance: '外観と言語',
       shortcuts: 'ショートカットと選択',
-      general: '録音と入力',
+      general: '一般',
       inputMethod: '入力方法',
-      services: 'AI サービスとモデル',
+      services: 'AI とモデル',
+      cloudServices: 'クラウドサービス',
       privacy: '権限とデータ',
       advanced: '実験機能と拡張',
       personalize: 'パーソナライズ',

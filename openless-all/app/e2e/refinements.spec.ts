@@ -1,4 +1,4 @@
-import { settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
@@ -54,11 +54,10 @@ test('trackpad input stays native, scrollbar chrome is hidden and scrolling sett
   await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
   await page
     .getByRole('navigation', { name: '设置分类' })
-    .getByRole('button', { name: '录音与输入', exact: true })
+    .getByRole('button', { name: '通用', exact: true })
     .click();
-  await expect(
-    content.locator('[data-section="general"] .ol-shortcut-binding').first(),
-  ).toBeVisible();
+  await openMicrophoneSettings(page);
+  await expect(content.locator('.ol-shortcut-binding').first()).toBeVisible();
   await content.hover();
   const destination = await content.evaluate((el) =>
     Math.min(el.scrollTop + 450, el.scrollHeight - el.clientHeight),
@@ -175,9 +174,9 @@ test('every main destination and settings category stays readable on desktop and
   }
   await page.getByRole('button', { name: '设置', exact: true }).click();
   for (const name of [
-    '录音与输入',
+    '通用',
     '快捷键',
-    'AI 服务与模型',
+    'AI 与模型',
     '外观与语言',
     '权限与数据',
     '实验与扩展',

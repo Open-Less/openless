@@ -6,7 +6,8 @@
 //     right (expands leftward on click)
 //   - Word grid: cards show text only by default; hover dims them and reveals
 //     "edit / delete" actions
-//   - Editing uses a modal (update_vocab keeps id/hits); scene presets stay a card section
+//   - Editing uses a modal (update_vocab keeps id/hits). New words are added only
+//     from the top-right modal, which still offers the preset templates.
 //   - Correction rules moved to the "tools → correction rules" page (Corrections.tsx)
 // Data is stored in ~/Library/Application Support/OpenLess/dictionary.json (same name as Swift).
 
@@ -24,13 +25,12 @@ import {
   updateVocab,
 } from '../lib/ipc';
 import type { DictionaryEntry, VocabPreset } from '../lib/types';
-import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
+import { DEFAULT_VOCAB_PRESETS, loadVocabPresets } from '../lib/vocabPresets';
 import { useExitMount } from '../lib/useExitMount';
 import { useOverlayMotion } from '../lib/motion';
 import { useMobileLayout } from '../lib/useMobileLayout';
-import { Btn, Card, Collapsible, PageHeader } from './_atoms';
-
-const NEW_PRESET_DRAFT_ID = '__new__';
+import { ExpandingSearch } from '../components/ExpandingSearch';
+import { Btn, PageHeader } from './_atoms';
 
 /** Auto-collected entries are recognized by note (the marker backend accept_pending_correction sets). */
 const LEARNED_NOTE = '从手改中自动收集';
@@ -42,19 +42,14 @@ export function Vocab() {
   const mobile = useMobileLayout();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [presets, setPresets] = useState<VocabPreset[]>(DEFAULT_VOCAB_PRESETS);
-  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
-  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
-  const [presetNameDraft, setPresetNameDraft] = useState('');
-  const [presetPhrasesDraft, setPresetPhrasesDraft] = useState('');
 
   // State added by the dictionary redesign
   const [filter, setFilter] = useState<SourceFilter>('all');
   const [query, setQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [wordAdded, setWordAdded] = useState(false);
   const [editingEntry, setEditingEntry] = useState<DictionaryEntry | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
@@ -118,28 +113,6 @@ export function Vocab() {
   const flashSaved = () => {
     setSaveState('saved');
     window.setTimeout(() => setSaveState('idle'), 1600);
-  };
-
-  const onAdd = async () => {
-    const phrase = inputRef.current?.value.trim();
-    if (!phrase) return;
-    try {
-      const entry = await addVocab(phrase);
-      // Optimistic insertion at the head (addVocab returns the new entry, also visible
-      // immediately under the browser mock).
-      setEntries((prev) => [entry, ...prev]);
-      flashSaved();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-    if (inputRef.current) inputRef.current.value = '';
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void onAdd();
-    }
   };
 
   const removeEntries = async (ids: string[]) => {
@@ -230,53 +203,12 @@ export function Vocab() {
       const entry = await addVocab(phrase);
       setEntries((prev) => [entry, ...prev]);
       setNewWordDraft('');
+      setWordAdded(true);
+      window.setTimeout(() => setWordAdded(false), 700);
       flashSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  };
-
-  const togglePreset = (id: string) => {
-    setSelectedPresetIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  };
-
-  const startEditPreset = (preset: VocabPreset) => {
-    setEditingPresetId(preset.id);
-    setPresetNameDraft(preset.name);
-    setPresetPhrasesDraft(preset.phrases.join(', '));
-  };
-
-  const savePreset = async () => {
-    if (!editingPresetId) return;
-    const name = presetNameDraft.trim();
-    if (!name) return;
-    const phrases = Array.from(
-      new Set(
-        presetPhrasesDraft
-          .split(/[,\n]/)
-          .map((s) => s.trim())
-          .filter(Boolean),
-      ),
-    );
-    const next =
-      editingPresetId === NEW_PRESET_DRAFT_ID
-        ? [...presets, { id: `user-${Date.now()}`, name, phrases }]
-        : presets.map((p) => (p.id === editingPresetId ? { ...p, name, phrases } : p));
-    try {
-      await persistVocabPresets(next);
-      setPresets(next);
-      setEditingPresetId(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const createPreset = () => {
-    setEditingPresetId(NEW_PRESET_DRAFT_ID);
-    setPresetNameDraft(t('vocab.presets.newPreset'));
-    setPresetPhrasesDraft('');
   };
 
   /** Merges the selected templates' entries into the dictionary (enabling existing ones as
@@ -317,18 +249,6 @@ export function Vocab() {
       }
     }
     return failures;
-  };
-
-  const applySelectedPresets = async () => {
-    const selected = presets.filter((p) => selectedPresetIds.includes(p.id));
-    if (selected.length === 0) return;
-    const failures = await applyPresets(selected);
-    await refresh();
-    if (failures > 0) {
-      setError(`部分词条添加失败（${failures}）`);
-    } else {
-      flashSaved();
-    }
   };
 
   const applyNewWordTemplates = async () => {
@@ -407,7 +327,7 @@ export function Vocab() {
         title={t('vocab.title')}
         desc={t('vocab.desc')}
         right={
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             {selectedIds.size > 0 && (
               <button
                 type="button"
@@ -509,55 +429,12 @@ export function Vocab() {
             : t('vocab.selectAllVisible')}
         </label>
         <div style={{ flex: 1 }} />
-        {/* The circular control expands in place into the search box — the magnifier stays
-            fixed at the right edge, the "search" placeholder sits inside the box; collapse
-            uses the same width transition (reverse of expansion). */}
-        <div className={searchOpen ? 'ol-search ol-search-open' : 'ol-search'}>
-          <input
-            className="ol-search-field"
-            type="text"
-            value={query}
-            placeholder={t('vocab.searchPlaceholder')}
-            aria-label={t('vocab.searchPlaceholder')}
-            tabIndex={searchOpen ? 0 : -1}
-            onChange={(e) => setQuery(e.target.value)}
-            onBlur={() => {
-              if (!query) setSearchOpen(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setQuery('');
-                setSearchOpen(false);
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="ol-search-icon"
-            aria-label={t('vocab.searchPlaceholder')}
-            aria-expanded={searchOpen}
-            // Don't let the icon click blur the input: otherwise the blur-collapse and the
-            // click toggle race — a second click would collapse first and then be re-opened
-            // by the toggle, never collapsing.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              if (searchOpen && query) {
-                setQuery('');
-                return;
-              }
-              setSearchOpen((prev) => !prev);
-              if (!searchOpen) {
-                window.setTimeout(() => inputRefSearchFocus(), 60);
-              } else {
-                // After collapsing, the input is invisible; don't leave focus in it.
-                const active = document.activeElement;
-                if (active instanceof HTMLElement && active.closest('.ol-search')) active.blur();
-              }
-            }}
-          >
-            <Icon name="search" size={15} />
-          </button>
-        </div>
+        <ExpandingSearch
+          value={query}
+          onChange={setQuery}
+          placeholder={t('vocab.searchPlaceholder')}
+          label={t('vocab.searchPlaceholder')}
+        />
       </div>
 
       {error && (
@@ -641,122 +518,6 @@ export function Vocab() {
               onEdit={() => openEdit(entry)}
             />
           ))}
-        </div>
-      </div>
-
-      {/* Bottom panel: quick-add row + hints + scene presets as one fixed block. When the
-          scene presets expand, the panel grows taller upward while the gap between the input
-          row and the panel's top edge stays constant. */}
-      <div
-        style={{
-          flexShrink: 0,
-          paddingTop: 14,
-          background: 'var(--ol-surface)',
-          boxShadow: '0 -18px 22px -18px rgba(15,17,22,0.14)',
-        }}
-      >
-        {/* Quick-add row (keeps the original type-and-add flow). */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            ref={inputRef}
-            placeholder={t('vocab.placeholder')}
-            onKeyDown={onKeyDown}
-            style={{
-              flex: 1,
-              height: 36,
-              padding: '0 12px',
-              border: '0.5px solid var(--ol-line-strong)',
-              borderRadius: 999,
-              fontSize: 13,
-              fontFamily: 'inherit',
-              outline: 'none',
-              background: 'var(--ol-surface-2)',
-              transition:
-                'border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick)',
-            }}
-          />
-          <Btn variant="primary" icon="plus" onClick={onAdd}>
-            {t('common.add')}
-          </Btn>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('vocab.tip')}</div>
-
-        {/* Scene presets: card section (shares the same template data as the "new word"
-            modal). Expandable; a divider on top separates it from the input area. */}
-        <div
-          style={{
-            marginTop: 12,
-            paddingTop: 12,
-            borderTop: '0.5px solid var(--ol-line)',
-            paddingBottom: 8,
-          }}
-        >
-          <Card padding={0}>
-            <Collapsible embedded title={t('vocab.presets.title')} desc={t('vocab.presets.tip')}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {presets.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => togglePreset(p.id)}
-                    style={{
-                      border: '0.5px solid var(--ol-line-strong)',
-                      borderRadius: 999,
-                      padding: '4px 10px',
-                      fontSize: 12,
-                      background: selectedPresetIds.includes(p.id)
-                        ? 'var(--ol-blue-soft)'
-                        : 'var(--ol-surface-2)',
-                    }}
-                  >
-                    {p.name}
-                  </button>
-                ))}
-                <Btn size="sm" variant="ghost" onClick={createPreset}>
-                  {t('vocab.presets.create')}
-                </Btn>
-                <Btn size="sm" variant="primary" onClick={applySelectedPresets}>
-                  {t('vocab.presets.apply')}
-                </Btn>
-              </div>
-              {editingPresetId && (
-                <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-                  <input
-                    value={presetNameDraft}
-                    onChange={(e) => setPresetNameDraft(e.target.value)}
-                    placeholder={t('vocab.presets.namePlaceholder')}
-                  />
-                  <textarea
-                    value={presetPhrasesDraft}
-                    onChange={(e) => setPresetPhrasesDraft(e.target.value)}
-                    placeholder={t('vocab.presets.wordsPlaceholder')}
-                    rows={3}
-                  />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <Btn size="sm" variant="primary" onClick={() => void savePreset()}>
-                      {t('vocab.presets.save')}
-                    </Btn>
-                    <Btn size="sm" variant="ghost" onClick={() => setEditingPresetId(null)}>
-                      {t('common.cancel')}
-                    </Btn>
-                  </div>
-                </div>
-              )}
-              {!editingPresetId && presets.length > 0 && (
-                <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {presets.map((p) => (
-                    <Btn
-                      key={`${p.id}-edit`}
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => startEditPreset(p)}
-                    >
-                      {t('vocab.presets.edit', { name: p.name })}
-                    </Btn>
-                  ))}
-                </div>
-              )}
-            </Collapsible>
-          </Card>
         </div>
       </div>
 
@@ -844,8 +605,18 @@ export function Vocab() {
                 color: 'var(--ol-ink)',
               }}
             />
-            <Btn variant="primary" icon="plus" onClick={() => void addNewWord()}>
-              {t('common.add')}
+            <Btn
+              variant="primary"
+              icon={wordAdded ? 'check' : 'plus'}
+              onClick={() => void addNewWord()}
+              style={{
+                borderRadius: 999,
+                height: 38,
+                minWidth: 92,
+                justifyContent: 'center',
+              }}
+            >
+              {wordAdded ? t('common.saved') : t('common.add')}
             </Btn>
           </div>
           <div
@@ -865,6 +636,7 @@ export function Vocab() {
                 <button
                   key={p.id}
                   type="button"
+                  className="ol-pressable"
                   aria-pressed={checked}
                   onClick={() =>
                     setNewWordTemplateIds((prev) =>
@@ -885,7 +657,7 @@ export function Vocab() {
                     background: checked ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                     cursor: 'default',
                     transition:
-                      'background 0.14s var(--ol-motion-quick), border-color 0.14s var(--ol-motion-quick)',
+                      'background 0.14s var(--ol-motion-quick), border-color 0.14s var(--ol-motion-quick), transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1)',
                   }}
                 >
                   <span style={{ minWidth: 0, flex: 1 }}>
@@ -944,11 +716,6 @@ export function Vocab() {
       `}</style>
     </div>
   );
-}
-
-function inputRefSearchFocus() {
-  const el = document.querySelector<HTMLInputElement>('.ol-search-field');
-  el?.focus();
 }
 
 interface WordCardProps {
@@ -1035,7 +802,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   useOverlayMotion(overlayRef, closing, 'backdrop');
-  useOverlayMotion(cardRef, closing);
+  useOverlayMotion(cardRef, closing, 'pop');
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1098,6 +865,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
           </div>
           <button
             type="button"
+            className="ol-pressable"
             aria-label={t('common.close')}
             onClick={onClose}
             style={{
@@ -1112,6 +880,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
+              transition: 'transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1)',
             }}
           >
             <Icon name="close" size={14} />

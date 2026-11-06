@@ -52,7 +52,9 @@ if (previewPageExists) {
 }
 
 // 2. 后端把「润色结果」交给 qa 面板，而不是新窗口。
-if (!/fn show_selection_polish_preview[\s\S]{0,400}?show_qa_window\(app, "polish-preview"\)/.test(lib)) {
+if (
+  !/fn show_selection_polish_preview[\s\S]{0,400}?show_qa_window\(app, "polish-preview"\)/.test(lib)
+) {
   violations.push('show_selection_polish_preview no longer opens the qa panel');
 }
 if (!/emit_to\("qa", SELECTION_POLISH_PREVIEW_SHOWN/.test(lib)) {
@@ -66,18 +68,34 @@ if (/WebviewWindowBuilder::new\(\s*app,\s*"selection-polish-preview"/.test(lib))
 }
 
 // 3. 是否退出润色模式由前端决定（面板可能正在提问对话中）。
-if (!/fn hide_selection_polish_preview[\s\S]{0,300}?clear_selection_polish_preview_pending\(\)/.test(lib)) {
+if (
+  !/fn hide_selection_polish_preview[\s\S]{0,300}?clear_selection_polish_preview_pending\(\)/.test(
+    lib,
+  )
+) {
   violations.push('hide_selection_polish_preview no longer clears the pending flag');
 }
 
 // 4. IPC：预览负载只在「真的处于润色模式」时给出。
-if (!/fn get_selection_polish_preview[\s\S]{0,400}?if !crate::selection_polish_preview_pending\(\)/.test(commands)) {
+if (
+  !/fn get_selection_polish_preview[\s\S]{0,400}?if !crate::selection_polish_preview_pending\(\)/.test(
+    commands,
+  )
+) {
   violations.push('get_selection_polish_preview lost its pending gate');
 }
-if (!/fn confirm_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(commands)) {
+if (
+  !/fn confirm_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(
+    commands,
+  )
+) {
   violations.push('confirm_selection_polish_preview no longer clears the pending flag');
 }
-if (!/fn cancel_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(commands)) {
+if (
+  !/fn cancel_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(
+    commands,
+  )
+) {
   violations.push('cancel_selection_polish_preview no longer clears the pending flag');
 }
 

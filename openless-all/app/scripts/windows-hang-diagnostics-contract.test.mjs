@@ -31,33 +31,64 @@ assert.match(helper, /"schema": "diagnosing-bugs.v1"/);
 assert.match(helper, /"parent_operation_id"/);
 assert.match(helper, /"event_seq"/);
 assert.match(helper, /pub\(crate\) fn health/);
-for (const field of ['dropped', 'queue_closed', 'legacy_unmapped', 'spawn_failed', 'io_failed', 'written', 'flushed']) {
+for (const field of [
+  'dropped',
+  'queue_closed',
+  'legacy_unmapped',
+  'spawn_failed',
+  'io_failed',
+  'written',
+  'flushed',
+]) {
   assert.match(helper, new RegExp(`${field}:`));
 }
 const probes = helper.match(/pub\(crate\) enum Probe \{([\s\S]*?)\n\}/)[1];
-assert.deepEqual([...probes.matchAll(/^\s+(P\d),/gm)].map((m) => m[1]), ['P1', 'P2', 'P3', 'P4', 'P5', 'P6']);
+assert.deepEqual(
+  [...probes.matchAll(/^\s+(P\d),/gm)].map((m) => m[1]),
+  ['P1', 'P2', 'P3', 'P4', 'P5', 'P6'],
+);
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
 assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 8);
 // Both adapters target the same native queue; neither whole-file token presence nor
 // the old host-only dispatcher is sufficient coverage of the reported capsule task.
-const capsuleHost = host.slice(host.indexOf('impl TauriCapsuleWindow {'), host.indexOf('pub(crate) struct TauriCoordinatorHost'));
+const capsuleHost = host.slice(
+  host.indexOf('impl TauriCapsuleWindow {'),
+  host.indexOf('pub(crate) struct TauriCoordinatorHost'),
+);
 const coordinatorHost = host.slice(host.indexOf('pub(crate) struct TauriCoordinatorHost'));
-assert.match(capsuleHost, /run_on_main_thread_observed\(crate::issue1266_debug::Kind::CapsuleDispatch, task\)/);
+assert.match(
+  capsuleHost,
+  /run_on_main_thread_observed\(crate::issue1266_debug::Kind::CapsuleDispatch, task\)/,
+);
 assert.match(capsuleHost, /MainDispatch::new\(kind\)/);
-assert.match(capsuleHost, /self\.app\.run_on_main_thread\(dispatch\.wrap\(move \|\| task\(capsule\)\)\)/);
+assert.match(
+  capsuleHost,
+  /self\.app\.run_on_main_thread\(dispatch\.wrap\(move \|\| task\(capsule\)\)\)/,
+);
 assert.match(capsuleHost, /Kind::MirrorDispatch/);
 assert.match(capsuleHost, /Kind::LayoutDispatch/);
 assert.match(coordinatorHost, /MainDispatch::new\(Kind::HostDispatch\)/);
 assert.match(coordinatorHost, /app\.run_on_main_thread\(dispatch\.wrap\(task\)\)/);
 // beta moved the Windows timer onto a handle-free host. Preserve that ownership
 // boundary while retaining P2 LayoutDispatch provenance on the real queued task.
-const layoutWatch = capsuleHost.slice(capsuleHost.indexOf('fn start_layout_watch('), capsuleHost.indexOf('fn refresh_watched_layout('));
-const windowsLayout = layoutWatch.match(/#\[cfg\(target_os = "windows"\)\]\s*\{([\s\S]*?)\n                \}/)[1];
-assert.match(windowsLayout, /host\.on_main_thread_observed\(crate::issue1266_debug::Kind::LayoutDispatch/);
+const layoutWatch = capsuleHost.slice(
+  capsuleHost.indexOf('fn start_layout_watch('),
+  capsuleHost.indexOf('fn refresh_watched_layout('),
+);
+const windowsLayout = layoutWatch.match(
+  /#\[cfg\(target_os = "windows"\)\]\s*\{([\s\S]*?)\n                \}/,
+)[1];
+assert.match(
+  windowsLayout,
+  /host\.on_main_thread_observed\(crate::issue1266_debug::Kind::LayoutDispatch/,
+);
 assert.ok(windowsLayout.indexOf('move ||') < windowsLayout.indexOf('capsule_window()'));
 assert.doesNotMatch(windowsLayout, /self\.clone\(|capsule\.clone\(|self\.app/);
-assert.match(layoutWatch, /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let capsule = self\.clone\(\)/);
+assert.match(
+  layoutWatch,
+  /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let capsule = self\.clone\(\)/,
+);
 // Bound this assertion by the method's own closing indentation, not the name
 // of an unrelated next method (beta may rename/remove that neighbor).
 function rustMethod(source, signature) {
@@ -73,9 +104,15 @@ const extractionFixture = `impl Host {
     }
     fn unrelated() { app.clone(); }
 }`;
-assert.equal(rustMethod(extractionFixture, 'fn observed('), 'fn observed() {\n        if ready { send(); }\n    }');
+assert.equal(
+  rustMethod(extractionFixture, 'fn observed('),
+  'fn observed() {\n        if ready { send(); }\n    }',
+);
 assert.throws(() => rustMethod(extractionFixture, 'fn missing('), /missing Rust method:/);
-assert.throws(() => rustMethod('    fn unclosed() {', 'fn unclosed('), /missing Rust method boundary:/);
+assert.throws(
+  () => rustMethod('    fn unclosed() {', 'fn unclosed('),
+  /missing Rust method boundary:/,
+);
 const borrowedDispatch = rustMethod(coordinatorHost, 'fn on_main_thread_observed<');
 assert.match(borrowedDispatch, /MainDispatch::new\(kind\)/);
 assert.match(borrowedDispatch, /let task = dispatch\.wrap\(task\)/);
@@ -86,7 +123,10 @@ assert.doesNotMatch(borrowedDispatch, /clone_handle|self\.app\(\)|app\.clone\(/)
 assert.match(helper, /EXECUTING\.with\(Cell::get\)/);
 assert.match(helper, /current\.replace\(Some\(self\.operation\)\)/);
 assert.match(helper, /current\.set\(self\.previous\)/);
-assert.match(helper, /self\.record\(Event::Entered, Outcome::Observed\);\s*task\(\);\s*self\.record\(Event::Returned, Outcome::Returned\)/);
+assert.match(
+  helper,
+  /self\.record\(Event::Entered, Outcome::Observed\);\s*task\(\);\s*self\.record\(Event::Returned, Outcome::Returned\)/,
+);
 assert.match(helper, /thread_label: main_dispatch::thread_label\(\)/);
 assert.match(helper, /"thread_label": record\.thread_label/);
 assert.doesNotMatch(helper, /GetCurrentThreadId|std::thread::current|std::thread::ThreadId/);
@@ -100,18 +140,35 @@ assert.match(recorder, /if let Some\(handle\) = join_handle\.lock\(\)\.take\(\) 
 assert.match(recorder, /if let Some\(handle\) = self\.join_handle\.lock\(\)\.take\(\) \{/);
 assert.match(recorder, /not\(feature = "issue-1266-diagnostics"\), not\(test\)/);
 assert.match(recorder, /issue1266_debug::legacy\(event, outcome\)/);
-assert.ok(lib.indexOf('issue1266_debug::initialize();') < lib.indexOf('tls_crypto::install_tls_crypto_provider();'));
-assert.match(lib, /feature = "issue-1266-diagnostics"\)\)\]\s*#\[tauri::command\]\s*fn issue1266_health/);
+assert.ok(
+  lib.indexOf('issue1266_debug::initialize();') <
+    lib.indexOf('tls_crypto::install_tls_crypto_provider();'),
+);
+assert.match(
+  lib,
+  /feature = "issue-1266-diagnostics"\)\)\]\s*#\[tauri::command\]\s*fn issue1266_health/,
+);
 assert.match(lib, /observe_issue1266_lifecycle\(&event\);\s*match event/);
 
 const ciSteps = Object.values(ci.jobs).flatMap((job) => job.steps ?? []);
 assert.ok(ciSteps.some((step) => /test-windows-hang-diagnostics\.py/.test(step.run ?? '')));
-assert.ok(ciSteps.some((step) => /cargo check.*--features issue-1266-diagnostics/.test(step.run ?? '')));
+assert.ok(
+  ciSteps.some((step) => /cargo check.*--features issue-1266-diagnostics/.test(step.run ?? '')),
+);
 const steps = release.jobs.build.steps;
 assert.equal(release.on.workflow_dispatch.inputs.windows_hang_diagnostics.default, false);
-assert.equal(steps.find((step) => step.uses === 'actions/checkout@v4').with.ref, '${{ inputs.release_tag || github.sha }}');
+assert.equal(
+  steps.find((step) => step.uses === 'actions/checkout@v4').with.ref,
+  '${{ inputs.release_tag || github.sha }}',
+);
 const gate = release.jobs.build.env.OPENLESS_HANG_DIAGNOSTICS;
-for (const fragment of ["workflow_dispatch", "windows-latest", "refs/heads/", "inputs.release_tag == ''"]) assert.ok(gate.includes(fragment));
+for (const fragment of [
+  'workflow_dispatch',
+  'windows-latest',
+  'refs/heads/',
+  "inputs.release_tag == ''",
+])
+  assert.ok(gate.includes(fragment));
 const build = steps.find((step) => step.name === 'Build (Windows)').run;
 assert.match(build, /diagnostic_args=\(--features issue-1266-diagnostics\)/);
 assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles/g) ?? []).length, 4);
@@ -122,11 +179,17 @@ assert.equal(symbolTooling.env.TOOLING_SHA, '${{ github.workflow_sha }}');
 assert.match(symbolTooling.run, /--method GET -f "ref=\$env:TOOLING_SHA"/);
 assert.match(symbolTooling.run, /LASTEXITCODE -ne 0/);
 assert.match(symbolTooling.run, /bytes\.Length -eq 0/);
-assert.match(verify.run, /python -I release-tooling\/openless-all\/app\/scripts\/windows-symbol-pair\.py/);
+assert.match(
+  verify.run,
+  /python -I release-tooling\/openless-all\/app\/scripts\/windows-symbol-pair\.py/,
+);
 assert.ok(steps.indexOf(symbolTooling) < steps.indexOf(verify));
 
 assert.match(verify.run, /LASTEXITCODE -ne 0/);
 const upload = steps.find((step) => step.name === 'Upload Windows artifacts');
 assert.match(upload.with.name, /issue-1266-diagnostics/);
 assert.match(upload.with.path, /openless-symbol-pair\.json/);
-assert.match(steps.find((step) => step.name === 'Write Windows artifact provenance').run, /issue_1266_diagnostics/);
+assert.match(
+  steps.find((step) => step.name === 'Write Windows artifact provenance').run,
+  /issue_1266_diagnostics/,
+);

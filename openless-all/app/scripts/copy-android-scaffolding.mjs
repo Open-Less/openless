@@ -386,7 +386,11 @@ function ensureInstrumentationRunner(dryRun) {
 
 /** CI copies Kotlin without enabling the backend application/services manifest. */
 export function mergeKeyboardSettingsDebugActivity(manifestXml) {
-  if (/android:name=["'](?:com\.openless\.app\.|\.)OpenLessKeyboardSettingsActivity["']/.test(manifestXml)) {
+  if (
+    /android:name=["'](?:com\.openless\.app\.|\.)OpenLessKeyboardSettingsActivity["']/.test(
+      manifestXml,
+    )
+  ) {
     return { content: manifestXml, changed: false };
   }
   const activity = `        <activity
@@ -396,11 +400,17 @@ export function mergeKeyboardSettingsDebugActivity(manifestXml) {
             android:theme="@style/Theme.openless" />`;
   let content;
   if (/<application\b[^>]*\/>/.test(manifestXml)) {
-    content = manifestXml.replace(/<application\b([^>]*)\/>/, `<application$1>\n${activity}\n    </application>`);
+    content = manifestXml.replace(
+      /<application\b([^>]*)\/>/,
+      `<application$1>\n${activity}\n    </application>`,
+    );
   } else if (manifestXml.includes('</application>')) {
     content = manifestXml.replace('</application>', `${activity}\n    </application>`);
   } else if (manifestXml.includes('</manifest>')) {
-    content = manifestXml.replace('</manifest>', `    <application>\n${activity}\n    </application>\n</manifest>`);
+    content = manifestXml.replace(
+      '</manifest>',
+      `    <application>\n${activity}\n    </application>\n</manifest>`,
+    );
   } else {
     throw new Error('Debug manifest is missing </manifest>');
   }

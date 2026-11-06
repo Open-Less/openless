@@ -7,16 +7,36 @@ export type SettingsSectionId =
   | 'shortcuts'
   | 'appearance'
   | 'services'
+  | 'cloudServices'
   | 'privacy'
   | 'advanced'
   | 'about';
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title' },
+  {
+    id: 'voiceEnhancement',
+    icon: 'mic',
+    titleKey: 'settings.advancedPages.voiceEnhancementTitle',
+    group: 'recording',
+  },
+  {
+    id: 'cursorContext',
+    icon: 'search',
+    titleKey: 'settings.advancedPages.cursorContextTitle',
+    group: 'text',
+    inline: true,
+  },
+  {
+    id: 'startupDiagnostics',
+    icon: 'bolt',
+    titleKey: 'settings.advancedPages.startupDiagnosticsTitle',
+    group: 'diagnostics',
+    inline: true,
+  },
   { id: 'testingFeatures', icon: 'sparkle', titleKey: 'settings.testingFeatures.title' },
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
   { id: 'claudeConsole', icon: 'chevLR', titleKey: 'settings.codingConsole.title' },
-  { id: 'vocabularyLearning', icon: 'sparkle', titleKey: 'settings.vocabularyLearning.title' },
   { id: 'customSyncServer', icon: 'cloud', titleKey: 'cloudSyncE2ee.customServerTitle' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
 ] as const;
@@ -38,16 +58,30 @@ export function visibleAdvancedPages(
     if (isTestingFeaturePage(page.id) && !enabled) return false;
     if (page.id === 'lessComputer') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'claudeConsole') return platform === 'desktop' && os === 'mac';
-    if (page.id === 'vocabularyLearning')
-      return (
-        platform === 'android' ||
-        platform === 'harmony' ||
-        (platform === 'desktop' && (os === 'win' || os === 'mac'))
-      );
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';
     return true;
   });
+}
+
+export type AdvancedPageGroup = 'recording' | 'text' | 'diagnostics';
+
+export function advancedPageGroup(page: AdvancedPage): AdvancedPageGroup | undefined {
+  return 'group' in page ? page.group : undefined;
+}
+
+// Cursor context and startup diagnostics stay on the advanced root.
+// Voice enhancement opens its own page, then a third screen for the DSP sliders.
+export function isInlineAdvancedPage(page: AdvancedPage): boolean {
+  return 'inline' in page && page.inline;
+}
+
+// Native readers exist on macOS, Windows, and Android. Generic mobile and Harmony
+// have no cursor-context capture, so the toggle stays hidden there.
+export function showsCursorContextControl(platform: PlatformKind | undefined, os: OS): boolean {
+  if (platform === 'mobile' || platform === 'harmony' || os === 'harmony') return false;
+  if (platform === 'android' || os === 'android') return true;
+  return os === 'mac' || os === 'win';
 }
 
 export interface SettingsNavigationItem {
@@ -59,10 +93,11 @@ export const SETTINGS_SECTIONS: SettingsNavigationItem[] = [
   { id: 'general', icon: 'mic' },
   { id: 'inputMethod', icon: 'keyboard' },
   { id: 'shortcuts', icon: 'bolt' },
-  { id: 'services', icon: 'cloud' },
+  { id: 'services', icon: 'sparkle' },
+  { id: 'cloudServices', icon: 'cloud' },
   { id: 'appearance', icon: 'settings' },
   { id: 'privacy', icon: 'shield' },
-  { id: 'advanced', icon: 'sparkle' },
+  { id: 'advanced', icon: 'flask' },
   { id: 'about', icon: 'info' },
 ];
 

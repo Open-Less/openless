@@ -634,6 +634,19 @@ button:disabled {
   color: var(--ol-ink-3);
   padding: 12px 0;
 }
+/* The advanced list insets its rows by 18px. Inline diagnostics used to start
+   on the border, so the report looked like it had slipped out of the card. */
+.ol-advanced-settings-inline .ol-startup-diagnostics {
+  padding: 2px 18px 16px;
+}
+.ol-advanced-settings-inline .ol-startup-diagnostics pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--ol-surface-2);
+}
 .ol-startup[data-compact] {
   padding: 6px;
 }

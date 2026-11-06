@@ -3,11 +3,17 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-const source = readFileSync(new URL('../harmony/entry/src/main/ets/inputmethod/ClipboardHistory.ets', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('../harmony/entry/src/main/ets/inputmethod/ClipboardHistory.ets', import.meta.url),
+  'utf8',
+);
 const exports = {};
-vm.runInNewContext(ts.transpileModule(source, {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-}).outputText, { exports });
+vm.runInNewContext(
+  ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText,
+  { exports },
+);
 const history = new exports.ClipboardHistory();
 history.add('第一条');
 history.add('第一条');
@@ -31,11 +37,15 @@ restored.remove(pinned);
 assert.equal(restored.get(pinned), '');
 restored.add('x'.repeat(16385));
 assert.equal(restored.list().length, 29, 'oversized text is not silently truncated into history');
-restored.load('[null, {"id":"ok","text":"合法记录","pinned":true,"usedAt":1}, {"id":"ok","text":"重复标识","usedAt":2}]');
+restored.load(
+  '[null, {"id":"ok","text":"合法记录","pinned":true,"usedAt":1}, {"id":"ok","text":"重复标识","usedAt":2}]',
+);
 assert.equal(restored.list().length, 1);
 assert.equal(restored.get('ok'), '合法记录');
 restored.load('invalid');
 assert.equal(restored.list().length, 0);
 history.clear();
 assert.equal(history.serialize(), '[]');
-console.log('Harmony clipboard history: deduplication, pinning, bounds, persistence, deletion and corrupt data passed');
+console.log(
+  'Harmony clipboard history: deduplication, pinning, bounds, persistence, deletion and corrupt data passed',
+);

@@ -24,20 +24,29 @@ const input = {
   hasShortcut: true,
 };
 
-// No service recommendation or success badge may be derived from an unfinished read.
-for (const credentials of [null, configured]) {
-  const loading = getOverviewSetup({ ...input, credentials, loading: true });
-  assert(
-    loading.step === 'loading' && loading.providers.length === 0,
-    'loading must hide stale readiness',
-  );
-}
-const failed = getOverviewSetup({ ...input, error: true });
+const initialLoad = getOverviewSetup({ ...input, credentials: null, loading: true });
+assert(
+  initialLoad.step === 'loading' && initialLoad.providers.length === 0,
+  'the first load has no provider cards yet',
+);
+const refreshing = getOverviewSetup({ ...input, loading: true });
+assert(
+  refreshing.providers.length === 2 &&
+    refreshing.providers[0].id === 'local-whisper' &&
+    refreshing.providers[1].id === 'deepseek',
+  'loading with existing credentials must still return the provider cards',
+);
+const failed = getOverviewSetup({ ...input, credentials: null, error: true });
 assert(
   failed.step === 'unavailable' && failed.action === 'refresh',
   'failed reads must offer retry',
 );
-assert(failed.providers.length === 0, 'a failed read must not present cached providers as current');
+assert(failed.providers.length === 0, 'a failed first read must not invent providers');
+const failedRefresh = getOverviewSetup({ ...input, error: true });
+assert(
+  failedRefresh.providers.length === 2 && failedRefresh.providers[0].id === 'local-whisper',
+  'a failed refresh keeps the last provider cards',
+);
 assert(
   getOverviewSetup({ ...input, credentials: null }).action === 'refresh',
   'missing status is unknown, not unconfigured',

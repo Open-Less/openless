@@ -81,6 +81,9 @@ jobs:
     # cannot alter what Chromium/WebKit paints is pure cost.
     if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
+    # A hung Chromium/WebKit process must not hold the runner after the step cap.
+    # Setup plus the 12 minute dependency cap and the 30 minute browser cap.
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: openless-all/app
@@ -91,8 +94,12 @@ jobs:
           node-version: '22'
       - name: Cache npm from beta
         uses: ./.github/actions/cache-npm
-      - run: npm ci
-      - run: npm run build
+      - name: Install frontend dependencies
+        timeout-minutes: 10
+        run: npm ci
+      - name: Build frontend for UI motion
+        timeout-minutes: 10
+        run: npm run build
       - name: Resolve Playwright browser version
         id: playwright_version
         run: |
@@ -106,17 +113,22 @@ jobs:
           # Browser revisions follow Playwright, not unrelated npm lock changes.
           key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
       - name: Install Playwright system dependencies
-        timeout-minutes: 8
+        # Browser libraries are about 114MB. Eight minutes dies while a trickling
+        # mirror is still transferring fonts, before Playwright starts.
+        timeout-minutes: 12
         run: |
           # Keep regional mirror stalls from blocking browser validation indefinitely.
+          # ubuntu.sources uses mirror+file:/etc/apt/apt-mirrors.txt, so the Azure
+          # host is not in *.list or *.sources.
           printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
             sudo tee /etc/apt/apt.conf.d/80-openless-ci-network >/dev/null
           while IFS= read -r -d '' apt_source; do
             sudo sed -i -E 's#https?://azure[.]archive[.]ubuntu[.]com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$apt_source"
-          done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+          done < <(find /etc/apt -type f \( -name '*.list' -o -name '*.sources' -o -name 'apt-mirrors.txt' \) -print0)
           npx playwright install-deps chromium webkit
       - name: Install Playwright browsers on cache miss
         if: steps.playwright_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
         run: npx playwright install chromium webkit
       - name: Save Playwright browsers on beta builds
         if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -124,7 +136,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - run: npm run test:ui-motion
+      - name: Run Chromium and WebKit UI motion checks
+        timeout-minutes: 30
+        run: npm run test:ui-motion
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -650,6 +664,9 @@ jobs:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     # Dispatch-only fallback; push/PR runs keep the default matrix and all test gates.
     runs-on: ${{ matrix.label == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.macos_runner || matrix.os }}
+    # Step caps below are shorter than this job cap. A hung Rust, recorder, IME,
+    # or COM step then fails under its own name instead of the runner being
+    # killed with no usable log.
     timeout-minutes: 60
     env:
       # The shared Core and full Tauri test binary compile together; limit concurrency
@@ -705,6 +722,9 @@ jobs:
         with:
           # Same prefix as `release-tauri.yml`, which is what lets a tag build
           # restore the baseline branch's dependency tree instead of a cold one.
+          # `swatinem/rust-cache` keys the host arch, not the Rust target triple.
+          # Manual Intel runs and the arm64 default must not share one macOS tree.
+          prefix-key: v0-rust-${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
           shared-key: tauri-macos
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
@@ -713,6 +733,7 @@ jobs:
 
       - name: Prepare Windows Sherpa static libraries
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         shell: pwsh
         run: ./scripts/prepare-windows-sherpa.ps1
 
@@ -778,6 +799,7 @@ jobs:
         # the cfg/link coverage here; the shared Core's public compatibility contract is actually
         # executed in the next step.
         if: runner.os == 'Windows'
+        timeout-minutes: 40
         # `--bins` keeps the binary coverage that the removed `cargo check` used to
         # provide: `cargo check` writes metadata, so the following codegen pass
         # recompiled the whole dependency graph anyway (measured: 6.4 min of it).
@@ -786,19 +808,24 @@ jobs:
       # Feature-on production cfg must compile too; standalone tests below actually run
       # the sink on Windows/macOS without optional Tauri runtime DLL entrypoints.
       - name: Compile opt-in Windows hang diagnostics host
+        timeout-minutes: 25
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1266-diagnostics
 
       - name: Run isolated Windows hang diagnostics tests (off/on)
+        timeout-minutes: 10
         run: python scripts/test-windows-hang-diagnostics.py
 
       - name: Run owner-thread target ownership tests
+        timeout-minutes: 10
         run: python scripts/test-windows-runtime-target.py
 
       - name: Run real Windows runtime ownership lifecycle
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         run: python scripts/test-windows-runtime-target.py --runtime
 
       - name: Run Windows symbol-pair format tests
+        timeout-minutes: 10
         run: python scripts/windows-symbol-pair.test.py
 
       - name: Run Rust-only backend unit tests (Windows)
@@ -806,25 +833,30 @@ jobs:
         # Core contract only. Windows-specific Tauri tests on this runner only get the cfg/link
         # compile coverage from the step above.
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
 
       - name: Run native recorder module tests (Windows)
         # Exercise the production recorder module without hardware, Tauri, MLX, or ASR submodules.
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         run: python scripts/test-recorder-module.py
 
       - name: Run Windows audio COM lifecycle tests
         # These tests use independent processes for COM/enumerator lifetime checks and do not
         # require a microphone. Device-dependent capture/playback tests remain explicitly ignored.
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         run: cargo test --locked --manifest-path src-tauri/vendor/cpal/Cargo.toml --lib --test windows_lifecycle
 
       - name: Check Tauri backend with Rust 1.99 MSRV
         if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
+        timeout-minutes: 30
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Compile backend tests with Rust 1.99 MSRV
         if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
+        timeout-minutes: 30
         run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
 
       - name: Build the Windows TSF input method
@@ -832,11 +864,13 @@ jobs:
         # nothing else in CI ever compiles it. A compile error here would
         # otherwise only surface on a Windows machine with Visual Studio.
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         uses: microsoft/setup-msbuild@v2
         with:
           msbuild-version: '17.x'
       - name: Compile the TSF IME (x64, Release)
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         working-directory: openless-all/app/windows-ime
         run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
 

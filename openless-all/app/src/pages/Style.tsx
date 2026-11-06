@@ -172,6 +172,7 @@ export function Style() {
   const [busy, setBusy] = useState<BusyAction>('loading');
   const [saveState, setSaveState] = useState<SaveToastState>('idle');
   const [saveMessage, setSaveMessage] = useState('');
+  const [saveReplay, setSaveReplay] = useState(0);
   const statusTimer = useRef<number | null>(null);
   const pendingDeletes = useRef(
     new Map<string, { pack: StylePack; timer: number; index: number; committing: boolean }>(),
@@ -222,6 +223,7 @@ export function Style() {
     }
     setSaveState(state);
     setSaveMessage(message);
+    setSaveReplay((current) => current + 1);
     // Auto-dismiss: success/info default to ~1.6s; failure gets longer so users can read it
     // (6s). The "saving" in-progress state never auto-dismisses (waits for a real terminal
     // state to overwrite it).
@@ -235,7 +237,7 @@ export function Style() {
     }
   };
 
-  const loadPacks = async (preferredId?: string | null) => {
+  const loadPacks = async (preferredId?: string | null, notify = false) => {
     const sequence = ++loadSequence.current;
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
@@ -252,6 +254,7 @@ export function Style() {
         next[0]?.id ||
         null;
       setSelectedId(nextSelectedId);
+      if (notify) showSaveStatus('saved', t('common.refreshed'), true);
     } catch (loadError) {
       if (sequence === loadSequence.current)
         showSaveStatus('failed', t('style.pack.loadFailed', { err: String(loadError) }));
@@ -809,7 +812,7 @@ export function Style() {
             <Btn
               variant="ghost"
               icon="refresh"
-              onClick={() => void loadPacks(selectedId)}
+              onClick={() => void loadPacks(selectedId, true)}
               disabled={busy === 'loading'}
             >
               {t('common.refresh')}
@@ -831,6 +834,7 @@ export function Style() {
           buttons for long. */}
       <SavedToast
         saveState={undoDelete ? 'saved' : saveState}
+        replayKey={saveReplay}
         message={
           undoDelete ? t('style.pack.deleteSuccess', { name: undoDelete.name }) : saveMessage
         }

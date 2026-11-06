@@ -47,7 +47,10 @@ const coordinatorRs =
   '\n' +
   (await readFile(new URL('../src-tauri/src/capsule_snapshot.rs', import.meta.url), 'utf-8')) +
   '\n' +
-  (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')) +
+  (await readFile(
+    new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url),
+    'utf-8',
+  )) +
   '\n' +
   capsuleHitTestRs;
 const tauriEventsRs = await readFile(
@@ -249,6 +252,16 @@ assertMatch(
   coordinatorRs,
   /fn hide_capsule_window_if_present\(\)/,
   'windows capsule lifecycle should include an explicit native hide helper',
+);
+assertMatch(
+  coordinatorRs,
+  /fn capsule_cursor_update\([\s\S]*?CapsuleState::Done[\s\S]*?CapsuleState::Cancelled[\s\S]*?CapsuleState::Error[\s\S]*?CapsuleState::Idle[\s\S]*?SuspendHitsUntilInteractive/,
+  'closing the openless capsule must not enable passthrough while the undecorated window is visible',
+);
+assertMatch(
+  coordinatorRs,
+  /if action == CapsuleWindowAction::HideCapsule \{[\s\S]*?hide_capsule_window_if_present\(\);[\s\S]*?self\.hide\(\);[\s\S]*?self\.update_cursor_for_payload\(payload, style\);/,
+  'capsule hide must finish before any cursor or style change',
 );
 assertMatch(
   coordinatorRs,

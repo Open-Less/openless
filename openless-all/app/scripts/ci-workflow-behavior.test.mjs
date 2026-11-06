@@ -26,15 +26,17 @@ const freeEmulatorSpace = androidSteps.find(
   (step) => step.name === 'Free disk space before Android emulator restore',
 );
 assert.ok(
-  androidSteps.indexOf(freeEmulatorSpace) > androidSteps.findIndex(
-    (step) => step.name === 'Run JVM credential tests and compile instrumentation tests',
-  ),
+  androidSteps.indexOf(freeEmulatorSpace) >
+    androidSteps.findIndex(
+      (step) => step.name === 'Run JVM credential tests and compile instrumentation tests',
+    ),
   'free build files only after the packaged test APK is ready',
 );
 assert.ok(
-  androidSteps.indexOf(freeEmulatorSpace) < androidSteps.findIndex(
-    (step) => step.name === 'Restore the pinned Android emulator and system image',
-  ),
+  androidSteps.indexOf(freeEmulatorSpace) <
+    androidSteps.findIndex(
+      (step) => step.name === 'Restore the pinned Android emulator and system image',
+    ),
   'make room before extracting the large emulator cache',
 );
 const runtimeDependencies = androidSteps.find(
@@ -241,15 +243,24 @@ try {
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, 'build-artifact'), 'temporary build output');
     const packaged = join(test.dir, 'src-tauri/gen/android/app/src/main');
-    for (const path of ['jniLibs/x86_64/libopenless_rime.so', 'assets/rime/pinyin_simp.schema.yaml']) {
+    for (const path of [
+      'jniLibs/x86_64/libopenless_rime.so',
+      'assets/rime/pinyin_simp.schema.yaml',
+    ]) {
       const staged = join(packaged, path);
       mkdirSync(dirname(staged), { recursive: true });
       writeFileSync(staged, 'packaged runtime input');
     }
     assert.equal(test.run(freeEmulatorSpace.run).status, 0);
     assert.equal(existsSync(cache), false);
-    assert.equal(readFileSync(join(packaged, 'jniLibs/x86_64/libopenless_rime.so'), 'utf8'), 'packaged runtime input');
-    assert.equal(readFileSync(join(packaged, 'assets/rime/pinyin_simp.schema.yaml'), 'utf8'), 'packaged runtime input');
+    assert.equal(
+      readFileSync(join(packaged, 'jniLibs/x86_64/libopenless_rime.so'), 'utf8'),
+      'packaged runtime input',
+    );
+    assert.equal(
+      readFileSync(join(packaged, 'assets/rime/pinyin_simp.schema.yaml'), 'utf8'),
+      'packaged runtime input',
+    );
     assert.match(test.trace(), /sudo rm -rf \/usr\/share\/dotnet \/usr\/local\/\.ghcup/);
   }
   for (const [name, env, expected, curls, sdkCalls] of [
