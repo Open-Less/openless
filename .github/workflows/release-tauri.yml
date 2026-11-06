@@ -33,7 +33,7 @@ on:
       platform:
         description: Desktop platforms to build (branch builds do not publish)
         type: choice
-        options: [all, macos, windows]
+        options: [all, macos, macos-aarch64, macos-x86_64, windows]
         default: all
       windows_hang_diagnostics:
         description: Opt-in issue 1266 Windows observation build (branch dispatch only)
@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-aarch64' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-x86_64' && '[{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # A release build takes ~33 minutes from a cold cache; anything past this is
     # a hang that would otherwise hold the runner and the release for hours.
