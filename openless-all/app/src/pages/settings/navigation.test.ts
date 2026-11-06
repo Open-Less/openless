@@ -1,7 +1,6 @@
 import {
   ADVANCED_PAGES,
   SETTINGS_SECTIONS,
-  advancedPageGroup,
   searchSettingsSections,
   showsCursorContextControl,
   visibleSettingsSections,
@@ -84,22 +83,22 @@ assert.equal(
   'desktop hides Android input method settings',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'win', true).some((item) => item.id === 'lessComputer'),
-  true,
-  'Windows retains Less Computer configuration',
+  visibleAdvancedPages('desktop', 'win').some((item) => String(item.id) === 'lessComputer'),
+  false,
+  'Less Computer is retired even for opted-in devices',
 );
 assert.equal(
-  visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'claudeConsole'),
+  visibleAdvancedPages('desktop', 'win').some((item) => String(item.id) === 'claudeConsole'),
   false,
   'the macOS Claude console is not exposed on Windows',
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
   [
+    'experiments',
     'voiceEnhancement',
     'cursorContext',
     'startupDiagnostics',
-    'testingFeatures',
     'customSyncServer',
     'debug',
   ],
@@ -131,18 +130,7 @@ assert.equal(
   false,
   'vocabulary learning is not a settings route',
 );
-assert.deepEqual(
-  ADVANCED_PAGES.flatMap((item) => {
-    const group = advancedPageGroup(item);
-    return group ? [[item.id, group]] : [];
-  }),
-  [
-    ['voiceEnhancement', 'recording'],
-    ['cursorContext', 'text'],
-    ['startupDiagnostics', 'diagnostics'],
-  ],
-  'recording, text, and diagnostics experiments stay grouped',
-);
+
 const sectionIds = SETTINGS_SECTIONS.map((item) => item.id);
 assert.equal(
   sectionIds.indexOf('cloudServices'),
@@ -172,8 +160,8 @@ assert.equal(
 
 assert.equal(
   visibleAdvancedPages('desktop', 'mac')[0].id,
-  'localModels',
-  'macOS experiments entry is first',
+  'experiments',
+  'debugging opens experiments through a subpage',
 );
 assert.equal(
   visibleAdvancedPages('desktop', 'win').some((page) => page.id === 'localModels'),
@@ -278,10 +266,10 @@ assert.equal(
 assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
   [
+    'experiments',
     'voiceEnhancement',
     'cursorContext',
     'startupDiagnostics',
-    'testingFeatures',
     'customSyncServer',
     'debug',
   ],
@@ -296,17 +284,17 @@ for (const os of ['mac', 'win', 'android'] as const) {
     `${os}: unfinished features are hidden without a device opt-in`,
   );
   assert.equal(
-    visibleAdvancedPages('desktop', os).some((item) => item.id === 'testingFeatures'),
-    true,
-    `${os}: the Beta opt-in page remains reachable`,
+    visibleAdvancedPages('desktop', os).some((item) => String(item.id) === 'testingFeatures'),
+    false,
+    `${os}: the retired Beta feature switch is removed`,
   );
 }
 assert.deepEqual(
-  visibleAdvancedPages('desktop', 'mac', true)
+  visibleAdvancedPages('desktop', 'mac')
     .filter((item) => ['lessComputer', 'claudeConsole'].includes(item.id))
     .map((item) => item.id),
-  ['lessComputer', 'claudeConsole'],
-  'macOS exposes both testing features after opt-in',
+  [],
+  'retired testing features cannot be restored by saved opt-in',
 );
 
 assert.equal(

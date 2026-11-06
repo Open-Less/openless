@@ -133,7 +133,7 @@ function AndroidOnboarding({ onComplete }: OnboardingProps) {
           style={{
             background: 'var(--ol-surface)',
             border: '0.5px solid var(--ol-line)',
-            borderRadius: 14,
+            borderRadius: 'var(--ol-r-lg)',
             boxShadow: 'var(--ol-shadow-lg)',
             padding: 18,
             display: 'flex',
@@ -146,7 +146,9 @@ function AndroidOnboarding({ onComplete }: OnboardingProps) {
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)', marginBottom: 4 }}>
               {t('onboarding.androidStepCounter', { current: stepIndex + 1, total: steps.length })}
             </div>
-            <div style={{ fontSize: 17, fontWeight: 650 }}>{current.title}</div>
+            <div style={{ fontSize: 17, fontWeight: 'var(--ol-font-weight-demibold)' }}>
+              {current.title}
+            </div>
             <div
               style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, marginTop: 5 }}
             >
@@ -357,7 +359,9 @@ function BrandHeader({
         }}
       />
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: compact ? 17 : 18, fontWeight: 650 }}>{title}</div>
+        <div style={{ fontSize: compact ? 17 : 18, fontWeight: 'var(--ol-font-weight-demibold)' }}>
+          {title}
+        </div>
         <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', marginTop: 2, lineHeight: 1.45 }}>
           {desc}
         </div>
@@ -374,7 +378,7 @@ function AndroidStepCard({ children }: { children: ReactNode }) {
         flexDirection: 'column',
         gap: 12,
         padding: 14,
-        borderRadius: 10,
+        borderRadius: 'var(--ol-r-md)',
         background: 'var(--ol-surface-2)',
         border: '0.5px solid var(--ol-line-soft)',
         minWidth: 0,
@@ -411,7 +415,7 @@ const primaryButtonStyle = {
   fontWeight: 'var(--ol-font-weight-semibold)',
   fontFamily: 'inherit',
   border: 0,
-  borderRadius: 10,
+  borderRadius: 'var(--ol-r-md)',
   background: 'var(--ol-primary-solid-bg)',
   color: 'var(--ol-primary-solid-ink)',
   cursor: 'default',
@@ -425,7 +429,7 @@ const secondaryButtonStyle = {
   fontWeight: 'var(--ol-font-weight-semibold)',
   fontFamily: 'inherit',
   border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 10,
+  borderRadius: 'var(--ol-r-md)',
   background: 'var(--ol-surface)',
   color: 'var(--ol-ink-2)',
   cursor: 'default',
@@ -438,7 +442,7 @@ const plainButtonStyle = {
   fontWeight: 'var(--ol-font-weight-medium)',
   fontFamily: 'inherit',
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-4)',
   cursor: 'default',

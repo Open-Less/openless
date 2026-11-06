@@ -112,7 +112,7 @@ button:disabled {
   font-size: 13px;
   padding: 4px 8px;
   margin-bottom: 6px;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
 }
 .ol-settings-sections {
   width: 100%;
@@ -152,7 +152,7 @@ button:disabled {
   height: 36px;
   padding: 0 11px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   color: var(--ol-ink);
   background: var(--ol-surface);
   font: inherit;
@@ -190,7 +190,7 @@ button:disabled {
 .ol-shortcuts-filters h3 {
   font-size: 11px;
   color: var(--ol-ink-3);
-  font-weight: 500;
+  font-weight: var(--ol-font-weight-medium);
   margin: 0 10px 8px;
 }
 .ol-shortcuts-filters nav + nav {
@@ -201,7 +201,7 @@ button:disabled {
   width: 100%;
   padding: 8px 10px;
   margin: 2px 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   font-size: 13px;
   font-weight: var(--ol-font-weight-medium);
   text-align: left;
@@ -257,7 +257,7 @@ button:disabled {
   max-width: 100%;
   min-height: 32px;
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   text-align: center;
 }
 .ol-shortcut-binding > span {
@@ -267,7 +267,7 @@ button:disabled {
 .ol-shortcut-recording {
   background: var(--ol-blue-soft);
   border: 1px solid var(--ol-blue);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   padding: 10px 12px;
   color: var(--ol-ink);
   font-size: 12px;
@@ -427,7 +427,7 @@ button:disabled {
   padding: 7px 12px;
   font-size: 12.5px;
   white-space: nowrap;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   border: 1px solid var(--ol-line);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
@@ -492,7 +492,7 @@ button:disabled {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   color: var(--ol-blue);
 }
 .ol-global-downloads {
@@ -508,7 +508,7 @@ button:disabled {
 .ol-download-card {
   padding: 10px 12px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface);
   box-shadow: var(--ol-shadow-lg);
 }
@@ -616,7 +616,7 @@ button:disabled {
   padding: 8px 14px;
   background: var(--ol-primary-solid-bg);
   color: var(--ol-primary-solid-ink);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   margin: 10px;
 }
 .ol-startup details {
@@ -644,7 +644,7 @@ button:disabled {
   max-height: 220px;
   overflow: auto;
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
 }
 .ol-startup[data-compact] {
@@ -673,7 +673,7 @@ button:disabled {
 .ol-skeleton {
   position: relative;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface-2);
 }
 .ol-skeleton-heading {
@@ -707,7 +707,7 @@ button:disabled {
   }
   .ol-shortcut-binding:hover {
     background: var(--ol-surface-2);
-    border-radius: 6px;
+    border-radius: var(--ol-r-sm);
   }
 }
 @media (max-width: 840px) {

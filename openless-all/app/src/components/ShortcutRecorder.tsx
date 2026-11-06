@@ -287,7 +287,7 @@ export function ShortcutRecorder({
     fontSize: 12,
     padding: '5px 12px',
     border: '0.5px solid var(--ol-line-strong)',
-    borderRadius: 6,
+    borderRadius: 'var(--ol-r-sm)',
     background: 'transparent',
     color: 'var(--ol-ink-2)',
     fontFamily: 'inherit',

@@ -1349,6 +1349,7 @@ export const en: typeof zhCN = {
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
       cursorContextTitle: 'Cursor context and short-input behavior',
       startupDiagnosticsTitle: 'Startup diagnostics',
@@ -2348,6 +2349,9 @@ export const en: typeof zhCN = {
         'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
       streamingInsertHintLinux:
         'Uses fcitx5 plugin for text submission; streaming insertion uses enigo + XTest for keystroke synthesis.',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Show live transcript in the input box (Windows)',
       windowsCompositionInputDesc:
         'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
@@ -2536,6 +2540,8 @@ export const en: typeof zhCN = {
     details: 'Show error details',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: 'Service settings',
       llm: 'Language models',
@@ -2561,6 +2567,7 @@ export const en: typeof zhCN = {
     backToTestingFeatures: 'Back to features under testing',
     back: 'Back',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
       localModels: experimentalAsr.description,
       testingFeatures: 'Opt in to features that are still being tested.',
@@ -2609,7 +2616,7 @@ export const en: typeof zhCN = {
       services: 'AI & models',
       cloudServices: 'Cloud services',
       privacy: 'Permissions & data',
-      advanced: 'Experiments & extensions',
+      advanced: 'Debugging tools',
       personalize: 'Personalize',
       about: 'About & updates',
       helpCenter: 'Help center',

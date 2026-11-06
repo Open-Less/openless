@@ -427,18 +427,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
-  // Warm up the shader compile cache while idle so the first hotkey press doesn't
-  // compile on the spot (perceived response latency).
+  // Only the selected Siri style needs a GPU warmup; classic/typeless never allocate it.
   useEffect(() => {
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number })
-      .requestIdleCallback;
-    if (idle) {
-      idle(() => warmUpSiriShaders());
-      return;
-    }
+    if (capsuleStyle !== 'siri') return;
     const timer = setTimeout(() => warmUpSiriShaders(), 1200);
     return () => clearTimeout(timer);
-  }, []);
+  }, [capsuleStyle]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -765,6 +759,58 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       console.warn('[capsule] transcript visibility sync failed', error),
     );
   }, [transcriptVisible]);
+
+  useEffect(() => {
+    if (!isTauri || os !== 'mac') return;
+    let stopped = false;
+    let frame = 0;
+    let last = '';
+    const sync = async () => {
+      if (stopped) return;
+      const interactive =
+        !!insertFallback || suggestions.length > 0 || (state !== 'idle' && !leaving);
+      const rects = interactive
+        ? Array.from(
+            document.querySelectorAll<HTMLElement>(
+              'button:not(:disabled), input, select, textarea, [role="button"], [role="menuitem"]',
+            ),
+          )
+            .filter((node) => node.getClientRects().length > 0)
+            .map((node) => {
+              const r = node.getBoundingClientRect();
+              return { left: r.left, top: r.top, width: r.width, height: r.height };
+            })
+            .filter((r) => r.width > 0 && r.height > 0)
+        : [];
+      const serialized = JSON.stringify(rects);
+      if (serialized !== last) {
+        last = serialized;
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (!stopped) await invoke('set_capsule_interactive_regions', { rects }).catch(() => {});
+      }
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        void sync();
+      });
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'hidden', 'disabled'],
+    });
+    window.addEventListener('resize', schedule);
+    schedule();
+    return () => {
+      stopped = true;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [os, state, leaving, insertFallback, suggestions.length]);
 
   // Always release the native hit-test region when the capsule webview is torn down.
   useEffect(() => {

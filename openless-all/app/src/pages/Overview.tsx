@@ -589,7 +589,7 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
         style={{
           width: 32,
           height: 32,
-          borderRadius: 8,
+          borderRadius: 'var(--ol-control-radius)',
           flexShrink: 0,
           background: 'var(--ol-blue-soft)',
           color: 'var(--ol-blue)',
@@ -776,7 +776,7 @@ function SegmentedToggle<T extends string | number>({
         display: 'flex',
         gap: 2,
         padding: 2,
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'var(--ol-surface-2)',
         border: '0.5px solid var(--ol-line)',
       }}
@@ -796,7 +796,7 @@ function SegmentedToggle<T extends string | number>({
                 ? 'var(--ol-font-weight-semibold)'
                 : 'var(--ol-font-weight-medium)',
               border: 0,
-              borderRadius: 6,
+              borderRadius: 'var(--ol-r-sm)',
               background: selected ? 'var(--ol-blue)' : 'transparent',
               color: selected ? '#fff' : 'var(--ol-ink-3)',
               cursor: 'pointer',

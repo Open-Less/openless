@@ -73,6 +73,7 @@
 
   /* Radii */
   --ol-shell-radius: 32px;
+  --ol-surface-radius: 24px;
   --ol-panel-radius: 18px;
   --ol-card-radius: 14px;
   --ol-pill-radius: 999px;
@@ -85,6 +86,9 @@
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --ol-font-weight-regular: 400;
+  --ol-font-weight-bold: 700;
+  --ol-font-weight-demibold: 650;
   --ol-font-weight-medium: 500;
   --ol-font-weight-semibold: 600;
   --ol-font-display: var(--ol-font-sans);
@@ -237,6 +241,9 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-regular: 360;
+  --ol-font-weight-bold: 660;
+  --ol-font-weight-demibold: 610;
   --ol-font-weight-medium: 460;
   --ol-font-weight-semibold: 560;
   --ol-accent-solid-bg: #3b82f6;

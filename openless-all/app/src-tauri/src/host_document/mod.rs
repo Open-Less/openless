@@ -41,7 +41,7 @@ mod windows;
 pub(crate) use windows::insert_with_delivery_check;
 
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};
+pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome, LiveComposition};
 
 // `minimal_edit` is currently used only by the macOS observation callback; no consumer on non-macOS builds.
 #[allow(unused_imports)]

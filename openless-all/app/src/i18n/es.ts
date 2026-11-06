@@ -1303,6 +1303,7 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
       cursorContextTitle: 'Contexto del cursor y frases cortas',
       startupDiagnosticsTitle: 'Diagnóstico de inicio',
@@ -2392,6 +2393,9 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
@@ -2585,6 +2589,8 @@ export const es: typeof zhCN = {
     details: 'Mostrar detalles del error',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: 'Ajustes de servicios',
       llm: 'Modelos de lenguaje',
@@ -2610,6 +2616,7 @@ export const es: typeof zhCN = {
     back: 'Atrás',
     backToTestingFeatures: 'Volver a funciones en fase de pruebas',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer:
         'Solo para servicios propios; la sincronización oficial no requiere configuración.',
       localModels: experimentalAsr.description,

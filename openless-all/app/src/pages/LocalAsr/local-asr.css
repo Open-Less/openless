@@ -45,7 +45,7 @@
   display: grid;
   grid-template-columns: minmax(230px, 0.85fr) minmax(0, 1.15fr);
   border: 1px solid var(--ol-line);
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   overflow: hidden;
   background: var(--ol-surface);
 }
@@ -85,7 +85,7 @@
   min-width: 0;
   padding: 14px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-settings-rail-bg);
   color: var(--ol-ink);
   font: inherit;
@@ -235,7 +235,7 @@
   gap: 12px;
   padding: 38px 24px;
   border: 1px solid var(--ol-line);
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface);
   text-align: center;
 }
@@ -244,7 +244,7 @@
   place-items: center;
   width: 52px;
   height: 52px;
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   color: var(--ol-blue);
 }
@@ -304,7 +304,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface-2);
   font-size: 13px;
   color: var(--ol-ink-3);
@@ -404,7 +404,7 @@
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
   color: var(--ol-ink);
   font: inherit;
@@ -416,7 +416,7 @@
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
   cursor: pointer;
@@ -451,7 +451,7 @@
 }
 .ol-model-filters button {
   border: 1px solid var(--ol-line);
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   padding: 5px 9px;
   background: var(--ol-surface);
   font: inherit;
@@ -547,7 +547,7 @@
   }
   .ol-model-dialog {
     height: calc(100dvh - 20px);
-    border-radius: 12px;
+    border-radius: var(--ol-r-lg);
   }
   .ol-model-dialog-header {
     padding: 18px;

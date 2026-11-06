@@ -31,7 +31,6 @@ import {
   searchSettingsSections,
   visibleSettingsSections,
   visibleAdvancedPages,
-  isTestingFeaturePage,
   type AdvancedPageId,
   type ServiceViewId,
   type SettingsSectionId,
@@ -86,7 +85,7 @@ export function SettingsModal({
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const experimentalAsr = useExperimentalAsr(platformCaps?.platform === 'desktop' && os === 'mac');
-  const { prefs, updatePrefs } = useHotkeySettings();
+  const { updatePrefs } = useHotkeySettings();
   const [asrNavigation, setAsrNavigation] = useState(0);
   const openExperimentalAsrChannels = async () => {
     const navigated = await providerForm.finish(async () => {
@@ -135,8 +134,7 @@ export function SettingsModal({
   );
   const searching = query.trim().length > 0;
   const results = searchSettingsSections(sections, query);
-  const testingFeaturesEnabled = prefs?.testingFeaturesEnabled === true;
-  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os, testingFeaturesEnabled);
+  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os);
   const activeAdvancedPage =
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
@@ -203,8 +201,8 @@ export function SettingsModal({
 
   useEffect(() => {
     if (advancedPage && !advancedPages.some((page) => page.id === advancedPage))
-      setAdvancedPage(isTestingFeaturePage(advancedPage) ? 'testingFeatures' : null);
-  }, [advancedPage, platformCaps, os, testingFeaturesEnabled]);
+      setAdvancedPage(null);
+  }, [advancedPage, platformCaps, os]);
 
   const openAdvancedPage = (page: AdvancedPageId) => {
     setAdvancedPage(page);
@@ -217,7 +215,7 @@ export function SettingsModal({
       return;
     }
     const previousPage = advancedPage;
-    setAdvancedPage(isTestingFeaturePage(previousPage) ? 'testingFeatures' : null);
+    setAdvancedPage(previousPage === 'experiments' ? null : 'experiments');
     window.requestAnimationFrame(() => {
       surfaceRef.current
         ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
@@ -288,7 +286,7 @@ export function SettingsModal({
         alignItems: 'center',
         gap: 8,
         padding: '7px 10px',
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         border: '0.5px solid var(--ol-line-strong)',
         background: 'var(--ol-surface)',
         minWidth: 0,
@@ -393,7 +391,14 @@ export function SettingsModal({
                   flexShrink: 0,
                 }}
               >
-                <div style={{ flex: 1, order: 0, fontSize: 17, fontWeight: 650 }}>
+                <div
+                  style={{
+                    flex: 1,
+                    order: 0,
+                    fontSize: 17,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
+                  }}
+                >
                   {t('shell.footer.settings')}
                 </div>
                 <button
@@ -536,20 +541,8 @@ export function SettingsModal({
                             type="button"
                             className="ol-settings-back"
                             onClick={backToAdvanced}
-                            aria-label={t(
-                              showingVoiceSettings
-                                ? 'modal.back'
-                                : isTestingFeaturePage(advancedPage)
-                                  ? 'modal.backToTestingFeatures'
-                                  : 'modal.backToAdvanced',
-                            )}
-                            title={t(
-                              showingVoiceSettings
-                                ? 'modal.back'
-                                : isTestingFeaturePage(advancedPage)
-                                  ? 'modal.backToTestingFeatures'
-                                  : 'modal.backToAdvanced',
-                            )}
+                            aria-label={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
+                            title={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
                           >
                             <Icon name="chevLeft" size={19} />
                           </button>
@@ -562,7 +555,7 @@ export function SettingsModal({
                             flex: 1,
                             minWidth: 0,
                             fontSize: 21,
-                            fontWeight: 650,
+                            fontWeight: 'var(--ol-font-weight-demibold)',
                             letterSpacing: '-0.025em',
                             outline: 'none',
                             overflow: 'hidden',
@@ -592,7 +585,7 @@ export function SettingsModal({
                           style={{
                             margin: 0,
                             fontSize: 20,
-                            fontWeight: 650,
+                            fontWeight: 'var(--ol-font-weight-demibold)',
                             letterSpacing: '-0.025em',
                             outline: 'none',
                           }}
@@ -676,7 +669,7 @@ export function SettingsModal({
                               style={{
                                 padding: '24px 16px',
                                 border: '0.5px solid var(--ol-line)',
-                                borderRadius: 10,
+                                borderRadius: 'var(--ol-r-md)',
                                 textAlign: 'center',
                               }}
                             >
@@ -793,7 +786,7 @@ const iconButtonStyle: CSSProperties = {
   height: 30,
   padding: 0,
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-3)',
   cursor: 'pointer',
@@ -804,7 +797,7 @@ const navButtonStyle: CSSProperties = {
   gap: 10,
   padding: '8px 10px',
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-2)',
   font: 'inherit',
@@ -820,7 +813,7 @@ const railButtonStyle: CSSProperties = {
   gap: 10,
   flexShrink: 0,
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   fontFamily: 'inherit',
   fontSize: 14,
   textAlign: 'left',

@@ -637,12 +637,12 @@ export function Marketplace() {
                 gap: 8,
                 height: 30,
                 padding: '0 12px',
-                borderRadius: 9,
+                borderRadius: 'var(--ol-r-md)',
                 border: '0.5px solid var(--ol-line-strong)',
                 background: 'var(--ol-surface)',
                 color: 'var(--ol-ink-2)',
                 fontSize: 12,
-                fontWeight: 650,
+                fontWeight: 'var(--ol-font-weight-demibold)',
                 cursor: 'pointer',
                 boxShadow: '0 1px 2px rgba(15,17,22,0.04)',
               }}
@@ -694,7 +694,7 @@ export function Marketplace() {
                 padding: '6px 10px',
                 fontSize: 12,
                 border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 8,
+                borderRadius: 'var(--ol-control-radius)',
                 cursor: 'pointer',
                 background: sort === p.id ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                 color: sort === p.id ? 'var(--ol-blue)' : 'var(--ol-ink-2)',
@@ -794,7 +794,7 @@ export function Marketplace() {
                     }}
                     key={p.id}
                     style={{
-                      borderRadius: 12,
+                      borderRadius: 'var(--ol-r-lg)',
                       border: '0.5px solid var(--ol-line-strong)',
                       background: 'var(--ol-surface)',
                       display: 'flex',
@@ -921,7 +921,7 @@ export function Marketplace() {
                             alignItems: 'center',
                             gap: 4,
                             padding: '4px 7px',
-                            borderRadius: 7,
+                            borderRadius: 'var(--ol-control-radius)',
                             border: '0.5px solid var(--ol-line-strong)',
                             background: 'var(--ol-surface-2)',
                             color: 'var(--ol-ink-2)',
@@ -984,7 +984,15 @@ export function Marketplace() {
                       flexWrap: 'wrap',
                     }}
                   >
-                    <h2 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>{detail.name}</h2>
+                    <h2
+                      style={{
+                        margin: 0,
+                        fontSize: 18,
+                        fontWeight: 'var(--ol-font-weight-demibold)',
+                      }}
+                    >
+                      {detail.name}
+                    </h2>
                     <Pill size="sm" tone="outline">
                       {detail.baseMode}
                     </Pill>
@@ -1037,7 +1045,7 @@ export function Marketplace() {
                     style={{
                       padding: 12,
                       border: '0.5px solid var(--ol-line)',
-                      borderRadius: 10,
+                      borderRadius: 'var(--ol-r-md)',
                       background: 'var(--ol-surface-2)',
                       marginBottom: 14,
                       maxHeight: 280,
@@ -1135,7 +1143,13 @@ export function Marketplace() {
         render={() =>
           showUpload && (
             <>
-              <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 650 }}>
+              <h2
+                style={{
+                  margin: '0 0 12px',
+                  fontSize: 16,
+                  fontWeight: 'var(--ol-font-weight-demibold)',
+                }}
+              >
                 {uploadOriginPackId
                   ? t('marketplace.upload.updateTitle', {
                       name: uploadTargetName ?? t('style.pack.title'),
@@ -1186,7 +1200,7 @@ export function Marketplace() {
                           border: selected
                             ? '1px solid var(--ol-blue)'
                             : '0.5px solid var(--ol-line-strong)',
-                          borderRadius: 8,
+                          borderRadius: 'var(--ol-control-radius)',
                           background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                           cursor: 'pointer',
                           display: 'flex',
@@ -1209,7 +1223,7 @@ export function Marketplace() {
                             placeItems: 'center',
                             color: '#fff',
                             fontSize: 11,
-                            fontWeight: 700,
+                            fontWeight: 'var(--ol-font-weight-bold)',
                             transition: 'background 0.12s, border-color 0.12s',
                           }}
                         >
@@ -1293,7 +1307,7 @@ export function Marketplace() {
                     gap: 6,
                     padding: '6px 10px',
                     border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 10,
+                    borderRadius: 'var(--ol-r-md)',
                     background: 'var(--ol-surface)',
                   }}
                 >
@@ -1329,12 +1343,12 @@ export function Marketplace() {
                     alignItems: 'center',
                     gap: 6,
                     padding: '5px 10px',
-                    borderRadius: 9,
+                    borderRadius: 'var(--ol-r-md)',
                     border: '0.5px solid var(--ol-line-strong)',
                     background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                     color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
                     fontSize: 12,
-                    fontWeight: 650,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
                   }}
@@ -1366,7 +1380,7 @@ export function Marketplace() {
                   style={{
                     width: 30,
                     height: 30,
-                    borderRadius: 9,
+                    borderRadius: 'var(--ol-r-md)',
                     display: 'inline-grid',
                     placeItems: 'center',
                     border: '0.5px solid var(--ol-line-strong)',
@@ -1498,7 +1512,7 @@ export function Marketplace() {
                       key={pack.id}
                       style={{
                         padding: 14,
-                        borderRadius: 12,
+                        borderRadius: 'var(--ol-r-lg)',
                         border: '0.5px solid var(--ol-line-strong)',
                         background: 'var(--ol-surface)',
                         display: 'flex',
@@ -1518,7 +1532,7 @@ export function Marketplace() {
                           <div
                             style={{
                               fontSize: 14,
-                              fontWeight: 650,
+                              fontWeight: 'var(--ol-font-weight-demibold)',
                               color: 'var(--ol-ink)',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',

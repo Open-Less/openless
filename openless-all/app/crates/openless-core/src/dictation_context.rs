@@ -415,7 +415,8 @@ impl DictationContext {
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
                 // Composition display is a TSF text-service feature; other insertion
                 // modes have no underlined preedit channel.
-                composition_input: cfg!(target_os = "windows")
+                composition_input: (cfg!(target_os = "macos") && preferences.macos_composition_input)
+                    || cfg!(target_os = "windows")
                     && preferences.windows_composition_input
                     && preferences.windows_insertion_mode == WindowsInsertionMode::Tsf,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,

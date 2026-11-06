@@ -14,7 +14,7 @@
   min-height: 36px;
   padding: 0 11px;
   border: 1px solid var(--ol-line);
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-control-muted);
   color: var(--ol-ink-4);
 }
@@ -65,7 +65,7 @@
   min-height: 54px;
   padding: 9px 10px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-control-muted);
   color: var(--ol-ink-2);
   text-align: start;

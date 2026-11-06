@@ -1235,6 +1235,7 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: '語音增強與播放抑制',
       cursorContextTitle: '游標上下文與短句行為',
       startupDiagnosticsTitle: '啟動診斷',
@@ -2212,6 +2213,9 @@ export const zhTW: typeof zhCN = {
       streamingInsertHintMac: '臨時切到 ABC 輸入源，避免 CJK IME 攔截，會話結束後自動切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字元，繞過 TSF / IME，不切輸入法。',
       streamingInsertHintLinux: '透過 fcitx5 外掛提交文字；串流輸入使用 enigo + XTest 合成按鍵。',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: '即時原文顯示在輸入框（Windows）',
       windowsCompositionInputDesc:
         '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
@@ -2392,6 +2396,8 @@ export const zhTW: typeof zhCN = {
     details: '查看錯誤詳情',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: '服務設定分類',
       llm: '語言模型',
@@ -2415,6 +2421,7 @@ export const zhTW: typeof zhCN = {
     back: '返回',
     backToTestingFeatures: '返回正在測試中的功能',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
       localModels: experimentalAsr.description,
       testingFeatures: '依需要開啟尚在測試中的功能。',

@@ -179,7 +179,7 @@ test('every main destination and settings category stays readable on desktop and
     'AI 与模型',
     '外观与语言',
     '权限与数据',
-    '实验与扩展',
+    '调试工具',
     '关于与更新',
   ]) {
     await page

@@ -469,6 +469,20 @@ fn status_label(frame: &Frame) -> String {
 
 impl DefaultCapsule {
     /// The platform material follows the painted pill, never the transparent host rectangle.
+    /// Only real controls own input; the transcript and central label are visual surfaces.
+    pub fn input_regions(&self, frame: &Frame) -> Vec<Rect> {
+        if !frame.interactive || frame.leaving || frame.state.selection_polish { return Vec::new(); }
+        let Some((shell, _)) = self.glass else { return Vec::new(); };
+        let center = shell.center();
+        let mut regions = vec![Rect::from_center_size(
+            pos2(center.x - BUTTON_OFFSET, center.y), egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0))];
+        if frame.state.phase == "recording" {
+            regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
+                egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
+        }
+        regions
+    }
+
     pub fn glass_surface(&self) -> Option<(Rect, f32)> {
         self.glass
     }
@@ -594,7 +608,7 @@ impl DefaultCapsule {
         let cancel_center = pos2(center_x - BUTTON_OFFSET, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
 
-        // Pointer: the buttons while recording, the whole pill while processing.
+        // Pointer ownership is restricted to the end controls, including cancellation while processing.
         let (pointer, pressed, released, down) = ui.input(|input| {
             (
                 input.pointer.hover_pos(),
@@ -618,7 +632,7 @@ impl DefaultCapsule {
                     } else {
                         None
                     }
-                } else if processing {
+                } else if processing && point.distance(cancel_center) <= BUTTON_RADIUS {
                     Some(Target::Processing)
                 } else {
                     None

@@ -10,8 +10,11 @@ name: Cache maintenance
 # caches the release path depends on are safe.
 on:
   schedule:
-    # Monday 03:17 UTC: after the weekend, before the working week.
-    - cron: '17 3 * * 1'
+    # Daily cleanup prevents superseded build generations evicting baseline caches.
+    - cron: '17 3 * * *'
+  pull_request:
+    types: [closed]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:

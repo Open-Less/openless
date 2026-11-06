@@ -1268,6 +1268,7 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
       cursorContextTitle: '커서 문맥과 짧은 입력',
       startupDiagnosticsTitle: '시작 진단',
@@ -2303,6 +2304,9 @@ export const ko: typeof zhCN = {
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
         'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: '실시간 원문을 입력창에 표시 (Windows)',
       windowsCompositionInputDesc:
         '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
@@ -2489,6 +2493,8 @@ export const ko: typeof zhCN = {
     details: '오류 세부 정보',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: '서비스 설정',
       llm: '언어 모델',
@@ -2512,6 +2518,7 @@ export const ko: typeof zhCN = {
     back: '뒤로',
     backToTestingFeatures: '테스트 중인 기능으로 돌아가기',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',
       localModels: experimentalAsr.description,
       testingFeatures: '필요할 때 테스트 중인 기능을 활성화합니다.',

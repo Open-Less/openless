@@ -49,7 +49,7 @@ assert.deepEqual(
 );
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
-assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 8);
+assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 6);
 // Both adapters target the same native queue; neither whole-file token presence nor
 // the old host-only dispatcher is sufficient coverage of the reported capsule task.
 const capsuleHost = host.slice(

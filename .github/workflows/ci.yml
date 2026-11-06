@@ -32,7 +32,7 @@ on:
 # Cancel old runs when the same PR is pushed repeatedly; workflow_dispatch is isolated by run_id.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   # 判定这次改动能不能影响到各平台门禁。只有“改动物理上够不到”的变更才会

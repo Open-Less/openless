@@ -1008,7 +1008,7 @@ export function Style() {
                       background: isCurrentForView
                         ? 'var(--ol-style-card-bg-active)'
                         : 'var(--ol-style-card-bg)',
-                      borderRadius: 14,
+                      borderRadius: 'var(--ol-r-lg)',
                       padding: 16,
                       boxShadow: 'none',
                       cursor: 'default',
@@ -1197,7 +1197,7 @@ export function Style() {
                   gap: 8,
                   textAlign: 'center',
                   border: '0.5px dashed var(--ol-line-strong)',
-                  borderRadius: 14,
+                  borderRadius: 'var(--ol-r-lg)',
                   padding: 16,
                   background: 'transparent',
                   color: 'var(--ol-ink-3)',
@@ -1740,7 +1740,7 @@ export function Style() {
                     <div
                       style={{
                         padding: 14,
-                        borderRadius: 14,
+                        borderRadius: 'var(--ol-r-lg)',
                         background: 'var(--ol-style-subtle-bg)',
                         border: '0.5px solid var(--ol-line)',
                       }}
@@ -1867,7 +1867,7 @@ export function Style() {
                                 height: 32,
                                 flexShrink: 0,
                                 border: '0.5px solid var(--ol-line-strong)',
-                                borderRadius: 8,
+                                borderRadius: 'var(--ol-control-radius)',
                                 background: 'transparent',
                                 color: 'var(--ol-ink-2)',
                                 display: 'inline-flex',
@@ -1893,7 +1893,7 @@ export function Style() {
                           >
                             <div
                               style={{
-                                borderRadius: 14,
+                                borderRadius: 'var(--ol-r-lg)',
                                 border: '0.5px solid var(--ol-line)',
                                 background: 'var(--ol-style-subtle-bg)',
                                 padding: 14,
@@ -1926,7 +1926,7 @@ export function Style() {
 
                             <div
                               style={{
-                                borderRadius: 14,
+                                borderRadius: 'var(--ol-r-lg)',
                                 border: '0.5px solid rgba(37,99,235,0.16)',
                                 background: 'var(--ol-style-subtle-bg)',
                                 padding: 14,
@@ -1975,7 +1975,7 @@ function MetaItem({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        borderRadius: 12,
+        borderRadius: 'var(--ol-r-lg)',
         border: '0.5px solid var(--ol-line)',
         background: 'var(--ol-style-input-bg)',
         padding: '10px 12px',
@@ -2029,7 +2029,7 @@ function DirectiveRow({
         justifyContent: 'space-between',
         gap: 12,
         padding: '10px 12px',
-        borderRadius: 12,
+        borderRadius: 'var(--ol-r-lg)',
         border: '0.5px solid var(--ol-line)',
         background: 'var(--ol-style-input-bg)',
       }}
@@ -2060,7 +2060,7 @@ const inputStyle: CSSProperties = {
   boxSizing: 'border-box',
   minHeight: 38,
   padding: '9px 11px',
-  borderRadius: 10,
+  borderRadius: 'var(--ol-r-md)',
   border: '0.5px solid var(--ol-line-strong)',
   background: 'var(--ol-style-input-bg)',
   color: 'var(--ol-ink)',
@@ -2072,7 +2072,7 @@ const textareaStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '11px 12px',
-  borderRadius: 12,
+  borderRadius: 'var(--ol-r-lg)',
   border: '0.5px solid var(--ol-line-strong)',
   background: 'var(--ol-style-input-bg)',
   color: 'var(--ol-ink)',

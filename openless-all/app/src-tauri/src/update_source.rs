@@ -1,33 +1,6 @@
-//! Where the in-app updater looks for release manifests.
-//!
-//! # Background
-//!
-//! The updater used to read its manifest from the GitHub Release assets
-//! (`releases/latest/download/latest-{target}-{arch}.json`, and a `-beta` twin per tag). That
-//! forced every release to carry fourteen `latest-*.json` files — seven target/arch entries
-//! times a `-mirror` twin — all repeating the same three fields (`version`, `url`, `signature`),
-//! and every new release re-uploaded the same file names because the Stable endpoint was a
-//! rolling pointer.
-//!
-//! The manifests now live on the project's own CDN:
-//!
-//! ```text
-//! https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
-//! https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
-//! ```
-//!
-//! Two properties matter:
-//!
-//! - **One rolling file per platform.** The CDN name is stable per channel, so a release never
-//!   accumulates manifest copies; publishing overwrites in place.
-//! - **Channel separation is a path, not a filename suffix.** `/updates/stable/` and
-//!   `/updates/beta/` are distinct locations, so a Stable client cannot walk into a Beta
-//!   manifest by accident.
-//!
-//! The manifest body is unchanged (`version`, `pub_date`, `url`, `signature`), so
-//! `tauri-plugin-updater` keeps owning download, minisign verification and platform install.
-//! Artifact URLs inside the manifest point at the same CDN (`/releases/{tag}/{asset}`), which
-//! is what mainland-China users download from.
+//! Concurrent release discovery and bounded transport sampling for the updater.
+//! GitHub owns release freshness; the rolling CDN is an independent backup and accelerator.
+//! Tauri still verifies the signed artifact and version before installation.
 
 use crate::types::UpdateChannel;
 
@@ -126,5 +99,201 @@ mod tests {
     fn cdn_base_has_no_trailing_slash() {
         assert!(!CDN_BASE.ends_with('/'));
         assert!(endpoint_template(UpdateChannel::Stable).starts_with(CDN_BASE));
+    }
+}
+
+/// Prefer GitHub unless the mirror wins both measurements by a meaningful margin.
+/// Version precedence is resolved before measuring transport performance.
+#[cfg(not(mobile))]
+pub(crate) fn mirror_is_faster(mirror: (f64, f64), github: (f64, f64)) -> bool {
+    mirror.0 <= github.0 * 1.2 && mirror.1 >= github.1 * 0.8
+}
+
+#[cfg(not(mobile))]
+pub(crate) async fn probe_download(url: &url::Url) -> Option<(f64, f64)> {
+    use futures_util::StreamExt;
+    let started = std::time::Instant::now();
+    let response = crate::net::http()
+        .get(url.clone())
+        .header(reqwest::header::RANGE, "bytes=0-65535")
+        .timeout(std::time::Duration::from_secs(4))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let transfer = std::time::Instant::now();
+    let mut stream = response.bytes_stream();
+    let first = stream.next().await?.ok()?;
+    let latency = started.elapsed().as_secs_f64();
+    let mut bytes = first.len().min(65536);
+    while bytes < 65536 {
+        match stream.next().await {
+            Some(Ok(chunk)) => bytes = (bytes + chunk.len()).min(65536),
+            Some(Err(_)) => return None,
+            None => break,
+        }
+    }
+    (bytes > 0).then(|| {
+        (
+            latency,
+            bytes as f64 / transfer.elapsed().as_secs_f64().max(0.001),
+        )
+    })
+}
+
+#[cfg(not(mobile))]
+pub(crate) fn prefer_mirror(mirror: Option<(f64, f64)>, github: Option<(f64, f64)>) -> bool {
+    match (mirror, github) {
+        (Some(_), None) => true,
+        (Some(mirror), Some(github)) => mirror_is_faster(mirror, github),
+        _ => false,
+    }
+}
+
+/// GitHub's release assets remain independent of the rolling CDN manifest.
+#[cfg(not(mobile))]
+pub(crate) async fn github_manifest(channel: UpdateChannel) -> Result<serde_json::Value, String> {
+    let endpoint = match channel {
+        UpdateChannel::Stable => "https://api.github.com/repos/Open-Less/openless/releases/latest",
+        UpdateChannel::Beta => {
+            "https://api.github.com/repos/Open-Less/openless/releases?per_page=30"
+        }
+    };
+    let client = crate::net::http();
+    let value: serde_json::Value = client
+        .get(endpoint)
+        .header("User-Agent", "OpenLess-Updater")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let release = if matches!(channel, UpdateChannel::Beta) {
+        value
+            .as_array()
+            .and_then(|list| {
+                list.iter()
+                    .filter(|v| v["draft"] == false && v["prerelease"] == true)
+                    .filter(|v| {
+                        v["tag_name"]
+                            .as_str()
+                            .is_some_and(|tag| tag.ends_with("-tauri"))
+                    })
+                    .max_by_key(|v| v["published_at"].as_str().unwrap_or(""))
+            })
+            .ok_or("no published GitHub beta release")?
+    } else {
+        &value
+    };
+    let tag = release["tag_name"]
+        .as_str()
+        .ok_or("missing GitHub release tag")?;
+    let version = tag
+        .strip_prefix('v')
+        .unwrap_or(tag)
+        .strip_suffix("-tauri")
+        .ok_or("not a desktop release")?;
+    semver::Version::parse(version).map_err(|e| e.to_string())?;
+    let arch = std::env::consts::ARCH;
+    let assets = release["assets"]
+        .as_array()
+        .ok_or("missing GitHub release assets")?;
+    let artifact = assets
+        .iter()
+        .find(|asset| {
+            let name = asset["name"].as_str().unwrap_or("");
+            if cfg!(target_os = "macos") {
+                name == format!("OpenLess_{arch}.app.tar.gz")
+            } else {
+                name.starts_with("OpenLess_") && name.ends_with("_x64-setup.exe")
+            }
+        })
+        .ok_or("no matching signed GitHub updater artifact")?;
+    let name = artifact["name"].as_str().ok_or("missing artifact name")?;
+    let signature = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        .and_then(|a| a["browser_download_url"].as_str())
+        .ok_or("missing GitHub signature")?;
+    let signature = client
+        .get(signature)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let version = github_signed_version(signature.trim(), version)?;
+    Ok(
+        serde_json::json!({"version": version, "url": artifact["browser_download_url"],
+        "signature": signature.trim(), "notes": release["body"], "pub_date": release["published_at"]}),
+    )
+}
+
+#[cfg(all(test, not(mobile)))]
+mod routing_tests {
+    use super::*;
+    #[test]
+    fn nearby_mirror_wins_ties_but_not_a_faster_github_path() {
+        assert!(prefer_mirror(Some((0.1, 100.)), None));
+        assert!(!prefer_mirror(None, Some((0.1, 100.))));
+        assert!(!prefer_mirror(None, None));
+        assert!(mirror_is_faster((0.105, 12_000_000.), (0.1, 12_000_000.)));
+        assert!(mirror_is_faster((0.04, 30_000_000.), (0.2, 10_000_000.)));
+        assert!(!mirror_is_faster((0.2, 30_000_000.), (0.1, 10_000_000.)));
+        assert!(!mirror_is_faster((0.1, 2_000_000.), (0.1, 10_000_000.)));
+    }
+}
+
+#[cfg(not(mobile))]
+fn github_signed_version(signature: &str, tag_version: &str) -> Result<String, String> {
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(signature)
+        .map_err(|e| e.to_string())?;
+    let decoded = std::str::from_utf8(&decoded).map_err(|e| e.to_string())?;
+    let version = decoded
+        .lines()
+        .find_map(|line| line.strip_prefix("trusted comment: "))
+        .and_then(|line| {
+            line.split('\t')
+                .find_map(|field| field.strip_prefix("version:"))
+        })
+        .ok_or("GitHub artifact is missing its signed version")?;
+    let signed = semver::Version::parse(version).map_err(|e| e.to_string())?;
+    let tag = semver::Version::parse(tag_version).map_err(|e| e.to_string())?;
+    if signed.major != tag.major
+        || signed.minor != tag.minor
+        || signed.patch != tag.patch
+        || signed.pre != tag.pre
+    {
+        return Err("GitHub artifact version does not match the release tag".into());
+    }
+    Ok(version.to_string())
+}
+
+#[cfg(all(test, not(mobile)))]
+mod signed_version_tests {
+    use super::*;
+    use base64::Engine;
+    #[test]
+    fn github_preserves_signed_build_metadata_and_rejects_a_different_release() {
+        let signature = base64::engine::general_purpose::STANDARD.encode(
+            "untrusted comment: fixture\nsignature\ntrusted comment: timestamp:1\tfile:app.tar.gz\tversion:2.0.2-Beta.4+build.20261106-abc\nglobal");
+        assert_eq!(
+            github_signed_version(&signature, "2.0.2-Beta.4").unwrap(),
+            "2.0.2-Beta.4+build.20261106-abc"
+        );
+        assert!(github_signed_version(&signature, "2.0.2-Beta.3").is_err());
+        assert!(github_signed_version("bad base64", "2.0.2").is_err());
     }
 }

@@ -87,7 +87,7 @@
   align-items: center;
   gap: 6px;
   padding: 3px 4px 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   font-size: 11px;
   color: var(--ol-pill-ink);
   color-scheme: var(--ol-pill-scheme);
@@ -127,7 +127,7 @@
   transform: translateX(-50%);
   max-width: 280px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   background: #fff;
   color: #dc2626;
   font-size: 10px;
@@ -368,7 +368,7 @@
   max-width: 100%;
   height: 96px;
   margin-top: 8px;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   pointer-events: none;
 }

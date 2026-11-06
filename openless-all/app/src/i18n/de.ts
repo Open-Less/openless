@@ -1311,6 +1311,7 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
       cursorContextTitle: 'Cursorkontext und kurze Eingaben',
       startupDiagnosticsTitle: 'Startdiagnose',
@@ -2414,6 +2415,9 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
       windowsCompositionInputDesc:
         'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
@@ -2607,6 +2611,8 @@ export const de: typeof zhCN = {
     details: 'Fehlerdetails anzeigen',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: 'Diensteinstellungen',
       llm: 'Sprachmodelle',
@@ -2632,6 +2638,7 @@ export const de: typeof zhCN = {
     back: 'Zurück',
     backToTestingFeatures: 'Zurück zu Funktionen im Test',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer:
         'Nur für selbst gehostete Dienste; die offizielle Synchronisierung benötigt keine Konfiguration.',
       localModels: experimentalAsr.description,

@@ -1323,6 +1323,7 @@ export const fr: typeof zhCN = {
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
       cursorContextTitle: 'Contexte du curseur et phrases courtes',
       startupDiagnosticsTitle: 'Diagnostic de démarrage',
@@ -2422,6 +2423,9 @@ export const fr: typeof zhCN = {
         'SendInput Unicode écrit directement, sans passer par TSF / IME et sans changer de méthode de saisie.',
       streamingInsertHintLinux:
         'Utilise le complément fcitx5 pour envoyer le texte ; l’insertion progressive simule les touches avec enigo + XTest.',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ (Windows)',
       windowsCompositionInputDesc:
         "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
@@ -2618,6 +2622,8 @@ export const fr: typeof zhCN = {
     details: 'Afficher les détails de l’erreur',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: 'Réglages des services',
       llm: 'Modèles de langage',
@@ -2643,6 +2649,7 @@ export const fr: typeof zhCN = {
     back: 'Retour',
     backToTestingFeatures: 'Retour aux fonctionnalités en cours de test',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer:
         'Pour les services auto-hébergés uniquement ; la synchronisation officielle ne nécessite aucune configuration.',
       localModels: experimentalAsr.description,

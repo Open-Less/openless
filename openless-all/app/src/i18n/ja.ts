@@ -1275,6 +1275,7 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: '音声強調と再生抑制',
       cursorContextTitle: 'カーソル文脈と短文の動作',
       startupDiagnosticsTitle: '起動診断',
@@ -2321,6 +2322,9 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
+      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputDesc:
+        'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
       windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
@@ -2508,6 +2512,8 @@ export const ja: typeof zhCN = {
     details: 'エラーの詳細',
   },
   modal: {
+    experimentsTitle: 'Experiments & extensions',
+    experimentsDescription: 'Configure experimental features and extensions.',
     serviceViews: {
       label: 'サービス設定',
       llm: '言語モデル',
@@ -2532,6 +2538,7 @@ export const ja: typeof zhCN = {
     back: '戻る',
     backToTestingFeatures: 'テスト中の機能に戻る',
     advancedPages: {
+      experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
       localModels: experimentalAsr.description,
       testingFeatures: 'テスト中の機能を必要に応じて有効にします。',

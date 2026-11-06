@@ -520,7 +520,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     padding: '6px 10px',
                     fontSize: 12,
                     border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 8,
+                    borderRadius: 'var(--ol-control-radius)',
                     background: 'var(--ol-surface-2)',
                     color: 'var(--ol-ink-3)',
                   }}
@@ -552,7 +552,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     style={{
                       margin: 8,
                       padding: '9px 10px',
-                      borderRadius: 8,
+                      borderRadius: 'var(--ol-control-radius)',
                       background: 'rgba(239,68,68,0.08)',
                       color: 'var(--ol-red, #ef4444)',
                       fontSize: 12,
@@ -623,7 +623,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         gap: 4,
                         border: '0.5px solid',
                         borderColor: selectedId === s.id ? 'var(--ol-line)' : 'transparent',
-                        borderRadius: 10,
+                        borderRadius: 'var(--ol-r-md)',
                         background: selectedId === s.id ? 'var(--ol-surface-2)' : 'transparent',
                         cursor: 'default',
                         fontFamily: 'inherit',
@@ -873,7 +873,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                       minWidth: 0,
                       padding: 14,
                       border: '0.5px solid var(--ol-line)',
-                      borderRadius: 10,
+                      borderRadius: 'var(--ol-r-md)',
                       background: 'var(--ol-surface-2)',
                     }}
                   >
@@ -931,7 +931,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                         minWidth: 0,
                         padding: 14,
                         border: '0.5px solid var(--ol-line)',
-                        borderRadius: 10,
+                        borderRadius: 'var(--ol-r-md)',
                         background: 'var(--ol-surface-2)',
                       }}
                     >
@@ -1103,7 +1103,7 @@ function HistoryActionMenu({
             overflowY: 'auto',
             padding: 6,
             border: '0.5px solid var(--ol-line-strong)',
-            borderRadius: 10,
+            borderRadius: 'var(--ol-r-md)',
             background: 'var(--ol-surface)',
             boxShadow: 'var(--ol-shadow-md, 0 12px 30px rgba(0,0,0,.18))',
           }}
@@ -1207,7 +1207,7 @@ function HistoryActionMenuItem({
         gap: 9,
         padding: '8px 9px',
         border: 0,
-        borderRadius: 7,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'transparent',
         color: danger ? 'var(--ol-red, #ef4444)' : 'var(--ol-ink-2)',
         fontFamily: 'inherit',
@@ -1491,7 +1491,7 @@ function RepolishPanel({
           style={{
             marginTop: 10,
             padding: '8px 10px',
-            borderRadius: 8,
+            borderRadius: 'var(--ol-control-radius)',
             background: 'rgba(239,68,68,0.08)',
             color: 'var(--ol-red, #ef4444)',
             fontSize: 11.5,
@@ -1556,7 +1556,7 @@ function HistoryResultCard({
         minWidth: 0,
         padding: 14,
         border: '0.5px dashed var(--ol-line-strong)',
-        borderRadius: 10,
+        borderRadius: 'var(--ol-r-md)',
         background: 'var(--ol-surface-2)',
       }}
     >

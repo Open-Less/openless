@@ -823,6 +823,9 @@ pub struct UserPreferences {
     /// Off by default; with it off, the target only receives the final text.
     #[serde(default)]
     pub windows_composition_input: bool,
+    /// macOS AX live transcript replacement in the captured editor; opt-in.
+    #[serde(default)]
+    pub macos_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -1222,6 +1225,8 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
+    #[serde(default)]
+    macos_composition_input: bool,
     #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
@@ -1429,6 +1434,7 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             windows_composition_input: prefs.windows_composition_input,
+            macos_composition_input: prefs.macos_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
@@ -1669,6 +1675,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             windows_composition_input: wire.windows_composition_input,
+            macos_composition_input: wire.macos_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
@@ -2052,6 +2059,7 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
+            macos_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
