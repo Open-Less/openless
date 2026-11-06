@@ -170,29 +170,13 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    Do not rerun an asset workflow after publication without first returning the release to draft.
 
    The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
-   `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
-   current clients read the CDN, not the release. Download them from the run and publish them to
-   the CDN as part of publishing the release:
-
-   | platform | workflow artifact |
-   | --- | --- |
-   | macOS | `openless-macos-<arch>-updater` |
-   | Windows | `openless-windows-x64-updater` |
-   | Android | `openless-android-updater-manifests` |
-
-   Destination (overwrite in place; the file name is per platform and channel, never per
-   version):
-
-   ```text
-   https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
-   https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
-   ```
-
-   Their `url` fields must point at the CDN artifacts (`.../releases/{tag}/{asset}`).
-   Manifest upload is the step that makes a release reachable by auto-update: a published
-   release whose manifests were not synced is downloadable by hand but invisible to the updater.
-   Clients built before the CDN switch read the old `releases/latest/download/latest-*.json`
-   assets, which new releases no longer carry, so they need one manual download.
+   `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets.
+   Current clients read those manifests from Aliyun, not from the GitHub Release. Download the
+   manifest artifacts from the run. Uploading them is only half of the Aliyun step: the binary
+   packages named by those manifests must be uploaded to Aliyun as well. See
+   [Aliyun artifacts](#aliyun-artifacts) below. Clients built before the CDN switch read the old
+   `releases/latest/download/latest-*.json` assets, which new releases no longer carry, so they
+   need one manual download.
 7. Publishing Stable with the administrator's CLI/UI credential automatically
    triggers `sync-homebrew-cask.yml`. It accepts only the published latest Stable
    tag, preserves application build metadata in DMG filenames, verifies matching
@@ -201,6 +185,60 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    `gh workflow run sync-homebrew-cask.yml -f tag=v<version>-tauri`; no asset rebuild
    or manual cask edit is needed. Do not publish via an asset workflow's
    `GITHUB_TOKEN`, which does not emit the downstream release event.
+
+## Aliyun artifacts
+
+阿里云这里要上传二进制产物。客户端先向阿里云要文件；阿里云能拉到就从阿里云下载，因为这条链路更快；阿里云没有拉到就改从 GitHub 下载同一份产物。
+
+Aliyun here is `https://dl.aeoform.com` (ESA). A published GitHub Release does not put anything
+on Aliyun. After the tag workflows succeed, upload both of the following.
+
+1. **Binary artifacts.** Upload every updater package the manifest will name, byte-for-byte the
+   same object as the GitHub Release asset:
+
+   ```text
+   https://dl.aeoform.com/releases/{tag}/{asset}
+   ```
+
+   This includes the macOS `OpenLess_{arch}.app.tar.gz` archives, the Windows
+   `*-setup.exe`, and the Android APKs. Website alias installers (`OpenLess_macos_aarch64.dmg`
+   and the other short names) belong at the same prefix when those URLs are handed out.
+   `.sig` files are not a separate client download; the signature stays inside the manifest.
+   Do not stop after uploading the JSON. An Aliyun manifest that points at a missing object
+   makes the download 404.
+
+2. **Rolling manifests.** Download these from the workflow artifacts and overwrite them in
+   place. The file name is per platform and channel, never per version.
+
+   | platform | workflow artifact |
+   | --- | --- |
+   | macOS | `openless-macos-<arch>-updater` |
+   | Windows | `openless-windows-x64-updater` |
+   | Android | `openless-android-updater-manifests` |
+
+   ```text
+   https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
+   https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
+   ```
+
+   The manifest `url` must stay the Aliyun object (`.../releases/{tag}/{asset}`). Do not write
+   the GitHub URL into the manifest. There is no GitHub copy of this JSON. If the previous
+   JSON is still what clients receive after the overwrite, purge that JSON path on Aliyun.
+
+**Client order.** Builds that contain the fallback ask Aliyun for the binary first. When Aliyun
+returns the object, the download stays on Aliyun because that path is faster. When Aliyun does
+not serve it (the object is missing, the response is not successful, or the request fails), the
+client downloads the same `{tag}/{asset}` from:
+
+```text
+https://github.com/Open-Less/openless/releases/download/{tag}/{asset}
+```
+
+The minisign signature still has to match those bytes. Clients installed before this fallback
+only know the Aliyun URL. For those installs, both the rolling JSON and the binary have to be
+on Aliyun. A JSON file that still names the previous version makes the in-app check report
+"already current" and never starts a download. Uploading the binaries alone does not change
+that.
 
 Before dispatching the Linux release build, additionally require all of the following:
 

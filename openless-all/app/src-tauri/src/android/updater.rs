@@ -78,8 +78,9 @@ mod android_impl {
 
     pub async fn check_update(channel: UpdateChannel) -> Result<Option<AppUpdateMetadata>, String> {
         let arch = device_arch()?;
-        // Manifests live on the project CDN; channel is a URL path, not a filename suffix, so
-        // there is no tag discovery and no GitHub dependency (see `crate::update_source`).
+        // The rolling manifest stays on Aliyun. Channel is a URL path, not a filename suffix.
+        // Binary fallback to GitHub happens in the download command, after this check returns
+        // the manifest `url` (see `crate::update_source`).
         let url = crate::update_source::manifest_url(channel, "android", arch);
         let current = env!("CARGO_PKG_VERSION").to_string();
         match fetch_manifest(&url).await {
