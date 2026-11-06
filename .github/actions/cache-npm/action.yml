@@ -26,9 +26,11 @@ runs:
       with:
         path: ${{ steps.npm.outputs.path }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles('openless-all/app/package-lock.json') }}
+        restore-keys: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-
     - name: Maintain npm cache on beta builds
       if: github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       uses: actions/cache@v4
       with:
         path: ${{ steps.npm.outputs.path }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles('openless-all/app/package-lock.json') }}
+        restore-keys: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-

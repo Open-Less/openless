@@ -43,7 +43,7 @@ assert.match(guard.run, /INPUT_PLATFORM.*windows/);
 const source = steps.find((s) => s.name === 'Verify repair source CI and version');
 assert.match(source.run, /git rev-parse HEAD/);
 assert.match(source.run, /head_sha=\$source_sha/);
-assert.match(source.run, /total_count == 7/);
+assert.match(source.run, /verify-release-ci\.mjs/);
 const build = steps.find((s) => s.name === 'Build (Windows)');
 const script = build.run.match(/node <<'MSI_CONFIG'\n([\s\S]*?)\nMSI_CONFIG/)[1];
 const originalVersion = (version, signing = false) => {

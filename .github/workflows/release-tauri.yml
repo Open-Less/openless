@@ -117,8 +117,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: 'openless-all/app/package-lock.json'
+      - name: Reuse baseline npm downloads
+        uses: ./.github/actions/cache-npm
 
       - name: Verify repair source CI and version
         if: inputs.release_tag != ''
@@ -134,8 +134,8 @@ jobs:
           [ "${version%%+*}" = "$tag_version" ] || { echo "::error::Tag/application version mismatch"; exit 1; }
           ci_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$source_sha&status=success&per_page=100" --jq "[.workflow_runs[] | select(.name == \"CI\" and .head_sha == \"$source_sha\" and .conclusion == \"success\")][0].id")
           [[ "$ci_id" =~ ^[0-9]+$ ]] || { echo "::error::No green CI for the exact tagged commit"; exit 1; }
-          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" --jq '(.total_count == 7 and all(.jobs[]; .conclusion == "success"))')
-          [ "$green" = true ] || { echo "::error::All seven tagged-commit CI gates must pass"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/release-ci-jobs.json"
+          node openless-all/app/scripts/verify-release-ci.mjs "$RUNNER_TEMP/release-ci-jobs.json"
           echo "Repair source verified: $source_sha ($version)"
 
       - uses: dtolnay/rust-toolchain@stable

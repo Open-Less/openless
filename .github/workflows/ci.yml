@@ -673,6 +673,7 @@ jobs:
       # so the arm64 runner is not OOM-killed
       # at peak memory.
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     defaults:

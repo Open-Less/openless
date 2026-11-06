@@ -1,0 +1,46 @@
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+export const REQUIRED_RELEASE_GATES = [
+  'Changed areas',
+  'macOS checks',
+  'Windows checks',
+  'Windows frontend and contracts',
+  'Android cargo check',
+  'Harmony (ArkTS contracts, Rust host, HAP)',
+  'macOS Rust 1.99 MSRV',
+  'UI motion (Chromium + WebKit)',
+  'Native capsule (macos-latest)',
+  'Native capsule (windows-latest)',
+  'Linux Core, egui and deb/rpm checks / test-linux-egui',
+  'Linux Core, egui and deb/rpm checks / build-linux-egui',
+];
+
+export function verifyReleaseCi(report) {
+  if (!Array.isArray(report.jobs) || report.total_count !== report.jobs.length)
+    throw new Error('CI job report is incomplete');
+  for (const name of REQUIRED_RELEASE_GATES) {
+    if (
+      !report.jobs.some(
+        (job) => job.name === name && job.status === 'completed' && job.conclusion === 'success',
+      )
+    )
+      throw new Error(`Required release gate did not pass: ${name}`);
+  }
+  for (const job of report.jobs) {
+    if (job.status === 'completed' && job.conclusion === 'success') continue;
+    if (
+      job.status === 'completed' &&
+      job.conclusion === 'skipped' &&
+      job.name.endsWith(' / publish-linux-egui')
+    )
+      continue;
+    throw new Error(`CI job did not pass: ${job.name}`);
+  }
+  return true;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  verifyReleaseCi(JSON.parse(readFileSync(process.argv[2], 'utf8')));
+  console.log('Exact-source release CI gates passed');
+}
