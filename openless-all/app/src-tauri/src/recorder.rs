@@ -2278,35 +2278,18 @@ fn run_audio_thread(
     runtime_error_tx: Sender<RecorderError>,
 ) {
     let far_end_for_reference = far_end.clone();
-    let (reference_stream, reference) = if processing.echo_cancellation_enabled {
-        match playback_reference::start(&stop_flag, &state.diagnostics) {
-            Ok((stream, buffer)) => (Some(stream), Some(buffer)),
-            Err(error) => {
-                log::warn!(
-                    "[recorder] playback reference unavailable; recording without AEC: {error}"
-                );
-                (None, None)
-            }
-        }
-    } else {
-        (None, None)
-    };
-    state.diagnostics.event(
-        "P1",
-        "[\"H1\",\"H2\",\"H3\"]",
-        "reference_start",
-        if reference.is_some() {
-            "available"
-        } else {
-            "fallback"
-        },
-        &format!(
-            "{{\"aec_requested\":{},\"reference_available\":{}}}",
-            processing.echo_cancellation_enabled,
-            reference.is_some()
-        ),
-    );
-    *state.reference.lock() = reference;
+    // The microphone must start before any playback tap. Creating a process tap
+    // reconfigures Core Audio and has been measured at about two seconds; the
+    // processor already treats a missing reference as "no cancellation yet".
+    if !processing.echo_cancellation_enabled {
+        state.diagnostics.event(
+            "P1",
+            "[\"H1\",\"H2\",\"H3\"]",
+            "reference_start",
+            "fallback",
+            "{\"aec_requested\":false,\"reference_available\":false}",
+        );
+    }
     let (processor, frame_tx) = match AudioProcessingWorker::start_with_targets(
         processing,
         consumer,
@@ -2325,19 +2308,6 @@ fn run_audio_thread(
         }
     };
     *state.processor_sender.lock() = Some(frame_tx.clone());
-    // 扬声器回环参考：`cpal::Stream` 不是 Send，只能在音频线程里创建，
-    // 并随本线程结束一起释放（和麦克风流一样）。
-    let _reference_stream = far_end_for_reference.as_ref().and_then(|queue| {
-        match start_reference_stream(&stop_flag, queue) {
-            Ok(stream) => Some(stream),
-            Err(error) => {
-                log::warn!(
-                    "[recorder] speaker reference unavailable; continuing without AEC: {error}"
-                );
-                None
-            }
-        }
-    });
     let (stream, state) = match build_input_stream(
         microphone_device_name,
         frame_tx.clone(),
@@ -2358,7 +2328,61 @@ fn run_audio_thread(
     };
 
     // build_input_stream returns only after native playback starts successfully.
+    // Playback taps stay after this signal: they must not keep the microphone closed.
     let _ = startup_tx.send(Ok(()));
+    let playback_reference = if processing.echo_cancellation_enabled {
+        let stop = Arc::clone(&stop_flag);
+        let reference_state = Arc::clone(&state);
+        let diagnostics = Arc::clone(&state.diagnostics);
+        thread::Builder::new()
+            .name("openless-playback-reference".into())
+            .spawn(move || {
+                let (stream, outcome) = match playback_reference::start(&stop, &diagnostics) {
+                    Ok((stream, buffer)) => {
+                        *reference_state.reference.lock() = Some(buffer);
+                        (Some(stream), "available")
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[recorder] playback reference unavailable; recording without AEC: {error}"
+                        );
+                        (None, "fallback")
+                    }
+                };
+                diagnostics.event(
+                    "P1",
+                    "[\"H1\",\"H2\",\"H3\"]",
+                    "reference_start",
+                    outcome,
+                    &format!(
+                        "{{\"aec_requested\":true,\"reference_available\":{}}}",
+                        outcome == "available"
+                    ),
+                );
+                if let Some(stream) = stream {
+                    while !stop.load(Ordering::SeqCst) {
+                        thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    drop(stream);
+                }
+            })
+            .ok()
+    } else {
+        None
+    };
+    // `cpal::Stream` is !Send, so the speaker loopback stays on this thread,
+    // but only after the microphone has already started.
+    let speaker_reference = far_end_for_reference.as_ref().and_then(|queue| {
+        match start_reference_stream(&stop_flag, queue) {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                log::warn!(
+                    "[recorder] speaker reference unavailable; continuing without AEC: {error}"
+                );
+                None
+            }
+        }
+    });
 
     // Start the liveness watchdog: detect the capture callback silently stopping.
     const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // check once per second
@@ -2483,7 +2507,7 @@ fn run_audio_thread(
         }
     }
     drop(stream);
-    drop(reference_stream);
+    drop(speaker_reference);
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
@@ -2494,6 +2518,10 @@ fn run_audio_thread(
     if let Some(handle) = watchdog_handle {
         let _ = handle.join();
     }
+    // Detach the playback tap. Joining it would hold Recorder::stop for Core
+    // Audio teardown, the same reconfiguration that used to delay the microphone.
+    // The tap thread owns its stream and exits on stop_flag.
+    drop(playback_reference);
 }
 
 /// Try the selected microphone's native format before other advertised formats/devices.
@@ -2709,6 +2737,19 @@ fn start_native_config(
     Ok((stream, Arc::clone(state)))
 }
 
+/// The saved microphone is usually the default device. Asking every input for
+/// its name first lets one slow device (a sleeping Bluetooth headset, an
+/// aggregate device) hold the microphone closed for about a second.
+pub(crate) fn default_input_matches_preference(
+    preferred: Option<&str>,
+    default_name: Option<&str>,
+) -> bool {
+    match preferred.map(str::trim).filter(|name| !name.is_empty()) {
+        None => true,
+        Some(preferred) => default_name == Some(preferred),
+    }
+}
+
 fn select_input_device(
     host: &cpal::Host,
     microphone_device_name: Option<&str>,
@@ -2716,6 +2757,25 @@ fn select_input_device(
     let preferred = microphone_device_name
         .map(str::trim)
         .filter(|name| !name.is_empty());
+    if let Some(device) = host.default_input_device() {
+        if default_input_matches_preference(preferred, device.name().ok().as_deref()) {
+            return Ok(device);
+        }
+        let devices = host
+            .input_devices()
+            .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
+        for candidate in devices {
+            if candidate.name().ok().as_deref() == preferred {
+                return Ok(candidate);
+            }
+        }
+        log::warn!(
+            "[recorder] preferred input device not found; falling back to default: {}",
+            preferred.unwrap_or_default()
+        );
+        return Ok(device);
+    }
+
     if let Some(preferred) = preferred {
         let devices = host
             .input_devices()
@@ -2728,10 +2788,6 @@ fn select_input_device(
         log::warn!(
             "[recorder] preferred input device not found; falling back to default: {preferred}"
         );
-    }
-
-    if let Some(device) = host.default_input_device() {
-        return Ok(device);
     }
     host.input_devices()
         .map_err(|error| RecorderError::EngineFailed(format!("input_devices: {error}")))?
@@ -3923,6 +3979,20 @@ mod tests {
         assert!(warm_capture_enabled(true, false));
         assert!(warm_capture_enabled(false, true));
         assert!(!warm_capture_enabled(false, false));
+    }
+
+    #[test]
+    fn saved_default_microphone_skips_the_full_input_list() {
+        assert!(default_input_matches_preference(None, Some("MacBook Air麦克风")));
+        assert!(default_input_matches_preference(
+            Some(" MacBook Air麦克风 "),
+            Some("MacBook Air麦克风")
+        ));
+        assert!(!default_input_matches_preference(
+            Some("外接麦克风"),
+            Some("MacBook Air麦克风")
+        ));
+        assert!(!default_input_matches_preference(Some("外接麦克风"), None));
     }
 
     #[test]
