@@ -560,7 +560,7 @@ export const es: typeof zhCN = {
     sortLiked: 'Me gusta',
     likedEmpty: 'Todavía no has marcado ningún paquete con «Me gusta»',
     likedEmptyHint:
-      'Abre un paquete y pulsa la estrella. Los paquetes que te gusten aparecerán aquí',
+      'Abre un paquete y pulsa el corazón. Los paquetes que te gusten aparecerán aquí',
     derivativeBadge: 'Basado en @{{login}}',
     detail: {
       withdrawBtn: 'Retirar',

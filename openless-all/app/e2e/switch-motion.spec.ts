@@ -330,12 +330,13 @@ test('stacked switches ripple their neighbours in collapsible groups and channel
     await switches.nth(0).click();
     return switches.nth(1).evaluate((element) => element.getAnimations().length);
   };
-  const startup = dialog.getByRole('button', { name: '启动', exact: true });
-  if ((await startup.getAttribute('aria-expanded')) === 'false') await startup.click();
-  // The collapsible's own root is its group: switches ripple only within that list.
-  const startupGroup = startup.locator('xpath=..');
-  await expect(startupGroup).toHaveAttribute('data-ol-toggle-group', '');
-  expect(await neighbourMoves(startupGroup)).toBeGreaterThan(0);
+  // Startup is no longer a collapsible on the microphone page. The recognition
+  // card still groups its switches, and that group is what ripples.
+  const recognition = dialog
+    .locator('[data-ol-toggle-group]')
+    .filter({ has: dialog.getByRole('switch', { name: '录音时静音', exact: true }) });
+  await expect(recognition).toBeVisible();
+  expect(await neighbourMoves(recognition)).toBeGreaterThan(0);
   await openSection(dialog, 'AI 与模型');
   const channels = dialog.locator('.ol-reorder-list[data-ol-toggle-group]');
   expect(await neighbourMoves(channels)).toBeGreaterThan(0);

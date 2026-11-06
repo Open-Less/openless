@@ -528,7 +528,7 @@ export const zhTW: typeof zhCN = {
     },
     sortLiked: '我讚過的',
     likedEmpty: '你還沒有讚過任何風格包',
-    likedEmptyHint: '點開任一風格包，紅色星星點亮後會出現在這裡',
+    likedEmptyHint: '點開任一風格包，點亮心形後會出現在這裡',
     derivativeBadge: '衍生自 @{{login}}',
     detail: {
       withdrawBtn: '撤回發布',

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AudioDspConfig, AudioDspStage } from '../../lib/types';
 import { audioEqualizerPresets, defaultAudioDsp, equalizerFrequencies } from '../../lib/audioDsp';
@@ -10,14 +10,23 @@ import { SettingRow, Toggle } from './shared';
 export function AudioDspSettings({
   value,
   onChange,
+  page = false,
 }: {
   value?: AudioDspConfig;
   onChange: (value: AudioDspConfig) => void;
+  /** The third settings screen already titles this panel, so skip the outer disclosure. */
+  page?: boolean;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(page);
   const [draft, setDraft] = useState<AudioDspConfig>({ ...defaultAudioDsp, ...value });
-  useEffect(() => setDraft({ ...defaultAudioDsp, ...value }), [value]);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    const next = { ...defaultAudioDsp, ...value };
+    draftRef.current = next;
+    setDraft(next);
+  }, [value]);
   const label = (key: string, fallback: string) =>
     t(`settings.recording.dsp.${key}`, { defaultValue: fallback });
   const save = (patch: Partial<AudioDspConfig>) => {
@@ -35,18 +44,20 @@ export function AudioDspSettings({
     <SettingRow key={field} label={title}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: 'min(280px, 100%)' }}>
         <input
+          className="ol-range"
           aria-label={title}
           type="range"
           min={min}
           max={max}
           step={1}
-          style={{ flex: 1, minWidth: 60 }}
           value={draft[field] as number}
-          onChange={(event) =>
-            setDraft((previous) => ({ ...previous, [field]: Number(event.target.value) }))
-          }
-          onPointerUp={() => onChange(draft)}
-          onKeyUp={() => onChange(draft)}
+          onChange={(event) => {
+            const next = { ...draftRef.current, [field]: Number(event.target.value) };
+            draftRef.current = next;
+            setDraft(next);
+          }}
+          onPointerUp={() => onChange(draftRef.current)}
+          onKeyUp={() => onChange(draftRef.current)}
         />
         <output style={{ minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {draft[field] as number}
@@ -71,14 +82,8 @@ export function AudioDspSettings({
     [order[index], order[target]] = [order[target], order[index]];
     save({ processingOrder: order });
   };
-  return (
-    <details
-      style={{ margin: '8px 0 16px' }}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
-    >
-      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
-        {label('title', 'Speech enhancement settings')}
-      </summary>
+  const body = (
+    <>
       <p style={{ fontSize: 12, color: 'var(--ol-muted)', lineHeight: 1.6 }}>
         {label(
           'description',
@@ -195,6 +200,7 @@ export function AudioDspSettings({
                 <label key={frequency} style={{ fontSize: 12 }}>
                   {frequency} · {draft.equalizerBandsDb[index]} dB
                   <input
+                    className="ol-range"
                     aria-label={`${stageLabels.equalizer} ${frequency}`}
                     type="range"
                     min={-15}
@@ -203,12 +209,14 @@ export function AudioDspSettings({
                     style={{ width: '100%' }}
                     value={draft.equalizerBandsDb[index]}
                     onChange={(event) => {
-                      const bands = [...draft.equalizerBandsDb];
+                      const bands = [...draftRef.current.equalizerBandsDb];
                       bands[index] = Number(event.target.value);
-                      setDraft((previous) => ({ ...previous, equalizerBandsDb: bands }));
+                      const next = { ...draftRef.current, equalizerBandsDb: bands };
+                      draftRef.current = next;
+                      setDraft(next);
                     }}
-                    onPointerUp={() => onChange(draft)}
-                    onKeyUp={() => onChange(draft)}
+                    onPointerUp={() => onChange(draftRef.current)}
+                    onKeyUp={() => onChange(draftRef.current)}
                   />
                 </label>
               ))}
@@ -244,9 +252,26 @@ export function AudioDspSettings({
           ))}
         </ol>
       </details>
-      <button type="button" style={{ marginTop: 14 }} onClick={() => save(defaultAudioDsp)}>
+      <button
+        type="button"
+        className="ol-pressable"
+        style={{ marginTop: 14 }}
+        onClick={() => save(defaultAudioDsp)}
+      >
         {label('reset', 'Reset enhancement settings')}
       </button>
+    </>
+  );
+  if (page) return body;
+  return (
+    <details
+      style={{ margin: '8px 0 16px' }}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+        {label('title', 'Speech enhancement settings')}
+      </summary>
+      {body}
     </details>
   );
 }

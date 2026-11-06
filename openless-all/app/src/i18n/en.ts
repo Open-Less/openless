@@ -557,7 +557,7 @@ export const en: typeof zhCN = {
     },
     sortLiked: 'Liked',
     likedEmpty: 'You have not liked any style packs yet',
-    likedEmptyHint: 'Open any pack and tap the star — liked packs appear here',
+    likedEmptyHint: 'Open any pack and tap the heart — liked packs appear here',
     derivativeBadge: 'Derived from @{{login}}',
     detail: {
       withdrawBtn: 'Withdraw',

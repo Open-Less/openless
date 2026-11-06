@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openMicrophoneSettings } from './support/navigation';
+import { openCapsuleStyleSettings } from './support/navigation';
 
 const errors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
@@ -269,11 +269,8 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   // OpenLess is now the default; opt into the optional WebGL style for this probe.
-  await openMicrophoneSettings(page);
-  await page
-    .getByRole('group', { name: '胶囊样式' })
-    .getByRole('button', { name: /Siri/ })
-    .click();
+  await openCapsuleStyleSettings(page);
+  await page.getByRole('group', { name: '胶囊样式' }).getByRole('button', { name: /Siri/ }).click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws))
     .toBeGreaterThan(5);

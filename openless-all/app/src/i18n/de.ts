@@ -562,7 +562,7 @@ export const de: typeof zhCN = {
     },
     sortLiked: 'Gefällt mir',
     likedEmpty: 'Du hast noch keine Stilpakete mit „Gefällt mir“ markiert',
-    likedEmptyHint: 'Öffne ein Paket und klicke auf den Stern. Markierte Pakete erscheinen hier',
+    likedEmptyHint: 'Öffne ein Paket und tippe auf das Herz. Markierte Pakete erscheinen hier',
     derivativeBadge: 'Abgeleitet von @{{login}}',
     detail: {
       withdrawBtn: 'Zurückziehen',

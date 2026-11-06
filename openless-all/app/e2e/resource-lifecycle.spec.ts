@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openMicrophoneSettings } from './support/navigation';
+import { openCapsuleStyleSettings } from './support/navigation';
 
 test('offscreen WebGL preview releases its animation clock and resumes only when visible', async ({
   page,
@@ -22,11 +22,8 @@ test('offscreen WebGL preview releases its animation clock and resumes only when
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   // The default OpenLess preview is CSS-only; opt into the WebGL style under test.
-  await openMicrophoneSettings(page);
-  await page
-    .getByRole('group', { name: '胶囊样式' })
-    .getByRole('button', { name: /Siri/ })
-    .click();
+  await openCapsuleStyleSettings(page);
+  await page.getByRole('group', { name: '胶囊样式' }).getByRole('button', { name: /Siri/ }).click();
   const draws = () => page.evaluate(() => (window as Window & { draws: number }).draws);
   await expect.poll(draws).toBeGreaterThan(5);
   await page.locator('.ol-settings-scroll').evaluate((element) => {
