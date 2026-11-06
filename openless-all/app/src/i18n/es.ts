@@ -210,6 +210,8 @@ export const es: typeof zhCN = {
       other: 'Elige la versión local o de la nube. No se muestran los valores.',
     },
     errors: {
+      serviceAccessDenied:
+        'Esta cuenta de GitHub no está autorizada para la sincronización en la nube. Pide al administrador del servicio que la habilite; volver a iniciar sesión no ayudará.',
       unknown: 'No se pudo completar la operación. Actualiza el estado y vuelve a intentarlo.',
       signIn: 'Vuelve a iniciar sesión con GitHub.',
       unlock: 'Primero desbloquea el dispositivo con la contraseña de sincronización.',

@@ -211,6 +211,8 @@ export const ko: typeof zhCN = {
       other: '로컬 또는 클라우드를 선택하세요. 실제 값은 표시하지 않습니다.',
     },
     errors: {
+      serviceAccessDenied:
+        '이 GitHub 계정에는 클라우드 동기화 권한이 없습니다. 동기화 서비스 관리자에게 계정 추가를 요청하세요. 다시 로그인해도 해결되지 않습니다.',
       unknown: '작업을 완료하지 못했습니다. 상태를 새로고침한 후 다시 시도하세요.',
       signIn: 'GitHub에 다시 로그인하세요.',
       unlock: '먼저 동기화 비밀번호로 이 기기를 잠금 해제하세요.',

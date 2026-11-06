@@ -256,6 +256,10 @@ assert.equal(
 );
 assert.equal(components.normalizeCustomServerOrigin('https://sync.example.com/path'), undefined);
 assert.equal(components.normalizeCustomServerOrigin(''), null);
+assert.equal(
+  api.encryptedSyncErrorKey({ details: { reason: 'service_access_denied' } }),
+  'serviceAccessDenied',
+);
 const syncPolls = new Map<number, () => void>();
 let pollId = 0;
 Object.defineProperty(globalThis, 'window', {

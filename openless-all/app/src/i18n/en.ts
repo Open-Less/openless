@@ -214,6 +214,8 @@ export const en: typeof zhCN = {
       other: 'Choose the local or cloud version. Values are not displayed.',
     },
     errors: {
+      serviceAccessDenied:
+        'This GitHub account is not authorized for cloud sync. Ask the sync service administrator to allow this account; signing in again will not help.',
       unknown: 'The operation could not be completed. Refresh the status and try again.',
       signIn: 'Sign in to GitHub again.',
       unlock: 'Unlock this device with your sync password first.',

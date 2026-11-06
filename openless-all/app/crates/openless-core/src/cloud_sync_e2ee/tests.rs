@@ -345,6 +345,7 @@ struct Remote {
     token_auth_requests: usize,
     identity_failure: Option<u16>,
     identity_rate_limited: bool,
+    exchange_failure: Option<u16>,
 }
 struct Server {
     origin: String,
@@ -404,8 +405,27 @@ impl Server {
                     bytes.extend_from_slice(&buffer[..size]);
                 }
                 let body = &bytes[header_end..header_end + length];
-                if path == "/github/user" {
-                    let (failure, rate_limited) = {
+                if path == "/v1/auth/github" && method == "POST" {
+                    let failure = shared.lock().unwrap().exchange_failure.take();
+                    if let Some(status) = failure {
+                        let body = serde_json::to_vec(&json!({
+                            "error": {
+                                "code": "unauthenticated",
+                                "message": "Authentication required.",
+                                "requestId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                            }
+                        }))
+                        .unwrap();
+                        let reply = format!(
+                            "HTTP/1.1 {status} Unauthorized\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        socket.write_all(reply.as_bytes()).await.unwrap();
+                        socket.write_all(&body).await.unwrap();
+                        continue;
+                    }
+                }
+                if path == "/github/user" {`n                    let (failure, rate_limited) = {
                         let mut remote = shared.lock().unwrap();
                         (remote.identity_failure.take(), remote.identity_rate_limited)
                     };
@@ -583,6 +603,28 @@ async fn issue1384_identity_outage_can_retry_without_another_github_login() {
 }
 
 #[tokio::test]
+async fn issue1384_sync_service_access_denial_does_not_require_github_relogin() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    server.state.lock().unwrap().exchange_failure = Some(401);
+
+    let failure = fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap_err();
+
+    assert_eq!(failure.message, "service_access_denied");
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedIn);
+    assert_eq!(fixture.service.status().sync_state, SyncState::Failed);
+    assert_eq!(
+        fixture.marketplace.read_access_token().await.unwrap().expose_secret(),
+        "fixture-github-token",
+        "a service allowlist rejection must not discard a valid GitHub credential"
+    );
+}
+
+#[tokio::test]
 async fn issue1384_rejected_or_missing_credentials_still_require_login() {
     for missing in [false, true] {
         let server = Server::start().await;
@@ -608,6 +650,10 @@ async fn issue1384_rejected_or_missing_credentials_still_require_login() {
         assert_eq!(failure.message, "sign_in_required");
         assert_eq!(fixture.service.status().auth_state, AuthState::Expired);
         assert_eq!(fixture.service.status().sync_state, SyncState::SignInRequired);
+        assert!(
+            fixture.marketplace.read_access_token().await.is_err(),
+            "a rejected token must not remain advertised as signed in"
+        );
     }
 }
 

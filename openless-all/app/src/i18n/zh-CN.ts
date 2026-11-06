@@ -198,6 +198,8 @@ export const zhCN = {
       other: '请选择本机或云端版本，具体值不会展示。',
     },
     errors: {
+      serviceAccessDenied:
+        '当前 GitHub 账号未获云同步服务授权。请联系同步服务管理员添加此账号，无需反复登录。',
       unknown: '操作未能完成，请刷新状态后重试。',
       signIn: '请重新登录 GitHub。',
       unlock: '请先使用同步密码解锁此设备。',

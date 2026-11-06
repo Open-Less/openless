@@ -198,6 +198,8 @@ export const zhTW: typeof zhCN = {
       other: '請選擇本機或雲端版本，具體值不會顯示。',
     },
     errors: {
+      serviceAccessDenied:
+        '目前 GitHub 帳號未取得雲端同步服務授權。請聯絡同步服務管理員加入此帳號，無需反覆登入。',
       unknown: '操作未能完成，請重新整理狀態後重試。',
       signIn: '請重新登入 GitHub。',
       unlock: '請先使用同步密碼解鎖此裝置。',

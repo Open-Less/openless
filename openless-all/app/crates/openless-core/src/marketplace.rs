@@ -491,8 +491,20 @@ impl MarketplaceService {
             .bearer_auth(token.expose_secret())
             .send()
             .await
-            .map_err(|_| Self::sync_identity_failure("transport_failed"))?;
+            .map_err(|error| {
+                let kind = if error.is_connect() {
+                    "connect"
+                } else if error.is_timeout() {
+                    "timeout"
+                } else {
+                    "request"
+                };
+                log::warn!("[e2ee-token] GitHub identity transport failed kind={kind}");
+                Self::sync_identity_failure("transport_failed")
+            })?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            log::warn!("[e2ee-token] GitHub identity rejected the stored token with HTTP 401");
+            let _ = self.clear_authentication().await;
             return Err(Self::authentication_required());
         }
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -516,6 +528,17 @@ impl MarketplaceService {
             return Err(error);
         }
         if !response.status().is_success() {
+            let status = response.status();
+            let request_id = response
+                .headers()
+                .get("x-github-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("unknown");
+            log::warn!(
+                "[e2ee-token] GitHub identity service failed status={} request_id={}",
+                status.as_u16(),
+                request_id
+            );
             return Err(Self::sync_identity_failure("service_failed"));
         }
         let mut bytes = Vec::new();

@@ -211,6 +211,8 @@ export const de: typeof zhCN = {
       other: 'Lokale oder Cloud-Version wählen. Werte werden nicht angezeigt.',
     },
     errors: {
+      serviceAccessDenied:
+        'Dieses GitHub-Konto ist für die Cloud-Synchronisierung nicht autorisiert. Der Dienstadministrator muss es freigeben; eine erneute Anmeldung hilft nicht.',
       unknown: 'Vorgang fehlgeschlagen. Status aktualisieren und erneut versuchen.',
       signIn: 'Erneut bei GitHub anmelden.',
       unlock: 'Dieses Gerät zuerst mit dem Sync-Passwort entsperren.',

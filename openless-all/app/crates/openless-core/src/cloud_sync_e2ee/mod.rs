@@ -29,9 +29,8 @@ pub(crate) fn error(reason: &'static str) -> BackendError {
     let code = match reason {
         "busy" | "stale_preview" | "revision_conflict" => BackendErrorCode::Busy,
         "cancelled" | "account_changed" => BackendErrorCode::Cancelled,
-        "sign_in_required" | "unlock_required" | "secure_storage_denied" => {
-            BackendErrorCode::PermissionDenied
-        }
+        "sign_in_required" | "unlock_required" | "secure_storage_denied"
+        | "service_access_denied" => BackendErrorCode::PermissionDenied,
         "service_unavailable" | "unsupported_protocol" => BackendErrorCode::Unsupported,
         "outcome_unknown" => BackendErrorCode::OutcomeUnknown,
         "recovery_required" | "local_storage_unavailable" => BackendErrorCode::Persistence,

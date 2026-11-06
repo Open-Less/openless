@@ -214,6 +214,8 @@ export const fr: typeof zhCN = {
       other: 'Choisissez la version locale ou cloud. Les valeurs restent masquées.',
     },
     errors: {
+      serviceAccessDenied:
+        'Ce compte GitHub doit être autorisé par le responsable du service de synchronisation cloud ; une nouvelle connexion ne changera rien.',
       unknown: 'L’opération n’a pas abouti. Actualisez l’état et réessayez.',
       signIn: 'Reconnectez-vous à GitHub.',
       unlock: 'Déverrouillez d’abord cet appareil avec votre mot de passe.',

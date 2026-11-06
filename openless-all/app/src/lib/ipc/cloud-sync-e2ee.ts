@@ -183,6 +183,7 @@ export function matchesEncryptedSyncEvent(
 // unknown detail fields and credential-bearing strings are never displayed.
 const errorKeys = {
   sign_in_required: 'signIn',
+  service_access_denied: 'serviceAccessDenied',
   unlock_required: 'unlock',
   sync_documents_locked: 'unlock',
   service_unavailable: 'unavailable',
