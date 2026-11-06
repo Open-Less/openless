@@ -82,7 +82,7 @@
 .ol-tool-heading h1 {
   margin: 0;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
   letter-spacing: -0.3px;
   line-height: 1.35;
 }

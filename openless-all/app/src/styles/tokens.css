@@ -86,6 +86,12 @@
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --font-weight-normal: var(--ol-font-weight-regular);
+  --font-weight-medium: var(--ol-font-weight-medium);
+  --font-weight-semibold: var(--ol-font-weight-semibold);
+  --font-weight-bold: var(--ol-font-weight-bold);
+  --font-weight-extrabold: calc(800 + var(--ol-font-weight-offset));
+  --ol-font-weight-offset: 0;
   --ol-font-weight-regular: 400;
   --ol-font-weight-bold: 700;
   --ol-font-weight-demibold: 650;
@@ -241,6 +247,7 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-offset: -40;
   --ol-font-weight-regular: 360;
   --ol-font-weight-bold: 660;
   --ol-font-weight-demibold: 610;

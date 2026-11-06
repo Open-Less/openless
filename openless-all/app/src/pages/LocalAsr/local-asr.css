@@ -17,7 +17,7 @@
   margin: 0;
   color: var(--ol-ink);
   font-size: 17px;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
 }
 .ol-local-model-heading p,
 .ol-model-manager-heading p {
@@ -171,7 +171,7 @@
   font-size: 22px;
   line-height: 1.35;
   letter-spacing: -0.025em;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
   color: var(--ol-ink);
   overflow-wrap: anywhere;
 }
@@ -380,7 +380,7 @@
 .ol-model-dialog-header h2 {
   margin: 0;
   font-size: 20px;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
   letter-spacing: -0.02em;
 }
 .ol-model-dialog-header p {

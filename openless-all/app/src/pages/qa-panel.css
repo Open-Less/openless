@@ -320,7 +320,7 @@
 }
 .qa-answer-header h1 {
   font-size: 12px;
-  font-weight: 620;
+  font-weight: calc(620 + var(--ol-font-weight-offset));
 }
 .qa-answer-header > span:last-child {
   margin-left: auto;
@@ -408,7 +408,7 @@
   gap: 7px;
   color: var(--qa-muted);
   font-size: 10px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
 }
 .qa-assistant-message .olchat-answer {
   color: var(--qa-ink);
@@ -642,7 +642,7 @@
 }
 .qa-answer-header h1 {
   font-size: 13px;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
 }
 .qa-answer-header > .qa-symbol {
   font-size: 16px;
@@ -727,7 +727,7 @@
 }
 .qa-assistant-label {
   font-size: 13px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
   color: #3f3f46;
   min-height: 43px;
 }

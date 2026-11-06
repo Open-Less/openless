@@ -656,7 +656,7 @@ export function Marketplace() {
                   placeItems: 'center',
                   background: 'var(--ol-surface-2)',
                   fontSize: 10,
-                  fontWeight: 750,
+                  fontWeight: 'calc(750 + var(--ol-font-weight-offset))',
                 }}
               >
                 {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
@@ -1362,7 +1362,7 @@ export function Marketplace() {
                       placeItems: 'center',
                       background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
                       fontSize: 10,
-                      fontWeight: 750,
+                      fontWeight: 'calc(750 + var(--ol-font-weight-offset))',
                     }}
                   >
                     {(authorizedLogin || '?').slice(0, 1).toUpperCase()}

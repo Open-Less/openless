@@ -34,7 +34,7 @@
 .ol-guide-turn h1,
 .ol-guide-turn h2 {
   margin: 0 0 20px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
   letter-spacing: -0.035em;
   line-height: 1.35;
   outline: none;
@@ -125,7 +125,7 @@
 .ol-guide-primary {
   color: var(--ol-primary-solid-ink);
   background: var(--ol-primary-solid-bg);
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
   white-space: nowrap;
 }
 .ol-guide-secondary {
@@ -187,7 +187,7 @@
 }
 .ol-guide-choice strong {
   font-size: 14px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
 }
 .ol-guide-choice span {
   font-size: 12px;

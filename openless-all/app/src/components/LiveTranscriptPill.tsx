@@ -62,7 +62,6 @@ export interface LiveTranscriptPillProps {
 }
 
 const FONT_SIZE = 16;
-const FONT_WEIGHT = 500;
 const DEFAULT_PILL_HEIGHT = 40;
 
 let measureCanvas: HTMLCanvasElement | null = null;
@@ -82,7 +81,10 @@ function measureGlyphWidth(glyph: string, fontSize: number): number {
   if (!measureCanvas) measureCanvas = document.createElement('canvas');
   const ctx = measureCanvas.getContext('2d');
   if (!ctx) return fontSize;
-  ctx.font = `${FONT_WEIGHT} ${fontSize}px ${getSansFont()}`;
+  const weight =
+    getComputedStyle(document.documentElement).getPropertyValue('--ol-font-weight-medium').trim() ||
+    '500';
+  ctx.font = `${weight} ${fontSize}px ${getSansFont()}`;
   const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
   return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
 }

@@ -154,7 +154,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
             flex: '0 0 auto',
             color,
             fontSize: completed ? 15 : 16,
-            fontWeight: 800,
+            fontWeight: 'calc(800 + var(--ol-font-weight-offset))',
             lineHeight: 1,
           }}
         >
