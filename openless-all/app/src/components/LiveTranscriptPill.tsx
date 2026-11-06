@@ -538,7 +538,7 @@ function TranscriptGlyph({
               filter: `blur(${INSERT_TEXT_MOTION.bornBlurPx}px)`,
             }
       }
-      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      animate={{ opacity: 1, y: 0, filter: 'blur(0px)', transitionEnd: { filter: 'none' } }}
       transition={
         reduceMotion
           ? { duration: 0 }

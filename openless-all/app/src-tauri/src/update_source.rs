@@ -102,7 +102,7 @@ mod tests {
     }
 }
 
-/// Prefer GitHub unless the mirror wins both measurements by a meaningful margin.
+/// Prefer a nearby mirror when latency and throughput are comparable.
 /// Version precedence is resolved before measuring transport performance.
 #[cfg(not(mobile))]
 pub(crate) fn mirror_is_faster(mirror: (f64, f64), github: (f64, f64)) -> bool {

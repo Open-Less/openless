@@ -447,7 +447,6 @@
   isolation: isolate;
   clip-path: inset(0 round 999px);
   box-sizing: border-box;
-  will-change: left, width;
 }
 
 .ol-live-transcript-pill[data-tone='frost'] {
@@ -537,13 +536,11 @@
   position: absolute;
   left: 100%;
   flex: none;
-  will-change: transform;
 }
 
 .ol-live-transcript-char {
   display: inline-block;
   transform-origin: 50% 85%;
-  will-change: transform, opacity, filter;
 }
 
 .ol-live-transcript-sr {

@@ -111,6 +111,8 @@ test('tabular transcript digits use shaped advances and never overlap', async ({
   });
   const glyphs = page.locator('.ol-live-transcript-char');
   await expect(glyphs).toHaveCount(8);
+  await expect(glyphs.first()).toHaveCSS('filter', 'none');
+  await expect(glyphs.first()).toHaveCSS('will-change', 'auto');
   const bounds = await glyphs.evaluateAll((nodes) =>
     nodes.map((node) => {
       const r = node.getBoundingClientRect();
