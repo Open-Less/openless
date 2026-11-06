@@ -4185,6 +4185,7 @@ impl CoreTextInserter for TauriTextInserter {
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
                     context.uses_llm_polisher()
+                        && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
                         context.polish.translation_active,

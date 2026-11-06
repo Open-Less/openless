@@ -1,6 +1,6 @@
 /* Utility windows and dialogs share a quiet, opaque surface and precise controls. */
 :root {
-  --ol-dialog-radius: 22px;
+  --ol-dialog-radius: var(--ol-surface-radius);
   --ol-dialog-border: color-mix(in srgb, var(--ol-ink) 12%, var(--ol-surface));
   --ol-dialog-shadow:
     0 32px 90px -24px rgba(18, 28, 48, 0.26), 0 8px 28px -12px rgba(18, 28, 48, 0.16),

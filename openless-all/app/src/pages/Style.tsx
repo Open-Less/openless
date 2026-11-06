@@ -1278,7 +1278,7 @@ export function Style() {
               initial={{ x: '100%', opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: '100%', opacity: 0 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 280 }}
+              transition={{ type: 'spring', damping: 36, stiffness: 280 }}
               style={
                 mobile
                   ? {

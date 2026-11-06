@@ -788,7 +788,7 @@ export function Marketplace() {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.85 }}
                     transition={{
-                      layout: { type: 'spring', damping: 25, stiffness: 220 },
+                      layout: { type: 'spring', damping: 32, stiffness: 220 },
                       opacity: { duration: 0.2 },
                       scale: { duration: 0.2 },
                     }}

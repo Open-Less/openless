@@ -1,3 +1,4 @@
+import { measureTabularDigit } from '../lib/tabularTextMetrics';
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -85,7 +86,8 @@ function measureGlyphWidth(glyph: string, fontSize: number): number {
     getComputedStyle(document.documentElement).getPropertyValue('--ol-font-weight-medium').trim() ||
     '500';
   ctx.font = `${weight} ${fontSize}px ${getSansFont()}`;
-  const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
+  const raw =
+    measureTabularDigit(glyph, ctx.font) ?? ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
   return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
 }
 

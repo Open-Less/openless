@@ -4,7 +4,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isTauri, startMicrophoneLevelMonitor, stopMicrophoneLevelMonitor } from '../../lib/ipc';
+import { isTauri } from '../../lib/ipc/shared';
+import { startMicrophoneLevelMonitor, stopMicrophoneLevelMonitor } from '../../lib/ipc/devices';
 import type { MicrophoneDevice } from '../../lib/types';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { useMobileLayout } from '../../lib/useMobileLayout';

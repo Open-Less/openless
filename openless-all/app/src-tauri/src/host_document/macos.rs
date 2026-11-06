@@ -132,7 +132,6 @@ type AxObserverCallback = unsafe extern "C" fn(
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
-    fn AXUIElementCreateSystemWide() -> AxUiElementRef;
     fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
     fn AXObserverCreate(
         application: i32,
@@ -601,14 +600,10 @@ impl KeyboardDelivery {
         // AX capture can take time. Recheck the exact control before sending
         // keys so a focus change during capture does not redirect this chunk.
         unsafe {
-            let system = AXUIElementCreateSystemWide();
-            if system.is_null() {
+            let GatedElement::Ready(focused) = focused_element_passing_the_gate(voice_edit_gate())
+            else {
                 return false;
-            }
-            AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-            let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-            CFRelease(system as CFTypeRef);
-            let Some(focused) = focused else { return false };
+            };
             let same = CFEqual(focused as CFTypeRef, self.element as CFTypeRef) != 0;
             CFRelease(focused as CFTypeRef);
             same
@@ -1806,6 +1801,8 @@ mod live_composition_acceptance {
             baseline, "before 原文 after",
             "refuse to modify a non-fixture editor"
         );
+        let delivery = KeyboardDelivery::capture().expect("fixture keyboard delivery target");
+        assert!(delivery.is_focused());
         let mut live = LiveComposition::capture().unwrap();
         live.replace("这是一段实时原文").unwrap();
         assert_eq!(

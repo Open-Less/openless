@@ -320,3 +320,33 @@ test('swipe departure is directional, removable and undoable', async ({ page }) 
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(card).toBeVisible();
 });
+
+test('continuous rectangular corners render through the native or WebKit fallback path', async ({
+  page,
+}) => {
+  await page.goto(fixture);
+  const route = await page.evaluate(() => ({
+    native: CSS.supports('corner-shape', 'superellipse(1.5)'),
+    fallback: CSS.supports(
+      'clip-path',
+      'shape(from 10px 0, curve to 0 10px with 0 0 / 0 0, close)',
+    ),
+  }));
+  const check = async (element: import('@playwright/test').Locator) => {
+    if (route.native) {
+      expect(
+        await element.evaluate((node) => getComputedStyle(node).getPropertyValue('corner-shape')),
+      ).toContain('superellipse');
+    } else if (route.fallback) {
+      expect(await element.evaluate((node) => getComputedStyle(node).clipPath)).toMatch(/^shape\(/);
+      await expect(element).toHaveCSS('border-radius', '0px');
+    }
+  };
+  await check(page.getByRole('combobox', { name: 'Long menu', exact: true }));
+  await expect(page.getByRole('switch', { name: 'Switch 0', exact: true })).toHaveCSS(
+    'clip-path',
+    'none',
+  );
+  await page.getByRole('button', { name: 'Open modal fixture', exact: true }).click();
+  await check(page.locator('.ol-dialog-card'));
+});

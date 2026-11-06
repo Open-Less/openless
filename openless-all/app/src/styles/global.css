@@ -1,5 +1,6 @@
 @import '../components/Tooltip.css';
 @import '../components/ui/Select.css';
+@import './continuous-corners.css';
 
 html,
 body,
@@ -382,9 +383,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 32px;
   height: 30px;
   padding: 0;
-  border: 1px solid var(--ol-line-strong);
+  border: 0;
   border-radius: var(--ol-control-radius);
-  background: var(--ol-surface);
+  background: var(--ol-surface-raised);
   color: var(--ol-ink-2);
   cursor: pointer;
   transition:
@@ -2271,21 +2272,6 @@ body {
   border-radius: var(--ol-r-md);
 }
 /* Continuous corners degrade to the same radius scale on older WebKit. */
-@supports (corner-shape: superellipse(1.5)) {
-  :where(
-    .ol-card,
-    .ol-settings-workspace,
-    .ol-settings-category-list,
-    .ol-advanced-settings-list,
-    button,
-    input,
-    select,
-    textarea,
-    dialog
-  ) {
-    corner-shape: superellipse(1.5);
-  }
-}
 
 /* Entry and exit paint the background; only the settled opaque workspace suspends it. */
 .ol-shell-depth[data-ol-settings-occluded='true'] {
