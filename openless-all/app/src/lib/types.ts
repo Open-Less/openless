@@ -386,6 +386,8 @@ export interface UserPreferences {
   capsuleDisplayModeV2?: UserPreferences['capsuleDisplayMode'];
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
+  /** Device-local "Siri enhanced" presentation; only meaningful with `capsuleStyle: 'siri'`. */
+  capsuleSiriEnhanced?: boolean;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
   muteDuringRecording: boolean;
   /** Record fully first, then connect to the current ASR and submit the whole audio on stop. Off by default. */
