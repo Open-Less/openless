@@ -544,7 +544,7 @@ export const ko: typeof zhCN = {
     },
     sortLiked: '좋아요한 팩',
     likedEmpty: '아직 좋아요한 팩이 없습니다',
-    likedEmptyHint: '팩을 열고 별을 누르면 여기에 표시됩니다',
+    likedEmptyHint: '팩을 열고 하트를 누르면 여기에 표시됩니다',
     derivativeBadge: '@{{login}}에서 파생',
     detail: {
       withdrawBtn: '게시 취소',

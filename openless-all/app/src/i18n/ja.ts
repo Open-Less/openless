@@ -550,7 +550,7 @@ export const ja: typeof zhCN = {
     },
     sortLiked: 'いいね済み',
     likedEmpty: 'まだいいねしたパックがありません',
-    likedEmptyHint: 'パックを開いて星をタップするとここに表示されます',
+    likedEmptyHint: 'パックを開いてハートをタップするとここに表示されます',
     derivativeBadge: '@{{login}} から派生',
     detail: {
       withdrawBtn: '公開を取り下げる',

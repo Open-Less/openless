@@ -240,6 +240,7 @@ export function Btn({
   const muted = disabled && (variant === 'primary' || variant === 'blue');
   return (
     <button
+      className="ol-pressable"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       aria-label={ariaLabel}
@@ -259,7 +260,7 @@ export function Btn({
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled && !muted ? 0.55 : 1,
         transition:
-          'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
+          'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1)',
         ...sizes[size],
         ...style,
       }}

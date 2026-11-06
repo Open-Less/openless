@@ -55,6 +55,9 @@ import {
 import { pickStylePackZipTargetPath, stylePackZipFileName } from '../lib/stylePackZip';
 import { useMobileLayout, useLayoutStack, useConservativeLayout } from '../lib/useMobileLayout';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import { ExpandingSearch } from '../components/ExpandingSearch';
+import { LikeButton } from '../components/LikeButton';
+import { readCachedLikes, reduceMarketplaceLikes, writeCachedLikes } from '../lib/marketplaceLikes';
 
 type SortMode = 'popular' | 'new' | 'liked';
 
@@ -103,6 +106,8 @@ export function Marketplace() {
   // Set of pack ids the user has liked — drives heart rendering + the "liked" filter.
   // Fetched once on entering the marketplace; mutated locally after starring.
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
+  const [likesSettled, setLikesSettled] = useState(false);
+  const likesSeqRef = useRef(0);
   const currentLogin = (prefs?.marketplaceDevLogin ?? '').trim();
   const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
   const authorizedLogin = marketplaceSignedIn ? currentLogin : '';
@@ -112,15 +117,19 @@ export function Marketplace() {
       const status = await marketplaceAuthStatus();
       setMarketplaceSignedIn(status.signedIn);
       if (!status.signedIn) {
-        setLikedIds(new Set());
+        setLikedIds((current) => reduceMarketplaceLikes(current, { type: 'signed-out' }));
+        setLikesSettled(true);
         setMyPacks([]);
         if (currentLogin) {
           await updatePrefs((current) => ({ ...current, marketplaceDevLogin: '' }));
         }
       }
       return status.signedIn;
-    } catch {
-      setMarketplaceSignedIn(false);
+    } catch (error) {
+      // A thrown status read is not a sign-out. Treating it as one cleared the
+      // heart the next time the marketplace effect restarted.
+      console.warn('[marketplace] auth status failed', error);
+      setLikedIds((current) => reduceMarketplaceLikes(current, { type: 'status-failed' }));
       return false;
     }
   }, [currentLogin, updatePrefs]);
@@ -203,28 +212,42 @@ export function Marketplace() {
     void refreshAuthStatus();
   }, [currentLogin, refreshAuthStatus]);
 
-  // Fetch the "my likes" cache once to render hearts + the "liked" filter. Refetch when the login identity changes.
+  // Fetch likes when the signed-in identity changes. A newer like click bumps
+  // likesSeqRef so a slow list response cannot wipe the heart that just landed.
   useEffect(() => {
-    let cancelled = false;
     if (!marketplaceSignedIn) {
-      setLikedIds(new Set());
-      return () => {
-        cancelled = true;
-      };
+      setLikedIds((current) => reduceMarketplaceLikes(current, { type: 'signed-out' }));
+      setLikesSettled(true);
+      return;
     }
+    const cached = readCachedLikes(currentLogin);
+    if (cached.length > 0) {
+      setLikedIds(new Set(cached));
+      setLikesSettled(true);
+    } else {
+      setLikesSettled(false);
+    }
+    const seq = ++likesSeqRef.current;
+    let cancelled = false;
     void (async () => {
       try {
         const ids = await marketplaceMyLikes();
-        if (!cancelled) setLikedIds(new Set(ids));
+        if (cancelled || seq !== likesSeqRef.current) return;
+        const next = reduceMarketplaceLikes(new Set(), { type: 'fetched', ids });
+        setLikedIds(next);
+        writeCachedLikes(currentLogin, next);
+        setLikesSettled(true);
       } catch (error) {
-        void refreshAuthStatus();
+        if (cancelled || seq !== likesSeqRef.current) return;
         console.warn('[marketplace] fetch my-likes failed', error);
+        setLikedIds((current) => reduceMarketplaceLikes(current, { type: 'fetch-failed' }));
+        setLikesSettled(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [marketplaceSignedIn, refreshAuthStatus]);
+  }, [marketplaceSignedIn, currentLogin]);
 
   const refreshMyPacks = useCallback(
     async (notify = false) => {
@@ -271,25 +294,24 @@ export function Marketplace() {
   const openDetail = async (id: string) => {
     const seq = ++detailSeqRef.current;
     setSelectedId(id);
-    setDetail(null);
-    setDetailLoading(true);
     setInstallError((previous) => (previous?.packId === id ? previous : null));
     // Differential cache hit: the list already carries version+updatedAt; match the local detail by the triple.
     // Hit = render directly, skip the network; miss = go through fetchMarketplaceDetail.
+    // Keep a previous detail mounted so the heart does not unmount into a spinner on every open.
     const listItem = items.find((it) => it.id === id);
-    if (listItem) {
-      const cached = readMarketplaceDetailCache(
-        id,
-        listItem.version ?? '',
-        listItem.updatedAt ?? '',
-      );
-      if (cached) {
-        if (seq === detailSeqRef.current) {
-          setDetail(cached);
-          setDetailLoading(false);
-        }
-        return;
+    const cached = listItem
+      ? readMarketplaceDetailCache(id, listItem.version ?? '', listItem.updatedAt ?? '')
+      : null;
+    if (cached) {
+      if (seq === detailSeqRef.current) {
+        setDetail(cached);
+        setDetailLoading(false);
       }
+      return;
+    }
+    if (detail?.id !== id) {
+      setDetail(null);
+      setDetailLoading(true);
     }
     try {
       const d = await fetchMarketplaceDetail(id);
@@ -304,7 +326,8 @@ export function Marketplace() {
         kind: 'err',
         text: t('marketplace.errors.detail', { err: errorMessage(error) }),
       });
-      setSelectedId(null);
+      // A list row is enough to keep the heart on screen. Closing the dialog made it vanish.
+      if (!listItem) setSelectedId(null);
     } finally {
       if (seq === detailSeqRef.current) setDetailLoading(false);
     }
@@ -352,23 +375,24 @@ export function Marketplace() {
     }
   };
 
-  const onLike = async () => {
-    if (!detail) return;
+  const onLike = async (packId: string, likeCount: number) => {
     if (!marketplaceSignedIn) {
       setActionMsg({ kind: 'err', text: t('marketplace.myPacks.notLoggedIn') });
       setShowLogin(true);
       return;
     }
-    const packId = detail.id;
     const prevLikedIds = likedIds;
-    const prevLikeCount = detail.likeCount;
+    const prevLikeCount = likeCount;
     const wasLiked = prevLikedIds.has(packId);
     // Optimistic mutate: flip the heart and adjust the count immediately so the click feels instant.
+    // Bump the likes seq so an in-flight "my likes" response cannot put the heart back.
     const optimisticCount = Math.max(0, prevLikeCount + (wasLiked ? -1 : 1));
+    likesSeqRef.current += 1;
     setLikedIds((prev) => {
       const next = new Set(prev);
       if (wasLiked) next.delete(packId);
       else next.add(packId);
+      if (currentLogin) writeCachedLikes(currentLogin, next);
       return next;
     });
     setDetail((prev) =>
@@ -388,12 +412,15 @@ export function Marketplace() {
         const next = new Set(prev);
         if (r.alreadyLiked) next.add(packId);
         else next.delete(packId);
+        if (currentLogin) writeCachedLikes(currentLogin, next);
         return next;
       });
     } catch (error) {
       void refreshAuthStatus();
       // Roll back to the pre-click state
+      likesSeqRef.current += 1;
       setLikedIds(prevLikedIds);
+      if (currentLogin) writeCachedLikes(currentLogin, prevLikedIds);
       setDetail((prev) =>
         prev && prev.id === packId ? { ...prev, likeCount: prevLikeCount } : prev,
       );
@@ -643,7 +670,7 @@ export function Marketplace() {
         }
       />
 
-      {/* Top: search + sort */}
+      {/* Sort stays put; search is the dictionary's circular control, expanding left. */}
       <div
         className="ol-flex-row"
         style={{
@@ -651,37 +678,10 @@ export function Marketplace() {
           gap: 10,
           alignItems: stackLayout ? 'stretch' : 'center',
           flexDirection: stackLayout ? 'column' : 'row',
+          justifyContent: 'space-between',
           padding: '4px 0 14px',
         }}
       >
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 10px',
-            border: '0.5px solid var(--ol-line-strong)',
-            borderRadius: 10,
-            background: 'var(--ol-surface)',
-          }}
-        >
-          <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
-          <input
-            type="search"
-            placeholder={t('marketplace.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{
-              flex: 1,
-              outline: 'none',
-              border: 0,
-              background: 'transparent',
-              fontSize: 13,
-              color: 'var(--ol-ink-1)',
-            }}
-          />
-        </div>
         <div
           className="ol-flex-row ol-flex-split"
           style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}
@@ -704,6 +704,12 @@ export function Marketplace() {
             </button>
           ))}
         </div>
+        <ExpandingSearch
+          value={query}
+          onChange={setQuery}
+          placeholder={t('marketplace.searchPlaceholder')}
+          label={t('marketplace.searchPlaceholder')}
+        />
       </div>
 
       {actionMsg && (
@@ -736,7 +742,7 @@ export function Marketplace() {
 
       {/* Card list / my packs */}
       <div style={{ flex: 1, overflow: 'auto' }} className="ol-thinscroll ol-scroll-fade">
-        {loading && items.length === 0 ? (
+        {(loading && items.length === 0) || (sort === 'liked' && !likesSettled) ? (
           // Show loading only when there's no cached data; with a cache, render it directly and let the background refresh correct it
           <div
             style={{
@@ -894,13 +900,15 @@ export function Marketplace() {
                         @{p.authorLogin}
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span>
-                          <span
-                            style={{ color: likedIds.has(p.id) ? '#ef4444' : 'var(--ol-ink-4)' }}
-                          >
-                            {likedIds.has(p.id) ? '★' : '☆'}
-                          </span>{' '}
-                          {p.likeCount} · ↓ {p.downloadCount}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <LikeButton
+                            compact
+                            liked={likedIds.has(p.id)}
+                            count={p.likeCount}
+                            label={t('marketplace.likeBtn')}
+                            onClick={() => void onLike(p.id, p.likeCount)}
+                          />
+                          <span>↓ {p.downloadCount}</span>
                         </span>
                         <button
                           type="button"
@@ -1010,13 +1018,6 @@ export function Marketplace() {
                     >
                       @{detail.authorLogin}
                     </span>
-                    {' · '}
-                    <span
-                      style={{ color: likedIds.has(detail.id) ? '#ef4444' : 'var(--ol-ink-4)' }}
-                    >
-                      {likedIds.has(detail.id) ? '★' : '☆'}
-                    </span>{' '}
-                    {detail.likeCount}
                     {' · ↓ '}
                     {detail.downloadCount}
                   </div>
@@ -1082,36 +1083,16 @@ export function Marketplace() {
                         )}
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <motion.button
-                        onClick={() => void onLike()}
-                        aria-label={
-                          marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')
+                      <LikeButton
+                        liked={likedIds.has(detail.id)}
+                        count={detail.likeCount}
+                        label={
+                          marketplaceSignedIn
+                            ? t('marketplace.likeBtn')
+                            : t('marketplace.oauth.loginBtn')
                         }
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: '4px 8px',
-                          borderRadius: 8,
-                          fontSize: 12,
-                          fontWeight: 'var(--ol-font-weight-medium)',
-                          color: 'var(--ol-ink-2)',
-                        }}
-                      >
-                        <span
-                          style={{
-                            color: likedIds.has(detail.id) ? '#ef4444' : 'inherit',
-                            marginRight: 4,
-                            display: 'inline-block',
-                          }}
-                        >
-                          {likedIds.has(detail.id) ? '★' : '☆'}
-                        </span>
-                        {detail.likeCount}
-                      </motion.button>
+                        onClick={() => void onLike(detail.id, detail.likeCount)}
+                      />
                       <Btn
                         variant="ghost"
                         size="sm"

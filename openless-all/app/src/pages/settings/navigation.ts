@@ -19,7 +19,6 @@ export const ADVANCED_PAGES = [
     icon: 'mic',
     titleKey: 'settings.advancedPages.voiceEnhancementTitle',
     group: 'recording',
-    inline: true,
   },
   {
     id: 'cursorContext',
@@ -71,7 +70,8 @@ export function advancedPageGroup(page: AdvancedPage): AdvancedPageGroup | undef
   return 'group' in page ? page.group : undefined;
 }
 
-// Small experiment groups stay on the advanced root. Larger tools keep their own page.
+// Cursor context and startup diagnostics stay on the advanced root.
+// Voice enhancement opens its own page, then a third screen for the DSP sliders.
 export function isInlineAdvancedPage(page: AdvancedPage): boolean {
   return 'inline' in page && page.inline;
 }

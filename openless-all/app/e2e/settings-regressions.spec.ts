@@ -313,6 +313,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   await expect(mute).toBeVisible();
   const muted = await mute.isChecked();
   await dialog.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
   const cancellation = dialog.getByRole('switch', { name: '播放回声抑制', exact: true });
   await expect(cancellation).not.toBeChecked();
   await cancellation.click();
@@ -321,6 +322,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   await openMicrophoneSettings(dialog);
   await expect(mute).toHaveAttribute('aria-checked', String(muted));
   await dialog.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
   await expect(cancellation).toBeChecked();
   await cancellation.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('playback-echo-cancellation.png') });

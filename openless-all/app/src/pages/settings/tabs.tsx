@@ -2,7 +2,7 @@
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
 import { useTranslation } from 'react-i18next';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
@@ -483,47 +483,76 @@ export function CloudServicesTab() {
   );
 }
 
+export const VoiceEnhancementDepthContext = createContext<{
+  open: boolean;
+  setOpen: (open: boolean) => void;
+} | null>(null);
+
 function VoiceEnhancementSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
+  const depth = useContext(VoiceEnhancementDepthContext);
   if (!prefs) return null;
-  return (
-    <Card>
-      <ExperimentalSectionTitle badge={t('common.experimental')}>
-        {t('settings.advancedPages.voiceEnhancementTitle')}
-      </ExperimentalSectionTitle>
-      {platformCaps?.platform === 'desktop' && (
-        <SettingRow
-          label={t('settings.recording.echoCancellationLabel')}
-          desc={t('settings.recording.echoCancellationDesc')}
-        >
-          <Toggle
-            on={prefs.echoCancellationEnabled ?? false}
-            onToggle={(next) =>
-              void updatePrefs((current) => ({ ...current, echoCancellationEnabled: next }))
-            }
-          />
-        </SettingRow>
-      )}
-      <SettingRow
-        label={t('settings.recording.audioEnhancementLabel')}
-        desc={t('settings.recording.audioEnhancementDesc')}
-      >
-        <Toggle
-          on={prefs.audioEnhancementEnabled}
-          onToggle={(next) =>
-            void updatePrefs((current) => ({ ...current, audioEnhancementEnabled: next }))
-          }
-        />
-      </SettingRow>
-      {prefs.audioEnhancementEnabled && (
+  const dspOpen = depth?.open ?? false;
+  const openDsp = () => depth?.setOpen(true);
+  if (dspOpen) {
+    return (
+      <div>
         <AudioDspSettings
+          page
           value={prefs.audioDsp}
           onChange={(audioDsp) => void updatePrefs((current) => ({ ...current, audioDsp }))}
         />
-      )}
-    </Card>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <Card>
+        <ExperimentalSectionTitle badge={t('common.experimental')}>
+          {t('settings.advancedPages.voiceEnhancementTitle')}
+        </ExperimentalSectionTitle>
+        {platformCaps?.platform === 'desktop' && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={(next) =>
+                void updatePrefs((current) => ({ ...current, echoCancellationEnabled: next }))
+              }
+            />
+          </SettingRow>
+        )}
+        <SettingRow
+          label={t('settings.recording.audioEnhancementLabel')}
+          desc={t('settings.recording.audioEnhancementDesc')}
+        >
+          <Toggle
+            on={prefs.audioEnhancementEnabled}
+            onToggle={(next) =>
+              void updatePrefs((current) => ({ ...current, audioEnhancementEnabled: next }))
+            }
+          />
+        </SettingRow>
+      </Card>
+      <div className="ol-advanced-settings-list" style={{ marginTop: 12 }}>
+        <button type="button" className="ol-advanced-settings-entry" onClick={openDsp}>
+          <span className="ol-advanced-entry-icon">
+            <Icon name="mic" size={19} />
+          </span>
+          <span className="ol-advanced-entry-copy">
+            <span className="ol-advanced-entry-title">{t('settings.recording.dsp.title')}</span>
+            <span className="ol-advanced-entry-description">
+              {t('settings.recording.dsp.description')}
+            </span>
+          </span>
+          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+        </button>
+      </div>
+    </div>
   );
 }
 

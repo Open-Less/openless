@@ -528,7 +528,7 @@ export const zhCN = {
     },
     sortLiked: '我赞过的',
     likedEmpty: '你还没有赞过任何风格包',
-    likedEmptyHint: '点开任一风格包，红色星星点亮后会出现在这里',
+    likedEmptyHint: '点开任一风格包，点亮心形后会出现在这里',
     derivativeBadge: '衍生自 @{{login}}',
     detail: {
       withdrawBtn: '撤回发布',

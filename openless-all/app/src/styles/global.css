@@ -387,10 +387,17 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-surface);
   color: var(--ol-ink-2);
   cursor: pointer;
+  transition:
+    transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.16s var(--ol-motion-quick),
+    color 0.16s var(--ol-motion-quick);
 }
 .ol-settings-back:hover {
   background: var(--ol-surface-2);
   color: var(--ol-ink);
+}
+.ol-settings-back:active {
+  transform: scale(0.9);
 }
 .ol-settings-back:focus-visible {
   outline: 2px solid var(--ol-blue);
@@ -495,7 +502,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   text-align: left;
   font-family: inherit;
   cursor: pointer;
-  transition: background 160ms ease;
+  transition:
+    background 160ms ease,
+    transform 0.28s cubic-bezier(0.34, 1.45, 0.64, 1);
+}
+.ol-advanced-settings-entry:active {
+  transform: scale(0.985);
 }
 .ol-advanced-settings-list > div + div {
   border-top: 1px solid var(--ol-line-soft);
@@ -714,13 +726,26 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border-radius: 999px;
   border: 0.5px solid var(--ol-line);
   background: var(--ol-surface-2);
+  transform-origin: right center;
   transition:
-    width 0.28s var(--ol-motion-spring),
+    width 0.34s cubic-bezier(0.34, 1.35, 0.64, 1),
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
     background 0.16s var(--ol-motion-quick),
     border-color 0.16s var(--ol-motion-quick);
 }
 .ol-search:hover {
   border-color: var(--ol-line-strong);
+}
+.ol-search:not(.ol-search-open):hover {
+  transform: scale(1.045);
+}
+.ol-search:not(.ol-search-open):active {
+  transform: scale(0.93);
+  transition:
+    width 0.34s cubic-bezier(0.34, 1.35, 0.64, 1),
+    transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.16s var(--ol-motion-quick),
+    border-color 0.16s var(--ol-motion-quick);
 }
 .ol-search-open {
   width: 220px;
@@ -768,6 +793,175 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-search-icon:hover {
   color: var(--ol-ink);
+}
+
+.ol-pressable:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.ol-like {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: var(--ol-font-weight-medium);
+  cursor: pointer;
+  transition:
+    scale 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.16s var(--ol-motion-quick);
+}
+.ol-like:hover {
+  background: var(--ol-control-muted, var(--ol-surface));
+}
+.ol-like:active {
+  scale: 0.96;
+}
+.ol-like[data-on='true'] {
+  color: #e5484d;
+  background: rgba(229, 72, 77, 0.08);
+}
+.ol-like-compact {
+  height: 24px;
+  padding: 0 2px;
+  gap: 4px;
+  background: transparent;
+}
+.ol-like-compact:hover,
+.ol-like-compact[data-on='true'] {
+  background: transparent;
+}
+.ol-like-heart {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+.ol-like-glyph {
+  display: grid;
+  position: relative;
+  z-index: 1;
+}
+.ol-like-glyph[data-pop='true'] {
+  animation: ol-like-pop 0.52s cubic-bezier(0.3, 1.5, 0.4, 1) both;
+}
+.ol-like-bloom {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 8px solid #cc8ef5;
+  border-radius: 50%;
+  box-sizing: border-box;
+  pointer-events: none;
+  animation: ol-like-bloom 0.56s cubic-bezier(0.25, 0.8, 0.35, 1) both;
+}
+.ol-like-count {
+  font-variant-numeric: tabular-nums;
+}
+@keyframes ol-like-pop {
+  0% {
+    scale: 0.6;
+  }
+  45% {
+    scale: 1.28;
+  }
+  to {
+    scale: 1;
+  }
+}
+@keyframes ol-like-bloom {
+  0% {
+    border-width: 8px;
+    border-color: #e5484d;
+    scale: 0.15;
+    opacity: 1;
+  }
+  40% {
+    border-width: 8px;
+    border-color: #cc8ef5;
+    scale: 1;
+  }
+  75% {
+    opacity: 1;
+    border-width: 1px;
+  }
+  to {
+    opacity: 0;
+    border-width: 0;
+  }
+}
+
+.ol-range {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 72px;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.ol-range:focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+.ol-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ol-line-strong);
+}
+.ol-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--ol-surface);
+  border: 0.5px solid var(--ol-line-strong);
+  box-shadow: 0 1px 3px rgba(15, 17, 22, 0.16);
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.ol-range:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.ol-range::-moz-range-track {
+  height: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ol-line-strong);
+}
+.ol-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ol-surface);
+  border: 0.5px solid var(--ol-line-strong);
+  box-shadow: 0 1px 3px rgba(15, 17, 22, 0.16);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ol-like-glyph[data-pop='true'],
+  .ol-like-bloom {
+    animation: none;
+  }
+  .ol-search:not(.ol-search-open):hover,
+  .ol-search:not(.ol-search-open):active,
+  .ol-pressable:active:not(:disabled),
+  .ol-channel-dialog-close:active,
+  .ol-settings-back:active {
+    transform: none;
+  }
 }
 
 /* 词条卡片：默认安静（图标+文字+命中数）；hover/focus-within 变灰并从右侧
@@ -1496,7 +1690,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-channel-dialog {
   display: flex;
   flex-direction: column;
-  height: min(780px, calc(100dvh - 40px));
+  height: min(680px, calc(100dvh - 120px));
   min-width: 0;
   min-height: 0;
   color: var(--ol-ink);
@@ -1571,10 +1765,18 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   background: var(--ol-surface);
   color: var(--ol-ink-3);
   cursor: pointer;
+  transition:
+    transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.16s var(--ol-motion-quick),
+    color 0.16s var(--ol-motion-quick);
 }
 .ol-channel-dialog-close:hover {
   color: var(--ol-ink);
   background: var(--ol-surface-2);
+  transform: scale(1.06);
+}
+.ol-channel-dialog-close:active {
+  transform: scale(0.88);
 }
 .ol-channel-dialog-body {
   flex: 1;

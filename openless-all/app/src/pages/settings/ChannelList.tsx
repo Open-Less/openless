@@ -1249,8 +1249,9 @@ function ChannelModal({
       onClose={requestClose}
       zIndex={1000}
       closing={closing}
-      width={mobile ? '100%' : 'min(840px, 100%)'}
-      style={{ padding: 0, overflow: 'hidden', maxHeight: 'calc(100dvh - 40px)' }}
+      motionVariant="pop"
+      width={mobile ? 'min(100%, calc(100vw - 32px))' : 'min(800px, calc(100vw - 96px))'}
+      style={{ padding: 0, overflow: 'hidden', maxHeight: 'calc(100dvh - 120px)' }}
     >
       {content}
     </Modal>

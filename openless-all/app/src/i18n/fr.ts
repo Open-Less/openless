@@ -568,7 +568,7 @@ export const fr: typeof zhCN = {
     },
     sortLiked: 'Aimés',
     likedEmpty: 'Vous n’avez pas encore aimé de pack de styles',
-    likedEmptyHint: 'Ouvrez un pack et cliquez sur l’étoile ; les packs aimés apparaîtront ici',
+    likedEmptyHint: 'Ouvrez un pack et touchez le cœur ; les packs aimés apparaîtront ici',
     derivativeBadge: 'Dérivé de @{{login}}',
     detail: {
       withdrawBtn: 'Retirer',

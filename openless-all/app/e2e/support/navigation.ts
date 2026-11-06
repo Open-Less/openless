@@ -10,12 +10,20 @@ export async function settleNavigation(scope: Page | Locator) {
  * entry, and the subpage heading stays at opacity 0 during the content fade.
  * A visibility probe therefore cannot tell the two surfaces apart: branch on
  * which node is mounted, and click the entry only while it is still mounted. */
+export async function openCapsuleStyleSettings(scope: Page | Locator) {
+  return openGeneralSubpage(scope, '胶囊样式');
+}
+
 export async function openMicrophoneSettings(scope: Page | Locator) {
-  const heading = scope.getByRole('heading', { name: '麦克风与录音', exact: true });
+  return openGeneralSubpage(scope, '麦克风与录音');
+}
+
+async function openGeneralSubpage(scope: Page | Locator, name: string) {
+  const heading = scope.getByRole('heading', { name, exact: true });
   // Role queries skip aria-hidden and opacity 0. These CSS queries still see
   // a surface that is mounted but not yet painted.
-  const subpage = scope.locator('h2').filter({ hasText: '麦克风与录音' });
-  const entry = scope.locator('.ol-settings-category-entry').filter({ hasText: '麦克风与录音' });
+  const subpage = scope.locator('h2').filter({ hasText: name });
+  const entry = scope.locator('.ol-settings-category-entry').filter({ hasText: name });
 
   if ((await subpage.count()) === 0 && (await entry.count()) === 0) {
     const nav = scope.getByRole('navigation', { name: '设置分类' });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openMicrophoneSettings } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 
 async function settings(page: Page) {
   await page.goto('/?os=mac');
@@ -149,6 +149,11 @@ test('dictation shortcuts hug the key label and coarse wheel scrolling has inter
   const binding = recorder.locator('.ol-shortcut-binding');
   await expect(binding).toContainText('右 Ctrl');
   expect((await binding.boundingBox())!.width).toBeLessThan(140);
+  await dialog
+    .getByRole('navigation', { name: '设置分类' })
+    .getByRole('button', { name: '快捷键', exact: true })
+    .click();
+  await settleNavigation(dialog);
   const scroll = dialog.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await scroll.evaluate((element) => {
     element.scrollTop = 0;
