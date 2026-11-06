@@ -160,6 +160,11 @@ assert.equal(
   'AI does not use the cloud icon',
 );
 assert.equal(
+  SETTINGS_SECTIONS.find((item) => item.id === 'advanced')?.icon,
+  'flask',
+  'experiments do not reuse the AI sparkle icon',
+);
+assert.equal(
   SETTINGS_SECTIONS.find((item) => item.id === 'cloudServices')?.icon,
   'cloud',
   'the cloud icon belongs to cloud services',

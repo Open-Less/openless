@@ -747,7 +747,7 @@ export const de: typeof zhCN = {
     actions: {
       refresh: 'Erneut versuchen',
       services: 'KI & Modelle',
-      general: 'Aufnahme und Eingabe',
+      general: 'Allgemein',
       shortcuts: 'Kurzbefehle',
       privacy: 'Berechtigungen und Daten',
     },
@@ -1302,9 +1302,11 @@ export const de: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Mikrofon und Aufnahme',
-      recordingDesc: 'Mikrofon, Aufnahmemodus, Kapsel, Einfügen und Start festlegen.',
-      textInputTitle: 'Texteingabe',
-      textInputDesc: 'Auswahlaktionen und das Umschreiben von Text festlegen.',
+      recordingDesc: 'Mikrofonüberwachung und Erkennung sowie Überwachung und Signale.',
+      capsuleTitle: 'Kapselstil',
+      capsuleDesc: 'Kapselschalter, mehrere Bildschirme, Stil und gestreamter Originaltext.',
+      textInputTitle: 'Texteinfügung',
+      textInputDesc: 'Auswahlassistent, Einfügen und Zwischenablage sowie Start.',
       phoneTitle: 'Telefon und Ferneingabe',
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
@@ -1548,7 +1550,7 @@ export const de: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Aufnahme und Eingabe',
+      title: 'Allgemein',
       desc: 'Globaler Aufnahmekurzbefehl und Auslösemodus.',
       hotkeyLabel: 'Aufnahmekurzbefehl',
       hotkeyDescAcc:
@@ -1675,9 +1677,9 @@ export const de: typeof zhCN = {
       audioCueDesc:
         'Spielt einen kurzen synthetischen Ton ab, wenn du die Aufnahme per Kurzbefehl startest. Auch bei ausgeblendeter Kapsel.',
       audioCuePreview: 'Anhören',
-      captureGroupTitle: 'Aufnahme',
-      capsuleGroupTitle: 'Bildschirmkapsel',
-      recognitionGroupTitle: 'Erkennung',
+      captureGroupTitle: 'Mikrofonüberwachung und Erkennung',
+      capsuleGroupTitle: 'Kapselstil',
+      recognitionGroupTitle: 'Überwachung und Signale',
       feedbackGroupTitle: 'Überwachung und Signale',
       insertGroupTitle: 'Einfügen und Zwischenablage',
       restoreClipboardLabel: 'Zwischenablage nach dem Einfügen wiederherstellen',
@@ -2648,7 +2650,7 @@ export const de: typeof zhCN = {
       startupDiagnostics: 'Startzeiten, Backend-Verbindungen und verzögerte Prüfungen ansehen.',
     },
     descriptions: {
-      general: 'Mikrofon wählen, Aufnahme und Texteingabe anpassen oder dein Smartphone verbinden.',
+      general: 'Mikrofonüberwachung, Kapselstil, Texteinfügung und Ferneingabe.',
       inputMethod: 'Android-Overlay und Eingabemethode für die mobile Eingabe konfigurieren.',
       shortcuts: 'Kurzbefehle einrichten und Aktionen für ausgewählten Text festlegen.',
       services:
@@ -2680,7 +2682,7 @@ export const de: typeof zhCN = {
     sections: {
       appearance: 'Darstellung und Sprache',
       shortcuts: 'Kurzbefehle und Auswahl',
-      general: 'Aufnahme und Eingabe',
+      general: 'Allgemein',
       inputMethod: 'Eingabemethode',
       services: 'KI & Modelle',
       cloudServices: 'Cloud-Dienste',

@@ -534,24 +534,20 @@ function FloatingShellBody({
               scrollRef={pageRef}
               contentKey={displayTab}
               page={displayTab}
-              // issue #243: all tabs allow overflow:auto so bottom content stays
-              //   reachable when the window shrinks or copy grows (Codex P1: overview
-              //   used hidden, leaving the Recent card fully invisible after shrinking).
-              //   - Overview uses its internal flex to grow the bottom row to fill;
-              //     at normal size the content fits exactly → no scrollbar; a thin
-              //     scrollbar appears only when it truly overflows.
-              //   - Other tabs use the thin scrollbar too.
-              // Overview skips the scroll-fade mask: that mask hides the bottom of the
-              // year heatmap even when the page itself is not scrolling.
+              // Other tabs scroll the page. Desktop overview is one dashboard: the
+              // page surface does not scroll, and only the recent-recognition list does.
+              // Mobile overview stays a growing column because the same blocks stack.
               className={
-                displayTab === 'overview' ? 'ol-thinscroll' : 'ol-thinscroll ol-scroll-fade'
+                displayTab === 'overview' && !mobile
+                  ? 'ol-thinscroll ol-page-fixed'
+                  : displayTab === 'overview'
+                    ? 'ol-thinscroll'
+                    : 'ol-thinscroll ol-scroll-fade'
               }
-              // Overview is a fixed single-screen dashboard. Its cards own any internal
-              // scrolling; the page surface scrolls only if a short window still overflows.
               style={{
                 flex: 1,
                 minHeight: 0,
-                overflow: 'auto',
+                overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
                 boxSizing: 'border-box',
                 // macOS: 26px title vs 15px wordmark, so the title starts 6px above the
                 // traffic-light clearance and lines up with "OpenLess". Other desktops

@@ -19,18 +19,21 @@ export const ADVANCED_PAGES = [
     icon: 'mic',
     titleKey: 'settings.advancedPages.voiceEnhancementTitle',
     group: 'recording',
+    inline: true,
   },
   {
     id: 'cursorContext',
     icon: 'search',
     titleKey: 'settings.advancedPages.cursorContextTitle',
     group: 'text',
+    inline: true,
   },
   {
     id: 'startupDiagnostics',
     icon: 'bolt',
     titleKey: 'settings.advancedPages.startupDiagnosticsTitle',
     group: 'diagnostics',
+    inline: true,
   },
   { id: 'testingFeatures', icon: 'sparkle', titleKey: 'settings.testingFeatures.title' },
   { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
@@ -68,6 +71,11 @@ export function advancedPageGroup(page: AdvancedPage): AdvancedPageGroup | undef
   return 'group' in page ? page.group : undefined;
 }
 
+// Small experiment groups stay on the advanced root. Larger tools keep their own page.
+export function isInlineAdvancedPage(page: AdvancedPage): boolean {
+  return 'inline' in page && page.inline;
+}
+
 // Native readers exist on macOS, Windows, and Android. Generic mobile and Harmony
 // have no cursor-context capture, so the toggle stays hidden there.
 export function showsCursorContextControl(platform: PlatformKind | undefined, os: OS): boolean {
@@ -89,7 +97,7 @@ export const SETTINGS_SECTIONS: SettingsNavigationItem[] = [
   { id: 'cloudServices', icon: 'cloud' },
   { id: 'appearance', icon: 'settings' },
   { id: 'privacy', icon: 'shield' },
-  { id: 'advanced', icon: 'sparkle' },
+  { id: 'advanced', icon: 'flask' },
   { id: 'about', icon: 'info' },
 ];
 

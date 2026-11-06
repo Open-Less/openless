@@ -46,6 +46,7 @@ import { useContentMotion, useSelectionMotion } from '../../lib/motion';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
   advancedPageGroup,
+  isInlineAdvancedPage,
   availableServiceViews,
   isTestingFeaturePage,
   isServiceViewInactive,
@@ -67,15 +68,20 @@ function usePlatformCaps(): PlatformCapabilities | null {
   return platformCaps;
 }
 
-// Recording & input: from recording to text insertion, plus phone input.
+// General: microphone, capsule style, text insertion, and remote input.
+// Each category is one page. Pages do not collapse their own groups again.
 export function GeneralTab({
   os,
   onOpenLocalModels,
 }: { os?: OS; onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
-  const [page, setPage] = useState<'root' | 'recording' | 'textInput' | 'phone'>('root');
-  const activePage = page === 'phone' && !showRemoteInput ? 'root' : page;
+  const showCapsule = platformCaps == null || platformCaps.platform === 'desktop';
+  const [page, setPage] = useState<'root' | 'recording' | 'capsule' | 'textInput' | 'phone'>(
+    'root',
+  );
+  const activePage =
+    (page === 'phone' && !showRemoteInput) || (page === 'capsule' && !showCapsule) ? 'root' : page;
   const contentRef = useRef<HTMLDivElement>(null);
   useContentMotion(contentRef, activePage);
   const categories = [
@@ -84,6 +90,12 @@ export function GeneralTab({
       icon: 'mic',
       title: 'settings.generalPages.recordingTitle',
       description: 'settings.generalPages.recordingDesc',
+    },
+    {
+      id: 'capsule' as const,
+      icon: 'layout',
+      title: 'settings.generalPages.capsuleTitle',
+      description: 'settings.generalPages.capsuleDesc',
     },
     {
       id: 'textInput' as const,
@@ -97,24 +109,33 @@ export function GeneralTab({
       title: 'settings.generalPages.phoneTitle',
       description: 'settings.generalPages.phoneDesc',
     },
-  ].filter((item) => item.id !== 'phone' || showRemoteInput);
+  ].filter(
+    (item) => (item.id !== 'phone' || showRemoteInput) && (item.id !== 'capsule' || showCapsule),
+  );
+  const pageTitle = {
+    recording: 'settings.generalPages.recordingTitle',
+    capsule: 'settings.generalPages.capsuleTitle',
+    textInput: 'settings.generalPages.textInputTitle',
+    phone: 'settings.generalPages.phoneTitle',
+  } as const;
   if (activePage !== 'root') {
     return (
       <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <SettingsSubpageHeader
-          onBack={() => setPage('root')}
-          title={
-            activePage === 'recording'
-              ? 'settings.generalPages.recordingTitle'
-              : activePage === 'textInput'
-                ? 'settings.generalPages.textInputTitle'
-                : 'settings.generalPages.phoneTitle'
-          }
-        />
+        <SettingsSubpageHeader onBack={() => setPage('root')} title={pageTitle[activePage]} />
         {activePage === 'recording' && (
-          <RecordingInputSection forcedOs={os} onOpenLocalModels={onOpenLocalModels} />
+          <RecordingInputSection
+            forcedOs={os}
+            onOpenLocalModels={onOpenLocalModels}
+            surface="microphone"
+          />
         )}
-        {activePage === 'textInput' && <SelectionWorkspaceSection showShortcut={false} />}
+        {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}
+        {activePage === 'textInput' && (
+          <>
+            <SelectionWorkspaceSection showShortcut={false} />
+            <RecordingInputSection forcedOs={os} surface="text" />
+          </>
+        )}
         {activePage === 'phone' && <RemoteInputSection />}
       </div>
     );
@@ -640,26 +661,36 @@ export function AdvancedTab({
                 {t(`settings.advancedGroups.${group}`)}
               </div>
             )}
-            <button
-              type="button"
-              className="ol-advanced-settings-entry"
-              data-ol-advanced-entry={item.id}
-              onClick={() => onOpenPage(item.id)}
-            >
-              <span className="ol-advanced-entry-icon">
-                <Icon name={item.icon} size={19} />
-              </span>
-              <span className="ol-advanced-entry-copy">
-                <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-                <span className="ol-advanced-entry-description">
-                  {t(`modal.advancedPages.${item.id}`)}
+            {isInlineAdvancedPage(item) ? (
+              <div className="ol-advanced-settings-inline">
+                {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
+                {item.id === 'cursorContext' && <CursorContextSection />}
+                {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="ol-advanced-settings-entry"
+                data-ol-advanced-entry={item.id}
+                onClick={() => onOpenPage(item.id)}
+              >
+                <span className="ol-advanced-entry-icon">
+                  <Icon name={item.icon} size={19} />
                 </span>
-              </span>
-              {item.id === 'testingFeatures' && (
-                <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
-              )}
-              <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-            </button>
+                <span className="ol-advanced-entry-copy">
+                  <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
+                  <span className="ol-advanced-entry-description">
+                    {t(`modal.advancedPages.${item.id}`)}
+                  </span>
+                </span>
+                {item.id === 'testingFeatures' && (
+                  <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>
+                    Beta
+                  </span>
+                )}
+                <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+              </button>
+            )}
           </div>
         );
       })}
@@ -702,7 +733,12 @@ export function AdvancedTab({
         </Card>
       )}
       {pages
-        .filter((item) => item.id !== 'testingFeatures' && visited.includes(item.id))
+        .filter(
+          (item) =>
+            item.id !== 'testingFeatures' &&
+            !isInlineAdvancedPage(item) &&
+            visited.includes(item.id),
+        )
         .map((item) => (
           <section
             key={item.id}

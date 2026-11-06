@@ -744,7 +744,7 @@ export const es: typeof zhCN = {
     actions: {
       refresh: 'Reintentar',
       services: 'IA y modelos',
-      general: 'Grabación y entrada',
+      general: 'General',
       shortcuts: 'Atajos',
       privacy: 'Permisos y datos',
     },
@@ -1293,10 +1293,12 @@ export const es: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Micrófono y grabación',
-      recordingDesc:
-        'Elige el micrófono, el modo de grabación, la cápsula, la inserción y el inicio.',
-      textInputTitle: 'Entrada de texto',
-      textInputDesc: 'Configura las acciones de selección y cómo se reescribe el texto.',
+      recordingDesc: 'Supervisión y reconocimiento del micrófono, y supervisión y avisos.',
+      capsuleTitle: 'Estilo de la cápsula',
+      capsuleDesc:
+        'Interruptor de la cápsula, varias pantallas, estilo y texto original en streaming.',
+      textInputTitle: 'Inserción de texto',
+      textInputDesc: 'Asistente de selección, inserción y portapapeles, e inicio.',
       phoneTitle: 'Teléfono y entrada remota',
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
@@ -1540,7 +1542,7 @@ export const es: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Grabación y entrada',
+      title: 'General',
       desc: 'Atajo global de grabación y modo de activación.',
       hotkeyLabel: 'Atajo de grabación',
       hotkeyDescAcc:
@@ -1666,9 +1668,9 @@ export const es: typeof zhCN = {
       audioCueDesc:
         'Reproduce un breve sonido sintetizado al pulsar el atajo para empezar a grabar, incluso si la cápsula está oculta.',
       audioCuePreview: 'Escuchar',
-      captureGroupTitle: 'Grabación',
-      capsuleGroupTitle: 'Cápsula en pantalla',
-      recognitionGroupTitle: 'Reconocimiento',
+      captureGroupTitle: 'Supervisión y reconocimiento del micrófono',
+      capsuleGroupTitle: 'Estilo de la cápsula',
+      recognitionGroupTitle: 'Supervisión y avisos',
       feedbackGroupTitle: 'Supervisión y avisos',
       insertGroupTitle: 'Inserción y portapapeles',
       restoreClipboardLabel: 'Restaurar el portapapeles tras insertar',
@@ -2627,7 +2629,8 @@ export const es: typeof zhCN = {
         'Revisa los tiempos de inicio, los intercambios con el backend y las sondas diferidas.',
     },
     descriptions: {
-      general: 'Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.',
+      general:
+        'Supervisión del micrófono, estilo de la cápsula, inserción de texto y entrada remota.',
       inputMethod: 'Configura la superposición y el método de entrada de Android.',
       shortcuts: 'Configura atajos y elige qué sucede al seleccionar texto.',
       services:
@@ -2658,7 +2661,7 @@ export const es: typeof zhCN = {
     sections: {
       appearance: 'Apariencia e idioma',
       shortcuts: 'Atajos y selección',
-      general: 'Grabación y entrada',
+      general: 'General',
       inputMethod: 'Método de entrada',
       services: 'IA y modelos',
       cloudServices: 'Servicios en la nube',

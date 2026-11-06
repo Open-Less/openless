@@ -734,7 +734,7 @@ export const en: typeof zhCN = {
     actions: {
       refresh: 'Try again',
       services: 'AI & models',
-      general: 'Recording & input',
+      general: 'General',
       shortcuts: 'Shortcuts',
       privacy: 'Permissions & data',
     },
@@ -1340,9 +1340,11 @@ export const en: typeof zhCN = {
     },
     generalPages: {
       recordingTitle: 'Microphone and recording',
-      recordingDesc: 'Microphone, recording mode, capsule, insertion, and startup.',
-      textInputTitle: 'Text input',
-      textInputDesc: 'Configure selection actions and how selected text is rewritten.',
+      recordingDesc: 'Microphone monitoring and recognition, plus monitoring and cues.',
+      capsuleTitle: 'Capsule style',
+      capsuleDesc: 'Capsule switch, multi-screen display, style, and streaming original text.',
+      textInputTitle: 'Text insertion',
+      textInputDesc: 'Selection assistant, insertion and clipboard, and startup.',
       phoneTitle: 'Phone and remote input',
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
@@ -1518,7 +1520,7 @@ export const en: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Recording & input',
+      title: 'General',
       desc: 'Global recording hotkey and trigger mode.',
       hotkeyLabel: 'Recording hotkey',
       hotkeyDescAcc: 'Press to capture voice globally (requires Accessibility permission).',
@@ -1642,9 +1644,9 @@ export const en: typeof zhCN = {
       audioCueDesc:
         'Play a short synthesized chime when you press the hotkey to start recording. Plays even when the capsule is hidden.',
       audioCuePreview: 'Preview',
-      captureGroupTitle: 'Recording',
-      capsuleGroupTitle: 'On-screen capsule',
-      recognitionGroupTitle: 'Recognition',
+      captureGroupTitle: 'Microphone monitoring and recognition',
+      capsuleGroupTitle: 'Capsule style',
+      recognitionGroupTitle: 'Monitoring and cues',
       feedbackGroupTitle: 'Monitoring and cues',
       insertGroupTitle: 'Insertion & clipboard',
       restoreClipboardLabel: 'Restore clipboard after insert',
@@ -2574,7 +2576,7 @@ export const en: typeof zhCN = {
       startupDiagnostics: 'Inspect startup timings, backend handshakes, and delayed probes.',
     },
     descriptions: {
-      general: 'Choose a microphone, adjust recording and text input, or connect your phone.',
+      general: 'Microphone monitoring, capsule style, text insertion, and remote input.',
       inputMethod: 'Configure the Android overlay and input method for phone typing.',
       shortcuts: 'Search, browse and customize keyboard shortcuts.',
       services:
@@ -2602,7 +2604,7 @@ export const en: typeof zhCN = {
     sections: {
       appearance: 'Appearance & language',
       shortcuts: 'Shortcuts',
-      general: 'Recording & input',
+      general: 'General',
       inputMethod: 'Input method',
       services: 'AI & models',
       cloudServices: 'Cloud services',

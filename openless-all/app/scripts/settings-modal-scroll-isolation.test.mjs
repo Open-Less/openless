@@ -37,8 +37,8 @@ if (!(
 }
 assertMatch(
   floatingShellTsx,
-  /displayTab === 'overview' \? 'ol-thinscroll' : 'ol-thinscroll ol-scroll-fade'/,
-  '概览和其他页面都要保留细滚动区，设置打开时才能锁住背景',
+  /displayTab === 'overview' && !mobile[\s\S]*'ol-thinscroll ol-page-fixed'[\s\S]*'ol-thinscroll ol-scroll-fade'/,
+  '桌面概览固定在一屏，其他页面保留细滚动区，设置打开时才能锁住背景',
 );
 assertMatch(
   tokensCss,

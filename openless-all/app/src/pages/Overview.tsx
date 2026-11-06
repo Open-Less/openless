@@ -328,14 +328,18 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     onOpenSettings?.(section, serviceView);
 
   return (
-    // The shell scrolls this column. Shrink is disabled so a short window reaches the
-    // year heatmap instead of clipping it inside a fixed dashboard.
+    // Desktop is one dashboard. The page itself does not scroll; the recent-recognition
+    // list is the scroller, and the year heatmap stays fully visible in the left column.
+    // Mobile stacks the same blocks, so that surface still grows with the page.
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
-        flex: '1 0 auto',
+        flex: mobile ? '1 0 auto' : '1 1 0%',
+        height: mobile ? undefined : '100%',
+        minHeight: mobile ? undefined : 0,
         minWidth: 0,
+        overflow: mobile ? 'visible' : 'hidden',
         gap: 8,
       }}
     >
@@ -443,32 +447,49 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </div>
       </div>
 
-      {/* Bottom row takes the remaining height: the period chart area stretches, the recent list scrolls internally. */}
+      {/* Bottom row fills the dashboard. The chart shrinks; the year heatmap and recent list stay inside it. */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
+          gridTemplateRows: 'minmax(0, 1fr)',
           gap: 10,
           flex: '1 1 auto',
-          minHeight: 200,
+          minHeight: 0,
           overflow: 'hidden',
         }}
       >
-        <PeriodMetricsCard
-          series={series}
-          period={period}
-          metric={metric}
-          onPeriodChange={setPeriod}
-          onMetricChange={setMetric}
-          loadError={activityError}
-          onRetry={refreshActivity}
-        />
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            minHeight: 0,
+            gap: 10,
+            overflow: 'hidden',
+          }}
+        >
+          <PeriodMetricsCard
+            series={series}
+            period={period}
+            metric={metric}
+            onPeriodChange={setPeriod}
+            onMetricChange={setMetric}
+            loadError={activityError}
+            onRetry={refreshActivity}
+          />
+          {!mobile &&
+            prefs?.showOverviewActivityHeatmap !== false &&
+            activity &&
+            activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
+        </div>
 
         <Card
           padding={0}
           style={{
             display: 'flex',
             flexDirection: 'column',
+            height: '100%',
             minWidth: 0,
             minHeight: 0,
             overflow: 'hidden',
@@ -530,7 +551,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
                     {t('overview.recentEmptyHint')}
                   </div>
                 )}
-                {history.slice(0, 8).map((s) => (
+                {history.map((s) => (
                   <RecentRow key={s.id} session={s} modeLabel={modeLabel} />
                 ))}
               </>
@@ -538,11 +559,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           </div>
         </Card>
       </div>
-      {/* Independent activity storage survives history clearing; keep the existing visibility preference. */}
-      {!mobile &&
-        prefs?.showOverviewActivityHeatmap !== false &&
-        activity &&
-        activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
     </div>
   );
 }
@@ -835,7 +851,14 @@ function PeriodMetricsCard({
   return (
     <Card
       padding={18}
-      style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minWidth: 0,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
     >
       {/* flexWrap: the card is narrow inside a 1fr column; wrap instead of squashing buttons when the two toggles don't fit. */}
       <div

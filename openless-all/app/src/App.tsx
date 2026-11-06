@@ -25,6 +25,7 @@ import { withStartupDeadline } from './lib/startupProbe';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 import {
   needsDesktopGuide,
+  permissionGate,
   newGuideProgress,
   readGuideProgress,
   REOPEN_ONBOARDING_EVENT,
@@ -449,17 +450,21 @@ function ReadyApp({
         checkMicrophonePermission(),
       ]);
       if (cancelled) return;
-      const aOk = a === 'granted' || a === 'notApplicable';
       // noDevice (no mic present) isn't a permission issue: don't trap the user on
       // onboarding; let them in and show the clear "no microphone detected" notice on
       // the permissions page. See issue #779.
-      const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
-      if (aOk && mOk) {
+      const next = permissionGate({
+        os,
+        persistedFinished: persistedOnboarding.finished,
+        accessibility: a,
+        microphone: m,
+      });
+      if (next.gate === 'ready') {
         setGate('ready');
       } else {
         saveGuideProgress({
           ...(progress ?? newGuideProgress()),
-          step: !aOk && os === 'mac' ? 'accessibility' : 'microphone',
+          step: next.step,
           finished: false,
         });
         setGate('onboarding');

@@ -756,7 +756,7 @@ export const fr: typeof zhCN = {
     actions: {
       refresh: 'Réessayer',
       services: 'IA et modèles',
-      general: 'Enregistrement et saisie',
+      general: 'Général',
       shortcuts: 'Raccourcis',
       privacy: 'Autorisations et données',
     },
@@ -1313,10 +1313,12 @@ export const fr: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Microphone et enregistrement',
-      recordingDesc:
-        'Choisir le microphone, le mode d’enregistrement, la capsule, l’insertion et le démarrage.',
-      textInputTitle: 'Saisie de texte',
-      textInputDesc: 'Configurer les actions de sélection et la réécriture du texte.',
+      recordingDesc: 'Surveillance et reconnaissance du micro, puis surveillance et signaux.',
+      capsuleTitle: 'Style de la capsule',
+      capsuleDesc:
+        'Activation de la capsule, multi-écran, style et affichage du texte original en flux.',
+      textInputTitle: 'Insertion de texte',
+      textInputDesc: 'Assistant de sélection, insertion et presse-papiers, et démarrage.',
       phoneTitle: 'Téléphone et saisie à distance',
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
@@ -1560,7 +1562,7 @@ export const fr: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Enregistrement et saisie',
+      title: 'Général',
       desc: 'Raccourci global d’enregistrement et mode de déclenchement.',
       hotkeyLabel: 'Raccourci d’enregistrement',
       hotkeyDescAcc:
@@ -1686,9 +1688,9 @@ export const fr: typeof zhCN = {
       audioCueDesc:
         'Joue un bref son synthétisé lorsque vous appuyez sur le raccourci pour enregistrer, même si la capsule est masquée.',
       audioCuePreview: 'Écouter',
-      captureGroupTitle: 'Enregistrement',
-      capsuleGroupTitle: 'Capsule à l’écran',
-      recognitionGroupTitle: 'Reconnaissance',
+      captureGroupTitle: 'Surveillance et reconnaissance du micro',
+      capsuleGroupTitle: 'Style de la capsule',
+      recognitionGroupTitle: 'Surveillance et signaux',
       feedbackGroupTitle: 'Surveillance et signaux',
       insertGroupTitle: 'Insertion et presse-papiers',
       restoreClipboardLabel: 'Restaurer le presse-papiers après insertion',
@@ -2662,7 +2664,7 @@ export const fr: typeof zhCN = {
     },
     descriptions: {
       general:
-        'Choisissez un microphone, réglez l’enregistrement et la saisie de texte, ou connectez votre téléphone.',
+        'Surveillance du micro, style de la capsule, insertion de texte et saisie à distance.',
       inputMethod: 'Configurez la fenêtre flottante et la méthode de saisie Android.',
       shortcuts: 'Configurez les raccourcis et choisissez l’action appliquée au texte sélectionné.',
       services:
@@ -2694,7 +2696,7 @@ export const fr: typeof zhCN = {
     sections: {
       appearance: 'Apparence et langue',
       shortcuts: 'Raccourcis et sélection',
-      general: 'Enregistrement et saisie',
+      general: 'Général',
       inputMethod: 'Méthode de saisie',
       services: 'IA et modèles',
       cloudServices: 'Services cloud',

@@ -73,6 +73,21 @@ pub(crate) fn map_capture_authorization(raw: i64) -> PermissionStatus {
     }
 }
 
+/// Keep a grant observed earlier in this process when a later read is only
+/// undetermined. Denied and restricted clear it. Closing the main window does
+/// not restart the process, so the second open must not forget a real grant.
+pub(crate) fn prefer_known_microphone_grant(
+    previous_grant: bool,
+    status: PermissionStatus,
+) -> (bool, PermissionStatus) {
+    match status {
+        PermissionStatus::Granted => (true, PermissionStatus::Granted),
+        PermissionStatus::Denied | PermissionStatus::Restricted => (false, status),
+        PermissionStatus::NotDetermined if previous_grant => (true, PermissionStatus::Granted),
+        other => (previous_grant, other),
+    }
+}
+
 /// A granted reading from either source is authoritative. `recordPermission`
 /// can stay undetermined after TCC has already authorized the microphone.
 pub(crate) fn resolve_microphone_permission(
@@ -195,6 +210,25 @@ mod platform {
     }
 
     pub fn check_microphone() -> PermissionStatus {
+        // AVFoundation can report NotDetermined when the status is read off the
+        // main thread. The UI command runs on the async worker, so hop first.
+        let status = if on_main_thread() {
+            check_microphone_on_main()
+        } else {
+            let mut status = super::PermissionStatus::NotDetermined;
+            dispatch2::DispatchQueue::main().exec_sync(|| {
+                status = check_microphone_on_main();
+            });
+            status
+        };
+        remember_microphone_grant(status)
+    }
+
+    fn on_main_thread() -> bool {
+        unsafe { libc::pthread_main_np() != 0 }
+    }
+
+    fn check_microphone_on_main() -> super::PermissionStatus {
         // Mirrors Swift `MicrophonePermission.isGranted()`, but a granted
         // AVCaptureDevice status wins over a stale non-granted recordPermission.
         let audio_app = check_microphone_via_avaudio_application();
@@ -203,6 +237,15 @@ mod platform {
         }
         let capture = check_microphone_via_avcapture_device();
         super::resolve_microphone_permission(audio_app, capture)
+    }
+
+    fn remember_microphone_grant(status: super::PermissionStatus) -> super::PermissionStatus {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static GRANTED: AtomicBool = AtomicBool::new(false);
+        let (granted, status) =
+            super::prefer_known_microphone_grant(GRANTED.load(Ordering::Relaxed), status);
+        GRANTED.store(granted, Ordering::Relaxed);
+        status
     }
 
     pub fn request_microphone() -> PermissionStatus {
@@ -584,9 +627,9 @@ pub fn windows_microphone_access_explicitly_denied() -> bool {
 mod tests {
     use super::{
         is_no_device_error, map_capture_authorization, map_record_permission,
-        microphone_status_after_request, resolve_microphone_permission,
-        should_reset_microphone_tcc, PermissionStatus, RECORD_PERMISSION_DENIED,
-        RECORD_PERMISSION_GRANTED, RECORD_PERMISSION_UNDETERMINED,
+        microphone_status_after_request, prefer_known_microphone_grant,
+        resolve_microphone_permission, should_reset_microphone_tcc, PermissionStatus,
+        RECORD_PERMISSION_DENIED, RECORD_PERMISSION_GRANTED, RECORD_PERMISSION_UNDETERMINED,
     };
 
     #[test]
@@ -640,6 +683,22 @@ mod tests {
         assert_eq!(
             map_capture_authorization(0),
             PermissionStatus::NotDetermined
+        );
+    }
+
+    #[test]
+    fn an_undetermined_reread_keeps_a_grant_from_earlier_in_the_process() {
+        assert_eq!(
+            prefer_known_microphone_grant(true, PermissionStatus::NotDetermined),
+            (true, PermissionStatus::Granted)
+        );
+        assert_eq!(
+            prefer_known_microphone_grant(false, PermissionStatus::NotDetermined),
+            (false, PermissionStatus::NotDetermined)
+        );
+        assert_eq!(
+            prefer_known_microphone_grant(true, PermissionStatus::Denied),
+            (false, PermissionStatus::Denied)
         );
     }
 

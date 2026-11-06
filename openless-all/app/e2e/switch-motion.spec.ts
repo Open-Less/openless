@@ -210,7 +210,8 @@ test('every settings switch slides between on and off', async ({ page }) => {
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     }
     if (section === '实验与扩展') {
-      const entries = dialog.locator('[data-ol-advanced-entry]');
+      total += await exerciseVisibleSwitches(dialog, 'advanced:root');
+      const entries = dialog.locator('button[data-ol-advanced-entry]');
       const visibleEntries = () =>
         entries.evaluateAll((items) =>
           items

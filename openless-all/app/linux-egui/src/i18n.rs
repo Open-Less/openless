@@ -2737,11 +2737,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.sections.general",
         text: row(
-            "录音与输入",
             "通用",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "通用",
+            "General",
+            "一般",
+            "일반",
         ),
     },
     Msg {
@@ -2813,11 +2813,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.title",
         text: row(
-            "录音与输入",
-            "錄音與輸入",
-            "Recording & input",
-            "録音と入力",
-            "녹음 및 입력",
+            "麦克风与录音",
+            "麥克風與錄音",
+            "Microphone and recording",
+            "マイクと録音",
+            "마이크와 녹음",
         ),
     },
     Msg {
@@ -4508,11 +4508,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "modal.descriptions.general",
         text: row(
-            "选择麦克风、设置录音方式与文字输入，也可连接手机输入。",
-            "選擇麥克風、設定錄音方式與文字輸入，也可連接手機輸入。",
-            "Choose a microphone, adjust recording and text input, or connect your phone.",
-            "マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。",
-            "마이크, 녹음 방식, 텍스트 입력을 설정하고 휴대폰 입력을 연결합니다.",
+            "麦克风监听、胶囊样式、文字插入，也可连接手机远程输入。",
+            "麥克風監聽、膠囊樣式、文字插入，也可連接手機遠端輸入。",
+            "Microphone monitoring, capsule style, text insertion, and remote input.",
+            "マイク監視、カプセルのスタイル、文字の挿入、リモート入力。",
+            "마이크 모니터링, 캡슐 스타일, 텍스트 삽입, 원격 입력.",
         ),
     },
     Msg {
@@ -8050,12 +8050,12 @@ mod tests {
     use super::*;
 
     const TEST_CATALOG: &[Msg] = &[
-    Msg {
+        Msg {
             key: "k.full",
             text: row("完整", "完整", "Full", "完全", "전체"),
         },
         // `k.missing_en` deliberately leaves `en` empty to exercise fallback.
-    Msg {
+        Msg {
             key: "k.missing_en",
             text: row("来源", "來源", "", "ソース", "출처"),
         },

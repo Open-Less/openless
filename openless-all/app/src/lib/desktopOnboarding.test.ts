@@ -3,6 +3,7 @@ import {
   needsDesktopGuide,
   newGuideProgress,
   parseGuideProgress,
+  permissionGate,
 } from './desktopOnboarding';
 import type { CredentialsStatus } from './types';
 
@@ -59,6 +60,46 @@ assert.equal(
   false,
 );
 assert.equal(needsDesktopGuide(null, { ...credentials, pipelineMode: 'multimodal' }), true);
+assert.deepEqual(
+  permissionGate({
+    os: 'mac',
+    persistedFinished: true,
+    accessibility: 'granted',
+    microphone: 'notDetermined',
+  }),
+  { gate: 'ready' },
+  'reopening a finished install does not prompt again for an undetermined microphone',
+);
+assert.deepEqual(
+  permissionGate({
+    os: 'mac',
+    persistedFinished: false,
+    accessibility: 'granted',
+    microphone: 'notDetermined',
+  }),
+  { gate: 'onboarding', step: 'microphone' },
+  'first launch still asks when the microphone has not been decided',
+);
+assert.deepEqual(
+  permissionGate({
+    os: 'mac',
+    persistedFinished: true,
+    accessibility: 'granted',
+    microphone: 'denied',
+  }),
+  { gate: 'onboarding', step: 'microphone' },
+  'a real microphone denial still returns to onboarding',
+);
+assert.deepEqual(
+  permissionGate({
+    os: 'mac',
+    persistedFinished: true,
+    accessibility: 'denied',
+    microphone: 'granted',
+  }),
+  { gate: 'onboarding', step: 'accessibility' },
+  'a real accessibility denial still returns to onboarding',
+);
 for (const invalid of [
   null,
   '',

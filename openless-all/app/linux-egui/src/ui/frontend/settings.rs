@@ -19,6 +19,7 @@ enum SettingsIcon {
     Settings,
     Mic,
     Sparkle,
+    Flask,
     Shield,
     Bolt,
     Info,
@@ -61,7 +62,7 @@ impl SettingsSection {
             Self::Appearance => SettingsIcon::Settings,
             Self::Services => SettingsIcon::Sparkle,
             Self::Privacy => SettingsIcon::Shield,
-            Self::Advanced => SettingsIcon::Sparkle,
+            Self::Advanced => SettingsIcon::Flask,
             Self::About => SettingsIcon::Info,
         }
     }
@@ -335,6 +336,7 @@ fn draw_rail_icon(ui: &egui::Ui, center: egui::Pos2, icon: SettingsIcon, color: 
         SettingsIcon::Settings => IconName::Settings,
         SettingsIcon::Mic => IconName::Mic,
         SettingsIcon::Sparkle => IconName::Sparkle,
+        SettingsIcon::Flask => IconName::Flask,
         SettingsIcon::Shield => IconName::Shield,
         SettingsIcon::Bolt => IconName::Bolt,
         SettingsIcon::Info => IconName::Info,
@@ -640,7 +642,9 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ui,
                     tr_l10n(lang, "settings.audioDsp.aecReferenceLabel"),
                     tr_l10n(lang, "settings.audioDsp.aecReferenceDesc"),
-                    vm.settings.aec_reference_index.min(options.len().saturating_sub(1)),
+                    vm.settings
+                        .aec_reference_index
+                        .min(options.len().saturating_sub(1)),
                     &options,
                     |index| {
                         actions.push(FrontendAction::SettingsCombo(
@@ -3076,89 +3080,87 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     // The Tauri page is a list of drill-in rows; the panel swaps to the detail
     // page (title + back button) while `advanced_open` is set.
     // Keep existing drill-in IDs, but the pipeline now lives only on Services.
-    let rows = [
-        (
-            2,
-            SettingsIcon::Bolt,
-            tr_l10n(lang, "settings.debug.title"),
-            tr_l10n(lang, "modal.advanced_pages.debug"),
-        ),
-    ];
+    let rows = [(
+        2,
+        SettingsIcon::Bolt,
+        tr_l10n(lang, "settings.debug.title"),
+        tr_l10n(lang, "modal.advanced_pages.debug"),
+    )];
     if rows.iter().any(|(id, _, _, _)| *id == vm.advanced_open) {
         card(ui, "", "", |ui| {
-                toggle_row(
-                    ui,
-                    tr_l10n(lang, "settings.recording.record_audio_for_debug_label"),
-                    "",
-                    vm.settings.record_audio_for_debug,
-                    || {
-                        actions.push(FrontendAction::SettingsToggle(
-                            SettingsField::RecordAudioForDebug,
-                        ));
-                    },
-                );
-                // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
-                // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
-                if vm.settings.record_audio_for_debug {
-                    ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
-                        toggle_row(
-                            ui,
-                            tr_l10n(lang, "settings.recording.archive_processed_label"),
-                            tr_l10n(lang, "settings.recording.archive_processed_desc"),
-                            vm.settings.debug_archive_processed,
-                            || {
-                                actions.push(FrontendAction::SettingsToggle(
-                                    SettingsField::DebugArchiveProcessed,
-                                ));
-                            },
-                        );
-                        toggle_row(
-                            ui,
-                            tr_l10n(lang, "settings.recording.archive_raw_label"),
-                            tr_l10n(lang, "settings.recording.archive_raw_desc"),
-                            vm.settings.debug_archive_raw,
-                            || {
-                                actions.push(FrontendAction::SettingsToggle(
-                                    SettingsField::DebugArchiveRaw,
-                                ));
-                            },
-                        );
-                    });
-                }
-                text_edit_row(
-                    ui,
-                    tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
-                    tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
-                    &mut vm.settings.audio_recording_max_entries,
-                    "50",
-                    |text| {
-                        actions.push(FrontendAction::SettingsText(
-                            SettingsTextField::AudioRecordingMaxEntries,
-                            text.to_owned(),
-                        ));
-                    },
-                );
-                combo_index_row(
-                    ui,
-                    tr_l10n(lang, "settings.debug.log_level_label"),
-                    tr_l10n(lang, "settings.debug.log_level_desc"),
-                    vm.settings.log_level.min(2),
-                    &["info", "debug", "trace"],
-                    |index| {
-                        actions.push(FrontendAction::SettingsCombo(
-                            SettingsComboField::LogLevel,
-                            index,
-                        ));
-                    },
-                );
-                action_row(
-                    ui,
-                    tr_l10n(lang, "settings.debug.title"),
-                    "",
-                    tr_l10n(lang, "btn.export_error_log"),
-                    SettingsActionField::ExportDiagnostics,
-                    actions,
-                );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.record_audio_for_debug_label"),
+                "",
+                vm.settings.record_audio_for_debug,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::RecordAudioForDebug,
+                    ));
+                },
+            );
+            // 调试录音保存哪一份：两个独立开关，可以只留处理前、只留处理后，
+            // 或者两份都留来做 A/B 对照。主开关关掉时这两项无意义。
+            if vm.settings.record_audio_for_debug {
+                ui.add_enabled_ui(vm.settings.record_audio_for_debug, |ui| {
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.recording.archive_processed_label"),
+                        tr_l10n(lang, "settings.recording.archive_processed_desc"),
+                        vm.settings.debug_archive_processed,
+                        || {
+                            actions.push(FrontendAction::SettingsToggle(
+                                SettingsField::DebugArchiveProcessed,
+                            ));
+                        },
+                    );
+                    toggle_row(
+                        ui,
+                        tr_l10n(lang, "settings.recording.archive_raw_label"),
+                        tr_l10n(lang, "settings.recording.archive_raw_desc"),
+                        vm.settings.debug_archive_raw,
+                        || {
+                            actions.push(FrontendAction::SettingsToggle(
+                                SettingsField::DebugArchiveRaw,
+                            ));
+                        },
+                    );
+                });
+            }
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.audio_recording_max_entries_label"),
+                tr_l10n(lang, "settings.recording.audio_recording_max_entries_desc"),
+                &mut vm.settings.audio_recording_max_entries,
+                "50",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::AudioRecordingMaxEntries,
+                        text.to_owned(),
+                    ));
+                },
+            );
+            combo_index_row(
+                ui,
+                tr_l10n(lang, "settings.debug.log_level_label"),
+                tr_l10n(lang, "settings.debug.log_level_desc"),
+                vm.settings.log_level.min(2),
+                &["info", "debug", "trace"],
+                |index| {
+                    actions.push(FrontendAction::SettingsCombo(
+                        SettingsComboField::LogLevel,
+                        index,
+                    ));
+                },
+            );
+            action_row(
+                ui,
+                tr_l10n(lang, "settings.debug.title"),
+                "",
+                tr_l10n(lang, "btn.export_error_log"),
+                SettingsActionField::ExportDiagnostics,
+                actions,
+            );
         });
         return;
     }
@@ -3677,7 +3679,8 @@ fn channel_status_line(
                 );
             }
         } else {
-            let error = provider_error_text(lang, channel.last_error.as_deref().unwrap_or_default());
+            let error =
+                provider_error_text(lang, channel.last_error.as_deref().unwrap_or_default());
             let text = if error.trim().is_empty() {
                 tr_l10n(lang, "settings.channels.failed_plain").to_string()
             } else {

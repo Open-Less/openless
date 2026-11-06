@@ -19,7 +19,7 @@ test('every configurable shortcut can be cleared and stays clear after remount',
     await clear.click();
     await expect(row.locator('.ol-shortcut-binding')).toHaveText('＋');
   }
-  await page.getByRole('button', { name: '录音与输入', exact: true }).click();
+  await page.getByRole('button', { name: '通用', exact: true }).click();
   await openMicrophoneSettings(page);
   await expect(page.locator('.ol-shortcut-binding').first()).toHaveText('＋');
   await page.getByRole('button', { name: '快捷键', exact: true }).click();

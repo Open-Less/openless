@@ -19,7 +19,7 @@ export async function openMicrophoneSettings(scope: Page | Locator) {
 
   if ((await subpage.count()) === 0 && (await entry.count()) === 0) {
     const nav = scope.getByRole('navigation', { name: '设置分类' });
-    await nav.getByRole('button', { name: '录音与输入', exact: true }).click();
+    await nav.getByRole('button', { name: '通用', exact: true }).click();
   }
   // An in-flight section handoff keeps the incoming page inert until it settles.
   await settleNavigation(scope);
