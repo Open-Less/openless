@@ -648,9 +648,10 @@ export function CloudSyncSection() {
   const customServerConfigured = Boolean(prefs?.syncCustomServerOrigin?.trim());
   const syncSignedIn =
     status?.authState === 'signed_in' && status?.syncState !== 'sign_in_required';
+  const syncNeedsGithubSignIn =
+    status?.syncState === 'sign_in_required' || status?.authState === 'expired';
   const identityAvailable =
-    status?.authState !== 'expired' &&
-    status?.syncState !== 'sign_in_required' &&
+    status !== null &&
     (syncSignedIn || (Boolean(prefs) && !customServerConfigured && authSignedIn));
   const working = busy || status?.syncState === 'syncing';
   const unlocked = status?.keyState === 'unlocked';
@@ -731,16 +732,18 @@ export function CloudSyncSection() {
           />
         </div>
         {loading && <p role="status">{t('cloudSyncE2ee.loading')}</p>}
-        {!loading && !customServerConfigured && !syncSignedIn && !authSignedIn && (
-          <Btn
-            variant="primary"
-            icon="user"
-            disabled={!isTauriNow() || !available || working}
-            onClick={() => setShowLogin(true)}
-          >
-            {t('cloudSyncE2ee.signIn')}
-          </Btn>
-        )}
+        {!loading &&
+          !customServerConfigured &&
+          (syncNeedsGithubSignIn || (!syncSignedIn && !authSignedIn)) && (
+            <Btn
+              variant="primary"
+              icon="user"
+              disabled={!isTauriNow() || !available || working}
+              onClick={() => setShowLogin(true)}
+            >
+              {t('cloudSyncE2ee.signIn')}
+            </Btn>
+          )}
         {syncSignedIn && (
           <div className="ol-cloud-sync-account">
             <Icon name="user" size={16} />
@@ -927,7 +930,17 @@ export function CloudSyncSection() {
             onSuccess={(login) => {
               setShowLogin(false);
               void updatePrefs((value) => ({ ...value, marketplaceDevLogin: login }))
-                .then(() => loadRef.current())
+                .then(async () => {
+                  await loadRef.current();
+                  if (!alive.current) return;
+                  if (current.current?.consentVersion === CONSENT_VERSION) {
+                    void perform(async (valid) =>
+                      routePreparation(await prepareEncryptedSync(), 'enable', valid),
+                    );
+                  } else {
+                    begin('enable');
+                  }
+                })
                 .catch(showError);
             }}
           />

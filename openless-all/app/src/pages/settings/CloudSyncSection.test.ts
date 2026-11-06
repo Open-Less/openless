@@ -488,6 +488,40 @@ try {
   await settle();
   assert.equal(events.size, 0);
 
+  // A stale sync error must not hide the only route to replace the rejected token.
+  server = update({
+    authState: 'expired',
+    syncState: 'sign_in_required',
+    enabled: false,
+    keyState: 'locked',
+    lastError: { code: 'sign_in_required', retryAfterSeconds: null },
+    recoveryRequired: false,
+  });
+  calls.length = 0;
+  const reauthHooks = new Hooks();
+  const reauth = () => reauthHooks.render(() => components.CloudSyncSection());
+  reauth();
+  await settle();
+  tree = reauth();
+  const signIn = find(tree, (node) => node.props.children === 'cloudSyncE2ee.signIn');
+  assert.equal(signIn.props.disabled, false);
+  assert.equal(
+    syncSwitch(tree).props.disabled,
+    false,
+    'a valid marketplace credential must allow sync to reconnect after stale sign-in state',
+  );
+  signIn.props.onClick();
+  tree = reauth();
+  find(tree, (node) => node.type === 'login').props.onSuccess('fixture');
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert(
+    calls.some(([name]) => name === 'prepare'),
+    'successful GitHub re-auth must immediately revalidate the sync connection',
+  );
+  reauthHooks.unmount();
+  await settle();
+  assert.equal(events.size, 0);
+
   // Empty/deleted cloud slots keep the observed revision; never invent zero.
   server = {
     ...initial,
