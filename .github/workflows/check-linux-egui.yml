@@ -71,15 +71,8 @@ jobs:
         if: inputs.scope != 'none'
         # Same list as the packaging job: the fcitx5 plugin build and the
         # `pwsh` contract scripts both live here now.
-        run: |
-          sudo add-apt-repository -y universe || true
-          sudo apt-get update
-          sudo apt-get install -y \
-            appstream build-essential cmake cpio desktop-file-utils \
-            fcitx5-modules-dev file libasound2-dev libdbus-1-dev \
-            libfcitx5config-dev libfcitx5core-dev libfcitx5utils-dev \
-            liblzma-dev libpipewire-0.3-dev libpulse-dev libssl-dev \
-            libwayland-dev libx11-dev libxkbcommon-dev pkg-config ripgrep rpm
+        timeout-minutes: 10
+        uses: ./.github/actions/setup-linux-dependencies
 
       - uses: swatinem/rust-cache@v2
         if: inputs.scope != 'none'
@@ -163,15 +156,8 @@ jobs:
 
       - name: Install native build and packaging dependencies
         if: inputs.scope != 'none'
-        run: |
-          sudo add-apt-repository -y universe || true
-          sudo apt-get update
-          sudo apt-get install -y \
-            appstream build-essential cmake cpio desktop-file-utils \
-            fcitx5-modules-dev file libasound2-dev libdbus-1-dev \
-            libfcitx5config-dev libfcitx5core-dev libfcitx5utils-dev \
-            liblzma-dev libpipewire-0.3-dev libpulse-dev libssl-dev \
-            libwayland-dev libx11-dev libxkbcommon-dev pkg-config ripgrep rpm
+        timeout-minutes: 10
+        uses: ./.github/actions/setup-linux-dependencies
 
       - uses: dtolnay/rust-toolchain@stable
         with:

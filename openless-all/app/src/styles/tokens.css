@@ -20,6 +20,7 @@
   --ol-canvas: #ffffff;
   --ol-surface: #ffffff;
   --ol-surface-2: #f4f4f5;
+  --ol-surface-raised: var(--ol-surface-2);
   --ol-surface-solid: #ffffff;
   --ol-line: #e4e4e7;
   --ol-line-strong: #d4d4d8;
@@ -73,6 +74,7 @@
 
   /* Radii */
   --ol-shell-radius: 32px;
+  --ol-surface-radius: 24px;
   --ol-panel-radius: 18px;
   --ol-card-radius: 14px;
   --ol-pill-radius: 999px;
@@ -85,6 +87,15 @@
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --font-weight-normal: var(--ol-font-weight-regular);
+  --font-weight-medium: var(--ol-font-weight-medium);
+  --font-weight-semibold: var(--ol-font-weight-semibold);
+  --font-weight-bold: var(--ol-font-weight-bold);
+  --font-weight-extrabold: calc(800 + var(--ol-font-weight-offset));
+  --ol-font-weight-offset: 0;
+  --ol-font-weight-regular: 400;
+  --ol-font-weight-bold: 700;
+  --ol-font-weight-demibold: 650;
   --ol-font-weight-medium: 500;
   --ol-font-weight-semibold: 600;
   --ol-font-display: var(--ol-font-sans);
@@ -237,6 +248,10 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-offset: -40;
+  --ol-font-weight-regular: 360;
+  --ol-font-weight-bold: 660;
+  --ol-font-weight-demibold: 610;
   --ol-font-weight-medium: 460;
   --ol-font-weight-semibold: 560;
   --ol-accent-solid-bg: #3b82f6;
@@ -473,4 +488,10 @@ body {
 .ol-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--ol-blue-ring);
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+  :root {
+    --ol-surface-raised: color-mix(in srgb, var(--ol-surface) 97%, var(--ol-ink) 3%);
+  }
 }

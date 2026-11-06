@@ -1,3 +1,4 @@
+import { openExperiments } from './support/experiments';
 import { settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -23,9 +24,13 @@ async function settings(page: Page, category: string) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page
     .getByRole('navigation', { name: '设置分类' })
-    .getByRole('button', { name: category, exact: true })
+    .getByRole('button', { name: category === '实验与扩展' ? '调试工具' : category, exact: true })
     .click();
   await settleNavigation(page);
+  if (category === '实验与扩展') {
+    await page.locator('[data-ol-advanced-entry="experiments"]').click();
+    await settleNavigation(page);
+  }
 }
 
 async function expectInViewport(page: Page) {
@@ -150,7 +155,7 @@ test('narrow windows keep select and long model explanations within the viewport
   expect(bounds.x).toBeGreaterThanOrEqual(0);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(375);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   await page.getByRole('button', { name: 'Embedding Gemma', exact: true }).click();
   await expect(page.getByRole('tooltip')).toBeVisible();

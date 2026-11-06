@@ -2313,7 +2313,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   <div
                     style={{
                       fontSize: 14,
-                      fontWeight: 700,
+                      fontWeight: 'var(--ol-font-weight-bold)',
                       color: 'var(--ol-ink)',
                       marginBottom: 6,
                     }}
@@ -2492,7 +2492,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   <div
                     style={{
                       fontSize: 14,
-                      fontWeight: 700,
+                      fontWeight: 'var(--ol-font-weight-bold)',
                       color: 'var(--ol-ink)',
                     }}
                   >
@@ -2882,7 +2882,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   <div
                     style={{
                       fontSize: 14,
-                      fontWeight: 700,
+                      fontWeight: 'var(--ol-font-weight-bold)',
                       color: 'var(--ol-ink)',
                     }}
                   >
@@ -2944,7 +2944,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                       fontSize: 13,
                       height: 31,
                       padding: '0 10px',
-                      borderRadius: 8,
+                      borderRadius: 'var(--ol-control-radius)',
                       border: '0.5px solid rgba(0,0,0,0.12)',
                       background: 'var(--ol-surface)',
                       color: 'var(--ol-ink)',
@@ -2975,7 +2975,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                       fontSize: 13,
                       height: 31,
                       padding: '0 10px',
-                      borderRadius: 8,
+                      borderRadius: 'var(--ol-control-radius)',
                       border: '0.5px solid rgba(0,0,0,0.12)',
                       background: 'var(--ol-surface)',
                       color: 'var(--ol-ink)',

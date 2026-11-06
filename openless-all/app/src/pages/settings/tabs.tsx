@@ -27,8 +27,6 @@ import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
 import { AudioDspSettings } from './AudioDspSettings';
-import { CodingAgentSection } from './CodingAgentSection';
-import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
 import { AutoUpdateSection } from './AutoUpdateSection';
 import { StartupDiagnostics } from './StartupDiagnostics';
@@ -45,10 +43,7 @@ import { Card } from '../_atoms';
 import { useContentMotion, useSelectionMotion } from '../../lib/motion';
 import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
-  advancedPageGroup,
-  isInlineAdvancedPage,
   availableServiceViews,
-  isTestingFeaturePage,
   isServiceViewInactive,
   resolveServiceView,
   showsCursorContextControl,
@@ -173,11 +168,13 @@ function SettingsSubpageHeader({ title, onBack }: { title: string; onBack?: () =
 }
 
 function SettingsCategoryEntry({
+  id,
   icon,
   title,
   description,
   onClick,
 }: {
+  id?: string;
   icon: string;
   title: string;
   description: string;
@@ -185,7 +182,12 @@ function SettingsCategoryEntry({
 }) {
   const { t } = useTranslation();
   return (
-    <button type="button" className="ol-settings-category-entry" onClick={onClick}>
+    <button
+      type="button"
+      className="ol-settings-category-entry"
+      data-ol-advanced-entry={id}
+      onClick={onClick}
+    >
       <span className="ol-settings-category-icon">
         <Icon name={icon} size={18} />
       </span>
@@ -620,7 +622,7 @@ export function PrivacyTab() {
           alignItems: 'center',
           gap: 10,
           padding: '10px 12px',
-          borderRadius: 10,
+          borderRadius: 'var(--ol-r-md)',
           background: 'var(--ol-blue-soft)',
           marginBottom: 2,
         }}
@@ -664,110 +666,40 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [visited, setVisited] = useState<AdvancedPageId[]>([]);
-  useEffect(() => {
-    if (page) setVisited((current) => (current.includes(page) ? current : [...current, page]));
-  }, [page]);
-  const { prefs, updatePrefs } = useHotkeySettings();
-  const testing = prefs?.testingFeaturesEnabled === true;
-  const [savingTesting, setSavingTesting] = useState(false);
-  const testingReady = testing && !savingTesting;
-  const entries = pages.filter((item) =>
-    page === 'testingFeatures'
-      ? testingReady && isTestingFeaturePage(item.id)
-      : !isTestingFeaturePage(item.id),
-  );
+  const entries = pages.filter((item) => !['experiments', 'debug'].includes(item.id));
   const list = (
     <div className="ol-advanced-settings-list">
-      {entries.map((item, index) => {
-        const group = advancedPageGroup(item);
-        const previous = index > 0 ? advancedPageGroup(entries[index - 1]) : undefined;
-        const showGroup = group !== undefined && group !== previous;
-        return (
-          <div key={item.id}>
-            {showGroup && (
-              <div className="ol-advanced-settings-group-title">
-                {t(`settings.advancedGroups.${group}`)}
-              </div>
-            )}
-            {isInlineAdvancedPage(item) ? (
-              <div className="ol-advanced-settings-inline">
-                {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
-                {item.id === 'cursorContext' && <CursorContextSection />}
-                {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="ol-advanced-settings-entry"
-                data-ol-advanced-entry={item.id}
-                onClick={() => onOpenPage(item.id)}
-              >
-                <span className="ol-advanced-entry-icon">
-                  <Icon name={item.icon} size={19} />
-                </span>
-                <span className="ol-advanced-entry-copy">
-                  <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-                  <span className="ol-advanced-entry-description">
-                    {t(`modal.advancedPages.${item.id}`)}
-                  </span>
-                </span>
-                {item.id === 'testingFeatures' && (
-                  <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>
-                    Beta
-                  </span>
-                )}
-                <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {entries.map((item) => (
+        <SettingsCategoryEntry
+          id={item.id}
+          key={item.id}
+          icon={item.icon}
+          title={item.titleKey}
+          description={`modal.advancedPages.${item.id}`}
+          onClick={() => onOpenPage(item.id)}
+        />
+      ))}
     </div>
   );
   return (
     <>
-      {page === null && list}
-      {page === 'testingFeatures' && (
-        <Card>
-          <ExperimentalSectionTitle badge="Beta">
-            {t('settings.testingFeatures.title')}
-          </ExperimentalSectionTitle>
-          <SettingRow
-            label={t('settings.testingFeatures.enable')}
-            desc={t('settings.testingFeatures.description')}
-          >
-            <Toggle
-              on={testing}
-              disabled={!prefs || savingTesting}
-              label={t('settings.testingFeatures.enable')}
-              onToggle={async (next) => {
-                setSavingTesting(true);
-                try {
-                  await updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next }));
-                } catch {
-                  emitSaved('failed', t('common.operationFailed'));
-                } finally {
-                  setSavingTesting(false);
-                }
-              }}
+      {page === null && (
+        <>
+          <DebugToolsSection />
+          <div className="ol-settings-category-list">
+            <SettingsCategoryEntry
+              id="experiments"
+              icon="flask"
+              title="modal.experimentsTitle"
+              description="modal.experimentsDescription"
+              onClick={() => onOpenPage('experiments')}
             />
-          </SettingRow>
-          {testingReady && list}
-          {testingReady && entries.length === 0 && (
-            <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
-              {t('settings.testingFeatures.unavailable')}
-            </p>
-          )}
-        </Card>
+          </div>
+        </>
       )}
+      {page === 'experiments' && list}
       {pages
-        .filter(
-          (item) =>
-            item.id !== 'testingFeatures' &&
-            !isInlineAdvancedPage(item) &&
-            visited.includes(item.id),
-        )
+        .filter((item) => item.id === page && item.id !== 'experiments')
         .map((item) => (
           <section
             key={item.id}
@@ -779,8 +711,6 @@ export function AdvancedTab({
             {item.id === 'localModels' && (
               <ExperimentalAsrSection controller={experimentalAsr} onOpenAsr={onOpenAsr} />
             )}
-            {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
-            {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'cursorContext' && <CursorContextSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}

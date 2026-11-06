@@ -1,5 +1,6 @@
 @import '../components/Tooltip.css';
 @import '../components/ui/Select.css';
+@import './continuous-corners.css';
 
 html,
 body,
@@ -382,9 +383,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 32px;
   height: 30px;
   padding: 0;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-surface-raised);
   color: var(--ol-ink-2);
   cursor: pointer;
   transition:
@@ -409,7 +410,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 4px;
   padding: 5px 8px 5px 4px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-blue);
   font: inherit;
@@ -420,9 +421,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   background: var(--ol-blue-soft);
 }
 .ol-settings-category-list {
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-card-radius);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
 .ol-settings-category-entry {
@@ -440,7 +441,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transition: background 160ms ease;
 }
 .ol-settings-category-list > .ol-settings-category-entry + .ol-settings-category-entry {
-  border-top: 1px solid var(--ol-line-soft);
+  border-top: 0;
 }
 .ol-settings-category-entry:hover {
   background: var(--ol-surface-2);
@@ -451,9 +452,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-shrink: 0;
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
-  color: var(--ol-blue);
+  color: var(--ol-ink-2);
 }
 .ol-settings-category-copy {
   display: grid;
@@ -476,20 +477,12 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   }
 }
 .ol-advanced-settings-list {
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
-  background: var(--ol-surface);
+  border: 0;
+  border-radius: var(--ol-card-radius);
+  background: var(--ol-surface-raised);
   overflow: hidden;
 }
-.ol-advanced-settings-group-title {
-  padding: 13px 18px 7px;
-  color: var(--ol-ink-4);
-  font-size: 11px;
-  font-weight: var(--ol-font-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: var(--ol-surface-2);
-}
+
 .ol-advanced-settings-entry {
   display: flex;
   align-items: center;
@@ -510,7 +503,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   transform: scale(0.985);
 }
 .ol-advanced-settings-list > div + div {
-  border-top: 1px solid var(--ol-line-soft);
+  border-top: 0;
 }
 .ol-advanced-settings-entry:hover {
   background: var(--ol-surface-2);
@@ -518,7 +511,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 .ol-advanced-settings-entry:focus-visible {
   outline: 2px solid var(--ol-blue);
   outline-offset: -4px;
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
 }
 .ol-advanced-entry-icon {
   display: grid;
@@ -527,7 +520,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 36px;
   height: 36px;
   border: 1px solid var(--ol-line);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
 }
@@ -972,7 +965,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   gap: 8px;
   min-width: 0;
   padding: 9px 12px;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   border: 0.5px solid var(--ol-line);
   background: var(--ol-surface);
   transition:
@@ -1048,7 +1041,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-ink-3);
   display: inline-flex;
@@ -1098,7 +1091,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   max-width: 100%;
   padding: 2px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
 }
 .ol-segmented-indicator,
@@ -1113,7 +1106,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 }
 .ol-segmented-indicator {
   z-index: 0;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   background: var(--ol-choice-active-bg);
 }
 .ol-service-view-indicator {
@@ -1126,7 +1119,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   z-index: 1;
   padding: 5px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   background: transparent;
   color: var(--ol-choice-idle-ink);
   font: inherit;
@@ -1450,7 +1443,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   gap: 7px;
   padding: 7px 10px;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
   font: 500 12.5px var(--ol-font-sans);
@@ -1478,8 +1471,8 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 }
 .ol-channel-dialog-embedded .ol-channel-form-sheet {
   padding: 18px;
-  border: 1px solid var(--ol-line);
-  border-radius: 14px;
+  border: 0;
+  border-radius: var(--ol-card-radius);
   background: var(--ol-surface);
 }
 .ol-channel-dialog-embedded .ol-channel-dialog-footer {
@@ -1570,7 +1563,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   justify-content: center;
   padding: 5px 8px;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: transparent;
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -1624,7 +1617,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   gap: 12px;
   margin: 12px 0 20px;
   padding: 14px 16px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   font-size: 12px;
   line-height: 1.7;
@@ -1718,7 +1711,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   width: 42px;
   height: 42px;
   border: 1px solid var(--ol-blue-ring);
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-blue-soft);
   color: var(--ol-blue);
 }
@@ -1761,7 +1754,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   height: 32px;
   padding: 0;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
   color: var(--ol-ink-3);
   cursor: pointer;
@@ -1803,7 +1796,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   margin: 18px 0 0;
   padding: 14px;
   border: 1px solid var(--ol-line);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface-2);
   font-size: 12px;
   line-height: 1.7;
@@ -1822,7 +1815,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
 .ol-channel-dialog .ol-provider-result {
   padding: 9px 11px;
   border: 1px solid var(--ol-line);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-bg-base);
 }
 .ol-channel-dialog .ol-provider-result[data-status='success'] {
@@ -1863,7 +1856,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   min-height: 34px;
   padding: 6px 12px;
   border: 1px solid rgba(220, 38, 38, 0.3);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: rgba(220, 38, 38, 0.05);
   color: var(--ol-err);
   font: 500 12.5px / 1.5 var(--ol-font-sans);
@@ -1971,7 +1964,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   border-color: var(--ol-ink-3);
 }
 .ol-word-card {
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   animation: none;
 }
 .ol-vocab-delete-selected {
@@ -1980,7 +1973,7 @@ html[data-ol-platform='android'] .ol-capsule-pill:not(.ol-default-capsule) {
   justify-content: center;
   gap: 7px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   border: 1px solid var(--ol-line-strong);
   background: var(--ol-surface);
   color: var(--ol-err);
@@ -2074,7 +2067,7 @@ html:lang(de) {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   color: var(--ol-ink-2);
 }
@@ -2091,7 +2084,7 @@ html:lang(de) {
 .ol-cloud-sync-backup {
   margin: 0;
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   font-size: 13px;
 }
@@ -2259,4 +2252,28 @@ html:lang(de) {
 .ol-services-page {
   flex: 1;
   min-height: 0;
+}
+
+/* Surface luminance carries hierarchy; focus outlines remain explicit. */
+body {
+  font-weight: var(--ol-font-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+.ol-settings-category-entry + .ol-settings-category-entry,
+.ol-advanced-settings-list > .ol-settings-category-entry + .ol-settings-category-entry {
+  margin-top: 2px;
+}
+.ol-settings-category-list,
+.ol-advanced-settings-list {
+  padding: 4px;
+}
+.ol-settings-category-entry,
+.ol-advanced-settings-entry {
+  border-radius: var(--ol-r-md);
+}
+/* Continuous corners degrade to the same radius scale on older WebKit. */
+
+/* Entry and exit paint the background; only the settled opaque workspace suspends it. */
+.ol-shell-depth[data-ol-settings-occluded='true'] {
+  content-visibility: hidden;
 }

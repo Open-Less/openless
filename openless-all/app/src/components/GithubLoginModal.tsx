@@ -205,7 +205,10 @@ export function GithubLoginModal({
           gap: 12,
         }}
       >
-        <h2 id={titleId} style={{ margin: 0, fontSize: 16, fontWeight: 650 }}>
+        <h2
+          id={titleId}
+          style={{ margin: 0, fontSize: 16, fontWeight: 'var(--ol-font-weight-demibold)' }}
+        >
           {t('marketplace.oauth.title')}
         </h2>
         <button
@@ -257,7 +260,7 @@ export function GithubLoginModal({
                 justifyContent: 'center',
                 gap: 12,
                 padding: 18,
-                borderRadius: 12,
+                borderRadius: 'var(--ol-r-lg)',
                 border: '0.5px solid var(--ol-line-strong)',
                 background: 'var(--ol-surface-2)',
               }}
@@ -266,7 +269,7 @@ export function GithubLoginModal({
                 style={{
                   fontFamily: 'var(--ol-font-mono)',
                   fontSize: 22,
-                  fontWeight: 700,
+                  fontWeight: 'var(--ol-font-weight-bold)',
                   letterSpacing: 2,
                   color: 'var(--ol-blue)',
                 }}
@@ -325,7 +328,13 @@ export function GithubLoginModal({
                 aria-hidden
                 style={{ color: 'var(--ol-ok, var(--ol-blue))', marginBottom: 10 }}
               />
-              <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--ol-ink)' }}>
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: 'var(--ol-font-weight-demibold)',
+                  color: 'var(--ol-ink)',
+                }}
+              >
                 {t('marketplace.oauth.successAs', { login: phase.login })}
               </div>
             </div>
@@ -337,7 +346,7 @@ export function GithubLoginModal({
             <div
               style={{
                 padding: 12,
-                borderRadius: 10,
+                borderRadius: 'var(--ol-r-md)',
                 border: '0.5px solid color-mix(in srgb, var(--ol-err) 32%, transparent)',
                 background: 'color-mix(in srgb, var(--ol-err) 8%, transparent)',
                 color: 'var(--ol-err)',

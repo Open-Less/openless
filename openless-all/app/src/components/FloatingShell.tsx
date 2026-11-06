@@ -150,6 +150,7 @@ function FloatingShellBody({
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
+  const [settingsPainted, setSettingsPainted] = useState(false);
   const providerPromptMount = useExitMount(providerPromptOpen);
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -307,6 +308,7 @@ function FloatingShellBody({
       <div
         ref={shellRef}
         data-ol-settings-open={settingsOpen ? 'true' : undefined}
+        data-ol-settings-occluded={settingsOpen && settingsPainted ? 'true' : undefined}
         className="ol-app-shell-bg ol-shell-depth"
         style={{
           flex: 1,
@@ -490,7 +492,7 @@ function FloatingShellBody({
                     alignItems: 'center',
                     gap: 10,
                     padding: '8px 10px',
-                    borderRadius: 8,
+                    borderRadius: 'var(--ol-control-radius)',
                     border: 0,
                     fontFamily: 'inherit',
                     fontSize: 15,
@@ -652,6 +654,7 @@ function FloatingShellBody({
             key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
             os={os}
             closing={settingsMount.closing}
+            onPaintedChange={setSettingsPainted}
             initialSettingsSection={settingsInitialSection}
             initialServiceView={settingsInitialServiceView}
             onClose={() => setSettingsOpen(false)}
@@ -812,7 +815,7 @@ function MobileTopBar({
           height: 36,
           flexShrink: 0,
           border: 0,
-          borderRadius: 10,
+          borderRadius: 'var(--ol-r-md)',
           background: settingsActive ? 'var(--ol-surface-2)' : 'transparent',
           display: 'inline-flex',
           alignItems: 'center',
@@ -942,7 +945,7 @@ const mobileNavBtnStyle: CSSProperties = {
   gap: 4,
   padding: '6px 4px',
   border: 0,
-  borderRadius: 10,
+  borderRadius: 'var(--ol-r-md)',
   background: 'transparent',
   fontFamily: 'inherit',
   cursor: 'default',
@@ -956,7 +959,7 @@ const navBtnStyle: CSSProperties = {
   gap: 10,
   width: '100%',
   padding: '8px 10px',
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   border: 0,
   // (After the Codex sidebar): 15px nav text, 16px icons — closer to the reference design.
   fontFamily: 'inherit',
@@ -1013,7 +1016,7 @@ function ProviderSetupPrompt({
             style={{
               width: 34,
               height: 34,
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               background: 'rgba(37,99,235,0.10)',
               color: 'var(--ol-blue)',
               display: 'inline-flex',
@@ -1051,7 +1054,7 @@ function ProviderSetupPrompt({
             style={{
               height: 32,
               padding: '0 13px',
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               border: '0.5px solid var(--ol-line-strong)',
               background: 'var(--ol-surface)',
               color: 'var(--ol-ink-3)',
@@ -1070,7 +1073,7 @@ function ProviderSetupPrompt({
             style={{
               height: 32,
               padding: '0 14px',
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               border: 0,
               background: 'var(--ol-primary-solid-bg)',
               color: 'var(--ol-primary-solid-ink)',
@@ -1137,7 +1140,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               width: 34,
               height: 34,
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               background: 'rgba(37,99,235,0.10)',
               color: 'var(--ol-blue)',
               display: 'inline-flex',
@@ -1167,7 +1170,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               height: 32,
               padding: '0 13px',
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               border: '0.5px solid var(--ol-line-strong)',
               background: 'var(--ol-surface)',
               color: 'var(--ol-ink-3)',
@@ -1186,7 +1189,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               height: 32,
               padding: '0 14px',
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               border: 0,
               background: 'var(--ol-primary-solid-bg)',
               color: 'var(--ol-primary-solid-ink)',

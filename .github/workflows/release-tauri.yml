@@ -33,7 +33,7 @@ on:
       platform:
         description: Desktop platforms to build (branch builds do not publish)
         type: choice
-        options: [all, macos, windows]
+        options: [all, macos, macos-aarch64, macos-x86_64, windows]
         default: all
       windows_hang_diagnostics:
         description: Opt-in issue 1266 Windows observation build (branch dispatch only)
@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-aarch64' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos-x86_64' && '[{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"}]' || '[{"platform":"macos-latest","rust-target":"aarch64-apple-darwin","updater-target":"darwin","updater-arch":"aarch64"},{"platform":"macos-15-intel","rust-target":"x86_64-apple-darwin","updater-target":"darwin","updater-arch":"x86_64"},{"platform":"windows-latest","rust-target":"x86_64-pc-windows-msvc","updater-target":"windows","updater-arch":"x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # A release build takes ~33 minutes from a cold cache; anything past this is
     # a hang that would otherwise hold the runner and the release for hours.
@@ -117,14 +117,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: 'openless-all/app/package-lock.json'
+      - name: Reuse baseline npm downloads
+        uses: ./.github/actions/cache-npm
 
       - name: Verify repair source CI and version
         if: inputs.release_tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOOLING_SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
@@ -134,8 +135,10 @@ jobs:
           [ "${version%%+*}" = "$tag_version" ] || { echo "::error::Tag/application version mismatch"; exit 1; }
           ci_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$source_sha&status=success&per_page=100" --jq "[.workflow_runs[] | select(.name == \"CI\" and .head_sha == \"$source_sha\" and .conclusion == \"success\")][0].id")
           [[ "$ci_id" =~ ^[0-9]+$ ]] || { echo "::error::No green CI for the exact tagged commit"; exit 1; }
-          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" --jq '(.total_count == 7 and all(.jobs[]; .conclusion == "success"))')
-          [ "$green" = true ] || { echo "::error::All seven tagged-commit CI gates must pass"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_id/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/release-ci-jobs.json"
+          # The repaired tag may predate this verifier; use the immutable workflow source.
+          gh api "repos/$GITHUB_REPOSITORY/contents/openless-all/app/scripts/verify-release-ci.mjs?ref=$TOOLING_SOURCE_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/verify-release-ci.mjs"
+          node "$RUNNER_TEMP/verify-release-ci.mjs" "$RUNNER_TEMP/release-ci-jobs.json"
           echo "Repair source verified: $source_sha ($version)"
 
       - uses: dtolnay/rust-toolchain@stable

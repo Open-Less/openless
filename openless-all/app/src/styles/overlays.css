@@ -1,6 +1,6 @@
 /* Utility windows and dialogs share a quiet, opaque surface and precise controls. */
 :root {
-  --ol-dialog-radius: 22px;
+  --ol-dialog-radius: var(--ol-surface-radius);
   --ol-dialog-border: color-mix(in srgb, var(--ol-ink) 12%, var(--ol-surface));
   --ol-dialog-shadow:
     0 32px 90px -24px rgba(18, 28, 48, 0.26), 0 8px 28px -12px rgba(18, 28, 48, 0.16),
@@ -63,7 +63,7 @@
   flex: 0 0 38px;
   height: 38px;
   border: 1px solid color-mix(in srgb, var(--ol-blue) 13%, var(--ol-surface));
-  border-radius: 12px;
+  border-radius: var(--ol-r-lg);
   color: var(--ol-blue);
   background: linear-gradient(145deg, var(--ol-surface), var(--ol-blue-soft));
   box-shadow:
@@ -82,7 +82,7 @@
 .ol-tool-heading h1 {
   margin: 0;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: calc(650 + var(--ol-font-weight-offset));
   letter-spacing: -0.3px;
   line-height: 1.35;
 }
@@ -102,7 +102,7 @@
   height: 30px;
   align-self: flex-start;
   margin: -3px -5px 0 0;
-  border-radius: 9px;
+  border-radius: var(--ol-r-md);
   color: var(--ol-ink-3);
   cursor: pointer;
   transition:
@@ -141,7 +141,7 @@
   resize: none;
   box-sizing: border-box;
   border: 1px solid var(--ol-line);
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   padding: 16px;
   background: var(--ol-control-solid);
   color: var(--ol-ink);
@@ -171,7 +171,7 @@
 }
 .ol-tool-error {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: color-mix(in srgb, var(--ol-err) 6%, var(--ol-surface));
   color: var(--ol-err);
   font-size: 12px;
@@ -195,7 +195,7 @@
   min-height: 36px;
   padding: 8px 15px;
   border: 1px solid var(--ol-line);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-surface);
   color: var(--ol-ink-2);
   font: 550 12.5px/1.4 var(--ol-font-sans);
@@ -233,7 +233,7 @@
 .ol-intent-instruction {
   padding: 16px;
   border: 1px solid var(--ol-line);
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-control-solid);
   font-size: 14px;
   line-height: 1.75;

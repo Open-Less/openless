@@ -346,7 +346,10 @@ export function UpdateDialog({
       labelledBy={titleId}
       render={() => (
         <>
-          <div id={titleId} style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>
+          <div
+            id={titleId}
+            style={{ fontSize: 15, fontWeight: 'var(--ol-font-weight-demibold)', marginBottom: 8 }}
+          >
             {t(
               `settings.about.updateDialog.${switchingToStable ? 'stableChannelSwitch' : status}.title`,
             )}

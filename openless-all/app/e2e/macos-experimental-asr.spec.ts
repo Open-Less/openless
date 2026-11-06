@@ -1,3 +1,4 @@
+import { openExperiments } from './support/experiments';
 import { expect, test, type Page } from '@playwright/test';
 
 async function settings(page: Page, os: 'mac' | 'win' = 'mac') {
@@ -24,7 +25,7 @@ async function settings(page: Page, os: 'mac' | 'win' = 'mac') {
   await page.getByRole('button', { name: '设置', exact: true }).click();
 }
 async function experiments(page: Page) {
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   const entries = page.locator('[data-ol-advanced-entry]');
   await expect(entries.first()).toHaveAttribute('data-ol-advanced-entry', 'localModels');
   await entries.first().click();
@@ -148,6 +149,6 @@ test('Windows retains its model manager and does not expose the Mac experiments 
   await expect(
     page.locator('.ol-service-views').getByRole('button', { name: '本地模型', exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await expect(page.locator('[data-ol-advanced-entry="localModels"]')).toHaveCount(0);
 });

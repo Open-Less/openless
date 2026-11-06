@@ -43,7 +43,7 @@ assert.match(guard.run, /INPUT_PLATFORM.*windows/);
 const source = steps.find((s) => s.name === 'Verify repair source CI and version');
 assert.match(source.run, /git rev-parse HEAD/);
 assert.match(source.run, /head_sha=\$source_sha/);
-assert.match(source.run, /total_count == 7/);
+assert.match(source.run, /verify-release-ci\.mjs/);
 const build = steps.find((s) => s.name === 'Build (Windows)');
 const script = build.run.match(/node <<'MSI_CONFIG'\n([\s\S]*?)\nMSI_CONFIG/)[1];
 const originalVersion = (version, signing = false) => {
@@ -205,3 +205,24 @@ if (process.platform !== 'win32') {
   }
 }
 console.log('windows-msi-release-contract.test.mjs passed');
+
+// Branch acceptance can build one Mac architecture; tag publishes retain all desktop targets.
+const selected = new Map(
+  [...job.strategy.matrix.include.matchAll(/inputs.platform == '([^']+)' && '(\[[^']+\])'/g)].map(
+    (m) => [m[1], JSON.parse(m[2])],
+  ),
+);
+assert.deepEqual(
+  selected.get('macos-aarch64').map((row) => row['rust-target']),
+  ['aarch64-apple-darwin'],
+);
+assert.deepEqual(
+  selected.get('macos-x86_64').map((row) => row['rust-target']),
+  ['x86_64-apple-darwin'],
+);
+const full = JSON.parse(job.strategy.matrix.include.match(/\|\| '(\[[^']+\])'\) \}\}$/)[1]);
+assert.deepEqual(full.map((row) => row['rust-target']).sort(), [
+  'aarch64-apple-darwin',
+  'x86_64-apple-darwin',
+  'x86_64-pc-windows-msvc',
+]);

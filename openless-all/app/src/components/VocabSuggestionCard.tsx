@@ -80,7 +80,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
     >
       <div
         style={{
-          borderRadius: 16,
+          borderRadius: 'var(--ol-r-xl)',
           padding: 12,
           background: 'var(--ol-capsule-pill-bg)',
           backdropFilter: 'blur(20px)',

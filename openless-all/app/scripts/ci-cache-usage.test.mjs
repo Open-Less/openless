@@ -106,10 +106,13 @@ case "$args" in
     printf '%s\\n' "$args" >>"$DELETE_LOG"
     ;;
   *actions/caches?per_page=100*)
-    ${pythonCommand} - "$CACHES_JSON" <<'PY'
+    ${pythonCommand} - "$CACHES_JSON" "$args" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 for entry in data["actions_caches"]:
+    if "--jq .actions_caches[].size_in_bytes" in " ".join(sys.argv[2:]):
+        print(entry['size_in_bytes'])
+        continue
     print(f"{entry['ref']}\\t{entry['key']}\\t{entry['size_in_bytes']}\\t{entry['created_at']}")
 PY
     ;;

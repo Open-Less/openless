@@ -1,3 +1,4 @@
+import { openExperiments } from './support/experiments';
 import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -130,7 +131,7 @@ test('experimental download cancel and switch-off share state, do not reappear, 
   page,
 }) => {
   await openSettings(page);
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   const sense = page.locator('[data-experimental-model="sense-voice"]');
   const next = page.locator('[data-experimental-model="embedding-gemma"]');
@@ -206,7 +207,7 @@ test('experimental completion guidance consumes Escape without closing settings'
   page,
 }) => {
   const settings = await openSettings(page);
-  await settings.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(settings);
   await page.locator('[data-ol-advanced-entry="localModels"]').click();
   await page.getByRole('switch', { name: 'SenseVoice Small', exact: true }).click();
   const guide = page.getByRole('dialog', { name: '下载完成，还需选择语音渠道', exact: true });
@@ -312,7 +313,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   const mute = dialog.getByRole('switch', { name: '录音时静音', exact: true });
   await expect(mute).toBeVisible();
   const muted = await mute.isChecked();
-  await dialog.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(dialog);
   await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
   const cancellation = dialog.getByRole('switch', { name: '播放回声抑制', exact: true });
   await expect(cancellation).not.toBeChecked();
@@ -321,7 +322,7 @@ test('playback echo cancellation is opt-in and does not change output muting', a
   await dialog.getByRole('button', { name: '通用', exact: true }).click();
   await openMicrophoneSettings(dialog);
   await expect(mute).toHaveAttribute('aria-checked', String(muted));
-  await dialog.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(dialog);
   await dialog.locator('[data-ol-advanced-entry="voiceEnhancement"]').click();
   await expect(cancellation).toBeChecked();
   await cancellation.scrollIntoViewIfNeeded();

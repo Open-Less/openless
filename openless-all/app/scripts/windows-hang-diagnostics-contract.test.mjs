@@ -49,7 +49,10 @@ assert.deepEqual(
 );
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
-assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 8);
+for (const kind of ['MainHotkey', 'QaHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
+  assert.ok(loops.includes(`lock_host(&inner.settings_host_gate, DebugKind::${kind})`));
+}
+assert.doesNotMatch(loops, /fn coding_agent_hotkey_supervisor_loop/);
 // Both adapters target the same native queue; neither whole-file token presence nor
 // the old host-only dispatcher is sufficient coverage of the reported capsule task.
 const capsuleHost = host.slice(

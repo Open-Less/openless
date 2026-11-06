@@ -12,7 +12,7 @@
 | tag `v*-tauri` | 发布 Tauri 桌面与 Android；Linux 包不随标签自动发布 |
 | `workflow_dispatch` | 全量；`platform=macos` 只跑 macOS（仅 macOS 验证入口） |
 
-同一 PR 连续推送会取消旧运行（`concurrency.cancel-in-progress`）。
+同一 ref 的验证 CI 连续推送会取消已被取代的旧运行（包括 beta/main），避免旧矩阵占用 runner、重复下载和编译。手动验证按 run_id 隔离；发版工作流保持自身发布并发策略。
 
 ### 改动范围判定
 
@@ -124,3 +124,13 @@ Linux 发版不受影响：`release-linux-egui.yml` 复用 CI 的同一个 `buil
 - 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 始终全量，所以合并后仍有完整证据。
 - `build-linux-egui` 在 `push` 时仍会构建 release 二进制（保持基线缓存里有 release 产物、并持续验证打包链），但不再上传 Action artifact；artifact 只在 PR 与 tag 运行产生。
 - 所有 job 都设了 `timeout-minutes`，避免卡死的运行长时间占用并发与时间。
+
+## 桌面整理后的依赖与维护
+
+- 前端的 shadcn CSS 放在 `src/components/chat/vendor/`，MIT 许可通过 `public/licenses/shadcn-LICENSE.txt` 随前端产物分发，不再为构建一份样式安装 shadcn CLI 及其依赖。`package-lock.json` 从 503 个包记录减到 246 个；运行期组件包保持锁定。
+- `cache-npm` 优先使用已缓存的下载，关闭 CI 安装时的 audit/fund 请求；单次网络请求上限 60 秒、重试两次。缓存分段恢复上限 3 分钟，避免异常下载长期占住 runner。
+- 缓存清理每日运行并在 PR 关闭时触发；删除后重新读取实际用量，避免以旧用量错误报告仍超额。保留开放 PR、分支的可用代际及 tag 缓存的既有边界。
+- 本地验证与远端耗时收益分别验收；依赖记录数量减少不等于某个平台编译时间已按比例下降。
+
+- Chromium 与 WebKit 各在独立 runner 上运行，保持每个浏览器一个 worker；两边完成后汇总为原有 `UI motion (Chromium + WebKit)` 门禁。失败、取消或应运行却跳过均不能报告成功。失败截图和 trace 按浏览器分别保存。
+- 手动桌面打包支持 `macos-aarch64` 与 `macos-x86_64`，可只构建验收所需架构。正式标签仍构建双 Mac 架构与 Windows。

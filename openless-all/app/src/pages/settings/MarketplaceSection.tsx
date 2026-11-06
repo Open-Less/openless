@@ -74,7 +74,7 @@ export function MarketplaceSection() {
             alignItems: 'center',
             gap: 12,
             padding: '10px 12px',
-            borderRadius: 10,
+            borderRadius: 'var(--ol-r-md)',
             background: 'var(--ol-surface-2)',
             border: '0.5px solid var(--ol-line)',
           }}

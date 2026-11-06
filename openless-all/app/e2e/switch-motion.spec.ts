@@ -209,8 +209,10 @@ test('every settings switch slides between on and off', async ({ page }) => {
       await header.click();
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     }
-    if (section === '实验与扩展') {
+    if (section === '调试工具') {
       total += await exerciseVisibleSwitches(dialog, 'advanced:root');
+      await dialog.locator('[data-ol-advanced-entry="experiments"]').click();
+      await settleNavigation(dialog);
       const entries = dialog.locator('button[data-ol-advanced-entry]');
       const visibleEntries = () =>
         entries.evaluateAll((items) =>
@@ -221,26 +223,14 @@ test('every settings switch slides between on and off', async ({ page }) => {
       const visit = async (id: string, inside?: () => Promise<void>) => {
         await dialog.locator(`[data-ol-advanced-entry="${id}"]`).click();
         await expect(dialog.locator('.ol-settings-back')).toBeVisible();
-        // Pages visited earlier stay mounted but hidden; only the open page is visible.
+        // Leaving a subpage releases its live controls and effects.
         total += await exerciseVisibleSwitches(dialog, `advanced:${id}`);
         await inside?.();
         await dialog.locator('.ol-settings-back').click();
         await expect(entries.first()).toBeVisible();
         await settleNavigation(dialog);
       };
-      for (const id of await visibleEntries()) {
-        await visit(id, async () => {
-          if (id !== 'testingFeatures') return;
-          // Testing pages are only listed while their switch is on.
-          const enable = dialog.getByRole('switch', { name: '启用正在测试中的功能' });
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'true');
-          await expect(entries.first()).toBeVisible();
-          for (const testingId of await visibleEntries()) await visit(testingId);
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'false');
-        });
-      }
+      for (const id of await visibleEntries()) await visit(id);
       continue;
     }
     const categoryEntries = dialog.locator('.ol-settings-category-entry');

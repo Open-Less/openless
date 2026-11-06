@@ -64,16 +64,13 @@ export function Translation() {
       options.unshift({ value: selected, label: language?.label ?? selected });
     }
     return [
-      { value: '', label: t('translation.target.disabled', { shortcut: translationShortcutLabel }) },
+      {
+        value: '',
+        label: t('translation.target.disabled', { shortcut: translationShortcutLabel }),
+      },
       ...options,
     ];
-  }, [
-    filteredLanguages,
-    languages,
-    prefs?.translationTargetLanguage,
-    t,
-    translationShortcutLabel,
-  ]);
+  }, [filteredLanguages, languages, prefs?.translationTargetLanguage, t, translationShortcutLabel]);
 
   useEffect(
     () => () => {
@@ -240,7 +237,7 @@ export function Translation() {
               justifyContent: 'space-between',
               gap: 10,
               padding: '8px 12px',
-              borderRadius: 10,
+              borderRadius: 'var(--ol-r-md)',
               border: '0.5px solid rgba(239,68,68,0.22)',
               background: 'rgba(239,68,68,0.07)',
               color: 'var(--ol-red, #ef4444)',
@@ -445,7 +442,7 @@ export function Translation() {
                 style={{
                   marginTop: 10,
                   padding: '8px 12px',
-                  borderRadius: 10,
+                  borderRadius: 'var(--ol-r-md)',
                   border: '0.5px solid rgba(217,119,6,0.24)',
                   background: 'rgba(217,119,6,0.08)',
                   color: 'var(--ol-warn, #b45309)',
@@ -498,7 +495,7 @@ export function Translation() {
                     background: 'var(--ol-blue-soft)',
                     color: 'var(--ol-blue)',
                     fontSize: 11,
-                    fontWeight: 650,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
                     fontVariantNumeric: 'tabular-nums',
                   }}
                 >

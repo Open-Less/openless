@@ -1174,7 +1174,6 @@ impl Coordinator {
                     coord.start_qa_hotkey_listener();
                     #[cfg(not(mobile))]
                     coord.start_selection_polish_hotkey_listener();
-                    coord.start_coding_agent_hotkey_listener();
                     coord.start_combo_hotkey_listener();
                     coord.start_translation_hotkey_listener();
                     coord.start_switch_style_hotkey_listener();
@@ -1219,17 +1218,6 @@ impl Coordinator {
     /// on failure (the user may have changed the combo).
     pub fn start_qa_hotkey_listener(&self) {
         qa::install_recording_companion(&self.inner);
-    }
-
-    /// Starts the "quick Agent" dual-hotkey supervisor, parallel to the QA
-    /// hotkey; the feature is off by default and registered only when
-    /// `coding_agent_enabled`.
-    pub fn start_coding_agent_hotkey_listener(&self) {
-        let inner = Arc::clone(&self.inner);
-        std::thread::Builder::new()
-            .name("openless-coding-agent-hotkey-supervisor".into())
-            .spawn(move || coding_agent_hotkey_supervisor_loop(inner))
-            .ok();
     }
 
     pub fn stop_coding_agent_hotkey_listener(&self) {

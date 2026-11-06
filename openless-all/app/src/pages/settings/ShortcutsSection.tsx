@@ -7,7 +7,6 @@ import { PageSkeleton } from '../../components/ui/PageSkeleton';
 import { detectOS } from '../../components/WindowChrome';
 import {
   defaultDictationHotkey,
-  defaultLessComputerShortcut,
   defaultOpenAppShortcut,
   defaultQaShortcut,
   defaultSelectionPolishShortcut,
@@ -191,30 +190,6 @@ export function ShortcutsSection() {
       },
     },
   ];
-  if (prefs.testingFeaturesEnabled && (os === 'mac' || os === 'win'))
-    commands.push({
-      id: 'computer',
-      label: t('settings.codingAgent.title'),
-      group: 'system',
-      binding: prefs.codingAgentVoiceHotkey,
-      save: async (binding) => {
-        await updatePrefs((current) => ({
-          ...current,
-          codingAgentEnabled: true,
-          codingAgentVoiceHotkey: binding,
-        }));
-      },
-      disable: async () => {
-        await updatePrefs((current) => ({ ...current, codingAgentVoiceHotkey: null }));
-      },
-      reset: async () => {
-        await updatePrefs((current) => ({
-          ...current,
-          codingAgentEnabled: true,
-          codingAgentVoiceHotkey: defaultLessComputerShortcut(),
-        }));
-      },
-    });
   const matches = (label: string, binding: ShortcutBinding | null) =>
     (!search ||
       `${label} ${binding?.primary.trim() ? `${formatComboLabel(binding)} ${binding.modifiers.join(' ')} ${binding.primary}` : tr('unassigned')}`

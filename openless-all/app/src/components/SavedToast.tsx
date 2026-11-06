@@ -126,7 +126,7 @@ export function SavedToast({
                 background: 'transparent',
                 color: 'inherit',
                 font: 'inherit',
-                fontWeight: 700,
+                fontWeight: 'var(--ol-font-weight-bold)',
                 textDecoration: 'underline',
                 cursor: 'pointer',
               }}

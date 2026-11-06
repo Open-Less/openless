@@ -47,8 +47,8 @@ assert.ok(
   'PR CI must isolate manual runs while grouping pull-request and branch runs by ref',
 );
 assert.ok(
-  workflows.ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
-  'PR CI must cancel superseded pull-request runs without cancelling branch pushes',
+  workflows.ci.includes('cancel-in-progress: true'),
+  'Validation CI cancels superseded runs on each ref; release workflows retain their independent policy',
 );
 
 assert.ok(

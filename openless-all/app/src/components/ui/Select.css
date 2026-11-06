@@ -8,7 +8,7 @@
   max-width: 100%;
   padding: 0 10px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 8px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-select-trigger-bg);
   color: var(--ol-ink);
   font: 12.5px var(--ol-font-sans);
@@ -43,7 +43,7 @@
   max-height: calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1));
   padding: 4px;
   border: 0.5px solid var(--ol-select-popover-border);
-  border-radius: 10px;
+  border-radius: var(--ol-r-md);
   background: var(--ol-select-popover-bg);
   color: var(--ol-ink);
   box-shadow: var(--ol-select-popover-shadow);
@@ -78,7 +78,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
   font-weight: var(--ol-font-weight-medium);
   outline: none;
   cursor: default;
@@ -126,7 +126,7 @@
   padding: 0 9px;
   min-height: 34px;
   border: 0.5px solid var(--ol-line-strong);
-  border-radius: 7px;
+  border-radius: var(--ol-control-radius);
   background: var(--ol-select-trigger-bg);
 }
 .ol-select-search input {

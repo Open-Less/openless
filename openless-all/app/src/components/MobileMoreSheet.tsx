@@ -152,7 +152,7 @@ const rowBtnStyle: CSSProperties = {
   alignItems: 'center',
   gap: 12,
   padding: '12px 14px',
-  borderRadius: 10,
+  borderRadius: 'var(--ol-r-md)',
   border: 0,
   background: 'transparent',
   fontFamily: 'inherit',
