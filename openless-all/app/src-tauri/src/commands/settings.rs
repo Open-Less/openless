@@ -738,11 +738,12 @@ fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
 // - Beta channel: swap in `https://dl.aeoform.com/updates/beta/...-beta.json` through
 //   builder.endpoints(vec![url])?.build()?.check().
 //
-// Manifests live on the project CDN instead of the GitHub Release assets (see
-// `crate::update_source`), so a release no longer accumulates fourteen `latest-*.json` copies.
-// The channel split is now a URL *path* (`/updates/stable/` vs `/updates/beta/`) instead of a
-// filename suffix, and artifact URLs inside the manifest point at the same CDN — a Stable
-// client can never reach a Beta package, and mainland-China downloads never touch github.com.
+// Manifests live on Aliyun instead of the GitHub Release assets (see `crate::update_source`),
+// so a release no longer accumulates fourteen `latest-*.json` copies. The channel split is a
+// URL path (`/updates/stable/` vs `/updates/beta/`). The manifest `url` names the Aliyun
+// object at `/releases/{tag}/{asset}`. Before this check hands the plugin an `Update`, it
+// probes that object: Aliyun is used when the probe succeeds, and the same asset is taken
+// from GitHub when Aliyun does not serve it. A Stable manifest still cannot name a Beta path.
 //
 // The returned Metadata shape exactly matches plugin-updater's JS UpdateMetadata (rid +
 // currentVersion and other camelCase fields), so the frontend can call
@@ -796,9 +797,20 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         .await
         .map_err(|e| format!("check update failed: {e}"))?;
 
-    let Some(update) = update else {
+    let Some(mut update) = update else {
         return Ok(None);
     };
+    // The plugin downloads `Update.download_url` and ignores a later change to the JS copy.
+    // Choose Aliyun or GitHub before the resource is stored.
+    let chosen =
+        crate::update_source::resolve_artifact_download_url(update.download_url.as_str()).await;
+    if chosen != update.download_url.as_str() {
+        update.download_url =
+            url::Url::parse(&chosen).map_err(|e| format!("parse artifact fallback url: {e}"))?;
+        if let Some(object) = update.raw_json.as_object_mut() {
+            object.insert("url".to_string(), serde_json::Value::String(chosen));
+        }
+    }
     // Passing through the date field would require the time crate; the frontend
     // AutoUpdate.tsx never uses date, so set it to None here and avoid pulling a new dep
     // into src-tauri/Cargo.toml.
@@ -816,8 +828,8 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 /// The Beta manifest endpoint, with `{{target}}` / `{{arch}}` left in place for
 /// `tauri-plugin-updater` to substitute at check time.
 ///
-/// Beta is a URL *path* on the CDN (`/updates/beta/`), so there is no tag discovery step and
-/// no dependency on `releases.atom` or the GitHub Release assets.
+/// Beta is a URL path on Aliyun (`/updates/beta/`). Tag discovery is not required. The
+/// manifest JSON is not read from GitHub; only a missing Aliyun binary falls back there.
 #[cfg(not(mobile))]
 fn beta_manifest_endpoint() -> Result<url::Url, String> {
     let template = crate::update_source::endpoint_template(UpdateChannel::Beta);
@@ -875,8 +887,9 @@ pub async fn app_download_and_install_android_update(
     signature: String,
     version: String,
 ) -> Result<(), String> {
-    // Parse and validate the host before downloading so userinfo and hostname-prefix tricks
-    // cannot turn the signed update fetch into an SSRF primitive.
+    // Prefer the Aliyun object. When that probe does not succeed, use the GitHub asset of
+    // the same tag and name, then reject anything outside the release-host allowlist.
+    let url = crate::update_source::resolve_artifact_download_url(&url).await;
     if !is_allowed_android_update_url(&url) {
         return Err(format!("不信任的更新 URL，拒绝下载: {url}"));
     }
