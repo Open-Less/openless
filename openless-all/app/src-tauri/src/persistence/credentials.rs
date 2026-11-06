@@ -176,7 +176,7 @@ fn mutate_credentials_with(
         .map(|gate| gate.begin_mutation())
         .transpose()
         .map_err(sync_access_error)?;
-    let _guard = credentials_lock().lock();
+    let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
     // First binding may win the lock after this worker observed no gate.
     // Such a worker must retry; it cannot write through a newly installed barrier.
     if was_unbound && sync_write_gate().is_some() {
@@ -565,7 +565,7 @@ fn last_vault_read_error_logged_slot() -> &'static Mutex<Option<String>> {
 }
 
 fn store_credentials_cache(root: &CredsRoot) {
-    *credentials_cache().lock() = Some(root.clone());
+    *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = Some(root.clone());
     clear_vault_read_error();
 }
 
@@ -612,7 +612,7 @@ fn clear_vault_read_error() {
 
 #[cfg(test)]
 fn reset_credentials_cache_for_tests() {
-    *credentials_cache().lock() = None;
+    *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = None;
     clear_vault_read_error();
 }
 
@@ -1738,7 +1738,7 @@ fn invalidate_marketplace_token_process_local() {
     // the command layer's point of view; the atomic also prevents accidental
     // direct readers from observing the rejected token.
     MARKETPLACE_TOKEN_REJECTED.store(true, Ordering::SeqCst);
-    if let Some(root) = credentials_cache().lock().as_mut() {
+    if let Some(root) = crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).as_mut() {
         write_marketplace_github_token(root, None);
     }
     #[cfg(target_os = "android")]
@@ -1807,7 +1807,7 @@ fn remove_marketplace_token_with(
     if result.is_err() {
         // Read/gate failures happen before the update closure. Reassert the local
         // revocation after any earlier in-flight login has left its vault section.
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         invalidate_marketplace_token_process_local();
     }
     result
@@ -2427,7 +2427,7 @@ fn load_credentials_for_sync_binding_with(
 fn load_credentials_readonly_into_cache_with(
     loader: impl FnOnce() -> Result<CredsRoot>,
 ) -> Result<CredsRoot> {
-    if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
+    if let Some(cached) = crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).as_ref().cloned() {
         return Ok(cached);
     }
     match loader() {
@@ -2444,7 +2444,7 @@ fn load_credentials_readonly_into_cache_with(
 }
 
 fn load_credentials_raw() -> CredsRoot {
-    if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
+    if let Some(cached) = crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).as_ref().cloned() {
         return cached;
     }
 
@@ -2473,7 +2473,7 @@ fn load_credentials_raw() -> CredsRoot {
 }
 
 fn load_credentials_for_update_raw() -> Result<CredsRoot> {
-    if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
+    if let Some(cached) = crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).as_ref().cloned() {
         return Ok(cached);
     }
 
@@ -2530,7 +2530,7 @@ fn finish_credential_write(root: &CredsRoot, outcome: Result<()>) -> Result<()> 
                 error.downcast_ref::<VaultCommitFailure>(),
                 Some(VaultCommitFailure::Unchanged)
             ) {
-                *credentials_cache().lock() = None;
+                *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = None;
             }
             Err(error)
         }
@@ -3502,7 +3502,7 @@ impl CredentialsVault {
     pub(crate) fn bind_sync_gate(
         gate: std::sync::Arc<openless_core::credentials::SyncWriteGate>,
     ) -> Result<()> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut installed = SYNC_WRITE_GATE.get_or_init(|| Mutex::new(None)).lock();
         // Binding is deliberately independent of OS authorization and migration.
         // Status/read/export lazily inspect the native store under this barrier;
@@ -3512,7 +3512,7 @@ impl CredentialsVault {
 
     pub(crate) fn export_sync_credentials_readonly(
     ) -> Result<openless_core::credentials::SyncCredentials> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         // Cold capture uses the same strict read-only loader as bound getters.
         // Legacy sources remain readable without migration, even before startup
         // recovery. Failed OS access leaves the next capture free to retry.
@@ -3532,7 +3532,7 @@ impl CredentialsVault {
         permit: &openless_core::credentials::ExclusivePermit,
     ) -> Result<openless_core::credentials::SyncCredentials> {
         require_sync_exclusive(permit)?;
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         capture_sync_credentials_with(load_credentials_for_update)
     }
 
@@ -3541,7 +3541,7 @@ impl CredentialsVault {
         permit: &openless_core::credentials::ExclusivePermit,
     ) -> Result<()> {
         require_sync_exclusive(permit)?;
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let current = load_credentials_for_update()?;
         let replacement = apply_sync_credentials_root(&current, snapshot)?;
         // The outer restore transaction owns the exclusive generation/receipt.
@@ -3551,7 +3551,7 @@ impl CredentialsVault {
     pub(crate) fn read_sync_secret(
         account: &openless_core::credentials::SyncSecretAccount,
     ) -> Result<Option<openless_core::SecretValue>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         read_sync_secret_raw(account)
     }
 
@@ -3560,7 +3560,7 @@ impl CredentialsVault {
         value: &openless_core::SecretValue,
     ) -> Result<()> {
         validate_sync_key(value)?;
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         if let Some(existing) = read_sync_secret_raw(account)? {
             if existing == *value {
                 return Ok(());
@@ -3580,7 +3580,7 @@ impl CredentialsVault {
     pub(crate) fn remove_sync_secret(
         account: &openless_core::credentials::SyncSecretAccount,
     ) -> Result<()> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         remove_sync_secret_raw(account)
     }
 
@@ -3602,7 +3602,7 @@ impl CredentialsVault {
     }
 
     pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let metadata = credential_metadata(&load_credentials_for_update()?);
         #[cfg(target_os = "macos")]
         let metadata = metadata.retired_macos_view();
@@ -3622,7 +3622,7 @@ impl CredentialsVault {
     }
 
     pub fn channel_has_secrets(kind: ChannelKind, id: &str) -> Result<bool> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         Ok(channel_has_secrets(
             &load_credentials_for_update()?,
             kind,
@@ -3631,7 +3631,7 @@ impl CredentialsVault {
     }
 
     pub fn get(account: CredentialAccount) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         Ok(lookup_account(&load_credentials_for_update()?, account))
     }
 
@@ -3647,7 +3647,7 @@ impl CredentialsVault {
     }
 
     pub fn get_for_asr_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = load_credentials_for_update()?;
         root.active.asr = id.to_string();
         Ok(lookup_account(&root, account))
@@ -3679,7 +3679,7 @@ impl CredentialsVault {
     /// This credential deliberately has no generic `CredentialAccount` and is
     /// excluded from `CredentialsSnapshot`, so frontend IPC can never read it.
     pub fn get_marketplace_github_token() -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         if marketplace_token_is_rejected() {
             return Ok(None);
         }
@@ -3701,7 +3701,7 @@ impl CredentialsVault {
     pub fn set_marketplace_github_token(value: &str) -> Result<()> {
         #[cfg(target_os = "android")]
         {
-            let _guard = credentials_lock().lock();
+            let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
             ensure_android_marketplace_legacy_scrubbed()?;
             *android_marketplace_token().lock() =
                 (!value.trim().is_empty()).then(|| MarketplaceGithubToken(value.to_string()));
@@ -3725,7 +3725,7 @@ impl CredentialsVault {
         #[cfg(target_os = "android")]
         {
             invalidate_marketplace_token_process_local();
-            let _guard = credentials_lock().lock();
+            let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
             invalidate_marketplace_token_with(ensure_android_marketplace_legacy_scrubbed)
         }
         #[cfg(not(target_os = "android"))]
@@ -3741,7 +3741,7 @@ impl CredentialsVault {
     /// (no "rejected" tombstone) — it is a plain opaque secret, same tier as
     /// an ASR/LLM API key.
     pub fn get_cloud_sync_custom_token() -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         Ok(lookup_cloud_sync_custom_token(
             &load_credentials_for_update()?,
         ))
@@ -3766,7 +3766,7 @@ impl CredentialsVault {
 
     #[cfg(test)]
     pub(crate) fn seed_marketplace_github_token_for_tests(value: &str) {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = CredsRoot::default();
         write_marketplace_github_token(&mut root, Some(value.to_string()));
         store_credentials_cache(&root);
@@ -3777,13 +3777,13 @@ impl CredentialsVault {
     pub(crate) fn reject_marketplace_github_token_for_tests(
         durable_delete: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         invalidate_marketplace_token_with(durable_delete)
     }
 
     #[cfg(test)]
     pub(crate) fn reset_marketplace_github_token_for_tests() {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         store_credentials_cache(&CredsRoot::default());
         MARKETPLACE_TOKEN_REJECTED.store(false, Ordering::SeqCst);
     }
@@ -3796,7 +3796,7 @@ impl CredentialsVault {
     /// need the vendor id. Convert here so those call sites stay unchanged.
     /// Use `get_active_asr_channel_id` when the channel id itself is needed.
     pub fn get_active_asr() -> String {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let root = load_credentials();
         let id = root.active.asr.clone();
         root.providers
@@ -3816,7 +3816,7 @@ impl CredentialsVault {
 
     /// The current LLM channel's **vendor id (providerType)**. Same rationale as `get_active_asr`.
     pub fn get_active_llm() -> String {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let root = load_credentials();
         let id = root.active.llm.clone();
         root.providers
@@ -3828,7 +3828,7 @@ impl CredentialsVault {
 
     /// Custom request headers for a specific LLM channel (used by connection tests; use `get_active_llm_extra_headers` when no channel is passed).
     pub fn get_llm_extra_headers_for_channel(id: &str) -> HashMap<String, String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = load_credentials();
         root.active.llm = id.to_string();
         active_llm_extra_headers(&root)
@@ -3836,7 +3836,7 @@ impl CredentialsVault {
 
     /// Sampling temperature for a specific LLM channel.
     pub fn get_llm_temperature_for_channel(id: &str) -> Option<f32> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = load_credentials();
         root.active.llm = id.to_string();
         active_llm_temperature(&root)
@@ -3847,7 +3847,7 @@ impl CredentialsVault {
     /// ASR has long had `get_for_asr_provider`; the LLM side could originally only read the
     /// "current active" entry, and after channelization must read any card.
     pub fn get_for_llm_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = load_credentials_for_update()?;
         root.active.llm = id.to_string();
         Ok(lookup_account(&root, account))
@@ -3868,7 +3868,7 @@ impl CredentialsVault {
     }
 
     pub fn get_active_omni() -> String {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         load_credentials().omni.active
     }
 
@@ -3892,7 +3892,7 @@ impl CredentialsVault {
     }
 
     pub fn get_for_omni_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         lookup_omni_account(&load_credentials(), id, account)
     }
 
@@ -3909,32 +3909,32 @@ impl CredentialsVault {
     }
 
     pub fn get_active_omni_extra_headers() -> HashMap<String, String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_omni_extra_headers(&load_credentials())
     }
 
     pub fn get_active_omni_extra_headers_json() -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_omni_extra_headers_json(&load_credentials())
     }
 
     pub fn get_omni_extra_headers_json_for_provider(id: &str) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         omni_extra_headers_json(&load_credentials(), id)
     }
 
     pub fn get_active_omni_temperature() -> Option<f32> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_omni_temperature(&load_credentials())
     }
 
     pub fn get_active_omni_temperature_string() -> Option<String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_omni_temperature_string(&load_credentials())
     }
 
     pub fn get_omni_temperature_string_for_provider(id: &str) -> Option<String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         omni_temperature_string(&load_credentials(), id)
     }
 
@@ -3987,22 +3987,22 @@ impl CredentialsVault {
     }
 
     pub fn get_active_llm_extra_headers() -> HashMap<String, String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_llm_extra_headers(&load_credentials())
     }
 
     pub fn get_active_llm_extra_headers_json() -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_llm_extra_headers_json(&load_credentials())
     }
 
     pub fn get_active_llm_temperature() -> Option<f32> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_llm_temperature(&load_credentials())
     }
 
     pub fn get_active_llm_temperature_string() -> Option<String> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         active_llm_temperature_string(&load_credentials())
     }
 
@@ -4019,7 +4019,7 @@ impl CredentialsVault {
     }
 
     pub fn get_llm_protocol_option(id: Option<&str>, account: &str) -> Result<Option<String>> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let mut root = load_credentials_for_update()?;
         let id = id.unwrap_or(&root.active.llm).to_string();
         match root.providers.llm.get_mut(&id) {
@@ -4076,7 +4076,7 @@ impl CredentialsVault {
     }
 
     pub fn snapshot_for_pipeline(include_omni: bool) -> CredentialsSnapshot {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let root = load_credentials();
         credentials_snapshot(&root, include_omni)
     }
@@ -4084,7 +4084,7 @@ impl CredentialsVault {
     pub(crate) fn configuration_snapshot(
         include_omni: bool,
     ) -> Result<CredentialConfigurationSnapshot> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         configuration_snapshot_with(include_omni, load_credentials_for_update)
     }
 }
@@ -4811,7 +4811,7 @@ mod tests {
                 .context("read Android credential envelope"))
         });
         assert!(lookup_marketplace_github_token(&first).is_none());
-        assert!(credentials_cache().lock().is_none());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_none());
         let first_error =
             CredentialsVault::last_read_error().expect("vault error should be recorded");
         assert!(
@@ -4830,13 +4830,13 @@ mod tests {
         let second = load_credentials_into_cache_with(|| load_android_credentials_from_path(&path));
 
         assert!(lookup_marketplace_github_token(&second).is_none());
-        assert!(credentials_cache().lock().is_some());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_some());
         assert!(
             CredentialsVault::last_read_error().is_none(),
             "successful read must clear the last vault error"
         );
         assert_android_secret_unrecoverable(&path, "gho_legacy_startup_secret");
-        *credentials_cache().lock() = Some(CredsRoot::default());
+        *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = Some(CredsRoot::default());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -4861,7 +4861,7 @@ mod tests {
                 .context("read Android credential envelope"))
         })
         .expect_err("mutations must not receive a default root to persist");
-        assert!(credentials_cache().lock().is_none());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_none());
         let error = CredentialsVault::last_read_error().expect("vault error should be recorded");
         assert!(
             error.contains("temporarily unavailable"),
@@ -5565,12 +5565,12 @@ mod encrypted_sync_tests {
         })
         .unwrap_err();
         assert!(failure.to_string().contains("fixture native access denied"));
-        assert!(credentials_cache().lock().is_none());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_none());
         let recorded = CredentialsVault::last_read_error().unwrap();
 
         // A cache hit itself is not a successful OS read. Seed only the cache
         // slot, without the successful-load/save helper's error-latch update.
-        *credentials_cache().lock() = Some(root_with_secret("fixture-cached"));
+        *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = Some(root_with_secret("fixture-cached"));
         let cached =
             load_credentials_readonly_into_cache_with(|| panic!("must use cache")).unwrap();
         assert_eq!(
@@ -5582,7 +5582,7 @@ mod encrypted_sync_tests {
             Some(recorded.as_str())
         );
 
-        *credentials_cache().lock() = None;
+        *crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock) = None;
         let loaded = load_credentials_readonly_into_cache_with(|| {
             Ok(root_with_secret("fixture-retry-succeeded"))
         })
@@ -5591,7 +5591,7 @@ mod encrypted_sync_tests {
             loaded.providers.asr["stable-channel"].apiKey.as_deref(),
             Some("fixture-retry-succeeded")
         );
-        assert!(credentials_cache().lock().is_some());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_some());
         assert!(CredentialsVault::last_read_error().is_none());
         reset_credentials_cache_for_tests();
     }
@@ -6082,13 +6082,13 @@ mod encrypted_sync_tests {
         store_credentials_cache(&old);
         assert!(finish_credential_write(&new, Err(VaultCommitFailure::Unchanged.into())).is_err());
         assert_eq!(
-            credentials_cache().lock().as_ref().unwrap().providers.asr["stable-channel"]
+            crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).as_ref().unwrap().providers.asr["stable-channel"]
                 .apiKey
                 .as_deref(),
             Some("old")
         );
         assert!(finish_credential_write(&new, Err(VaultCommitFailure::Unknown.into())).is_err());
-        assert!(credentials_cache().lock().is_none());
+        assert!(crate::issue1338_debug::lock(credentials_cache(), crate::issue1338_debug::Kind::CacheLock).is_none());
         let count = Cell::new(0);
         let loaded = load_credentials_into_cache_with(|| {
             count.set(count.get() + 1);

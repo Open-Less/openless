@@ -22,9 +22,19 @@ pub fn set_android_audio_monitoring(enabled: bool) {
 
 #[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
+    use crate::issue1338_debug::{Boundary, Kind, Probe, SyncContext};
+    let command = Boundary::enter(Probe::P2, Kind::GetSettings);
+    let _context = SyncContext::enter(command.operation);
+    let read = Boundary::enter(Probe::P2, Kind::PrefsRead);
     let mut prefs = core.get_preferences();
+    read.returned();
+    drop(read);
     prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
+    let configure = Boundary::enter(Probe::P2, Kind::WarmConfigure);
     sync_low_latency_capture_preferences(&prefs);
+    configure.returned();
+    drop(configure);
+    command.returned();
     prefs
 }
 

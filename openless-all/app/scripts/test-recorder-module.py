@@ -51,6 +51,7 @@ log = "0.4"
         "pub use audio::{pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue, ReferenceAudioBuffer};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
         + "#[path = " + json.dumps(str(recorder.with_name("issue1266_debug.rs")), ensure_ascii=False) + "]\nmod issue1266_debug;\n"
+        + "#[path = " + json.dumps(str(recorder.with_name("issue1338_debug.rs")), ensure_ascii=False) + "]\nmod issue1338_debug;\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
         + "#[path = " + json.dumps(str(recorder.with_name("native_audio_cue.rs")), ensure_ascii=False) + "]\npub mod native_audio_cue;\n"
     )

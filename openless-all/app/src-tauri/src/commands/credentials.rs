@@ -318,8 +318,19 @@ impl openless_core::CredentialStore for SystemCredentialStore {
 fn run_credential_task<T: Send + 'static>(
     task: impl FnOnce() -> Result<T, openless_core::BackendError> + Send + 'static,
 ) -> futures_util::future::BoxFuture<'static, Result<T, openless_core::BackendError>> {
+    let operation = crate::issue1338_debug::Operation::new(crate::issue1338_debug::Probe::P2);
     Box::pin(async move {
-        tauri::async_runtime::spawn_blocking(task)
+        operation.record(crate::issue1338_debug::Event::Requested, crate::issue1338_debug::Outcome::Observed,
+            crate::issue1338_debug::Facts { kind: crate::issue1338_debug::Kind::CredentialWorker, ..Default::default() });
+        tauri::async_runtime::spawn_blocking(move || {
+            use crate::issue1338_debug::{Boundary, Kind, SyncContext};
+            let _context = SyncContext::enter(operation);
+            let boundary = Boundary { operation, kind: Kind::CredentialWorker };
+            boundary.record(crate::issue1338_debug::Event::Entered, crate::issue1338_debug::Outcome::Observed);
+            let result = task();
+            boundary.returned();
+            result
+        })
             .await
             .map_err(|_| {
                 openless_core::BackendError::new(
@@ -906,11 +917,13 @@ pub async fn read_credential(
     account: String,
     provider: Option<String>,
 ) -> Result<Option<String>, String> {
-    ensure_main_window(&window)?;
-    core.read_credential(credential_key(&account, provider)?)
-        .await
-        .map(|value| value.map(openless_core::SecretValue::into_exposed))
-        .map_err(|error| error.to_string())
+    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::ReadCredential, async move {
+        ensure_main_window(&window)?;
+        core.read_credential(credential_key(&account, provider)?)
+            .await
+            .map(|value| value.map(openless_core::SecretValue::into_exposed))
+            .map_err(|error| error.to_string())
+    }).await
 }
 
 fn credential_key(

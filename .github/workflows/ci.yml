@@ -815,6 +815,14 @@ jobs:
         timeout-minutes: 10
         run: python scripts/test-windows-hang-diagnostics.py
 
+      - name: Compile opt-in backend observation host
+        timeout-minutes: 25
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1338-diagnostics
+
+      - name: Run isolated backend observation tests (off/on)
+        timeout-minutes: 10
+        run: python scripts/test-backend-hang-diagnostics.py
+
       - name: Run owner-thread target ownership tests
         timeout-minutes: 10
         run: python scripts/test-windows-runtime-target.py

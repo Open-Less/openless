@@ -169,7 +169,7 @@ fn merge_channels(
 
 impl CredentialsVault {
     pub(crate) fn export_android_channels(secrets: bool) -> Result<serde_json::Value> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let root = load_credentials_for_update()?;
         let channels = Channels {
             asr: root
@@ -206,7 +206,7 @@ impl CredentialsVault {
         selection: &serde_json::Value,
         credentials: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        let _guard = credentials_lock().lock();
+        let _guard = crate::issue1338_debug::lock(credentials_lock(), crate::issue1338_debug::Kind::CredentialsLock);
         let root = load_credentials_for_update()?;
         let mut channels = Channels::default();
         for (slot, field) in [("asr", "activeAsrProvider"), ("llm", "activeLlmProvider")] {
