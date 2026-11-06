@@ -5037,6 +5037,12 @@ impl TauriTextInsertionSession {
                                     },
                                 };
                             }
+                            if session.context.insertion.composition_input {
+                                return match final_text {
+                                    Some(text) => session.copy_fallback(text).await.map(MacInsertionCompletion::Finished),
+                                    None => Ok(MacInsertionCompletion::Cancelled),
+                                };
+                            }
                             match final_text {
                                 Some(text) if !text.is_empty() => session
                                     .insert_final(text)
