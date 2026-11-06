@@ -131,6 +131,7 @@ type AxObserverCallback = unsafe extern "C" fn(
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
+    fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
     fn AXUIElementCreateSystemWide() -> AxUiElementRef;
     fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
     fn AXObserverCreate(
@@ -236,15 +237,18 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         return GatedElement::Blocked(reason);
     }
 
-    let system = AXUIElementCreateSystemWide();
-    if system.is_null() {
-        return GatedElement::Unavailable("system-wide AX element unavailable");
+    // Query the captured foreground application directly. System-wide focus can
+    // return kAXErrorCannotComplete even while this application exposes a valid editor.
+    let Some(front_pid) = crate::selection::current_front_app_pid() else {
+        return GatedElement::Unavailable("no foreground application");
+    };
+    let application = AXUIElementCreateApplication(front_pid);
+    if application.is_null() {
+        return GatedElement::Unavailable("application AX element unavailable");
     }
-    // Settings on the system-wide element become this process's default.
-    AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-
-    let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-    CFRelease(system as CFTypeRef);
+    AXUIElementSetMessagingTimeout(application, AX_MESSAGING_TIMEOUT_SECS);
+    let focused = copy_element_attr(application, b"AXFocusedUIElement\0");
+    CFRelease(application as CFTypeRef);
 
     let Some(focused) = focused else {
         return GatedElement::Unavailable("no focused UI element (AX permission or no focus)");
@@ -269,6 +273,10 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         CFRelease(focused as CFTypeRef);
         return GatedElement::Unavailable("could not confirm which app owns the focused element");
     };
+    if crate::selection::current_front_app_pid() != Some(pid) {
+        CFRelease(focused as CFTypeRef);
+        return GatedElement::Unavailable("foreground application changed during AX capture");
+    }
     gate.bundle_id = Some(owner);
     // Secure Input is global state; refresh it too — it may have been enabled during these AX calls.
     gate.secure_input = crate::unicode_keystroke::is_secure_input_enabled();
