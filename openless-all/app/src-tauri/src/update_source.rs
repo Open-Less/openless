@@ -155,6 +155,16 @@ pub(crate) fn prefer_mirror(mirror: Option<(f64, f64)>, github: Option<(f64, f64
 /// GitHub's release assets remain independent of the rolling CDN manifest.
 #[cfg(not(mobile))]
 pub(crate) async fn github_manifest(channel: UpdateChannel) -> Result<serde_json::Value, String> {
+    match github_api_manifest(channel).await {
+        Ok(manifest) => Ok(manifest),
+        Err(api) => github_web_manifest(channel)
+            .await
+            .map_err(|web| format!("GitHub API: {api}; public releases: {web}")),
+    }
+}
+
+#[cfg(not(mobile))]
+async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value, String> {
     let endpoint = match channel {
         UpdateChannel::Stable => "https://api.github.com/repos/Open-Less/openless/releases/latest",
         UpdateChannel::Beta => {
@@ -321,5 +331,153 @@ mod release_freshness_tests {
             latest_github_beta(&releases).unwrap()["tag_name"],
             "v2.0.2-Beta.10-tauri"
         );
+    }
+}
+
+/// Public release pages remain usable when an anonymous API quota is exhausted.
+/// Only this repository's canonical tags and signed updater assets are accepted.
+#[cfg(not(mobile))]
+async fn github_web_manifest(channel: UpdateChannel) -> Result<serde_json::Value, String> {
+    async fn text(url: &str) -> Result<String, String> {
+        crate::net::http()
+            .get(url)
+            .header("User-Agent", "OpenLess-Updater")
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .text()
+            .await
+            .map_err(|e| e.to_string())
+    }
+    let feed = text("https://github.com/Open-Less/openless/releases.atom").await?;
+    let tag =
+        github_feed_tag(&feed, channel).ok_or("no published channel release in GitHub feed")?;
+    let version = tag
+        .strip_prefix('v')
+        .unwrap_or(tag)
+        .strip_suffix("-tauri")
+        .unwrap();
+    let assets = text(&format!(
+        "https://github.com/Open-Less/openless/releases/expanded_assets/{tag}"
+    ))
+    .await?;
+    let (artifact, signature) =
+        github_page_assets(&assets, tag, std::env::consts::OS, std::env::consts::ARCH)
+            .ok_or("no matching signed updater assets on GitHub release page")?;
+    let signature = text(&signature).await?;
+    let version = github_signed_version(signature.trim(), version)?;
+    Ok(
+        serde_json::json!({"version": version, "url": artifact, "signature": signature.trim(),
+        "notes": format!("https://github.com/Open-Less/openless/releases/tag/{tag}")}),
+    )
+}
+
+#[cfg(not(mobile))]
+fn github_feed_tag(feed: &str, channel: UpdateChannel) -> Option<&str> {
+    feed.split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let entry = entry.split("</entry>").next()?;
+            let tag = entry
+                .split("href=\"https://github.com/Open-Less/openless/releases/tag/")
+                .nth(1)?
+                .split('"')
+                .next()?;
+            let version = semver::Version::parse(
+                tag.strip_prefix('v')
+                    .unwrap_or(tag)
+                    .strip_suffix("-tauri")?,
+            )
+            .ok()?;
+            let matches = match channel {
+                UpdateChannel::Stable => version.pre.is_empty(),
+                UpdateChannel::Beta => version
+                    .pre
+                    .as_str()
+                    .to_ascii_lowercase()
+                    .starts_with("beta."),
+            };
+            matches.then_some((version, tag))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, tag)| tag)
+}
+
+#[cfg(not(mobile))]
+fn github_page_assets(page: &str, tag: &str, os: &str, arch: &str) -> Option<(String, String)> {
+    let prefix = format!("/Open-Less/openless/releases/download/{tag}/");
+    let paths: Vec<_> = page
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|part| {
+            let href = part.split('"').next()?;
+            let name = href.strip_prefix(&prefix)?;
+            (!name.contains('/')).then_some((href, name))
+        })
+        .collect();
+    let (artifact, name) = paths.iter().find(|(_, name)| {
+        if os == "macos" {
+            *name == format!("OpenLess_{arch}.app.tar.gz")
+        } else if os == "windows" {
+            name.starts_with("OpenLess_") && name.ends_with("_x64-setup.exe")
+        } else {
+            false
+        }
+    })?;
+    let (signature, _) = paths
+        .iter()
+        .find(|(_, candidate)| *candidate == format!("{name}.sig"))?;
+    Some((
+        format!("https://github.com{artifact}"),
+        format!("https://github.com{signature}"),
+    ))
+}
+
+#[cfg(all(test, not(mobile)))]
+mod public_release_tests {
+    use super::*;
+    #[test]
+    fn feed_uses_semantic_channel_versions_and_canonical_repository_links() {
+        let feed = r#"<entry><link href="https://github.com/Open-Less/openless/releases/tag/v2.0.2-Beta.9-tauri"/></entry>
+        <entry><link href="https://github.com/Open-Less/openless/releases/tag/v2.0.2-Beta.10-tauri"/></entry>
+        <entry><link href="https://github.com/Open-Less/openless/releases/tag/v2.1.0-tauri"/></entry>
+        <entry><link href="https://github.com/other/repo/releases/tag/v9.0.0-Beta.1-tauri"/></entry>
+        <entry><link href="https://github.com/Open-Less/openless/releases/tag/not-a-version-tauri"/></entry>"#;
+        assert_eq!(
+            github_feed_tag(feed, UpdateChannel::Beta),
+            Some("v2.0.2-Beta.10-tauri")
+        );
+        assert_eq!(
+            github_feed_tag(feed, UpdateChannel::Stable),
+            Some("v2.1.0-tauri")
+        );
+    }
+    #[test]
+    fn web_assets_require_architecture_and_signature_in_the_same_release() {
+        let page = r#"<a href="/Open-Less/openless/releases/download/v2.0.2-Beta.4-tauri/OpenLess_aarch64.app.tar.gz">
+        <a href="/Open-Less/openless/releases/download/v2.0.2-Beta.4-tauri/OpenLess_aarch64.app.tar.gz.sig">
+        <a href="/Open-Less/openless/releases/download/v2.0.2-Beta.4-tauri/OpenLess_2.0.2%2BBuild_x64-setup.exe">
+        <a href="/Open-Less/openless/releases/download/v2.0.2-Beta.4-tauri/OpenLess_2.0.2%2BBuild_x64-setup.exe.sig">"#;
+        let tag = "v2.0.2-Beta.4-tauri";
+        assert!(github_page_assets(page, tag, "macos", "aarch64")
+            .unwrap()
+            .0
+            .ends_with("OpenLess_aarch64.app.tar.gz"));
+        assert!(github_page_assets(page, tag, "windows", "x86_64")
+            .unwrap()
+            .0
+            .ends_with("_x64-setup.exe"));
+        assert!(github_page_assets(page, tag, "macos", "x86_64").is_none());
+        assert!(github_page_assets(page, "v2.0.2-Beta.3-tauri", "macos", "aarch64").is_none());
+        assert!(github_page_assets(
+            &page.replace(".tar.gz.sig", ".tar.gz.unsigned"),
+            tag,
+            "macos",
+            "aarch64"
+        )
+        .is_none());
     }
 }
