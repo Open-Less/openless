@@ -99,7 +99,8 @@ test('QA jump control appears only more than 120 pixels from the latest message'
   });
   const viewport = page.locator('[data-slot="message-scroller-viewport"]');
   await expect(viewport).toBeVisible();
-  const jump = page.locator('[data-slot="message-scroller-button"]');
+  const jump = page.getByRole('button', { name: '跳至最新' });
+  await expect(jump).toHaveText('跳至最新');
   await expect
     .poll(() => viewport.evaluate((node) => node.scrollHeight - node.clientHeight))
     .toBeGreaterThan(150);

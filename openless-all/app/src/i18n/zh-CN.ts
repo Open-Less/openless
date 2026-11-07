@@ -368,7 +368,7 @@ export const zhCN = {
     statusRecording: '录音中',
     statusThinking: '思考中',
     statusError: '出错了',
-    jumpToLatest: '跳到最新',
+    jumpToLatest: '跳至最新',
     editApplyReplace: '预览并确认插入',
     editApplyUnavailable: '没有可替换的编辑结果',
     editRevertPrevious: '保留上一版本',

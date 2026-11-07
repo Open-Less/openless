@@ -889,7 +889,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                     )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
-                <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')} />
+                <MessageScrollerButton className="qa-jump" aria-label={t('qa.jumpToLatest')}>
+                  {t('qa.jumpToLatest')}
+                </MessageScrollerButton>
               </MessageScroller>
             </MessageScrollerProvider>
           </QaAnswerScroll>

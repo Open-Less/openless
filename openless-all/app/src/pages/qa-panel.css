@@ -439,6 +439,9 @@
 }
 .qa-jump {
   z-index: 2;
+  width: auto;
+  padding-inline: 10px;
+  white-space: nowrap;
   border: 0;
   background: var(--qa-paper);
   color: var(--qa-ink);
