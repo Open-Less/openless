@@ -45,6 +45,7 @@ test('message follow yields to the reader and resumes at the bottom', async ({ p
   await page.evaluate(async () => {
     const root = document.createElement('div');
     root.id = 'follow-fixture';
+    root.style.cssText = 'position:fixed;top:0;left:0;width:200px;z-index:99999';
     root.innerHTML =
       '<div data-slot="message-scroller-viewport" style="height:100px;overflow:auto"><div data-slot="message-scroller-content" style="height:300px"></div></div>';
     document.body.append(root);
