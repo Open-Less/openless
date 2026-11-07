@@ -42,42 +42,46 @@ test('IME confirmation and the next 500ms do not trigger Enter handlers', async 
 
 test('message follow yields to the reader and resumes at the bottom', async ({ page }) => {
   await page.goto('http://127.0.0.1:5326/');
-  const result = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     const root = document.createElement('div');
+    root.id = 'follow-fixture';
     root.innerHTML =
       '<div data-slot="message-scroller-viewport" style="height:100px;overflow:auto"><div data-slot="message-scroller-content" style="height:300px"></div></div>';
     document.body.append(root);
-    const viewport = root.firstElementChild as HTMLElement;
-    const content = viewport.firstElementChild as HTMLElement;
     const modulePath = '/src/lib/messageFollow.ts';
     const { installMessageFollow } = await import(modulePath);
-    const dispose = installMessageFollow(root);
-    const wait = () => new Promise((resolve) => setTimeout(resolve, 100));
-    await wait();
-    viewport.scrollTop -= 30;
-    viewport.dispatchEvent(new Event('scroll'));
-    content.style.height = '360px';
-    await wait();
-    const followed = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
-    viewport.dispatchEvent(new Event('touchmove'));
-    viewport.scrollTop -= 30;
-    viewport.dispatchEvent(new Event('scroll'));
-    const held = viewport.scrollTop;
-    content.style.height = '440px';
-    await wait();
-    const stayed = viewport.scrollTop === held;
-    viewport.scrollTop = viewport.scrollHeight;
-    viewport.dispatchEvent(new Event('scroll'));
-    content.style.height = '500px';
-    await wait();
-    const resumed = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
-    dispose();
-    root.remove();
-    return { followed, stayed, resumed };
+    installMessageFollow(root);
   });
-  expect(result.followed).toBeLessThanOrEqual(1);
-  expect(result.stayed).toBe(true);
-  expect(result.resumed).toBeLessThanOrEqual(1);
+  const viewport = page.locator('#follow-fixture [data-slot="message-scroller-viewport"]');
+  const distance = () =>
+    viewport.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop);
+  await expect.poll(distance).toBeLessThanOrEqual(1);
+  await viewport.evaluate((node) => {
+    node.scrollTop -= 30;
+    node.dispatchEvent(new Event('scroll'));
+    (node.firstElementChild as HTMLElement).style.height = '360px';
+  });
+  await expect.poll(distance).toBeLessThanOrEqual(1);
+  const held = await viewport.evaluate((node) => {
+    node.dispatchEvent(new Event('touchmove'));
+    node.scrollTop -= 30;
+    node.dispatchEvent(new Event('scroll'));
+    const value = node.scrollTop;
+    (node.firstElementChild as HTMLElement).style.height = '440px';
+    return value;
+  });
+  await expect.poll(distance).toBeGreaterThanOrEqual(100);
+  await page.waitForTimeout(250);
+  expect(await viewport.evaluate((node) => node.scrollTop)).toBe(held);
+  await viewport.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+    node.dispatchEvent(new Event('scroll'));
+  });
+  await expect.poll(distance).toBeLessThanOrEqual(1);
+  await viewport.evaluate((node) => {
+    (node.firstElementChild as HTMLElement).style.height = '500px';
+  });
+  await expect.poll(distance).toBeLessThanOrEqual(1);
 });
 
 test('QA jump control appears only more than 120 pixels from the latest message', async ({
@@ -110,6 +114,7 @@ test('QA jump control appears only more than 120 pixels from the latest message'
   });
   await expect(jump).toHaveAttribute('data-active', 'false');
   await viewport.evaluate((node) => {
+    node.dispatchEvent(new Event('touchmove'));
     node.scrollTop = node.scrollHeight - node.clientHeight - 80;
     node.dispatchEvent(new Event('scroll'));
   });
