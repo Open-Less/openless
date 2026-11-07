@@ -65,15 +65,17 @@
   gap: 7px;
   height: 64px;
   padding: 10px 11px;
-  border: 1px solid var(--qa-strong);
+  --qa-prompt-outline: var(--qa-strong);
+  border: 0;
   border-radius: var(--ol-surface-radius);
   background: var(--qa-paper);
   box-shadow:
+    inset 0 0 0 1px var(--qa-prompt-outline),
     0 3px 12px rgb(30 40 20 / 6%),
     inset 0 1px 0 rgb(255 255 255 / 12%);
 }
 .qa-prompt:focus-within {
-  border-color: var(--qa-accent);
+  --qa-prompt-outline: var(--qa-accent);
 }
 .qa-prompt button {
   display: grid;
@@ -479,9 +481,20 @@
   align-items: center;
   gap: 5px;
   padding: 7px 12px;
-  border: 1px solid var(--qa-line);
+  border: 0;
   border-radius: var(--ol-r-md);
+  background: transparent;
+  color: var(--qa-ink);
   font-size: 11px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .qa-edit-actions button:not(:disabled):hover {
+    background: var(--qa-wash);
+  }
+  .qa-edit-actions .qa-apply:not(:disabled):hover {
+    filter: brightness(0.94);
+    background: var(--qa-accent);
+  }
 }
 .qa-edit-actions button:disabled {
   opacity: 0.4;
@@ -630,8 +643,8 @@
 .qa-answer-panel {
   border-radius: var(--ol-r-xl);
   background: #f3f2f0;
-  border: 1px solid #deddda;
-  box-shadow: 0 3px 10px rgb(0 0 0 / 12%);
+  border: 0;
+  box-shadow: inset 0 0 0 1px #deddda, 0 3px 10px rgb(0 0 0 / 12%);
 }
 .qa-answer-header {
   position: relative;

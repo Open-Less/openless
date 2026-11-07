@@ -126,6 +126,18 @@
   .ol-startup-retry,
   .ol-advanced-settings-inline .ol-startup-diagnostics pre,
   .ol-skeleton,
+  .qa-prompt,
+  .qa-voice-pod,
+  .qa-answer-panel,
+  .qa-user-avatar,
+  .qa-user-message p,
+  .qa-thinking-dot,
+  .qa-error,
+  .qa-error pre,
+  .qa-polish-text,
+  .olchat-orb-stage,
+  .olchat-answer code,
+  .olchat-answer pre,
   .ol-shortcut-binding:hover
 ) {
   border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;
@@ -259,6 +271,18 @@
     .ol-startup-retry,
     .ol-advanced-settings-inline .ol-startup-diagnostics pre,
     .ol-skeleton,
+    .qa-prompt,
+    .qa-voice-pod,
+    .qa-answer-panel,
+    .qa-user-avatar,
+    .qa-user-message p,
+    .qa-thinking-dot,
+    .qa-error,
+    .qa-error pre,
+    .qa-polish-text,
+    .olchat-orb-stage,
+    .olchat-answer code,
+    .olchat-answer pre,
     .ol-shortcut-binding:hover
   ) {
     corner-shape: superellipse(1.5);
@@ -394,6 +418,18 @@
     .ol-startup-retry,
     .ol-advanced-settings-inline .ol-startup-diagnostics pre,
     .ol-skeleton,
+    .qa-prompt,
+    .qa-voice-pod,
+    .qa-answer-panel,
+    .qa-user-avatar,
+    .qa-user-message p,
+    .qa-thinking-dot,
+    .qa-error,
+    .qa-error pre,
+    .qa-polish-text,
+    .olchat-orb-stage,
+    .olchat-answer code,
+    .olchat-answer pre,
     .ol-shortcut-binding:hover
   ):not(:focus-visible) {
     /* Percentages cap the curve at half of each dimension for small controls. */
