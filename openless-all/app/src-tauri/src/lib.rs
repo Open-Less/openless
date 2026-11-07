@@ -1183,13 +1183,16 @@ fn observe_issue1338_invoke<R: tauri::Runtime>(
     handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     move |invoke| {
-        use issue1338_debug::{Boundary, Event, Kind, Outcome, Probe, SyncContext};
+        use issue1338_debug::{Boundary, Event, Facts, Kind, Operation, Outcome, Probe, SyncContext, WebviewKind};
         if !issue1338_debug::enabled() { return handler(invoke); }
         let Some(kind) = Kind::command(invoke.message.command()) else { return handler(invoke); };
-        let boundary = Boundary::enter(Probe::P1, kind);
+        let webview = WebviewKind::from_label(invoke.message.webview_ref().label());
+        let boundary = Boundary { operation: Operation::new(Probe::P1), kind };
+        boundary.operation.record(Event::Entered, Outcome::Observed, Facts { kind, webview, ..Default::default() });
         let _context = SyncContext::enter(boundary.operation);
         let handled = handler(invoke);
-        boundary.record(Event::DispatchReturned, if handled { Outcome::Ok } else { Outcome::Error });
+        boundary.operation.record(Event::DispatchReturned, if handled { Outcome::Ok } else { Outcome::Error },
+            Facts { kind, webview, ..Default::default() });
         handled
     }
 }

@@ -82,24 +82,39 @@ pub async fn get_hotkey_status(core: CoreState<'_>) -> Result<HotkeyStatus, Stri
 
 #[tauri::command]
 pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
+    use crate::issue1338_debug::{Boundary, Kind, Probe, SyncContext};
+    let boundary = Boundary::enter(Probe::P2, Kind::GetHotkeyCapability);
+    let _context = SyncContext::enter(boundary.operation);
     #[cfg(mobile)]
     {
         let _ = coord;
         return HotkeyCapability::current();
     }
     #[cfg(not(mobile))]
-    coord.hotkey_capability()
+    {
+        let result = coord.hotkey_capability();
+        boundary.returned();
+        result
+    }
 }
 
 #[tauri::command]
 pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
+    use crate::issue1338_debug::{Boundary, Event, Facts, Kind, Outcome, Probe, SyncContext};
+    let boundary = Boundary::enter(Probe::P2, Kind::ShortcutRecording);
+    let _context = SyncContext::enter(boundary.operation);
+    boundary.operation.record(Event::Requested, Outcome::Observed,
+        Facts { kind: Kind::ShortcutRecording, flag: active, ..Default::default() });
     #[cfg(mobile)]
     {
         let _ = (coord, active);
         return;
     }
     #[cfg(not(mobile))]
-    coord.set_shortcut_recording_active(active);
+    {
+        coord.set_shortcut_recording_active(active);
+        boundary.returned();
+    }
 }
 
 #[tauri::command]
@@ -262,6 +277,16 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
 /// On Android the dialog returns a `content://` URI which `std::fs::copy` cannot handle; write
 /// through the JNI ContentResolver instead, avoiding the 0-byte files caused by
 /// tauri-plugin-fs's detachFd.
+#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
+#[tauri::command]
+pub async fn export_error_log(target_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = resolve_openless_log_path()?;
+        crate::issue1338_debug::export_log(&src, std::path::Path::new(&target_path))
+    }).await.map_err(|_| "issue1338_export_worker_failed: capture unknown".to_owned())?
+}
+
+#[cfg(not(all(target_os = "windows", feature = "issue-1338-diagnostics")))]
 #[tauri::command]
 pub fn export_error_log(target_path: String) -> Result<(), String> {
     let src = resolve_openless_log_path()?;

@@ -106,6 +106,10 @@ pub fn set_selection_polish_hotkey(
     coord: CoordinatorState<'_>,
     binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
+    use crate::issue1338_debug::{Boundary, Event, Kind, Outcome, Probe, SyncContext};
+    let boundary = Boundary::enter(Probe::P2, Kind::SelectionHotkeySettings);
+    let _context = SyncContext::enter(boundary.operation);
+    let result = (|| {
     if let Some(binding) = binding.as_ref() {
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
@@ -115,6 +119,9 @@ pub fn set_selection_polish_hotkey(
     next.selection_polish_hotkey = binding;
     reject_hotkey_collisions(&next)?;
     super::settings::persist_strict_settings(&coord, next)
+    })();
+    boundary.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
+    result
 }
 
 /// Replaces the whole style-pack direct-hotkey table (issue #759). The frontend sends the full list on any

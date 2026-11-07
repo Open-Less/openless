@@ -27,6 +27,7 @@ edition = "2021"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 thiserror = "1"
 log = "0.4"
 """ + "cpal = { version = \"=0.15.3\", path = " + json.dumps((recorder.parents[1] / "vendor/cpal").as_posix()) + " }\n"

@@ -11,6 +11,21 @@ import subprocess
 import tempfile
 
 source = Path(__file__).resolve().parents[1] / "src-tauri/src/issue1338_debug.rs"
+# Source-contract layer only: the Windows diagnostic command is asynchronous;
+# standard builds still use the original synchronous copy/Android SAF branch.
+# Runtime behavior is covered separately by the injected Rust module tests.
+misc = (source.parent / "commands/misc.rs").read_text(encoding="utf-8").replace("\r\n", "\n")
+start = misc.index('#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]\n#[tauri::command]\npub async fn export_error_log(')
+standard = misc.index('#[cfg(not(all(target_os = "windows", feature = "issue-1338-diagnostics")))]\n#[tauri::command]\npub fn export_error_log(', start)
+end = misc.index('/// Android：直接把当前会话日志写入公共 Downloads', standard)
+diagnostic_export = misc[start:standard]
+standard_export = misc[standard:end]
+assert 'spawn_blocking(move ||' in diagnostic_export
+assert 'crate::issue1338_debug::export_log(' in diagnostic_export
+assert 'std::fs::copy' not in diagnostic_export
+assert 'std::fs::copy(&src, std::path::Path::new(&target_path))' in standard_export
+assert 'write_content_uri(&target_path, &bytes)' in standard_export
+assert 'issue1338_debug' not in standard_export.split('pub fn export_error_log(', 1)[1]
 with tempfile.TemporaryDirectory(prefix="openless-backend-hang-tests-") as directory:
     root = Path(directory)
     (root / "src/bin").mkdir(parents=True)
@@ -24,6 +39,7 @@ issue-1338-diagnostics = []
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 ''', encoding="utf-8")
     module = "#[path = " + json.dumps(str(source), ensure_ascii=False) + "]\nmod issue1338_debug;\n"
     (root / "src/lib.rs").write_text(module, encoding="utf-8")

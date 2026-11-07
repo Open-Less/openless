@@ -1,4 +1,4 @@
-//! [DEBUG-ISSUE-1338] A0 observations only, not a behavioral fix.
+//! [DEBUG-ISSUE-1338] A1 diagnostic delivery repair, not a confirmed stall fix.
 //! Fixed closed facts only. Producers never serialize, write, initialize a sink,
 //! acquire application locks, or wait for queue capacity. try_send is not lock-free.
 //! Missing records and the final flush tail remain unknown, including forced exit.
@@ -9,8 +9,8 @@
 //! P5 covers exported native checks, not every internal platform helper.
 #![allow(dead_code)]
 use serde::Serialize;
-pub(crate) const ATTEMPT: &str = "A0-observation";
-pub(crate) const CHANGE: &str = "no-behavior-change";
+pub(crate) const ATTEMPT: &str = "A1-diagnostic-delivery";
+pub(crate) const CHANGE: &str = "C1-single-file-diagnostic-export";
 pub(crate) const SESSION: &str = "issue-1338-20261106";
 pub(crate) const LOG_NAME: &str = "openless-issue-1338-20261106-session.ndjson";
 pub(crate) const fn enabled() -> bool {
@@ -21,8 +21,9 @@ pub(crate) enum Probe { P1, P2, P3, P4, P5, P6 }
 impl Probe {
     fn hypotheses(self) -> &'static [&'static str] {
         match self {
-            Self::P1 | Self::P4 | Self::P6 => &["H1", "H2", "H4", "H5"],
-            Self::P2 => &["H1", "H2", "H3", "H5"], Self::P3 => &["H3"], Self::P5 => &["H2"],
+            Self::P1 | Self::P4 | Self::P6 => &["R1-H1", "R1-H2", "R1-H3", "R1-H4"],
+            Self::P2 => &["R1-H1", "R1-H2", "R1-H3", "R1-H4"],
+            Self::P3 => &["R1-H2"], Self::P5 => &["R1-H1"],
         }
     }
 }
@@ -45,12 +46,24 @@ pub(crate) enum Kind {
     GetSettings, ListChannels, ReadCredential, Accessibility, Microphone,
     StartupSnapshot, PrefsRead, WarmConfigure, CredentialWorker,
     CredentialsLock, CacheLock, HostDispatch, CapsuleDispatch, TrayQuit, QuitRequest,
+    SettingsSnapshot, UpdateSettingFields, SetSettings, QaHotkeySettings,
+    SelectionHotkeySettings, GetHotkeyCapability, ShortcutRecording,
+    SettingsHostGate, SnapshotRevision, SnapshotPreferences, SnapshotVerify,
+    SettingsPersist, SettingsRefresh,
+    SelectionHotkeyRegistration, QaHotkeyRegistration, OtherHotkeyRegistration,
 }
 impl Kind {
     // Never pass through arbitrary command names, arguments, labels or payloads.
     pub(crate) fn command(command: &str) -> Option<Self> {
         match command {
             "get_settings" => Some(Self::GetSettings),
+            "get_settings_snapshot" => Some(Self::SettingsSnapshot),
+            "update_setting_fields" => Some(Self::UpdateSettingFields),
+            "set_settings" => Some(Self::SetSettings),
+            "set_qa_hotkey" => Some(Self::QaHotkeySettings),
+            "set_selection_polish_hotkey" => Some(Self::SelectionHotkeySettings),
+            "get_hotkey_capability" => Some(Self::GetHotkeyCapability),
+            "set_shortcut_recording_active" => Some(Self::ShortcutRecording),
             "get_startup_snapshot" => Some(Self::StartupSnapshot),
             "list_channels" => Some(Self::ListChannels),
             "read_credential" => Some(Self::ReadCredential),
@@ -60,8 +73,17 @@ impl Kind {
         }
     }
 }
+/// Fixed source category, never an arbitrary webview label or page identity.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WebviewKind { Main, Other, #[default] Unknown }
+impl WebviewKind {
+    pub(crate) fn from_label(label: &str) -> Self {
+        if label == "main" { Self::Main } else { Self::Other }
+    }
+}
 #[derive(Clone, Copy, Debug, Default, Serialize)]
-pub(crate) struct Facts { pub kind: Kind, pub value: u64, pub flag: bool }
+pub(crate) struct Facts { pub kind: Kind, pub value: u64, pub flag: bool, pub webview: WebviewKind }
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Operation { id: u64, parent: u64, probe: Probe }
 impl Operation {
@@ -169,20 +191,29 @@ impl MainDispatch {
 #[cfg(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics")))]
 pub(crate) struct Guard<'a, T: ?Sized> {
     guard: Option<parking_lot::MutexGuard<'a, T>>, boundary: Boundary,
+    // Only the synchronous host-gate scope installs context for its real
+    // nested main-thread dispatches. MutexGuard and SyncContext are !Send.
+    _context: Option<SyncContext>,
 }
 #[cfg(not(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics"))))]
 pub(crate) type Guard<'a, T> = parking_lot::MutexGuard<'a, T>;
 pub(crate) fn lock<T: ?Sized>(mutex: &parking_lot::Mutex<T>, kind: Kind) -> Guard<'_, T> {
+    lock_at(mutex, Probe::P3, kind)
+}
+pub(crate) fn lock_at<T: ?Sized>(mutex: &parking_lot::Mutex<T>, probe: Probe, kind: Kind) -> Guard<'_, T> {
     #[cfg(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics")))]
     {
-        let boundary = Boundary { operation: Operation::new(Probe::P3), kind };
+        let boundary = Boundary { operation: Operation::new(probe), kind };
         boundary.record(Event::Requested, Outcome::Observed);
         let guard = mutex.lock();
         boundary.record(Event::Acquired, Outcome::Observed);
-        Guard { guard: Some(guard), boundary }
+        let context = matches!(kind, Kind::SettingsHostGate | Kind::SelectionHotkeyRegistration
+            | Kind::QaHotkeyRegistration | Kind::OtherHotkeyRegistration)
+            .then(|| SyncContext::enter(boundary.operation));
+        Guard { guard: Some(guard), boundary, _context: context }
     }
     #[cfg(not(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics"))))]
-    { let _ = kind; mutex.lock() }
+    { let _ = (probe, kind); mutex.lock() }
 }
 #[cfg(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics")))]
 impl<T: ?Sized> std::ops::Deref for Guard<'_, T> {
@@ -208,6 +239,14 @@ pub(crate) fn build_id() -> &'static str {
     let value = option_env!("OPENLESS_BUILD_ID").unwrap_or("unbound");
     if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) { value }
     else { "unbound" }
+}
+
+#[cfg(any(test, all(target_os = "windows", feature = "issue-1338-diagnostics")))]
+#[path = "issue1338_export.rs"]
+mod export;
+#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
+pub(crate) fn export_log(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    export::export_log(source, target).map_err(str::to_owned)
 }
 
 #[derive(Default, Serialize)]
@@ -292,8 +331,13 @@ mod sink {
         thread_label: u64,
     }
 
+    #[derive(Debug)]
+    enum Message {
+        Record(Record),
+        Snapshot(SyncSender<Result<super::export::Snapshot, &'static str>>),
+    }
     pub(super) struct Sink {
-        sender: SyncSender<Record>,
+        sender: SyncSender<Message>,
         pub(super) health: Arc<HealthState>,
         started: Instant,
         pub(super) run: u128,
@@ -307,7 +351,7 @@ mod sink {
         fn submit(&self, record: Record) {
             #[cfg(test)]
             INSPECT.with(|hook| { if let Some(inspect) = hook.borrow().as_ref() { inspect(&record); } });
-            match self.sender.try_send(record) {
+            match self.sender.try_send(Message::Record(record)) {
                 Ok(()) => {},
                 Err(TrySendError::Full(_)) => { self.health.dropped.fetch_add(1, Relaxed); },
                 Err(TrySendError::Disconnected(_)) => {
@@ -318,10 +362,14 @@ mod sink {
         }
     }
 
+    fn next_sequence(sequences: &[AtomicU64; 6], probe: Probe) -> u64 {
+        sequences[probe as usize].fetch_add(1, Relaxed)
+    }
+
     fn submit(sink: &Sink, operation: Operation, event: Event, outcome: Outcome, facts: Facts) {
         sink.submit(Record {
             operation, event, outcome, facts,
-            seq: SEQUENCES[operation.probe as usize].fetch_add(1, Relaxed),
+            seq: next_sequence(&SEQUENCES, operation.probe),
             elapsed_us: sink.started.elapsed().as_micros().min(u64::MAX as u128) as u64,
             thread_label: thread_label(),
         });
@@ -391,25 +439,99 @@ mod sink {
         Ok(line)
     }
 
-    fn write_record(writer: &mut impl Write, record: Record, run: u128, start: u128,
-                    health: &HealthState) -> io::Result<()> {
-        writer.write_all(&encode(record, run, start, health)?)?;
-        health.written.fetch_add(1, Relaxed);
-        writer.flush()?;
-        health.flushed.fetch_add(1, Relaxed);
-        Ok(())
+    // Only exports wait, on a blocking worker, with a finite failure boundary.
+    // Probe producers retain bounded try_send and never wait for this handshake.
+    pub(super) fn snapshot() -> Result<super::export::Snapshot, &'static str> {
+        request_snapshot(SINK.get().ok_or("issue1338_no_writer: capture unknown")?)
+    }
+    fn request_snapshot(sink: &Sink) -> Result<super::export::Snapshot, &'static str> {
+        let (tx, rx) = sync_channel(1);
+        sink.sender.try_send(Message::Snapshot(tx))
+            .map_err(|_| "issue1338_checkpoint_unavailable: capture unknown")?;
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .map_err(|_| "issue1338_checkpoint_unacknowledged: capture unknown")?
     }
 
-    fn drain(mut writer: impl Write, rx: Receiver<Record>, run: u128, start: u128,
+    fn checkpoint(writer: &mut impl Write, run: u128, offset: u64,
+                  health: &HealthState) -> io::Result<super::export::Snapshot> {
+        let mut state = health.snapshot_value();
+        state.run_id = Some(format!("r{run:x}"));
+        let incomplete = state.dropped != 0 || state.queue_closed != 0 || state.io_failed || state.spawn_failed;
+        let mut line = serde_json::to_vec(&serde_json::json!({
+            "schema": "issue1338-export-checkpoint.v1", "session_id": SESSION,
+            "attempt_id": ATTEMPT, "change_id": CHANGE,
+            "checkpoint_start_byte": offset,
+            "capture_unix_ms": SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis()),
+            "run_id": state.run_id, "build_id": build_id(), "feature_enabled": enabled(),
+            "capture_health": state,
+            "counter_scope": "current_backend_run_before_checkpoint",
+            "record_counters": "probe_records_only_excludes_export_checkpoints",
+            "backend_preinitialization_capture": "unknown",
+            "checkpoint_commit": "ack_only_after_write_and_flush",
+            "historical_runs": "included_not_current_coverage_unknown",
+            "frontend_coverage": { "scope": "backend_only", "request_intent": "unknown",
+                "request_send": "unknown", "response_application": "unknown", "transport_loss": "unknown" },
+            "tail_capture": "unknown", "flush_durability": "os_not_fsync",
+            "coverage": if incomplete { "incomplete" } else { "backend_checkpoint_only_not_complete_capture" }
+        }))?;
+        line.push(b'\n');
+        writer.write_all(&line)?;
+        writer.flush()?;
+        let end = offset.checked_add(line.len() as u64).ok_or_else(|| io::Error::other("offset"))?;
+        Ok(super::export::Snapshot { end, checkpoint: line, incomplete })
+    }
+
+    fn drain(writer: impl Write, rx: Receiver<Message>, run: u128, start: u128,
              health: &HealthState) {
+        drain_at(writer, rx, run, start, health, 0);
+    }
+    fn drain_at(mut writer: impl Write, rx: Receiver<Message>, run: u128, start: u128,
+                health: &HealthState, mut offset: u64) {
         health.ready.store(true, Relaxed);
-        for record in rx {
-            if write_record(&mut writer, record, run, start, health).is_err() {
-                health.io_failed.store(true, Relaxed);
-                break;
-            }
+        for message in rx {
+            let result = match message {
+                Message::Record(record) => (|| -> io::Result<()> {
+                    let line = encode(record, run, start, health)?;
+                    writer.write_all(&line)?;
+                    health.written.fetch_add(1, Relaxed);
+                    writer.flush()?;
+                    health.flushed.fetch_add(1, Relaxed);
+                    offset = offset.checked_add(line.len() as u64).ok_or_else(|| io::Error::other("offset"))?;
+                    Ok(())
+                })(),
+                Message::Snapshot(reply) => match checkpoint(&mut writer, run, offset, health) {
+                    Ok(snapshot) => {
+                        offset = snapshot.end;
+                        let _ = reply.try_send(Ok(snapshot));
+                        Ok(())
+                    },
+                    Err(error) => {
+                        let _ = reply.try_send(Err("issue1338_checkpoint_io_failed: capture unknown"));
+                        Err(error)
+                    }
+                },
+            };
+            if result.is_err() { health.io_failed.store(true, Relaxed); break; }
         }
         health.ready.store(false, Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn export_fixture() -> (Vec<u8>, super::export::Snapshot) {
+        let (tx, rx) = sync_channel(2);
+        let (reply, ack) = sync_channel(1);
+        tx.send(Message::Record(Record {
+            operation: Operation { id: 1, parent: 0, probe: Probe::P2 },
+            event: Event::Entered, outcome: Outcome::Observed, facts: Facts::default(),
+            seq: 0, elapsed_us: 0, thread_label: 1,
+        })).unwrap();
+        tx.send(Message::Snapshot(reply)).unwrap();
+        drop(tx);
+        let health = HealthState::default();
+        health.initialized.store(true, Relaxed);
+        let mut bytes = Vec::new();
+        drain(&mut bytes, rx, 0x1338, 0, &health);
+        (bytes, ack.try_recv().unwrap().unwrap())
     }
 
     #[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics", not(test)))]
@@ -432,7 +554,10 @@ mod sink {
                     std::fs::OpenOptions::new().create(true).append(true).open(directory.join(LOG_NAME))
                 })();
                 match file {
-                    Ok(file) => drain(file, receiver, now.as_nanos(), now.as_millis(), &writer_health),
+                    Ok(file) => match file.metadata() {
+                        Ok(meta) => drain_at(file, receiver, now.as_nanos(), now.as_millis(), &writer_health, meta.len()),
+                        Err(_) => { writer_health.io_failed.store(true, Relaxed); },
+                    },
                     Err(_) => { writer_health.io_failed.store(true, Relaxed); },
                 }
             }).is_err() { health.spawn_failed.store(true, Relaxed); }
@@ -490,7 +615,7 @@ mod sink {
         fn sample() -> Record {
             Record { operation: Operation { id: 2, parent: 1, probe: Probe::P5 },
                 event: Event::ScopeLeft, outcome: Outcome::Observed,
-                facts: Facts { kind: Kind::Microphone, value: 0, flag: false }, seq: 4, elapsed_us: 1234, thread_label: 7 }
+                facts: Facts { kind: Kind::Microphone, value: 0, flag: false, ..Default::default() }, seq: 4, elapsed_us: 1234, thread_label: 7 }
         }
         #[test]
         fn schema_is_typed_single_line_and_scope_left_is_not_success() {
@@ -501,19 +626,20 @@ mod sink {
                 assert!(value.get(key).is_some(), "missing closed schema field");
             }
             assert_eq!(value["session_id"], SESSION);
-            assert_eq!(value["attempt_id"], "A0-observation");
-            assert_eq!(value["change_id"], "no-behavior-change");
+            assert_eq!(value["attempt_id"], ATTEMPT);
+            assert_eq!(value["change_id"], CHANGE);
             assert_eq!(value["schema"], "diagnosing-bugs.v1");
             assert_eq!(value["probe_id"], "P5");
-            assert_eq!(value["hypothesis_ids"], serde_json::json!(["H2"]));
+            assert_eq!(value["hypothesis_ids"], serde_json::json!(["R1-H1"]));
             assert_eq!(value["event"], "scope_left");
             assert_eq!(value["outcome"], "observed");
             assert_eq!(value["parent_operation_id"], 1);
             assert_eq!(value["event_seq"], 4);
             assert_eq!(value["thread_label"], 7);
             let safe = value["safe"].as_object().unwrap();
-            assert_eq!(safe.keys().map(String::as_str).collect::<Vec<_>>(), ["flag", "kind", "value"]);
-            assert!(safe.values().all(|v| v.is_boolean() || v.is_number() || v == "microphone"));
+            assert_eq!(safe, serde_json::json!({
+                "flag": false, "kind": "microphone", "value": 0, "webview": "unknown"
+            }).as_object().unwrap());
         }
         #[test]
         fn full_and_disconnected_are_counted_without_waiting() {
@@ -537,7 +663,7 @@ mod sink {
         #[test]
         fn write_failure_does_not_claim_a_written_or_flushed_record() {
             let (tx, rx) = sync_channel(1);
-            tx.send(sample()).unwrap(); drop(tx);
+            tx.send(Message::Record(sample())).unwrap(); drop(tx);
             let health = HealthState::default();
             drain(FailWrite, rx, 1, 2, &health);
             assert!(health.io_failed.load(Relaxed));
@@ -553,7 +679,7 @@ mod sink {
         #[test]
         fn io_failure_retains_independent_write_and_flush_watermarks() {
             let (tx, rx) = sync_channel(1);
-            tx.send(sample()).unwrap(); drop(tx);
+            tx.send(Message::Record(sample())).unwrap(); drop(tx);
             let health = HealthState::default();
             drain(FailFlush(Vec::new()), rx, 1, 2, &health);
             assert!(health.io_failed.load(Relaxed));
@@ -564,7 +690,7 @@ mod sink {
         #[test]
         fn successful_writer_records_every_complete_line() {
             let (tx, rx) = sync_channel(2);
-            tx.send(sample()).unwrap(); tx.send(sample()).unwrap(); drop(tx);
+            tx.send(Message::Record(sample())).unwrap(); tx.send(Message::Record(sample())).unwrap(); drop(tx);
             let health = HealthState::default();
             let mut bytes = Vec::new();
             drain(&mut bytes, rx, 1, 2, &health);
@@ -572,10 +698,96 @@ mod sink {
             assert_eq!(bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()).count(), 2);
         }
         #[test]
+        fn current_checkpoint_is_serialized_by_writer_and_acknowledged_only_after_flush() {
+            let (tx, rx) = sync_channel(2);
+            let (reply, ack) = sync_channel(1);
+            tx.send(Message::Record(sample())).unwrap();
+            tx.send(Message::Snapshot(reply)).unwrap();
+            drop(tx);
+            let health = HealthState::default();
+            health.initialized.store(true, Relaxed);
+            let mut bytes = b"historical\n".to_vec();
+            let initial = bytes.len() as u64;
+            drain_at(&mut bytes, rx, 0xab, 0, &health, initial);
+            let snapshot = ack.try_recv().unwrap().unwrap();
+            assert_eq!(snapshot.end, bytes.len() as u64);
+            assert!(bytes.ends_with(&snapshot.checkpoint));
+            assert!(!snapshot.incomplete);
+            let value: serde_json::Value = serde_json::from_slice(&snapshot.checkpoint).unwrap();
+            assert_eq!(value["run_id"], "rab");
+            assert_eq!(value["capture_health"]["run_id"], "rab");
+            assert_eq!(value["capture_health"]["written"], 1);
+            assert_eq!(value["capture_health"]["flushed"], 1);
+            assert_eq!(value["capture_health"]["dropped"], 0);
+            assert_eq!(value["capture_health"]["ready"], true);
+            assert_eq!(value["feature_enabled"], enabled());
+            assert_eq!(value["build_id"], build_id());
+            assert_eq!(value["tail_capture"], "unknown");
+            assert_eq!(value["frontend_coverage"], serde_json::json!({
+                "scope": "backend_only", "request_intent": "unknown", "request_send": "unknown",
+                "response_application": "unknown", "transport_loss": "unknown"
+            }));
+            assert_eq!(value["historical_runs"], "included_not_current_coverage_unknown");
+            assert_eq!(value["backend_preinitialization_capture"], "unknown");
+        }
+        #[test]
+        fn checkpoint_write_and_flush_failure_never_acknowledge_an_old_snapshot() {
+            fn run(writer: impl Write) {
+                let (tx, rx) = sync_channel(1);
+                let (reply, ack) = sync_channel(1);
+                tx.send(Message::Snapshot(reply)).unwrap();
+                drop(tx);
+                let health = HealthState::default();
+                drain(writer, rx, 2, 0, &health);
+                assert!(ack.try_recv().unwrap().is_err());
+                assert!(health.io_failed.load(Relaxed));
+            }
+            run(FailWrite);
+            run(FailFlush(b"old snapshot\n".to_vec()));
+        }
+        #[test]
+        fn record_failure_before_checkpoint_cannot_authorize_readable_old_file() {
+            let (tx, rx) = sync_channel(2);
+            let (reply, ack) = sync_channel(1);
+            tx.send(Message::Record(sample())).unwrap();
+            tx.send(Message::Snapshot(reply)).unwrap();
+            drop(tx);
+            let health = HealthState::default();
+            drain(FailFlush(b"old snapshot\n".to_vec()), rx, 2, 0, &health);
+            assert!(ack.try_recv().is_err());
+            assert!(health.io_failed.load(Relaxed));
+        }
+        #[test]
+        fn unavailable_writer_and_full_or_closed_queue_are_explicit_failures() {
+            assert!(snapshot().is_err()); // initialize() under tests never initializes SINK.
+            let (sender, receiver) = sync_channel(1);
+            let sink = Sink { sender, health: Arc::default(), started: Instant::now(), run: 9 };
+            sink.submit(sample());
+            assert!(request_snapshot(&sink).is_err()); // no waiting on full queue
+            drop(receiver);
+            assert!(request_snapshot(&sink).is_err());
+        }
+        #[test]
+        fn writer_checkpoint_preserves_nonzero_loss_instead_of_claiming_complete() {
+            let health = HealthState::default();
+            health.dropped.store(1, Relaxed);
+            let snapshot = checkpoint(&mut Vec::new(), 7, 0, &health).unwrap();
+            assert!(snapshot.incomplete);
+            let value: serde_json::Value = serde_json::from_slice(&snapshot.checkpoint).unwrap();
+            assert_eq!(value["coverage"], "incomplete");
+            assert_eq!(value["capture_health"]["dropped"], 1);
+        }
+        #[test]
         fn probe_sources_have_independent_sequences() {
-            let first = SEQUENCES[0].fetch_add(1, Relaxed);
-            SEQUENCES[1].fetch_add(1, Relaxed);
-            assert_eq!(SEQUENCES[0].fetch_add(1, Relaxed), first + 1);
+            // Use the real producer helper with private counters: other tests
+            // deliberately submit records concurrently through global SEQUENCES.
+            let sequences = [const { AtomicU64::new(0) }; 6];
+            let first = next_sequence(&sequences, Probe::P1);
+            assert_eq!(first, 0);
+            assert_eq!(next_sequence(&sequences, Probe::P2), 0);
+            assert_eq!(next_sequence(&sequences, Probe::P1), first + 1);
+            assert_eq!(next_sequence(&sequences, Probe::P2), 1);
+            assert!(sequences[2..].iter().all(|sequence| sequence.load(Relaxed) == 0));
         }
     }
 }
@@ -598,13 +810,42 @@ mod boundary_tests {
     }
     #[test]
     fn command_allowlist_redacts_unknown_names_and_startup_is_covered() {
-        for name in ["get_settings", "list_channels", "read_credential", "get_startup_snapshot", "check_accessibility_permission", "check_microphone_permission"] {
+        for name in ["get_settings", "list_channels", "read_credential", "get_startup_snapshot", "check_accessibility_permission", "check_microphone_permission", "get_settings_snapshot", "update_setting_fields", "set_settings", "set_qa_hotkey", "set_selection_polish_hotkey", "get_hotkey_capability", "set_shortcut_recording_active"] {
             assert!(Kind::command(name).is_some());
         }
         for secret in ["", "personal-window", "secret-token", "get_settings extra-args", "plugin:untrusted|value"] {
             assert!(Kind::command(secret).is_none());
         }
-        assert_eq!(Probe::P2.hypotheses(), ["H1", "H2", "H3", "H5"]);
+        assert_eq!(Probe::P2.hypotheses(), ["R1-H1", "R1-H2", "R1-H3", "R1-H4"]);
+    }
+    #[test]
+    fn webview_origin_is_a_closed_source_category_not_a_window_identity() {
+        assert_eq!(WebviewKind::from_label("main"), WebviewKind::Main);
+        assert_eq!(WebviewKind::from_label("private-window-name"), WebviewKind::Other);
+        let records = sink::capture(|| {
+            Operation::new(Probe::P1).record(Event::Entered, Outcome::Observed,
+                Facts { kind: Kind::SettingsSnapshot,
+                    webview: WebviewKind::from_label("private-window-name"), ..Default::default() });
+        });
+        assert_eq!(records[0]["safe"]["webview"], "other");
+        assert!(!records[0].to_string().contains("private-window-name"));
+    }
+    #[test]
+    fn settings_gate_is_the_real_parent_only_while_its_sync_guard_is_alive() {
+        let records = sink::capture(|| {
+            let mutex = parking_lot::Mutex::new(());
+            let gate = lock_at(&mutex, Probe::P2, Kind::SettingsHostGate);
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            dispatch.wrap(|| {})();
+            dispatch.dispatched(true);
+            drop(gate);
+            assert!(current().is_none());
+            assert!(mutex.try_lock().is_some());
+        });
+        let gate = records.iter().find(|r| r["probe_id"] == "P2" && r["event"] == "requested").unwrap();
+        let dispatch = records.iter().find(|r| r["probe_id"] == "P4" && r["event"] == "requested").unwrap();
+        assert_eq!(dispatch["parent_operation_id"], gate["operation_id"]);
+        assert!(records.iter().any(|r| r["probe_id"] == "P2" && r["event"] == "released"));
     }
     #[test]
     fn cancellation_is_scope_left_and_poll_context_never_leaks_across_await() {
