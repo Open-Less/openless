@@ -158,7 +158,7 @@ function LevelMeter({ level }: { level: number }) {
             style={{
               width: 3,
               height,
-              borderRadius: 999,
+              borderRadius: 'var(--ol-radius)',
               background: intensity > 0.08 ? 'var(--ol-blue)' : 'rgba(0,0,0,0.14)',
               opacity: 0.4 + intensity * 0.6,
               transition: 'height 70ms linear, opacity 90ms ease, background 120ms ease',

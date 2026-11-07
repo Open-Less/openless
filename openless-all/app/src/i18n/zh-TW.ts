@@ -2225,7 +2225,7 @@ export const zhTW: typeof zhCN = {
     searchCount: '找到 {{count}} 個相關分類',
     noResults: '找不到相關分類。試試「麥克風」「模型」或「主題」。',
     autoSaveHint: '修改後自動儲存',
-    backToAdvanced: '返回實驗與擴充',
+    backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
       experiments: '設定實驗功能與擴充選項。',
@@ -2246,7 +2246,7 @@ export const zhTW: typeof zhCN = {
       cloudServices: '管理擴充市場、GitHub 登入與加密雲端同步。',
       appearance: '調整主題、頁面排版和介面語言，讓閱讀更舒服。',
       privacy: '檢查系統權限與連線狀態，管理歷史、錄音和本機資料。',
-      advanced: '設定測試功能、診斷與除錯工具。',
+      advanced: '設定實驗功能與擴充選項。',
       about: '查看目前版本、更新管道與自動更新設定。',
     },
     searchKeywords: {
@@ -2258,7 +2258,7 @@ export const zhTW: typeof zhCN = {
       appearance: '主題 深色 淺色 暗色 語言 字體 排版 版面 熱圖',
       privacy: '權限 麥克風 輔助功能 歷史 錄音 儲存 隱私 匯出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 進階功能 手改學詞',
       about: '版本 Beta 穩定 更新 升級',
     },
     sections: {
@@ -2269,7 +2269,7 @@ export const zhTW: typeof zhCN = {
       services: 'AI 與模型',
       cloudServices: '雲端服務',
       privacy: '隱私',
-      advanced: '偵錯工具',
+      advanced: '進階功能',
       personalize: '個性化',
       about: '關於',
       helpCenter: '幫助中心',

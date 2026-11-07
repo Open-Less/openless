@@ -231,7 +231,7 @@ export function SettingsModal({
       return;
     }
     const previousPage = advancedPage;
-    setAdvancedPage(previousPage === 'experiments' ? null : 'experiments');
+    setAdvancedPage(null);
     window.requestAnimationFrame(() => {
       surfaceRef.current
         ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
@@ -580,6 +580,9 @@ export function SettingsModal({
                           }}
                         >
                           {contentTitle}
+                          {activeAdvancedPage &&
+                            'beta' in activeAdvancedPage &&
+                            activeAdvancedPage.beta && <span className="ol-beta-tag">Beta</span>}
                         </h2>
                         {!mobile && (
                           <span style={{ color: 'var(--ol-ink-3)', fontSize: 12, flexShrink: 0 }}>

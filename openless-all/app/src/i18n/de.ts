@@ -2425,7 +2425,7 @@ export const de: typeof zhCN = {
     searchCount: 'Gefundene Kategorien: {{count}}',
     noResults: 'Keine passenden Kategorien. Versuche „Mikrofon“, „Modelle“ oder „Design“.',
     autoSaveHint: 'Änderungen werden automatisch gespeichert',
-    backToAdvanced: 'Zurück zu Experimente und Erweiterungen',
+    backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
@@ -2453,7 +2453,7 @@ export const de: typeof zhCN = {
       appearance: 'Design, Seitenlayout und Sprache der Oberfläche für angenehmes Lesen anpassen.',
       privacy:
         'Systemberechtigungen und Verbindungen prüfen. Verlauf, Aufnahmen und lokale Daten verwalten.',
-      advanced: 'Testfunktionen, Diagnose und Debugging-Werkzeuge konfigurieren.',
+      advanced: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       about: 'Version, Updatekanal und automatische Updateeinstellungen anzeigen.',
     },
     searchKeywords: {
@@ -2469,7 +2469,7 @@ export const de: typeof zhCN = {
       privacy:
         'Berechtigung Mikrofon Bedienungshilfen Verlauf Aufnahme Speicher Datenschutz Export',
       advanced:
-        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning',
+        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning manual edits vocabulary learning Beta ',
       about: 'Version Beta Stabil Update Aktualisierung',
     },
     sections: {
@@ -2480,7 +2480,7 @@ export const de: typeof zhCN = {
       services: 'KI & Modelle',
       cloudServices: 'Cloud-Dienste',
       privacy: 'Berechtigungen und Daten',
-      advanced: 'Debugging-Werkzeuge',
+      advanced: 'Erweiterte Funktionen',
       personalize: 'Anpassen',
       about: 'Über OpenLess und Updates',
       helpCenter: 'Hilfezentrum',

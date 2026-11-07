@@ -386,7 +386,7 @@ export function UpdateDialog({
               <div
                 style={{
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'var(--ol-surface-2)',
                   overflow: 'hidden',
                   border: '0.5px solid var(--ol-line)',

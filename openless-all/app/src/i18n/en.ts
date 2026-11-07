@@ -2359,7 +2359,7 @@ export const en: typeof zhCN = {
     searchCount: 'Categories found: {{count}}',
     noResults: 'No matching categories. Try “microphone”, “models” or “theme”.',
     autoSaveHint: 'Changes save automatically',
-    backToAdvanced: 'Back to Experiments & extensions',
+    backToAdvanced: 'Back to advanced features',
     back: 'Back',
     advancedPages: {
       experiments: 'Configure experimental features and extensions.',
@@ -2384,7 +2384,7 @@ export const en: typeof zhCN = {
       appearance: 'Adjust the theme, page layout and interface language for comfortable reading.',
       privacy:
         'Check system permissions and connections. Manage history, recordings and local data.',
-      advanced: 'Configure testing features, diagnostics, and debugging tools.',
+      advanced: 'Configure experimental features and extensions.',
       about: 'View your version, update channel and automatic update settings.',
     },
     searchKeywords: {
@@ -2396,7 +2396,7 @@ export const en: typeof zhCN = {
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
       advanced:
-        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics',
+        'Less Computer Claude Agent debug logs experiment voice enhancement cursor diagnostics manual edits vocabulary learning Beta ',
       about: 'version Beta stable update upgrade',
     },
 
@@ -2408,7 +2408,7 @@ export const en: typeof zhCN = {
       services: 'AI & models',
       cloudServices: 'Cloud services',
       privacy: 'Permissions & data',
-      advanced: 'Debugging tools',
+      advanced: 'Advanced features',
       personalize: 'Personalize',
       about: 'About & updates',
       helpCenter: 'Help center',

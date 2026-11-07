@@ -23,6 +23,8 @@ export function collectCapsuleInputRegions(root: Document): CapsuleInputRect[] {
     if (style?.visibility === 'hidden' || style?.pointerEvents === 'none') return [];
     if (node.parentElement?.closest('[role="listbox"], [role="menu"]')) return [];
     const r = node.getBoundingClientRect();
+    // Base UI focus proxies are 1px boxes, not visible mouse controls.
+    if (r.width <= 1 || r.height <= 1) return [];
     const left = Math.max(0, r.left);
     const top = Math.max(0, r.top);
     const right = Math.min(width, r.right);

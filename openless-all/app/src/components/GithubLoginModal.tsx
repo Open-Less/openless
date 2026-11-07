@@ -219,7 +219,7 @@ export function GithubLoginModal({
           style={{
             width: 28,
             height: 28,
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             display: 'inline-grid',
             placeItems: 'center',
             border: '0.5px solid var(--ol-line-strong)',
@@ -308,7 +308,7 @@ export function GithubLoginModal({
                   display: 'inline-block',
                   width: 8,
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'var(--ol-blue)',
                   animation: 'ol-pulse 1.4s ease-in-out infinite',
                 }}

@@ -99,7 +99,7 @@ export function FoundryPrepareProgressBlock({
             <div
               style={{
                 height: 6,
-                borderRadius: 3,
+                borderRadius: 'var(--ol-radius)',
                 overflow: 'hidden',
                 background: 'rgba(0,0,0,0.08)',
               }}
@@ -312,7 +312,7 @@ export function ModelRow({
               <div
                 style={{
                   height: 6,
-                  borderRadius: 3,
+                  borderRadius: 'var(--ol-radius)',
                   background: 'rgba(0,0,0,0.06)',
                   overflow: 'hidden',
                 }}

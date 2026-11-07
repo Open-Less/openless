@@ -178,7 +178,7 @@ function CardButton({
       style={{
         width: 28,
         height: 28,
-        borderRadius: 999,
+        borderRadius: 'var(--ol-radius)',
         flexShrink: 0,
         padding: 0,
         display: 'inline-flex',

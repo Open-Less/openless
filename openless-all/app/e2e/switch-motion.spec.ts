@@ -209,10 +209,8 @@ test('every settings switch slides between on and off', async ({ page }) => {
       await header.click();
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     }
-    if (section === '调试工具') {
+    if (section === '高级功能') {
       total += await exerciseVisibleSwitches(dialog, 'advanced:root');
-      await dialog.locator('[data-ol-advanced-entry="experiments"]').click();
-      await settleNavigation(dialog);
       const entries = dialog.locator('button[data-ol-advanced-entry]');
       const visibleEntries = () =>
         entries.evaluateAll((items) =>

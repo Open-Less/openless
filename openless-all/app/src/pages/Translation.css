@@ -111,7 +111,7 @@
   height: 17px;
   place-items: center;
   border: 1px solid var(--ol-line-strong);
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
 }
 
 .ol-language-choice[data-selected='true'] .ol-language-check {

@@ -2434,7 +2434,7 @@ export const fr: typeof zhCN = {
     searchCount: 'Catégories trouvées : {{count}}',
     noResults: 'Aucune catégorie correspondante. Essayez « microphone », « modèles » ou « thème ».',
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
-    backToAdvanced: 'Retour à Expériences et extensions',
+    backToAdvanced: 'Retour aux fonctions avancées',
     back: 'Retour',
     advancedPages: {
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
@@ -2466,7 +2466,7 @@ export const fr: typeof zhCN = {
         'Réglez le thème, la disposition et la langue de l’interface pour une lecture confortable.',
       privacy:
         'Vérifiez les autorisations et les connexions. Gérez l’historique, les enregistrements et les données locales.',
-      advanced: 'Configurer les fonctions en test, le diagnostic et les outils de débogage.',
+      advanced: 'Configurer les fonctions expérimentales et les extensions.',
       about: 'Consultez votre version, le canal et les réglages de mise à jour automatique.',
     },
     searchKeywords: {
@@ -2481,7 +2481,7 @@ export const fr: typeof zhCN = {
       privacy:
         'autorisation microphone accessibilité historique enregistrement stockage confidentialité exporter',
       advanced:
-        'Less Computer Claude agent débogage journaux expérience Apprendre des corrections vocabulary learning',
+        'Less Computer Claude agent débogage journaux expérience Apprendre des corrections vocabulary learning manual edits vocabulary learning Beta ',
       about: 'version Beta stable mise à jour actualisation',
     },
     sections: {
@@ -2492,7 +2492,7 @@ export const fr: typeof zhCN = {
       services: 'IA et modèles',
       cloudServices: 'Services cloud',
       privacy: 'Autorisations et données',
-      advanced: 'Outils de débogage',
+      advanced: 'Fonctions avancées',
       personalize: 'Personnalisation',
       about: 'À propos et mises à jour',
       helpCenter: 'Centre d’aide',

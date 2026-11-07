@@ -67,7 +67,7 @@ export function AboutSection() {
               width: appIconSize,
               height: appIconSize,
               flexShrink: 0,
-              borderRadius: 13,
+              borderRadius: 'var(--ol-radius)',
               boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)',
             }}
           />

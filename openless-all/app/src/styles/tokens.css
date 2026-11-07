@@ -10,8 +10,8 @@
   --ol-primary-solid-ink: var(--ol-on-accent);
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
-  --ol-control-radius: 8px;
-  --ol-bubble-radius: var(--ol-r-lg);
+  --ol-control-radius: var(--ol-radius);
+  --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
@@ -72,18 +72,19 @@
     0 40px 60px -20px rgba(15, 17, 22, 0.15), 0 24px 30px -12px rgba(15, 17, 22, 0.08),
     0 0 0 0.5px rgba(0, 0, 0, 0.03);
 
-  /* Radii */
-  --ol-shell-radius: 32px;
-  --ol-surface-radius: 24px;
-  --ol-panel-radius: 18px;
-  --ol-card-radius: 14px;
-  --ol-pill-radius: 999px;
-  --ol-r-sm: 6px;
-  --ol-r-md: 10px;
-  --ol-r-lg: 14px;
-  --ol-r-xl: 18px;
-  --ol-r-2xl: var(--ol-card-radius);
-  --ol-r-pill: var(--ol-pill-radius);
+  /* One radius for every rounded interface surface and control. */
+  --ol-radius: 16px;
+  --ol-shell-radius: var(--ol-radius);
+  --ol-surface-radius: var(--ol-radius);
+  --ol-panel-radius: var(--ol-radius);
+  --ol-card-radius: var(--ol-radius);
+  --ol-pill-radius: var(--ol-radius);
+  --ol-r-sm: var(--ol-radius);
+  --ol-r-md: var(--ol-radius);
+  --ol-r-lg: var(--ol-radius);
+  --ol-r-xl: var(--ol-radius);
+  --ol-r-2xl: var(--ol-radius);
+  --ol-r-pill: var(--ol-radius);
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
@@ -452,7 +453,7 @@ body {
 }
 .ol-thinscroll::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.18);
-  border-radius: 3px;
+  border-radius: var(--ol-radius);
 }
 .ol-thinscroll::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.28);

@@ -1,3 +1,4 @@
+import { VocabularyLearningSection } from './VocabularyLearningSection';
 // Content page for each sidebar tab in the settings dialog. Each tab is a vertical stack of section cards;
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
@@ -172,12 +173,14 @@ function SettingsCategoryEntry({
   icon,
   title,
   description,
+  beta = false,
   onClick,
 }: {
   id?: string;
   icon: string;
   title: string;
   description: string;
+  beta?: boolean;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
@@ -192,7 +195,10 @@ function SettingsCategoryEntry({
         <Icon name={icon} size={18} />
       </span>
       <span className="ol-settings-category-copy">
-        <strong>{t(title)}</strong>
+        <strong>
+          <span>{t(title)}</span>
+          {beta && <span className="ol-beta-tag">Beta</span>}
+        </strong>
         <span>{t(description)}</span>
       </span>
       <Icon name="chevRight" size={17} />
@@ -631,7 +637,7 @@ export function PrivacyTab() {
           style={{
             fontSize: 11,
             padding: '3px 8px',
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             background: 'var(--ol-surface)',
             color: 'var(--ol-blue)',
             fontWeight: 'var(--ol-font-weight-semibold)',
@@ -666,7 +672,7 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const entries = pages.filter((item) => !['experiments', 'debug'].includes(item.id));
+  const entries = pages;
   const list = (
     <div className="ol-advanced-settings-list">
       {entries.map((item) => (
@@ -675,6 +681,7 @@ export function AdvancedTab({
           key={item.id}
           icon={item.icon}
           title={item.titleKey}
+          beta={'beta' in item && item.beta}
           description={`modal.advancedPages.${item.id}`}
           onClick={() => onOpenPage(item.id)}
         />
@@ -683,23 +690,9 @@ export function AdvancedTab({
   );
   return (
     <>
-      {page === null && (
-        <>
-          <DebugToolsSection />
-          <div className="ol-settings-category-list">
-            <SettingsCategoryEntry
-              id="experiments"
-              icon="flask"
-              title="modal.experimentsTitle"
-              description="modal.experimentsDescription"
-              onClick={() => onOpenPage('experiments')}
-            />
-          </div>
-        </>
-      )}
-      {page === 'experiments' && list}
+      {page === null && list}
       {pages
-        .filter((item) => item.id === page && item.id !== 'experiments')
+        .filter((item) => item.id === page)
         .map((item) => (
           <section
             key={item.id}
@@ -713,6 +706,7 @@ export function AdvancedTab({
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'cursorContext' && <CursorContextSection />}
+            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

@@ -367,7 +367,7 @@ function FloatingShellBody({
                     color: 'var(--ol-blue)',
                     background: 'transparent',
                     border: '0.5px solid var(--ol-pill-blue-border)',
-                    borderRadius: 5,
+                    borderRadius: 'var(--ol-radius)',
                   }}
                 >
                   {t('shell.betaTag')}
@@ -789,7 +789,7 @@ function MobileTopBar({
         <img
           src="AppIcon.png"
           alt=""
-          style={{ width: 22, height: 22, borderRadius: 5, flexShrink: 0 }}
+          style={{ width: 22, height: 22, borderRadius: 'var(--ol-radius)', flexShrink: 0 }}
         />
         <span
           style={{

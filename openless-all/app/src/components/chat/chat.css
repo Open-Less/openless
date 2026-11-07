@@ -242,7 +242,7 @@
   height: 12px;
   background: var(--color-foreground);
   animation: olchat-pulse 0.9s ease-in-out infinite;
-  border-radius: 1px;
+  border-radius: var(--ol-radius);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -338,7 +338,7 @@
   font-family: var(--ol-font-mono, ui-monospace, monospace);
   font-size: 0.75rem;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--ol-radius);
   background: var(--color-muted);
 }
 .olchat-answer pre {
@@ -435,7 +435,7 @@
   color: #24416e;
   background: #edf3ff;
   border: 1px solid #e2eaff;
-  border-radius: 15px 15px 5px 15px;
+  border-radius: var(--ol-radius);
 }
 .olchat-shell [data-slot='bubble'][data-variant='secondary'] [data-slot='bubble-content'] {
   background: #f4f6f9;

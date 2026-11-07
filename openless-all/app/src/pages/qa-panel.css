@@ -79,7 +79,7 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
 }
 .qa-prompt button:not(:disabled) {
   transition:
@@ -268,7 +268,7 @@
 }
 .qa-capsule-shell .voice-waveform-bars span {
   width: 3px;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
   background: var(--qa-accent);
   transition: height 90ms linear;
 }
@@ -353,7 +353,7 @@
   flex-shrink: 0;
   width: 26px;
   height: 26px;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   overflow: hidden;
   background: var(--qa-wash);
   color: var(--qa-muted);
@@ -373,7 +373,7 @@
 }
 .qa-user-message p {
   padding: 10px 13px;
-  border-radius: 13px 13px 3px 13px;
+  border-radius: var(--ol-radius);
   background: var(--qa-wash);
   color: var(--qa-ink);
   font-size: 12px;
@@ -425,7 +425,7 @@
 .qa-thinking-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--ol-radius);
   background: var(--qa-accent);
   animation: qa-processing-pulse 1.3s ease-in-out infinite;
 }
@@ -665,7 +665,7 @@
   background: transparent;
   color: #71717a;
   cursor: pointer;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
 }
 .qa-window-actions button:hover {
   background: #e4e4e7;
@@ -745,7 +745,7 @@
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
   background: transparent;
   color: #71717a !important;
   cursor: pointer;
@@ -776,7 +776,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 3px 8px;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
   background: #fff;
   color: #52525b;
   font-size: 10px;

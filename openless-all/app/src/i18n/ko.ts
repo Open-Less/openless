@@ -2311,7 +2311,7 @@ export const ko: typeof zhCN = {
     searchCount: '관련 카테고리 {{count}}개',
     noResults: '일치하는 카테고리가 없습니다. “마이크”, “모델” 또는 “테마”를 검색해 보세요.',
     autoSaveHint: '변경 사항이 자동 저장됩니다',
-    backToAdvanced: '실험 및 확장으로 돌아가기',
+    backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
@@ -2333,7 +2333,7 @@ export const ko: typeof zhCN = {
       cloudServices: '확장 마켓, GitHub 로그인, 암호화된 클라우드 동기화를 관리합니다.',
       appearance: '테마, 페이지 배치, 인터페이스 언어를 편하게 읽도록 조정합니다.',
       privacy: '시스템 권한과 연결을 확인하고 기록, 녹음 및 로컬 데이터를 관리합니다.',
-      advanced: '테스트 기능, 진단, 디버그 도구를 설정합니다.',
+      advanced: '실험 기능과 확장 옵션을 설정합니다.',
       about: '현재 버전, 업데이트 채널 및 자동 업데이트 설정을 확인합니다.',
     },
     searchKeywords: {
@@ -2346,7 +2346,7 @@ export const ko: typeof zhCN = {
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
       privacy: '권한 마이크 접근성 기록 녹음 저장 개인정보 내보내기',
       advanced:
-        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning',
+        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning manual edits vocabulary learning Beta ',
       about: '버전 Beta 안정 업데이트 업그레이드',
     },
 
@@ -2358,7 +2358,7 @@ export const ko: typeof zhCN = {
       services: 'AI와 모델',
       cloudServices: '클라우드 서비스',
       privacy: '권한 및 데이터',
-      advanced: '디버그 도구',
+      advanced: '고급 기능',
       personalize: '개인 설정',
       about: '정보 및 업데이트',
       helpCenter: '도움말 센터',

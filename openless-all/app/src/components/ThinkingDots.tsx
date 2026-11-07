@@ -46,7 +46,7 @@ export function ThinkingDots({ size = 20, style }: ThinkingDotsProps) {
             height: dot,
             marginLeft: -dot / 2,
             marginTop: -dot / 2,
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             background: color,
             transform: `rotate(${i * 60}deg) translateY(${-radius}px)`,
           }}

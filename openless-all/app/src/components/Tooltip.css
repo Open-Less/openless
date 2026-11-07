@@ -12,7 +12,7 @@
   width: fit-content;
   max-width: 100%;
   border: 0;
-  border-radius: 2px;
+  border-radius: var(--ol-radius);
   padding: 0;
   background: transparent;
   color: inherit;

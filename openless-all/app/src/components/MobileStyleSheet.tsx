@@ -54,8 +54,8 @@ export function MobileStyleSheet({
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--ol-surface)',
-          borderTopLeftRadius: 16,
-          borderTopRightRadius: 16,
+          borderTopLeftRadius: 'var(--ol-radius)',
+          borderTopRightRadius: 'var(--ol-radius)',
           border: '0.5px solid var(--ol-line)',
           padding: '12px 12px calc(12px + env(safe-area-inset-bottom, 0px))',
           boxShadow: '0 -8px 32px -8px rgba(15,17,22,0.18)',
@@ -117,7 +117,7 @@ const iconBtnStyle: CSSProperties = {
   width: 32,
   height: 32,
   border: 0,
-  borderRadius: 999,
+  borderRadius: 'var(--ol-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-3)',
   display: 'inline-flex',

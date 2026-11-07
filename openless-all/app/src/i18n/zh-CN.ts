@@ -2225,7 +2225,7 @@ export const zhCN = {
     searchCount: '找到 {{count}} 个相关分类',
     noResults: '没有找到相关分类。试试“麦克风”“模型”或“主题”。',
     autoSaveHint: '修改后自动保存',
-    backToAdvanced: '返回实验与扩展',
+    backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
       experiments: '配置实验功能与扩展选项。',
@@ -2246,7 +2246,7 @@ export const zhCN = {
       cloudServices: '管理扩展市场、GitHub 登录与加密云同步。',
       appearance: '调整主题、页面排版和界面语言，让阅读更舒服。',
       privacy: '检查系统权限与连接状态，管理历史、录音和本地数据。',
-      advanced: '配置测试功能、诊断与调试工具。',
+      advanced: '配置实验功能与扩展选项。',
       about: '查看当前版本、更新渠道与自动更新设置。',
     },
     searchKeywords: {
@@ -2258,7 +2258,7 @@ export const zhCN = {
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 高级功能 手改学词',
       about: '版本 Beta 稳定 更新 升级',
     },
 
@@ -2270,7 +2270,7 @@ export const zhCN = {
       services: 'AI 与模型',
       cloudServices: '云服务',
       privacy: '权限与数据',
-      advanced: '调试工具',
+      advanced: '高级功能',
       personalize: '个性化',
       about: '关于与更新',
       helpCenter: '帮助中心',

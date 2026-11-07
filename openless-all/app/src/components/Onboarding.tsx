@@ -122,7 +122,7 @@ function AndroidOnboarding({ onComplete }: OnboardingProps) {
               key={step.id}
               style={{
                 height: 4,
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 background: index <= stepIndex ? 'var(--ol-blue)' : 'var(--ol-line-soft)',
               }}
             />
@@ -396,7 +396,7 @@ function StatusBadge({ granted, label }: { granted: boolean; label: string }) {
         flexShrink: 0,
         fontSize: 11,
         fontWeight: 'var(--ol-font-weight-semibold)',
-        borderRadius: 999,
+        borderRadius: 'var(--ol-radius)',
         padding: '4px 8px',
         color: granted ? 'var(--ol-ok)' : 'var(--ol-ink-4)',
         background: granted ? 'rgba(40, 160, 90, 0.12)' : 'rgba(0,0,0,0.06)',

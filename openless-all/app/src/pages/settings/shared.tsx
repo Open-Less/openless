@@ -57,7 +57,7 @@ export function ExperimentalSectionTitle({
         <span
           style={{
             padding: '2px 6px',
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             background: 'var(--ol-blue-soft)',
             color: 'var(--ol-blue)',
             fontSize: 10,

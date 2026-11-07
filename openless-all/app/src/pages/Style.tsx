@@ -911,7 +911,7 @@ export function Style() {
                     alignItems: 'center',
                     gap: 6,
                     padding: '6px 12px',
-                    borderRadius: 999,
+                    borderRadius: 'var(--ol-radius)',
                     border: '0.5px solid',
                     borderColor: 'var(--ol-line-strong)',
                     background: rawPack.active ? 'var(--ol-style-card-bg-active)' : 'transparent',
@@ -1001,13 +1001,8 @@ export function Style() {
                       flexDirection: 'column',
                       textAlign: 'left',
                       position: 'relative',
-                      border: isCurrentForView ? '1.5px solid' : '0.5px solid',
-                      borderColor: isCurrentForView
-                        ? 'var(--ol-style-card-border-active)'
-                        : 'var(--ol-style-card-border)',
-                      background: isCurrentForView
-                        ? 'var(--ol-style-card-bg-active)'
-                        : 'var(--ol-style-card-bg)',
+                      border: 0,
+                      background: isCurrentForView ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
                       borderRadius: 'var(--ol-r-lg)',
                       padding: 16,
                       boxShadow: 'none',
@@ -1212,7 +1207,7 @@ export function Style() {
                   style={{
                     width: 44,
                     height: 44,
-                    borderRadius: 999,
+                    borderRadius: 'var(--ol-radius)',
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1347,7 +1342,7 @@ export function Style() {
                       style={{
                         width: 28,
                         height: 28,
-                        borderRadius: 999,
+                        borderRadius: 'var(--ol-radius)',
                         border: 0,
                         background: 'transparent',
                         color: 'var(--ol-ink-3)',

@@ -2404,7 +2404,7 @@ export const es: typeof zhCN = {
     searchCount: 'Categorías encontradas: {{count}}',
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
-    backToAdvanced: 'Volver a Experimentos y extensiones',
+    backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
       experiments: 'Configura funciones experimentales y extensiones.',
@@ -2435,7 +2435,7 @@ export const es: typeof zhCN = {
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced: 'Configura funciones en prueba, diagnósticos y herramientas de depuración.',
+      advanced: 'Configura funciones experimentales y extensiones.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
@@ -2450,7 +2450,7 @@ export const es: typeof zhCN = {
       privacy:
         'permiso micrófono accesibilidad historial grabación almacenamiento privacidad exportar',
       advanced:
-        'Less Computer Claude agente depuración registros experimento Aprender de las correcciones vocabulary learning',
+        'Less Computer Claude agente depuración registros experimento Aprender de las correcciones vocabulary learning manual edits vocabulary learning Beta ',
       about: 'versión Beta estable actualización actualizar',
     },
     sections: {
@@ -2461,7 +2461,7 @@ export const es: typeof zhCN = {
       services: 'IA y modelos',
       cloudServices: 'Servicios en la nube',
       privacy: 'Permisos y datos',
-      advanced: 'Herramientas de depuración',
+      advanced: 'Funciones avanzadas',
       personalize: 'Personalización',
       about: 'Acerca de y actualizaciones',
       helpCenter: 'Centro de ayuda',

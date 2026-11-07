@@ -13,22 +13,29 @@ export type SettingsSectionId =
   | 'about';
 
 export const ADVANCED_PAGES = [
-  { id: 'experiments', icon: 'flask', titleKey: 'modal.experimentsTitle' },
-  { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title' },
+  { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
   {
     id: 'voiceEnhancement',
     icon: 'mic',
     titleKey: 'settings.advancedPages.voiceEnhancementTitle',
+    beta: true,
   },
   {
     id: 'cursorContext',
     icon: 'search',
     titleKey: 'settings.advancedPages.cursorContextTitle',
+    beta: true,
   },
   {
     id: 'startupDiagnostics',
     icon: 'bolt',
     titleKey: 'settings.advancedPages.startupDiagnosticsTitle',
+  },
+  {
+    id: 'vocabularyLearning',
+    icon: 'pencil',
+    titleKey: 'settings.vocabularyLearning.title',
+    beta: true,
   },
   { id: 'customSyncServer', icon: 'cloud', titleKey: 'cloudSyncE2ee.customServerTitle' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
@@ -40,6 +47,7 @@ export type AdvancedPageId = AdvancedPage['id'];
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
+    if (page.id === 'vocabularyLearning') return platform === 'desktop' || platform === 'android';
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';
     return true;

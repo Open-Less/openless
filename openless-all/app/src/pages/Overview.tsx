@@ -621,7 +621,14 @@ function ProviderCard({ kind, name, providerId, details, status, onConfigure }: 
         </span>
         {status === 'configured' ? (
           <Pill tone="ok" size="sm">
-            <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }} />
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: 'var(--ol-radius)',
+                background: 'var(--ol-ok)',
+              }}
+            />
             {t('overview.statusConfigured')}
           </Pill>
         ) : (

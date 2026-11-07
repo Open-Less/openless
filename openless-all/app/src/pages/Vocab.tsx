@@ -597,7 +597,7 @@ export function Vocab() {
                 height: 38,
                 padding: '0 12px',
                 border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 fontSize: 13.5,
                 fontFamily: 'inherit',
                 outline: 'none',
@@ -610,7 +610,7 @@ export function Vocab() {
               icon={wordAdded ? 'check' : 'plus'}
               onClick={() => void addNewWord()}
               style={{
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 height: 38,
                 minWidth: 92,
                 justifyContent: 'center',

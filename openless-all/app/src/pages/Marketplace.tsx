@@ -651,7 +651,7 @@ export function Marketplace() {
                 style={{
                   width: 18,
                   height: 18,
-                  borderRadius: 999,
+                  borderRadius: 'var(--ol-radius)',
                   display: 'inline-grid',
                   placeItems: 'center',
                   background: 'var(--ol-surface-2)',
@@ -1214,7 +1214,7 @@ export function Marketplace() {
                             flexShrink: 0,
                             width: 18,
                             height: 18,
-                            borderRadius: 999,
+                            borderRadius: 'var(--ol-radius)',
                             border: selected
                               ? '1px solid var(--ol-blue)'
                               : '1px solid var(--ol-line-strong)',
@@ -1357,7 +1357,7 @@ export function Marketplace() {
                     style={{
                       width: 18,
                       height: 18,
-                      borderRadius: 999,
+                      borderRadius: 'var(--ol-radius)',
                       display: 'inline-grid',
                       placeItems: 'center',
                       background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',

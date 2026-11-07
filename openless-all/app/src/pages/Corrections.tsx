@@ -277,7 +277,7 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
         alignItems: 'center',
         gap: 6,
         padding: '5px 8px 5px 10px',
-        borderRadius: 999,
+        borderRadius: 'var(--ol-radius)',
         border: '0.5px solid var(--ol-line-strong)',
         background: enabled ? 'var(--ol-surface)' : 'var(--ol-surface-2)',
         opacity: enabled ? 1 : 0.55,
@@ -304,7 +304,7 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
           title={t('vocab.corrections.learnedTip')}
           style={{
             padding: '1px 5px',
-            borderRadius: 4,
+            borderRadius: 'var(--ol-radius)',
             fontSize: 10,
             background: 'var(--ol-blue-soft)',
             color: 'var(--ol-ink-3)',
@@ -321,7 +321,7 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
         style={{
           width: 18,
           height: 18,
-          borderRadius: 999,
+          borderRadius: 'var(--ol-radius)',
           border: 0,
           background: 'var(--ol-control-muted)',
           color: 'var(--ol-ink-4)',

@@ -1,7 +1,16 @@
 //! Native click-through follows measured DOM controls, not the transparent WebView bounds.
+use objc2::{
+    class, msg_send,
+    runtime::{AnyObject, Bool},
+};
+use objc2_foundation::{NSPoint, NSRect};
 use parking_lot::Mutex;
 use serde::Deserialize;
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
+use tauri::Manager;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,13 +38,17 @@ impl InputRect {
     }
 }
 
-static REGIONS: OnceLock<Arc<Mutex<Vec<InputRect>>>> = OnceLock::new();
+type Regions = Arc<Mutex<HashMap<String, Vec<InputRect>>>>;
+static REGIONS: OnceLock<Regions> = OnceLock::new();
+fn owns_capsule_input(label: &str) -> bool {
+    label == "capsule" || label.starts_with("capsule-mirror-")
+}
 #[tauri::command]
 pub(crate) fn set_capsule_interactive_regions(
     window: tauri::WebviewWindow,
     rects: Vec<InputRect>,
 ) -> Result<(), String> {
-    if window.label() != "capsule" {
+    if !owns_capsule_input(window.label()) {
         return Err("capsule window required".into());
     }
     if rects.len() > 128 || rects.iter().any(|rect| !rect.valid()) {
@@ -44,25 +57,31 @@ pub(crate) fn set_capsule_interactive_regions(
     let mut start = false;
     let regions = REGIONS.get_or_init(|| {
         start = true;
-        Arc::new(Mutex::new(Vec::new()))
+        Arc::new(Mutex::new(HashMap::new()))
     });
-    *regions.lock() = rects;
+    // Remove departed mirrors whenever a live document publishes a fresh frame.
+    let live = window.app_handle().webview_windows();
+    {
+        let mut current = regions.lock();
+        current.retain(|label, _| live.contains_key(label));
+        current.insert(window.label().to_string(), rects);
+    }
+    update_native_input(&window, Arc::clone(regions));
     if start {
         let regions = Arc::clone(regions);
+        let app = window.app_handle().clone();
         tauri::async_runtime::spawn(async move {
             loop {
-                let visible = window.is_visible().unwrap_or(false);
-                if visible {
-                    if let (Ok(cursor), Ok(origin), Ok(scale)) = (
-                        window.cursor_position(),
-                        window.inner_position(),
-                        window.scale_factor(),
-                    ) {
-                        let x = (cursor.x - origin.x as f64) / scale;
-                        let y = (cursor.y - origin.y as f64) / scale;
-                        let pass = !regions.lock().iter().any(|rect| rect.contains(x, y));
-                        // Host phase transitions can also reset ignoresMouseEvents.
-                        let _ = window.set_ignore_cursor_events(pass);
+                // Each mirror owns its own DOM geometry and coordinate space.
+                let labels: Vec<_> = regions.lock().keys().cloned().collect();
+                let mut visible = false;
+                for label in labels {
+                    if let Some(window) = app
+                        .get_webview_window(&label)
+                        .filter(|w| w.is_visible().unwrap_or(false))
+                    {
+                        visible = true;
+                        update_native_input(&window, Arc::clone(&regions));
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(if visible {
@@ -77,9 +96,56 @@ pub(crate) fn set_capsule_interactive_regions(
     Ok(())
 }
 
+fn update_native_input(window: &tauri::WebviewWindow, regions: Regions) {
+    let owner = window.clone();
+    let _ = window.run_on_main_thread(move || unsafe {
+        // Keep a press routed to its original window through mouse-up. Opening
+        // a language menu resizes the host before the DOM publishes new rectangles.
+        let pressed: usize = msg_send![class!(NSEvent), pressedMouseButtons];
+        if pressed != 0 {
+            return;
+        }
+        let Ok(pointer) = owner.ns_window() else {
+            return;
+        };
+        let native = pointer as *mut AnyObject;
+        let view: *mut AnyObject = msg_send![native, contentView];
+        if view.is_null() {
+            return;
+        }
+        // AppKit converts screen points directly into this window's logical coordinates.
+        // Tauri's global cursor and window positions use different display scale factors.
+        let screen: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let point: NSPoint = msg_send![native, convertPointFromScreen: screen];
+        let local: NSPoint =
+            msg_send![view, convertPoint: point fromView: std::ptr::null::<AnyObject>()];
+        let bounds: NSRect = msg_send![view, bounds];
+        let flipped: Bool = msg_send![view, isFlipped];
+        let x = local.x - bounds.origin.x;
+        let y = if flipped.as_bool() {
+            local.y - bounds.origin.y
+        } else {
+            bounds.origin.y + bounds.size.height - local.y
+        };
+        let pass = !regions
+            .lock()
+            .get(owner.label())
+            .is_some_and(|rects| rects.iter().any(|rect| rect.contains(x, y)));
+        let _: () = msg_send![native, setIgnoresMouseEvents: Bool::new(pass)];
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primary_and_mirror_capsules_own_input_but_other_windows_do_not() {
+        assert!(owns_capsule_input("capsule"));
+        assert!(owns_capsule_input("capsule-mirror-42"));
+        for label in ["main", "qa", "capsule-rail", "less-computer"] {
+            assert!(!owns_capsule_input(label));
+        }
+    }
     #[test]
     fn text_and_transparent_space_are_not_input_regions() {
         let buttons = [

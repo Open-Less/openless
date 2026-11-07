@@ -2327,7 +2327,7 @@ export const ja: typeof zhCN = {
     searchCount: '関連するカテゴリ：{{count}} 件',
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
-    backToAdvanced: '実験と拡張に戻る',
+    backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
       experiments: '実験的な機能と拡張オプションを設定します。',
@@ -2349,7 +2349,7 @@ export const ja: typeof zhCN = {
       cloudServices: '拡張マーケット、GitHub ログイン、暗号化クラウド同期を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: 'テスト機能、診断、デバッグツールを設定します。',
+      advanced: '実験的な機能と拡張オプションを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2362,7 +2362,7 @@ export const ja: typeof zhCN = {
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
-        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning',
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta ',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 
@@ -2374,7 +2374,7 @@ export const ja: typeof zhCN = {
       services: 'AI とモデル',
       cloudServices: 'クラウドサービス',
       privacy: '権限とデータ',
-      advanced: 'デバッグツール',
+      advanced: '高度な機能',
       personalize: 'パーソナライズ',
       about: 'バージョンと更新',
       helpCenter: 'ヘルプセンター',

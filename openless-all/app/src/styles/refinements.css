@@ -122,7 +122,7 @@ button:disabled {
 }
 .ol-settings-sections > .ol-card {
   border: 0 !important;
-  border-radius: 0 !important;
+  border-radius: var(--ol-radius);
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 0 20px !important;
@@ -379,7 +379,7 @@ button:disabled {
   min-width: var(--ol-switch-width);
   max-width: var(--ol-switch-width);
   height: var(--ol-switch-height);
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: var(--ol-toggle-off-bg);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
   cursor: pointer;
@@ -405,7 +405,7 @@ button:disabled {
   left: 2px;
   width: var(--ol-switch-knob);
   height: var(--ol-switch-knob);
-  border-radius: 999px;
+  border-radius: var(--ol-radius);
   background: var(--ol-toggle-knob);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.25),
@@ -447,7 +447,7 @@ button:disabled {
 }
 .ol-advanced-settings-detail > .ol-experimental-models {
   border: 0 !important;
-  border-radius: 0 !important;
+  border-radius: var(--ol-radius);
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 !important;
@@ -535,7 +535,7 @@ button:disabled {
   width: 24px;
   height: 24px;
   flex-shrink: 0;
-  border-radius: 5px;
+  border-radius: var(--ol-radius);
 }
 .ol-download-card progress {
   display: block;
@@ -596,7 +596,7 @@ button:disabled {
 .ol-startup-mark span {
   width: 4px;
   height: 18px;
-  border-radius: 3px;
+  border-radius: var(--ol-radius);
   background: currentColor;
   animation: ol-startup-wave 800ms var(--ol-motion-soft) 3;
 }

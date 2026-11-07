@@ -95,10 +95,10 @@ assert.equal(
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
   [
-    'experiments',
     'voiceEnhancement',
     'cursorContext',
     'startupDiagnostics',
+    'vocabularyLearning',
     'customSyncServer',
     'debug',
   ],
@@ -127,8 +127,8 @@ assert.equal(
 const advancedIds: readonly string[] = ADVANCED_PAGES.map((item) => item.id);
 assert.equal(
   advancedIds.includes('vocabularyLearning'),
-  false,
-  'vocabulary learning is not a settings route',
+  true,
+  'manual correction learning remains reachable from advanced features',
 );
 
 const sectionIds = SETTINGS_SECTIONS.map((item) => item.id);
@@ -160,8 +160,8 @@ assert.equal(
 
 assert.equal(
   visibleAdvancedPages('desktop', 'mac')[0].id,
-  'experiments',
-  'debugging opens experiments through a subpage',
+  'localModels',
+  'advanced features opens its peer pages directly',
 );
 assert.equal(
   visibleAdvancedPages('desktop', 'win').some((page) => page.id === 'localModels'),
@@ -265,14 +265,7 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
-  [
-    'experiments',
-    'voiceEnhancement',
-    'cursorContext',
-    'startupDiagnostics',
-    'customSyncServer',
-    'debug',
-  ],
+  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
   'Harmony retains shared utility settings without desktop coding-agent controls',
 );
 for (const os of ['mac', 'win', 'android'] as const) {

@@ -20,13 +20,14 @@ class Node {
   }
   getBoundingClientRect() {
     const [left, top, width, height] = this.rect;
-    return { left, top, right: left + width, bottom: top + height };
+    return { left, top, right: left + width, bottom: top + height, width, height };
   }
 }
 const list = new Node('listbox', [100, 20, 180, 100]);
 const button = new Node('button', [10, 130, 24, 24]);
 const nodes = [
   button,
+  new Node('button', [50, 50, 1, 1]),
   list,
   ...Array.from({ length: 300 }, (_, i) => new Node('button', [100, 20 + i * 24, 180, 24], list)),
   new Node('button', [900, 0, 20, 20]),
