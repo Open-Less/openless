@@ -19,7 +19,7 @@ test('translation uses the shared popup and native headroom; save failure preser
   await picker.click();
   const popup = page.locator('.ol-select-popup');
   await expect(popup).toBeVisible();
-  await expect(popup).toHaveCSS('border-radius', '10px');
+  await expect(popup).toHaveCSS('border-radius', '16px');
   const bounds = await popup.boundingBox();
   expect(bounds!.y).toBeGreaterThanOrEqual(0);
   expect(bounds!.height).toBeGreaterThan(200);
