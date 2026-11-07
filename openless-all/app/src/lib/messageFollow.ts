@@ -35,6 +35,8 @@ export function installMessageFollow(root: HTMLElement) {
   const resize = new ResizeObserver(() => {
     const beforeChange = Math.max(0, previousHeight - viewport.clientHeight - viewport.scrollTop);
     previousHeight = viewport.scrollHeight;
+    // A content resize can precede WebKit's queued scroll event.
+    if (!following && movedAway && beforeChange <= 1) following = true;
     const shouldFollow = following && (firstLayout || beforeChange <= 40);
     firstLayout = false;
     if (shouldFollow) {
