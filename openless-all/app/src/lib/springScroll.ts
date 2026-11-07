@@ -100,7 +100,7 @@ export function installSpringScroll(doc: Document = document) {
       m.position,
       m.velocity,
       m.target,
-      Math.min((time - m.last) / 1000, 0.05),
+      Math.max(0, Math.min((time - m.last) / 1000, 0.05)),
     );
     m.position = next.position;
     m.velocity = next.velocity;
@@ -158,7 +158,14 @@ export function installSpringScroll(doc: Document = document) {
           : 1);
     if (!delta) return;
     event.preventDefault();
-    const current = motion?.node === node && motion.axis === axis ? motion : null;
+    let current = motion?.node === node && motion.axis === axis ? motion : null;
+    if (current) {
+      const displayed = Math.max(0, Math.min(maxScroll(node, axis), current.position));
+      if (Math.abs(offset(node, axis) - displayed) > 2) {
+        stop();
+        current = null;
+      }
+    }
     const position = current?.position ?? offset(node, axis);
     const target = Math.max(
       0,

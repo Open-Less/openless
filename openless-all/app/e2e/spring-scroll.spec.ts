@@ -60,3 +60,22 @@ test('reduced motion leaves scrolling to the browser', async ({ page }) => {
   });
   expect(prevented).toBe(false);
 });
+
+test('a programmatic scroll reset cancels stale wheel momentum', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5326/');
+  await page.evaluate(() => {
+    const node = document.createElement('div');
+    node.id = 'spring-reset';
+    node.style.cssText = 'position:fixed;z-index:9999;width:100px;height:100px;overflow:auto';
+    node.innerHTML = '<div style="height:1200px"></div>';
+    document.body.append(node);
+    node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 500 }));
+  });
+  const scroller = page.locator('#spring-reset');
+  await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBeGreaterThan(5);
+  await scroller.evaluate((node) => {
+    node.scrollTop = 0;
+    node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 100 }));
+  });
+  await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBe(100);
+});
