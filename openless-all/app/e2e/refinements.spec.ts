@@ -37,9 +37,7 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
   await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
 });
 
-test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
-  page,
-}) => {
+test('scrolling uses a spring, hides scrollbar chrome and settles', async ({ page }) => {
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
@@ -51,7 +49,12 @@ test('trackpad input stays native, scrollbar chrome is hidden and scrolling sett
     el.dispatchEvent(event);
     el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
   });
-  await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
+  await expect(content).toHaveAttribute('data-wheel-prevented', 'true');
+  await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await content.evaluate((el) => {
+    el.scrollTop = 0;
+    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+  });
   await page
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '通用', exact: true })
@@ -63,9 +66,7 @@ test('trackpad input stays native, scrollbar chrome is hidden and scrolling sett
     Math.min(el.scrollTop + 450, el.scrollHeight - el.clientHeight),
   );
   await page.mouse.wheel(0, 450);
-  // A single unchanged 120ms sample can still be WebKit's intermediate 11px
-  // compositor position. Await the complete clamped native wheel displacement
-  // before asserting rest; this is stronger than accepting any positive offset.
+  // Await the final spring destination before asserting that motion has stopped.
   await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBe(destination);
   const stopped = await content.evaluate((el) => el.scrollTop);
   await page.waitForTimeout(160);
@@ -321,15 +322,29 @@ test('swipe departure is directional, removable and undoable', async ({ page }) 
   await expect(card).toBeVisible();
 });
 
-test('interface corners match the 16 px capsule radius', async ({ page }) => {
+test('interface corners use continuous curves at the shared 16 px radius', async ({ page }) => {
   await page.goto(fixture);
-  expect(
-    await page.evaluate(() =>
-      getComputedStyle(document.documentElement).getPropertyValue('--ol-radius').trim(),
-    ),
-  ).toBe('16px');
-  await expect(page.getByRole('switch', { name: 'Switch 0', exact: true })).toHaveCSS('border-radius', '16px');
-  await expect(page.getByRole('combobox', { name: 'Long menu', exact: true })).toHaveCSS('border-radius', '16px');
+  const support = await page.evaluate(() => ({
+    native: CSS.supports('corner-shape', 'superellipse(1.5)'),
+    fallback: CSS.supports('clip-path', 'shape(from 0 0, line to 100% 0, close)'),
+    radius: getComputedStyle(document.documentElement).getPropertyValue('--ol-radius').trim(),
+  }));
+  expect(support.radius).toBe('16px');
+  const check = async (locator: import('@playwright/test').Locator) => {
+    if (support.native) {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+      expect(
+        await locator.evaluate((node) => getComputedStyle(node).getPropertyValue('corner-shape')),
+      ).toContain('superellipse');
+    } else if (support.fallback) {
+      await expect(locator).toHaveCSS('border-radius', '0px');
+      expect(await locator.evaluate((node) => getComputedStyle(node).clipPath)).toMatch(/^shape\(/);
+    } else {
+      await expect(locator).toHaveCSS('border-radius', '16px');
+    }
+  };
+  await check(page.getByRole('switch', { name: 'Switch 0', exact: true }));
+  await check(page.getByRole('combobox', { name: 'Long menu', exact: true }));
   await page.getByRole('button', { name: 'Open modal fixture', exact: true }).click();
-  await expect(page.locator('.ol-dialog-card')).toHaveCSS('border-radius', '16px');
+  await check(page.locator('.ol-dialog-card'));
 });

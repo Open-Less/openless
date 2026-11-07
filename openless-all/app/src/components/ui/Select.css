@@ -42,11 +42,13 @@
   max-width: calc(var(--available-width, 100vw) / var(--ol-interface-scale, 1));
   max-height: calc(var(--available-height, 100vh) / var(--ol-interface-scale, 1));
   padding: 4px;
-  border: 0.5px solid var(--ol-select-popover-border);
+  border: 0;
   border-radius: var(--ol-r-md);
   background: var(--ol-select-popover-bg);
   color: var(--ol-ink);
-  box-shadow: var(--ol-select-popover-shadow);
+  box-shadow:
+    inset 0 0 0 0.5px var(--ol-select-popover-border),
+    var(--ol-select-popover-shadow);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   font: 12.5px var(--ol-font-sans);

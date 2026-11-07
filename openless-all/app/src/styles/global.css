@@ -674,10 +674,11 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
+  padding: 3.5px;
   border-radius: var(--ol-radius);
   background: var(--ol-surface-2);
-  border: 0.5px solid var(--ol-line);
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line);
 }
 .ol-seg-item {
   display: inline-flex;
@@ -1089,8 +1090,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 2px;
   max-width: 100%;
-  padding: 2px;
-  border: 0.5px solid var(--ol-line-strong);
+  padding: 2.5px;
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
   border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
 }

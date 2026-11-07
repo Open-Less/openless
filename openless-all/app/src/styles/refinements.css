@@ -61,7 +61,6 @@ button:disabled {
   padding: 8px 0;
 }
 
-/* Trackpad momentum stays native; only coarse mouse-wheel notches are smoothed. */
 .ol-scroll-fade {
   mask-image: none !important;
   -webkit-mask-image: none !important;
