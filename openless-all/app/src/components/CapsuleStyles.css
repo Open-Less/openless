@@ -105,6 +105,12 @@
   pointer-events: auto;
   max-width: 174px;
 }
+.ol-select-popup.ol-capsule-language-popup {
+  background: var(--ol-select-popover-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: none;
+}
 .ol-translation-language .ol-select-trigger {
   height: 22px;
   min-width: 92px;
