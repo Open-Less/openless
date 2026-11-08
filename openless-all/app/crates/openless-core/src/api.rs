@@ -7448,7 +7448,7 @@ impl OpenLessBackend {
         let vocabulary = preferences
             .vocabulary_learning_enabled
             .then(|| CoreEditObservationSink {
-                settings: settings.clone(),
+                settings,
                 expected_generation,
                 generation: Arc::clone(&self.edit_observation_generation),
                 typed_text: typed_text.to_string(),
@@ -9755,12 +9755,21 @@ mod tests {
         prefs.expression_learning_enabled = true;
         backend.set_preferences(prefs).unwrap();
         let gate = Arc::clone(&backend.settings_write_gate);
-        let _guard = gate.lock().unwrap();
+        let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = gate.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         let options = DictationStartOptions::default();
         let context = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             backend.capture_dictation_context(&options, DictationContextPurpose::Dictation),
         ).await.expect("busy settings must not block capture").unwrap();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
         assert!(!context.polish.style_system_prompt.contains("用户经多次编辑"));
     }
 
