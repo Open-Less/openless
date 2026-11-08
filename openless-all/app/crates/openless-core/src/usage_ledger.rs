@@ -51,6 +51,7 @@ pub struct ReportedTokens {
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub cached_input: Option<u64>,
+    pub cache_write_input: Option<u64>,
 }
 
 impl ReportedTokens {
@@ -77,6 +78,9 @@ impl ReportedTokens {
                 .or_else(|| usage.get("cache_read_input_tokens"))
                 .or_else(|| usage.get("cachedContentTokenCount"))
                 .and_then(|value| value.as_u64()),
+            cache_write_input: usage
+                .get("cache_creation_input_tokens")
+                .and_then(|value| value.as_u64()),
         };
         (tokens != Self::default()).then_some(tokens)
     }
@@ -90,6 +94,9 @@ impl ReportedTokens {
         }
         if newer.cached_input.is_some() {
             self.cached_input = newer.cached_input;
+        }
+        if newer.cache_write_input.is_some() {
+            self.cache_write_input = newer.cache_write_input;
         }
     }
 }
@@ -109,13 +116,17 @@ pub struct UsageRecord {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
     pub synthesized_characters: Option<u64>,
 }
 
 fn identifier_valid(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
     !value.is_empty()
         && value.len() <= 160
         && !value.contains("://")
+        && !lower.starts_with("sk-")
+        && !lower.starts_with("bearer")
         && value
             .chars()
             .all(|character| character.is_alphanumeric() || "._-/+:".contains(character))
@@ -123,7 +134,8 @@ fn identifier_valid(value: &str) -> bool {
 
 impl UsageRecord {
     fn valid(&self) -> bool {
-        self.occurred_at_ms > 0
+        !self.id.is_nil()
+            && self.occurred_at_ms > 0
             && self.provider.as_deref().is_none_or(identifier_valid)
             && self.model.as_deref().is_none_or(identifier_valid)
     }
@@ -144,6 +156,12 @@ pub struct UsageLedger {
 }
 
 impl UsageLedger {
+    /// Replacing an unreadable ledger requires an explicit user reset.
+    pub fn reset(path: PathBuf) -> Result<Self, BackendError> {
+        atomic_write(&path, br#"{"version":1,"records":[]}"#)?;
+        Self::open(path)
+    }
+
     pub fn open(path: PathBuf) -> Result<Self, BackendError> {
         let mut records = Vec::new();
         match std::fs::File::open(&path) {
@@ -271,6 +289,7 @@ mod tests {
             input_tokens: Some(80),
             output_tokens: Some(20),
             cached_input_tokens: None,
+            cache_write_input_tokens: None,
             synthesized_characters: None,
         }
     }
@@ -308,7 +327,8 @@ mod tests {
         let unknown = br#"{"version":2,"records":[],"newField":true}"#;
         std::fs::write(&path, unknown).unwrap();
         assert!(UsageLedger::open(path.clone()).is_err());
-        assert_eq!(std::fs::read(path).unwrap(), unknown);
+        assert_eq!(std::fs::read(&path).unwrap(), unknown);
+        assert!(UsageLedger::reset(path).unwrap().list().unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -318,6 +338,9 @@ mod tests {
         let ledger = UsageLedger::open(dir.join("usage.json")).unwrap();
         let mut event = record();
         event.model = Some("https://example.invalid/?key=secret".into());
+        assert!(ledger.append(ledger.generation(), event).is_err());
+        let mut event = record();
+        event.model = Some("sk-example-secret".into());
         assert!(ledger.append(ledger.generation(), event).is_err());
         let mut event = record();
         event.cached_input_tokens = Some(81);
@@ -333,7 +356,8 @@ mod tests {
             ReportedTokens {
                 input: Some(100),
                 output: Some(8),
-                cached_input: Some(30)
+                cached_input: Some(30),
+                cache_write_input: None,
             }
         );
         let response = ReportedTokens::from_response(
@@ -343,7 +367,7 @@ mod tests {
         assert_eq!(response.input, Some(40));
         assert_eq!(response.output, Some(5));
         let mut messages = ReportedTokens::from_response(
-            &json!({"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90}}}),
+            &json!({"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90,"cache_creation_input_tokens":12}}}),
         )
         .unwrap();
         messages.merge_report(
@@ -354,7 +378,8 @@ mod tests {
             ReportedTokens {
                 input: Some(10),
                 output: Some(7),
-                cached_input: Some(90)
+                cached_input: Some(90),
+                cache_write_input: Some(12),
             }
         );
         let gemini = ReportedTokens::from_response(&json!({"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":3,"cachedContentTokenCount":4}})).unwrap();
