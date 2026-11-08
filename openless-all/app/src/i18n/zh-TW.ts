@@ -612,6 +612,7 @@ export const zhTW: typeof zhCN = {
       settings: '偏好設定：快捷鍵、提供商、隱私與更新',
     },
     footer: {
+      usage: '用量',
       account: '帳號',
       feedback: '反饋',
       settings: '設定',

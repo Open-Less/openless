@@ -1,0 +1,7 @@
+# Service usage accounting follow-up
+
+The initial desktop page reads retained dictation history, which is capped and can be cleared. It is not a service usage ledger. Provider labels in those records do not represent retries or complete billing data.
+
+To satisfy complete usage accounting, add a separately persisted, bounded, local ledger at the service-call boundary. Record a unique attempt identifier, timestamp, operation (including dictation post-processing, translation, selection, QA and other call sites), provider and model, outcome, and provider-reported quantities. Preserve unknown quantities as unknown, not zero; never infer token counts or price from characters. Capture ASR audio units and TTS units where the underlying provider reports them. Cover streaming, non-streaming, retries, cancellation, errors, multimodal calls and supported provider protocols, with tests proving one record per actual attempt and no secret or text content in the ledger. Distinguish missing legacy data from a zero-usage interval. Do not silently attach current model prices to historical requests.
+
+Expose aggregated date ranges and paginated, filterable records through the existing host contract, independent of history deletion. Add migration, retention and explicit deletion controls, deterministic aggregation tests, and UI tests for partial data, empty states and failed reads. The current history-derived view must be replaced or clearly separated when the ledger exists.

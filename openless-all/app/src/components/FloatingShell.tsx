@@ -21,6 +21,7 @@ import type { ServiceViewId } from '../pages/settings/navigation';
 import { CloudSyncSetupPrompt } from './CloudSyncSetupPrompt';
 import { Overview } from '../pages/Overview';
 const History = lazy(() => import('../pages/History').then((m) => ({ default: m.History })));
+const Usage = lazy(() => import('../pages/Usage').then((m) => ({ default: m.Usage })));
 const Vocab = lazy(() => import('../pages/Vocab').then((m) => ({ default: m.Vocab })));
 const Style = lazy(() => import('../pages/Style').then((m) => ({ default: m.Style })));
 const Marketplace = lazy(() =>
@@ -70,6 +71,7 @@ const SIDEBAR_WIDTH = 226;
 const PAGE_CMP: Record<Exclude<AppTab, 'localAsr'>, ComponentType> = {
   overview: Overview,
   history: History,
+  usage: Usage,
   vocab: Vocab,
   style: Style,
   marketplace: Marketplace,
@@ -479,14 +481,14 @@ function FloatingShellBody({
 
             <div style={{ flex: 1 }} />
 
-            {/* Footer holds only the settings button. */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 4, paddingTop: 10 }}>
               <Tooltip content={t('shell.navHint.settings')} placement="right">
                 <button
                   onClick={() => openSettings()}
                   className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                   style={{
                     display: 'flex',
+                    flex: 1,
                     alignItems: 'center',
                     gap: 10,
                     padding: '8px 10px',
@@ -501,6 +503,15 @@ function FloatingShellBody({
                   <span style={{ flex: 1 }}>{t('shell.footer.settings')}</span>
                 </button>
               </Tooltip>
+              <button
+                type="button"
+                className={currentTab === 'usage' ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
+                onClick={() => setCurrentTab('usage')}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px' }}
+              >
+                <Icon name="overview" size={16} />
+                <span>{t('shell.footer.usage', { defaultValue: 'Usage' })}</span>
+              </button>
             </div>
           </aside>
         )}
