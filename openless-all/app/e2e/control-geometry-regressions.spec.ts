@@ -136,8 +136,18 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   });
   expect(wheelPrevented).toBe(false);
   await page.screenshot({ path: test.info().outputPath('history-list.png') });
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  await page.getByRole('button', { name: '纠正规则', exact: true }).click();
+  const tools = page.getByRole('button', { name: '工具', exact: true });
+  await tools.click();
+  await tools.evaluate(async (node) => {
+    await Promise.all(
+      node
+        .parentElement!.getAnimations({ subtree: true })
+        .map((animation) => animation.finished.catch(() => {})),
+    );
+  });
+  const corrections = page.getByRole('button', { name: '纠正规则', exact: true });
+  await corrections.click();
+  await expect(corrections).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('[data-ol-page="corrections"]')).toHaveAttribute(
     'data-transition-phase',
     'settled',
