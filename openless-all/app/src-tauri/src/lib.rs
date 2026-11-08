@@ -3373,10 +3373,17 @@ const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
 fn ensure_voice_edit_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Option<tauri::WebviewWindow<R>> {
-    if let Some(window) = app.get_webview_window("voice-edit") {
+    use issue1338_debug::{Boundary, Event, Facts, Kind, Outcome, Probe};
+    let lookup = Boundary::enter(Probe::P4, Kind::VoiceEditLookup);
+    let existing = app.get_webview_window("voice-edit");
+    lookup.operation.record(Event::Returned, Outcome::Returned,
+        Facts { kind: Kind::VoiceEditLookup, flag: existing.is_some(), ..Default::default() });
+    drop(lookup);
+    if let Some(window) = existing {
         return Some(window);
     }
-    match WebviewWindowBuilder::new(
+    let create = Boundary::enter(Probe::P4, Kind::VoiceEditCreate);
+    let created = WebviewWindowBuilder::new(
         app,
         "voice-edit",
         WebviewUrl::App("index.html?window=voice-edit".into()),
@@ -3393,8 +3400,10 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
     .focused(false)
     .visible(false)
     .accept_first_mouse(true)
-    .build()
-    {
+    .build();
+    create.record(Event::Returned, if created.is_ok() { Outcome::Ok } else { Outcome::Error });
+    drop(create);
+    match created {
         Ok(window) => {
             #[cfg(target_os = "macos")]
             {
@@ -3456,8 +3465,15 @@ pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "windows")]
     {
         // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
-        let _ = window.set_focusable(false);
-        let _ = window.show();
+        use issue1338_debug::{Boundary, Event, Kind, Outcome, Probe};
+        let focus = Boundary::enter(Probe::P4, Kind::VoiceEditFocusable);
+        let result = window.set_focusable(false);
+        focus.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
+        drop(focus);
+        let show = Boundary::enter(Probe::P4, Kind::VoiceEditShow);
+        let result = window.show();
+        show.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
+        drop(show);
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let _ = window.show();

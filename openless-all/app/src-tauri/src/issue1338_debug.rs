@@ -1,4 +1,4 @@
-//! [DEBUG-ISSUE-1338] A1 diagnostic delivery repair, not a confirmed stall fix.
+//! [DEBUG-ISSUE-1338] A2 Windows panel-open experiment; effectiveness unconfirmed.
 //! Fixed closed facts only. Producers never serialize, write, initialize a sink,
 //! acquire application locks, or wait for queue capacity. try_send is not lock-free.
 //! Missing records and the final flush tail remain unknown, including forced exit.
@@ -9,8 +9,8 @@
 //! P5 covers exported native checks, not every internal platform helper.
 #![allow(dead_code)]
 use serde::Serialize;
-pub(crate) const ATTEMPT: &str = "A1-diagnostic-delivery";
-pub(crate) const CHANGE: &str = "C1-single-file-diagnostic-export";
+pub(crate) const ATTEMPT: &str = "A2-voice-edit-open-async";
+pub(crate) const CHANGE: &str = "C2-async-command-dispatch";
 pub(crate) const SESSION: &str = "issue-1338-20261106";
 pub(crate) const LOG_NAME: &str = "openless-issue-1338-20261106-session.ndjson";
 pub(crate) const fn enabled() -> bool {
@@ -21,9 +21,9 @@ pub(crate) enum Probe { P1, P2, P3, P4, P5, P6 }
 impl Probe {
     fn hypotheses(self) -> &'static [&'static str] {
         match self {
-            Self::P1 | Self::P4 | Self::P6 => &["R1-H1", "R1-H2", "R1-H3", "R1-H4"],
-            Self::P2 => &["R1-H1", "R1-H2", "R1-H3", "R1-H4"],
-            Self::P3 => &["R1-H2"], Self::P5 => &["R1-H1"],
+            Self::P1 | Self::P2 | Self::P4 => &["R2-H1", "R2-H2", "R2-H3", "R2-H4"],
+            Self::P6 => &["R2-H3"],
+            Self::P3 | Self::P5 => &["R2-H4"],
         }
     }
 }
@@ -51,11 +51,13 @@ pub(crate) enum Kind {
     SettingsHostGate, SnapshotRevision, SnapshotPreferences, SnapshotVerify,
     SettingsPersist, SettingsRefresh,
     SelectionHotkeyRegistration, QaHotkeyRegistration, OtherHotkeyRegistration,
+    VoiceEditOpen, VoiceEditLookup, VoiceEditCreate, VoiceEditFocusable, VoiceEditShow,
 }
 impl Kind {
     // Never pass through arbitrary command names, arguments, labels or payloads.
     pub(crate) fn command(command: &str) -> Option<Self> {
         match command {
+            "voice_edit_window_open" => Some(Self::VoiceEditOpen),
             "get_settings" => Some(Self::GetSettings),
             "get_settings_snapshot" => Some(Self::SettingsSnapshot),
             "update_setting_fields" => Some(Self::UpdateSettingFields),
@@ -630,7 +632,7 @@ mod sink {
             assert_eq!(value["change_id"], CHANGE);
             assert_eq!(value["schema"], "diagnosing-bugs.v1");
             assert_eq!(value["probe_id"], "P5");
-            assert_eq!(value["hypothesis_ids"], serde_json::json!(["R1-H1"]));
+            assert_eq!(value["hypothesis_ids"], serde_json::json!(["R2-H4"]));
             assert_eq!(value["event"], "scope_left");
             assert_eq!(value["outcome"], "observed");
             assert_eq!(value["parent_operation_id"], 1);
@@ -816,7 +818,8 @@ mod boundary_tests {
         for secret in ["", "personal-window", "secret-token", "get_settings extra-args", "plugin:untrusted|value"] {
             assert!(Kind::command(secret).is_none());
         }
-        assert_eq!(Probe::P2.hypotheses(), ["R1-H1", "R1-H2", "R1-H3", "R1-H4"]);
+        assert_eq!(Probe::P2.hypotheses(), ["R2-H1", "R2-H2", "R2-H3", "R2-H4"]);
+        assert!(matches!(Kind::command("voice_edit_window_open"), Some(Kind::VoiceEditOpen)));
     }
     #[test]
     fn webview_origin_is_a_closed_source_category_not_a_window_identity() {
