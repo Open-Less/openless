@@ -1750,13 +1750,14 @@ impl LiveComposition {
                 K_CF_STRING_ENCODING_UTF8,
             );
             let attr = cfstring_from_static(b"AXSelectedText\0").ok_or("liveInputUnavailable")?;
+            // A failed AX call can have an unknown outcome; never retarget after submission.
+            self.wrote = true;
             let result = AXUIElementSetAttributeValue(self.target.element.as_ref(), attr, value);
             CFRelease(attr);
             CFRelease(value);
             if result != AX_ERROR_SUCCESS {
                 return Err("liveInputUnsupportedEditor".into());
             }
-            self.wrote = true;
             let expected = format!("{start}{text}{suffix}");
             if voice_edit_text(self.target.element.as_ref()).as_deref() != Some(&expected) {
                 return Err("liveInputEditorTransformedText".into());
