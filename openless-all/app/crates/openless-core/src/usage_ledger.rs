@@ -58,9 +58,18 @@ impl ReportedTokens {
     pub fn from_response(value: &serde_json::Value) -> Option<Self> {
         let usage = value
             .get("usage")
-            .or_else(|| value.pointer("/response/usage"))
-            .or_else(|| value.pointer("/message/usage"))
-            .or_else(|| value.get("usageMetadata"))?;
+            .filter(|usage| usage.is_object())
+            .or_else(|| {
+                value
+                    .pointer("/response/usage")
+                    .filter(|usage| usage.is_object())
+            })
+            .or_else(|| {
+                value
+                    .pointer("/message/usage")
+                    .filter(|usage| usage.is_object())
+            })
+            .or_else(|| value.get("usageMetadata").filter(|usage| usage.is_object()))?;
         let tokens = Self {
             input: usage
                 .get("input_tokens")
@@ -130,6 +139,12 @@ fn identifier_valid(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_alphanumeric() || "._-/+:".contains(character))
+}
+
+/// Adapters may omit untrusted or invalid identifiers without dropping usage.
+pub fn sanitized_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    identifier_valid(value).then(|| value.to_owned())
 }
 
 impl UsageRecord {
@@ -342,6 +357,8 @@ mod tests {
         let mut event = record();
         event.model = Some("sk-example-secret".into());
         assert!(ledger.append(ledger.generation(), event).is_err());
+        assert_eq!(sanitized_identifier("sk-example-secret"), None);
+        assert_eq!(sanitized_identifier(" model-v1 "), Some("model-v1".into()));
         let mut event = record();
         event.cached_input_tokens = Some(81);
         assert!(ledger.append(ledger.generation(), event).unwrap());
@@ -366,6 +383,11 @@ mod tests {
         .unwrap();
         assert_eq!(response.input, Some(40));
         assert_eq!(response.output, Some(5));
+        let nested = ReportedTokens::from_response(
+            &json!({"usage":null,"response":{"usage":{"input_tokens":40}}}),
+        )
+        .unwrap();
+        assert_eq!(nested.input, Some(40));
         let mut messages = ReportedTokens::from_response(
             &json!({"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90,"cache_creation_input_tokens":12}}}),
         )
