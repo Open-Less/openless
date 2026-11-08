@@ -240,7 +240,7 @@ export function Btn({
   const muted = disabled && (variant === 'primary' || variant === 'blue');
   return (
     <button
-      className="ol-pressable"
+      className="ol-pressable ol-action-button"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       aria-label={ariaLabel}
