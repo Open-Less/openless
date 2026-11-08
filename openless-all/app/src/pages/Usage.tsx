@@ -40,6 +40,8 @@ export function Usage() {
     [text('语音识别记录', 'ASR records'), asr.length],
     [text('文字处理记录', 'Text processing records'), llm.length],
     [text('多模态记录', 'Multimodal records'), omni.length],
+    [text('TTS 用量', 'TTS usage'), '—'],
+    [text('模型 Token', 'Model tokens'), '—'],
     [
       text('录音时长', 'Recording duration'),
       rows.some((row) => row.durationMs == null)
