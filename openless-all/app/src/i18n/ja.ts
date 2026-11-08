@@ -1172,6 +1172,7 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
       cursorContextTitle: 'カーソル文脈と短文の動作',
@@ -2115,10 +2116,10 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
-      macosCompositionInputLabel: '入力欄に認識中の原文を表示（macOS）',
+      macosCompositionInputLabel: '入力欄に認識中の原文を表示',
       macosCompositionInputDesc:
         '録音中の認識結果を元の入力欄に表示し、終了後に整形または翻訳した文章へ置き換えます。アクセシビリティ権限と対応エディタが必要です。カーソル移動や手動編集で置き換えを停止します。',
-      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
@@ -2330,6 +2331,7 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      liveInput: '入力欄に表示するリアルタイム原文を設定します。',
       experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
       localModels: experimentalAsr.description,

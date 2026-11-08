@@ -21,6 +21,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
+    id: 'liveInput',
+    icon: 'keyboard',
+    titleKey: 'settings.advancedPages.liveInputTitle',
+    beta: true,
+  },
+  {
     id: 'cursorContext',
     icon: 'search',
     titleKey: 'settings.advancedPages.cursorContextTitle',
@@ -46,6 +52,7 @@ export type AdvancedPageId = AdvancedPage['id'];
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'liveInput') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'vocabularyLearning') return platform === 'desktop' || platform === 'android';
     if (page.id === 'debug')

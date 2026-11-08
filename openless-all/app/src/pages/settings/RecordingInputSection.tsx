@@ -900,28 +900,6 @@ export function RecordingInputSection({
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
-          {capability.adapter === 'macEventTap' && (
-            <SettingRow
-              label={t('settings.advanced.macosCompositionInputLabel')}
-              desc={t('settings.advanced.macosCompositionInputDesc')}
-            >
-              <Toggle
-                on={!!prefs.macosCompositionInput}
-                onToggle={(next) => void savePrefs({ ...prefs, macosCompositionInput: next })}
-              />
-            </SettingRow>
-          )}
-          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
-            <SettingRow
-              label={t('settings.advanced.windowsCompositionInputLabel')}
-              desc={t('settings.advanced.windowsCompositionInputDesc')}
-            >
-              <Toggle
-                on={!!prefs.windowsCompositionInput}
-                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
-              />
-            </SettingRow>
-          )}
         </Card>
       )}
       {surface === 'text' && showDesktopStartup && (

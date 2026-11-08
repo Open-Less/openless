@@ -617,6 +617,45 @@ function CursorContextSection() {
   );
 }
 
+function LiveInputSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const os = detectOS();
+  if (!prefs || (os !== 'mac' && os !== 'win')) return null;
+  const mac = os === 'mac';
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge="Beta">
+        {t('settings.advancedPages.liveInputTitle')}
+      </ExperimentalSectionTitle>
+      <SettingRow
+        label={t(
+          mac
+            ? 'settings.advanced.macosCompositionInputLabel'
+            : 'settings.advanced.windowsCompositionInputLabel',
+        )}
+        desc={t(
+          mac
+            ? 'settings.advanced.macosCompositionInputDesc'
+            : 'settings.advanced.windowsCompositionInputDesc',
+        )}
+      >
+        <Toggle
+          on={mac ? prefs.macosCompositionInput : prefs.windowsCompositionInput}
+          disabled={!mac && prefs.windowsInsertionMode !== 'tsf'}
+          onToggle={(next) =>
+            void updatePrefs((current) =>
+              mac
+                ? { ...current, macosCompositionInput: next }
+                : { ...current, windowsCompositionInput: next },
+            )
+          }
+        />
+      </SettingRow>
+    </Card>
+  );
+}
+
 // Privacy: local-first explanation + permission management · data storage.
 export function PrivacyTab() {
   const { t } = useTranslation();
@@ -705,6 +744,7 @@ export function AdvancedTab({
               <ExperimentalAsrSection controller={experimentalAsr} onOpenAsr={onOpenAsr} />
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
+            {item.id === 'liveInput' && <LiveInputSection />}
             {item.id === 'cursorContext' && <CursorContextSection />}
             {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
