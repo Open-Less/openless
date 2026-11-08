@@ -80,6 +80,7 @@ pub mod style_pack_store;
 pub mod style_packs;
 pub mod testing;
 pub mod types;
+pub mod usage_ledger;
 pub mod vocabulary;
 pub mod voice_activation;
 pub mod voice_edit_session;
