@@ -378,7 +378,7 @@ button:disabled {
   min-width: var(--ol-switch-width);
   max-width: var(--ol-switch-width);
   height: var(--ol-switch-height);
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   background: var(--ol-toggle-off-bg);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
   cursor: pointer;
@@ -404,7 +404,7 @@ button:disabled {
   left: 2px;
   width: var(--ol-switch-knob);
   height: var(--ol-switch-knob);
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   background: var(--ol-toggle-knob);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.25),
@@ -443,6 +443,7 @@ button:disabled {
 
 .ol-typography .ol-select-trigger {
   width: 280px;
+  background: var(--ol-surface-2);
 }
 .ol-advanced-settings-detail > .ol-experimental-models {
   border: 0 !important;

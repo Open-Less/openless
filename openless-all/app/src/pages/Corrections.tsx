@@ -201,6 +201,7 @@ export function Corrections() {
             <Btn
               size="sm"
               variant="primary"
+              className="ol-correction-add"
               onClick={() => void onAddCorrectionRule()}
               style={mobile ? { justifySelf: 'start' } : undefined}
             >

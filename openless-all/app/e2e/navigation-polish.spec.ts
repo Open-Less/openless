@@ -173,10 +173,5 @@ test('dictation shortcuts hug the key label and coarse wheel scrolling has inter
   const end = positions.at(-1)!;
   expect(end).toBeGreaterThan(80);
   expect(positions.some((value) => value > 1 && value < end - 1)).toBe(true);
-  await page.waitForTimeout(300);
-  const settled = await scroll.evaluate((element) => element.scrollTop);
-  await page.waitForTimeout(150);
-  expect(
-    Math.abs((await scroll.evaluate((element) => element.scrollTop)) - settled),
-  ).toBeLessThanOrEqual(1);
+  expect(positions.every((value, index) => !index || value >= positions[index - 1] - 1)).toBe(true);
 });

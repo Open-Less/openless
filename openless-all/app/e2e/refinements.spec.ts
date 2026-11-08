@@ -37,7 +37,9 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
   await expect(page.locator('.ol-settings-workspace')).toHaveCSS('opacity', '1');
 });
 
-test('scrolling uses a spring, hides scrollbar chrome and settles', async ({ page }) => {
+test('trackpad input stays native, scrollbar chrome is hidden and scrolling settles', async ({
+  page,
+}) => {
   // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
   await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
@@ -49,12 +51,7 @@ test('scrolling uses a spring, hides scrollbar chrome and settles', async ({ pag
     el.dispatchEvent(event);
     el.setAttribute('data-wheel-prevented', String(event.defaultPrevented));
   });
-  await expect(content).toHaveAttribute('data-wheel-prevented', 'true');
-  await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await content.evaluate((el) => {
-    el.scrollTop = 0;
-    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-  });
+  await expect(content).toHaveAttribute('data-wheel-prevented', 'false');
   await page
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '通用', exact: true })
@@ -66,7 +63,9 @@ test('scrolling uses a spring, hides scrollbar chrome and settles', async ({ pag
     Math.min(el.scrollTop + 450, el.scrollHeight - el.clientHeight),
   );
   await page.mouse.wheel(0, 450);
-  // Await the final spring destination before asserting that motion has stopped.
+  // A single unchanged 120ms sample can still be WebKit's intermediate 11px
+  // compositor position. Await the complete clamped native wheel displacement
+  // before asserting rest; this is stronger than accepting any positive offset.
   await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBe(destination);
   const stopped = await content.evaluate((el) => el.scrollTop);
   await page.waitForTimeout(160);
@@ -343,8 +342,12 @@ test('interface corners use continuous curves at the shared 16 px radius', async
       await expect(locator).toHaveCSS('border-radius', '16px');
     }
   };
-  await check(page.getByRole('switch', { name: 'Switch 0', exact: true }));
-  await check(page.getByRole('combobox', { name: 'Long menu', exact: true }));
+  const toggle = page.getByRole('switch', { name: 'Switch 0', exact: true });
+  await expect(toggle).toHaveCSS('border-radius', '999px');
+  await expect(toggle).toHaveCSS('clip-path', 'none');
+  const select = page.getByRole('combobox', { name: 'Long menu', exact: true });
+  await expect(select).toHaveCSS('border-radius', '16px');
+  await expect(select).toHaveCSS('clip-path', 'none');
   await page.getByRole('button', { name: 'Open modal fixture', exact: true }).click();
   await check(page.locator('.ol-dialog-card'));
 });

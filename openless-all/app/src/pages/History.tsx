@@ -497,6 +497,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         {(!mobile || !mobileDetailOpen) && (
           <Card
             padding={0}
+            className="ol-history-list"
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
             {/* The left column is one scroll container; the search box sticks to the top with an
@@ -508,7 +509,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                   position: 'sticky',
                   top: 0,
                   zIndex: 2,
-                  background: 'var(--ol-surface)',
+                  background: 'var(--ol-surface-raised)',
                   padding: '12px 14px',
                 }}
               >

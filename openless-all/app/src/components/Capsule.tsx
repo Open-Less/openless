@@ -117,7 +117,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
         gap: 8,
         maxWidth: 360,
         padding: '8px 14px',
-        borderRadius: 'var(--ol-radius)',
+        borderRadius: 999,
         border: failed
           ? '1px solid rgba(255, 112, 102, 0.42)'
           : '1px solid var(--ol-capsule-pill-border)',
@@ -141,7 +141,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
             flex: '0 0 auto',
             border: '2px solid rgba(143, 192, 255, 0.32)',
             borderTopColor: color,
-            borderRadius: 'var(--ol-radius)',
+            borderRadius: '50%',
             animation: 'selection-polish-spinner .75s linear infinite',
           }}
         />
@@ -925,7 +925,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   color: 'var(--ol-capsule-center-ink)',
                   background: 'var(--ol-capsule-badge-bg)',
                   border: '1px solid var(--ol-capsule-pill-border)',
-                  borderRadius: 'var(--ol-radius)',
+                  borderRadius: 999,
                   padding: '4px 10px',
                   letterSpacing: '0.02em',
                   whiteSpace: 'nowrap',
@@ -941,7 +941,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   style={{
                     width: 5,
                     height: 5,
-                    borderRadius: 'var(--ol-radius)',
+                    borderRadius: 999,
                     background: 'rgba(150, 185, 255, 0.95)',
                     boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
                   }}

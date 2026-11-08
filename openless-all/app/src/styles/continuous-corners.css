@@ -480,3 +480,47 @@
 .ol-settings-category-list > .ol-settings-category-entry {
   --ol-corner-radius: calc(var(--ol-radius) - 4px);
 }
+
+/* Recording capsules and switches preserve their original pill geometry. */
+:where(
+  .ol-switch,
+  .ol-switch-thumb,
+  .ol-default-capsule,
+  .ol-typeless-capsule,
+  .ol-classic-capsule-preview
+) {
+  border-radius: 999px !important;
+  corner-shape: round !important;
+  clip-path: none !important;
+}
+:where(
+  .ol-default-action,
+  .ol-typeless-action,
+  .ol-typeless-stop,
+  .ol-live-transcript-control,
+  .ol-classic-capsule-preview > span:not(.ol-capsule-waveform)
+) {
+  border-radius: 50% !important;
+  corner-shape: round !important;
+  clip-path: none !important;
+}
+/* Do not crop animated indicators, focus rings, or popover shadows. */
+:where(
+  .ol-segmented,
+  .ol-segmented-indicator,
+  .ol-service-view-indicator,
+  .ol-select-popup,
+  .ol-select-trigger
+) {
+  clip-path: none !important;
+  border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;
+}
+
+.ol-default-processing-cancel {
+  border-radius: inherit !important;
+  corner-shape: round !important;
+  clip-path: none !important;
+}
+.ol-correction-add {
+  --ol-corner-radius: 8px;
+}

@@ -206,7 +206,7 @@
   --ol-pill-selected-bg: #18181b;
   --ol-pill-selected-ink: #ffffff;
   --ol-pill-selected-border: #18181b;
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #fcfcfd;
   --ol-select-popover-border: rgba(0, 0, 0, 0.1);
   --ol-select-popover-shadow:
@@ -371,7 +371,7 @@
   --ol-pill-selected-bg: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.92));
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(147, 197, 253, 0.44);
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #202024;
   --ol-select-popover-border: rgba(226, 232, 240, 0.12);
   --ol-select-popover-shadow:

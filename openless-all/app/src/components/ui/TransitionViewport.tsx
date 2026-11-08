@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from 'react';
 import { useReducedMotion } from '../../lib/motion';
+import { useSmoothWheelScroll } from '../../lib/useSmoothWheelScroll';
 import { PageSkeleton } from './PageSkeleton';
 
 const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
@@ -212,6 +213,7 @@ function TransitionSurface({
       node.style.willChange = '';
     };
   }, [phase, reduced, slow, pace]);
+  useSmoothWheelScroll(ref, surfaceKey);
   useEffect(() => {
     const node = ref.current;
     if (!node || typeof ResizeObserver === 'undefined') return;

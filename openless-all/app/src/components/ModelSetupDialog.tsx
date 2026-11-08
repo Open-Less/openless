@@ -5,6 +5,7 @@ import { PresenceModal } from './ui/Modal';
 import { PageSkeleton } from './ui/PageSkeleton';
 import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
 import { ChannelEditorHostContext } from '../pages/settings/ChannelEditorHostContext';
+import { useSmoothWheelScroll } from '../lib/useSmoothWheelScroll';
 
 const ProvidersSection = lazy(() =>
   import('../pages/settings/ChannelList').then((module) => ({ default: module.ProvidersSection })),
@@ -33,6 +34,7 @@ export function ModelSetupDialog({
   const editorClose = useRef<(() => void) | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const [error, setError] = useState('');
+  useSmoothWheelScroll(scroll, `${open}`);
   const close = async () => {
     if (editorClose.current) {
       editorClose.current();

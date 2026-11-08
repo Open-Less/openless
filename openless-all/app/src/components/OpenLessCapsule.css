@@ -5,7 +5,7 @@
   flex: 0 0 auto;
   isolation: isolate;
   overflow: hidden;
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   color-scheme: var(--ol-pill-scheme);
   color: var(--ol-pill-ink);
   font-family: var(--ol-font-sans);
@@ -75,7 +75,7 @@
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: var(--ol-radius);
+  border-radius: 50%;
   background: var(--ol-pill-cancel);
   color: var(--ol-pill-cancel-ink);
   cursor: pointer;
@@ -162,7 +162,7 @@
   width: 1.5px;
   height: 1.5px;
   flex: 0 0 1.5px;
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   background: var(--ol-pill-ink);
 }
 @media (prefers-reduced-motion: reduce) {

@@ -112,6 +112,7 @@
   width: auto;
   padding: 0 7px;
   border-radius: var(--ol-radius);
+  background: var(--ol-control-solid);
   font-size: 11px;
 }
 .ol-translation-language[data-busy='true'] {
@@ -206,7 +207,7 @@
   height: 64px;
   overflow: hidden;
   border: 0.5px solid var(--ol-typeless-border);
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   box-sizing: border-box;
   background: var(--ol-typeless-bg);
   color: var(--ol-typeless-ink);
@@ -265,7 +266,7 @@
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: var(--ol-radius);
+  border-radius: 50%;
   background: var(--ol-typeless-button-bg);
   color: var(--ol-typeless-ink);
   cursor: pointer;
@@ -302,7 +303,7 @@
 .ol-capsule-waveform > span {
   width: 3px;
   height: 28px;
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   background: #3478f6;
   transform-origin: center;
   transition: transform 100ms linear;
@@ -338,7 +339,7 @@
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: var(--ol-radius);
+  border-radius: 50%;
   background: var(--ol-typeless-button-bg);
   color: var(--ol-typeless-ink);
   padding: 0;
@@ -384,7 +385,7 @@
   padding: 0 7px;
   box-sizing: border-box;
   border: 1px solid var(--ol-capsule-pill-border);
-  border-radius: var(--ol-radius);
+  border-radius: 999px;
   background: var(--ol-capsule-pill-bg);
   box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
 }
@@ -394,7 +395,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--ol-radius);
+  border-radius: 50%;
   color: var(--ol-capsule-btn-ink);
   background: var(--ol-capsule-btn-bg);
 }
@@ -502,7 +503,7 @@
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: var(--ol-radius);
+  border-radius: 50%;
   cursor: pointer;
   color: var(--ol-capsule-btn-ink);
   background: var(--ol-capsule-btn-bg);
