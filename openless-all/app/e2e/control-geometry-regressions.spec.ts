@@ -141,6 +141,8 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await settleNavigation(page);
   const add = page.getByRole('button', { name: '添加', exact: true });
   await expect(add).toBeVisible();
+  await expect(add).toHaveCSS('border-radius', '8px');
+  await expect(add).toHaveCSS('clip-path', 'none');
   await page.screenshot({ path: test.info().outputPath('correction-add.png') });
   expect(
     await add.evaluate((node) =>

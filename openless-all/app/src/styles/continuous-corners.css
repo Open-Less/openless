@@ -523,4 +523,7 @@
 }
 .ol-correction-add {
   --ol-corner-radius: 8px;
+  border-radius: 8px !important;
+  corner-shape: round !important;
+  clip-path: none !important;
 }
