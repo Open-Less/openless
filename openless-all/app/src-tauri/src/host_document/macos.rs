@@ -1669,8 +1669,23 @@ pub(crate) struct LiveComposition {
 }
 
 impl LiveComposition {
+    pub(crate) fn has_written(&self) -> bool {
+        self.wrote
+    }
+
     pub(crate) fn capture() -> Result<Self, String> {
+        match crate::selection::current_front_app_pid() {
+            Some(pid) if pid != std::process::id() as i32 => {}
+            _ => return Err("liveInputTargetUnavailable".into()),
+        }
         let (_, _, target) = capture_voice_edit_target()?;
+        let mut owner_pid = 0;
+        if unsafe { AXUIElementGetPid(target.element.as_ref(), &mut owner_pid) } != AX_ERROR_SUCCESS
+            || owner_pid <= 0
+            || owner_pid == std::process::id() as i32
+        {
+            return Err("liveInputTargetUnavailable".into());
+        }
         let start =
             utf16_offset_to_char_offset(&target.text, target.selection_utf16.location as usize);
         let end = utf16_offset_to_char_offset(
