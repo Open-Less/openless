@@ -29,4 +29,3 @@ rustup toolchain install 1.99.0 --profile minimal
 rustup target add --toolchain 1.99.0 aarch64-apple-ios aarch64-apple-ios-sim
 python3 "$ROOT/scripts/prepare-core.py"
 echo "Dependencies ready. Run scripts/build-rime.sh, then scripts/build-core.sh."
-

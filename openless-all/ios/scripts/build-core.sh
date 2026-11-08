@@ -21,4 +21,3 @@ for spec in "device:aarch64-apple-ios:iphoneos" "simulator:aarch64-apple-ios-sim
   cp "$CARGO_TARGET_DIR/$target/release/libopenless_ios_host.a" "$ROOT/Frameworks/$platform/libOpenLessCore.a"
   python3 "$ROOT/scripts/validate-deployment.py" "$ROOT/Frameworks/$platform/libOpenLessCore.a"
 done
-

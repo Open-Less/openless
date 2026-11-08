@@ -33,4 +33,3 @@ for name in sherpa onnxruntime; do
   unzip -oq "$CACHE/$name.zip" -d "$FRAMEWORKS"
 done
 echo 'Bundled SenseVoice Small and official iOS CPU runtime verified.'
-

@@ -1,6 +1,6 @@
-import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -9,30 +9,30 @@ import {
   readFileSync,
   rmSync,
   writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Exercise the production downloader with a curl that times out after writing
 // a partial response. Retrying must resume that file and still verify integrity.
 const source = readFileSync(
-  new URL("../../ios/scripts/bootstrap-local-speech.sh", import.meta.url),
-  "utf8",
+  new URL('../../ios/scripts/bootstrap-local-speech.sh', import.meta.url),
+  'utf8',
 );
 const fetchFunction = source.match(/^fetch\(\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(fetchFunction);
-const scratch = mkdtempSync(join(tmpdir(), "openless-ios-download-"));
+const scratch = mkdtempSync(join(tmpdir(), 'openless-ios-download-'));
 try {
-  const bin = join(scratch, "bin");
+  const bin = join(scratch, 'bin');
   mkdirSync(bin);
   const executable = (name, content) => {
     const path = join(bin, name);
-    writeFileSync(path, "#!/usr/bin/env bash\nset -eu\n" + content);
+    writeFileSync(path, '#!/usr/bin/env bash\nset -eu\n' + content);
     chmodSync(path, 0o755);
   };
-  executable("sleep", "exit 0\n");
+  executable('sleep', 'exit 0\n');
   executable(
-    "curl",
+    'curl',
     `
 max=0; speed=0; window=0; resume=''; output=''
 while [ "$#" -gt 0 ]; do
@@ -59,26 +59,21 @@ esac
 printf verified > "$output"
 `,
   );
-  const sha = createHash("sha256").update("verified").digest("hex");
+  const sha = createHash('sha256').update('verified').digest('hex');
   const run = (mode, output) => {
     const result = spawnSync(
-      "bash",
-      [
-        "-e",
-        "-c",
-        fetchFunction +
-          '\nfetch https://example.invalid/model "$SHA" "$OUTPUT"',
-      ],
+      'bash',
+      ['-e', '-c', fetchFunction + '\nfetch https://example.invalid/model "$SHA" "$OUTPUT"'],
       {
         env: {
           ...process.env,
-          PATH: bin + ":" + process.env.PATH,
+          PATH: bin + ':' + process.env.PATH,
           MODE: mode,
-          TRACE: join(scratch, mode + "-calls"),
+          TRACE: join(scratch, mode + '-calls'),
           SHA: sha,
           OUTPUT: output,
         },
-        encoding: "utf8",
+        encoding: 'utf8',
         timeout: 5000,
       },
     );
@@ -86,40 +81,28 @@ printf verified > "$output"
     return result;
   };
   for (const [mode, expectedCalls] of [
-    ["success", 1],
-    ["resume", 2],
+    ['success', 1],
+    ['resume', 2],
   ]) {
     const output = join(scratch, mode);
     const result = run(mode, output);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.equal(readFileSync(output, "utf8"), "verified");
-    assert.ok(!existsSync(output + ".download"));
-    assert.equal(
-      Number(readFileSync(join(scratch, mode + "-calls"), "utf8")),
-      expectedCalls,
-    );
+    assert.equal(readFileSync(output, 'utf8'), 'verified');
+    assert.ok(!existsSync(output + '.download'));
+    assert.equal(Number(readFileSync(join(scratch, mode + '-calls'), 'utf8')), expectedCalls);
     assert.equal(run(mode, output).status, 0);
-    assert.equal(
-      Number(readFileSync(join(scratch, mode + "-calls"), "utf8")),
-      expectedCalls,
-    );
+    assert.equal(Number(readFileSync(join(scratch, mode + '-calls'), 'utf8')), expectedCalls);
   }
   for (const [mode, expectedCalls] of [
-    ["timeout", 6],
-    ["corrupt", 1],
+    ['timeout', 6],
+    ['corrupt', 1],
   ]) {
     const output = join(scratch, mode);
     assert.notEqual(run(mode, output).status, 0);
-    assert.ok(
-      !existsSync(output),
-      "failed downloads must not be promoted to verified files",
-    );
-    assert.equal(
-      Number(readFileSync(join(scratch, mode + "-calls"), "utf8")),
-      expectedCalls,
-    );
+    assert.ok(!existsSync(output), 'failed downloads must not be promoted to verified files');
+    assert.equal(Number(readFileSync(join(scratch, mode + '-calls'), 'utf8')), expectedCalls);
   }
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-console.log("ios-ci-downloads.test.mjs passed");
+console.log('ios-ci-downloads.test.mjs passed');
