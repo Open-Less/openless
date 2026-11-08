@@ -366,6 +366,11 @@ fn normalized(text: &str) -> String {
     text.nfkc().flat_map(char::to_lowercase).collect()
 }
 
+pub(crate) fn contains_sensitive_text(text: &str) -> bool {
+    text.chars().take(MAX_CHARS + 1).count() > MAX_CHARS
+        || sensitive_patterns().is_match(&normalized(text))
+}
+
 fn skeleton(text: &str) -> String {
     text.chars()
         .filter(|character| !character.is_whitespace() && !",.;:!，。；：！、".contains(*character))

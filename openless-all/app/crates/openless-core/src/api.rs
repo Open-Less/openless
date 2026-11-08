@@ -2743,6 +2743,9 @@ impl EditObservationSink for CoreEditObservationSink {
         if self.generation.load(Ordering::Acquire) != self.expected_generation {
             return false;
         }
+        if !crate::correction_observation::permits_vocabulary_suggestion(&self.typed_text, &edit) {
+            return false;
+        }
         let rules = crate::host_document::learned_rules_with_max_chars(
             &edit,
             self.settings.max_phrase_chars as usize,
@@ -9800,6 +9803,27 @@ mod tests {
         prefs.expression_learning_enabled = false;
         backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT, &crate::NoopSettingsRuntime).unwrap();
         assert_eq!(backend.pending_corrections().len(), 1);
+    }
+
+    #[test]
+    fn vocabulary_observer_does_not_offer_fact_changes_as_words() {
+        let (backend, _) = backend();
+        let sink = CoreEditObservationSink {
+            settings: crate::shared_types::VocabularyLearningSettings::default(),
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "今天买了十个苹果".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        let edit = crate::host_document::EditPair {
+            before: "今天买了".into(),
+            source: "十".into(),
+            target: "九".into(),
+            after: "个苹果".into(),
+        };
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
     }
 
     #[test]
