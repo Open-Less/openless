@@ -35,6 +35,15 @@ assert.match(
 );
 const checkout = steps.find((s) => s.uses === 'actions/checkout@v4');
 assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.sha }}');
+// Historical repair tags need not contain the newer repository-local action.
+assert.equal(
+  steps.find((s) => s.uses === './.github/actions/cache-npm').if,
+  "inputs.release_tag == ''",
+);
+assert.equal(
+  steps.find((s) => s.uses === 'actions/setup-node@v4').with.cache,
+  "${{ inputs.release_tag != '' && 'npm' || '' }}",
+);
 const guard = steps.find((s) => s.name === 'Validate targeted draft release repair');
 assert.equal(guard.if, "inputs.release_tag != ''");
 assert.match(guard.run, /permission.*admin/);
@@ -80,7 +89,7 @@ for (const version of ['256.0.0', '1.256.0', '1.0.65536', 'invalid'])
 assert.equal(
   (
     build.run.match(
-      /build "\$\{diagnostic_args\[@\]\}" --bundles msi --config src-tauri\/tauri.msi-version.json/g,
+      /bundle "\$\{diagnostic_args\[@\]\}" --bundles msi --config src-tauri\/tauri.msi-version.json/g,
     ) ?? []
   ).length,
   2,

@@ -9,26 +9,25 @@ runs:
       run: |
         echo "path=$(npm config get cache)" >> "$GITHUB_OUTPUT"
         echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
-    - name: Bound npm network stalls
-      shell: bash
-      run: |
-        echo "npm_config_prefer_offline=true" >> "$GITHUB_ENV"
-        echo "npm_config_audit=false" >> "$GITHUB_ENV"
-        echo "npm_config_fund=false" >> "$GITHUB_ENV"
-        echo "npm_config_fetch_retries=2" >> "$GITHUB_ENV"
-        echo "npm_config_fetch_timeout=60000" >> "$GITHUB_ENV"
-        echo "SEGMENT_DOWNLOAD_TIMEOUT_MINS=3" >> "$GITHUB_ENV"
+        # Prefer verified tarballs already in the download cache. Keep network
+        # retries bounded; npm ci still validates the lockfile and integrity.
+        echo 'NPM_CONFIG_PREFER_OFFLINE=true' >> "$GITHUB_ENV"
+        echo 'NPM_CONFIG_AUDIT=false' >> "$GITHUB_ENV"
+        echo 'NPM_CONFIG_FUND=false' >> "$GITHUB_ENV"
+        echo 'NPM_CONFIG_FETCH_RETRIES=2' >> "$GITHUB_ENV"
+        echo 'NPM_CONFIG_FETCH_TIMEOUT=60000' >> "$GITHUB_ENV"
+        echo 'SEGMENT_DOWNLOAD_TIMEOUT_MINS=3' >> "$GITHUB_ENV"
     # Keep setup-node's existing key and path so the current beta cache remains
     # reusable. Cache lookup falls back to the PR base/default branch on a miss.
     - name: Restore npm outside beta builds
-      if: github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch')
+      if: github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch' && github.event_name != 'schedule')
       uses: actions/cache/restore@v4
       with:
         path: ${{ steps.npm.outputs.path }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles('openless-all/app/package-lock.json') }}
         restore-keys: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-
     - name: Maintain npm cache on beta builds
-      if: github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      if: github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
       uses: actions/cache@v4
       with:
         path: ${{ steps.npm.outputs.path }}

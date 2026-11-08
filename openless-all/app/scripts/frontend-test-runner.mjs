@@ -34,16 +34,24 @@ export function discoverTestFiles(appRoot = DEFAULT_APP_ROOT) {
 
 export function runTestFiles(
   testFiles,
-  { appRoot = DEFAULT_APP_ROOT, log = console.log, spawn = spawnSync, tsxCli } = {},
+  {
+    appRoot = DEFAULT_APP_ROOT,
+    log = console.log,
+    spawn = spawnSync,
+    tsxImport,
+    timeout = 120_000,
+  } = {},
 ) {
-  let resolvedTsxCli = tsxCli;
+  let resolvedTsxImport = tsxImport;
 
   for (const testFile of testFiles) {
     const absoluteTestFile = resolve(appRoot, testFile);
     let args;
     if (testFile.endsWith('.test.ts')) {
-      resolvedTsxCli ??= fileURLToPath(import.meta.resolve('tsx/cli'));
-      args = [resolvedTsxCli, absoluteTestFile];
+      // Load TypeScript in the child itself. The tsx CLI spawns another Node
+      // process, adding startup cost and leaving it alive if the CLI times out.
+      resolvedTsxImport ??= import.meta.resolve('tsx');
+      args = ['--import', resolvedTsxImport, absoluteTestFile];
     } else if (testFile.endsWith('.mjs')) {
       args = [absoluteTestFile];
     } else {
@@ -52,12 +60,20 @@ export function runTestFiles(
     }
 
     log(`[frontend-tests] ${testFile}`);
+    const started = performance.now();
     const result = spawn(process.execPath, args, {
       cwd: appRoot,
       env: process.env,
       stdio: 'inherit',
+      timeout,
+      killSignal: 'SIGKILL',
     });
+    log(`[frontend-tests] ${testFile}: ${((performance.now() - started) / 1000).toFixed(1)}s`);
     if (result.error) {
+      if (result.error.code === 'ETIMEDOUT') {
+        log(`[frontend-tests] timed out after ${timeout}ms: ${testFile}`);
+        return 124;
+      }
       log(`[frontend-tests] failed to start ${testFile}: ${result.error.message}`);
       return 1;
     }

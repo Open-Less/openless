@@ -46,12 +46,13 @@ on:
         required: false
         default: ''
 
-# Manual branch builds share a ref group and cancel the older run so duplicate
-# DMG builds do not stack. Tag publishes and draft repairs use a unique group
+# Equivalent manual branch builds cancel the older run so duplicate DMG builds
+# do not stack. Different platform/diagnostic requests stay independent.
+# Tag publishes and draft repairs use a unique group
 # and are not cancelled: cancelling them would abort a release.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' && github.ref || format('{0}-{1}', github.ref, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag == '' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}', github.ref, inputs.platform, inputs.windows_hang_diagnostics) || format('{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' }}
 
 jobs:
   build:
@@ -117,7 +118,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Reuse baseline npm downloads
+          # Repairs check out historical tags that may predate the local action.
+          # Preserve their existing setup-node cache path instead of requiring
+          # newer workflow tooling to exist in the immutable tagged source.
+          cache: ${{ inputs.release_tag != '' && 'npm' || '' }}
+          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        if: inputs.release_tag == ''
         uses: ./.github/actions/cache-npm
 
       - name: Verify repair source CI and version
@@ -161,8 +168,9 @@ jobs:
           shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
           cache-on-failure: true
-          # Branch dispatches restore this shared tree and must not replace it.
-          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
+          # Only beta can warm future tag builds. Per-tag copies cannot be
+          # restored by the next tag and evict reusable baseline dependencies.
+          save-if: ${{ github.ref == 'refs/heads/beta' && inputs.release_tag == '' }}
 
       - name: Cache macOS release dependencies
         if: startsWith(matrix.platform, 'macos')
@@ -174,10 +182,11 @@ jobs:
           prefix-key: v0-rust-${{ matrix.rust-target }}
           shared-key: tauri-macos
           workspaces: 'openless-all/app/src-tauri -> target'
-          # Branch dispatches restore this shared tree and must not replace it.
-          save-if: ${{ github.ref == 'refs/heads/beta' || startsWith(github.ref, 'refs/tags/') }}
+          # Weekly beta builds maintain this tree; tags only restore it.
+          save-if: ${{ github.ref == 'refs/heads/beta' && inputs.release_tag == '' }}
 
       - name: Prepare Windows Sherpa static libraries
+        timeout-minutes: 15
         if: matrix.platform == 'windows-latest'
         working-directory: 'openless-all/app'
         shell: pwsh
@@ -291,6 +300,7 @@ jobs:
         if: always() && startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: macos-cargo-timings-${{ matrix.updater-arch }}
           path: openless-all/app/src-tauri/target/cargo-timings/*.html
           if-no-files-found: ignore
@@ -369,7 +379,8 @@ jobs:
           # and any bundler failure makes *all* bundles skip their .sig. MSI always hits ICE80,
           # so a single `tauri build` can never produce the NSIS .exe.sig.
           # Pass 1: NSIS alone — must succeed, producing *_x64-setup.exe(.sig) for the updater.
-          # Pass 2: MSI alone — allowed to fail; the Repair step re-links with light.exe.
+          # Pass 2: bundle MSI from the compiled executable; no second tsc/vite/Cargo pass.
+          # MSI bundling may fail; the Repair step re-links with light.exe.
           # Beta skips MSI: Windows Installer / WiX cannot represent non-numeric prerelease
           # identifiers like `1.2.3-Beta.1`; stable still produces MSI as usual.
           # MSI ProductVersion is numeric and 16-bit bounded. Keep the full app
@@ -388,27 +399,29 @@ jobs:
           msi_config_exit=$?
           if [ "$msi_config_exit" -ne 0 ]; then exit "$msi_config_exit"; fi
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked --timings
             nsis_exit=$?
+            if [ "$nsis_exit" -ne 0 ]; then exit "$nsis_exit"; fi
             if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ] || [ "$msi_supported" -eq 0 ]; then
               echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
               echo "[info] Skipping MSI bundle for unsupported prerelease/channel."
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
+              npm run tauri -- bundle "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           else
-            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis
+            npm run tauri -- build "${diagnostic_args[@]}" --bundles nsis -- --locked --timings
             nsis_exit=$?
+            if [ "$nsis_exit" -ne 0 ]; then exit "$nsis_exit"; fi
             if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ] || [ "$msi_supported" -eq 0 ]; then
               echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
               echo "[info] Skipping MSI bundle for unsupported prerelease/channel."
               msi_exit=0
             else
               echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
-              npm run tauri -- build "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
+              npm run tauri -- bundle "${diagnostic_args[@]}" --bundles msi --config src-tauri/tauri.msi-version.json
               msi_exit=$?
             fi
           fi
@@ -420,6 +433,16 @@ jobs:
           fi
           # MSI failure does not block — the next Repair step re-links with light.exe (with -sice:ICE80).
           exit 0
+
+      - name: Upload Windows Cargo timings
+        if: always() && matrix.platform == 'windows-latest'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cargo-timings-x64
+          retention-days: 7
+          path: openless-all/app/src-tauri/target/cargo-timings/*.html
+          if-no-files-found: ignore
 
       # ── If tauri fails at the wix link stage (candle produced wixobj, but light cannot find
       #    the IME DLL because of cwd-relative wxs Source resolution), manually run light from
@@ -629,6 +652,7 @@ jobs:
         timeout-minutes: 10
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-download-alias-${{ matrix.updater-target }}-${{ matrix.updater-arch }}
           compression-level: 0
           path: openless-all/app/src-tauri/target/release/downloads/*
@@ -638,6 +662,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-macos-${{ matrix.updater-arch }}
           compression-level: 0
           path: |
@@ -648,6 +673,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-macos-${{ matrix.updater-arch }}-updater
           compression-level: 0
           path: |
@@ -695,6 +721,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: ${{ env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
@@ -709,6 +736,7 @@ jobs:
         if: matrix.platform == 'windows-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-windows-x64-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
