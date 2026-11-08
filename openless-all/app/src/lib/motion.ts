@@ -265,7 +265,14 @@ export function useSelectionMotion(
     };
     position(previous.current !== null && previous.current !== selection);
     previous.current = selection;
-    const observer = new ResizeObserver(() => position(false));
+    let resizeFrame = 0;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        position(false);
+      });
+    });
     observer.observe(group);
     return () => {
       interrupted.current = {
@@ -273,6 +280,7 @@ export function useSelectionMotion(
         width: getComputedStyle(indicator).width,
       };
       observer.disconnect();
+      cancelAnimationFrame(resizeFrame);
       motion?.cancel();
     };
   }, [groupRef, indicatorRef, selection, underline, reduced]);
