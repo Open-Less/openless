@@ -652,6 +652,7 @@ export const de: typeof zhCN = {
       settings: 'Einstellungen: Kurzbefehle, Dienste, Datenschutz und Updates',
     },
     footer: {
+      usage: 'Nutzung',
       account: 'Konto',
       feedback: 'Rückmeldung',
       settings: 'Einstellungen',
