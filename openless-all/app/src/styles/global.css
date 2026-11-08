@@ -1089,6 +1089,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 /* Segmented control (components/ui/Segmented), shared by every segmented choice in
    Settings: a white track with the controls' hairline, a neutral chip that slides under
    the selected option (useSelectionMotion), labels in the selection language. */
+.ol-overview-segment > button {
+  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 2px);
+}
 .ol-segmented {
   position: relative;
   isolation: isolate;

@@ -1304,7 +1304,7 @@ export const es: typeof zhCN = {
     },
     advancedPages: {
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
-      cursorContextTitle: 'Contexto del cursor y frases cortas',
+      cursorContextTitle: 'Percepción',
       startupDiagnosticsTitle: 'Diagnóstico de inicio',
       cursorContextHint:
         'El contexto del cursor está activado de forma predeterminada. Desactívalo aquí si no quieres enviar el texto cercano con las solicitudes de mejora.',

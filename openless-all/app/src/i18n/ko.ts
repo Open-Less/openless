@@ -1269,7 +1269,7 @@ export const ko: typeof zhCN = {
     },
     advancedPages: {
       voiceEnhancementTitle: '음성 향상과 재생 억제',
-      cursorContextTitle: '커서 문맥과 짧은 입력',
+      cursorContextTitle: '인식',
       startupDiagnosticsTitle: '시작 진단',
       cursorContextHint:
         '커서 문맥은 기본적으로 켜져 있습니다. 주변 텍스트를 다듬기 요청에 포함하지 않으려면 여기서 끄세요.',

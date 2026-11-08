@@ -9,6 +9,29 @@ async function openShortcuts(page: Page) {
   await settleNavigation(page);
 }
 
+test('shortcut search remains visible without focus', async ({ page }) => {
+  await openShortcuts(page);
+  const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
+  const colors = await search.evaluate((element) => ({
+    search: getComputedStyle(element).backgroundColor,
+    page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
+      .backgroundColor,
+  }));
+  expect(colors.search).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colors.search).not.toBe(colors.page);
+});
+
+test('awareness settings have a dedicated advanced page', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: /^(高级功能|实验与扩展)$/ }).click();
+  await settleNavigation(dialog);
+  await dialog.locator('[data-ol-advanced-entry="cursorContext"]').click();
+  await expect(dialog.locator('[data-ol-advanced-page="cursorContext"]')).toBeVisible();
+  await expect(dialog.getByText('手改学词', { exact: true })).toBeVisible();
+});
+
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({
   page,
 }) => {
