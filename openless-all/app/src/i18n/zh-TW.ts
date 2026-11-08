@@ -1138,7 +1138,7 @@ export const zhTW: typeof zhCN = {
       liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
-      cursorContextTitle: '游標上下文與短句行為',
+      cursorContextTitle: '感知',
       startupDiagnosticsTitle: '啟動診斷',
       cursorContextHint: '游標上下文預設開啟。如果不希望潤色請求帶上附近文字，可以在這裡關閉。',
     },

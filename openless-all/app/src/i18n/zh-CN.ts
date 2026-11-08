@@ -1193,7 +1193,7 @@ export const zhCN = {
       liveInputTitle: '文字插入',
       experiments: '配置实验功能与扩展选项。',
       voiceEnhancementTitle: '语音增强与播放抑制',
-      cursorContextTitle: '光标上下文与短句行为',
+      cursorContextTitle: '感知',
       startupDiagnosticsTitle: '启动诊断',
       cursorContextHint: '光标上下文默认开启。如果不希望润色请求携带附近文字，可以在这里关闭。',
     },
@@ -2237,7 +2237,7 @@ export const zhCN = {
       multimodal: '管理多模态识别的实验性开关。',
       debug: '保留调试录音、探测光标上下文和导出日志。',
       voiceEnhancement: '配置高级音频处理、降噪与播放回声抑制。',
-      cursorContext: '配置润色请求使用的光标附近上下文与短句行为。',
+      cursorContext: '管理光标上下文、短句行为和手改学词。',
       startupDiagnostics: '查看启动耗时、后端握手和延迟探测结果。',
     },
     descriptions: {

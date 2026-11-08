@@ -777,6 +777,7 @@ function SegmentedToggle<T extends string | number>({
 }) {
   return (
     <div
+      className="ol-overview-segment"
       role="group"
       aria-label={ariaLabel}
       style={{
@@ -785,7 +786,7 @@ function SegmentedToggle<T extends string | number>({
         padding: 2,
         borderRadius: 'var(--ol-control-radius)',
         background: 'var(--ol-surface-2)',
-        border: '0.5px solid var(--ol-line)',
+        boxShadow: 'inset 0 0 0 0.5px var(--ol-line)',
       }}
     >
       {options.map((option) => {

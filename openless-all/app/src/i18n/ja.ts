@@ -1175,7 +1175,7 @@ export const ja: typeof zhCN = {
       liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
-      cursorContextTitle: 'カーソル文脈と短文の動作',
+      cursorContextTitle: '認識',
       startupDiagnosticsTitle: '起動診断',
       cursorContextHint:
         'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',

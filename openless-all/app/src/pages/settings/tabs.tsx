@@ -27,6 +27,7 @@ import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
+import { VocabularyLearningSection } from './VocabularyLearningSection';
 import { AudioDspSettings } from './AudioDspSettings';
 import { BetaChannelSection } from './BetaChannelSection';
 import { AutoUpdateSection } from './AutoUpdateSection';
@@ -711,6 +712,7 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const platformCaps = usePlatformCaps();
   const entries = pages;
   const list = (
     <div className="ol-advanced-settings-list">
@@ -745,8 +747,14 @@ export function AdvancedTab({
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'liveInput' && <LiveInputSection />}
-            {item.id === 'cursorContext' && <CursorContextSection />}
-            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'cursorContext' && (
+              <>
+                <CursorContextSection />
+                {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
+                  <VocabularyLearningSection />
+                )}
+              </>
+            )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

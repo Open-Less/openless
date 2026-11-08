@@ -1244,7 +1244,7 @@ export const en: typeof zhCN = {
       liveInputTitle: 'Text insertion',
       experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
-      cursorContextTitle: 'Cursor context and short-input behavior',
+      cursorContextTitle: 'Awareness',
       startupDiagnosticsTitle: 'Startup diagnostics',
       cursorContextHint:
         'Cursor context is enabled by default. Disable it if you do not want nearby text sent with polish requests.',

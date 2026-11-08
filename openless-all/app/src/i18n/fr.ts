@@ -1221,7 +1221,7 @@ export const fr: typeof zhCN = {
       liveInputTitle: 'Insertion de texte',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
-      cursorContextTitle: 'Contexte du curseur et phrases courtes',
+      cursorContextTitle: 'Perception',
       startupDiagnosticsTitle: 'Diagnostic de démarrage',
       cursorContextHint:
         'Le contexte du curseur est activé par défaut. Désactivez-le ici si le texte voisin ne doit pas partir avec les demandes de reformulation.',
