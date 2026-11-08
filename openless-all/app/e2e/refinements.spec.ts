@@ -2,6 +2,20 @@ import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+
+test('style and dictionary action buttons retain compact corners', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '风格', exact: true }).click();
+  await page.getByRole('button', { name: '润色模式', exact: true }).click();
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '8px');
+  await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
+    'border-radius',
+    '8px',
+  );
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+});
+
 async function openShortcuts(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();

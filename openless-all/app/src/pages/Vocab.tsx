@@ -610,7 +610,7 @@ export function Vocab() {
               icon={wordAdded ? 'check' : 'plus'}
               onClick={() => void addNewWord()}
               style={{
-                borderRadius: 999,
+                borderRadius: 8,
                 height: 38,
                 minWidth: 92,
                 justifyContent: 'center',
