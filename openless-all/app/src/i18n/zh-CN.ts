@@ -1197,6 +1197,23 @@ export const zhCN = {
       startupDiagnosticsTitle: '启动诊断',
       cursorContextHint: '光标上下文默认开启。如果不希望润色请求携带附近文字，可以在这里关闭。',
     },
+    expressionLearning: {
+      clearHint: '清除后，正在进行的听写可能仍使用开始时已捕获的偏好。',
+      lineBreaksMore: '更常分行',
+      lineBreaksLess: '减少分行',
+      exclamationsMore: '更常使用感叹号',
+      exclamationsLess: '减少感叹号',
+      terminalPunctuationMore: '保留句末标点',
+      terminalPunctuationLess: '减少句末标点',
+
+      title: '表达习惯',
+      enabled: '学习表达习惯',
+      description:
+        '仅在本机观察听写后的排版修改；表达习惯数据只保存抽象统计，不保存观察到的文本。历史记录另行管理。重复且一致的分行、感叹号和句末标点偏好达到稳定阈值后，会作为简短形式指令发送给所选文字模型；关闭后立即停止学习，并从下一次听写起停止应用；正在进行的听写可能仍使用已捕获的偏好。',
+      status: '已形成 {{count}} 项稳定偏好',
+      clear: '清除表达习惯',
+      error: '无法读取或保存表达习惯，请重试。',
+    },
     vocabularyLearning: {
       title: '手改学词',
       enabled: '启用手改学词',

@@ -4913,7 +4913,8 @@ impl TauriTextInsertionSession {
                                         .as_ref()
                                         .and_then(|b| b.upgrade())
                                         .is_some_and(|b| {
-                                            b.get_preferences().vocabulary_learning_enabled
+                                            let prefs = b.get_preferences();
+                                            prefs.vocabulary_learning_enabled || prefs.expression_learning_enabled
                                         })
                             },
                             || {

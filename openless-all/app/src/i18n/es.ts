@@ -1272,6 +1272,24 @@ export const es: typeof zhCN = {
       useSystemProxyDesc:
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
     },
+    expressionLearning: {
+      clearHint:
+        'Tras borrar, un dictado en curso puede seguir usando las preferencias capturadas al comenzar.',
+      lineBreaksMore: 'Más saltos de línea',
+      lineBreaksLess: 'Menos saltos de línea',
+      exclamationsMore: 'Más signos de exclamación',
+      exclamationsLess: 'Menos signos de exclamación',
+      terminalPunctuationMore: 'Usar puntuación final',
+      terminalPunctuationLess: 'Reducir la puntuación final',
+
+      title: 'Hábitos de expresión',
+      enabled: 'Aprender hábitos de expresión',
+      description:
+        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede seguir usando las preferencias ya capturadas.',
+      status: '{{count}} preferencias estables',
+      clear: 'Borrar hábitos',
+      error: 'No se pudieron leer o guardar los hábitos.',
+    },
     vocabularyLearning: {
       title: 'Aprender de las correcciones',
       enabled: 'Activar aprendizaje de correcciones',

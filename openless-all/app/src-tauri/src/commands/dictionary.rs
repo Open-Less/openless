@@ -44,6 +44,18 @@ pub fn list_correction_rules(core: CoreState<'_>) -> Result<Vec<CorrectionRule>,
 }
 
 #[tauri::command]
+pub fn get_expression_profile(window: Window, core: CoreState<'_>) -> Result<Vec<openless_core::expression_observation::StableExpressionDirection>, String> {
+    if window.label() != "main" { return Err("expression profile is only available from the main window".into()); }
+    core.expression_profile_directions().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn clear_expression_profile(window: Window, core: CoreState<'_>) -> Result<(), String> {
+    if window.label() != "main" { return Err("expression profile is only available from the main window".into()); }
+    core.clear_expression_profile().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn add_correction_rule(
     core: CoreState<'_>,
     pattern: String,

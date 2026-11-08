@@ -443,6 +443,9 @@ fn shared_backend_from_stores(
         preferences: prefs.core(),
         history: history.core(),
         activity: activity.core(),
+        expression_profile: openless_core::expression_observation::open_shared_expression_profile(
+            config.data_dir.join("expression-profile.json"),
+        ),
         vocabulary: vocab.core(),
         correction_rules: correction_rules.core(),
         style_packs: style_packs.core(),

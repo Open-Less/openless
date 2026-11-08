@@ -1232,6 +1232,23 @@ export const ko: typeof zhCN = {
       useSystemProxyDesc:
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
+    expressionLearning: {
+      clearHint: '삭제 후에도 진행 중인 받아쓰기에는 시작할 때 캡처한 선호가 사용될 수 있습니다.',
+      lineBreaksMore: '줄바꿈 늘리기',
+      lineBreaksLess: '줄바꿈 줄이기',
+      exclamationsMore: '느낌표 늘리기',
+      exclamationsLess: '느낌표 줄이기',
+      terminalPunctuationMore: '문장 끝 구두점 사용',
+      terminalPunctuationLess: '문장 끝 구두점 줄이기',
+
+      title: '표현 습관',
+      enabled: '표현 습관 학습',
+      description:
+        '받아쓰기 후 서식 수정을 기기에서만 관찰하며 표현 습관에는 추상적인 통계만 저장합니다. 기록은 별도로 관리됩니다. 반복되고 일관된 줄바꿈과 문장 부호 선호를 선택한 텍스트 모델에 짧은 지시로 전달합니다. 끄면 학습은 즉시 중단되고 다음 받아쓰기부터 적용되지 않습니다. 진행 중인 받아쓰기에는 이미 캡처한 선호가 사용될 수 있습니다.',
+      status: '안정된 선호 {{count}}개',
+      clear: '표현 습관 지우기',
+      error: '표현 습관을 읽거나 저장하지 못했습니다.',
+    },
     vocabularyLearning: {
       title: '수정으로 단어 학습',
       enabled: '수정 학습 사용',

@@ -1240,6 +1240,23 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
+    expressionLearning: {
+      clearHint: '消去後も、進行中の音声入力には開始時の好みが使われる場合があります。',
+      lineBreaksMore: '改行を増やす',
+      lineBreaksLess: '改行を減らす',
+      exclamationsMore: '感嘆符を増やす',
+      exclamationsLess: '感嘆符を減らす',
+      terminalPunctuationMore: '文末の句読点を使う',
+      terminalPunctuationLess: '文末の句読点を減らす',
+
+      title: '表現の習慣',
+      enabled: '表現の習慣を学習',
+      description:
+        '音声入力後の書式変更を端末内で観察し、表現の習慣には抽象的な統計のみを保存します。履歴は別に管理されます。繰り返し確認された改行や句読点の傾向を、選択した文字モデルへの短い指示として利用します。オフにすると学習は直ちに停止し、次の音声入力から適用されません。進行中の入力には取得済みの好みが使われる場合があります。',
+      status: '安定した好み {{count}} 件',
+      clear: '表現の習慣を消去',
+      error: '表現の習慣を読み書きできませんでした。',
+    },
     vocabularyLearning: {
       title: '修正から単語を学習',
       enabled: '修正からの学習を有効にする',

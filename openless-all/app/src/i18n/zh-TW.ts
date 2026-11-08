@@ -1197,6 +1197,23 @@ export const zhTW: typeof zhCN = {
       useSystemProxyDesc:
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
+    expressionLearning: {
+      clearHint: '清除後，進行中的聽寫可能仍使用開始時已擷取的偏好。',
+      lineBreaksMore: '更常分行',
+      lineBreaksLess: '減少分行',
+      exclamationsMore: '更常使用驚嘆號',
+      exclamationsLess: '減少驚嘆號',
+      terminalPunctuationMore: '保留句末標點',
+      terminalPunctuationLess: '減少句末標點',
+
+      title: '表達習慣',
+      enabled: '學習表達習慣',
+      description:
+        '僅在本機觀察聽寫後的排版修改；表達習慣資料只儲存抽象統計，不儲存觀察到的文字。歷史記錄另行管理。反覆且一致的分行、驚嘆號及句末標點偏好穩定後，會以簡短形式指令傳給所選文字模型；關閉後立即停止學習，並從下一次聽寫起停止套用；進行中的聽寫可能仍使用已擷取的偏好。',
+      status: '已形成 {{count}} 項穩定偏好',
+      clear: '清除表達習慣',
+      error: '無法讀取或儲存表達習慣，請重試。',
+    },
     vocabularyLearning: {
       title: '手改學詞',
       enabled: '啟用手改學詞',

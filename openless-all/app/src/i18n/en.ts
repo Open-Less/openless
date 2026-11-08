@@ -1254,6 +1254,24 @@ export const en: typeof zhCN = {
       text: 'Text and context',
       diagnostics: 'Diagnostics',
     },
+    expressionLearning: {
+      clearHint:
+        'After clearing, an in-progress dictation may still use the preferences captured when it started.',
+      lineBreaksMore: 'More line breaks',
+      lineBreaksLess: 'Fewer line breaks',
+      exclamationsMore: 'More exclamation marks',
+      exclamationsLess: 'Fewer exclamation marks',
+      terminalPunctuationMore: 'Use terminal punctuation',
+      terminalPunctuationLess: 'Use less terminal punctuation',
+
+      title: 'Expression habits',
+      enabled: 'Learn expression habits',
+      description:
+        'Observes formatting edits locally after dictation; expression data stores abstract statistics, not observed text. History is managed separately. Repeated, consistent line-break and punctuation preferences become short instructions sent to the selected text model. Turning this off stops learning immediately and applying preferences to new dictations; an in-progress dictation may still use its captured preferences.',
+      status: '{{count}} stable preferences',
+      clear: 'Clear expression habits',
+      error: 'Could not read or save expression habits. Try again.',
+    },
     vocabularyLearning: {
       title: 'Learn from corrections',
       enabled: 'Enable learning from corrections',
