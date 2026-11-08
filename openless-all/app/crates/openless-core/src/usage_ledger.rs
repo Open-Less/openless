@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Mutex,
+    mpsc, Arc, Mutex,
 };
 use uuid::Uuid;
 
@@ -32,6 +32,9 @@ pub enum ServicePurpose {
     Translation,
     Question,
     Selection,
+    QuickNote,
+    VoiceEdit,
+    CloudNote,
     Other,
 }
 
@@ -52,6 +55,7 @@ pub struct ReportedTokens {
     pub output: Option<u64>,
     pub cached_input: Option<u64>,
     pub cache_write_input: Option<u64>,
+    pub reasoning: Option<u64>,
 }
 
 impl ReportedTokens {
@@ -84,11 +88,17 @@ impl ReportedTokens {
             cached_input: usage
                 .pointer("/input_tokens_details/cached_tokens")
                 .or_else(|| usage.pointer("/prompt_tokens_details/cached_tokens"))
+                .or_else(|| usage.get("prompt_cache_hit_tokens"))
                 .or_else(|| usage.get("cache_read_input_tokens"))
                 .or_else(|| usage.get("cachedContentTokenCount"))
                 .and_then(|value| value.as_u64()),
             cache_write_input: usage
                 .get("cache_creation_input_tokens")
+                .or_else(|| usage.pointer("/input_tokens_details/cache_write_tokens"))
+                .and_then(|value| value.as_u64()),
+            reasoning: usage
+                .pointer("/output_tokens_details/reasoning_tokens")
+                .or_else(|| usage.pointer("/completion_tokens_details/reasoning_tokens"))
                 .and_then(|value| value.as_u64()),
         };
         (tokens != Self::default()).then_some(tokens)
@@ -107,6 +117,9 @@ impl ReportedTokens {
         if newer.cache_write_input.is_some() {
             self.cache_write_input = newer.cache_write_input;
         }
+        if newer.reasoning.is_some() {
+            self.reasoning = newer.reasoning;
+        }
     }
 }
 
@@ -120,12 +133,14 @@ pub struct UsageRecord {
     pub purpose: ServicePurpose,
     pub outcome: ServiceOutcome,
     pub provider: Option<String>,
+    pub channel: Option<String>,
     pub model: Option<String>,
     pub audio_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
     pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     pub synthesized_characters: Option<u64>,
 }
 
@@ -152,6 +167,7 @@ impl UsageRecord {
         !self.id.is_nil()
             && self.occurred_at_ms > 0
             && self.provider.as_deref().is_none_or(identifier_valid)
+            && self.channel.as_deref().is_none_or(identifier_valid)
             && self.model.as_deref().is_none_or(identifier_valid)
     }
 }
@@ -168,6 +184,101 @@ pub struct UsageLedger {
     path: PathBuf,
     records: Mutex<Option<Vec<UsageRecord>>>,
     generation: AtomicU64,
+}
+
+enum WriterCommand {
+    Append(u64, Box<UsageRecord>),
+    Flush(mpsc::Sender<()>),
+    Clear(mpsc::Sender<Result<(), BackendError>>),
+}
+
+/// A bounded worker keeps disk writes off recognition and model response paths.
+pub struct UsageRecorder {
+    ledger: Arc<UsageLedger>,
+    sender: mpsc::SyncSender<WriterCommand>,
+    dropped_or_failed: Arc<AtomicU64>,
+}
+
+impl UsageRecorder {
+    pub fn start(ledger: Arc<UsageLedger>) -> Result<Self, BackendError> {
+        let (sender, receiver) = mpsc::sync_channel(256);
+        let worker_ledger = Arc::clone(&ledger);
+        let dropped_or_failed = Arc::new(AtomicU64::new(0));
+        let failures = Arc::clone(&dropped_or_failed);
+        std::thread::Builder::new()
+            .name("openless-usage-ledger".into())
+            .spawn(move || {
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        WriterCommand::Append(generation, record) => {
+                            if worker_ledger.append(generation, *record).is_err() {
+                                failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        WriterCommand::Flush(reply) => {
+                            let _ = reply.send(());
+                        }
+                        WriterCommand::Clear(reply) => {
+                            let _ = reply.send(worker_ledger.clear());
+                        }
+                    }
+                }
+            })
+            .map_err(|_| persistence_error("start service usage worker"))?;
+        Ok(Self {
+            ledger,
+            sender,
+            dropped_or_failed,
+        })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.ledger.generation()
+    }
+
+    pub fn submit(&self, generation: u64, record: UsageRecord) -> bool {
+        if self
+            .sender
+            .try_send(WriterCommand::Append(generation, Box::new(record)))
+            .is_ok()
+        {
+            true
+        } else {
+            self.dropped_or_failed.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+    }
+
+    /// Call from a blocking worker, never from an audio or UI thread.
+    pub fn snapshot(&self) -> Result<(Vec<UsageRecord>, u64), BackendError> {
+        let (send, receive) = mpsc::channel();
+        self.sender
+            .try_send(WriterCommand::Flush(send))
+            .map_err(|_| persistence_error("flush service usage"))?;
+        receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| persistence_error("flush service usage"))?;
+        Ok((
+            self.ledger.list()?,
+            self.dropped_or_failed.load(Ordering::Relaxed),
+        ))
+    }
+
+    /// Queued records precede the clear; in-flight pre-clear requests are rejected later.
+    pub fn clear(&self) -> Result<(), BackendError> {
+        let (send, receive) = mpsc::channel();
+        self.sender
+            .try_send(WriterCommand::Clear(send))
+            .map_err(|_| persistence_error("clear service usage"))?;
+        receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| {
+                BackendError::new(
+                    crate::errors::BackendErrorCode::OutcomeUnknown,
+                    "service usage clear outcome is unknown",
+                )
+            })?
+    }
 }
 
 impl UsageLedger {
@@ -299,12 +410,14 @@ mod tests {
             purpose: ServicePurpose::DictationPostprocess,
             outcome: ServiceOutcome::Succeeded,
             provider: Some("provider".into()),
+            channel: Some("channel-1".into()),
             model: Some("model-v1".into()),
             audio_ms: None,
             input_tokens: Some(80),
             output_tokens: Some(20),
             cached_input_tokens: None,
             cache_write_input_tokens: None,
+            reasoning_tokens: None,
             synthesized_characters: None,
         }
     }
@@ -348,6 +461,49 @@ mod tests {
     }
 
     #[test]
+    fn older_records_without_optional_fields_remain_readable() {
+        let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usage.json");
+        let mut value = serde_json::to_value(record()).unwrap();
+        value.as_object_mut().unwrap().remove("channel");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("cacheWriteInputTokens");
+        value.as_object_mut().unwrap().remove("reasoningTokens");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"version":1,"records":[value]})).unwrap(),
+        )
+        .unwrap();
+        let saved = UsageLedger::open(path).unwrap().list().unwrap();
+        assert_eq!(saved[0].channel, None);
+        assert_eq!(saved[0].cache_write_input_tokens, None);
+        assert_eq!(saved[0].reasoning_tokens, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recorder_flushes_and_rejects_inflight_records_after_clear() {
+        let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
+        let ledger = Arc::new(UsageLedger::open(dir.join("usage.json")).unwrap());
+        let recorder = UsageRecorder::start(ledger).unwrap();
+        let generation = recorder.generation();
+        assert!(recorder.submit(generation, record()));
+        assert_eq!(recorder.snapshot().unwrap().0.len(), 1);
+        recorder.clear().unwrap();
+        assert!(recorder.submit(generation, record()));
+        assert!(recorder.snapshot().unwrap().0.is_empty());
+        let mut invalid = record();
+        invalid.model = Some("sk-secret".into());
+        assert!(recorder.submit(recorder.generation(), invalid));
+        assert_eq!(recorder.snapshot().unwrap().1, 1);
+        drop(recorder);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn rejects_invalid_identifiers_without_inventing_token_semantics() {
         let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
         let ledger = UsageLedger::open(dir.join("usage.json")).unwrap();
@@ -375,6 +531,7 @@ mod tests {
                 output: Some(8),
                 cached_input: Some(30),
                 cache_write_input: None,
+                reasoning: None,
             }
         );
         let response = ReportedTokens::from_response(
@@ -383,6 +540,11 @@ mod tests {
         .unwrap();
         assert_eq!(response.input, Some(40));
         assert_eq!(response.output, Some(5));
+        let reasoning = ReportedTokens::from_response(
+            &json!({"usage":{"output_tokens":10,"output_tokens_details":{"reasoning_tokens":7}}}),
+        )
+        .unwrap();
+        assert_eq!(reasoning.reasoning, Some(7));
         let nested = ReportedTokens::from_response(
             &json!({"usage":null,"response":{"usage":{"input_tokens":40}}}),
         )
@@ -402,6 +564,7 @@ mod tests {
                 output: Some(7),
                 cached_input: Some(90),
                 cache_write_input: Some(12),
+                reasoning: None,
             }
         );
         let gemini = ReportedTokens::from_response(&json!({"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":3,"cachedContentTokenCount":4}})).unwrap();
