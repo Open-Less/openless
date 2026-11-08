@@ -1190,6 +1190,7 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      liveInputTitle: '文字插入',
       experiments: '配置实验功能与扩展选项。',
       voiceEnhancementTitle: '语音增强与播放抑制',
       cursorContextTitle: '光标上下文与短句行为',
@@ -2020,10 +2021,10 @@ export const zhCN = {
       streamingInsertHintMac: '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
       streamingInsertHintLinux: '通过 fcitx5 插件提交文字；流式输入使用 enigo + XTest 合成按键。',
-      macosCompositionInputLabel: '实时原文显示在输入框（macOS）',
+      macosCompositionInputLabel: '实时原文显示在输入框',
       macosCompositionInputDesc:
         '录音时在原输入框显示识别文字，结束后整体替换为整理或翻译结果。需要辅助功能权限及编辑器支持；移动光标或编辑原文会停止实时替换。',
-      windowsCompositionInputLabel: '实时原文显示在输入框（Windows）',
+      windowsCompositionInputLabel: '实时原文显示在输入框',
       windowsCompositionInputDesc:
         '录音时把识别到的文字以带下划线的组合文本显示在输入框中，结束后替换为最终结果。需要启用 OpenLess 的 TSF 输入法组件，且目标应用支持文本服务框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪贴板',
@@ -2228,6 +2229,7 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      liveInput: '配置实时原文在输入框中的显示。',
       experiments: '配置实验功能与扩展选项。',
       customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
       localModels: experimentalAsr.description,

@@ -1135,6 +1135,7 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
       cursorContextTitle: '游標上下文與短句行為',
@@ -2021,10 +2022,10 @@ export const zhTW: typeof zhCN = {
       streamingInsertHintMac: '臨時切到 ABC 輸入源，避免 CJK IME 攔截，會話結束後自動切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字元，繞過 TSF / IME，不切輸入法。',
       streamingInsertHintLinux: '透過 fcitx5 外掛提交文字；串流輸入使用 enigo + XTest 合成按鍵。',
-      macosCompositionInputLabel: '即時原文顯示在輸入框（macOS）',
+      macosCompositionInputLabel: '即時原文顯示在輸入框',
       macosCompositionInputDesc:
         '錄音時在原輸入框顯示辨識文字，完成後整段取代為整理或翻譯結果。需要輔助使用授權及編輯器支援；移動游標或手動編輯會停止即時取代。',
-      windowsCompositionInputLabel: '即時原文顯示在輸入框（Windows）',
+      windowsCompositionInputLabel: '即時原文顯示在輸入框',
       windowsCompositionInputDesc:
         '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪貼簿',
@@ -2228,6 +2229,7 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      liveInput: '設定即時原文在輸入框中的顯示。',
       experiments: '設定實驗功能與擴充選項。',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
       localModels: experimentalAsr.description,

@@ -1201,6 +1201,7 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
       cursorContextTitle: 'Contexto del cursor y frases cortas',
@@ -2185,10 +2186,10 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
-      macosCompositionInputLabel: 'Transcripción en directo en el campo de entrada (macOS)',
+      macosCompositionInputLabel: 'Transcripción en directo en el campo de entrada',
       macosCompositionInputDesc:
         'Muestra el reconocimiento en el campo original y después lo sustituye por el texto corregido o traducido. Requiere permiso de Accesibilidad y un editor compatible. Mover el cursor o editar el texto detiene la sustitución.',
-      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
+      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
@@ -2407,6 +2408,7 @@ export const es: typeof zhCN = {
     backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
+      liveInput: 'Configurar la transcripción en directo en el campo.',
       experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:
         'Solo para servicios propios; la sincronización oficial no requiere configuración.',
