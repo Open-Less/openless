@@ -1096,10 +1096,17 @@ pub fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> Advanced
     parse_advanced_asr_config(raw)
 }
 
+/// Providers cap uploads by size (25 MB on Groq's free tier and OpenAI), so a
+/// long dictation sent as one WAV is rejected with 413. Ten minutes of 16 kHz
+/// mono PCM is 19.2 MB, safely under that cap.
+const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
+
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
-        _ => advanced.chunk_duration_ms,
+        _ => advanced
+            .chunk_duration_ms
+            .or(Some(DEFAULT_BATCH_ASR_CHUNK_MS)),
     }
 }
 
@@ -1315,6 +1322,20 @@ mod tests {
         assert_eq!(
             batch_asr_chunk_limit_ms("openrouter", AdvancedAsrConfig::default()),
             Some(30_000)
+        );
+        assert_eq!(
+            batch_asr_chunk_limit_ms("groq", AdvancedAsrConfig::default()),
+            Some(600_000)
+        );
+        assert_eq!(
+            batch_asr_chunk_limit_ms(
+                "openai-compatible",
+                AdvancedAsrConfig {
+                    chunk_duration_ms: Some(45_000),
+                    ..AdvancedAsrConfig::default()
+                }
+            ),
+            Some(45_000)
         );
         assert_eq!(whisper_transcribe_timeout(10.0), Duration::from_secs(30));
         assert_eq!(whisper_transcribe_timeout(60.0), Duration::from_secs(50));
