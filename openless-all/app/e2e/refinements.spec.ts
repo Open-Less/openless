@@ -30,6 +30,13 @@ test('awareness settings have a dedicated advanced page', async ({ page }) => {
   await dialog.locator('[data-ol-advanced-entry="cursorContext"]').click();
   await expect(dialog.locator('[data-ol-advanced-page="cursorContext"]')).toBeVisible();
   await expect(dialog.getByText('手改学词', { exact: true })).toBeVisible();
+  const expression = dialog.getByRole('switch', { name: '学习表达习惯', exact: true });
+  await expect(expression).toBeVisible();
+  await expect(expression).toHaveAttribute('aria-checked', 'false');
+  await expression.click();
+  await expect(expression).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '清除表达习惯', exact: true }).click();
+  await expect(dialog.getByText('已形成 0 项稳定偏好')).toBeVisible();
 });
 
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({

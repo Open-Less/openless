@@ -1,6 +1,6 @@
 # Awareness follow-up
 
-The desktop Awareness page currently groups cursor context and opt-in correction suggestions. It does not yet implement application-awareness controls, expression learning, or the complete correction system requested by the user.
+The desktop Awareness page groups cursor context, opt-in correction suggestions, and an initial opt-in expression-learning implementation. The initial implementation learns only a small set of global formatting directions, stores abstract evidence locally, and applies stable directions to future dictation prompts. It does not yet implement application-awareness controls, per-app/category profiles, a user blacklist, or the complete correction system requested by the user.
 
 ## Reference and evidence
 
@@ -11,7 +11,7 @@ The reviewed implementation separates app/control context, cursor context, corre
 ## Required implementation
 
 - Define independently controlled, opt-in learning and capture boundaries; keep secure fields, sensitive apps, uncertain target changes and blacklist entries excluded. Describe when contextual text may be sent to the configured model.
-- Extend bounded, locally observed edits to distinguish content changes, lexical corrections, formatting-only edits and ambiguous cases. Do not learn facts, sensitive values or uncertain target edits as style.
-- Persist only bounded abstract expression evidence; define migration, corruption handling, retention, clear/reset semantics and concurrency. Require repeated, consistent evidence across days before applying a profile, with clear app/category/global precedence and decay. Ensure style directives cannot override facts, explicit corrections or user instructions.
+- The initial implementation accepts only uniquely anchored formatting edits, rejects sensitive or content-changing observations, and stores bounded text-free global evidence. Opt-out stops observation and new-session application; users can clear the profile. Mixed edits and richer classification remain unsupported.
+- Extend the profile to app/category scopes with explicit precedence and decay, plus a user-maintained exclusion list. Validate reset and opt-out races across all hosts, and ensure form directives cannot override facts, explicit corrections or user instructions.
 - Separate correction suggestion detection from style learning; retain explicit user confirmation for learned vocabulary. Cover conflicting candidates and repeated sessions without treating one edit as a stable habit.
 - Integrate the controls into the single Awareness page and exercise opt-out, clearing, app exclusion, restart and prompt behavior across supported hosts. Add deterministic classification, persistence, safety, stale-observer and native integration tests before enabling the feature.
