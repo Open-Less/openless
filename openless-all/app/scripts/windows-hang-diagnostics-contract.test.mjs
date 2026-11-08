@@ -171,7 +171,10 @@ for (const fragment of [
   assert.ok(gate.includes(fragment));
 const build = steps.find((step) => step.name === 'Build (Windows)').run;
 assert.match(build, /diagnostic_args=\(--features issue-1266-diagnostics\)/);
-assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles/g) ?? []).length, 4);
+// Signed and unsigned paths compile NSIS once, then reuse that executable for
+// MSI. Both commands must retain the same diagnostics feature selection.
+assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles nsis/g) ?? []).length, 2);
+assert.equal((build.match(/bundle "\$\{diagnostic_args\[@\]\}" --bundles msi/g) ?? []).length, 2);
 const verify = steps.find((step) => step.name === 'Verify Windows diagnostic symbols');
 assert.match(verify.run, /windows-symbol-pair\.py/);
 const symbolTooling = steps.find((step) => step.name === 'Fetch symbol-pair verification tooling');
