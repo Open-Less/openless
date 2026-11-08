@@ -16,7 +16,12 @@ grep -q '^MIT License' "$ROOT/.vendor/KeyboardKit/LICENSE"
 cp "$ROOT/.vendor/KeyboardKit/LICENSE" "$ROOT/Resources/Licenses/KeyboardKit-LICENSE.txt"
 checkout https://github.com/rime/rime-pinyin-simp.git "$ROOT/.vendor/rime-pinyin-simp" 0c6861ef7420ee780270ca6d993d18d4101049d0
 BOOST="$ROOT/.vendor/boost_1_85_0.tar.bz2"
-[ -f "$BOOST" ] || curl -LfsS --retry 2 https://archives.boost.io/release/1.85.0/source/boost_1_85_0.tar.bz2 -o "$BOOST"
+if [ ! -f "$BOOST" ]; then
+  curl -LfsS --retry 2 --connect-timeout 20 --max-time 300 \
+    --speed-limit 1024 --speed-time 30 https://archives.boost.io/release/1.85.0/source/boost_1_85_0.tar.bz2 -o "$BOOST.download"
+  echo "7009fe1faa1697476bdc7027703a2badb84e849b7b0baad5086b087b971f8617  $BOOST.download" | shasum -a 256 -c -
+  mv "$BOOST.download" "$BOOST"
+fi
 echo "7009fe1faa1697476bdc7027703a2badb84e849b7b0baad5086b087b971f8617  $BOOST" | shasum -a 256 -c -
 [ -d "$ROOT/.vendor/boost_1_85_0/boost" ] || tar -xjf "$BOOST" -C "$ROOT/.vendor" boost_1_85_0/boost boost_1_85_0/LICENSE_1_0.txt
 swift build --package-path "$ROOT/.build-tools/XcodeGen" -c release
@@ -24,3 +29,4 @@ rustup toolchain install 1.99.0 --profile minimal
 rustup target add --toolchain 1.99.0 aarch64-apple-ios aarch64-apple-ios-sim
 python3 "$ROOT/scripts/prepare-core.py"
 echo "Dependencies ready. Run scripts/build-rime.sh, then scripts/build-core.sh."
+
