@@ -437,6 +437,10 @@ impl TextEventStream {
         crate::polish::append_utf8_sse_chunk(&mut self.buffer, &mut self.pending, chunk)
     }
 
+    pub fn reported_tokens(&self) -> crate::usage_ledger::ReportedTokens {
+        self.reported_tokens
+    }
+
     pub fn next(&mut self) -> Result<Option<StreamEvent>, LLMError> {
         if self.done {
             return Ok(None);
