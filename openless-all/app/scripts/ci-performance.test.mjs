@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
@@ -88,7 +96,9 @@ assert.equal(
 // Exercise the actual CI Cargo commands against two tiny offline packages.
 // Switching the diagnostics compile back to `check` or giving backend tests
 // their own target directory must lose the dependency reuse this change needs.
-const cargoScratch = mkdtempSync(join(tmpdir(), 'openless-cargo-reuse-'));
+// macOS exposes /private/var through /var. Use one canonical path for relative
+// and absolute manifests so Cargo does not fingerprint two names for one source.
+const cargoScratch = realpathSync(mkdtempSync(join(tmpdir(), 'openless-cargo-reuse-')));
 try {
   for (const path of ['host/src', 'shared/src', 'backend/src']) {
     mkdirSync(join(cargoScratch, path), { recursive: true });
