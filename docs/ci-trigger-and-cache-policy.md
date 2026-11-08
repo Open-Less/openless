@@ -160,4 +160,14 @@ npm 下载缓存使用锁文件精确键，缺失时按 OS/架构前缀恢复已
 
 矩阵取舍：浏览器由一个串行 job 拆成两路，Windows MSRV 由 stable job 拆出，再增加两条轻量汇总检查以保留原必需检查名。单次全量 CI 的 runner 数会增加，目标是缩短关键路径；没有增加浏览器、平台或架构组合。实际墙钟收益仍受 GitHub runner 排队、冷缓存与新增缓存体积影响，需要合并后的同类运行对照，不能把各步骤节省相加作为整轮加速比。
 
-本地验证：`npm test` 完成构建和全部 166 个测试文件；修改的工作流通过 actionlint；两种浏览器分别 `playwright test --list --project=…`，各发现 116 个测试。新增行为用例覆盖必需检查的失败/取消/跳过、挂起的 JS/TS 子进程、NSIS 失败中止和 MSI 二次打包。Windows 安装器实际打包、macOS 签名与 GitHub 多平台耗时仍需远端验证。
+本地验证：`npm test` 完成构建和全部 166 个测试文件；修改的工作流通过 actionlint；两种浏览器分别 `playwright test --list --project=…`，各发现 116 个测试。新增行为用例覆盖必需检查的失败/取消/跳过、挂起的 JS/TS 子进程、NSIS 失败中止和 MSI 二次打包。Windows 安装器实际打包、macOS 签名仍需远端验证；多平台首轮 CI 结果见下一节。
+
+## 9. 第二轮：减少 Windows 重复编译
+
+[首轮 CI 42490834011](https://github.com/Open-Less/openless/actions/runs/42490834011) 全部通过，执行窗口（首个 job 开始到最后一个 job 结束）为 14 分 28 秒。父提交的完整 CI 为 21 分 14 秒，缩短 31.9%；这不包含前者 3 秒、后者 24 分 03 秒的首次调度等待。首轮各 runner 时长合计为 94 分 20 秒，较基线 82 分 40 秒增加 14.1%，因此继续优化重复工作。
+
+Windows stable 首轮为 13 分 36 秒，其中默认 host 测试编译 287 秒，随后诊断 feature 的 `cargo check` 又花 194 秒。日志显示前者使用 `test` profile（无 debug info），后者切到 `dev` profile（有 debug info）并重新检查整张依赖图。诊断检查改为 `cargo build --profile test --lib --bins`，使用前一步的依赖产物，同时实际编译、链接 feature-on 的生产 lib/bin；`cfg(not(test))` 仍生效，独立诊断运行测试也保留。
+
+独立 backend 测试此前使用自己的 target，首轮另花 101 秒。它与 Tauri 锁文件的 394 个条目中有 393 个相同；现在 Windows stable 的这一步使用 `--target-dir src-tauri/target`，让 Cargo 复用版本、features、profile 均匹配的依赖，其余仍独立编译。缓存也恢复为原有单一 target 路径，避免为同一依赖图存两份目录；MSRV 仍保留独立工具链缓存。
+
+`ci-performance.test.mjs` 用两个离线 Cargo 测试包执行实际工作流命令，确认共享依赖在两步中均为 `fresh`，诊断命令产出非测试二进制，并用故意损坏的 feature-on 生产代码确认它会失败。第二轮不增加 runner、不减少现有测试；实际节省需等待新的远端运行，不能直接将 194 秒和 101 秒全计作收益。

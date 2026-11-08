@@ -749,13 +749,11 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: runner.os == 'Windows'
         with:
-          # `shared-key` replaces the job name in the cache prefix, so the release
-          # workflow restoring the same key can reuse this tree. Keep the two in
-          # sync (scripts/ci-cache-sharing.test.mjs enforces it).
+          # Keep the baseline's target path/cache version. The standalone backend
+          # suite below uses this same directory; Cargo fingerprints isolate any
+          # dependency versions/features that differ between the two manifests.
           shared-key: tauri-windows
-          workspaces: |
-            openless-all/app/src-tauri -> target
-            openless-all/app/src-tauri/backend-tests -> target
+          workspaces: 'openless-all/app/src-tauri -> target'
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Cache macOS stable dependencies
@@ -857,7 +855,10 @@ jobs:
       # the sink on Windows/macOS without optional Tauri runtime DLL entrypoints.
       - name: Compile opt-in Windows hang diagnostics host
         timeout-minutes: 25
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1266-diagnostics --timings
+        # `check` rebuilt the graph in dev mode after `test` (194s on Windows).
+        # Build real production lib/bin targets with the preceding test profile:
+        # dependencies are reusable, while cfg(not(test)) and linking stay checked.
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --profile test --lib --bins --features issue-1266-diagnostics --timings
 
       - name: Run isolated Windows hang diagnostics tests (off/on)
         timeout-minutes: 10
@@ -882,7 +883,7 @@ jobs:
         # compile coverage from the step above.
         if: runner.os == 'Windows'
         timeout-minutes: 20
-        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --timings
 
       - name: Run native recorder module tests (Windows)
         # Exercise the production recorder module without hardware, Tauri, MLX, or ASR submodules.

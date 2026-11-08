@@ -85,6 +85,115 @@ assert.equal(
   0,
 );
 
+// Exercise the actual CI Cargo commands against two tiny offline packages.
+// Switching the diagnostics compile back to `check` or giving backend tests
+// their own target directory must lose the dependency reuse this change needs.
+const cargoScratch = mkdtempSync(join(tmpdir(), 'openless-cargo-reuse-'));
+try {
+  for (const path of ['host/src', 'shared/src', 'backend/src']) {
+    mkdirSync(join(cargoScratch, path), { recursive: true });
+  }
+  writeFileSync(
+    join(cargoScratch, 'host/Cargo.toml'),
+    `[package]
+name = "ci-profile-host"
+version = "0.1.0"
+edition = "2021"
+[features]
+issue-1266-diagnostics = []
+[dependencies]
+ci-shared = { path = "../shared" }
+`,
+  );
+  writeFileSync(
+    join(cargoScratch, 'shared/Cargo.toml'),
+    '[package]\nname = "ci-shared"\nversion = "0.1.0"\nedition = "2021"\n',
+  );
+  writeFileSync(join(cargoScratch, 'shared/src/lib.rs'), 'pub fn value() -> u32 { 42 }');
+  writeFileSync(
+    join(cargoScratch, 'host/src/lib.rs'),
+    'pub fn run() -> u32 { ci_shared::value() }',
+  );
+  writeFileSync(
+    join(cargoScratch, 'host/src/main.rs'),
+    'fn main() { assert_eq!(ci_profile_host::run(), 42); }',
+  );
+  writeFileSync(
+    join(cargoScratch, 'backend/Cargo.toml'),
+    '[package]\nname = "ci-backend-tests"\nversion = "0.1.0"\nedition = "2021"\n' +
+      '[dependencies]\nci-shared = { path = "../shared" }\n',
+  );
+  writeFileSync(
+    join(cargoScratch, 'backend/src/lib.rs'),
+    '#[test] fn shared_contract() { assert_eq!(ci_shared::value(), 42); }',
+  );
+  const cargoEnv = { ...process.env, CARGO_PROFILE_TEST_DEBUG: '0' };
+  delete cargoEnv.CARGO_TARGET_DIR;
+  const cargo = (args) =>
+    spawnSync('cargo', [...args, '--offline'], {
+      cwd: cargoScratch,
+      env: cargoEnv,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  const expectSuccess = (result) => {
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result;
+  };
+  expectSuccess(
+    cargo(['test', '--manifest-path', 'host/Cargo.toml', '--lib', '--bins', '--no-run']),
+  );
+  expectSuccess(cargo(['generate-lockfile', '--manifest-path', 'backend/Cargo.toml']));
+  const ciArgs = (stepName) =>
+    ci.jobs['cross-platform'].steps
+      .find((step) => step.name === stepName)
+      .run.trim()
+      .split(/\s+/)
+      .slice(1)
+      .map((arg) =>
+        arg === 'src-tauri/Cargo.toml'
+          ? join(cargoScratch, 'host/Cargo.toml')
+          : arg === 'src-tauri/backend-tests/Cargo.toml'
+            ? join(cargoScratch, 'backend/Cargo.toml')
+            : arg === 'src-tauri/target'
+              ? join(cargoScratch, 'host/target')
+              : arg,
+      );
+  const diagnosticsArgs = ciArgs('Compile opt-in Windows hang diagnostics host');
+  for (const args of [diagnosticsArgs, ciArgs('Run Rust-only backend unit tests (Windows)')]) {
+    const result = expectSuccess(cargo([...args, '--message-format=json']));
+    const artifacts = result.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.reason === 'compiler-artifact');
+    assert.equal(
+      artifacts.find((record) => record.target.name === 'ci_shared')?.fresh,
+      true,
+      `${args.join(' ')} must reuse the previously compiled dependency`,
+    );
+    if (args === diagnosticsArgs) {
+      assert.ok(
+        artifacts.some((record) => record.target.kind.includes('bin') && !record.profile.test),
+        'diagnostics must link the production binary, not only a test harness',
+      );
+    }
+  }
+  writeFileSync(
+    join(cargoScratch, 'host/src/lib.rs'),
+    '#[cfg(all(feature = "issue-1266-diagnostics", not(test)))]\n' +
+      'compile_error!("production diagnostics checked");\n' +
+      'pub fn run() -> u32 { ci_shared::value() }',
+  );
+  const broken = cargo(diagnosticsArgs);
+  assert.ifError(broken.error);
+  assert.notEqual(broken.status, 0);
+  assert.match(broken.stderr, /production diagnostics checked/);
+} finally {
+  rmSync(cargoScratch, { recursive: true, force: true });
+}
+
 // Run the real Windows build shell with only npm stubbed. Check artifact-flow
 // decisions, not the spelling of the commands: one compile, optional rebundle,
 // and no MSI attempt after a failed NSIS build.
@@ -156,4 +265,4 @@ esac
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-console.log('CI gates and Windows installer reuse/failure propagation passed');
+console.log('CI gates, Cargo reuse and Windows installer failure propagation passed');
