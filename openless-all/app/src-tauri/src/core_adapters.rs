@@ -5634,11 +5634,22 @@ mod tests {
     #[test]
     fn live_input_retargets_only_before_any_write() {
         #[derive(Debug)]
-        struct Target { written: bool, current: bool }
-        let mut slot = Some(Target { written: false, current: false });
-        let capture = || Ok(Target { written: false, current: true });
+        struct Target {
+            written: bool,
+            current: bool,
+        }
+        let mut slot = Some(Target {
+            written: false,
+            current: false,
+        });
+        let capture = || Ok(Target {
+            written: false,
+            current: true,
+        });
         let replace = |target: &mut Target, _: &str| {
-            if !target.current { return Err("target changed".into()); }
+            if !target.current {
+                return Err("target changed".into());
+            }
             target.written = true;
             Ok(())
         };
@@ -5663,11 +5674,27 @@ mod tests {
             &mut slot,
             "text",
             || Ok(false),
-            |written, _| { *written = true; Err("verification failed".into()) },
+            |written, _| {
+                *written = true;
+                Err("verification failed".into())
+            },
             |written| *written,
         );
         assert_eq!(result.unwrap_err(), "verification failed");
         assert_eq!(slot, Some(true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires the foreground disposable native-live-input-fixture app"]
+    fn live_input_captures_late_focused_native_editor() {
+        let (_, bundle) = crate::selection::current_front_app_parts();
+        assert_eq!(bundle.as_deref(), Some("org.openless.live-input-fixture"));
+        let mut slot = None;
+        super::replace_live_composition(&mut slot, "实时原文").unwrap();
+        let mut live = slot.expect("captured live editor");
+        assert!(live.has_written());
+        live.cancel().unwrap();
     }
 
     use super::*;
