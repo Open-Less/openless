@@ -153,7 +153,11 @@ assert.match(lib, /observe_issue1266_lifecycle\(&event\);\s*match event/);
 const ciSteps = Object.values(ci.jobs).flatMap((job) => job.steps ?? []);
 assert.ok(ciSteps.some((step) => /test-windows-hang-diagnostics\.py/.test(step.run ?? '')));
 assert.ok(
-  ciSteps.some((step) => /cargo check.*--features issue-1266-diagnostics/.test(step.run ?? '')),
+  ciSteps.some((step) =>
+    /cargo build.*--profile test --lib --bins --features issue-1266-diagnostics/.test(
+      step.run ?? '',
+    ),
+  ),
 );
 const steps = release.jobs.build.steps;
 assert.equal(release.on.workflow_dispatch.inputs.windows_hang_diagnostics.default, false);
