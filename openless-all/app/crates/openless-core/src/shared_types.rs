@@ -840,6 +840,9 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    /// Local consent for observing formatting edits as abstract expression evidence.
+    #[serde(default)]
+    pub expression_learning_enabled: bool,
     #[serde(default)]
     pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
@@ -1226,6 +1229,8 @@ struct UserPreferencesWire {
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    expression_learning_enabled: bool,
     vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
@@ -1431,6 +1436,7 @@ impl Default for UserPreferencesWire {
             windows_composition_input: prefs.windows_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            expression_learning_enabled: prefs.expression_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
@@ -1671,6 +1677,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             windows_composition_input: wire.windows_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            expression_learning_enabled: wire.expression_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
@@ -2054,6 +2061,7 @@ impl Default for UserPreferences {
             windows_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
+            expression_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,

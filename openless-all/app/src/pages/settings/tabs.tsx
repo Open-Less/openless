@@ -27,6 +27,7 @@ import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
 import { VocabularyLearningSection } from './VocabularyLearningSection';
+import { ExpressionLearningSection } from './ExpressionLearningSection';
 import { AudioDspSettings } from './AudioDspSettings';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
@@ -789,6 +790,8 @@ export function AdvancedTab({
                 {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
                   <VocabularyLearningSection />
                 )}
+                {platformCaps?.platform === 'desktop' &&
+                  (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
               </>
             )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}

@@ -164,6 +164,9 @@ button:disabled {
   outline-offset: 1px;
   box-shadow: inset 0 0 0 1px var(--ol-blue);
 }
+.ol-expression-clear {
+  --ol-corner-radius: 8px;
+}
 .ol-shortcuts-toolbar {
   display: flex;
   gap: 12px;

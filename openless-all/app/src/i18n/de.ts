@@ -1387,6 +1387,24 @@ export const de: typeof zhCN = {
       useSystemProxyDesc:
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
     },
+    expressionLearning: {
+      clearHint:
+        'Nach dem Löschen kann ein laufendes Diktat noch die beim Start erfassten Vorlieben verwenden.',
+      lineBreaksMore: 'Mehr Zeilenumbrüche',
+      lineBreaksLess: 'Weniger Zeilenumbrüche',
+      exclamationsMore: 'Mehr Ausrufezeichen',
+      exclamationsLess: 'Weniger Ausrufezeichen',
+      terminalPunctuationMore: 'Satzzeichen am Ende verwenden',
+      terminalPunctuationLess: 'Weniger Satzzeichen am Ende',
+
+      title: 'Ausdrucksgewohnheiten',
+      enabled: 'Ausdrucksgewohnheiten lernen',
+      description:
+        'Beobachtet Formatänderungen nach dem Diktat lokal; Ausdrucksdaten speichern nur abstrakte Statistiken. Der Verlauf wird separat verwaltet. Wiederholte, konsistente Zeilenumbruch- und Satzzeichenpräferenzen werden als kurze Anweisungen an das gewählte Textmodell gesendet. Ausschalten beendet das Lernen sofort und die Anwendung ab dem nächsten Diktat; ein laufendes Diktat kann noch erfasste Vorlieben verwenden.',
+      status: '{{count}} stabile Vorlieben',
+      clear: 'Ausdrucksgewohnheiten löschen',
+      error: 'Ausdrucksgewohnheiten konnten nicht gelesen oder gespeichert werden.',
+    },
     vocabularyLearning: {
       title: 'Aus Korrekturen lernen',
       enabled: 'Lernen aus Korrekturen aktivieren',
