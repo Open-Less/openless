@@ -1312,7 +1312,7 @@ export const de: typeof zhCN = {
     },
     advancedPages: {
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
-      cursorContextTitle: 'Cursorkontext und kurze Eingaben',
+      cursorContextTitle: 'Wahrnehmung',
       startupDiagnosticsTitle: 'Startdiagnose',
       cursorContextHint:
         'Der Cursorkontext ist standardmäßig aktiv. Hier deaktivieren, wenn naher Text nicht mit Überarbeitungsanfragen gesendet werden soll.',

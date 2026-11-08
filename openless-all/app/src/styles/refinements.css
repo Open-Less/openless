@@ -151,17 +151,18 @@ button:disabled {
   min-width: 0;
   height: 36px;
   padding: 0 11px;
-  border: 1px solid var(--ol-line-strong);
+  border: 0;
   border-radius: 8px;
   color: var(--ol-ink);
-  background: var(--ol-surface);
+  background: var(--ol-surface-2);
+  box-shadow: inset 0 0 0 1px var(--ol-line-strong);
   font: inherit;
   font-size: 13px;
 }
 .ol-settings-search-field:focus-visible {
   outline: 2px solid var(--ol-blue-ring);
   outline-offset: 1px;
-  border-color: var(--ol-blue);
+  box-shadow: inset 0 0 0 1px var(--ol-blue);
 }
 .ol-shortcuts-toolbar {
   display: flex;

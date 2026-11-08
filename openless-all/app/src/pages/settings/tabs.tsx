@@ -26,6 +26,7 @@ import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
+import { VocabularyLearningSection } from './VocabularyLearningSection';
 import { AudioDspSettings } from './AudioDspSettings';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
@@ -664,6 +665,7 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const platformCaps = usePlatformCaps();
   const [visited, setVisited] = useState<AdvancedPageId[]>([]);
   useEffect(() => {
     if (page) setVisited((current) => (current.includes(page) ? current : [...current, page]));
@@ -693,7 +695,6 @@ export function AdvancedTab({
             {isInlineAdvancedPage(item) ? (
               <div className="ol-advanced-settings-inline">
                 {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
-                {item.id === 'cursorContext' && <CursorContextSection />}
                 {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
               </div>
             ) : (
@@ -782,7 +783,14 @@ export function AdvancedTab({
             {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
             {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
-            {item.id === 'cursorContext' && <CursorContextSection />}
+            {item.id === 'cursorContext' && (
+              <>
+                <CursorContextSection />
+                {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
+                  <VocabularyLearningSection />
+                )}
+              </>
+            )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}
