@@ -271,7 +271,8 @@ impl ExpressionProfile {
     }
 
     pub fn stable_directions(&self) -> Vec<StableExpressionDirection> {
-        let selectors: [(ExpressionFeature, fn(ExpressionSignal) -> i8); 3] = [
+        type FeatureSelector = (ExpressionFeature, fn(ExpressionSignal) -> i8);
+        let selectors: [FeatureSelector; 3] = [
             (ExpressionFeature::LineBreaks, |signal| signal.line_breaks),
             (ExpressionFeature::Exclamations, |signal| {
                 signal.exclamations
