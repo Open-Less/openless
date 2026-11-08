@@ -130,7 +130,17 @@ app.run()
     def count(): return int(counts.read_text()) if counts.exists() else 0
     try:
         until(lambda line: line.startswith('REGIONS ') and len(json.loads(line[8:]))>=3)
-        frame = geometry(); x,y,_,_ = bounds(native.pid,460)
+        frame = geometry()
+        deadline=time.monotonic()+5
+        while (not frame.get('capsule') or abs(frame['capsule']['width']-116)>0.5) and time.monotonic()<deadline:
+            time.sleep(.05); frame=geometry()
+        capsule=frame['capsule']
+        assert capsule and abs(capsule['width']-116)<0.5 and abs(capsule['height']-32)<0.5, ('capsule geometry', capsule)
+        assert capsule['radius']=='999px' and capsule['clip']=='none', ('capsule shape', capsule)
+        for node in frame['buttons']:
+            if 'ol-default-action' in node['class']:
+                assert node['radius']=='50%' and not node['clip'], ('capsule action shape',node)
+        x,y,_,_ = bounds(native.pid,460)
         subprocess.run(['open','-a',str(app)],check=True);time.sleep(.3)
         ux,uy,uw,uh = bounds(underlay_pid,point=(x+25,y+20))
         print("WINDOWS",{"capsule":bounds(native.pid,460),"underlay":(ux,uy,uw,uh)},flush=True)

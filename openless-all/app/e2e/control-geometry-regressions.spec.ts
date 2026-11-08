@@ -150,3 +150,65 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
     ),
   ).toBe('8px');
 });
+
+test('the WebKit fallback preserves capsule, switch and popup exceptions', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+  const result = await page.evaluate(async () => {
+    const css = await (await fetch('/src/styles/continuous-corners.css?direct')).text();
+    const source = document.createElement('style');
+    source.textContent = css;
+    document.head.append(source);
+    const rules = Array.from(source.sheet!.cssRules);
+    const fallback = rules.find(
+      (rule) => rule instanceof CSSSupportsRule && rule.conditionText.includes('not (corner-shape'),
+    ) as CSSSupportsRule | undefined;
+    if (!fallback) throw new Error('continuous-corner fallback missing');
+    const exceptions = rules.filter(
+      (rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.style.getPropertyValue('clip-path') === 'none' &&
+        (rule.selectorText.includes('.ol-default-capsule') ||
+          rule.selectorText.includes('.ol-default-action') ||
+          rule.selectorText.includes('.ol-select-popup') ||
+          rule.selectorText.includes('.ol-correction-add')),
+    );
+    if (exceptions.length !== 4)
+      throw new Error(`expected four fallback exceptions, got ${exceptions.length}`);
+    const force = document.createElement('style');
+    force.textContent =
+      Array.from(fallback.cssRules)
+        .map((rule) => rule.cssText)
+        .join('\n') +
+      '\n' +
+      exceptions.map((rule) => rule.cssText).join('\n');
+    document.head.append(force);
+    const holder = document.createElement('div');
+    holder.innerHTML =
+      '<div class="ol-default-capsule"></div><button class="ol-default-action"></button><button class="ol-switch"></button><div class="ol-switch-thumb"></div><div class="ol-select-popup"></div><button class="ol-correction-add"></button>';
+    document.body.append(holder);
+    const read = (selector: string) => {
+      const style = getComputedStyle(holder.querySelector(selector)!);
+      return { radius: style.borderRadius, clip: style.clipPath };
+    };
+    const values = {
+      capsule: read('.ol-default-capsule'),
+      action: read('.ol-default-action'),
+      toggle: read('.ol-switch'),
+      thumb: read('.ol-switch-thumb'),
+      popup: read('.ol-select-popup'),
+      add: read('.ol-correction-add'),
+    };
+    holder.remove();
+    force.remove();
+    source.remove();
+    return values;
+  });
+  expect(result).toEqual({
+    capsule: { radius: '999px', clip: 'none' },
+    action: { radius: '50%', clip: 'none' },
+    toggle: { radius: '999px', clip: 'none' },
+    thumb: { radius: '999px', clip: 'none' },
+    popup: { radius: '16px', clip: 'none' },
+    add: { radius: '8px', clip: 'none' },
+  });
+});
