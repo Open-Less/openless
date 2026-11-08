@@ -1,0 +1,159 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { load } from 'js-yaml';
+
+const workflow = (name) =>
+  load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
+const ci = workflow('ci.yml');
+const desktop = workflow('release-tauri.yml');
+const browserGate = ci.jobs['ui-motion'].steps[0].run;
+const windowsGate = ci.jobs['windows-checks'].steps[0].run;
+const runGate = (script, env) =>
+  spawnSync('bash', ['-e', '-c', script], {
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+    timeout: 5000,
+  }).status;
+
+// Exercise the actual shell gates: failure, cancellation and unexpected skips
+// must not turn an existing required check green after parallelising its work.
+for (const outcome of ['success', 'failure', 'cancelled', 'skipped']) {
+  assert.equal(
+    runGate(browserGate, {
+      CHANGES_RESULT: 'success',
+      FRONTEND: 'true',
+      MACOS_ONLY: 'false',
+      BROWSERS_RESULT: outcome,
+    }),
+    outcome === 'success' ? 0 : 1,
+    `browser gate: ${outcome}`,
+  );
+  for (const compiler of ['STABLE_RESULT', 'MSRV_RESULT']) {
+    assert.equal(
+      runGate(windowsGate, {
+        CHANGES_RESULT: 'success',
+        TAURI: 'true',
+        MSRV: 'true',
+        STABLE_RESULT: 'success',
+        MSRV_RESULT: 'success',
+        [compiler]: outcome,
+      }),
+      outcome === 'success' ? 0 : 1,
+      `${compiler}: ${outcome}`,
+    );
+  }
+}
+assert.equal(
+  runGate(browserGate, {
+    CHANGES_RESULT: 'success',
+    FRONTEND: 'false',
+    MACOS_ONLY: 'false',
+    BROWSERS_RESULT: 'skipped',
+  }),
+  0,
+);
+assert.equal(
+  runGate(browserGate, {
+    CHANGES_RESULT: 'failure',
+    FRONTEND: '',
+    MACOS_ONLY: 'false',
+    BROWSERS_RESULT: 'skipped',
+  }),
+  1,
+);
+assert.equal(
+  runGate(windowsGate, {
+    CHANGES_RESULT: 'success',
+    TAURI: 'false',
+    MSRV: 'false',
+    STABLE_RESULT: 'skipped',
+    MSRV_RESULT: 'skipped',
+  }),
+  0,
+);
+assert.equal(
+  runGate(windowsGate, {
+    CHANGES_RESULT: 'success',
+    TAURI: 'false',
+    MSRV: 'true',
+    STABLE_RESULT: 'skipped',
+    MSRV_RESULT: 'success',
+  }),
+  0,
+);
+
+// Run the real Windows build shell with only npm stubbed. Check artifact-flow
+// decisions, not the spelling of the commands: one compile, optional rebundle,
+// and no MSI attempt after a failed NSIS build.
+const buildWindows = desktop.jobs.build.steps.find((s) => s.name === 'Build (Windows)').run;
+const scratch = mkdtempSync(join(tmpdir(), 'openless-installer-flow-'));
+const shellPath = (value) =>
+  process.platform === 'win32'
+    ? value.replaceAll('\\', '/').replace(/^([a-z]):/i, (_, drive) => '/' + drive.toLowerCase())
+    : value;
+try {
+  mkdirSync(join(scratch, 'src-tauri'));
+  mkdirSync(join(scratch, 'bin'));
+  const npm = join(scratch, 'bin/npm');
+  writeFileSync(
+    npm,
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$NPM_CALLS"
+case "$*" in
+  *'-- build '*) exit "\${NSIS_EXIT:-0}" ;;
+  *'-- bundle '*) exit "\${MSI_EXIT:-0}" ;;
+  *) exit 99 ;;
+esac
+`,
+  );
+  chmodSync(npm, 0o755);
+  for (const [name, version, channel, signed, nsis, msi, expectedCalls, expectedExit] of [
+    ['stable-signed', '2.0.2', 'stable', true, 0, 0, 2, 0],
+    ['stable-unsigned', '2.0.2+build.123', 'stable', false, 0, 0, 2, 0],
+    ['beta-channel', '2.0.2', 'beta', true, 0, 0, 1, 0],
+    ['beta-version', '2.0.2-Beta.4', 'stable', false, 0, 0, 1, 0],
+    ['nsis-failure', '2.0.2', 'stable', true, 23, 0, 1, 23],
+    ['msi-repair', '2.0.2', 'stable', true, 0, 17, 2, 0],
+  ]) {
+    writeFileSync(join(scratch, 'src-tauri/tauri.conf.json'), JSON.stringify({ version }));
+    const callsPath = join(scratch, `${name}.calls`);
+    const envPath = join(scratch, `${name}.env`);
+    const result = spawnSync('bash', ['-c', 'export PATH="$TEST_BIN:$PATH"\n' + buildWindows], {
+      cwd: scratch,
+      encoding: 'utf8',
+      timeout: 10000,
+      env: {
+        ...process.env,
+        TEST_BIN: shellPath(join(scratch, 'bin')),
+        NPM_CALLS: shellPath(callsPath),
+        GITHUB_ENV: shellPath(envPath),
+        TAURI_SIGNING_PRIVATE_KEY: signed ? 'fixture' : '',
+        OPENLESS_HANG_DIAGNOSTICS: 'true',
+        OPENLESS_RELEASE_CHANNEL: channel,
+        NSIS_EXIT: String(nsis),
+        MSI_EXIT: String(msi),
+      },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, expectedExit, name + ': ' + result.stdout + result.stderr);
+    const calls = readFileSync(callsPath, 'utf8').trim().split('\n');
+    assert.equal(calls.length, expectedCalls, name);
+    assert.match(calls[0], /-- build --features issue-1266-diagnostics --bundles nsis/);
+    assert.match(calls[0], /-- --locked --timings$/);
+    if (expectedCalls === 2) {
+      assert.match(calls[1], /-- bundle --features issue-1266-diagnostics --bundles msi/);
+      assert.equal(
+        JSON.parse(readFileSync(join(scratch, 'src-tauri/tauri.msi-version.json'))).bundle.windows
+          .wix.version,
+        '2.0.2.0',
+      );
+      assert.match(readFileSync(envPath, 'utf8'), new RegExp(`TAURI_BUILD_EXIT=${msi}`));
+    }
+  }
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
+console.log('CI gates and Windows installer reuse/failure propagation passed');
