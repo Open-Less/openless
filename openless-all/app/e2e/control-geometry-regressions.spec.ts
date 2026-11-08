@@ -138,6 +138,11 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await page.screenshot({ path: test.info().outputPath('history-list.png') });
   await page.getByRole('button', { name: '工具', exact: true }).click();
   await page.getByRole('button', { name: '纠正规则', exact: true }).click();
+  await expect(page.locator('[data-ol-page="corrections"]')).toHaveAttribute(
+    'data-transition-phase',
+    'settled',
+    { timeout: 15_000 },
+  );
   await settleNavigation(page);
   const add = page.getByRole('button', { name: '添加', exact: true });
   await expect(add).toBeVisible();
