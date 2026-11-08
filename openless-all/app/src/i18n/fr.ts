@@ -554,6 +554,7 @@ export const fr: typeof zhCN = {
       settings: 'Préférences : raccourcis, fournisseurs, confidentialité et mises à jour',
     },
     footer: {
+      usage: 'Utilisation',
       account: 'Compte',
       feedback: 'Commentaires',
       settings: 'Réglages',

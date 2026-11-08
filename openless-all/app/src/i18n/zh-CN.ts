@@ -512,6 +512,7 @@ export const zhCN = {
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
     footer: {
+      usage: '用量',
       account: '账户',
       feedback: '反馈',
       settings: '设置',

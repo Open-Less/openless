@@ -546,6 +546,7 @@ export const es: typeof zhCN = {
       settings: 'Preferencias: atajos, proveedores, privacidad y actualizaciones',
     },
     footer: {
+      usage: 'Uso',
       account: 'Cuenta',
       feedback: 'Comentarios',
       settings: 'Ajustes',

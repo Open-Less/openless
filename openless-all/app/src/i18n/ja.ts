@@ -533,6 +533,7 @@ export const ja: typeof zhCN = {
       settings: '環境設定：ショートカット・プロバイダー・プライバシー・更新',
     },
     footer: {
+      usage: '使用量',
       account: 'アカウント',
       feedback: 'フィードバック',
       settings: '設定',

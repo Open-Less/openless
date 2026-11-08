@@ -527,6 +527,7 @@ export const ko: typeof zhCN = {
       settings: '환경설정: 단축키, 제공자, 개인정보 및 업데이트',
     },
     footer: {
+      usage: '사용량',
       account: '계정',
       feedback: '피드백',
       settings: '설정',

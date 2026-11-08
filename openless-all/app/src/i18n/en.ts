@@ -542,6 +542,7 @@ export const en: typeof zhCN = {
       settings: 'Preferences: shortcuts, providers, privacy and updates',
     },
     footer: {
+      usage: 'Usage',
       account: 'Account',
       feedback: 'Feedback',
       settings: 'Settings',
