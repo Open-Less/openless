@@ -814,7 +814,9 @@ function SegmentedToggle<T extends string | number>({
                 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
             }}
           >
-            {option.label}
+            <span className="ol-segmented-label" data-label={option.label}>
+              {option.label}
+            </span>
           </button>
         );
       })}
