@@ -298,7 +298,15 @@ jobs:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag }}
+      LINUX_ACCEPTED_RELEASE_TAG: ${{ vars.LINUX_ACCEPTED_RELEASE_TAG }}
     steps:
+      - name: Verify exact-tag Linux acceptance
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ] || [ "$LINUX_ACCEPTED_RELEASE_TAG" != "$RELEASE_TAG" ]; then
+            echo "::error::Linux device acceptance must be recorded for this exact release tag before publication."
+            exit 1
+          fi
       - name: Download verified Linux packages
         uses: actions/download-artifact@v8
         with:

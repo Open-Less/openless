@@ -858,21 +858,8 @@ jobs:
           # from the project CDN. The stage step copies installers only.
           files: release-files/*
 
-  # ── Hand the finished tag to the platform workflows that ride the same Release ──
-  # `Release HarmonyOS` and `Release Linux egui` are dispatch-only on purpose: an
-  # unaccepted HAP or deb/rpm must never reach users because someone pushed a
-  # Tauri tag. Nothing used to link them to that tag, though, so both entry
-  # points had **zero runs in their entire history** and every 2.0.x Release
-  # shipped without a `.hap`, a `.deb` or a `.rpm` - the AppGallery upload never
-  # ran either, and the omission was silent. Dispatch them here, once the desktop
-  # matrix finished, so both find the Release they attach to (they wait only ten
-  # minutes for it, less than the desktop matrix needs) and a tag push produces
-  # one complete Release.
-  #
-  # `workflow_dispatch` is one of the two events `GITHUB_TOKEN` may still
-  # trigger, so this needs no PAT - only `actions: write` for this job. The
-  # downstream runs use the same release tag for their workflow definition and
-  # checkout, so the package, workflow and cache inputs stay on one immutable ref.
+  # Harmony receives the immutable release tag. Linux publication additionally
+  # requires administrator acceptance for that exact tag, independent of desktop readiness.
   dispatch-platform-releases:
     needs: [build, publish]
     # Independent of the desktop result: the HAP and the Linux packages only need
@@ -897,6 +884,7 @@ jobs:
       # automatically - the upload never submits it for review, so that decision
       # stays human either way.
       HARMONY_CHANNEL: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
+      LINUX_ACCEPTED_RELEASE_TAG: ${{ vars.LINUX_ACCEPTED_RELEASE_TAG }}
     steps:
       - name: Dispatch the HarmonyOS and Linux releases
         run: |
@@ -911,10 +899,15 @@ jobs:
             -f "channel=$HARMONY_CHANNEL" \
             -f publish=true \
             -f upload_to_appgallery=true
-          gh workflow run release-linux-egui.yml \
-            --ref "$RELEASE_TAG" \
-            -f "tag=$RELEASE_TAG" \
-            -f publish=true
+          if [ "$LINUX_ACCEPTED_RELEASE_TAG" = "$RELEASE_TAG" ]; then
+            gh workflow run release-linux-egui.yml \
+              --ref "$RELEASE_TAG" \
+              -f "tag=$RELEASE_TAG" \
+              -f publish=true
+            echo "Linux publication accepted for $RELEASE_TAG." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Linux omitted: device acceptance is not recorded for $RELEASE_TAG. Desktop and Android publication is unaffected." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Report the dispatched runs
         # Both dispatches already returned a run id; this listing is the log line
