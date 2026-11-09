@@ -95,10 +95,13 @@ where
     Ok(bytes)
 }
 
-pub(crate) async fn candidates(
+async fn source_results(
     channel: UpdateChannel,
     arch: &str,
-) -> Result<Vec<UpdateCandidate>, String> {
+) -> (
+    Result<UpdateCandidate, String>,
+    Result<UpdateCandidate, String>,
+) {
     let (github, cdn) = tokio::join!(
         async {
             let value = update_source::github_android_manifest(channel, arch).await?;
@@ -114,6 +117,14 @@ pub(crate) async fn candidates(
                 .map_err(|_| "CDN update check timed out".to_string())?
         }
     );
+    (github, cdn)
+}
+
+pub(crate) async fn candidates(
+    channel: UpdateChannel,
+    arch: &str,
+) -> Result<Vec<UpdateCandidate>, String> {
+    let (github, cdn) = source_results(channel, arch).await;
     merge_sources(github, cdn)
 }
 
@@ -159,16 +170,30 @@ fn merge_sources(
     Ok(available)
 }
 
+fn check_sources(
+    github: Result<UpdateCandidate, String>,
+    cdn: Result<UpdateCandidate, String>,
+    current: &str,
+) -> Result<Option<UpdateCandidate>, String> {
+    let github_unavailable = github.is_err();
+    let update = updater_logic::newest_candidates(merge_sources(github, cdn)?)
+        .into_iter()
+        .find(|candidate| updater_logic::version_is_newer(&candidate.version, current));
+    // A rolling mirror can lag. An unavailable canonical source is not evidence
+    // that the installed version is current, even if the mirror is reachable.
+    if update.is_none() && github_unavailable {
+        return Err("Unable to confirm the latest version from GitHub. Please retry.".into());
+    }
+    Ok(update)
+}
+
 pub(crate) async fn check(
     channel: UpdateChannel,
     arch: &str,
     current: &str,
 ) -> Result<Option<UpdateCandidate>, String> {
-    Ok(
-        updater_logic::newest_candidates(candidates(channel, arch).await?)
-            .into_iter()
-            .find(|candidate| updater_logic::version_is_newer(&candidate.version, current)),
-    )
+    let (github, cdn) = source_results(channel, arch).await;
+    check_sources(github, cdn, current)
 }
 
 async fn transfer<P: Fn(u64, Option<u64>)>(
@@ -371,6 +396,64 @@ mod tests {
                 .version,
             "2.0.2-Beta.7"
         );
+    }
+
+    #[test]
+    fn github_unavailable_with_current_or_older_cdn_does_not_claim_up_to_date() {
+        for mirror_version in [VERSION, "2.0.2-Beta.5"] {
+            let error = check_sources(
+                Err("GitHub temporarily unavailable".into()),
+                Ok(candidate("dl.aeoform.com", mirror_version)),
+                VERSION,
+            )
+            .unwrap_err();
+            assert!(error.contains("Unable to confirm the latest version"));
+        }
+    }
+
+    #[test]
+    fn github_unavailable_can_still_offer_a_known_newer_cdn_update() {
+        let update = check_sources(
+            Err("GitHub temporarily unavailable".into()),
+            Ok(candidate("dl.aeoform.com", VERSION)),
+            "2.0.2-Beta.5",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(update.version, VERSION);
+    }
+
+    #[test]
+    fn successful_canonical_check_can_confirm_the_current_version() {
+        assert!(check_sources(
+            Ok(candidate("github.com", VERSION)),
+            Err("CDN unavailable".into()),
+            VERSION,
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn known_candidate_failure_only_uses_a_sufficiently_fresh_mirror_for_check() {
+        let error = format!("GitHub release candidate: {VERSION}: signature unavailable");
+        assert_eq!(
+            check_sources(
+                Err(error.clone()),
+                Ok(candidate("dl.aeoform.com", VERSION)),
+                "2.0.2-Beta.5",
+            )
+            .unwrap()
+            .unwrap()
+            .version,
+            VERSION
+        );
+        assert!(check_sources(
+            Err(error),
+            Ok(candidate("dl.aeoform.com", "2.0.2-Beta.5")),
+            "2.0.2-Beta.4",
+        )
+        .is_err());
     }
 
     fn metadata_candidate(version: &str, abi: &str) -> UpdateCandidate {
