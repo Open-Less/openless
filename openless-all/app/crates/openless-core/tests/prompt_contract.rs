@@ -23,7 +23,12 @@ fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
         true,
     );
 
-    assert!(system_prompt.starts_with("# 上下文"));
+    let context_at = system_prompt
+        .find("\n\n# 上下文\n")
+        .expect("generated context follows the reusable rules");
+    assert!(system_prompt[..context_at].starts_with("STYLE"));
+    assert!(system_prompt[..context_at].contains("- OpenLess"));
+    assert!(system_prompt[context_at..].contains("当前前台应用：Mailevilinstruction"));
     assert!(system_prompt.contains("当前前台应用：Mailevilinstruction"));
     assert!(!system_prompt.contains("#evil<instruction>"));
     assert!(system_prompt.contains("- OpenLess"));
