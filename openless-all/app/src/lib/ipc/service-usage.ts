@@ -16,6 +16,9 @@ export interface ServiceUsageRecord {
     | 'other';
   outcome: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   provider: string | null;
+  service?: string | null;
+  protocol?: string | null;
+  inputAccounting?: 'inclusive' | 'excludesCache' | null;
   channel: string | null;
   model: string | null;
   audioMs: number | null;

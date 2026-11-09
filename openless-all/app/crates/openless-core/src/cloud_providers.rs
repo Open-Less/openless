@@ -1137,6 +1137,7 @@ impl TextPolisher for SharedCloudTextPolisher {
                     (usage_recorder, usage_generation, usage_label)
                 {
                     let purpose = usage_purpose(&context);
+                    let (service, protocol) = provider.usage_metadata();
                     let channel = crate::usage_ledger::sanitized_identifier(&context.llm.provider_id);
                     provider.set_usage_observer(Arc::new(move |id, usage| {
                         let record = crate::usage_ledger::UsageRecord {
@@ -1146,6 +1147,9 @@ impl TextPolisher for SharedCloudTextPolisher {
                             purpose,
                             outcome: crate::usage_ledger::ServiceOutcome::Unknown,
                             provider: crate::usage_ledger::sanitized_identifier(&label.provider),
+                            service: crate::usage_ledger::sanitized_identifier(&service),
+                            protocol: crate::usage_ledger::sanitized_identifier(&protocol),
+                            input_accounting: usage.input_accounting,
                             channel: channel.clone(),
                             model: crate::usage_ledger::sanitized_identifier(&label.model),
                             audio_ms: None,
@@ -3759,6 +3763,10 @@ mod tests {
         assert_eq!(records[0].input_tokens, Some(30));
         assert_eq!(records[0].output_tokens, Some(4));
         assert_eq!(records[0].channel.as_deref(), Some("llm-channel"));
+        assert_eq!(records[0].protocol.as_deref(), Some("chat_completions"));
+        assert_eq!(records[0].input_accounting, Some(crate::usage_ledger::CacheInputAccounting::Inclusive));
+        assert!(records[0].service.is_some());
+        assert!(!records[0].service.as_deref().unwrap().contains(&address.to_string()));
         assert_eq!(records[0].purpose, crate::usage_ledger::ServicePurpose::DictationPostprocess);
         let stored = std::fs::read_to_string(directory.join("usage.json")).unwrap();
         assert!(!stored.contains("private text"));

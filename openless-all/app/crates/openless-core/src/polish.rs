@@ -571,6 +571,18 @@ impl OpenAICompatibleLLMProvider {
         self.usage_observer = Some(observer);
     }
 
+    pub(crate) fn usage_metadata(&self) -> (String, String) {
+        let protocol = match self.config.protocol.format {
+            LlmRequestFormat::ChatCompletions => "chat_completions",
+            LlmRequestFormat::Responses => "responses",
+            LlmRequestFormat::Messages => "messages",
+        };
+        (
+            crate::prompt_cache::service_id(&self.config.base_url).into(),
+            protocol.into(),
+        )
+    }
+
     fn report_usage(&self, request_id: uuid::Uuid, usage: crate::usage_ledger::ReportedTokens) {
         if usage != crate::usage_ledger::ReportedTokens::default() {
             if let Some(observer) = &self.usage_observer {
@@ -855,7 +867,9 @@ impl OpenAICompatibleLLMProvider {
 
     fn chat_body(&self, stream: bool, messages: Vec<Value>) -> Value {
         if self.config.protocol.format != LlmRequestFormat::ChatCompletions {
-            return crate::llm_protocol::request_body(&self.config, stream, messages);
+            let mut body = crate::llm_protocol::request_body(&self.config, stream, messages);
+            crate::prompt_cache::apply(&self.config, &mut body);
+            return body;
         }
         let mut body = json!({
             "model": self.config.model,
@@ -864,12 +878,7 @@ impl OpenAICompatibleLLMProvider {
         });
         if stream
             && self.usage_observer.is_some()
-            && self.config.provider_id == "openai"
-            && url::Url::parse(&self.config.base_url)
-                .ok()
-                .and_then(|url| url.host_str().map(str::to_owned))
-                .as_deref()
-                == Some("api.openai.com")
+            && crate::prompt_cache::supports_usage(&self.config)
         {
             body["stream_options"] = json!({"include_usage": true});
         }
@@ -893,6 +902,7 @@ impl OpenAICompatibleLLMProvider {
         self.config
             .protocol
             .apply_service_tier(&self.config.provider_id, &mut body);
+        crate::prompt_cache::apply(&self.config, &mut body);
         body
     }
 
@@ -959,7 +969,7 @@ impl OpenAICompatibleLLMProvider {
             })
             .map_err(|error| LLMError::ParseError(error.message))?;
         let request = self
-            .authorize(self.polish_client.post(url))
+            .authorize(self.polish_client.post(url), body)
             .header("Content-Type", "application/json")
             .json(body);
 
@@ -1091,7 +1101,7 @@ impl OpenAICompatibleLLMProvider {
             self.config.protocol.format
         );
         let request = self
-            .authorize(self.polish_client.post(&url))
+            .authorize(self.polish_client.post(&url), &body)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&body);
@@ -1199,12 +1209,26 @@ impl OpenAICompatibleLLMProvider {
         Ok(full_text)
     }
 
-    fn authorize(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn authorize(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        body: &Value,
+    ) -> reqwest::RequestBuilder {
         for (name, value) in self.config.protocol.format.headers(&self.config.api_key) {
             request = request.header(name, value);
         }
         for (name, value) in &self.config.extra_headers {
             request = request.header(name, value);
+        }
+        if let Some((name, value)) = crate::prompt_cache::routing_header(&self.config, body) {
+            if !self
+                .config
+                .extra_headers
+                .keys()
+                .any(|configured| configured.eq_ignore_ascii_case(name))
+            {
+                request = request.header(name, value);
+            }
         }
         request
     }
@@ -1401,15 +1425,12 @@ impl CodexOAuthLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let mut system_prompt = prompts::qa_system_prompt();
-        if let Some(premise) = context_premise(
+        let system_prompt = compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
             output_language_preference,
             front_app,
-        ) {
-            system_prompt = format!("{}\n\n{}", premise, system_prompt);
-        }
+        );
 
         let mut request_messages = Vec::with_capacity(messages.len() + 1);
         request_messages.push(json!({ "role": "system", "content": system_prompt }));
@@ -2670,7 +2691,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_stream_option_is_limited_to_official_openai_chat_requests() {
+    fn usage_stream_option_is_limited_to_verified_chat_services() {
         let observer: LlmUsageObserver = std::sync::Arc::new(|_, _| {});
         let official = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "openai",
@@ -2700,6 +2721,73 @@ mod tests {
             .chat_body(true, vec![])
             .get("stream_options")
             .is_none());
+    }
+
+    #[test]
+    fn cache_policy_survives_protocol_conversion_and_header_authorization() {
+        let messages = vec![
+            json!({"role": "system", "content": "fixed rules\n\n# 上下文\nApp A"}),
+            json!({"role": "user", "content": "unique input"}),
+        ];
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.anthropic.com/v1",
+            "test",
+            "claude-sonnet-4-6",
+        );
+        config.protocol.format = LlmRequestFormat::Messages;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"][1]["text"], "\n\n# 上下文\nApp A");
+        assert_eq!(body["messages"][0]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.openai.com/v1",
+            "test",
+            "gpt-6.1",
+        );
+        config.protocol.format = LlmRequestFormat::Responses;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][1]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "ark",
+            "Ark",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "test",
+            "doubao-seed-2-1-pro-260628",
+        );
+        config
+            .extra_headers
+            .insert("x-prompt-cache-id".into(), "user-affinity".into());
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages);
+        let request = provider
+            .authorize(
+                provider
+                    .polish_client
+                    .post("https://ark.cn-beijing.volces.com/api/v3/chat/completions"),
+                &body,
+            )
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["x-prompt-cache-id"], "user-affinity");
+        assert_eq!(
+            request
+                .headers()
+                .get_all("x-prompt-cache-id")
+                .iter()
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -4712,14 +4800,14 @@ mod tests {
         let mut expected = compose_system_prompt(&prompts::system_prompt(PolishMode::Light), &[]);
         expected = format!(
             "{}\n\n{}",
+            expected,
             context_premise(
                 &["中文".to_string()],
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
                 Some("Notes (com.apple.Notes)"),
             )
-            .unwrap(),
-            expected
+            .unwrap()
         );
         expected = format!("{}\n\n{}", expected, prompts::polish_injection_defense());
         assert_eq!(without, expected);
