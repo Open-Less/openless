@@ -60,19 +60,82 @@ export function formatUsageNumber(value: number | null | undefined): string {
   return String(value);
 }
 
+export interface CacheUsageSummary {
+  rate: number | null;
+  cachedTokens: number | null;
+  comparableInputTokens: number | null;
+  comparableRecords: number;
+  totalRecords: number;
+}
+
+function comparableCachePair(record: ServiceUsageRecord): [number, number] | null {
+  if (record.kind !== 'llm' && record.kind !== 'multimodal') return null;
+  const { inputTokens: input, cachedInputTokens: cached } = record;
+  if (
+    input == null ||
+    cached == null ||
+    !Number.isSafeInteger(input) ||
+    !Number.isSafeInteger(cached) ||
+    input < 0 ||
+    cached < 0
+  )
+    return null;
+  let total: number;
+  if (record.inputAccounting === 'inclusive') {
+    total = input;
+  } else if (record.inputAccounting === 'excludesCache') {
+    const write = record.cacheWriteInputTokens;
+    if (write == null || !Number.isSafeInteger(write) || write < 0) return null;
+    total = input + cached + write;
+  } else {
+    return null;
+  }
+  return Number.isSafeInteger(total) && total > 0 && cached <= total ? [cached, total] : null;
+}
+
+export function summarizeCacheUsage(records: ServiceUsageRecord[]): CacheUsageSummary {
+  const pairs = records
+    .map(comparableCachePair)
+    .filter((pair): pair is [number, number] => pair !== null);
+  const cachedTokens = sumKnown(pairs.map(([cached]) => cached));
+  const comparableInputTokens = sumKnown(pairs.map(([, input]) => input));
+  return {
+    rate:
+      cachedTokens !== null && comparableInputTokens !== null && comparableInputTokens > 0
+        ? cachedTokens / comparableInputTokens
+        : null,
+    cachedTokens,
+    comparableInputTokens,
+    comparableRecords: pairs.length,
+    totalRecords: records.length,
+  };
+}
+
 export function reportedCacheHitRate(records: ServiceUsageRecord[]): number | null {
-  const compatible = records.filter(
-    (record) =>
-      ['openai', 'deepseek'].includes(record.provider?.toLowerCase() ?? '') &&
-      record.cacheWriteInputTokens == null &&
-      Number.isSafeInteger(record.inputTokens) &&
-      record.inputTokens! > 0 &&
-      Number.isSafeInteger(record.cachedInputTokens) &&
-      record.cachedInputTokens! >= 0 &&
-      record.cachedInputTokens! <= record.inputTokens!,
-  );
-  if (!compatible.length) return null;
-  const input = sumKnown(compatible.map((record) => record.inputTokens));
-  const cached = sumKnown(compatible.map((record) => record.cachedInputTokens));
-  return input !== null && input > 0 && cached !== null ? cached / input : null;
+  return summarizeCacheUsage(records).rate;
+}
+
+export function summarizeCacheUsageByModel(records: ServiceUsageRecord[]) {
+  const groups = new Map<string, ServiceUsageRecord[]>();
+  for (const record of records) {
+    const key = JSON.stringify([
+      record.service ?? null,
+      record.channel,
+      record.model,
+      record.protocol ?? null,
+    ]);
+    const group = groups.get(key) ?? [];
+    group.push(record);
+    groups.set(key, group);
+  }
+  return [...groups]
+    .map(([key, group]) => ({
+      key,
+      service: group[0].service ?? null,
+      channel: group[0].channel,
+      model: group[0].model,
+      protocol: group[0].protocol ?? null,
+      ...summarizeCacheUsage(group),
+    }))
+    .sort((a, b) => b.comparableRecords - a.comparableRecords || b.totalRecords - a.totalRecords);
 }

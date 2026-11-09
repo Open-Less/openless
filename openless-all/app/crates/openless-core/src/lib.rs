@@ -57,6 +57,7 @@ mod persistence;
 pub mod polish;
 pub mod ports;
 pub mod preferences;
+mod prompt_cache;
 pub mod prompt_compose;
 pub mod prompts;
 pub mod provider_registry;

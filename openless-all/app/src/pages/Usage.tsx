@@ -10,16 +10,41 @@ import type { DictationSession } from '../lib/types';
 import {
   summarizeReportedUsage,
   formatUsageNumber,
-  reportedCacheHitRate,
+  summarizeCacheUsage,
+  summarizeCacheUsageByModel,
 } from '../lib/serviceUsageMetrics';
 import { Segmented } from '../components/ui/Segmented';
 import './usage.css';
 import { Btn, Card, PageHeader } from './_atoms';
 
 export function Usage() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const zh = i18n.resolvedLanguage?.startsWith('zh') ?? false;
   const text = (cn: string, en: string) => (zh ? cn : en);
+  const serviceName = (service: string | null) => {
+    if (!service) return text('未知服务', 'Unknown service');
+    const labels: Record<string, string> = {
+      anthropic: 'Claude · Anthropic',
+      dashscope: text('阿里云百炼', 'Alibaba Cloud Bailian'),
+      openrouter: 'OpenRouter',
+      zhipu: text('智谱', 'Zhipu'),
+      groq: 'Groq',
+      zenmux: 'ZenMux',
+      minimax: 'MiniMax',
+    };
+    return (
+      labels[service] ??
+      t(`settings.providers.presets.${service === 'api-route' ? 'apiRoute' : service}`, {
+        defaultValue: service,
+      })
+    );
+  };
+  const protocolName = (protocol: string | null) =>
+    ({ chat_completions: 'Chat Completions', responses: 'Responses', messages: 'Messages' })[
+      protocol ?? ''
+    ] ??
+    protocol ??
+    text('未知协议', 'Unknown protocol');
   const [history, setHistory] = useState<DictationSession[] | null>(null);
   const [error, setError] = useState(false);
   const [days, setDays] = useState(30);
@@ -106,7 +131,11 @@ export function Usage() {
       {formatUsageNumber(value)}
     </span>
   );
-  const cacheRate = reportedCacheHitRate(reported);
+  const cacheSummary = summarizeCacheUsage(reported);
+  const cacheRate = cacheSummary.rate;
+  const cacheGroups = summarizeCacheUsageByModel(reported);
+  const cachePercent = (rate: number | null) =>
+    rate === null ? '—' : `${(rate * 100).toFixed(1)}%`;
   const seconds = rows.reduce((total, row) => total + (row.durationMs ?? 0), 0) / 1000;
   const stats: Array<[string, string, string?]> = [
     [text('语音识别记录', 'ASR records'), formatUsageNumber(asr.length), String(asr.length)],
@@ -130,7 +159,15 @@ export function Usage() {
     [
       text('缓存命中率', 'Cache hit rate'),
       cacheRate === null ? '—' : `${(cacheRate * 100).toFixed(1)}%`,
-      text('可比较记录的缓存命中率', 'Cache hit rate for comparable reported calls'),
+      cacheRate === null
+        ? text(
+            '缺少可比较的缓存数据（含旧记录）',
+            'Comparable cache data unavailable, including legacy records',
+          )
+        : text(
+            '可比较报告的输入 Token 缓存占比，按 Token 量加权',
+            'Cached share of input tokens from comparable reports, weighted by token count',
+          ),
     ],
     [
       text('录音时长', 'Recording duration'),
@@ -303,7 +340,20 @@ export function Usage() {
               >
                 {stats.map(([label, value, exact]) => (
                   <Card key={String(label)}>
-                    <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>{label}</div>
+                    <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>
+                      {label}
+                      {label === text('缓存命中率', 'Cache hit rate') && (
+                        <span
+                          style={{ marginLeft: 6, fontSize: 11 }}
+                          title={text(
+                            '可比较报告 / 已保存报告',
+                            'Comparable reports / saved reports',
+                          )}
+                        >
+                          {cacheSummary.comparableRecords}/{cacheSummary.totalRecords}
+                        </span>
+                      )}
+                    </div>
                     <div title={exact} style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>
                       {value}
                     </div>
@@ -347,32 +397,103 @@ export function Usage() {
             </>
           )}
           {view === 'services' && (
-            <Card style={{ marginTop: 14 }}>
-              <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
-                {text('服务与用途', 'Services and purposes')}
-              </h2>
-              {grouped.size === 0 ? (
-                <p>{text('没有可归属服务的记录。', 'No attributable records.')}</p>
-              ) : (
-                [...grouped.entries()]
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([name, count]) => (
-                    <div
-                      key={name}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: 12,
-                        padding: '10px 0',
-                        borderTop: '1px solid var(--ol-line)',
-                      }}
-                    >
-                      <span>{name}</span>
-                      <span>{count}</span>
-                    </div>
-                  ))
-              )}
-            </Card>
+            <>
+              <Card style={{ marginTop: 14 }}>
+                <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                  {text('模型缓存报告', 'Model cache reports')}
+                </h2>
+                <div
+                  className="ol-thinscroll"
+                  role="region"
+                  aria-label={text('模型缓存报告列表', 'Model cache report list')}
+                  tabIndex={0}
+                  style={{
+                    maxHeight: 'min(440px, 55dvh)',
+                    overflowY: 'auto',
+                    overscrollBehavior: 'contain',
+                  }}
+                >
+                  {cacheGroups.length === 0 ? (
+                    <p>{text('尚无模型缓存报告。', 'No model cache reports yet.')}</p>
+                  ) : (
+                    cacheGroups.map((group) => (
+                      <div
+                        key={group.key}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 16,
+                          padding: '12px 0',
+                          borderTop: '1px solid var(--ol-line)',
+                        }}
+                      >
+                        <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                          <strong>{group.model ?? text('未知模型', 'Unknown model')}</strong>
+                          <div
+                            title={protocolName(group.protocol)}
+                            style={{ color: 'var(--ol-ink-3)', fontSize: 12, marginTop: 4 }}
+                          >
+                            {[serviceName(group.service), group.channel]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <strong
+                            title={
+                              group.rate === null
+                                ? text(
+                                    '缺少可比较的缓存数据（含旧记录）',
+                                    'Comparable cache data unavailable, including legacy records',
+                                  )
+                                : text(
+                                    '输入 Token 缓存占比，非请求命中比例',
+                                    'Cached input token share, not the fraction of requests with a hit',
+                                  )
+                            }
+                          >
+                            {cachePercent(group.rate)}
+                          </strong>
+                          <div style={{ color: 'var(--ol-ink-3)', fontSize: 12, marginTop: 4 }}>
+                            {text(
+                              `${group.comparableRecords}/${group.totalRecords} 条可比较报告`,
+                              `${group.comparableRecords}/${group.totalRecords} comparable reports`,
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Card>
+              <Card style={{ marginTop: 14 }}>
+                <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                  {text('服务与用途', 'Services and purposes')}
+                </h2>
+                {grouped.size === 0 ? (
+                  <p>{text('没有可归属服务的记录。', 'No attributable records.')}</p>
+                ) : (
+                  [...grouped.entries()]
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([name, count]) => (
+                      <div
+                        key={name}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          padding: '10px 0',
+                          borderTop: '1px solid var(--ol-line)',
+                        }}
+                      >
+                        <span>{name}</span>
+                        <span>{count}</span>
+                      </div>
+                    ))
+                )}
+              </Card>
+            </>
           )}
           {view === 'history' && (
             <div className="ol-usage-history-grid">

@@ -2,6 +2,8 @@ import {
   summarizeReportedUsage,
   formatUsageNumber,
   reportedCacheHitRate,
+  summarizeCacheUsage,
+  summarizeCacheUsageByModel,
 } from './serviceUsageMetrics';
 import type { ServiceUsageRecord } from './ipc/service-usage';
 
@@ -74,25 +76,115 @@ for (const [value, expected] of [
 ] as const) {
   equal(formatUsageNumber(value), expected, `compact number ${value}`);
 }
+const inclusive = (overrides: Partial<ServiceUsageRecord>) =>
+  make({ inputAccounting: 'inclusive', ...overrides });
+const additive = (overrides: Partial<ServiceUsageRecord>) =>
+  make({ inputAccounting: 'excludesCache', ...overrides });
 equal(
   reportedCacheHitRate([
-    make({ provider: 'deepseek', inputTokens: 100, cachedInputTokens: 80 }),
-    make({ provider: 'openai', inputTokens: 300, cachedInputTokens: 0 }),
+    inclusive({ provider: 'unknown-gateway', inputTokens: 100, cachedInputTokens: 80 }),
+    inclusive({ provider: 'openai', inputTokens: 300, cachedInputTokens: 0 }),
   ]),
   0.2,
-  'cache rate weights compatible requests by reported input',
+  'canonical field accounting replaces the provider-name whitelist',
+);
+equal(
+  reportedCacheHitRate([
+    additive({ inputTokens: 10, cachedInputTokens: 80, cacheWriteInputTokens: 10 }),
+  ]),
+  0.8,
+  'Messages denominator includes raw input, cache read and creation once',
+);
+equal(
+  reportedCacheHitRate([
+    additive({ inputTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0 }),
+  ]),
+  0,
+  'reported zero cache is a valid zero rate',
 );
 for (const record of [
-  make({ provider: 'anthropic', inputTokens: 100, cachedInputTokens: 80 }),
-  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: null }),
-  make({ provider: 'openai', inputTokens: 0, cachedInputTokens: 0 }),
-  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: 101 }),
-  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: 80, cacheWriteInputTokens: 0 }),
-]) {
+  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: 80 }),
+  inclusive({ inputTokens: 100, cachedInputTokens: null }),
+  inclusive({ inputTokens: 0, cachedInputTokens: 0 }),
+  inclusive({ inputTokens: 100, cachedInputTokens: 101 }),
+  additive({ inputTokens: 100, cachedInputTokens: 80, cacheWriteInputTokens: null }),
+  additive({
+    inputTokens: Number.MAX_SAFE_INTEGER,
+    cachedInputTokens: 1,
+    cacheWriteInputTokens: 0,
+  }),
+  inclusive({ inputTokens: -1, cachedInputTokens: 0 }),
+])
   equal(
     reportedCacheHitRate([record]),
     null,
-    'unknown, additive or invalid cache reports do not create a rate',
+    'legacy, incomplete and unsafe quantities remain unknown',
   );
-}
-console.log('compact usage numbers and reported cache rate tests passed');
+equal(
+  reportedCacheHitRate([
+    inclusive({ inputTokens: Number.MAX_SAFE_INTEGER, cachedInputTokens: 0 }),
+    inclusive({ inputTokens: 1, cachedInputTokens: 0 }),
+  ]),
+  null,
+  'aggregate overflow remains unknown',
+);
+const cohorts = [
+  inclusive({
+    service: 'deepseek',
+    channel: 'direct',
+    model: 'v4',
+    protocol: 'chat_completions',
+    inputTokens: 100,
+    cachedInputTokens: 80,
+  }),
+  inclusive({
+    service: 'deepseek',
+    channel: 'direct',
+    model: 'v4',
+    protocol: 'chat_completions',
+    inputTokens: 100,
+    cachedInputTokens: 20,
+  }),
+  make({
+    service: 'deepseek',
+    channel: 'direct',
+    model: 'v4',
+    protocol: 'chat_completions',
+    inputTokens: 100,
+    cachedInputTokens: 99,
+  }),
+  inclusive({
+    service: 'ark',
+    channel: 'hosted',
+    model: 'v4',
+    protocol: 'chat_completions',
+    inputTokens: 100,
+    cachedInputTokens: 10,
+  }),
+  additive({
+    service: 'ark',
+    channel: 'hosted',
+    model: 'v4',
+    protocol: 'messages',
+    inputTokens: 10,
+    cachedInputTokens: 70,
+    cacheWriteInputTokens: 20,
+  }),
+];
+const before = JSON.stringify(cohorts);
+const groups = summarizeCacheUsageByModel(cohorts);
+equal(groups.length, 3, 'service, channel and protocol distinguish identical model names');
+equal(groups[0].rate, 0.5, 'rates are token-weighted within their own cohort');
+equal(groups[0].comparableRecords, 2, 'comparable report count is explicit');
+equal(groups[0].totalRecords, 3, 'unclassified legacy reports remain in coverage denominator');
+equal(summarizeCacheUsage([]).rate, null, 'empty rate is unknown');
+equal(JSON.stringify(cohorts), before, 'normalization never rewrites raw quantities');
+console.log('compact usage numbers and protocol-aware cache rate tests passed');
+
+equal(
+  reportedCacheHitRate([
+    inclusive({ inputTokens: 100, cachedInputTokens: 30, cacheWriteInputTokens: 20 }),
+  ]),
+  0.3,
+  'inclusive cache writes are already counted in input',
+);

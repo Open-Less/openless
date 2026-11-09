@@ -47,10 +47,18 @@ pub enum ServiceOutcome {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CacheInputAccounting {
+    Inclusive,
+    ExcludesCache,
+}
+
 /// Values are retained as the provider reported them. Cache accounting differs
 /// between protocols, so these fields must not be summed implicitly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReportedTokens {
+    pub input_accounting: Option<CacheInputAccounting>,
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub cached_input: Option<u64>,
@@ -74,7 +82,43 @@ impl ReportedTokens {
                     .filter(|usage| usage.is_object())
             })
             .or_else(|| value.get("usageMetadata").filter(|usage| usage.is_object()))?;
+        // Canonical response fields define accounting, never the selected vendor label.
+        // Mixed field families from an unknown gateway remain unclassified.
+        let additive = usage.get("cache_read_input_tokens").is_some()
+            || usage.get("cache_creation_input_tokens").is_some();
+        let inclusive = usage.get("prompt_tokens").is_some()
+            || usage.get("promptTokenCount").is_some()
+            || usage
+                .pointer("/input_tokens_details/cached_tokens")
+                .is_some()
+            || usage
+                .pointer("/input_tokens_details/cache_write_tokens")
+                .is_some()
+            || usage
+                .pointer("/input_tokens_details/cache_creation_input_tokens")
+                .is_some()
+            || usage
+                .pointer("/prompt_tokens_details/cache_creation_input_tokens")
+                .is_some()
+            || usage
+                .pointer("/prompt_tokens_details/cache_write_tokens")
+                .is_some()
+            || usage
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .is_some()
+            || usage.get("prompt_cache_hit_tokens").is_some()
+            || usage.get("cachedContentTokenCount").is_some();
+        let input_fields = ["input_tokens", "prompt_tokens", "promptTokenCount"]
+            .iter()
+            .filter(|name| usage.get(**name).is_some())
+            .count();
+        let input_accounting = match (additive, inclusive, input_fields > 1) {
+            (true, false, false) => Some(CacheInputAccounting::ExcludesCache),
+            (false, true, false) => Some(CacheInputAccounting::Inclusive),
+            _ => None,
+        };
         let tokens = Self {
+            input_accounting,
             input: usage
                 .get("input_tokens")
                 .or_else(|| usage.get("prompt_tokens"))
@@ -95,16 +139,30 @@ impl ReportedTokens {
             cache_write_input: usage
                 .get("cache_creation_input_tokens")
                 .or_else(|| usage.pointer("/input_tokens_details/cache_write_tokens"))
+                .or_else(|| usage.pointer("/input_tokens_details/cache_creation_input_tokens"))
+                .or_else(|| usage.pointer("/prompt_tokens_details/cache_creation_input_tokens"))
+                .or_else(|| usage.pointer("/prompt_tokens_details/cache_write_tokens"))
                 .and_then(|value| value.as_u64()),
             reasoning: usage
                 .pointer("/output_tokens_details/reasoning_tokens")
                 .or_else(|| usage.pointer("/completion_tokens_details/reasoning_tokens"))
                 .and_then(|value| value.as_u64()),
         };
-        (tokens != Self::default()).then_some(tokens)
+        (tokens.input.is_some()
+            || tokens.output.is_some()
+            || tokens.cached_input.is_some()
+            || tokens.cache_write_input.is_some()
+            || tokens.reasoning.is_some())
+        .then_some(tokens)
     }
 
     pub fn merge_report(&mut self, newer: Self) {
+        if newer.input.is_some()
+            || newer.cached_input.is_some()
+            || newer.cache_write_input.is_some()
+        {
+            self.input_accounting = newer.input_accounting;
+        }
         if newer.input.is_some() {
             self.input = newer.input;
         }
@@ -133,6 +191,12 @@ pub struct UsageRecord {
     pub purpose: ServicePurpose,
     pub outcome: ServiceOutcome,
     pub provider: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub input_accounting: Option<CacheInputAccounting>,
     pub channel: Option<String>,
     pub model: Option<String>,
     pub audio_ms: Option<u64>,
@@ -167,6 +231,8 @@ impl UsageRecord {
         !self.id.is_nil()
             && self.occurred_at_ms > 0
             && self.provider.as_deref().is_none_or(identifier_valid)
+            && self.service.as_deref().is_none_or(identifier_valid)
+            && self.protocol.as_deref().is_none_or(identifier_valid)
             && self.channel.as_deref().is_none_or(identifier_valid)
             && self.model.as_deref().is_none_or(identifier_valid)
     }
@@ -410,6 +476,9 @@ mod tests {
             purpose: ServicePurpose::DictationPostprocess,
             outcome: ServiceOutcome::Succeeded,
             provider: Some("provider".into()),
+            service: Some("custom".into()),
+            protocol: Some("chat_completions".into()),
+            input_accounting: Some(CacheInputAccounting::Inclusive),
             channel: Some("channel-1".into()),
             model: Some("model-v1".into()),
             audio_ms: None,
@@ -467,6 +536,9 @@ mod tests {
         let path = dir.join("usage.json");
         let mut value = serde_json::to_value(record()).unwrap();
         value.as_object_mut().unwrap().remove("channel");
+        for field in ["service", "protocol", "inputAccounting"] {
+            value.as_object_mut().unwrap().remove(field);
+        }
         value
             .as_object_mut()
             .unwrap()
@@ -479,6 +551,9 @@ mod tests {
         .unwrap();
         let saved = UsageLedger::open(path).unwrap().list().unwrap();
         assert_eq!(saved[0].channel, None);
+        assert_eq!(saved[0].service, None);
+        assert_eq!(saved[0].protocol, None);
+        assert_eq!(saved[0].input_accounting, None);
         assert_eq!(saved[0].cache_write_input_tokens, None);
         assert_eq!(saved[0].reasoning_tokens, None);
         std::fs::remove_dir_all(dir).unwrap();
@@ -527,6 +602,7 @@ mod tests {
         assert_eq!(
             chat,
             ReportedTokens {
+                input_accounting: Some(CacheInputAccounting::Inclusive),
                 input: Some(100),
                 output: Some(8),
                 cached_input: Some(30),
@@ -560,6 +636,7 @@ mod tests {
         assert_eq!(
             messages,
             ReportedTokens {
+                input_accounting: Some(CacheInputAccounting::ExcludesCache),
                 input: Some(10),
                 output: Some(7),
                 cached_input: Some(90),
@@ -571,5 +648,91 @@ mod tests {
         assert_eq!(gemini.cached_input, Some(4));
         assert!(ReportedTokens::from_response(&json!({"usage":{"total_tokens":999}})).is_none());
         assert!(ReportedTokens::from_response(&json!({"text":"never stored"})).is_none());
+    }
+
+    #[test]
+    fn cache_accounting_follows_report_fields_and_preserves_unknowns() {
+        use serde_json::json;
+        for value in [
+            json!({"usage":{"prompt_tokens":100,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}),
+            json!({"usage":{"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0}}}),
+            json!({"response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":80}}}}),
+            json!({"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":80}}),
+        ] {
+            let report = ReportedTokens::from_response(&value).unwrap();
+            assert_eq!(
+                report.input_accounting,
+                Some(CacheInputAccounting::Inclusive)
+            );
+        }
+        let zero = ReportedTokens::from_response(&json!({"usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}})).unwrap();
+        assert_eq!(zero.input, Some(0));
+        assert_eq!(zero.cached_input, Some(0));
+        assert_eq!(
+            zero.input_accounting,
+            Some(CacheInputAccounting::ExcludesCache)
+        );
+        for value in [
+            json!({"usage":{"input_tokens":100}}),
+            json!({"usage":{"input_tokens":10,"prompt_tokens":100,"prompt_cache_hit_tokens":80}}),
+            json!({"usage":{"prompt_tokens":100,"cache_read_input_tokens":80}}),
+        ] {
+            assert_eq!(
+                ReportedTokens::from_response(&value)
+                    .unwrap()
+                    .input_accounting,
+                None
+            );
+        }
+        let missing = ReportedTokens::from_response(
+            &json!({"usage":{"input_tokens":10,"cache_read_input_tokens":80}}),
+        )
+        .unwrap();
+        assert_eq!(missing.cache_write_input, None);
+        assert!(
+            ReportedTokens::from_response(&json!({"usage":{"prompt_tokens":"invalid"}})).is_none()
+        );
+        let mut report = ReportedTokens::from_response(
+            &json!({"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30}}}),
+        )
+        .unwrap();
+        report.merge_report(ReportedTokens::from_response(&json!({"usage":{"prompt_tokens_details":{"cached_tokens":40},"cache_read_input_tokens":40}})).unwrap());
+        assert_eq!(report.input_accounting, None);
+    }
+
+    #[test]
+    fn streaming_messages_preserve_input_accounting_across_output_reports() {
+        use crate::llm_protocol::{LlmRequestFormat, TextEventStream};
+        let mut events = TextEventStream::new(LlmRequestFormat::Messages);
+        events.push(b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":80,\"cache_creation_input_tokens\":10,\"output_tokens\":0}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\ndata: {\"type\":\"message_stop\"}\n\n").unwrap();
+        while events.next().unwrap().is_some() {}
+        let report = events.reported_tokens();
+        assert_eq!(
+            report.input_accounting,
+            Some(CacheInputAccounting::ExcludesCache)
+        );
+        assert_eq!(report.input, Some(10));
+        assert_eq!(report.cached_input, Some(80));
+        assert_eq!(report.cache_write_input, Some(10));
+        assert_eq!(report.output, Some(7));
+    }
+
+    #[test]
+    fn nested_cache_write_fields_do_not_change_inclusive_denominators() {
+        use serde_json::json;
+        for value in [
+            json!({"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30,"cache_creation_input_tokens":20}}}),
+            json!({"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":20}}}),
+            json!({"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":30,"cache_creation_input_tokens":20}}}),
+        ] {
+            let tokens = ReportedTokens::from_response(&value).unwrap();
+            assert_eq!(tokens.input, Some(100));
+            assert_eq!(tokens.cached_input, Some(30));
+            assert_eq!(tokens.cache_write_input, Some(20));
+            assert_eq!(
+                tokens.input_accounting,
+                Some(CacheInputAccounting::Inclusive)
+            );
+        }
     }
 }
