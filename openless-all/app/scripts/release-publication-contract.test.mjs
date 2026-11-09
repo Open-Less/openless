@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import vm from 'node:vm';
 
@@ -112,4 +115,61 @@ const attach = publish.steps.find((step) => step.run?.includes('gh release uploa
 assert.match(attach.run, /seq 1 40/);
 assert.match(attach.run, /sleep 15/);
 assert.match(attach.run, /--clobber/);
+const acceptance = publish.steps.find((step) => step.name === 'Verify exact-tag Linux acceptance');
+assert.ok(acceptance);
+assert.match(publish.env.LINUX_ACCEPTED_RELEASE_TAG, /vars\.LINUX_ACCEPTED_RELEASE_TAG/);
+for (const [tag, accepted, expected] of [
+  ['v2.0.2-Beta.5-tauri', '', 1],
+  ['v2.0.2-Beta.5-tauri', 'v2.0.2-Beta.4-tauri', 1],
+  ['', '', 1],
+  ['v2.0.2-Beta.5-tauri', 'v2.0.2-Beta.5-tauri', 0],
+]) {
+  const result = spawnSync('bash', ['-c', acceptance.run], {
+    env: { ...process.env, RELEASE_TAG: tag, LINUX_ACCEPTED_RELEASE_TAG: accepted },
+  });
+  assert.equal(result.status, expected, `publication acceptance: ${tag}/${accepted}`);
+}
+const handoff = workflow('release-tauri.yml').jobs['dispatch-platform-releases'];
+assert.match(handoff.env.LINUX_ACCEPTED_RELEASE_TAG, /vars\.LINUX_ACCEPTED_RELEASE_TAG/);
+const dispatch = handoff.steps.find((step) =>
+  step.run?.includes('gh workflow run release-harmony.yml'),
+);
+assert.ok(dispatch);
+const directory = mkdtempSync(join(tmpdir(), 'openless-release-acceptance-'));
+try {
+  const calls = join(directory, 'calls');
+  const summary = join(directory, 'summary');
+  writeFileSync(join(directory, 'gh'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n', {
+    mode: 0o755,
+  });
+  for (const accepted of ['', 'v2.0.2-Beta.4-tauri', 'v2.0.2-Beta.5-tauri']) {
+    writeFileSync(calls, '');
+    writeFileSync(summary, '');
+    const result = spawnSync('bash', ['-c', dispatch.run], {
+      env: {
+        ...process.env,
+        PATH: `${directory}:${process.env.PATH}`,
+        CALLS: calls,
+        RELEASE_TAG: 'v2.0.2-Beta.5-tauri',
+        LINUX_ACCEPTED_RELEASE_TAG: accepted,
+        HARMONY_CHANNEL: 'none',
+        GITHUB_STEP_SUMMARY: summary,
+      },
+    });
+    assert.equal(result.status, 0);
+    const logged = readFileSync(calls, 'utf8');
+    assert.match(logged, /release-harmony\.yml.*channel=none/);
+    assert.equal(logged.includes('release-linux-egui.yml'), accepted === 'v2.0.2-Beta.5-tauri');
+    assert.match(
+      readFileSync(summary, 'utf8'),
+      accepted
+        ? accepted.endsWith('Beta.5-tauri')
+          ? /Linux publication accepted/
+          : /Linux omitted/
+        : /Linux omitted/,
+    );
+  }
+} finally {
+  rmSync(directory, { recursive: true, force: true });
+}
 console.log('release-publication-contract.test.mjs passed');

@@ -37,7 +37,7 @@ export function VocabularyLearningSection() {
   const settings = prefs.vocabularyLearningSettings ?? defaults;
   return (
     <Card>
-      <ExperimentalSectionTitle badge={t('common.experimental')}>
+      <ExperimentalSectionTitle badge="Beta">
         {t('settings.vocabularyLearning.title')}
       </ExperimentalSectionTitle>
       <p style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>

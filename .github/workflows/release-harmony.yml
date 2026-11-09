@@ -129,6 +129,7 @@ jobs:
         uses: ./.github/actions/cache-npm
 
       - name: Install frontend dependencies
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -282,6 +283,7 @@ jobs:
       - name: Upload the HAP as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-harmony-hap
           # `-signed` stays in the workflow artifacts for the store upload; the
           # repository never publishes it.

@@ -119,7 +119,10 @@ test('translation target popup stays interactive during a recording session', as
   await expect(trigger).toBeEnabled();
   await trigger.click();
   await expect(page.getByRole('listbox')).toBeVisible();
-  const japanese = page.getByRole('option').filter({ hasText: /日语|日本語/ }).first();
+  const japanese = page
+    .getByRole('option')
+    .filter({ hasText: /日语|日本語/ })
+    .first();
   await expect(japanese).toBeVisible();
   await japanese.click();
   await expect(trigger).toContainText(/日语|日本語/);
@@ -152,10 +155,16 @@ test('QA records in a pill, reveals a wide result, retains content on exit and r
   await page.screenshot({ path: info.outputPath('qa-result.png') });
   await emit(page, 'chat-panel:closing', {});
   await expect(page.locator('.qa-assistant-message')).toContainText('我会尽力为你解答');
-  await page.waitForTimeout(60);
-  expect(
-    await page.locator('.qa-capsule-shell').evaluate((el) => Number(getComputedStyle(el).opacity)),
-  ).toBeLessThan(1);
+  await expect
+    .poll(
+      async () => {
+        const shell = page.locator('.qa-capsule-shell');
+        if ((await shell.count()) === 0) return 0;
+        return shell.evaluate((el) => Number(getComputedStyle(el).opacity)).catch(() => 0);
+      },
+      { intervals: [10, 25, 50] },
+    )
+    .toBeLessThan(1);
   await emit(page, 'chat-panel:shown', {});
   await emit(page, 'qa:state', { kind: 'recording', sessionId: 'b', messages: [] });
   await expect(page.locator('.qa-capsule-shell')).not.toHaveClass(/is-closing/);

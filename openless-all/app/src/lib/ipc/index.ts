@@ -204,19 +204,6 @@ export {
 } from './voice-edit-session';
 export type { VoiceEditSnapshot } from './voice-edit-session';
 
-// less-computer
-export {
-  lessComputerWindowDismiss,
-  lessComputerWindowOpen,
-  lessComputerApprove,
-  lessComputerSubmitText,
-  lessComputerSync,
-  lessComputerVoiceStart,
-  lessComputerVoiceStop,
-  lessComputerVoiceCancel,
-  lessComputerTaskCancel,
-} from './less-computer';
-
 // chat-panel (shared by QA / Less Computer)
 export { chatPanelFocusKeyboard } from './chat-panel';
 
@@ -238,26 +225,6 @@ export {
   regenerateRemotePin,
   setRemoteLocale,
 } from './remote-server';
-
-// coding-agent
-export type {
-  CodingAgentPermissionMode,
-  McpHealth,
-  CodingAgentEvent,
-  OpenCodeDetection,
-  McpServerStatus,
-  ClaudeDetection,
-  CodingAgentRunTestArgs,
-} from './coding-agent';
-export {
-  codingAgentDetect,
-  codingAgentDetectCli,
-  codingAgentDetectOpencode,
-  codingAgentListOpencodeModels,
-  codingAgentRunTest,
-  codingAgentCancelTest,
-  codingAgentCommandRisk,
-} from './coding-agent';
 
 // marketplace
 export {

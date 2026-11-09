@@ -4372,7 +4372,7 @@ dependencies = [
 
 [[package]]
 name = "openless"
-version = "2.0.2-Beta.4+build.20261106-16d927ba"
+version = "2.0.2-Beta.6+build.20261109-1f057451"
 dependencies = [
  "anyhow",
  "arboard",

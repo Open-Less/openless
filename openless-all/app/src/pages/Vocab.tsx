@@ -447,7 +447,7 @@ export function Vocab() {
             gap: 10,
             padding: '8px 12px',
             marginBottom: 12,
-            borderRadius: 10,
+            borderRadius: 'var(--ol-r-md)',
             border: '0.5px solid rgba(239,68,68,0.22)',
             background: 'rgba(239,68,68,0.07)',
             color: 'var(--ol-red, #ef4444)',
@@ -547,7 +547,7 @@ export function Vocab() {
               height: 40,
               padding: '0 12px',
               border: '1.5px solid var(--ol-ink)',
-              borderRadius: 10,
+              borderRadius: 'var(--ol-r-md)',
               fontSize: 14,
               fontFamily: 'inherit',
               outline: 'none',
@@ -597,7 +597,7 @@ export function Vocab() {
                 height: 38,
                 padding: '0 12px',
                 border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 999,
+                borderRadius: 'var(--ol-radius)',
                 fontSize: 13.5,
                 fontFamily: 'inherit',
                 outline: 'none',
@@ -610,7 +610,7 @@ export function Vocab() {
               icon={wordAdded ? 'check' : 'plus'}
               onClick={() => void addNewWord()}
               style={{
-                borderRadius: 999,
+                borderRadius: 8,
                 height: 38,
                 minWidth: 92,
                 justifyContent: 'center',
@@ -649,7 +649,7 @@ export function Vocab() {
                     gap: 10,
                     textAlign: 'left',
                     padding: '10px 12px',
-                    borderRadius: 10,
+                    borderRadius: 'var(--ol-r-md)',
                     fontFamily: 'inherit',
                     border: checked
                       ? '1px solid var(--ol-blue)'
@@ -854,7 +854,15 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 650, color: 'var(--ol-ink)' }}>{title}</div>
+            <div
+              style={{
+                fontSize: 15,
+                fontWeight: 'var(--ol-font-weight-demibold)',
+                color: 'var(--ol-ink)',
+              }}
+            >
+              {title}
+            </div>
             {desc && (
               <div
                 style={{ marginTop: 4, fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
@@ -873,7 +881,7 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
               height: 26,
               flexShrink: 0,
               border: 0,
-              borderRadius: 8,
+              borderRadius: 'var(--ol-control-radius)',
               background: 'transparent',
               color: 'var(--ol-ink-4)',
               cursor: 'default',

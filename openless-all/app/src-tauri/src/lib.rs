@@ -23,14 +23,12 @@ compile_error!(
      打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
 );
 
-mod recording_companion;
 mod android;
 mod asr;
 mod audio_mute;
 #[cfg(test)]
 mod build_target;
 mod cli;
-mod coding_agent;
 #[cfg(not(mobile))]
 mod combo_hotkey;
 #[cfg(mobile)]
@@ -51,6 +49,7 @@ mod native_audio_cue;
 #[cfg(not(mobile))]
 mod native_capsule;
 mod qa_adapter;
+mod recording_companion;
 mod tauri_coordinator_host;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // 仅桌面端。详见 issue #470。
@@ -72,9 +71,9 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
-#[cfg(target_os = "android")]
-mod style_zip_transfer;
 mod llm_gemini;
+#[cfg(target_os = "macos")]
+mod macos_capsule_input;
 #[cfg(mobile)]
 mod mobile_runtime;
 #[cfg(not(mobile))]
@@ -111,6 +110,8 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+#[cfg(target_os = "android")]
+mod style_zip_transfer;
 mod tauri_events;
 mod tls_crypto;
 mod types;
@@ -364,6 +365,10 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_vocab_enabled,
             commands::update_vocab,
             commands::list_correction_rules,
+            commands::get_expression_profile,
+            commands::clear_expression_profile,
+            commands::get_service_usage,
+            commands::clear_service_usage,
             commands::add_correction_rule,
             commands::remove_correction_rule,
             commands::set_correction_rule_enabled,
@@ -384,13 +389,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::voice_edit_window_open,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
-            coding_agent::commands::coding_agent_detect,
-            coding_agent::commands::coding_agent_detect_opencode,
-            coding_agent::commands::coding_agent_detect_cli,
-            coding_agent::commands::coding_agent_list_opencode_models,
-            coding_agent::commands::coding_agent_run_test,
-            coding_agent::commands::coding_agent_cancel_test,
-            coding_agent::commands::coding_agent_command_risk,
+            #[cfg(target_os = "macos")]
+            macos_capsule_input::set_capsule_interactive_regions,
             commands::handle_window_hotkey_event,
             #[cfg(debug_assertions)]
             commands::inject_hotkey_click_for_dev,
@@ -465,16 +465,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::qa_toggle_recording,
             commands::qa_submit_text,
             commands::qa_set_edit_instruction_mode,
-            commands::less_computer_window_dismiss,
-            commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
-            commands::less_computer_submit_text,
-            commands::less_computer_sync,
-            commands::less_computer_approve,
-            commands::less_computer_voice_start,
-            commands::less_computer_voice_stop,
-            commands::less_computer_voice_cancel,
-            commands::less_computer_task_cancel,
             commands::validate_combo_hotkey,
             commands::set_combo_hotkey,
             commands::list_provider_descriptors,
@@ -677,6 +668,10 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::set_vocab_enabled,
             $crate::commands::update_vocab,
             $crate::commands::list_correction_rules,
+            $crate::commands::get_expression_profile,
+            $crate::commands::clear_expression_profile,
+            $crate::commands::get_service_usage,
+            $crate::commands::clear_service_usage,
             $crate::commands::add_correction_rule,
             $crate::commands::remove_correction_rule,
             $crate::commands::set_correction_rule_enabled,
@@ -873,10 +868,7 @@ fn run_desktop() {
     // Runtime effects follow Core startup/recovery
     // in tauri_events::start; pending restore must not mutate the old vault here.
     let mut context = tauri::generate_context!();
-    desktop_resources::configure(
-        &mut context,
-        false,
-    );
+    desktop_resources::configure(&mut context, false);
     let builder = tauri::Builder::default();
     // macOS: the capsule must overlay other apps' fullscreen Spaces, which requires a
     // non-activating NSPanel (a plain NSWindow cannot do this even with collectionBehavior —
@@ -1191,7 +1183,14 @@ fn observe_issue1266_lifecycle(event: &RunEvent) {
         }
         _ => return,
     };
-    Operation::new(Probe::P6).record(event, Outcome::Observed, Facts { kind, ..Facts::default() });
+    Operation::new(Probe::P6).record(
+        event,
+        Outcome::Observed,
+        Facts {
+            kind,
+            ..Facts::default()
+        },
+    );
 }
 
 #[cfg(not(mobile))]
@@ -2854,11 +2853,26 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 }
 
 // Preserve a dragged window's centre and baseline; repeated result events must not drift.
-fn qa_resize_origin(x: f64, y: f64, old_width: f64, old_height: f64,
-    width: f64, height: f64, was_expanded: bool, expanded: bool) -> (f64, f64) {
+fn qa_resize_origin(
+    x: f64,
+    y: f64,
+    old_width: f64,
+    old_height: f64,
+    width: f64,
+    height: f64,
+    was_expanded: bool,
+    expanded: bool,
+) -> (f64, f64) {
     let lift = if expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 }
-        - if was_expanded { QA_RESULT_BOTTOM_LIFT } else { 0.0 };
-    (x + (old_width - width) / 2.0, y + old_height - height - lift)
+        - if was_expanded {
+            QA_RESULT_BOTTOM_LIFT
+        } else {
+            0.0
+        };
+    (
+        x + (old_width - width) / 2.0,
+        y + old_height - height - lift,
+    )
 }
 
 /// Called on the native main thread by the restricted QA command. The compact
@@ -2880,10 +2894,16 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         .inner_position()
         .map_err(|_| "qa_geometry_unavailable")?
         .to_logical::<f64>(scale);
-    let current_size = window.inner_size()
-        .map_err(|_| "qa_geometry_unavailable")?.to_logical::<f64>(scale);
+    let current_size = window
+        .inner_size()
+        .map_err(|_| "qa_geometry_unavailable")?
+        .to_logical::<f64>(scale);
     let was_expanded = current_size.height > QA_WINDOW_HEIGHT + 1.0;
-    let mut width = if expanded { QA_WINDOW_EXPANDED_WIDTH } else { QA_WINDOW_WIDTH };
+    let mut width = if expanded {
+        QA_WINDOW_EXPANDED_WIDTH
+    } else {
+        QA_WINDOW_WIDTH
+    };
     let mut height = if expanded {
         QA_WINDOW_EXPANDED_HEIGHT
     } else {
@@ -2894,8 +2914,14 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
         height = height.min((frame.height - 64.0).max(QA_WINDOW_HEIGHT));
     }
     let (mut x, mut y) = qa_resize_origin(
-        position.x, position.y, current_size.width, current_size.height,
-        width, height, was_expanded, expanded,
+        position.x,
+        position.y,
+        current_size.width,
+        current_size.height,
+        width,
+        height,
+        was_expanded,
+        expanded,
     );
     if let Some((frame, _)) = area {
         x = x.clamp(
@@ -3626,7 +3652,9 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
         let _ = result_tx.send(result);
     })
     .map_err(|error| format!("Less Computer window show dispatch failed: {error}"))?;
-    result_rx.recv().map_err(|error| format!("Less Computer window show task failed: {error}"))?
+    result_rx
+        .recv()
+        .map_err(|error| format!("Less Computer window show task failed: {error}"))?
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -3927,19 +3955,17 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
     140.0
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_position, capsule_visual_height,
-        capsule_window_bounds, capsule_window_bounds_for_style,
-        capsule_window_bounds_for_style_with_transcript,
+        bottom_center_position, capsule_visual_height, capsule_window_bounds,
+        capsule_window_bounds_for_style, capsule_window_bounds_for_style_with_transcript,
         capsule_window_bounds_for_style_with_transcript_and_translation, clamp_to_monitor,
         frame_contains_point, frame_distance_to_point_squared, logical_monitor_frame,
-        parse_tray_style_pack_menu_id, resolve_tray_style_pack_id, rotate_log_if_too_large,
-        tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
-        LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
-        permission_requires_visible_start,
+        parse_tray_style_pack_menu_id, permission_requires_visible_start,
+        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
+        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
+        LOG_ROTATE_LIMIT_BYTES,
     };
     #[cfg(target_os = "macos")]
     use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
@@ -4234,10 +4260,17 @@ mod tests {
 
     #[test]
     fn qa_resize_preserves_centre_baseline_and_user_position() {
-        let expanded = super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
+        let expanded =
+            super::qa_resize_origin(-700.0, 700.0, 480.0, 80.0, 760.0, 416.0, false, true);
         assert_eq!(expanded, (-840.0, 324.0));
-        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true), expanded);
-        assert_eq!(super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false), (-700.0, 700.0));
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 760.0, 416.0, true, true),
+            expanded
+        );
+        assert_eq!(
+            super::qa_resize_origin(expanded.0, expanded.1, 760.0, 416.0, 480.0, 80.0, true, false),
+            (-700.0, 700.0)
+        );
     }
 
     #[test]

@@ -567,6 +567,7 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Windows TSF: show the live transcript as an underlined composition in the target. */
   windowsCompositionInput: boolean;
+  macosCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -574,6 +575,7 @@ export interface UserPreferences {
    *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  expressionLearningEnabled: boolean;
   vocabularyLearningSettings: {
     observationSeconds: number;
     suggestionSeconds: number;

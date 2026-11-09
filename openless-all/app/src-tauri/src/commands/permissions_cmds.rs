@@ -183,8 +183,15 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
         std::process::Command::new("open")
             .arg(url)
             .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if pane == "accessibility" {
+            extern "C" {
+                fn openless_show_accessibility_guide();
+            }
+            // The AppKit helper schedules its work on the main thread.
+            unsafe { openless_show_accessibility_guide() };
+        }
+        Ok(())
     }
     #[cfg(target_os = "windows")]
     {
