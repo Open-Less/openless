@@ -7,7 +7,13 @@ import {
   type ServiceUsageSnapshot,
 } from '../lib/ipc/service-usage';
 import type { DictationSession } from '../lib/types';
-import { summarizeReportedUsage } from '../lib/serviceUsageMetrics';
+import {
+  summarizeReportedUsage,
+  formatUsageNumber,
+  reportedCacheHitRate,
+} from '../lib/serviceUsageMetrics';
+import { Segmented } from '../components/ui/Segmented';
+import './usage.css';
 import { Btn, Card, PageHeader } from './_atoms';
 
 export function Usage() {
@@ -89,16 +95,43 @@ export function Usage() {
     const label = labels[purpose];
     return label ? text(...label) : text('其他', 'Other');
   };
-  const safeTokens = (value: number | null) =>
-    value !== null && Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
+  const safeTokens = (value: number | null) => (
+    <span
+      title={
+        value !== null && Number.isSafeInteger(value) && value >= 0
+          ? value.toLocaleString()
+          : undefined
+      }
+    >
+      {formatUsageNumber(value)}
+    </span>
+  );
+  const cacheRate = reportedCacheHitRate(reported);
   const seconds = rows.reduce((total, row) => total + (row.durationMs ?? 0), 0) / 1000;
-  const stats = [
-    [text('语音识别记录', 'ASR records'), asr.length],
-    [text('文字处理记录', 'Text processing records'), llm.length],
-    [text('多模态记录', 'Multimodal records'), omni.length],
+  const stats: Array<[string, string, string?]> = [
+    [text('语音识别记录', 'ASR records'), formatUsageNumber(asr.length), String(asr.length)],
+    [
+      text('文字处理记录', 'Text processing records'),
+      formatUsageNumber(llm.length),
+      String(llm.length),
+    ],
+    [text('多模态记录', 'Multimodal records'), formatUsageNumber(omni.length), String(omni.length)],
     [text('TTS 用量', 'TTS usage'), '—'],
-    [text('已报告输入 Token', 'Reported input tokens'), totals.input?.toLocaleString() ?? '—'],
-    [text('已报告输出 Token', 'Reported output tokens'), totals.output?.toLocaleString() ?? '—'],
+    [
+      text('已报告输入 Token', 'Reported input tokens'),
+      formatUsageNumber(totals.input),
+      totals.input?.toLocaleString(),
+    ],
+    [
+      text('已报告输出 Token', 'Reported output tokens'),
+      formatUsageNumber(totals.output),
+      totals.output?.toLocaleString(),
+    ],
+    [
+      text('缓存命中率', 'Cache hit rate'),
+      cacheRate === null ? '—' : `${(cacheRate * 100).toFixed(1)}%`,
+      text('可比较记录的缓存命中率', 'Cache hit rate for comparable reported calls'),
+    ],
     [
       text('录音时长', 'Recording duration'),
       rows.some((row) => row.durationMs == null)
@@ -142,6 +175,34 @@ export function Usage() {
     };
   });
   const maxDaily = Math.max(1, ...daily.map((day) => day.count));
+  const clearControl = view === 'history' && usage && (
+    <Btn
+      style={{
+        minHeight: 36,
+        lineHeight: 1.4,
+        flexShrink: 0,
+        whiteSpace: 'nowrap',
+      }}
+      disabled={clearing}
+      onClick={async () => {
+        clearingRef.current = true;
+        request.current += 1;
+        setClearing(true);
+        setClearError(false);
+        try {
+          await clearServiceUsage();
+          if (mounted.current) setUsage({ records: [], droppedOrFailed: usage.droppedOrFailed });
+        } catch {
+          if (mounted.current) setClearError(true);
+        } finally {
+          clearingRef.current = false;
+          if (mounted.current) setClearing(false);
+        }
+      }}
+    >
+      {text('清除已记录 Token', 'Clear recorded tokens')}
+    </Btn>
+  );
   return (
     <div className="ol-usage-page" style={{ width: '100%', minWidth: 0, flexShrink: 0 }}>
       <PageHeader
@@ -192,25 +253,17 @@ export function Usage() {
           </button>
         ))}
       </nav>
-      <div style={{ display: 'flex', gap: 8, margin: '8px 0 16px' }}>
-        {[7, 30].map((day) => (
-          <button
-            key={day}
-            type="button"
-            className="ol-pressable"
-            aria-pressed={days === day}
-            onClick={() => setDays(day)}
-            style={{
-              padding: '7px 12px',
-              border: 0,
-              borderRadius: 8,
-              color: days === day ? 'white' : 'var(--ol-ink-2)',
-              background: days === day ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
-            }}
-          >
-            {text(`近 ${day} 天`, `Last ${day} days`)}
-          </button>
-        ))}
+      <div className="ol-usage-toolbar">
+        <Segmented
+          label={text('统计时段', 'Usage period')}
+          options={[
+            { value: '7', label: text('近 7 天', 'Last 7 days') },
+            { value: '30', label: text('近 30 天', 'Last 30 days') },
+          ]}
+          value={String(days)}
+          onChange={(value) => setDays(Number(value))}
+        />
+        {clearControl}
       </div>
       {usageError && (
         <p role="alert">
@@ -233,36 +286,6 @@ export function Usage() {
           )}
         </p>
       )}
-      {view === 'history' && usage && (
-        <Btn
-          style={{
-            minHeight: 36,
-            lineHeight: 1.4,
-            flexShrink: 0,
-            whiteSpace: 'nowrap',
-            marginBottom: 2,
-          }}
-          disabled={clearing}
-          onClick={async () => {
-            clearingRef.current = true;
-            request.current += 1;
-            setClearing(true);
-            setClearError(false);
-            try {
-              await clearServiceUsage();
-              if (mounted.current)
-                setUsage({ records: [], droppedOrFailed: usage.droppedOrFailed });
-            } catch {
-              if (mounted.current) setClearError(true);
-            } finally {
-              clearingRef.current = false;
-              if (mounted.current) setClearing(false);
-            }
-          }}
-        >
-          {text('清除已记录 Token', 'Clear recorded tokens')}
-        </Btn>
-      )}
       {error ? (
         <p role="alert">{text('无法读取历史记录。', 'Could not load history.')}</p>
       ) : history === null ? (
@@ -278,10 +301,12 @@ export function Usage() {
                   gap: 12,
                 }}
               >
-                {stats.map(([label, value]) => (
+                {stats.map(([label, value, exact]) => (
                   <Card key={String(label)}>
                     <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>{label}</div>
-                    <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{value}</div>
+                    <div title={exact} style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>
+                      {value}
+                    </div>
                   </Card>
                 ))}
               </div>
@@ -289,7 +314,7 @@ export function Usage() {
                 <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
                   {text('每日记录', 'Daily records')}
                 </h2>
-                <div style={{ display: 'flex', alignItems: 'end', gap: 4, height: 120 }}>
+                <div className="ol-usage-chart">
                   {daily.map(({ date, count }) => (
                     <div
                       key={date.toISOString()}
@@ -303,6 +328,20 @@ export function Usage() {
                       }}
                     />
                   ))}
+                </div>
+                <div className="ol-usage-chart-dates">
+                  <span>
+                    {daily[0].date.toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  </span>
+                  <span>
+                    {daily[daily.length - 1].date.toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  </span>
                 </div>
               </Card>
             </>
@@ -336,8 +375,8 @@ export function Usage() {
             </Card>
           )}
           {view === 'history' && (
-            <>
-              <Card style={{ marginTop: 14 }}>
+            <div className="ol-usage-history-grid">
+              <Card className="ol-usage-record-card">
                 <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
                   {text('已报告的模型用量', 'Reported model usage')}
                 </h2>
@@ -347,91 +386,107 @@ export function Usage() {
                     'Provider-reported cache and reasoning fields may already be included in input or output; do not add them directly.',
                   )}
                 </p>
-                {byPurpose.map(({ purpose, input, output }) => (
-                  <div
-                    key={purpose}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      padding: '8px 0',
-                    }}
-                  >
-                    <strong>{purposeName(purpose)}</strong>
-                    <span>
-                      {text('已报告输入', 'Reported input')}: {input?.toLocaleString() ?? '—'} ·{' '}
-                      {text('已报告输出', 'Reported output')}: {output?.toLocaleString() ?? '—'}
-                    </span>
-                  </div>
-                ))}
-                {reported.length === 0 ? (
-                  <p>
-                    {text(
-                      '该时段没有已保存的服务商 token 报告。',
-                      'No provider token reports were saved for this period.',
-                    )}
-                  </p>
-                ) : (
-                  [...reported]
-                    .sort((a, b) => b.occurredAtMs - a.occurredAtMs)
-                    .slice(0, 30)
-                    .map((record) => (
-                      <div
-                        key={record.id}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                          gap: 8,
-                          padding: '10px 0',
-                          borderTop: '1px solid var(--ol-line)',
-                        }}
-                      >
-                        <time>{new Date(record.occurredAtMs).toLocaleString()}</time>
-                        <span>{purposeName(record.purpose)}</span>
-                        <span>
-                          {[
-                            ...new Set(
-                              [record.provider, record.channel, record.model].filter(Boolean),
-                            ),
-                          ].join(' · ') || '—'}
-                        </span>
-                        <span>
-                          {text('输入', 'Input')}: {safeTokens(record.inputTokens)} ·{' '}
-                          {text('输出', 'Output')}: {safeTokens(record.outputTokens)}
-                          <br />
-                          {text('缓存读取', 'Cache read')}: {safeTokens(record.cachedInputTokens)} ·{' '}
-                          {text('缓存写入', 'Cache write')}:{' '}
-                          {safeTokens(record.cacheWriteInputTokens)}
-                          <br />
-                          {text('推理', 'Reasoning')}: {safeTokens(record.reasoningTokens)}
-                        </span>
-                      </div>
-                    ))
-                )}
+                <div
+                  className="ol-usage-record-scroll ol-thinscroll"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={text('模型用量列表', 'Model usage list')}
+                >
+                  {byPurpose.map(({ purpose, input, output }) => (
+                    <div
+                      key={purpose}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '8px 0',
+                      }}
+                    >
+                      <strong>{purposeName(purpose)}</strong>
+                      <span>
+                        {text('已报告输入', 'Reported input')}: {safeTokens(input)} ·{' '}
+                        {text('已报告输出', 'Reported output')}: {safeTokens(output)}
+                      </span>
+                    </div>
+                  ))}
+                  {reported.length === 0 ? (
+                    <p>
+                      {text(
+                        '该时段没有已保存的服务商 token 报告。',
+                        'No provider token reports were saved for this period.',
+                      )}
+                    </p>
+                  ) : (
+                    [...reported]
+                      .sort((a, b) => b.occurredAtMs - a.occurredAtMs)
+                      .slice(0, 30)
+                      .map((record) => (
+                        <div
+                          key={record.id}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 8,
+                            padding: '10px 0',
+                            borderTop: '1px solid var(--ol-line)',
+                          }}
+                        >
+                          <time>{new Date(record.occurredAtMs).toLocaleString()}</time>
+                          <span>{purposeName(record.purpose)}</span>
+                          <span>
+                            {[
+                              ...new Set(
+                                [record.provider, record.channel, record.model].filter(Boolean),
+                              ),
+                            ].join(' · ') || '—'}
+                          </span>
+                          <span>
+                            {text('输入', 'Input')}: {safeTokens(record.inputTokens)} ·{' '}
+                            {text('输出', 'Output')}: {safeTokens(record.outputTokens)}
+                            <br />
+                            {text('缓存读取', 'Cache read')}: {safeTokens(record.cachedInputTokens)}{' '}
+                            · {text('缓存写入', 'Cache write')}:{' '}
+                            {safeTokens(record.cacheWriteInputTokens)}
+                            <br />
+                            {text('推理', 'Reasoning')}: {safeTokens(record.reasoningTokens)}
+                          </span>
+                        </div>
+                      ))
+                  )}
+                </div>
               </Card>
-              <Card style={{ marginTop: 14 }}>
+              <Card className="ol-usage-record-card">
                 <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
                   {text('最近记录', 'Recent records')}
                 </h2>
-                {rows.slice(0, 30).map((row) => (
-                  <div
-                    key={row.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      padding: '10px 0',
-                      borderTop: '1px solid var(--ol-line)',
-                    }}
-                  >
-                    <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
-                    <span>
-                      {[row.asrProvider, row.llmProvider].filter(Boolean).join(' · ') || '—'}
-                    </span>
-                  </div>
-                ))}
+                <div
+                  className="ol-usage-record-scroll ol-thinscroll"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={text('最近记录列表', 'Recent records list')}
+                >
+                  {rows.map((row) => (
+                    <div
+                      key={row.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '10px 0',
+                        borderTop: '1px solid var(--ol-line)',
+                      }}
+                    >
+                      <time dateTime={row.createdAt}>
+                        {new Date(row.createdAt).toLocaleString()}
+                      </time>
+                      <span>
+                        {[row.asrProvider, row.llmProvider].filter(Boolean).join(' · ') || '—'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </Card>
-            </>
+            </div>
           )}
         </>
       )}

@@ -1,4 +1,8 @@
-import { summarizeReportedUsage } from './serviceUsageMetrics';
+import {
+  summarizeReportedUsage,
+  formatUsageNumber,
+  reportedCacheHitRate,
+} from './serviceUsageMetrics';
 import type { ServiceUsageRecord } from './ipc/service-usage';
 
 function equal(actual: unknown, expected: unknown, label: string) {
@@ -56,3 +60,39 @@ equal(
   'unsafe sums are unknown',
 );
 console.log('reported service usage metrics tests passed');
+
+for (const [value, expected] of [
+  [null, '—'],
+  [-1, '—'],
+  [999, '999'],
+  [1000, '1K'],
+  [12500, '12.5K'],
+  [999999, '1M'],
+  [1250000, '1.3M'],
+  [2300000000, '2.3B'],
+  [Number.MAX_SAFE_INTEGER + 1, '—'],
+] as const) {
+  equal(formatUsageNumber(value), expected, `compact number ${value}`);
+}
+equal(
+  reportedCacheHitRate([
+    make({ provider: 'deepseek', inputTokens: 100, cachedInputTokens: 80 }),
+    make({ provider: 'openai', inputTokens: 300, cachedInputTokens: 0 }),
+  ]),
+  0.2,
+  'cache rate weights compatible requests by reported input',
+);
+for (const record of [
+  make({ provider: 'anthropic', inputTokens: 100, cachedInputTokens: 80 }),
+  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: null }),
+  make({ provider: 'openai', inputTokens: 0, cachedInputTokens: 0 }),
+  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: 101 }),
+  make({ provider: 'openai', inputTokens: 100, cachedInputTokens: 80, cacheWriteInputTokens: 0 }),
+]) {
+  equal(
+    reportedCacheHitRate([record]),
+    null,
+    'unknown, additive or invalid cache reports do not create a rate',
+  );
+}
+console.log('compact usage numbers and reported cache rate tests passed');

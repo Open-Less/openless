@@ -41,3 +41,38 @@ export function summarizeReportedUsage(
     byPurpose: [...groups].map(([purpose, group]) => ({ purpose, ...summarize(group) })),
   };
 }
+
+export function formatUsageNumber(value: number | null | undefined): string {
+  if (value == null || !Number.isSafeInteger(value) || value < 0) return '—';
+  if (value < 1_000) return String(value);
+  const units = [
+    [1_000_000_000, 'B'],
+    [1_000_000, 'M'],
+    [1_000, 'K'],
+  ] as const;
+  // Choose the unit after rounding so 999,999 becomes 1M, never 1000K.
+  for (let index = 0; index < units.length; index++) {
+    const [divisor, suffix] = units[index];
+    if (value >= divisor || (index < units.length - 1 && value / divisor >= 0.99995)) {
+      return `${Number((value / divisor).toFixed(1))}${suffix}`;
+    }
+  }
+  return String(value);
+}
+
+export function reportedCacheHitRate(records: ServiceUsageRecord[]): number | null {
+  const compatible = records.filter(
+    (record) =>
+      ['openai', 'deepseek'].includes(record.provider?.toLowerCase() ?? '') &&
+      record.cacheWriteInputTokens == null &&
+      Number.isSafeInteger(record.inputTokens) &&
+      record.inputTokens! > 0 &&
+      Number.isSafeInteger(record.cachedInputTokens) &&
+      record.cachedInputTokens! >= 0 &&
+      record.cachedInputTokens! <= record.inputTokens!,
+  );
+  if (!compatible.length) return null;
+  const input = sumKnown(compatible.map((record) => record.inputTokens));
+  const cached = sumKnown(compatible.map((record) => record.cachedInputTokens));
+  return input !== null && input > 0 && cached !== null ? cached / input : null;
+}

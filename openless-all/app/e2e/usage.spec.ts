@@ -32,6 +32,47 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
     .click();
   const clear = page.getByRole('button', { name: '清除已记录 Token', exact: true });
   await expect(clear).toBeVisible();
+  const period = page.getByRole('group', { name: '统计时段' });
+  await expect(period).toBeVisible();
+  const positions = await clear.evaluate((node) => {
+    const button = node.getBoundingClientRect();
+    const toolbar = node.closest('.ol-usage-toolbar')!.getBoundingClientRect();
+    const segment = node
+      .closest('.ol-usage-toolbar')!
+      .querySelector('.ol-segmented')!
+      .getBoundingClientRect();
+    return {
+      right: toolbar.right - button.right,
+      center: Math.abs(button.top + button.bottom - (segment.top + segment.bottom)) / 2,
+    };
+  });
+  expect(positions.right).toBeLessThan(1);
+  expect(positions.center).toBeLessThan(1);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await page.locator('.ol-usage-page').evaluate((node) => {
+    node.style.zoom = '1.1';
+  });
+  const recent = page.getByRole('region', { name: '最近记录列表' });
+  await expect(recent).toBeVisible();
+  await recent.scrollIntoViewIfNeeded();
+  const bounds = await recent.evaluate((node) => ({
+    height: node.clientHeight,
+    content: node.scrollHeight,
+    overflow: getComputedStyle(node).overflowY,
+  }));
+  expect(bounds.overflow).toBe('auto');
+  expect(bounds.height).toBeLessThan(400);
+  expect(bounds.content).toBeGreaterThan(bounds.height);
+  await recent.hover();
+  await page.mouse.wheel(0, 160);
+  await expect.poll(() => recent.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.screenshot({ path: test.info().outputPath('usage-history-light-short.png') });
+  await page.setViewportSize({ width: 1300, height: 835 });
+  await page.locator('.ol-usage-page').evaluate((node) => {
+    node.style.zoom = '1';
+  });
+
   const dimensions = await clear.evaluate((node) => ({
     scroll: node.scrollHeight,
     client: node.clientHeight,
@@ -45,4 +86,15 @@ test('usage separates the dashboard, services and history', async ({ page }) => 
     'aria-pressed',
     'true',
   );
+  await page
+    .getByRole('navigation', { name: '用量页面' })
+    .getByRole('button', { name: '概览', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: '每日记录' })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.locator('.ol-usage-chart-dates').evaluate((node) => node.getBoundingClientRect().bottom),
+    )
+    .toBeLessThan(835);
+  await page.screenshot({ path: test.info().outputPath('usage-dashboard-light.png') });
 });
