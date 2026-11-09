@@ -146,6 +146,8 @@ button:disabled {
 
 /* Search and the command list share the right-hand settings pane. */
 .ol-settings-search-field {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   min-width: 0;
   height: 36px;
@@ -174,6 +176,9 @@ button:disabled {
 }
 .ol-shortcuts-toolbar input {
   max-width: 520px;
+}
+.ol-shortcuts .ol-settings-search-field[type='search'] {
+  background-color: var(--ol-surface-2);
 }
 .ol-shortcuts-count {
   white-space: nowrap;
