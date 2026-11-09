@@ -68,6 +68,7 @@ jobs:
         if: inputs.scope != 'none'
 
       - name: Install native build and test dependencies
+        timeout-minutes: 10
         if: inputs.scope != 'none'
         # Same list as the packaging job: the fcitx5 plugin build and the
         # `pwsh` contract scripts both live here now.
@@ -103,6 +104,7 @@ jobs:
           test -s build/openless.conf
 
       - name: Test Core, Linux host, and platform boundaries
+        timeout-minutes: 40
         if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: |
@@ -136,6 +138,7 @@ jobs:
           pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
 
       - name: Test remote input TLS identity and Unix key permissions
+        timeout-minutes: 20
         if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
@@ -162,6 +165,7 @@ jobs:
           ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Install native build and packaging dependencies
+        timeout-minutes: 10
         if: inputs.scope != 'none'
         run: |
           sudo add-apt-repository -y universe || true
@@ -235,11 +239,13 @@ jobs:
           appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
 
       - name: Build Linux egui host
+        timeout-minutes: 40
         if: inputs.scope != 'none'
         working-directory: openless-all/app
         run: cargo build --locked --release -p openless-linux-egui
 
       - name: Package deb and rpm without Tauri
+        timeout-minutes: 10
         if: inputs.scope != 'none'
         working-directory: openless-all/app
         env:
@@ -285,6 +291,7 @@ jobs:
         if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
         uses: actions/upload-artifact@v7
         with:
+          retention-days: 14
           name: openless-linux-egui-x86_64
           path: openless-all/app/target/linux-egui-packages/*
           if-no-files-found: error
@@ -293,6 +300,7 @@ jobs:
         if: inputs.scope != 'none' && (github.event_name != 'push' || env.RELEASE_TAG != '')
         uses: actions/upload-artifact@v7
         with:
+          retention-days: 14
           name: openless-linux-egui-direct-download
           path: ${{ runner.temp }}/openless-linux-egui-direct-download/*
           if-no-files-found: error

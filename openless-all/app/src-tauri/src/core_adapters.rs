@@ -94,6 +94,7 @@ pub(crate) fn backend_dependencies(
     backend: BackendSlot,
     native_asr_dependencies: TauriNativeAsrDependencies,
     preferences: Arc<openless_core::PreferencesStore>,
+    usage_recorder: Option<Arc<openless_core::usage_ledger::UsageRecorder>>,
     hotkey_status: Arc<Mutex<openless_core::HotkeyStatus>>,
     qa_host_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 ) -> openless_core::BackendDependencies {
@@ -247,9 +248,11 @@ pub(crate) fn backend_dependencies(
         )
         .expect("Apple system speech provider ID");
     let polisher = Arc::new(openless_core::TextPolisherRouter::default());
-    let production_polisher: Arc<dyn TextPolisher> = Arc::new(
-        openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store)),
-    );
+    let production_polisher = openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store));
+    let production_polisher: Arc<dyn TextPolisher> = Arc::new(match &usage_recorder {
+        Some(recorder) => production_polisher.with_usage_recorder(Arc::clone(recorder)),
+        None => production_polisher,
+    });
     for provider_type in openless_core::SHARED_CLOUD_LLM_PROVIDER_TYPES {
         polisher
             .register(*provider_type, Arc::clone(&production_polisher))
@@ -303,6 +306,7 @@ pub(crate) fn backend_dependencies(
             .expect("built-in Omni provider ids are non-empty");
     }
     let mut dependencies = openless_core::BackendDependencies::unsupported();
+    dependencies.services.usage_recorder = usage_recorder;
     if let Some(model_store) = model_store.clone() {
         dependencies.services.configure_model_store(model_store);
     }

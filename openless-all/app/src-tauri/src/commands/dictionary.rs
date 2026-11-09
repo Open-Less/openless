@@ -43,6 +43,32 @@ pub fn list_correction_rules(core: CoreState<'_>) -> Result<Vec<CorrectionRule>,
     core.list_correction_rules().map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceUsageSnapshot {
+    records: Vec<openless_core::usage_ledger::UsageRecord>,
+    dropped_or_failed: u64,
+}
+
+#[tauri::command]
+pub async fn get_service_usage(window: Window, core: CoreState<'_>) -> Result<ServiceUsageSnapshot, String> {
+    if window.label() != "main" { return Err("service usage is only available from the main window".into()); }
+    let recorder = core.services().usage_recorder.clone().ok_or("service usage is unavailable")?;
+    let (records, dropped_or_failed) = tauri::async_runtime::spawn_blocking(move || recorder.snapshot())
+        .await.map_err(|_| "service usage read failed".to_string())?
+        .map_err(|error| error.to_string())?;
+    Ok(ServiceUsageSnapshot { records, dropped_or_failed })
+}
+
+#[tauri::command]
+pub async fn clear_service_usage(window: Window, core: CoreState<'_>) -> Result<(), String> {
+    if window.label() != "main" { return Err("service usage is only available from the main window".into()); }
+    let recorder = core.services().usage_recorder.clone().ok_or("service usage is unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || recorder.clear())
+        .await.map_err(|_| "service usage clear failed".to_string())?
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn add_correction_rule(
     core: CoreState<'_>,
