@@ -27,7 +27,6 @@
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
   <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
   <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
-  <a href="https://discord.gg/vTZHTFGFm"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -39,7 +38,7 @@
 </p>
 
 <p align="center">
-  💬 &nbsp;<a href="https://discord.gg/vTZHTFGFm"><strong>Join our Discord</strong></a> &nbsp;·&nbsp; QQ Group&nbsp; <strong>1078960553</strong>
+  QQ Group&nbsp; <strong>1078960553</strong>
 </p>
 
 <br/>
@@ -193,6 +192,10 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 - It does not accumulate conversation context; every dictation is an independent cleanup request.
 - The pipeline is: speech → transcript → cleanup → insertion at the cursor, with a clipboard fallback on failure.
 - Everything else (modes, dictionary, history, menu bar, home report) exists to support that single path.
+
+## Stability freeze
+
+OpenLess is currently in a stability phase. The project is not accepting pull requests that add new product features or expand the existing feature set. Work should focus on making the current release reliable: bug fixes, regressions, security fixes, documentation, tests, compatibility, and release maintenance are welcome. New-feature proposals and implementation PRs will be held or closed until the stability phase ends.
 
 ## Comparison
 
@@ -422,6 +425,30 @@ egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows and Android hosts alongside the independent Linux egui deb/rpm workflow. After Linux device acceptance and an admin's tag, verified Linux packages attach to the shared Release; Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
+
+### Client architecture and flows
+
+The diagrams below are generated from the current `beta` client boundaries. Each rendered PNG is accompanied by an editable Mermaid source and an SVG version.
+
+#### Architecture
+
+![OpenLess client architecture](docs/images/client-diagrams/openless-client-architecture.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-architecture.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.svg) · [中文图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg)
+
+#### Data flow
+
+![OpenLess client data flow](docs/images/client-diagrams/openless-client-data-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-data-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg)
+
+#### Startup, permissions, and recording
+
+![OpenLess startup, permissions, and recording flow](docs/images/client-diagrams/openless-client-startup-recording-flow.png)
+
+[Mermaid source](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
+
+The dependency and module review that accompanies these diagrams is in [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md).
 
 See [Contributing workflow](#contributing-workflow) and [Releasing](RELEASING.md) for contribution and release rules, and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 

@@ -188,7 +188,7 @@ export function CloudSyncSetupPrompt({
 }
 
 /** Available before API-key setup. Opening this never enables sync or uploads. */
-export function CloudSyncWelcome() {
+export function CloudSyncWelcome({ inline = false }: { inline?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
@@ -198,7 +198,7 @@ export function CloudSyncWelcome() {
         className="ol-tool-button"
         disabled={!isTauri}
         onClick={() => setOpen(true)}
-        style={{ position: 'fixed', top: 18, right: 18, zIndex: 10 }}
+        style={inline ? undefined : { position: 'fixed', top: 18, right: 18, zIndex: 10 }}
       >
         <CloudIcon size={16} />
         {t('cloudSync.restore')}

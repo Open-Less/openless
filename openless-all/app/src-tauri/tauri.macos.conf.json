@@ -21,11 +21,10 @@
           "y": 253
         }
       }
-    },
-    "externalBin": ["binaries/openless-native-capsule"]
+    }
   },
   "build": {
-    "beforeBuildCommand": "npm run build:native-capsule && npm run build",
-    "beforeDevCommand": "npm run build:native-capsule:dev && npm run dev"
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev"
   }
 }

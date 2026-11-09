@@ -1,3 +1,4 @@
+import { desktopGuideJa as desktopGuide } from './desktopGuide';
 import { siwcJa as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
@@ -10,6 +11,7 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -295,6 +297,7 @@ export const ja: typeof zhCN = {
     show: '表示',
     hide: '非表示',
     saved: '保存しました',
+    refreshed: '更新しました',
     saving: '保存中',
     experimental: '実験的',
     copied: 'コピーしました',
@@ -390,109 +393,6 @@ export const ja: typeof zhCN = {
     editRevertPrevious: '前のバージョンを保持',
     editInstructionMode: '編集指示',
   },
-  lessComputer: {
-    activity: {
-      process: '処理の流れ',
-      count: '{{count}} 件の処理',
-      count_one: '{{count}} 件の処理',
-      count_other: '{{count}} 件の処理',
-      finished: '完了',
-      stopped: '停止',
-      search: '検索',
-      searchRunning: '検索中…',
-      read: '読み取り',
-      readRunning: '読み取り中…',
-      command: 'コマンド',
-      commandRunning: 'コマンドを実行中…',
-      edit: '編集',
-      editRunning: '編集中…',
-      web: 'ウェブ',
-      webRunning: 'ウェブページを確認中…',
-      other: 'ツール',
-      otherRunning: '処理中…',
-    },
-    desktop: {
-      approvedSubmitted: '許可を送信しました',
-      deniedSubmitted: '拒否を送信しました',
-      agents: 'エージェント',
-      configured: '現在の設定',
-      agentSettings: '設定で選択',
-      sessionUnavailable: '新しい会話 · 未対応',
-      signedIn: 'ログイン済み',
-      signIn: 'ログイン',
-      currentSession: '現在の会話',
-      minimize: '最小化',
-      maximize: '最大化 / 元に戻す',
-      windowError: 'ウィンドウ操作に失敗しました。再試行してください。',
-      idle: '指示を待っています',
-      waitingApproval: '承認待ち',
-      submittingApproval: '送信中…',
-      approvalError: '承認を送信できませんでした。再試行してください。',
-      approvalExpired: 'このターンは終了しました。承認はできません。',
-      sendError: '送信できませんでした。入力は保持されています。再試行してください。',
-      browserUnavailable:
-        'ブラウザのプレビューでは実行できません。デスクトップアプリをご利用ください。',
-      inputHint: 'Enter で送信 · Shift + Enter で改行',
-      apiCost: '今回の API 料金',
-      emptyHint: 'タスクを入力するか、マイクをタップするか、音声ショートカットで始めましょう。',
-      showInspector: 'ワークスペースを表示',
-      hideInspector: 'ワークスペースを隠す',
-      inspectorTitle: 'ワークスペース',
-      inspectorStatus: 'ステータス',
-      inspectorTurn: 'このターン',
-      toolCalls: 'ツール呼び出し',
-      pendingApprovals: '確認待ち',
-      inspectorVoice: '音声入力',
-      voiceShortcutOff: '音声ショートカットが未設定です。設定で有効にできます。',
-      voiceModesHint:
-        'マイク：話した内容が入力欄に入り、編集してから送信できます。音声ボタン：話し終えるとそのままエージェントに送信します。',
-      copy: 'コピー',
-      copied: 'コピーしました',
-      messagePlaceholder: '{{agent}} にメッセージ',
-    },
-    voice: {
-      dictate: '入力欄に音声入力',
-      voiceMode: '音声モード（停止で送信）',
-      stopTask: 'タスクを停止',
-      cancel: '録音をキャンセル',
-      confirmDictation: '音声入力を完了',
-      stopAndSend: '停止して送信',
-      listening: '聞き取り中…',
-      starting: 'マイクを準備中…',
-      transcribing: '文字起こし中…',
-      empty: '聞き取れませんでした。もう一度お話しください。',
-      failed: '音声認識に失敗しました。もう一度お試しください。',
-      startFailed: '録音を開始できません：{{message}}',
-      taskCancelFailed: 'タスクを停止できませんでした。もう一度お試しください。',
-      dictateCaption:
-        '話し終えたら ✓ をタップ。テキストは入力欄に入り編集できます · Esc でキャンセル',
-      submitCaption: '↑ をタップするとそのままエージェントに送信 · Esc でキャンセル',
-      stopHint: 'タスク実行中：■ で停止できます',
-      holdHint: '{{key}} を押している間話す',
-      toggleHint: '{{key}} を押して開始・終了',
-      autoHint: '{{key}} を長押しまたはタップして話す',
-    },
-    title: 'Less Computer',
-    subtitle: 'コンピュータに何をさせますか？',
-    you: 'あなた',
-    working: '操作中…',
-    tool: '{{name}} を使用',
-    compaction: 'コンテキストを圧縮しました',
-    done: '完了',
-    cost: '${{cost}}',
-    error: '失敗しました。再試行してください。',
-    closeTooltip: '閉じる',
-    jumpToLatest: '最新へ移動',
-    inputPlaceholder: '指示を入力、Enter で送信',
-    send: '送信',
-    approvalTitle: 'ブロックされたコマンドを実行？',
-    approvalRerunWarning:
-      '注意：承認すると、すでに変更されたワークスペース上で再実行され、冪等でない操作に副作用が生じる可能性があります。',
-    approve: '許可',
-    deny: '拒否',
-    approved: '許可済み',
-    denied: '拒否済み',
-  },
   nav: {
     overview: '概要',
     history: '履歴',
@@ -547,7 +447,7 @@ export const ja: typeof zhCN = {
     },
     sortLiked: 'いいね済み',
     likedEmpty: 'まだいいねしたパックがありません',
-    likedEmptyHint: 'パックを開いて星をタップするとここに表示されます',
+    likedEmptyHint: 'パックを開いてハートをタップするとここに表示されます',
     derivativeBadge: '@{{login}} から派生',
     detail: {
       withdrawBtn: '公開を取り下げる',
@@ -633,6 +533,7 @@ export const ja: typeof zhCN = {
       settings: '環境設定：ショートカット・プロバイダー・プライバシー・更新',
     },
     footer: {
+      usage: '使用量',
       account: 'アカウント',
       feedback: 'フィードバック',
       settings: '設定',
@@ -722,8 +623,8 @@ export const ja: typeof zhCN = {
     },
     actions: {
       refresh: '再読み込み',
-      services: 'AI サービスとモデル',
-      general: '録音と入力',
+      services: 'AI とモデル',
+      general: '一般',
       shortcuts: 'ショートカット',
       privacy: '権限とデータ',
     },
@@ -732,7 +633,7 @@ export const ja: typeof zhCN = {
       loadingTitle: '設定を読み込んでいます',
       loadingDesc: '使用中のサービスと次の操作をまもなく表示します。',
       unavailableTitle: 'サービスの状態を読み込めません',
-      unavailableDesc: '再読み込みするか、AI サービスで設定を確認してください。',
+      unavailableDesc: '再読み込みするか、AI とモデルで設定を確認してください。',
       servicesTitle: 'まず音声サービスを設定しましょう',
       servicesDesc:
         'ここから始めるのがおすすめです。音声認識とテキスト処理のサービスを選びましょう。Omni モードでは、使用するマルチモーダルモデルだけを設定します。',
@@ -1172,9 +1073,9 @@ export const ja: typeof zhCN = {
     target: {
       title: '翻訳ターゲット言語',
       desc: '録音中に Shift で翻訳を起動。「無効」で Shift 無効化。',
-      disabled: '無効（Shift で翻訳を発動しない）',
+      disabled: '無効（{{shortcut}} で翻訳を発動しない）',
       sameAsWorking:
-        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
+        'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（{{shortcut}} を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
     },
     style: {
       title: '翻訳スタイル',
@@ -1195,7 +1096,7 @@ export const ja: typeof zhCN = {
       step4: '再度 {{trigger}} を押して停止。',
       step5: '翻訳結果がカーソル位置に挿入されます。',
       indicatorTitle: '翻訳モードの確認方法',
-      indicatorDesc: 'Shift を押すと画面下部に青い「翻訳中」表示が出ます。',
+      indicatorDesc: '{{shortcut}} を押すと画面下部に青い「翻訳中」表示が出ます。',
       fallbackTitle: 'セーフティフォールバック',
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
@@ -1261,14 +1162,36 @@ export const ja: typeof zhCN = {
     cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
-    testingFeatures: {
-      title: 'テスト中の機能',
-      enable: 'テスト中の機能を有効にする',
-      description:
-        '対応するプラットフォームで Less Computer と Claude コンソールを表示し、設定・使用できます。オフにすると実行中のタスクを停止して項目を非表示にしますが、設定は保持されます。このデバイスのみに適用されます。',
-      unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
+    generalPages: {
+      recordingTitle: 'マイクと録音',
+      recordingDesc: 'マイクの監視と認識、および監視と通知です。',
+      capsuleTitle: 'カプセルのスタイル',
+      capsuleDesc: 'カプセルの表示、マルチスクリーン、スタイル、原文のストリーミング表示。',
+      textInputTitle: '文字の挿入',
+      textInputDesc: '選択アシスタント、挿入とクリップボード、起動。',
+      phoneTitle: 'スマホとリモート入力',
+      phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
+    },
+    advancedPages: {
+      liveInputTitle: '文字入力',
+      experiments: '実験的な機能と拡張オプションを設定します。',
+      voiceEnhancementTitle: '音声強調と再生抑制',
+      cursorContextTitle: '認識',
+      startupDiagnosticsTitle: '起動診断',
+      cursorContextHint:
+        'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
+    },
+    advancedGroups: {
+      recording: '録音',
+      text: 'テキストと文脈',
+      diagnostics: '診断',
     },
     selectionWorkspace: {
+      extraControls: '追加設定',
+      extraControlsDesc: '質問と編集の判定、モデル出力形式を調整します。通常は変更不要です。',
+      openExtraControls: 'その他',
+      extraControlsSaveHint: '変更は自動保存されます。',
+      extraControlsDone: '完了',
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
       polishHotkey: '選択範囲アシスタントのショートカット',
@@ -1318,6 +1241,23 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
+    expressionLearning: {
+      clearHint: '消去後も、進行中の音声入力には開始時の好みが使われる場合があります。',
+      lineBreaksMore: '改行を増やす',
+      lineBreaksLess: '改行を減らす',
+      exclamationsMore: '感嘆符を増やす',
+      exclamationsLess: '感嘆符を減らす',
+      terminalPunctuationMore: '文末の句読点を使う',
+      terminalPunctuationLess: '文末の句読点を減らす',
+
+      title: '表現の習慣',
+      enabled: '表現の習慣を学習',
+      description:
+        '音声入力後の書式変更を端末内で観察し、表現の習慣には抽象的な統計のみを保存します。履歴は別に管理されます。繰り返し確認された改行や句読点の傾向を、選択した文字モデルへの短い指示として利用します。オフにすると学習は直ちに停止し、次の音声入力から適用されません。進行中の入力には取得済みの好みが使われる場合があります。',
+      status: '安定した好み {{count}} 件',
+      clear: '表現の習慣を消去',
+      error: '表現の習慣を読み書きできませんでした。',
+    },
     vocabularyLearning: {
       title: '修正から単語を学習',
       enabled: '修正からの学習を有効にする',
@@ -1354,102 +1294,6 @@ export const ja: typeof zhCN = {
       opening: '開いています…',
       openFailed: 'ローカル移行を開けませんでした。設定からもう一度お試しください。',
     },
-    codingConsole: {
-      title: 'Claude コンソール',
-      desc: 'ローカルの Claude Code と MCP（computer use）の状態を検出し、ガードレール付きで Claude をヘッドレス実行して、出力とコストをストリーミング表示します。',
-      guardNote:
-        '復元可能な操作はデフォルトで許可。rm -rf / sudo / 強制プッシュなどの高リスクコマンドはブロック。作業ディレクトリが git リポジトリなら実行前にスナップショットを作成し巻き戻し可能。',
-      status: '状態',
-      detect: '検出',
-      detecting: '検出中…',
-      installed: 'Claude を検出',
-      notInstalled: 'claude が見つかりません',
-      notInstalledHint:
-        'まず Claude Code をインストールしてください（docs.anthropic.com/claude-code 参照）。または下に実行ファイルのフルパスを入力してください。',
-      mcpServers: 'MCP サーバー {{count}} 件',
-      computerUsePresent: 'デスクトップ操作（computer use）MCP を検出',
-      computerUseAbsent:
-        'デスクトップ操作 MCP なし（コピー / 貼り付けなどの軽い操作は Bash で可能、不要）',
-      exePath: '実行ファイル',
-      workdir: '作業ディレクトリ',
-      workdirDesc:
-        '任意。Claude はこのディレクトリ内で実行。git リポジトリなら実行前スナップショットで巻き戻し可能。',
-      workdirPlaceholder: '空欄なら一時ディレクトリで実行',
-      permissionMode: '権限モード',
-      mode: {
-        acceptEdits: '許可（復元可能）',
-        plan: '読み取り専用 / 計画',
-        default: 'デフォルト（都度確認）',
-        bypassPermissions: '完全許可（高リスク）',
-      },
-      promptPlaceholder: 'Claude に指示、例：カレントディレクトリのファイル名を一覧表示',
-      run: '実行',
-      running: '実行中…',
-      cancel: 'キャンセル',
-      clear: 'クリア',
-      riskWarn:
-        '高リスクの意図を検出：{{reason}}。ガードレールが実行時に高リスクコマンドをブロックします。',
-      toolUse: 'ツール {{name}}',
-      done: '完了',
-      doneCost: '完了 · コスト ${{cost}}',
-      cancelled: 'キャンセル済み',
-      outputPlaceholder: '出力はここにストリーミング表示されます…',
-    },
-    codingAgent: {
-      title: 'Less Computer',
-      desc: 'キーを押して話すと、選択した Agent が PC を操作します。macOS のみ。',
-      enable: 'Less Computer を有効化',
-      comingSoonNote:
-        '設定はすぐ保存されます。ホットキー起動と実行フローは今後のバージョンで対応。',
-      hotkeyHint:
-        '有効にすると、ショートカットを押しながら話し、離すと選択した Agent の結果がカプセルに表示されます。',
-      voiceHotkey: '押しながら話すキー',
-      voiceHotkeyDesc:
-        '押して話す、離して実行。Ctrl/Option/Fn などの単キー対応。機能の説明は「詳細」設定ページを参照。',
-      provider: 'Agent バックエンド',
-      opencodeReady: 'OpenCode v{{version}} を検出しました。',
-      opencodeMissing:
-        'opencode コマンドが見つかりません。先にインストール（npm i -g opencode-ai）して opencode auth login でログインしてください。',
-      cliReady: '{{name}} v{{version}} を検出しました。',
-      cliMissing:
-        '{{name}} コマンドが見つかりません。先にインストールとログインを行うか、下の「実行ファイル」に絶対パスを入力してください。',
-      sandboxGuardHint:
-        'このバックエンドは粗い粒度のサンドボックス段階しか持たず、コマンド単位の高リスク一覧はありません。制限に触れた場合はそのままエラーとして報告し、「このコマンドを承認」カードは表示されません。',
-      codexModelHint:
-        'Codex のモデル名（gpt-5 など）を入力します。空欄の場合は ~/.codex/config.toml の設定を使います。',
-      codexBudgetHint:
-        'Codex には実行ごとの米ドル予算上限がありません。料金は設定したプロバイダーに依存します。',
-      codexMode: {
-        plan: '読み取り専用 / 計画',
-        workspaceWrite: 'ワークスペースへの書き込みを許可',
-      },
-      codexModelPlaceholder: '空欄 = Codex の既定値',
-      dshModelHint:
-        'dsh の headless プロファイルにモデル切り替えはありません。モデルは dsh 自身のプロファイルで決まり、ここでは変更できません。',
-      panelHotkey: 'パネルキー（音声 Agent）',
-      panelHotkeyDesc:
-        '録音 → ASR → Claude → パネルにストリーミング表示。デフォルト Cmd/Ctrl+Shift+Enter。',
-      quickHotkey: 'クイック取得キー',
-      quickHotkeyDesc: '選択テキストを取得 → Claude → 結果をカーソル位置へ。パネルなし、より高速。',
-      model: 'モデル',
-      modelPlaceholder: 'デフォルト: sonnet',
-      modelDefault: 'デフォルト（自動 sonnet）',
-      modelHint: 'Haiku = 最速 · Sonnet = バランス · Opus = 最強',
-      opencodeModelDefault: 'OpenCode のデフォルトモデルを使用',
-      opencodeModelHint:
-        '現在の OpenCode アカウントで利用できる provider/model を自動取得し、選択内容をすぐ保存します。',
-      opencodeModelsRefresh: 'モデルを再取得',
-      opencodeModelsRefreshing: 'OpenCode モデルを取得中…',
-      opencodeModelsLoaded: '{{count}} 個のモデルを取得しました。',
-      opencodeModelsEmpty:
-        '利用可能なモデルが返されませんでした。OpenCode にログインするか、モデルプロバイダーを設定してください。',
-      opencodeModelsError: 'モデルの取得に失敗しました：{{message}}',
-      exe: '実行ファイルのパス',
-      openPanel: 'テキストテスト',
-      openPanelHint:
-        'Less Computer パネルを直接開き、現在の Agent とモデル設定をテキストで確認します。',
-      openPanelAction: 'Less Computer を開く',
-    },
     debug: {
       cursorLabel: 'カーソル',
       title: 'デバッグツール',
@@ -1476,7 +1320,7 @@ export const ja: typeof zhCN = {
       },
     },
     recording: {
-      title: '録音と入力',
+      title: '一般',
       desc: 'グローバル録音のショートカットとトリガー方式を定義します。',
       hotkeyLabel: '録音ショートカット',
       hotkeyDescAcc: '押すと音声キャプチャを開始（グローバル）。アクセシビリティ権限が必要です。',
@@ -1525,7 +1369,7 @@ export const ja: typeof zhCN = {
         'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
+      capsuleStyleClassic: 'デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
@@ -1602,6 +1446,10 @@ export const ja: typeof zhCN = {
       audioCueDesc:
         'ホットキーで録音を開始するとき、合成した短い通知音を再生します。カプセルが非表示でも鳴ります。',
       audioCuePreview: '試聴',
+      captureGroupTitle: 'マイク監視と認識',
+      capsuleGroupTitle: 'カプセルのスタイル',
+      recognitionGroupTitle: '監視と通知音',
+      feedbackGroupTitle: '監視と通知音',
       insertGroupTitle: '挿入とクリップボード',
       restoreClipboardLabel: '入力後にクリップボードを復元',
       restoreClipboardDesc:
@@ -1670,9 +1518,11 @@ export const ja: typeof zhCN = {
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
       debugArchiveProcessedLabel: '処理後の音声を保存',
-      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveProcessedDesc:
+        'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
       debugArchiveRawLabel: '処理前の音声も保存',
-      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
+      debugArchiveRawDesc:
+        '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
@@ -1692,16 +1542,6 @@ export const ja: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'タイムアウトで停止',
       voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
-      lowMemoryBackgroundLabel: '省メモリバックグラウンドモード',
-      lowMemoryBackgroundDesc:
-        '再起動後に適用。メイン画面を閉じると解放し、録音時のみネイティブカプセルを表示します。待機中のマイク事前起動を無効にします。ローカルモデルの解放設定は維持されます。',
-      lowMemoryRestartLabel: '再起動後に適用',
-      lowMemoryRestartDesc:
-        '低メモリバックグラウンドモードの設定を保存しました。実行モードの切り替えにはアプリの再起動が必要です。',
-      lowMemoryRestartNow: '今すぐ再起動',
-      lowMemoryCapsuleErrorLabel: 'ネイティブカプセル利用不可',
-      lowMemoryCapsuleErrorDesc:
-        'ディクテーションは引き続き利用できますが、フローティングカプセルは表示されません。ヘルパーが見つからないかブロックされている可能性があります。アプリを再インストールしてください。',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
@@ -1779,7 +1619,7 @@ export const ja: typeof zhCN = {
       hoursAgo: '{{count}}時間前',
       daysAgo: '{{count}}日前',
       localEngineModelHint:
-        '「AI サービスとモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
+        '「AI とモデル → ローカルモデル」でモデルをダウンロード・切り替えできます。',
     },
     providers: {
       localEngineNoCredentials: 'ローカルエンジンに API キーやエンドポイントは不要です。',
@@ -2297,7 +2137,10 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
-      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      macosCompositionInputLabel: '入力欄に認識中の原文を表示',
+      macosCompositionInputDesc:
+        '録音中の認識結果を元の入力欄に表示し、終了後に整形または翻訳した文章へ置き換えます。アクセシビリティ権限と対応エディタが必要です。カーソル移動や手動編集で置き換えを停止します。',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
@@ -2484,6 +2327,8 @@ export const ja: typeof zhCN = {
     details: 'エラーの詳細',
   },
   modal: {
+    experimentsTitle: '実験と拡張',
+    experimentsDescription: '実験的な機能と拡張オプションを設定します。',
     serviceViews: {
       label: 'サービス設定',
       llm: '言語モデル',
@@ -2504,27 +2349,30 @@ export const ja: typeof zhCN = {
     searchCount: '関連するカテゴリ：{{count}} 件',
     noResults: 'カテゴリが見つかりません。「マイク」「モデル」「テーマ」などをお試しください。',
     autoSaveHint: '変更は自動保存されます',
-    backToAdvanced: '実験と拡張に戻る',
-    backToTestingFeatures: 'テスト中の機能に戻る',
+    backToAdvanced: '高度な機能に戻る',
+    back: '戻る',
     advancedPages: {
+      liveInput: '入力欄に表示するリアルタイム原文を設定します。',
+      experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
       localModels: experimentalAsr.description,
-      testingFeatures: 'テスト中の機能を必要に応じて有効にします。',
       vocabularyLearning:
         '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
-      lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
-      claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
       debug: 'デバッグ録音の保持、カーソル周辺の確認、ログの書き出しを行います。',
+      voiceEnhancement: '高度な音声処理、ノイズ低減、再生エコーの抑制を設定します。',
+      cursorContext: '推敲リクエストに使うカーソル付近の文脈と、短い入力の扱いを設定します。',
+      startupDiagnostics: '起動時間、バックエンドの接続、遅延プローブを確認します。',
     },
     descriptions: {
-      general: 'マイク、録音方法、文字入力を設定し、スマートフォンからの入力を接続します。',
+      general: 'マイク監視、カプセルのスタイル、文字の挿入、リモート入力。',
       inputMethod: 'Android のオーバーレイと入力方法を設定します。',
       shortcuts: '各機能のショートカットと、テキスト選択後の操作を設定します。',
       services: '音声認識と文章処理のサービス、チャンネル、ローカルモデル、接続を管理します。',
+      cloudServices: '拡張マーケット、GitHub ログイン、暗号化クラウド同期を管理します。',
       appearance: 'テーマ、レイアウト、表示言語を読みやすく調整します。',
       privacy: 'システム権限と接続を確認し、履歴、録音、ローカルデータを管理します。',
-      advanced: 'テスト機能、語彙学習、デバッグツールを設定します。',
+      advanced: '実験的な機能と拡張オプションを設定します。',
       about: '現在のバージョン、更新チャンネル、自動更新を確認します。',
     },
     searchKeywords: {
@@ -2533,21 +2381,23 @@ export const ja: typeof zhCN = {
       shortcuts: 'ショートカット ホットキー キー 選択 推敲 音声編集',
       services:
         'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット マルチモーダル 認識パイプライン Omni',
+      cloudServices: 'クラウド 同期 暗号化 マーケット GitHub ログイン 公式',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
       advanced:
-        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning',
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning manual edits vocabulary learning Beta ',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 
     sections: {
       appearance: '外観と言語',
       shortcuts: 'ショートカットと選択',
-      general: '録音と入力',
+      general: '一般',
       inputMethod: '入力方法',
-      services: 'AI サービスとモデル',
+      services: 'AI とモデル',
+      cloudServices: 'クラウドサービス',
       privacy: '権限とデータ',
-      advanced: '実験機能と拡張',
+      advanced: '高度な機能',
       personalize: 'パーソナライズ',
       about: 'バージョンと更新',
       helpCenter: 'ヘルプセンター',

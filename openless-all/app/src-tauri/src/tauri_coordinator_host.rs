@@ -659,6 +659,55 @@ fn capsule_window_action(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleCursorUpdate {
+    Keep,
+    SetPassthrough(bool),
+    /// Close is still on screen (or just hidden). Do not enable passthrough yet.
+    SuspendHitsUntilInteractive,
+}
+
+/// Cursor policy for one capsule frame.
+///
+/// Terminal frames stay visible for the exit animation. Enabling passthrough
+/// calls `set_ignore_cursor_events`, and on Windows tao reapplies `WS_CAPTION`
+/// plus `WS_EX_WINDOWEDGE` with `SWP_FRAMECHANGED`. That paints the classic
+/// non-client frame for one frame, and clearing the window region makes the
+/// full rectangle visible. Keep the undecorated styles and region; suspend
+/// hit testing instead until the next interactive frame.
+fn capsule_cursor_update(
+    style: CapsuleStyle,
+    state: CapsuleState,
+    selection_polish: bool,
+    current_passthrough: bool,
+    close_hits_suspended: bool,
+) -> CapsuleCursorUpdate {
+    let interactive = style != CapsuleStyle::Siri
+        && !selection_polish
+        && matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        );
+    let want_passthrough = !interactive;
+    if close_hits_suspended && !want_passthrough {
+        return CapsuleCursorUpdate::SetPassthrough(false);
+    }
+    if want_passthrough
+        && !current_passthrough
+        && matches!(
+            state,
+            CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error | CapsuleState::Idle
+        )
+    {
+        return CapsuleCursorUpdate::SuspendHitsUntilInteractive;
+    }
+    if current_passthrough == want_passthrough {
+        CapsuleCursorUpdate::Keep
+    } else {
+        CapsuleCursorUpdate::SetPassthrough(want_passthrough)
+    }
+}
+
 fn should_present_capsule_window(window_visible_before: bool) -> bool {
     !window_visible_before
 }
@@ -711,6 +760,8 @@ struct CapsuleWindowState {
     qa_voice_active: AtomicBool,
     translation_menu: Mutex<Option<CapsuleMenuFrame>>,
     cursor_passthrough: AtomicBool,
+    /// Close suspended hit testing without changing native window styles.
+    close_hits_suspended: AtomicBool,
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
     style: AtomicU8,
@@ -738,6 +789,7 @@ impl Default for CapsuleWindowState {
             qa_voice_active: AtomicBool::new(false),
             translation_menu: Mutex::new(None),
             cursor_passthrough: AtomicBool::new(true),
+            close_hits_suspended: AtomicBool::new(false),
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
@@ -1035,10 +1087,30 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
-        let capsule = self.clone();
-        self.app
-            .run_on_main_thread(move || task(capsule))
-            .map_err(|error| error.to_string())
+        self.run_on_main_thread_observed(crate::issue1266_debug::Kind::CapsuleDispatch, task)
+    }
+
+    fn run_on_main_thread_observed<F>(&self, kind: crate::issue1266_debug::Kind, task: F)
+        -> Result<(), String>
+    where
+        F: FnOnce(Self) + Send + 'static,
+    {
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+            let capsule = dispatch.clone_handle(|| self.clone());
+            let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
+                .map_err(|error| error.to_string());
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let _ = kind;
+            let capsule = self.clone();
+            self.app.run_on_main_thread(move || task(capsule))
+                .map_err(|error| error.to_string())
+        }
     }
 
     fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
@@ -1220,7 +1292,8 @@ impl TauriCapsuleWindow {
     /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
-        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
+        let _ = self.run_on_main_thread_observed(crate::issue1266_debug::Kind::MirrorDispatch,
+            |capsule| capsule.apply_capsule_mirrors());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1724,14 +1797,14 @@ impl TauriCapsuleWindow {
                 #[cfg(target_os = "windows")]
                 {
                     let host_for_main = host.clone();
-                    host.on_main_thread(move || {
+                    host.on_main_thread_observed(crate::issue1266_debug::Kind::LayoutDispatch, move || {
                         if let Some(capsule) = host_for_main.capsule_window() {
                             capsule.refresh_watched_layout(epoch);
                         }
                     });
                 }
                 #[cfg(not(target_os = "windows"))]
-                let _ = capsule.run_on_main_thread(move |capsule| {
+                let _ = capsule.run_on_main_thread_observed(crate::issue1266_debug::Kind::LayoutDispatch, move |capsule| {
                     capsule.refresh_watched_layout(epoch);
                 });
             }
@@ -1764,19 +1837,71 @@ impl TauriCapsuleWindow {
     fn update_cursor_for_payload(&self, payload: &CapsulePayload, style: CapsuleStyle) {
         #[cfg(not(mobile))]
         {
-            let interactive = style != CapsuleStyle::Siri
-                && !payload.selection_polish
-                && matches!(
-                    payload.state,
-                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-                );
-            let want_passthrough = !interactive;
-            if self.state.cursor_passthrough.load(Ordering::SeqCst) != want_passthrough {
-                if let Err(error) = self.set_cursor_passthrough(want_passthrough) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+            let update = capsule_cursor_update(
+                style,
+                payload.state,
+                payload.selection_polish,
+                self.state.cursor_passthrough.load(Ordering::SeqCst),
+                self.state.close_hits_suspended.load(Ordering::SeqCst),
+            );
+            match update {
+                CapsuleCursorUpdate::Keep => {}
+                CapsuleCursorUpdate::SetPassthrough(passthrough) => {
+                    self.state
+                        .close_hits_suspended
+                        .store(false, Ordering::SeqCst);
+                    if let Err(error) = self.set_cursor_passthrough(passthrough) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
+                }
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive => {
+                    if self.state.close_hits_suspended.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    // Windows: do not clear the region or call
+                    // set_ignore_cursor_events while the exit frame can be seen.
+                    // Other platforms have no classic non-client frame.
+                    #[cfg(target_os = "windows")]
+                    self.suspend_close_hit_testing();
+                    #[cfg(not(target_os = "windows"))]
+                    if let Err(error) = self.set_cursor_passthrough(true) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                    }
                 }
             }
         }
+    }
+
+    /// Pass clicks through during close without changing window styles.
+    ///
+    /// `SetWindowRgn(NULL)` and tao's decoration refresh both paint the classic
+    /// frame. An empty hit rect keeps the existing undecorated region.
+    #[cfg(target_os = "windows")]
+    fn suspend_close_hit_testing(&self) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Some(window) = self.window() else {
+            return;
+        };
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(raw.hwnd.get() as *mut _);
+        if hwnd.0.is_null() {
+            return;
+        }
+        let _ = install_capsule_hit_test_proc(
+            hwnd,
+            CapsuleHitTestRect {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            },
+        );
     }
 
     fn refresh_style(&self) {
@@ -1841,6 +1966,22 @@ impl TauriCapsuleWindow {
                 self.invalidate_layout();
             }
             self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            // Hide before any cursor or style change. The exit frames below
+            // must not enable passthrough while this HWND is still visible.
+            if action == CapsuleWindowAction::HideCapsule {
+                self.stop_layout_watch();
+                if !show_capsule
+                    && !matches!(payload.state, CapsuleState::Idle)
+                    && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
+                {
+                    log::info!(
+                        "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
+                        capsule_state_log_name(payload.state)
+                    );
+                }
+                hide_capsule_window_if_present();
+                let _ = self.hide();
+            }
             self.update_cursor_for_payload(payload, style);
             self.sync_capsule_mirrors();
 
@@ -1870,18 +2011,6 @@ impl TauriCapsuleWindow {
                     crate::restore_main_window_key_if_active(&self.app);
                 }
                 CapsuleWindowAction::HideCapsule => {
-                    self.stop_layout_watch();
-                    if !show_capsule
-                        && !matches!(payload.state, CapsuleState::Idle)
-                        && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
-                    {
-                        log::info!(
-                            "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
-                            capsule_state_log_name(payload.state)
-                        );
-                    }
-                    hide_capsule_window_if_present();
-                    let _ = self.hide();
                     if matches!(
                         payload.state,
                         CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error
@@ -1905,11 +2034,6 @@ pub(crate) struct TauriCoordinatorHost {
     capsule: Arc<CapsuleWindowState>,
     #[cfg(not(mobile))]
     native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
-    /// Last sidecar init failure, surfaced by `native_capsule_status` so the
-    /// settings page can explain a missing recording overlay instead of
-    /// failing silently.
-    #[cfg(not(mobile))]
-    native_capsule_error: Arc<Mutex<Option<String>>>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
@@ -1923,8 +2047,6 @@ impl TauriCoordinatorHost {
             capsule: Arc::new(CapsuleWindowState::default()),
             #[cfg(not(mobile))]
             native: Arc::new(Mutex::new(None)),
-            #[cfg(not(mobile))]
-            native_capsule_error: Arc::new(Mutex::new(None)),
             qa_context,
         }
     }
@@ -1938,11 +2060,9 @@ impl TauriCoordinatorHost {
             match crate::native_capsule::NativeCapsule::new(app.clone()) {
                 Ok(native) => {
                     *self.native.lock() = Some(Arc::new(native));
-                    *self.native_capsule_error.lock() = None;
                 }
                 Err(error) => {
                     log::error!("[native-capsule] {error}; dictation remains available");
-                    *self.native_capsule_error.lock() = Some(error.to_string());
                 }
             }
         }
@@ -1960,26 +2080,38 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
-            task();
-            return;
-        }
-        // On a worker thread `run_on_main_thread` only queues through the event-loop proxy, so
-        // holding the slot lock here cannot re-enter it.
-        if let Some(app) = self.app.lock().as_ref() {
-            let _ = app.run_on_main_thread(task);
-        }
+        self.on_main_thread_observed(crate::issue1266_debug::Kind::HostDispatch, task);
     }
 
-    /// `(available, last_error)` for the disposable capsule sidecar.
-    #[cfg(not(mobile))]
-    pub(crate) fn native_capsule_status(&self) -> (bool, Option<String>) {
-        let native = self.native.lock();
-        let error = native
-            .as_ref()
-            .and_then(|native| native.last_error())
-            .or_else(|| self.native_capsule_error.lock().clone());
-        (native.is_some() && error.is_none(), error)
+    #[cfg(target_os = "windows")]
+    fn on_main_thread_observed<F>(&self, kind: crate::issue1266_debug::Kind, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        #[cfg(feature = "issue-1266-diagnostics")]
+        let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+        #[cfg(feature = "issue-1266-diagnostics")]
+        let task = dispatch.wrap(task);
+        #[cfg(not(feature = "issue-1266-diagnostics"))]
+        let _ = kind;
+
+        if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+            task();
+            #[cfg(feature = "issue-1266-diagnostics")]
+            dispatch.dispatched(true);
+            return;
+        }
+        // Borrow, never clone, the bound handle. On a worker this only queues;
+        // the slot lock cannot re-enter on the same thread.
+        let queued = if let Some(app) = self.app.lock().as_ref() {
+            app.run_on_main_thread(task).is_ok()
+        } else {
+            false
+        };
+        #[cfg(feature = "issue-1266-diagnostics")]
+        dispatch.dispatched(queued);
+        #[cfg(not(feature = "issue-1266-diagnostics"))]
+        let _ = queued;
     }
 
     #[cfg(not(mobile))]
@@ -2027,6 +2159,13 @@ impl TauriCoordinatorHost {
     pub(crate) fn set_native_capsule_locale(&self, locale: String) {
         if let Some(native) = self.native.lock().as_ref() {
             native.set_locale(locale);
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn refresh_native_capsule_theme(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.refresh_theme();
         }
     }
 
@@ -2170,11 +2309,23 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        let app = self
-            .app()
-            .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
-        app.run_on_main_thread(task)
-            .map_err(|error| error.to_string())
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            use crate::issue1266_debug::{Kind, MainDispatch};
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            let app = dispatch.clone_handle(|| self.app());
+            let result = app.ok_or_else(|| "Tauri AppHandle is not bound".to_string())
+                .and_then(|app| app.run_on_main_thread(dispatch.wrap(task))
+                    .map_err(|error| error.to_string()));
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let app = self.app()
+                .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
+            app.run_on_main_thread(task).map_err(|error| error.to_string())
+        }
     }
 
     pub(crate) fn spawn<F>(&self, future: F) -> tauri::async_runtime::JoinHandle<F::Output>
@@ -2564,6 +2715,65 @@ mod tests {
                 CapsuleWindowAction::PreserveFallbackCard
             );
         }
+    }
+
+    #[test]
+    fn closing_openless_capsule_does_not_enable_passthrough_while_visible() {
+        // Classic is the OpenLess default. It is interactive while recording, so
+        // close used to flip passthrough on and tao repainted the caption frame.
+        for state in [
+            CapsuleState::Done,
+            CapsuleState::Cancelled,
+            CapsuleState::Error,
+            CapsuleState::Idle,
+        ] {
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Classic, state, false, false, false),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive,
+                "close must not call set_ignore_cursor_events for {state:?}"
+            );
+            assert_eq!(
+                capsule_cursor_update(CapsuleStyle::Typeless, state, false, false, true),
+                CapsuleCursorUpdate::SuspendHitsUntilInteractive
+            );
+        }
+        // The next interactive frame restores hit testing without a passthrough edge.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                false,
+                true
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        // Siri is already click-through, so close does not touch window styles.
+        assert_eq!(
+            capsule_cursor_update(CapsuleStyle::Siri, CapsuleState::Done, false, true, false),
+            CapsuleCursorUpdate::Keep
+        );
+        // Non-close transitions still update passthrough.
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                false,
+                true,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(false)
+        );
+        assert_eq!(
+            capsule_cursor_update(
+                CapsuleStyle::Classic,
+                CapsuleState::Recording,
+                true,
+                false,
+                false
+            ),
+            CapsuleCursorUpdate::SetPassthrough(true)
+        );
     }
 
     #[test]

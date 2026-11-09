@@ -1,3 +1,4 @@
+import { desktopGuideEs as desktopGuide } from './desktopGuide';
 import { siwcEs as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
@@ -5,6 +6,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const es: typeof zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -304,6 +306,7 @@ export const es: typeof zhCN = {
     show: 'Mostrar',
     hide: 'Ocultar',
     saved: 'Guardado',
+    refreshed: 'Actualizado',
     saving: 'Guardando…',
     experimental: 'Experimental',
     copied: 'Copiado',
@@ -400,108 +403,6 @@ export const es: typeof zhCN = {
     editRevertPrevious: 'Conservar la versión anterior',
     editInstructionMode: 'Instrucción de edición',
   },
-  lessComputer: {
-    activity: {
-      process: 'Actividad',
-      count: '{{count}} actividades',
-      count_one: '{{count}} actividad',
-      count_other: '{{count}} actividades',
-      finished: 'Completado',
-      stopped: 'Detenido',
-      search: 'Búsqueda',
-      searchRunning: 'Buscando…',
-      read: 'Lectura',
-      readRunning: 'Leyendo…',
-      command: 'Comandos',
-      commandRunning: 'Ejecutando comandos…',
-      edit: 'Edición',
-      editRunning: 'Editando…',
-      web: 'Web',
-      webRunning: 'Consultando páginas…',
-      other: 'Herramientas',
-      otherRunning: 'Procesando…',
-    },
-    desktop: {
-      approvedSubmitted: 'Aprobación enviada',
-      deniedSubmitted: 'Rechazo enviado',
-      agents: 'Tus agentes',
-      configured: 'Agente configurado',
-      agentSettings: 'Elegir en Ajustes',
-      sessionUnavailable: 'Nueva sesión · no disponible',
-      signedIn: 'Sesión iniciada',
-      signIn: 'Iniciar sesión',
-      currentSession: 'Conversación actual',
-      minimize: 'Minimizar',
-      maximize: 'Maximizar / restaurar',
-      windowError: 'La acción de la ventana ha fallado. Inténtalo de nuevo.',
-      idle: 'Esperando una tarea',
-      waitingApproval: 'Esperando aprobación',
-      submittingApproval: 'Enviando…',
-      approvalError: 'No se ha enviado la aprobación. Inténtalo de nuevo.',
-      approvalExpired: 'Este turno ha terminado. Ya no se puede aprobar.',
-      sendError: 'No se pudo enviar. Tu texto sigue aquí. Inténtalo de nuevo.',
-      browserUnavailable: 'Esta vista previa no ejecuta comandos. Usa la aplicación de escritorio.',
-      inputHint: 'Intro para enviar · Mayús + Intro para una nueva línea',
-      apiCost: 'Coste de API de este turno',
-      emptyHint: 'Describe una tarea, toca el micrófono o usa tu atajo de voz para empezar.',
-      showInspector: 'Mostrar panel de trabajo',
-      hideInspector: 'Ocultar panel de trabajo',
-      inspectorTitle: 'Espacio de trabajo',
-      inspectorStatus: 'Estado',
-      inspectorTurn: 'Este turno',
-      toolCalls: 'Llamadas a herramientas',
-      pendingApprovals: 'Esperando tu respuesta',
-      inspectorVoice: 'Entrada de voz',
-      voiceShortcutOff: 'No hay atajo de voz. Puedes activar uno en Ajustes.',
-      voiceModesHint:
-        'Micrófono: el texto va al campo de entrada para que lo edites antes de enviar. Botón de voz: se envía directamente al agente al detenerte.',
-      copy: 'Copiar',
-      copied: 'Copiado',
-      messagePlaceholder: 'Mensaje para {{agent}}',
-    },
-    voice: {
-      dictate: 'Dictar en el campo de entrada',
-      voiceMode: 'Modo de voz (envía al detenerte)',
-      stopTask: 'Detener tarea',
-      cancel: 'Cancelar grabación',
-      confirmDictation: 'Terminar dictado',
-      stopAndSend: 'Detener y enviar',
-      listening: 'Escuchando…',
-      starting: 'Preparando el micrófono…',
-      transcribing: 'Transcribiendo…',
-      empty: 'No se oyó nada. Inténtalo de nuevo.',
-      failed: 'Falló el reconocimiento de voz. Inténtalo de nuevo.',
-      startFailed: 'No se pudo empezar a grabar: {{message}}',
-      taskCancelFailed: 'La tarea no se detuvo. Inténtalo de nuevo.',
-      dictateCaption:
-        'Toca ✓ al terminar: el texto irá al campo de entrada para editarlo · Esc para cancelar',
-      submitCaption: 'Toca ↑ para enviarlo directamente al agente · Esc para cancelar',
-      stopHint: 'Tarea en curso: toca ■ para detenerla',
-      holdHint: 'Mantén {{key}} para hablar',
-      toggleHint: 'Pulsa {{key}} para empezar o terminar',
-      autoHint: 'Mantén o toca {{key}} para hablar',
-    },
-    title: 'Less Computer',
-    subtitle: '¿Qué quieres que haga tu ordenador?',
-    you: 'Tú',
-    working: 'Actuando…',
-    tool: 'Se ha usado {{name}}',
-    compaction: 'Contexto resumido',
-    done: 'Hecho',
-    cost: '${{cost}}',
-    error: 'Ha fallado. Inténtalo de nuevo.',
-    closeTooltip: 'Cerrar',
-    jumpToLatest: 'Ir al último mensaje',
-    inputPlaceholder: 'Escribe una instrucción. Pulsa Intro para enviar',
-    send: 'Enviar',
-    approvalTitle: '¿Ejecutar el comando bloqueado?',
-    approvalRerunWarning:
-      'Al aprobar, se vuelve a ejecutar sobre un espacio de trabajo ya modificado. Repetir operaciones que no sean idempotentes puede producir efectos adicionales.',
-    approve: 'Aprobar',
-    deny: 'Rechazar',
-    approved: 'Aprobado',
-    denied: 'Rechazado',
-  },
   nav: {
     overview: 'Resumen',
     history: 'Historial',
@@ -557,7 +458,7 @@ export const es: typeof zhCN = {
     sortLiked: 'Me gusta',
     likedEmpty: 'Todavía no has marcado ningún paquete con «Me gusta»',
     likedEmptyHint:
-      'Abre un paquete y pulsa la estrella. Los paquetes que te gusten aparecerán aquí',
+      'Abre un paquete y pulsa el corazón. Los paquetes que te gusten aparecerán aquí',
     derivativeBadge: 'Basado en @{{login}}',
     detail: {
       withdrawBtn: 'Retirar',
@@ -645,6 +546,7 @@ export const es: typeof zhCN = {
       settings: 'Preferencias: atajos, proveedores, privacidad y actualizaciones',
     },
     footer: {
+      usage: 'Uso',
       account: 'Cuenta',
       feedback: 'Comentarios',
       settings: 'Ajustes',
@@ -740,8 +642,8 @@ export const es: typeof zhCN = {
     },
     actions: {
       refresh: 'Reintentar',
-      services: 'Servicios y modelos de IA',
-      general: 'Grabación y entrada',
+      services: 'IA y modelos',
+      general: 'General',
       shortcuts: 'Atajos',
       privacy: 'Permisos y datos',
     },
@@ -750,7 +652,7 @@ export const es: typeof zhCN = {
       loadingTitle: 'Leyendo tu configuración',
       loadingDesc: 'En breve aparecerán tus servicios actuales y el siguiente paso.',
       unavailableTitle: 'El estado de los servicios no está disponible',
-      unavailableDesc: 'Vuelve a consultarlo o abre Servicios de IA para revisar la configuración.',
+      unavailableDesc: 'Vuelve a consultarlo o abre IA y modelos para revisar la configuración.',
       servicesTitle: 'Configura tus servicios de voz',
       servicesDesc:
         'Empieza eligiendo servicios de reconocimiento de voz y procesamiento de texto. En modo Omni, basta con configurar el modelo multimodal activo.',
@@ -1196,9 +1098,9 @@ export const es: typeof zhCN = {
     target: {
       title: 'Idioma de destino',
       desc: 'Pulsa Mayús mientras grabas para traducir. Con «Desactivada», Mayús no hace nada.',
-      disabled: 'Desactivada (Mayús no hace nada)',
+      disabled: 'Desactivada ({{shortcut}} no hace nada)',
       sameAsWorking:
-        'El destino coincide con tu único idioma habitual, por lo que la traducción no tendrá efecto: Mayús solo mejorará el texto. Elige otro destino o añade otro idioma habitual arriba.',
+        'El destino coincide con tu único idioma habitual, por lo que la traducción no tendrá efecto: {{shortcut}} solo mejorará el texto. Elige otro destino o añade otro idioma habitual arriba.',
     },
     style: {
       title: 'Estilo de traducción',
@@ -1221,7 +1123,7 @@ export const es: typeof zhCN = {
       step5: 'La traducción se insertará donde esté el cursor.',
       indicatorTitle: 'Cómo saber si la traducción está activada',
       indicatorDesc:
-        'Después de pulsar Mayús, aparece un indicador azul de «Traduciendo» en la parte inferior de la pantalla.',
+        'Después de pulsar {{shortcut}}, aparece un indicador azul de «Traduciendo» en la parte inferior de la pantalla.',
       fallbackTitle: 'Alternativa en caso de error',
       fallbackDesc: 'Si la traducción falla, se inserta la transcripción original.',
     },
@@ -1288,14 +1190,38 @@ export const es: typeof zhCN = {
     cancelledTitle: 'Grabación cancelada',
   },
   settings: {
-    testingFeatures: {
-      title: 'Funciones en fase de pruebas',
-      enable: 'Activar funciones en fase de pruebas',
-      description:
-        'Mostrar Less Computer y la consola de Claude para configurarlos y usarlos en plataformas compatibles. Al desactivar esta opción, se detienen las tareas y se ocultan las entradas, pero se conservan los ajustes. Solo se aplica a este dispositivo.',
-      unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
+    generalPages: {
+      recordingTitle: 'Micrófono y grabación',
+      recordingDesc: 'Supervisión y reconocimiento del micrófono, y supervisión y avisos.',
+      capsuleTitle: 'Estilo de la cápsula',
+      capsuleDesc:
+        'Interruptor de la cápsula, varias pantallas, estilo y texto original en streaming.',
+      textInputTitle: 'Inserción de texto',
+      textInputDesc: 'Asistente de selección, inserción y portapapeles, e inicio.',
+      phoneTitle: 'Teléfono y entrada remota',
+      phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
+    },
+    advancedPages: {
+      liveInputTitle: 'Inserción de texto',
+      experiments: 'Configura funciones experimentales y extensiones.',
+      voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
+      cursorContextTitle: 'Percepción',
+      startupDiagnosticsTitle: 'Diagnóstico de inicio',
+      cursorContextHint:
+        'El contexto del cursor está activado de forma predeterminada. Desactívalo aquí si no quieres enviar el texto cercano con las solicitudes de mejora.',
+    },
+    advancedGroups: {
+      recording: 'Grabación',
+      text: 'Texto y contexto',
+      diagnostics: 'Diagnóstico',
     },
     selectionWorkspace: {
+      extraControls: 'Controles avanzados',
+      extraControlsDesc:
+        'Configura la decisión entre pregunta y edición y el formato de salida del modelo.',
+      openExtraControls: 'Más',
+      extraControlsSaveHint: 'Los cambios se guardan automáticamente.',
+      extraControlsDone: 'Listo',
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',
@@ -1347,6 +1273,24 @@ export const es: typeof zhCN = {
       useSystemProxyDesc:
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
     },
+    expressionLearning: {
+      clearHint:
+        'Tras borrar, un dictado en curso puede seguir usando las preferencias capturadas al comenzar.',
+      lineBreaksMore: 'Más saltos de línea',
+      lineBreaksLess: 'Menos saltos de línea',
+      exclamationsMore: 'Más signos de exclamación',
+      exclamationsLess: 'Menos signos de exclamación',
+      terminalPunctuationMore: 'Usar puntuación final',
+      terminalPunctuationLess: 'Reducir la puntuación final',
+
+      title: 'Hábitos de expresión',
+      enabled: 'Aprender hábitos de expresión',
+      description:
+        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede seguir usando las preferencias ya capturadas.',
+      status: '{{count}} preferencias estables',
+      clear: 'Borrar hábitos',
+      error: 'No se pudieron leer o guardar los hábitos.',
+    },
     vocabularyLearning: {
       title: 'Aprender de las correcciones',
       enabled: 'Activar aprendizaje de correcciones',
@@ -1385,104 +1329,6 @@ export const es: typeof zhCN = {
       opening: 'Abriendo…',
       openFailed: 'No se pudo abrir la migración local. Inténtalo de nuevo desde Ajustes.',
     },
-    codingConsole: {
-      title: 'Consola de Claude',
-      desc: 'Detecta Claude Code y MCP para controlar el ordenador. Ejecuta Claude sin interfaz, con límites de seguridad, y consulta la salida progresiva y el coste.',
-      guardNote:
-        'Las acciones reversibles se permiten de forma predeterminada. Se bloquean comandos de alto riesgo como rm -rf, sudo y force push. Si el directorio es un repositorio Git, se crea una instantánea antes de cada ejecución para poder revertirla.',
-      status: 'Estado',
-      detect: 'Detectar',
-      detecting: 'Detectando…',
-      installed: 'Claude detectado',
-      notInstalled: 'No se encontró claude',
-      notInstalledHint:
-        'Instala primero Claude Code (consulta docs.anthropic.com/claude-code) o introduce abajo la ruta completa de su ejecutable.',
-      mcpServers: '{{count}} servidores MCP configurados',
-      computerUsePresent: 'MCP de control del escritorio configurado',
-      computerUseAbsent:
-        'Sin MCP de control del escritorio; no es necesario para acciones sencillas como copiar y pegar mediante Bash',
-      exePath: 'Ejecutable',
-      workdir: 'Directorio de trabajo',
-      workdirDesc:
-        'Opcional. Claude se ejecutará en este directorio. Si es un repositorio Git, se creará una instantánea antes de ejecutarse para poder revertir los cambios.',
-      workdirPlaceholder: 'Vacío = ejecutar en un directorio temporal',
-      permissionMode: 'Modo de permisos',
-      mode: {
-        acceptEdits: 'Permitir acciones reversibles',
-        plan: 'Solo lectura / plan',
-        default: 'Predeterminado (preguntar siempre)',
-        bypassPermissions: 'Omitir todos los permisos (riesgoso)',
-      },
-      promptPlaceholder:
-        'Pide algo a Claude, por ejemplo, listar los archivos del directorio actual',
-      run: 'Ejecutar',
-      running: 'Ejecutando…',
-      cancel: 'Cancelar',
-      clear: 'Borrar',
-      riskWarn:
-        'Intención de alto riesgo detectada: {{reason}}. La protección bloquea los comandos de alto riesgo al ejecutarlos.',
-      toolUse: 'herramienta {{name}}',
-      done: 'Hecho',
-      doneCost: 'Hecho · coste ${{cost}}',
-      cancelled: 'Cancelado',
-      outputPlaceholder: 'La salida aparecerá aquí progresivamente…',
-    },
-    codingAgent: {
-      title: 'Less Computer',
-      desc: 'Mantén pulsada una tecla y habla para que el agente elegido actúe en tu ordenador. Solo macOS.',
-      enable: 'Activar Less Computer',
-      comingSoonNote:
-        'La configuración se guarda ahora; la activación por atajo y el flujo de ejecución llegarán en una versión posterior.',
-      hotkeyHint:
-        'Mantén pulsado el atajo para hablar. Al soltarlo, el agente elegido mostrará el resultado en la cápsula.',
-      voiceHotkey: 'Tecla para mantener pulsada y hablar',
-      voiceHotkeyDesc:
-        'Mantén pulsado para hablar y suelta para ejecutar. Admite Ctrl, Option o Fn por separado. Consulta sus funciones en los ajustes avanzados.',
-      provider: 'Motor del agente',
-      opencodeReady: 'OpenCode v{{version}} detectado.',
-      opencodeMissing:
-        'No se encontró el comando opencode. Instálalo con npm i -g opencode-ai e inicia sesión con opencode auth login antes de usarlo.',
-      cliReady: 'Se ha detectado {{name}} v{{version}}.',
-      cliMissing:
-        'No se encontró el comando {{name}}. Instálalo e inicia sesión primero, o introduce su ruta absoluta en Ejecutable.',
-      sandboxGuardHint:
-        'Este motor solo ofrece niveles generales de aislamiento, sin una lista de comandos de alto riesgo. Al alcanzar un límite, muestra el error en lugar de una tarjeta para aprobar el comando.',
-      codexModelHint:
-        'Introduce un modelo de Codex (p. ej., gpt-5). Déjalo vacío para usar ~/.codex/config.toml.',
-      codexBudgetHint:
-        'Codex no permite fijar un presupuesto en USD por ejecución; el coste depende de tu proveedor configurado.',
-      codexMode: {
-        plan: 'Solo lectura / plan',
-        workspaceWrite: 'Permitir escritura en el espacio de trabajo',
-      },
-      codexModelPlaceholder: 'Vacío = predeterminado de Codex',
-      dshModelHint:
-        'El perfil sin interfaz de dsh no permite cambiar el modelo. Se usa el definido en el propio perfil de dsh.',
-      panelHotkey: 'Atajo del panel (agente por voz)',
-      panelHotkeyDesc:
-        'Graba voz → ASR → Claude → salida progresiva en un panel. Predeterminado: Cmd/Ctrl+Shift+Enter.',
-      quickHotkey: 'Atajo de acción rápida',
-      quickHotkeyDesc:
-        'Envía el texto seleccionado a Claude y devuelve el resultado al cursor. Sin panel y más rápido.',
-      model: 'Modelo',
-      modelPlaceholder: 'Predeterminado: sonnet',
-      modelDefault: 'Predeterminado (sonnet automático)',
-      modelHint: 'Haiku = más rápido · Sonnet = equilibrado · Opus = más potente',
-      opencodeModelDefault: 'Usar el modelo predeterminado de OpenCode',
-      opencodeModelHint:
-        'Obtiene automáticamente los proveedores y modelos disponibles para tu cuenta de OpenCode y guarda la selección de inmediato.',
-      opencodeModelsRefresh: 'Actualizar modelos',
-      opencodeModelsRefreshing: 'Obteniendo modelos de OpenCode…',
-      opencodeModelsLoaded: 'Se han obtenido {{count}} modelos.',
-      opencodeModelsEmpty:
-        'No se recibieron modelos. Inicia sesión en OpenCode o configura primero un proveedor de modelos.',
-      opencodeModelsError: 'No se pudieron obtener los modelos: {{message}}',
-      exe: 'Ruta del ejecutable',
-      openPanel: 'Prueba con texto',
-      openPanelHint:
-        'Abre el panel de Less Computer para comprobar el agente y el modelo actuales usando texto.',
-      openPanelAction: 'Abrir Less Computer',
-    },
     debug: {
       cursorLabel: 'Cursor',
       title: 'Herramientas de depuración',
@@ -1509,7 +1355,7 @@ export const es: typeof zhCN = {
       },
     },
     recording: {
-      title: 'Grabación y entrada',
+      title: 'General',
       desc: 'Atajo global de grabación y modo de activación.',
       hotkeyLabel: 'Atajo de grabación',
       hotkeyDescAcc:
@@ -1558,7 +1404,7 @@ export const es: typeof zhCN = {
         'Cambiar del modo de todas las pantallas requiere reiniciar para cerrar las cápsulas anteriores. ¿Reiniciar ahora?',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
-      capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
+      capsuleStyleClassic: 'Estilo predeterminado',
       stableTranscriptionLabel: 'Modo estable (grabar y luego transcribir)',
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',
@@ -1635,6 +1481,10 @@ export const es: typeof zhCN = {
       audioCueDesc:
         'Reproduce un breve sonido sintetizado al pulsar el atajo para empezar a grabar, incluso si la cápsula está oculta.',
       audioCuePreview: 'Escuchar',
+      captureGroupTitle: 'Supervisión y reconocimiento del micrófono',
+      capsuleGroupTitle: 'Estilo de la cápsula',
+      recognitionGroupTitle: 'Supervisión y avisos',
+      feedbackGroupTitle: 'Supervisión y avisos',
       insertGroupTitle: 'Inserción y portapapeles',
       restoreClipboardLabel: 'Restaurar el portapapeles tras insertar',
       restoreClipboardDesc:
@@ -1705,9 +1555,11 @@ export const es: typeof zhCN = {
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
       debugArchiveProcessedLabel: 'Conservar el audio procesado',
-      debugArchiveProcessedDesc: 'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
+      debugArchiveProcessedDesc:
+        'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
       debugArchiveRawLabel: 'Conservar también el audio sin procesar',
-      debugArchiveRawDesc: 'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
+      debugArchiveRawDesc:
+        'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
       recordAudioForDebugLabel: 'Conservar grabación original (depuración)',
       recordAudioForDebugDesc:
         'Guarda el audio original del micrófono en WAV para investigar problemas de reconocimiento.',
@@ -1729,16 +1581,6 @@ export const es: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Detener al agotarse el tiempo',
       voiceActivationTimeoutSeconds: 'Tiempo de espera (segundos)',
       startupGroupTitle: 'Inicio',
-      lowMemoryBackgroundLabel: 'Modo de fondo con poca memoria',
-      lowMemoryBackgroundDesc:
-        'Se aplica al reiniciar. Libera la ventana principal al cerrarla y muestra la cápsula nativa cuando se necesita. Desactiva el precalentamiento del micrófono en reposo. Conserva la configuración de descarga de los modelos locales.',
-      lowMemoryRestartLabel: 'Se aplica tras reiniciar',
-      lowMemoryRestartDesc:
-        'El cambio del modo de fondo de baja memoria está guardado; el modo en ejecución cambia al reiniciar la aplicación.',
-      lowMemoryRestartNow: 'Reiniciar ahora',
-      lowMemoryCapsuleErrorLabel: 'Cápsula nativa no disponible',
-      lowMemoryCapsuleErrorDesc:
-        'El dictado sigue funcionando, pero no se mostrará la cápsula flotante. Puede que falte el programa auxiliar o esté bloqueado; reinstala la app.',
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:
         'Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.',
@@ -1817,8 +1659,7 @@ export const es: typeof zhCN = {
       minutesAgo: 'hace {{count}}min',
       hoursAgo: 'hace {{count}}h',
       daysAgo: 'hace {{count}}d',
-      localEngineModelHint:
-        'Descarga y cambia modelos locales en Servicios y modelos de IA → Modelos locales.',
+      localEngineModelHint: 'Descarga y cambia modelos locales en IA y modelos → Modelos locales.',
     },
     providers: {
       localEngineNoCredentials: 'Los motores locales no necesitan una clave API ni una dirección.',
@@ -2367,7 +2208,10 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
-      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
+      macosCompositionInputLabel: 'Transcripción en directo en el campo de entrada',
+      macosCompositionInputDesc:
+        'Muestra el reconocimiento en el campo original y después lo sustituye por el texto corregido o traducido. Requiere permiso de Accesibilidad y un editor compatible. Mover el cursor o editar el texto detiene la sustitución.',
+      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
@@ -2560,6 +2404,8 @@ export const es: typeof zhCN = {
     details: 'Mostrar detalles del error',
   },
   modal: {
+    experimentsTitle: 'Experimentos y extensiones',
+    experimentsDescription: 'Configura funciones experimentales y extensiones.',
     serviceViews: {
       label: 'Ajustes de servicios',
       llm: 'Modelos de lenguaje',
@@ -2581,32 +2427,39 @@ export const es: typeof zhCN = {
     searchCount: 'Categorías encontradas: {{count}}',
     noResults: 'No se encontraron categorías. Prueba «micrófono», «modelos» o «tema».',
     autoSaveHint: 'Los cambios se guardan automáticamente',
-    backToAdvanced: 'Volver a Experimentos y extensiones',
-    backToTestingFeatures: 'Volver a funciones en fase de pruebas',
+    backToAdvanced: 'Volver a funciones avanzadas',
+    back: 'Atrás',
     advancedPages: {
+      liveInput: 'Configurar la transcripción en directo en el campo.',
+      experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:
         'Solo para servicios propios; la sincronización oficial no requiere configuración.',
       localModels: experimentalAsr.description,
-      testingFeatures: 'Activar opcionalmente las funciones que siguen en pruebas.',
       vocabularyLearning:
         'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
-      lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
-      claudeConsole: 'Detecta Claude Code y consulta la salida de las tareas de prueba.',
       multimodal: 'Administra la activación del reconocimiento multimodal experimental.',
       debug:
         'Conserva grabaciones de depuración, inspecciona el contexto del cursor y exporta registros.',
+      voiceEnhancement:
+        'Configura el procesamiento de audio avanzado, la reducción de ruido y la supresión del eco de reproducción.',
+      cursorContext:
+        'Configura el contexto alrededor del cursor para las mejoras y el manejo de entradas cortas.',
+      startupDiagnostics:
+        'Revisa los tiempos de inicio, los intercambios con el backend y las sondas diferidas.',
     },
     descriptions: {
-      general: 'Elige un micrófono, ajusta la grabación y la entrada de texto o conecta tu móvil.',
+      general:
+        'Supervisión del micrófono, estilo de la cápsula, inserción de texto y entrada remota.',
       inputMethod: 'Configura la superposición y el método de entrada de Android.',
       shortcuts: 'Configura atajos y elige qué sucede al seleccionar texto.',
       services:
         'Elige servicios de reconocimiento de voz y procesamiento de texto. Administra canales, modelos locales y conexiones.',
+      cloudServices:
+        'Administra el mercado de extensiones, el inicio de sesión de GitHub y la sincronización cifrada en la nube.',
       appearance: 'Ajusta el tema, el diseño y el idioma de la interfaz para leer con comodidad.',
       privacy:
         'Comprueba los permisos y las conexiones. Administra el historial, las grabaciones y los datos locales.',
-      advanced:
-        'Configurar funciones de prueba, aprendizaje de vocabulario y herramientas de depuración.',
+      advanced: 'Configura funciones experimentales y extensiones.',
       about: 'Consulta tu versión, el canal y los ajustes de actualización automática.',
     },
     searchKeywords: {
@@ -2616,21 +2469,23 @@ export const es: typeof zhCN = {
       shortcuts: 'atajo tecla combinación selección mejorar voz edición',
       services:
         'ASR LLM API canal modelo nube local sin conexión red proxy catálogo multimodal canalización Omni',
+      cloudServices: 'nube sincronización cifrada mercado GitHub inicio sesión servicio oficial',
       appearance: 'tema oscuro claro idioma fuente texto tamaño diseño mapa actividad',
       privacy:
         'permiso micrófono accesibilidad historial grabación almacenamiento privacidad exportar',
       advanced:
-        'Less Computer Claude agente depuración registros experimento Aprender de las correcciones vocabulary learning',
+        'Less Computer Claude agente depuración registros experimento Aprender de las correcciones vocabulary learning manual edits vocabulary learning Beta ',
       about: 'versión Beta estable actualización actualizar',
     },
     sections: {
       appearance: 'Apariencia e idioma',
       shortcuts: 'Atajos y selección',
-      general: 'Grabación y entrada',
+      general: 'General',
       inputMethod: 'Método de entrada',
-      services: 'Servicios y modelos de IA',
+      services: 'IA y modelos',
+      cloudServices: 'Servicios en la nube',
       privacy: 'Permisos y datos',
-      advanced: 'Experimentos y extensiones',
+      advanced: 'Funciones avanzadas',
       personalize: 'Personalización',
       about: 'Acerca de y actualizaciones',
       helpCenter: 'Centro de ayuda',

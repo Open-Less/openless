@@ -244,7 +244,6 @@ pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
     warm_hub.configure(
         crate::recorder::warm_capture_enabled(
             prefs.low_latency_dictation_enabled,
-            crate::desktop_resources::active(),
             warm_hub.activation_is_active(),
         ),
         (!prefs.microphone_device_name.trim().is_empty())
@@ -782,21 +781,50 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 
     let prefs = coord.backend().get_preferences();
     let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
-    let mut builder = webview.updater_builder();
-    if let Some(ms) = timeout_ms {
-        builder = builder.timeout(std::time::Duration::from_millis(ms));
-    }
-    if matches!(channel, UpdateChannel::Beta) {
-        builder = builder
-            .endpoints(vec![beta_manifest_endpoint()?])
-            .map_err(|e| format!("set beta endpoint: {e}"))?;
-    }
+    let check_timeout =
+        std::time::Duration::from_millis(timeout_ms.unwrap_or(8000).clamp(1000, 15000));
+    let builder = webview
+        .updater_builder()
+        .timeout(check_timeout)
+        .endpoints(vec![url::Url::parse(
+            &crate::update_source::endpoint_template(channel),
+        )
+        .map_err(|e| e.to_string())?])
+        .map_err(|e| e.to_string())?;
     let updater = builder.build().map_err(|e| format!("build updater: {e}"))?;
-    let update = updater
-        .check()
+    let (mirror, github) = tokio::join!(updater.check(), async {
+        tokio::time::timeout(check_timeout, async {
+            let manifest = crate::update_source::github_manifest(channel).await?;
+            updater.restore_update(manifest).map_err(|e| e.to_string())
+        })
         .await
-        .map_err(|e| format!("check update failed: {e}"))?;
-
+        .map_err(|_| "GitHub update check timed out".to_string())?
+    });
+    let update = match (mirror, github) {
+        (Ok(Some(mirror)), Ok(Some(github))) => {
+            let mirror_version =
+                semver::Version::parse(&mirror.version).map_err(|e| e.to_string())?;
+            let github_version =
+                semver::Version::parse(&github.version).map_err(|e| e.to_string())?;
+            if github_version != mirror_version {
+                Some(github)
+            } else {
+                let (m, g) = tokio::join!(
+                    crate::update_source::probe_download(&mirror.download_url),
+                    crate::update_source::probe_download(&github.download_url)
+                );
+                if crate::update_source::prefer_mirror(m, g) {
+                    Some(mirror)
+                } else {
+                    Some(github)
+                }
+            }
+        }
+        (_, Ok(Some(update))) => Some(update),
+        (_, Ok(None)) => None,
+        (Ok(update), Err(_)) => update,
+        (Err(mirror), Err(github)) => return Err(format!("Aliyun: {mirror}; GitHub: {github}")),
+    };
     let Some(update) = update else {
         return Ok(None);
     };

@@ -1,3 +1,4 @@
+import { openExperiments } from './support/experiments';
 import { expect, test, type Page } from '@playwright/test';
 
 async function settings(page: Page, os: 'mac' | 'win' = 'mac') {
@@ -24,7 +25,7 @@ async function settings(page: Page, os: 'mac' | 'win' = 'mac') {
   await page.getByRole('button', { name: '设置', exact: true }).click();
 }
 async function experiments(page: Page) {
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   const entries = page.locator('[data-ol-advanced-entry]');
   await expect(entries.first()).toHaveAttribute('data-ol-advanced-entry', 'localModels');
   await entries.first().click();
@@ -36,7 +37,7 @@ test('Mac removes legacy manager and exposes lazy experiments first with memory 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await settings(page);
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   const retired = page
     .locator('.ol-service-views')
     .getByRole('button', { name: '本地模型', exact: true });
@@ -92,7 +93,7 @@ test('Apple system recognition remains selectable without local-model controls',
   page,
 }) => {
   await settings(page);
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await page.getByRole('button', { name: /^语音识别。/ }).click();
   await page.getByRole('button', { name: '添加渠道', exact: true }).click();
   const form = page.getByRole('dialog', { name: '添加渠道', exact: true });
@@ -102,7 +103,10 @@ test('Apple system recognition remains selectable without local-model controls',
   await expect(form.locator('.ol-channel-local-hint')).toHaveCount(0);
   await expect(form.locator('.ol-local-model-picker')).toHaveCount(0);
   await expect(form.getByRole('textbox', { name: /API Key|Base URL/ })).toHaveCount(0);
-  await form.getByRole('button', { name: '返回渠道列表', exact: true }).click();
+  await form
+    .locator('.ol-channel-dialog-footer')
+    .getByRole('button', { name: '关闭', exact: true })
+    .click();
   const card = page.locator('[data-channel-provider="apple-speech"]');
   await expect(card).toHaveCount(1);
   await expect(card).not.toHaveAttribute('data-retired-local-asr', 'true');
@@ -141,10 +145,10 @@ test('Windows retains its model manager and does not expose the Mac experiments 
   page,
 }) => {
   await settings(page, 'win');
-  await page.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await expect(
     page.locator('.ol-service-views').getByRole('button', { name: '本地模型', exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: '实验与扩展', exact: true }).click();
+  await openExperiments(page);
   await expect(page.locator('[data-ol-advanced-entry="localModels"]')).toHaveCount(0);
 });

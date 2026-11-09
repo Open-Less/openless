@@ -131,7 +131,7 @@ type AxObserverCallback = unsafe extern "C" fn(
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+    fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
     fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
     fn AXObserverCreate(
         application: i32,
@@ -236,15 +236,18 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         return GatedElement::Blocked(reason);
     }
 
-    let system = AXUIElementCreateSystemWide();
-    if system.is_null() {
-        return GatedElement::Unavailable("system-wide AX element unavailable");
+    // Query the captured foreground application directly. System-wide focus can
+    // return kAXErrorCannotComplete even while this application exposes a valid editor.
+    let Some(front_pid) = crate::selection::current_front_app_pid() else {
+        return GatedElement::Unavailable("no foreground application");
+    };
+    let application = AXUIElementCreateApplication(front_pid);
+    if application.is_null() {
+        return GatedElement::Unavailable("application AX element unavailable");
     }
-    // Settings on the system-wide element become this process's default.
-    AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-
-    let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-    CFRelease(system as CFTypeRef);
+    AXUIElementSetMessagingTimeout(application, AX_MESSAGING_TIMEOUT_SECS);
+    let focused = copy_element_attr(application, b"AXFocusedUIElement\0");
+    CFRelease(application as CFTypeRef);
 
     let Some(focused) = focused else {
         return GatedElement::Unavailable("no focused UI element (AX permission or no focus)");
@@ -269,6 +272,10 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         CFRelease(focused as CFTypeRef);
         return GatedElement::Unavailable("could not confirm which app owns the focused element");
     };
+    if crate::selection::current_front_app_pid() != Some(pid) {
+        CFRelease(focused as CFTypeRef);
+        return GatedElement::Unavailable("foreground application changed during AX capture");
+    }
     gate.bundle_id = Some(owner);
     // Secure Input is global state; refresh it too — it may have been enabled during these AX calls.
     gate.secure_input = crate::unicode_keystroke::is_secure_input_enabled();
@@ -593,14 +600,10 @@ impl KeyboardDelivery {
         // AX capture can take time. Recheck the exact control before sending
         // keys so a focus change during capture does not redirect this chunk.
         unsafe {
-            let system = AXUIElementCreateSystemWide();
-            if system.is_null() {
+            let GatedElement::Ready(focused) = focused_element_passing_the_gate(voice_edit_gate())
+            else {
                 return false;
-            }
-            AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-            let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-            CFRelease(system as CFTypeRef);
-            let Some(focused) = focused else { return false };
+            };
             let same = CFEqual(focused as CFTypeRef, self.element as CFTypeRef) != 0;
             CFRelease(focused as CFTypeRef);
             same
@@ -1651,5 +1654,199 @@ mod tests {
             "kCFNotFound：没有光标"
         );
         assert_eq!(caret_offset_from_location(isize::MIN), None);
+    }
+}
+
+/// Owns only the transcript range, never the rest of the user's document.
+/// Every update verifies control identity, complete baseline and caret before writing.
+pub(crate) struct LiveComposition {
+    target: VoiceEditTarget,
+    original: String,
+    original_selection: CFRange,
+    start: usize,
+    end: usize,
+    wrote: bool,
+}
+
+impl LiveComposition {
+    pub(crate) fn has_written(&self) -> bool {
+        self.wrote
+    }
+
+    pub(crate) fn capture() -> Result<Self, String> {
+        match crate::selection::current_front_app_pid() {
+            Some(pid) if pid != std::process::id() as i32 => {}
+            _ => return Err("liveInputTargetUnavailable".into()),
+        }
+        let (_, _, target) = capture_voice_edit_target()?;
+        let mut owner_pid = 0;
+        if unsafe { AXUIElementGetPid(target.element.as_ref(), &mut owner_pid) } != AX_ERROR_SUCCESS
+            || owner_pid <= 0
+            || owner_pid == std::process::id() as i32
+        {
+            return Err("liveInputTargetUnavailable".into());
+        }
+        let start =
+            utf16_offset_to_char_offset(&target.text, target.selection_utf16.location as usize);
+        let end = utf16_offset_to_char_offset(
+            &target.text,
+            (target.selection_utf16.location + target.selection_utf16.length) as usize,
+        );
+        let original = target.text.chars().skip(start).take(end - start).collect();
+        let original_selection = target.selection_utf16;
+        Ok(Self {
+            target,
+            original,
+            original_selection,
+            start,
+            end,
+            wrote: false,
+        })
+    }
+
+    pub(crate) fn replace(&mut self, text: &str) -> Result<(), String> {
+        unsafe {
+            let GatedElement::Ready(current) = focused_element_passing_the_gate(voice_edit_gate())
+            else {
+                return Err("liveInputTargetUnavailable".into());
+            };
+            let same = CFEqual(
+                current as CFTypeRef,
+                self.target.element.as_ref() as CFTypeRef,
+            ) != 0;
+            CFRelease(current as CFTypeRef);
+            if !same
+                || voice_edit_text(self.target.element.as_ref()).as_deref()
+                    != Some(&self.target.text)
+                || copy_selected_range(self.target.element.as_ref())
+                    != Some(self.target.selection_utf16)
+            {
+                return Err("liveInputTargetChanged".into());
+            }
+            let start = self
+                .target
+                .text
+                .chars()
+                .take(self.start)
+                .collect::<String>();
+            let suffix = self.target.text.chars().skip(self.end).collect::<String>();
+            let range = CFRange {
+                location: start.encode_utf16().count() as isize,
+                length: self
+                    .target
+                    .text
+                    .chars()
+                    .skip(self.start)
+                    .take(self.end - self.start)
+                    .collect::<String>()
+                    .encode_utf16()
+                    .count() as isize,
+            };
+            set_voice_edit_selection(self.target.element.as_ref(), range)?;
+            let value = std::ffi::CString::new(text).map_err(|_| "liveInputInvalidText")?;
+            let value = CFStringCreateWithCString(
+                std::ptr::null(),
+                value.as_ptr(),
+                K_CF_STRING_ENCODING_UTF8,
+            );
+            let attr = cfstring_from_static(b"AXSelectedText\0").ok_or("liveInputUnavailable")?;
+            // A failed AX call can have an unknown outcome; never retarget after submission.
+            self.wrote = true;
+            let result = AXUIElementSetAttributeValue(self.target.element.as_ref(), attr, value);
+            CFRelease(attr);
+            CFRelease(value);
+            if result != AX_ERROR_SUCCESS {
+                return Err("liveInputUnsupportedEditor".into());
+            }
+            let expected = format!("{start}{text}{suffix}");
+            if voice_edit_text(self.target.element.as_ref()).as_deref() != Some(&expected) {
+                return Err("liveInputEditorTransformedText".into());
+            }
+            self.end = self.start + text.chars().count();
+            self.target.text = expected;
+            self.target.selection_utf16 = copy_selected_range(self.target.element.as_ref())
+                .ok_or("liveInputCaretUnavailable")?;
+            Ok(())
+        }
+    }
+
+    pub(crate) fn cancel(&mut self) -> Result<(), String> {
+        if !self.wrote {
+            return Ok(());
+        }
+        self.replace(&self.original.clone())?;
+        unsafe { set_voice_edit_selection(self.target.element.as_ref(), self.original_selection) }
+    }
+}
+
+#[cfg(test)]
+mod live_composition_acceptance {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the foreground disposable native-live-input-fixture app"]
+    fn live_original_translation_cancel_and_user_caret_changes() {
+        unsafe extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        assert!(
+            unsafe { AXIsProcessTrusted() },
+            "native acceptance executable needs Accessibility permission"
+        );
+        println!(
+            "fixture_front={:?}",
+            crate::selection::current_front_app_parts()
+        );
+        unsafe {
+            match focused_element_passing_the_gate(voice_edit_gate()) {
+                GatedElement::Ready(element) => {
+                    println!(
+                        "fixture_role={:?} chars={:?} range={:?}",
+                        copy_string_attr(element, b"AXRole\0"),
+                        copy_index_attr(element, b"AXNumberOfCharacters\0"),
+                        copy_selected_range(element)
+                    );
+                    CFRelease(element as CFTypeRef);
+                }
+                GatedElement::Blocked(reason) => println!("fixture_gate_blocked={reason:?}"),
+                GatedElement::Unavailable(reason) => println!("fixture_unavailable={reason}"),
+            }
+        }
+        let (baseline, _, _) = capture_voice_edit_target().expect("fixture accessibility");
+        assert_eq!(
+            baseline, "before 原文 after",
+            "refuse to modify a non-fixture editor"
+        );
+        let delivery = KeyboardDelivery::capture().expect("fixture keyboard delivery target");
+        assert!(delivery.is_focused());
+        let mut live = LiveComposition::capture().unwrap();
+        live.replace("这是一段实时原文").unwrap();
+        assert_eq!(
+            capture_voice_edit_target().unwrap().0,
+            "before 这是一段实时原文 after"
+        );
+        live.replace("This is the final translation.").unwrap();
+        assert_eq!(
+            capture_voice_edit_target().unwrap().0,
+            "before This is the final translation. after"
+        );
+        live.cancel().unwrap();
+        assert_eq!(capture_voice_edit_target().unwrap().0, baseline);
+        let mut live = LiveComposition::capture().unwrap();
+        unsafe {
+            set_voice_edit_selection(
+                live.target.element.as_ref(),
+                CFRange {
+                    location: 0,
+                    length: 0,
+                },
+            )
+            .unwrap();
+        }
+        assert!(live
+            .replace("must not overwrite manual cursor changes")
+            .is_err());
+        assert_eq!(capture_voice_edit_target().unwrap().0, baseline);
+        println!("NATIVE_LIVE_INPUT=PASS partial=replace final=translation cancel=baseline caret_change=refused");
     }
 }

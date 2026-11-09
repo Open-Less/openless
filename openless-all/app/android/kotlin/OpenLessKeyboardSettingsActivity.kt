@@ -52,6 +52,8 @@ class OpenLessKeyboardSettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val exportKeys = savedInstanceState?.getStringArrayList(STATE_EXPORT_SECTIONS).orEmpty()
+        pendingExport = KeyboardDataFile.Section.entries.filter { it.key in exportKeys }.toSet()
         // Explicit rather than relying on targetSdk 36's implicit
         // edge-to-edge enforcement — guarantees the IME-inset listener in
         // buildContent() actually fires so the "云笔记提交" URL/Token fields
@@ -64,6 +66,11 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         // just created as the standard companion call to
         // setDecorFitsSystemWindows(false) above.
         WindowCompat.getInsetsController(window, window.decorView)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putStringArrayList(STATE_EXPORT_SECTIONS, ArrayList(pendingExport.map { it.key }))
+        super.onSaveInstanceState(outState)
     }
 
     private fun saveMigrationSetting(write: () -> Unit) {
@@ -260,6 +267,25 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             isChecked = prefs.getBoolean("public_dictionary_updates", true)
             setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("public_dictionary_updates", checked).apply() }
         })
+        content.addView(
+            sectionLabel(ui("模糊音", "Fuzzy pinyin")),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(14)
+            },
+        )
+        val fuzzy = RimeFuzzyPinyin.selected(prefs).toMutableSet()
+        for (group in RimeFuzzyPinyin.groups) {
+            content.addView(Switch(this).apply {
+                text = ui(group.labelZh, group.labelEn)
+                isChecked = group.id in fuzzy
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) fuzzy += group.id else fuzzy -= group.id
+                    RimeFuzzyPinyin.save(prefs, fuzzy)
+                    scheduleFuzzyRedeploy()
+                }
+            })
+        }
+        content.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(14)))
         content.addView(sectionLabel(ui("英文键盘", "English keyboard")))
         val englishSuggestionsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         englishSuggestionsRow.addView(
@@ -464,28 +490,47 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         // live in the app's own WebView settings, not this native page.
         content.addView(sectionLabel(ui("个人偏好数据", "Personal preference data")))
         // 笔画输入的个人调频数据：记录"这个笔画码你选过哪个字"，越用越靠前
-        // 排序，不影响词库本身，也不会同步到云端。
-        val personalFrequency = StrokeUserFrequency(this)
+        // 排序，不影响词库本身，也不会同步到云端。联想学习单独一个存储、单独
+        // 计上限，两者不再互相挤占。
+        val strokePicks = StrokeUserFrequency.strokeCodes(this)
+        val associationPicks = StrokeUserFrequency.associations(this)
+        for ((labelZh, labelEn, store) in listOf(
+            Triple("笔画调频", "Stroke ranking", strokePicks),
+            Triple("联想学习", "Association learning", associationPicks),
+        )) {
+            content.addView(
+                TextView(this).apply {
+                    text = ui(
+                        "$labelZh：已记录 ${store.size()} / ${store.capacity()} 条",
+                        "$labelEn: ${store.size()} / ${store.capacity()} entries recorded",
+                    )
+                    textSize = 14f
+                    setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
+                },
+            )
+        }
+        // 拼音的选词调频和造词由 Rime 的用户词典完成；这里只读条数。
+        pinyinDictionaryText = TextView(this).apply {
+            text = ui("拼音用户词典：读取中…", "Pinyin user dictionary: loading…")
+            textSize = 14f
+            setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
+        }
+        content.addView(pinyinDictionaryText)
+        refreshPinyinDictionaryCount()
+        // 键盘自己的学习数据（上面三项）单独导出 / 导入，和 App 设置无关：
+        // 设置走云同步，这里不进迁移文件，也不参与加密同步。
+        val dataActions = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        dataActions.addView(dictionaryAction(ui("导出键盘数据 →", "Export keyboard data →")) { showKeyboardDataExportChoices() })
+        dataActions.addView(dictionaryAction(ui("导入键盘数据 →", "Import keyboard data →")) { pickKeyboardDataImportSource() })
+        content.addView(dataActions)
         content.addView(
             TextView(this).apply {
                 text = ui(
-                    "笔画调频：已记录 ${personalFrequency.size()} / ${personalFrequency.capacity()} 条",
-                    "Stroke ranking: ${personalFrequency.size()} / ${personalFrequency.capacity()} entries recorded",
+                    "可选择导出本页的键盘设置（高度、震动等）、拼音用户词典、笔画调频、联想学习，以及云笔记地址 / Token（明文）。不含 App 设置（设置通过云同步）。文件里有你学过的词，请妥善保管。导入时可选择部分：设置会被覆盖，学习数据与本机合并（同一条取较高的次数），不会删除现有内容。",
+                    "Choose what to export: this page's keyboard settings (size, haptics…), the pinyin user dictionary, stroke ranking, association learning, and the cloud notes URL / token (plaintext). App settings are not included; cloud sync carries them. The file holds words you have learned; keep it private. On import, pick the parts: settings are replaced, learning data merges into this device's (the higher count wins) and nothing is removed.",
                 )
-                textSize = 14f
-                setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
-            },
-        )
-        // Retain old backups without presenting them as active Rime learning.
-        val learnedPhrases = LegacyPinyinBackup(this)
-        content.addView(
-            TextView(this).apply {
-                text = ui(
-                    "旧版拼音备份：${learnedPhrases.entryCount()} 条（不参与候选）",
-                    "Legacy pinyin backup: ${learnedPhrases.entryCount()} entries (not used for candidates)",
-                )
-                textSize = 14f
-                setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
+                textSize = 12f
+                setTextColor(tone(Color.rgb(150, 150, 150), Color.rgb(110, 110, 115)))
                 setPadding(0, 0, 0, dp(14))
             },
         )
@@ -565,6 +610,188 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         )
 
         return root
+    }
+
+    private var pinyinDictionaryText: TextView? = null
+
+    private fun dictionaryAction(text: String, onClick: () -> Unit): View = TextView(this).apply {
+        this.text = text
+        textSize = 15f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setTextColor(tone(Color.rgb(94, 234, 212), Color.rgb(15, 118, 110)))
+        isClickable = true
+        setPadding(0, dp(8), dp(20), dp(8))
+        setOnClickListener { onClick() }
+    }
+
+    private fun toast(zh: String, en: String) {
+        Toast.makeText(applicationContext, ui(zh, en), Toast.LENGTH_LONG).show()
+    }
+
+    /** Applies the saved fuzzy-pinyin groups; toggles made while one redeploy runs are folded into the next. */
+    private fun scheduleFuzzyRedeploy() {
+        if (!fuzzyRedeployPending.compareAndSet(false, true)) return
+        toast("正在更新拼音方案…", "Updating the pinyin schema…")
+        val app = applicationContext
+        rimeWorker.execute {
+            fuzzyRedeployPending.set(false)
+            val result = runCatching { OpenLessRime.applyFuzzyPinyin(app, RimeFuzzyPinyin.selected(prefs)) }
+            runOnUiThread {
+                if (result.isSuccess) toast("模糊音已更新", "Fuzzy pinyin updated")
+                else toast("模糊音更新失败：${result.exceptionOrNull()?.message}", "Fuzzy pinyin update failed: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    /** Exports to a scratch file and counts it — the only way to read the dictionary while Rime owns it. */
+    private fun refreshPinyinDictionaryCount() {
+        val app = applicationContext
+        rimeWorker.execute {
+            val count = runCatching {
+                val scratch = java.io.File(app.cacheDir, "count-pinyin_simp.userdb.txt")
+                try {
+                    if (OpenLessRime.exportUserDictionary(app, scratch)) RimeUserDictionaryFile.entryCount(scratch.readText()) else 0
+                } finally { scratch.delete() }
+            }.getOrNull()
+            runOnUiThread {
+                pinyinDictionaryText?.text = if (count == null) ui("拼音用户词典：读取失败", "Pinyin user dictionary: unavailable")
+                else ui("拼音用户词典：$count 条", "Pinyin user dictionary: $count entries")
+            }
+        }
+    }
+
+    // A result without a saved checklist must never silently export every section.
+    private var pendingExport: Set<KeyboardDataFile.Section> = emptySet()
+
+    /** A checklist of [sections], [preset] checked; [onConfirm] gets the checked ones (never called with none). */
+    private fun chooseSections(
+        title: String,
+        sections: List<KeyboardDataFile.Section>,
+        preset: Set<KeyboardDataFile.Section>,
+        label: (KeyboardDataFile.Section) -> String,
+        action: String,
+        onConfirm: (Set<KeyboardDataFile.Section>) -> Unit,
+    ) {
+        val checked = BooleanArray(sections.size) { sections[it] in preset }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMultiChoiceItems(sections.map(label).toTypedArray(), checked) { _, index, isChecked -> checked[index] = isChecked }
+            .setPositiveButton(action) { _, _ ->
+                val chosen = sections.filterIndexed { index, _ -> checked[index] }.toSet()
+                if (chosen.isNotEmpty()) onConfirm(chosen)
+            }
+            .setNegativeButton(ui("取消", "Cancel"), null)
+            .show()
+    }
+
+    private fun showKeyboardDataExportChoices() {
+        chooseSections(
+            ui("选择要导出的内容", "Choose what to export"),
+            KeyboardDataFile.Section.entries,
+            KeyboardDataFile.defaultExport,
+            { ui(it.labelZh, it.labelEn) },
+            ui("下一步", "Next"),
+        ) { pendingExport = it; pickKeyboardDataExportTarget() }
+    }
+
+    private fun pickKeyboardDataExportTarget() {
+        val timestamp = android.text.format.DateFormat.format("yyyyMMdd-HHmm", System.currentTimeMillis())
+        val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(android.content.Intent.EXTRA_TITLE, "openless-keyboard-data-$timestamp.json")
+        }
+        runCatching { startActivityForResult(intent, REQUEST_KEYBOARD_DATA_EXPORT) }
+            .onFailure { toast("找不到文件管理器", "No file manager available") }
+    }
+
+    private fun pickKeyboardDataImportSource() {
+        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            // Shared files often lose their JSON MIME type on the way.
+            type = "*/*"
+        }
+        runCatching { startActivityForResult(intent, REQUEST_KEYBOARD_DATA_IMPORT) }
+            .onFailure { toast("找不到文件管理器", "No file manager available") }
+    }
+
+    /** Lists the parts [contents] actually holds, with counts, all but the token checked. */
+    private fun showKeyboardDataImportChoices(contents: KeyboardDataFile.Contents) {
+        val sections = contents.present()
+        if (sections.isEmpty()) {
+            toast("文件里没有可导入的数据", "The file holds nothing to import")
+            return
+        }
+        chooseSections(
+            ui("选择要导入的内容", "Choose what to import"),
+            sections,
+            KeyboardDataFile.defaultImport,
+            { ui("${it.labelZh}（${contents.count(it)} 项）", "${it.labelEn} (${contents.count(it)})") },
+            ui("导入", "Import"),
+        ) { chosen ->
+            val app = applicationContext
+            rimeWorker.execute {
+                val result = runCatching { KeyboardDataFile.import(app, contents, chosen) }
+                runOnUiThread {
+                    result.onSuccess { toast("已导入：${chosen.joinToString("、") { it.labelZh }}", "Imported: ${chosen.joinToString(", ") { it.labelEn }}") }
+                        .onFailure { toast("导入失败：${it.message}", "Import failed: ${it.message}") }
+                    if (!isFinishing && !isDestroyed) setContentView(buildContent())
+                }
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data?.toString()
+        if (resultCode != RESULT_OK || uri == null) {
+            if (requestCode == REQUEST_KEYBOARD_DATA_EXPORT) pendingExport = emptySet()
+            return
+        }
+        val app = applicationContext
+        when (requestCode) {
+            REQUEST_KEYBOARD_DATA_EXPORT -> {
+                val sections = pendingExport
+                pendingExport = emptySet()
+                if (sections.isEmpty()) {
+                    toast("请重新选择要导出的内容", "Choose what to export again")
+                    return
+                }
+                rimeWorker.execute {
+                    val result = runCatching {
+                        val json = KeyboardDataFile.export(app, sections)
+                        check(OpenLessContentWriter.writeBytes(app, uri, json.toByteArray(Charsets.UTF_8))) { "write failed" }
+                    }
+                    runOnUiThread {
+                        result.onSuccess { toast("键盘数据已导出", "Keyboard data exported") }
+                            .onFailure { toast("导出失败：${it.message}", "Export failed: ${it.message}") }
+                        refreshPinyinDictionaryCount()
+                    }
+                }
+            }
+            REQUEST_KEYBOARD_DATA_IMPORT -> rimeWorker.execute {
+                val result = runCatching {
+                    val bytes = OpenLessContentReader.readBytes(app, uri, KeyboardDataFile.MAX_BYTES)
+                        ?: error(ui("读取失败或文件超过 48 MiB", "Read failed or file exceeds 48 MiB"))
+                    runCatching { KeyboardDataFile.read(String(bytes, Charsets.UTF_8)) }
+                        .getOrElse { error(ui("不是 OpenLess 键盘数据文件", "Not an OpenLess keyboard data file")) }
+                }
+                runOnUiThread {
+                    result.onSuccess { if (!isFinishing && !isDestroyed) showKeyboardDataImportChoices(it) }
+                        .onFailure { toast("导入失败：${it.message}", "Import failed: ${it.message}") }
+                }
+            }
+        }
+    }
+
+    private companion object {
+        const val REQUEST_KEYBOARD_DATA_EXPORT = 7101
+        const val REQUEST_KEYBOARD_DATA_IMPORT = 7102
+        const val STATE_EXPORT_SECTIONS = "keyboardDataExportSections"
+        // Outlives the Activity. OpenLessRime serializes session-closing work with input;
+        // JSON parsing and document I/O can stay off the input queue.
+        val rimeWorker: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val fuzzyRedeployPending = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 
     /** Fires a one-shot vibration with the sliders' current (already-saved) values, so a change is felt immediately. */

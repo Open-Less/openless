@@ -440,9 +440,6 @@ pub struct UserPreferences {
     /// This is opt-in because the OS microphone indicator remains active while enabled.
     #[serde(default)]
     pub low_latency_dictation_enabled: bool,
-    /// Desktop-only UI resource policy. Applied on the next application launch.
-    #[serde(default)]
-    pub low_memory_background_enabled: bool,
     /// Play an instantly synthesized cue when the recording hotkey enters the
     /// recording state ("recording started"). Default on; can be disabled in
     /// the "Recording & Input" settings. The cue is synthesized by the capsule
@@ -826,6 +823,9 @@ pub struct UserPreferences {
     /// Off by default; with it off, the target only receives the final text.
     #[serde(default)]
     pub windows_composition_input: bool,
+    /// macOS AX live transcript replacement in the captured editor; opt-in.
+    #[serde(default)]
+    pub macos_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -843,6 +843,9 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    /// Local consent for observing formatting edits as abstract expression evidence.
+    #[serde(default)]
+    pub expression_learning_enabled: bool,
     #[serde(default)]
     pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
@@ -1053,8 +1056,6 @@ struct UserPreferencesWire {
     stable_transcription_enabled: bool,
     #[serde(default)]
     low_latency_dictation_enabled: bool,
-    #[serde(default)]
-    low_memory_background_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -1227,10 +1228,14 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
+    #[serde(default)]
+    macos_composition_input: bool,
     #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    expression_learning_enabled: bool,
     vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
@@ -1344,7 +1349,6 @@ impl Default for UserPreferencesWire {
             audio_dsp: prefs.audio_dsp.normalized(),
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
-            low_memory_background_enabled: prefs.low_memory_background_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1435,8 +1439,10 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             windows_composition_input: prefs.windows_composition_input,
+            macos_composition_input: prefs.macos_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            expression_learning_enabled: prefs.expression_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
@@ -1569,7 +1575,6 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_dsp: wire.audio_dsp.normalized(),
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
-            low_memory_background_enabled: wire.low_memory_background_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1676,8 +1681,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             windows_composition_input: wire.windows_composition_input,
+            macos_composition_input: wire.macos_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            expression_learning_enabled: wire.expression_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
@@ -1972,7 +1979,6 @@ impl Default for UserPreferences {
             audio_dsp: Default::default(),
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
-            low_memory_background_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -2060,8 +2066,10 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
+            macos_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
+            expression_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
@@ -4055,24 +4063,5 @@ mod capsule_transcript_preferences_tests {
                 .capsule_transcript_font_size,
             12
         );
-    }
-}
-
-#[cfg(test)]
-mod low_memory_background_preferences_tests {
-    use super::UserPreferences;
-
-    #[test]
-    fn low_memory_background_is_opt_in_and_keeps_low_latency_preference() {
-        let old: UserPreferences = serde_json::from_str("{}").unwrap();
-        assert!(!old.low_memory_background_enabled);
-        let preferences: UserPreferences = serde_json::from_str(
-            r#"{"lowMemoryBackgroundEnabled":true,"lowLatencyDictationEnabled":true}"#,
-        )
-        .unwrap();
-        let restored: UserPreferences =
-            serde_json::from_value(serde_json::to_value(preferences).unwrap()).unwrap();
-        assert!(restored.low_memory_background_enabled);
-        assert!(restored.low_latency_dictation_enabled);
     }
 }

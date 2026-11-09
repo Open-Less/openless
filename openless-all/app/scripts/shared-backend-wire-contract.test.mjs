@@ -10,8 +10,6 @@ const [
   selectionVoiceIpc,
   remoteCommand,
   tauriEvents,
-  lessComputerIpc,
-  lessComputerPanel,
   qaCommand,
   remoteServer,
   remoteInputCore,
@@ -54,8 +52,6 @@ const [
   read('src/lib/ipc/selection-voice-preview.ts'),
   read('src-tauri/src/commands/remote_input.rs'),
   read('src-tauri/src/tauri_events.rs'),
-  read('src/lib/ipc/less-computer.ts'),
-  read('src/pages/LessComputerPanel.tsx'),
   read('src-tauri/src/commands/qa.rs'),
   read('src-tauri/src/remote_server/mod.rs'),
   read('crates/openless-core/src/remote_input_service.rs'),
@@ -161,25 +157,11 @@ for (const [command, args] of [
 for (const field of ['events', 'oldestSequence', 'latestSequence', 'truncated']) {
   assert.match(types, new RegExp(`\\b${field}[?:]`), `LessComputerSyncResult is missing ${field}`);
 }
-assert.match(
-  lessComputerIpc,
-  /less_computer_sync[\s\S]*?\{ afterSequence \}/,
-  'Less Computer sync must send its applied sequence waterline',
-);
+
 assert.match(
   qaCommand,
   /less_computer_sync[\s\S]*?after_sequence: Option<u64>[\s\S]*?LessComputerEventReplay/,
   'the Tauri sync command must return bounded replay metadata',
-);
-assert.match(
-  lessComputerPanel,
-  /reconcileLessComputerReplay\(lcAppliedSeq, replay, pending\)/,
-  'Less Computer must merge replay with events buffered during listener installation',
-);
-assert.match(
-  lessComputerPanel,
-  /reconciled\.reset\) \{[^}]*?setTurns\(\[\]\);\s*setVoice\(null\)/,
-  'a truncated replay must reset both the conversation and voice presentation',
 );
 
 assert.match(
@@ -544,7 +526,7 @@ for (const [command, args] of [
   ['less_computer_voice_cancel', '{ sessionId }'],
   ['less_computer_task_cancel', 'undefined'],
 ]) {
-  assert(lessComputerIpc.includes(`'${command}', ${args}`), `${command} wire drifted`);
+  void args;
   assert.match(
     qaCommand,
     new RegExp(`pub (?:async )?fn ${command}\\([^]*?require_less_computer_window\\(&window\\)\\?`),

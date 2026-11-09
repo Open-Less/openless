@@ -36,10 +36,9 @@ internal class StrokeInputRepository(context: Context) {
 
     // Personal per-code preference, learned from picking a non-top candidate.
     // Kept global (not per-target-app, unlike phrase association) since which
-    // character you mean for a given stroke code is a habit, not context —
-    // sharing StrokeUserFrequency's store/cap with the phrase repository is
-    // intentional, both are "how you personally type" data.
-    private val userFrequency = StrokeUserFrequency(context)
+    // character you mean for a given stroke code is a habit, not context.
+    // Its own store and cap, separate from the association picks.
+    private val userFrequency = StrokeUserFrequency.strokeCodes(context)
 
     /** Warm the offline index before the first stroke key is pressed. */
     fun preloadAsync() {

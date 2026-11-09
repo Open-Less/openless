@@ -173,13 +173,6 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
-        rust_name: "low_memory_background_enabled",
-        key: "lowMemoryBackgroundEnabled",
-        class: PreferenceClass::DeviceProfile,
-        shape: PreferenceShape::Boolean,
-        reason: "device_bound",
-    },
-    PreferenceField {
         rust_name: "low_latency_dictation_enabled",
         key: "lowLatencyDictationEnabled",
         class: PreferenceClass::Excluded,
@@ -789,6 +782,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "macos_composition_input",
+        key: "macosCompositionInput",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "windows_composition_input",
         key: "windowsCompositionInput",
         class: PreferenceClass::Portable,
@@ -805,6 +805,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "vocabulary_learning_enabled",
         key: "vocabularyLearningEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
+        rust_name: "expression_learning_enabled",
+        key: "expressionLearningEnabled",
         class: PreferenceClass::Excluded,
         shape: PreferenceShape::Boolean,
         reason: "local_consent_or_secret",

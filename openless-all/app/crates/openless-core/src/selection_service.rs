@@ -5,7 +5,7 @@ use futures_util::future::BoxFuture;
 
 use crate::config::Clock;
 use crate::correction::apply_correction_rules;
-use crate::credentials::{CredentialStore, ProviderSlot};
+use crate::credentials::CredentialStore;
 use crate::dictation_context::{
     DictationContext, DictationProviderInvocations, DictationStartOptions, ProviderInvocation,
 };
@@ -16,7 +16,7 @@ use crate::domains::{
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{HostAction, HostActions, TextPolisher, TextStreamChunk, TextStreamSink};
-use crate::shared_types::SelectionPolishOutputMode;
+use crate::shared_types::{PipelineMode, SelectionPolishOutputMode};
 use crate::style_packs::{style_pack_prompt, StylePromptKind};
 use crate::types::{
     DictationSession, HistoryChange, HistoryInsertStatus, HistorySource, SessionId,
@@ -233,15 +233,32 @@ impl SelectionServiceInner {
         if let Some(block) = instruction.and_then(crate::prompts::selection_instruction_block) {
             selection_prompt = format!("{selection_prompt}\n\n{block}");
         }
-        let llm = if uses_llm {
-            crate::provider_resolution::resolve_session_provider(
+        let mode = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        );
+        let (llm, omni) = if uses_llm {
+            let text = crate::provider_resolution::resolve_selection_text_provider(
                 &self.credential_store,
-                ProviderSlot::Llm,
-                &preferences.active_llm_provider,
+                &preferences,
             )
-            .await?
+            .await?;
+            // Only the active pipeline's text channel is required.
+            match mode {
+                PipelineMode::Multimodal => (
+                    ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                    text,
+                ),
+                PipelineMode::Traditional => (
+                    text,
+                    ProviderInvocation::for_provider(preferences.active_omni_provider.clone()),
+                ),
+            }
         } else {
-            ProviderInvocation::for_provider(preferences.active_llm_provider.clone())
+            (
+                ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
+                ProviderInvocation::for_provider(preferences.active_omni_provider.clone()),
+            )
         };
         let mut context = DictationContext::capture(
             &preferences,
@@ -249,7 +266,7 @@ impl SelectionServiceInner {
             DictationProviderInvocations::new(
                 ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
                 llm,
-                ProviderInvocation::for_provider(preferences.active_omni_provider.clone()),
+                omni,
             ),
             Vec::new(),
             Vec::new(),
@@ -451,6 +468,14 @@ impl SelectionServiceInner {
                 None
             }
         };
+        let (text_provider_id, text_model) = match context.pipeline_mode {
+            PipelineMode::Multimodal => {
+                (context.omni.provider_id.clone(), context.omni.model.clone())
+            }
+            PipelineMode::Traditional => {
+                (context.llm.provider_id.clone(), context.llm.model.clone())
+            }
+        };
         let session = DictationSession {
             id: session_id.to_string(),
             created_at: self.clock.now_utc().to_rfc3339(),
@@ -471,12 +496,15 @@ impl SelectionServiceInner {
             has_audio_recording: None,
             asr_provider: None,
             asr_model: None,
-            llm_provider: completed.llm_used.then(|| context.llm.provider_id.clone()),
-            llm_model: completed
-                .llm_used
-                .then(|| context.llm.model.clone())
-                .flatten(),
-            pipeline_mode: Some("traditional".to_string()),
+            llm_provider: completed.llm_used.then_some(text_provider_id),
+            llm_model: completed.llm_used.then_some(text_model).flatten(),
+            pipeline_mode: Some(
+                match context.pipeline_mode {
+                    PipelineMode::Traditional => "traditional",
+                    PipelineMode::Multimodal => "multimodal",
+                }
+                .to_string(),
+            ),
             asr_ms: None,
             polish_ms: completed.polish_ms,
         };
@@ -685,18 +713,26 @@ impl SelectionApi for SelectionService {
                     // simplified-script drift out of the preview/replacement. The
                     // non-LLM branch only echoes the raw selection and does no
                     // conversion.
-                    // `context` is moved into polish() later; grab the Copy preference
-                    // into a local first.
+                    // Copy preference is read before the provider call.
                     let script_pref = context.polish.chinese_script_preference;
-                    let mut output = inner
-                        .polisher
-                        .polish(
-                            session_id,
-                            context,
-                            capture.text.clone(),
-                            Arc::new(DiscardTextStreamSink),
+                    let mut output = if context.pipeline_mode == PipelineMode::Multimodal {
+                        crate::cloud_providers::polish_with_omni_text(
+                            inner.credential_store.as_ref(),
+                            context.as_ref(),
+                            &capture.text,
                         )
-                        .await?;
+                        .await?
+                    } else {
+                        inner
+                            .polisher
+                            .polish(
+                                session_id,
+                                Arc::clone(&context),
+                                capture.text.clone(),
+                                Arc::new(DiscardTextStreamSink),
+                            )
+                            .await?
+                    };
                     // Scaffolding stripping (2026-09-11 spider-story incident): small
                     // models intermittently echo the user-message template lines and
                     // the <raw_transcript> envelope along with the body text. The

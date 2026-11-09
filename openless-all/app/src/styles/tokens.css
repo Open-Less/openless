@@ -10,8 +10,8 @@
   --ol-primary-solid-ink: var(--ol-on-accent);
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
-  --ol-control-radius: 8px;
-  --ol-bubble-radius: var(--ol-r-lg);
+  --ol-control-radius: var(--ol-radius);
+  --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
@@ -20,6 +20,7 @@
   --ol-canvas: #ffffff;
   --ol-surface: #ffffff;
   --ol-surface-2: #f4f4f5;
+  --ol-surface-raised: var(--ol-surface-2);
   --ol-surface-solid: #ffffff;
   --ol-line: #e4e4e7;
   --ol-line-strong: #d4d4d8;
@@ -71,20 +72,31 @@
     0 40px 60px -20px rgba(15, 17, 22, 0.15), 0 24px 30px -12px rgba(15, 17, 22, 0.08),
     0 0 0 0.5px rgba(0, 0, 0, 0.03);
 
-  /* Radii */
-  --ol-shell-radius: 32px;
-  --ol-panel-radius: 18px;
-  --ol-card-radius: 14px;
-  --ol-pill-radius: 999px;
-  --ol-r-sm: 6px;
-  --ol-r-md: 10px;
-  --ol-r-lg: 14px;
-  --ol-r-xl: 18px;
-  --ol-r-2xl: var(--ol-card-radius);
-  --ol-r-pill: var(--ol-pill-radius);
+  /* One radius for every rounded interface surface and control. */
+  --ol-radius: 16px;
+  --ol-shell-radius: var(--ol-radius);
+  --ol-surface-radius: var(--ol-radius);
+  --ol-panel-radius: var(--ol-radius);
+  --ol-card-radius: var(--ol-radius);
+  --ol-pill-radius: var(--ol-radius);
+  --ol-r-sm: var(--ol-radius);
+  --ol-r-md: var(--ol-radius);
+  --ol-r-lg: var(--ol-radius);
+  --ol-r-xl: var(--ol-radius);
+  --ol-r-2xl: var(--ol-radius);
+  --ol-r-pill: var(--ol-radius);
 
   /* Typography: compensate bright-on-dark irradiation without changing the type scale.
      Intermediate weights are continuous on variable fonts; static faces use their nearest weight. */
+  --font-weight-normal: var(--ol-font-weight-regular);
+  --font-weight-medium: var(--ol-font-weight-medium);
+  --font-weight-semibold: var(--ol-font-weight-semibold);
+  --font-weight-bold: var(--ol-font-weight-bold);
+  --font-weight-extrabold: calc(800 + var(--ol-font-weight-offset));
+  --ol-font-weight-offset: 0;
+  --ol-font-weight-regular: 400;
+  --ol-font-weight-bold: 700;
+  --ol-font-weight-demibold: 650;
   --ol-font-weight-medium: 500;
   --ol-font-weight-semibold: 600;
   --ol-font-display: var(--ol-font-sans);
@@ -194,7 +206,7 @@
   --ol-pill-selected-bg: #18181b;
   --ol-pill-selected-ink: #ffffff;
   --ol-pill-selected-border: #18181b;
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #fcfcfd;
   --ol-select-popover-border: rgba(0, 0, 0, 0.1);
   --ol-select-popover-shadow:
@@ -237,6 +249,10 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-font-weight-offset: -40;
+  --ol-font-weight-regular: 360;
+  --ol-font-weight-bold: 660;
+  --ol-font-weight-demibold: 610;
   --ol-font-weight-medium: 460;
   --ol-font-weight-semibold: 560;
   --ol-accent-solid-bg: #3b82f6;
@@ -355,7 +371,7 @@
   --ol-pill-selected-bg: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.92));
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(147, 197, 253, 0.44);
-  --ol-select-trigger-bg: var(--ol-control-solid);
+  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
   --ol-select-popover-bg: #202024;
   --ol-select-popover-border: rgba(226, 232, 240, 0.12);
   --ol-select-popover-shadow:
@@ -424,7 +440,8 @@ body {
   overscroll-behavior: contain;
 }
 /* 概览是 overflow:hidden 的单屏固定页，永远不会有滚动条 —— 不占槽位。 */
-.ol-thinscroll[data-ol-page-fixed] {
+.ol-thinscroll[data-ol-page-fixed],
+.ol-thinscroll.ol-page-fixed {
   scrollbar-gutter: auto;
 }
 .ol-thinscroll::-webkit-scrollbar {
@@ -436,7 +453,7 @@ body {
 }
 .ol-thinscroll::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.18);
-  border-radius: 3px;
+  border-radius: var(--ol-radius);
 }
 .ol-thinscroll::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.28);
@@ -472,4 +489,10 @@ body {
 .ol-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--ol-blue-ring);
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+  :root {
+    --ol-surface-raised: color-mix(in srgb, var(--ol-surface) 97%, var(--ol-ink) 3%);
+  }
 }

@@ -2,7 +2,7 @@
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
 import { useTranslation } from 'react-i18next';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
 import { Tooltip } from '../../components/Tooltip';
@@ -27,8 +27,8 @@ import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
 import { VocabularyLearningSection } from './VocabularyLearningSection';
-import { CodingAgentSection } from './CodingAgentSection';
-import { ClaudeConsoleSection } from './ClaudeConsoleSection';
+import { ExpressionLearningSection } from './ExpressionLearningSection';
+import { AudioDspSettings } from './AudioDspSettings';
 import { BetaChannelSection } from './BetaChannelSection';
 import { AutoUpdateSection } from './AutoUpdateSection';
 import { StartupDiagnostics } from './StartupDiagnostics';
@@ -39,15 +39,16 @@ import type { PlatformCapabilities } from '../../lib/types';
 import { type OS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
-import { SettingRow, Toggle, ExperimentalSectionTitle } from './shared';
+import { SettingRow, Toggle, ExperimentalSectionTitle, inputStyle } from './shared';
 import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../_atoms';
-import { usePageTransition, useSelectionMotion } from '../../lib/motion';
+import { useContentMotion, useSelectionMotion } from '../../lib/motion';
+import { TransitionViewport } from '../../components/ui/TransitionViewport';
 import {
   availableServiceViews,
-  isTestingFeaturePage,
   isServiceViewInactive,
   resolveServiceView,
+  showsCursorContextControl,
   type ServiceViewId,
   type AdvancedPage,
   type AdvancedPageId,
@@ -64,20 +65,145 @@ function usePlatformCaps(): PlatformCapabilities | null {
   return platformCaps;
 }
 
-// Recording & input: from recording to text insertion, plus phone input.
+// General: microphone, capsule style, text insertion, and remote input.
+// Each category is one page. Pages do not collapse their own groups again.
 export function GeneralTab({
   os,
   onOpenLocalModels,
 }: { os?: OS; onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
-
+  const showCapsule = platformCaps == null || platformCaps.platform === 'desktop';
+  const [page, setPage] = useState<'root' | 'recording' | 'capsule' | 'textInput' | 'phone'>(
+    'root',
+  );
+  const activePage =
+    (page === 'phone' && !showRemoteInput) || (page === 'capsule' && !showCapsule) ? 'root' : page;
+  const contentRef = useRef<HTMLDivElement>(null);
+  useContentMotion(contentRef, activePage);
+  const categories = [
+    {
+      id: 'recording' as const,
+      icon: 'mic',
+      title: 'settings.generalPages.recordingTitle',
+      description: 'settings.generalPages.recordingDesc',
+    },
+    {
+      id: 'capsule' as const,
+      icon: 'layout',
+      title: 'settings.generalPages.capsuleTitle',
+      description: 'settings.generalPages.capsuleDesc',
+    },
+    {
+      id: 'textInput' as const,
+      icon: 'pencil',
+      title: 'settings.generalPages.textInputTitle',
+      description: 'settings.generalPages.textInputDesc',
+    },
+    {
+      id: 'phone' as const,
+      icon: 'link',
+      title: 'settings.generalPages.phoneTitle',
+      description: 'settings.generalPages.phoneDesc',
+    },
+  ].filter(
+    (item) => (item.id !== 'phone' || showRemoteInput) && (item.id !== 'capsule' || showCapsule),
+  );
+  const pageTitle = {
+    recording: 'settings.generalPages.recordingTitle',
+    capsule: 'settings.generalPages.capsuleTitle',
+    textInput: 'settings.generalPages.textInputTitle',
+    phone: 'settings.generalPages.phoneTitle',
+  } as const;
+  if (activePage !== 'root') {
+    return (
+      <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <SettingsSubpageHeader onBack={() => setPage('root')} title={pageTitle[activePage]} />
+        {activePage === 'recording' && (
+          <RecordingInputSection
+            forcedOs={os}
+            onOpenLocalModels={onOpenLocalModels}
+            surface="microphone"
+          />
+        )}
+        {activePage === 'capsule' && <RecordingInputSection forcedOs={os} surface="capsule" />}
+        {activePage === 'textInput' && (
+          <>
+            <SelectionWorkspaceSection showShortcut={false} />
+            <RecordingInputSection forcedOs={os} surface="text" />
+          </>
+        )}
+        {activePage === 'phone' && <RemoteInputSection />}
+      </div>
+    );
+  }
   return (
-    <>
-      <RecordingInputSection forcedOs={os} onOpenLocalModels={onOpenLocalModels} />
-      <SelectionWorkspaceSection showShortcut={false} />
-      {showRemoteInput && <RemoteInputSection />}
-    </>
+    <div ref={contentRef} className="ol-settings-category-list">
+      {categories.map((item) => (
+        <SettingsCategoryEntry
+          key={item.id}
+          icon={item.icon}
+          title={item.title}
+          description={item.description}
+          onClick={() => setPage(item.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SettingsSubpageHeader({ title, onBack }: { title: string; onBack?: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {onBack && (
+        <button type="button" className="ol-settings-back-button" onClick={onBack}>
+          <Icon name="chevLeft" size={16} />
+          {t('modal.back')}
+        </button>
+      )}
+      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 'var(--ol-font-weight-semibold)' }}>
+        {t(title)}
+      </h2>
+    </div>
+  );
+}
+
+function SettingsCategoryEntry({
+  id,
+  icon,
+  title,
+  description,
+  beta = false,
+  onClick,
+}: {
+  id?: string;
+  icon: string;
+  title: string;
+  description: string;
+  beta?: boolean;
+  onClick: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      className="ol-settings-category-entry"
+      data-ol-advanced-entry={id}
+      onClick={onClick}
+    >
+      <span className="ol-settings-category-icon">
+        <Icon name={icon} size={18} />
+      </span>
+      <span className="ol-settings-category-copy">
+        <strong>
+          <span>{t(title)}</span>
+          {beta && <span className="ol-beta-tag">Beta</span>}
+        </strong>
+        <span>{t(description)}</span>
+      </span>
+      <Icon name="chevRight" size={17} />
+    </button>
   );
 }
 
@@ -148,7 +274,7 @@ export function ServicesTab({
     voiceActivationModels,
   );
   const contentRef = useRef<HTMLDivElement>(null);
-  const selectedView = usePageTransition(requestedView, contentRef, false);
+  const selectedView = requestedView;
   const navigationRef = useRef<HTMLDivElement>(null);
   const navigationIndicatorRef = useRef<HTMLSpanElement>(null);
   useSelectionMotion(
@@ -317,7 +443,12 @@ export function ServicesTab({
             );
           })}
         </div>
-        <div key={selectedView} ref={contentRef} className="ol-service-content">
+        <TransitionViewport
+          contentKey={selectedView}
+          scrollRef={contentRef}
+          className="ol-service-content ol-thinscroll"
+          style={{ overflow: 'auto' }}
+        >
           {/* The LocalModelPicker inside the channel editor jumps to this view through this context. */}
           <LocalModelsNavContext.Provider
             value={
@@ -339,21 +470,176 @@ export function ServicesTab({
                 <LocalModelsSection />
               </>
             )}
-            {selectedView === 'connections' && (
-              <>
-                <NetworkSection />
-                <MarketplaceSection />
-              </>
-            )}
+            {selectedView === 'connections' && <NetworkSection />}
           </LocalModelsNavContext.Provider>
           {(selectedView === 'llm' || selectedView === 'asr') && (
             <p className="ol-service-storage-note">
               {t('settings.providers.credentialStorageNotice')}
             </p>
           )}
-        </div>
+        </TransitionViewport>
       </div>
     </>
+  );
+}
+
+export function CloudServicesTab() {
+  return (
+    <>
+      <MarketplaceSection />
+      <CloudSyncSection />
+    </>
+  );
+}
+
+export const VoiceEnhancementDepthContext = createContext<{
+  open: boolean;
+  setOpen: (open: boolean) => void;
+} | null>(null);
+
+function VoiceEnhancementSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const platformCaps = usePlatformCaps();
+  const depth = useContext(VoiceEnhancementDepthContext);
+  if (!prefs) return null;
+  const dspOpen = depth?.open ?? false;
+  const openDsp = () => depth?.setOpen(true);
+  if (dspOpen) {
+    return (
+      <div>
+        <AudioDspSettings
+          page
+          value={prefs.audioDsp}
+          onChange={(audioDsp) => void updatePrefs((current) => ({ ...current, audioDsp }))}
+        />
+      </div>
+    );
+  }
+  return (
+    <div>
+      <Card>
+        <ExperimentalSectionTitle badge={t('common.experimental')}>
+          {t('settings.advancedPages.voiceEnhancementTitle')}
+        </ExperimentalSectionTitle>
+        {platformCaps?.platform === 'desktop' && (
+          <SettingRow
+            label={t('settings.recording.echoCancellationLabel')}
+            desc={t('settings.recording.echoCancellationDesc')}
+          >
+            <Toggle
+              on={prefs.echoCancellationEnabled ?? false}
+              onToggle={(next) =>
+                void updatePrefs((current) => ({ ...current, echoCancellationEnabled: next }))
+              }
+            />
+          </SettingRow>
+        )}
+        <SettingRow
+          label={t('settings.recording.audioEnhancementLabel')}
+          desc={t('settings.recording.audioEnhancementDesc')}
+        >
+          <Toggle
+            on={prefs.audioEnhancementEnabled}
+            onToggle={(next) =>
+              void updatePrefs((current) => ({ ...current, audioEnhancementEnabled: next }))
+            }
+          />
+        </SettingRow>
+      </Card>
+      <div className="ol-advanced-settings-list" style={{ marginTop: 12 }}>
+        <button type="button" className="ol-advanced-settings-entry" onClick={openDsp}>
+          <span className="ol-advanced-entry-icon">
+            <Icon name="mic" size={19} />
+          </span>
+          <span className="ol-advanced-entry-copy">
+            <span className="ol-advanced-entry-title">{t('settings.recording.dsp.title')}</span>
+            <span className="ol-advanced-entry-description">
+              {t('settings.recording.dsp.description')}
+            </span>
+          </span>
+          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CursorContextSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const platformCaps = usePlatformCaps();
+  if (!prefs) return null;
+  const showCursor = showsCursorContextControl(platformCaps?.platform, detectOS());
+  // Empty input rolls back to off. 50 characters keeps the skip on short fragments.
+  const onPolishSkipMaxCharsChange = (raw: string) => {
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return;
+    void updatePrefs((current) => ({
+      ...current,
+      polishSkipMaxChars: Math.max(0, Math.min(50, parsed)),
+    }));
+  };
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge={t('common.experimental')}>
+        {t('settings.advancedPages.cursorContextTitle')}
+      </ExperimentalSectionTitle>
+      {showCursor && (
+        <SettingRow
+          label={t('settings.dataStorage.cursorContextLabel')}
+          desc={t('settings.dataStorage.cursorContextDesc')}
+        >
+          <Toggle
+            on={prefs.cursorContextEnabled}
+            onToggle={(next) =>
+              void updatePrefs((current) => ({ ...current, cursorContextEnabled: next }))
+            }
+          />
+        </SettingRow>
+      )}
+      {showCursor && (
+        <p className="ol-section-note">{t('settings.advancedPages.cursorContextHint')}</p>
+      )}
+      <SettingRow
+        label={t('settings.recording.polishSkipMaxCharsLabel')}
+        desc={t('settings.recording.polishSkipMaxCharsDesc')}
+      >
+        <input
+          type="number"
+          min={0}
+          max={50}
+          value={prefs.polishSkipMaxChars}
+          onChange={(event) => onPolishSkipMaxCharsChange(event.target.value)}
+          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+    </Card>
+  );
+}
+
+function LiveInputSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  if (!prefs || detectOS() !== 'win') return null;
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge="Beta">
+        {t('settings.advancedPages.liveInputTitle')}
+      </ExperimentalSectionTitle>
+      <SettingRow
+        label={t('settings.advanced.windowsCompositionInputLabel')}
+        desc={t('settings.advanced.windowsCompositionInputDesc')}
+      >
+        <Toggle
+          on={prefs.windowsCompositionInput}
+          disabled={prefs.windowsInsertionMode !== 'tsf'}
+          onToggle={(next) =>
+            void updatePrefs((current) => ({ ...current, windowsCompositionInput: next }))
+          }
+        />
+      </SettingRow>
+    </Card>
   );
 }
 
@@ -368,7 +654,7 @@ export function PrivacyTab() {
           alignItems: 'center',
           gap: 10,
           padding: '10px 12px',
-          borderRadius: 10,
+          borderRadius: 'var(--ol-r-md)',
           background: 'var(--ol-blue-soft)',
           marginBottom: 2,
         }}
@@ -377,7 +663,7 @@ export function PrivacyTab() {
           style={{
             fontSize: 11,
             padding: '3px 8px',
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             background: 'var(--ol-surface)',
             color: 'var(--ol-blue)',
             fontWeight: 'var(--ol-font-weight-semibold)',
@@ -393,7 +679,6 @@ export function PrivacyTab() {
       <PermissionsSection />
       <DataStorageSection />
       <LocalMigrationSection />
-      <CloudSyncSection />
     </>
   );
 }
@@ -413,84 +698,28 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [visited, setVisited] = useState<AdvancedPageId[]>([]);
-  useEffect(() => {
-    if (page) setVisited((current) => (current.includes(page) ? current : [...current, page]));
-  }, [page]);
-  const { prefs, updatePrefs } = useHotkeySettings();
-  const testing = prefs?.testingFeaturesEnabled === true;
-  const [savingTesting, setSavingTesting] = useState(false);
-  const testingReady = testing && !savingTesting;
-  const entries = pages.filter((item) =>
-    page === 'testingFeatures'
-      ? testingReady && isTestingFeaturePage(item.id)
-      : !isTestingFeaturePage(item.id),
-  );
+  const platformCaps = usePlatformCaps();
+  const entries = pages;
   const list = (
     <div className="ol-advanced-settings-list">
       {entries.map((item) => (
-        <button
+        <SettingsCategoryEntry
+          id={item.id}
           key={item.id}
-          type="button"
-          className="ol-advanced-settings-entry"
-          data-ol-advanced-entry={item.id}
+          icon={item.icon}
+          title={item.titleKey}
+          beta={'beta' in item && item.beta}
+          description={`modal.advancedPages.${item.id}`}
           onClick={() => onOpenPage(item.id)}
-        >
-          <span className="ol-advanced-entry-icon">
-            <Icon name={item.icon} size={19} />
-          </span>
-          <span className="ol-advanced-entry-copy">
-            <span className="ol-advanced-entry-title">{t(item.titleKey)}</span>
-            <span className="ol-advanced-entry-description">
-              {t(`modal.advancedPages.${item.id}`)}
-            </span>
-          </span>
-          {item.id === 'testingFeatures' && (
-            <span style={{ color: 'var(--ol-blue)', fontSize: 11, fontWeight: 600 }}>Beta</span>
-          )}
-          <Icon name="chevRight" size={17} className="ol-advanced-entry-arrow" />
-        </button>
+        />
       ))}
     </div>
   );
   return (
     <>
       {page === null && list}
-      {page === 'testingFeatures' && (
-        <Card>
-          <ExperimentalSectionTitle badge="Beta">
-            {t('settings.testingFeatures.title')}
-          </ExperimentalSectionTitle>
-          <SettingRow
-            label={t('settings.testingFeatures.enable')}
-            desc={t('settings.testingFeatures.description')}
-          >
-            <Toggle
-              on={testing}
-              disabled={!prefs || savingTesting}
-              label={t('settings.testingFeatures.enable')}
-              onToggle={async (next) => {
-                setSavingTesting(true);
-                try {
-                  await updatePrefs((current) => ({ ...current, testingFeaturesEnabled: next }));
-                } catch {
-                  emitSaved('failed', t('common.operationFailed'));
-                } finally {
-                  setSavingTesting(false);
-                }
-              }}
-            />
-          </SettingRow>
-          {testingReady && list}
-          {testingReady && entries.length === 0 && (
-            <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
-              {t('settings.testingFeatures.unavailable')}
-            </p>
-          )}
-        </Card>
-      )}
       {pages
-        .filter((item) => item.id !== 'testingFeatures' && visited.includes(item.id))
+        .filter((item) => item.id === page)
         .map((item) => (
           <section
             key={item.id}
@@ -502,9 +731,22 @@ export function AdvancedTab({
             {item.id === 'localModels' && (
               <ExperimentalAsrSection controller={experimentalAsr} onOpenAsr={onOpenAsr} />
             )}
-            {testingReady && item.id === 'lessComputer' && <CodingAgentSection />}
-            {testingReady && item.id === 'claudeConsole' && <ClaudeConsoleSection />}
-            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
+            {item.id === 'liveInput' && <LiveInputSection />}
+            {item.id === 'cursorContext' && (
+              <div
+                className="ol-awareness-sections"
+                style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+              >
+                <CursorContextSection />
+                {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
+                  <VocabularyLearningSection />
+                )}
+                {platformCaps?.platform === 'desktop' &&
+                  (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
+              </div>
+            )}
+            {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}
           </section>
@@ -521,7 +763,6 @@ export function AboutTab() {
   return (
     <>
       <AboutSection />
-      <StartupDiagnostics />
       {showUpdateControls && <BetaChannelSection />}
       {showUpdateControls && <AutoUpdateSection />}
     </>

@@ -161,6 +161,12 @@ if [ "$prune" = 1 ]; then
   echo "pruned $pruned cache(s)"
 fi
 
+if [ "$prune" = 1 ] && [ "$dry_run" = 0 ]; then
+  total_gb=$(gh api --paginate "repos/$repo/actions/caches?per_page=100" \
+    --jq '.actions_caches[].size_in_bytes' | awk '{ sum += $1 } END { printf "%.2f", sum / 1e9 }')
+  echo "post-prune usage: ${total_gb} GB"
+fi
+
 if awk -v used="$total_gb" -v limit="$limit_gb" 'BEGIN { exit (used + 0 > limit + 0) ? 0 : 1 }'; then
   echo "::error::cache usage ${total_gb} GB exceeds the ${limit_gb} GB budget"
   exit 1

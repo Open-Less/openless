@@ -17,6 +17,23 @@ export function displacedTop(base: number, index: number, slot: number, space: n
   return base + space * Math.max(0, Math.min(1, index + 1 - slot));
 }
 
+/** Exact overdamped step: x'' + 44x' + 480(x-target) = 0, with roots -20 and -24.
+ * Delayed frames consume real elapsed time instead of slowing the spring clock. */
+export function advanceReorderSpring(
+  position: number,
+  velocity: number,
+  target: number,
+  dt: number,
+): [number, number] {
+  if (dt <= 0) return [position, velocity];
+  const offset = position - target;
+  const a = (velocity + 24 * offset) / 4;
+  const b = offset - a;
+  const slow = a * Math.exp(-20 * dt);
+  const fast = b * Math.exp(-24 * dt);
+  return [target + slow + fast, -20 * slow - 24 * fast];
+}
+
 /** A temporary absolute stack: pointer and spring updates never re-render React.
  * Every frame computes a fractional gap, rather than swapping entire rows at a threshold.
  * Pointer-cancel/Escape restores the original order; only a completed drop persists.
@@ -114,7 +131,7 @@ export function useSpringReorder<T extends { id: string }>(
       }
     };
     const tick = (now: number) => {
-      const dt = Math.min(0.032, Math.max(0.001, (now - previous) / 1000));
+      const dt = Math.max(0, (now - previous) / 1000);
       previous = now;
       if (!released) {
         if (scrollParent) {
@@ -126,7 +143,7 @@ export function useSpringReorder<T extends { id: string }>(
               : pointerY > bounds.bottom - edge
                 ? Math.min(1, (pointerY - bounds.bottom + edge) / edge)
                 : 0;
-          scrollParent.scrollTop += speed * dt * 480;
+          scrollParent.scrollTop += speed * Math.min(dt, 0.032) * 480;
         }
         active.y = Math.max(
           startTop - 12,
@@ -148,12 +165,14 @@ export function useSpringReorder<T extends { id: string }>(
             pose.y = pose.target;
             pose.velocity = 0;
           } else {
-            const steps = Math.ceil(dt / 0.008),
-              step = dt / steps;
-            for (let i = 0; i < steps; i++) {
-              pose.velocity += ((pose.target - pose.y) * 480 - pose.velocity * 44) * step;
-              pose.y += pose.velocity * step;
-            }
+            const [position, velocity] = advanceReorderSpring(
+              pose.y,
+              pose.velocity,
+              pose.target,
+              dt,
+            );
+            pose.y = position;
+            pose.velocity = velocity;
           }
           if (Math.abs(pose.target - pose.y) > 0.15 || Math.abs(pose.velocity) > 1) settled = false;
         }

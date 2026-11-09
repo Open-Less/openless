@@ -1,8 +1,8 @@
 diff --git a/crates/openless-core/src/api.rs b/crates/openless-core/src/api.rs
-index ab3a2a08..b6e5305a 100644
+index 14d0521..dc54279 100644
 --- a/crates/openless-core/src/api.rs
 +++ b/crates/openless-core/src/api.rs
-@@ -5753,7 +5753,13 @@ impl OpenLessBackend {
+@@ -5754,7 +5754,13 @@ impl OpenLessBackend {
          };
          // Keep finalization outside this critical section. A failed save changes neither
          // the active target nor the remembered choice, and no other preference is overwritten.
@@ -17,7 +17,7 @@ index ab3a2a08..b6e5305a 100644
          state.dictation_context = Some(Arc::new(updated));
          // The common stop boundary must also send the changed context to a streaming engine.
          state.dictation_translation_requested = Some(true);
-@@ -6589,6 +6595,146 @@ impl OpenLessBackend {
+@@ -6590,6 +6596,146 @@ impl OpenLessBackend {
          self.preferences.get()
      }
  
@@ -164,7 +164,7 @@ index ab3a2a08..b6e5305a 100644
      /// Consumes the "first launch of this major version" splash PV marker:
      /// returns false when the config's `splash_seen_version` matches the
      /// given current major (no replay); on mismatch it writes back the major
-@@ -6716,6 +6862,7 @@ impl OpenLessBackend {
+@@ -6717,6 +6863,7 @@ impl OpenLessBackend {
              };
          crate::sync_dictation_hotkey_legacy_fields(&mut previous);
          crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
@@ -172,7 +172,7 @@ index ab3a2a08..b6e5305a 100644
          // The splash marker may only advance via take_splash_playback: when a
          // whole-document submit (old frontend, or a request that hasn't read
          // the marker back) omits the field, serde's default would write the
-@@ -7700,10 +7847,42 @@ impl OpenLessBackend {
+@@ -7701,10 +7848,42 @@ impl OpenLessBackend {
          self.start_reserved_dictation(reservation, options).await
      }
  
@@ -215,7 +215,7 @@ index ab3a2a08..b6e5305a 100644
      ) -> Result<SessionId, BackendError> {
          let DictationReservation {
              session_id,
-@@ -7720,14 +7899,25 @@ impl OpenLessBackend {
+@@ -7721,14 +7900,25 @@ impl OpenLessBackend {
                  return Err(error);
              }
          }
@@ -249,7 +249,7 @@ index ab3a2a08..b6e5305a 100644
              Ok(context) => Arc::new(context),
              Err(error) => {
                  self.schedule_pending_audio_capture_discard(pending_capture.take());
-@@ -9177,6 +9367,36 @@ impl OpenLessBackend {
+@@ -9189,6 +9379,36 @@ impl OpenLessBackend {
          }
      }
  
@@ -286,7 +286,7 @@ index ab3a2a08..b6e5305a 100644
      async fn capture_dictation_context(
          &self,
          options: &DictationStartOptions,
-@@ -9198,6 +9418,11 @@ impl OpenLessBackend {
+@@ -9210,6 +9430,11 @@ impl OpenLessBackend {
      ) -> Result<DictationContext, BackendError> {
          let preferences = self.get_preferences();
          let mut captured_options = options.clone();
@@ -298,7 +298,7 @@ index ab3a2a08..b6e5305a 100644
          if !preferences.cursor_context_enabled {
              // This switch controls document text, including text supplied by
              // callers. Front-application metadata is still needed for history,
-@@ -12189,6 +12414,285 @@ mod tests {
+@@ -12208,6 +12433,285 @@ mod tests {
          let _ = std::fs::remove_dir_all(data_dir);
      }
  
@@ -584,7 +584,7 @@ index ab3a2a08..b6e5305a 100644
      #[test]
      fn focused_microphone_selection_persists_and_publishes_once() {
          let (backend, _) = backend();
-@@ -13870,6 +14374,10 @@ mod tests {
+@@ -13893,6 +14397,10 @@ mod tests {
          let selected = backend.select_dictation_translation_target(session, "ja".into()).unwrap();
          assert_eq!(selected.target_language, "日本語");
          assert_eq!(backend.get_preferences().translation_target_language, "日本語");
@@ -595,7 +595,7 @@ index ab3a2a08..b6e5305a 100644
          assert_eq!(backend.get_preferences().microphone_device_name, "next microphone");
          backend.stop_dictation().await.unwrap();
          let contexts = engine.contexts();
-@@ -13880,6 +14388,35 @@ mod tests {
+@@ -13903,6 +14411,35 @@ mod tests {
          backend.shutdown().await.unwrap();
      }
  
@@ -632,7 +632,7 @@ index ab3a2a08..b6e5305a 100644
      async fn translation_picker_save_failure_keeps_active_and_saved_targets() {
          let data_dir = TestDataDir::new("translation-picker-save-failure");
 diff --git a/crates/openless-core/src/auxiliary.rs b/crates/openless-core/src/auxiliary.rs
-index 75c9c3c3..55a7de23 100644
+index 75c9c3c..55a7de2 100644
 --- a/crates/openless-core/src/auxiliary.rs
 +++ b/crates/openless-core/src/auxiliary.rs
 @@ -64,7 +64,106 @@ impl RetranscriptionFailure {
@@ -857,11 +857,11 @@ index 75c9c3c3..55a7de23 100644
      async fn untouched_builtin_raw_repolish_is_a_true_passthrough() {
          let (service, path) = service(
 diff --git a/crates/openless-core/src/cloud_providers.rs b/crates/openless-core/src/cloud_providers.rs
-index 4c38be0f..bce7e393 100644
+index 05c6421..82d23c7 100644
 --- a/crates/openless-core/src/cloud_providers.rs
 +++ b/crates/openless-core/src/cloud_providers.rs
-@@ -1056,7 +1056,89 @@ enum CloudPolisherProvider {
-     Gemini(crate::llm_gemini::GeminiProvider),
+@@ -1081,7 +1081,91 @@ fn usage_purpose(context: &DictationContext) -> crate::usage_ledger::ServicePurp
+     }
  }
  
 +// Read-only, selected-channel request credentials. SecretValue zeroizes on drop;
@@ -907,6 +907,7 @@ index 4c38be0f..bce7e393 100644
 +    }
 +}
 +
++
  impl TextPolisher for SharedCloudTextPolisher {
 +    fn prepare(
 +        &self,
@@ -947,11 +948,12 @@ index 4c38be0f..bce7e393 100644
 +        })
 +    }
 +
++
      fn polish(
          &self,
          session_id: SessionId,
 diff --git a/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs b/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
-index 3b7e806c..66a16066 100644
+index fef46cc..7aa8d22 100644
 --- a/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
 +++ b/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs
 @@ -368,6 +368,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
@@ -969,7 +971,7 @@ index 3b7e806c..66a16066 100644
          rust_name: "translation_target_language",
          key: "translationTargetLanguage",
 diff --git a/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs b/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
-index d3d9688c..eb2e6ccb 100644
+index 369ccf8..c28048f 100644
 --- a/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
 +++ b/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs
 @@ -108,6 +108,22 @@ fn all_current_preference_fields_have_an_explicit_registration() {
@@ -996,7 +998,7 @@ index d3d9688c..eb2e6ccb 100644
          .iter()
          .map(|field| field.rust_name)
 diff --git a/crates/openless-core/src/dictation_context.rs b/crates/openless-core/src/dictation_context.rs
-index b82b76a0..495952a7 100644
+index e997f55..64fdd74 100644
 --- a/crates/openless-core/src/dictation_context.rs
 +++ b/crates/openless-core/src/dictation_context.rs
 @@ -43,6 +43,9 @@ pub enum DictationOutputTarget {
@@ -1026,7 +1028,7 @@ index b82b76a0..495952a7 100644
      pub translation_active: bool,
      pub edit_plan_input: bool,
      /// Selected text uses its own prompt envelope, separate from voice transcripts.
-@@ -252,8 +258,12 @@ impl DictationContext {
+@@ -259,8 +265,12 @@ impl DictationContext {
              omni,
          } = providers;
          let hotwords = normalize_hotwords(hotwords);
@@ -1041,7 +1043,7 @@ index b82b76a0..495952a7 100644
          let translation_active = translation_effective(
              options.translation_requested,
              &translation_target_language,
-@@ -357,6 +367,7 @@ impl DictationContext {
+@@ -382,6 +392,7 @@ impl DictationContext {
                  hotwords,
                  working_languages: preferences.working_languages.clone(),
                  translation_target_language,
@@ -1049,7 +1051,7 @@ index b82b76a0..495952a7 100644
                  translation_active,
                  edit_plan_input: false,
                  selection_input: false,
-@@ -813,6 +824,56 @@ mod tests {
+@@ -852,6 +863,56 @@ mod tests {
          assert_eq!(local_asr_fallback(&no_model, &cloud_asr(), true), None);
      }
  
@@ -1107,10 +1109,10 @@ index b82b76a0..495952a7 100644
      fn selection_polish_uses_the_selected_text_envelope() {
          let mut context = DictationContext::default();
 diff --git a/crates/openless-core/src/dictation_engine.rs b/crates/openless-core/src/dictation_engine.rs
-index f8d3d58e..d4f95155 100644
+index 3a95c61..3657e6f 100644
 --- a/crates/openless-core/src/dictation_engine.rs
 +++ b/crates/openless-core/src/dictation_engine.rs
-@@ -1011,6 +1011,13 @@ impl DictationEngine for PipelineDictationEngine {
+@@ -1016,6 +1016,13 @@ impl DictationEngine for PipelineDictationEngine {
              let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
              // Optional polish may be skipped after fallback; an explicit translation is still required.
              let translation_active = context.polish.translation_active;
@@ -1124,7 +1126,7 @@ index f8d3d58e..d4f95155 100644
              let uses_polisher = context.uses_llm_polisher()
                  && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
                  && !skips_polish_for_short_text
-@@ -1063,6 +1070,16 @@ impl DictationEngine for PipelineDictationEngine {
+@@ -1068,6 +1075,16 @@ impl DictationEngine for PipelineDictationEngine {
                          )
                          .await
                  };
@@ -1141,7 +1143,7 @@ index f8d3d58e..d4f95155 100644
                  let result = match output {
                      Ok(text) => (text, false),
                      // Offline after local recognition: the raw transcript is the
-@@ -3810,6 +3827,37 @@ mod tests {
+@@ -3817,6 +3834,37 @@ mod tests {
          assert_eq!(result.polished_text, "raw text");
      }
  
@@ -1180,7 +1182,7 @@ index f8d3d58e..d4f95155 100644
      async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
          use crate::testing::{
 diff --git a/crates/openless-core/src/language_catalog.rs b/crates/openless-core/src/language_catalog.rs
-index 6bcfcf27..b8ac2f0c 100644
+index 6bcfcf2..b8ac2f0 100644
 --- a/crates/openless-core/src/language_catalog.rs
 +++ b/crates/openless-core/src/language_catalog.rs
 @@ -43,6 +43,14 @@ pub fn language_code(value: &str) -> Option<String> {
@@ -1222,7 +1224,7 @@ index 6bcfcf27..b8ac2f0c 100644
      fn extended_names_route_to_iso_and_apple_identifiers() {
          for (name, code, locale) in [
 diff --git a/crates/openless-core/src/ports.rs b/crates/openless-core/src/ports.rs
-index 66dfa69f..e5c8e58f 100644
+index 66dfa69..e5c8e58 100644
 --- a/crates/openless-core/src/ports.rs
 +++ b/crates/openless-core/src/ports.rs
 @@ -780,6 +780,15 @@ impl<T: DictationEngine + ?Sized> PreparedTranscription for DeferredDictationPre
@@ -1242,7 +1244,7 @@ index 66dfa69f..e5c8e58f 100644
          &self,
          session_id: SessionId,
 diff --git a/crates/openless-core/src/preference_patch.rs b/crates/openless-core/src/preference_patch.rs
-index 411a4b5f..07e176ec 100644
+index 411a4b5..07e176e 100644
 --- a/crates/openless-core/src/preference_patch.rs
 +++ b/crates/openless-core/src/preference_patch.rs
 @@ -18,7 +18,9 @@ pub fn patch_preferences(
@@ -1282,10 +1284,10 @@ index 411a4b5f..07e176ec 100644
      fn capsule_display_edits_establish_v2_without_opt_in_from_unrelated_edits() {
          let mut current = UserPreferences::default();
 diff --git a/crates/openless-core/src/preferences.rs b/crates/openless-core/src/preferences.rs
-index 817d7663..129f2a33 100644
+index a76f075..38f3af8 100644
 --- a/crates/openless-core/src/preferences.rs
 +++ b/crates/openless-core/src/preferences.rs
-@@ -266,6 +266,7 @@ impl PreferencesStore {
+@@ -268,6 +268,7 @@ impl PreferencesStore {
      }
  
      pub fn set(&self, mut preferences: UserPreferences) -> Result<(), BackendError> {
@@ -1293,7 +1295,7 @@ index 817d7663..129f2a33 100644
          self.update(|current| {
              // The sync transaction owns this field; stale whole-document saves cannot reroute its token.
              preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
-@@ -370,6 +371,7 @@ impl PreferencesStore {
+@@ -376,6 +377,7 @@ impl PreferencesStore {
          &self,
          mut preferences: UserPreferences,
      ) -> Result<(), BackendError> {
@@ -1302,7 +1304,7 @@ index 817d7663..129f2a33 100644
              preferences.preserve_style_preferences_from(current);
              preferences.sync_custom_server_origin = current.sync_custom_server_origin.clone();
 diff --git a/crates/openless-core/src/provider_registry.rs b/crates/openless-core/src/provider_registry.rs
-index 3f5c973b..1112e0fe 100644
+index 3f5c973..1112e0f 100644
 --- a/crates/openless-core/src/provider_registry.rs
 +++ b/crates/openless-core/src/provider_registry.rs
 @@ -136,6 +136,17 @@ impl TextPolisherRouter {
@@ -1324,7 +1326,7 @@ index 3f5c973b..1112e0fe 100644
          &self,
          session_id: SessionId,
 diff --git a/crates/openless-core/src/settings.rs b/crates/openless-core/src/settings.rs
-index 51600f8d..ad33194b 100644
+index 51600f8..ad33194 100644
 --- a/crates/openless-core/src/settings.rs
 +++ b/crates/openless-core/src/settings.rs
 @@ -19,6 +19,125 @@ pub(crate) fn ensure_testing_features_enabled(
@@ -1596,10 +1598,10 @@ index 51600f8d..ad33194b 100644
 +    }
 +}
 diff --git a/crates/openless-core/src/shared_types.rs b/crates/openless-core/src/shared_types.rs
-index ddb570f9..f2ad5f27 100644
+index e441d45..2f231aa 100644
 --- a/crates/openless-core/src/shared_types.rs
 +++ b/crates/openless-core/src/shared_types.rs
-@@ -551,12 +551,21 @@ pub struct UserPreferences {
+@@ -552,12 +552,21 @@ pub struct UserPreferences {
      /// model knows which languages the user works in. See issue #4.
      #[serde(default = "default_working_languages")]
      pub working_languages: Vec<String>,
@@ -1625,7 +1627,7 @@ index ddb570f9..f2ad5f27 100644
      /// Chinese output script preference (not exposed as a UI switch):
      /// - Simplified: prefer simplified for Chinese output
      /// - Traditional: prefer traditional for Chinese output
-@@ -1093,6 +1102,8 @@ struct UserPreferencesWire {
+@@ -1108,6 +1117,8 @@ struct UserPreferencesWire {
      windows_show_openless_in_keyboard_list: bool,
      working_languages: Vec<String>,
      translation_target_language: String,
@@ -1634,7 +1636,7 @@ index ddb570f9..f2ad5f27 100644
      chinese_script_preference: ChineseScriptPreference,
      #[serde(default)]
      output_language_preference: OutputLanguagePreference,
-@@ -1346,6 +1357,7 @@ impl Default for UserPreferencesWire {
+@@ -1367,6 +1378,7 @@ impl Default for UserPreferencesWire {
              windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
              working_languages: prefs.working_languages,
              translation_target_language: prefs.translation_target_language,
@@ -1642,7 +1644,7 @@ index ddb570f9..f2ad5f27 100644
              chinese_script_preference: prefs.chinese_script_preference,
              output_language_preference: prefs.output_language_preference,
              qa_hotkey: prefs.qa_hotkey,
-@@ -1470,6 +1482,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
+@@ -1494,6 +1506,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
                  selection_polish_hotkey = None;
              }
          }
@@ -1658,7 +1660,7 @@ index ddb570f9..f2ad5f27 100644
          let streaming_insert_default_migrated = wire.streaming_insert_default_migrated;
          let streaming_insert = if streaming_insert_default_migrated {
              wire.streaming_insert
-@@ -1575,7 +1596,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
+@@ -1599,7 +1620,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
              ),
              windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
              working_languages: wire.working_languages,
@@ -1670,7 +1672,7 @@ index ddb570f9..f2ad5f27 100644
              chinese_script_preference: wire.chinese_script_preference,
              output_language_preference: wire.output_language_preference,
              qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
-@@ -1966,6 +1990,9 @@ impl Default for UserPreferences {
+@@ -1993,6 +2017,9 @@ impl Default for UserPreferences {
              windows_show_openless_in_keyboard_list: true,
              working_languages: default_working_languages(),
              translation_target_language: String::new(),

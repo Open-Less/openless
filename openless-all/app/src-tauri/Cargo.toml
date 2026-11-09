@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "2.0.2-Beta.3+build.20261026-c9f49c60"
+version = "2.0.2-Beta.6+build.20261109-1f057451"
 license = "AGPL-3.0-only"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
@@ -62,7 +62,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "system-proxy"] }
 rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-zip = "2"
+zip = "9.0.0"
 thiserror = "1"
 anyhow = "1"
 log = "0.4"
@@ -188,6 +188,7 @@ window-vibrancy = "0.7"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+issue-1266-diagnostics = []
 
 [profile.release]
 # 之前没有 [profile.release] —— 发布版走 Cargo 默认（无 LTO、不 strip、
@@ -200,3 +201,7 @@ lto = "thin"
 codegen-units = 1
 # Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
+
+# A1: Windows event-loop targets must not follow Send/Sync runtime handle clones.
+[patch.crates-io]
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

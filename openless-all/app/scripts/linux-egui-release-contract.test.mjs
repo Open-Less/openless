@@ -65,14 +65,14 @@ assert.match(gate, /cargo tree --locked/);
 assert.match(gate, /tauri\|wry\|webkit2gtk/);
 assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 
-// Linux artifacts require an independent build and explicit administrator upload.
+// Linux artifacts require independent device acceptance and an exact-tag publication gate.
 // Shared Tauri tags and PRs must never publish unaccepted Linux packages.
 assert.match(release, /^on:\n  workflow_dispatch:/m);
 assert.doesNotMatch(release, /^  (push|pull_request):/m);
-// Linux now ships inside the same Release as the desktop and Android assets, so
-// the entry point attaches the verified packages itself. Publishing stays opt-in
-// per dispatch and requires the tag, which is what keeps an unaccepted package
-// out of a Tauri release.
+// Accepted Linux packages can accompany the same release; manual and automatic
+// publication share the exact-tag acceptance gate before any upload.
+assert.match(check, /LINUX_ACCEPTED_RELEASE_TAG/);
+assert.match(tauri, /LINUX_ACCEPTED_RELEASE_TAG/);
 assert.match(check, /gh release upload/);
 assert.match(check, /inputs\.publish/);
 assert.match(check, /inputs\.release_tag != ''/);
@@ -96,12 +96,12 @@ assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
 assert.match(release, /release_tag: \$\{\{ inputs\.tag \}\}/);
 assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
 
-// `release-linux-egui.yml` is dispatch-only above, so the Tauri tag build must
-// dispatch it: the workflow had zero runs before that hand-off existed and every
-// 2.0.x Release shipped without a `.deb` or `.rpm`. Publishing stays implicit in
-// the hand-off (`publish=true`), which is safe because the tag is admin-created
-// after acceptance.
-assert.match(tauri, /^  dispatch-platform-releases:$/m, 'release-tauri.yml must hand the tag to this workflow');
+// Automatic dispatch is enabled only by administrator acceptance of the exact tag.
+assert.match(
+  tauri,
+  /^  dispatch-platform-releases:$/m,
+  'release-tauri.yml must hand the tag to this workflow',
+);
 assert.match(
   tauri,
   /gh workflow run release-linux-egui\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openCapsuleStyleSettings } from './support/navigation';
 
 const errors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
@@ -115,9 +116,10 @@ test('settings entrance exposes its starting pose, interpolates and releases its
     }
   });
   expect(initial.opacity).toBeLessThan(0.1);
-  // A full-window settings destination fades; scaling its text caused raster flicker.
-  expect(initial.y).toBe(0);
-  expect(initial.scale).toBe(1);
+  // Settings enters as a surface, then releases its transform at rest for crisp text.
+  expect(initial.y).toBeCloseTo(10, 1);
+  expect(initial.scale).toBeCloseTo(0.965, 3);
+  expect(frames.some((frame) => frame.scale > 0.966 && frame.scale < 0.999)).toBe(true);
   expect(frames.some((frame) => frame.opacity > 0.1 && frame.opacity < 0.9)).toBe(true);
   expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(3);
   await expect(dialog).toHaveCSS('opacity', '1');
@@ -129,8 +131,8 @@ test('rapid return to the current page cannot leave it transparent or inert', as
     await page.getByRole('button', { name: '历史', exact: true }).press('Enter');
     await page.getByRole('button', { name: '概览', exact: true }).press('Enter');
     // Inspect beyond the complete transition budget to catch stale completion callbacks.
-    await page.waitForTimeout(400);
-    const content = page.locator('main .ol-scroll-fade');
+    await page.waitForTimeout(500);
+    const content = page.locator('main [data-ol-page="overview"]');
     await expect(page.getByRole('heading', { name: '今日概览', exact: true })).toBeVisible();
     await expect(content).toHaveCSS('opacity', '1');
     expect(await content.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
@@ -193,7 +195,7 @@ test('reduced motion keeps model gates and removes the closing delay', async ({ 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await expect(dialog.getByRole('button', { name: /^多模态模型/ })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: '本地模型', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
@@ -267,8 +269,8 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   // OpenLess is now the default; opt into the optional WebGL style for this probe.
-  await page.getByRole('combobox', { name: '胶囊样式' }).click();
-  await page.getByRole('option', { name: /Siri/ }).click();
+  await openCapsuleStyleSettings(page);
+  await page.getByRole('group', { name: '胶囊样式' }).getByRole('button', { name: /Siri/ }).click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws))
     .toBeGreaterThan(5);
@@ -278,7 +280,7 @@ test('changing reduced motion stops the decorative WebGL loop', async ({ page })
   const before = await page.evaluate(
     () => (window as Window & { motionDraws: number }).motionDraws,
   );
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
   expect(await page.evaluate(() => (window as Window & { motionDraws: number }).motionDraws)).toBe(
     before,
   );
@@ -290,7 +292,7 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   const card = dialog.locator('.ol-omni-settings');
   await expect(card.getByLabel('额外 Headers', { exact: true })).toBeVisible();
@@ -329,12 +331,45 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   });
 });
 
+test('pipeline selection stays evenly inset in both modes', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  const track = dialog.locator('.ol-service-pipeline-track');
+  for (const name of ['传统模式', '多模态模式']) {
+    await dialog.getByRole('button', { name, exact: true }).click();
+    await expect
+      .poll(() =>
+        track.evaluate((element, selectedName) => {
+          const outer = element.getBoundingClientRect();
+          const selected = element.querySelector<HTMLElement>('button[aria-pressed="true"]')!;
+          const chip = element.querySelector<HTMLElement>('.ol-segmented-indicator')!;
+          const item = selected.getBoundingClientRect();
+          const inner = chip.getBoundingClientRect();
+          return Math.max(
+            Math.abs(inner.top - item.top),
+            Math.abs(inner.left - item.left),
+            Math.abs(inner.width - item.width),
+            Math.abs(inner.height - item.height),
+            Math.abs(inner.top - outer.top - (outer.bottom - inner.bottom)),
+            Math.abs(
+              (selectedName === '传统模式' ? inner.left - outer.left : outer.right - inner.right) -
+                (inner.top - outer.top),
+            ),
+          );
+        }, name),
+      )
+      .toBeLessThan(0.75);
+  }
+});
+
 test('selection highlights move and settle correctly after a rapid mode return', async ({
   page,
 }) => {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await page.evaluate(() => {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (...args) {
@@ -400,7 +435,7 @@ test('selection highlights move and settle correctly after a rapid mode return',
 test('provider changes reveal configuration and validation feedback', async ({ page }) => {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
-  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await dialog.getByRole('button', { name: '多模态模式', exact: true }).click();
   const form = dialog.locator('.ol-omni-settings > div');
   // Retain the actual entrance at an intermediate frame for deterministic inspection.

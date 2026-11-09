@@ -87,10 +87,7 @@ for (const file of files) {
       j += 1;
     }
     const literal = raw;
-    const text = literal
-      .replace(/\\n/g, '\n')
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\');
+    const text = literal.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
     if (SKIP_LITERALS.has(text) || !CJK.test(text) || text.includes('{') || text.includes('}')) {
       out += source.slice(i, j + 1);
       i = j + 1;

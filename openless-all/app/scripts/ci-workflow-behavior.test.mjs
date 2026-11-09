@@ -22,6 +22,23 @@ const ci = workflow('ci.yml');
 const linux = workflow('check-linux-egui.yml');
 const harmony = workflow('release-harmony.yml');
 const androidSteps = ci.jobs['android-check'].steps;
+const freeEmulatorSpace = androidSteps.find(
+  (step) => step.name === 'Free disk space before Android emulator restore',
+);
+assert.ok(
+  androidSteps.indexOf(freeEmulatorSpace) >
+    androidSteps.findIndex(
+      (step) => step.name === 'Run JVM credential tests and compile instrumentation tests',
+    ),
+  'free build files only after the packaged test APK is ready',
+);
+assert.ok(
+  androidSteps.indexOf(freeEmulatorSpace) <
+    androidSteps.findIndex(
+      (step) => step.name === 'Restore the pinned Android emulator and system image',
+    ),
+  'make room before extracting the large emulator cache',
+);
 const runtimeDependencies = androidSteps.find(
   (step) => step.name === 'Install Linux check dependencies',
 );
@@ -50,7 +67,7 @@ const hotkey =
 const publish = linux.jobs['publish-linux-egui'].steps.find((step) =>
   step.run?.includes('gh release upload'),
 ).run;
-for (const script of [install, boot, hotkey, publish]) {
+for (const script of [install, boot, hotkey, publish, freeEmulatorSpace.run]) {
   const result = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 }
@@ -167,6 +184,7 @@ function fixture(name) {
     'adb',
     'cargo',
     'gh',
+    'sudo',
   ])
     executable(join(bin, command), stubs);
   executable(join(dir, 'emulator-source'), emulatorSource);
@@ -219,6 +237,32 @@ function fixture(name) {
   return { dir, sdk, run, trace, count, seed };
 }
 try {
+  {
+    const test = fixture('emulator-disk-cleanup');
+    const cache = join(test.dir, 'openless-cache/mobile-rime');
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, 'build-artifact'), 'temporary build output');
+    const packaged = join(test.dir, 'src-tauri/gen/android/app/src/main');
+    for (const path of [
+      'jniLibs/x86_64/libopenless_rime.so',
+      'assets/rime/pinyin_simp.schema.yaml',
+    ]) {
+      const staged = join(packaged, path);
+      mkdirSync(dirname(staged), { recursive: true });
+      writeFileSync(staged, 'packaged runtime input');
+    }
+    assert.equal(test.run(freeEmulatorSpace.run).status, 0);
+    assert.equal(existsSync(cache), false);
+    assert.equal(
+      readFileSync(join(packaged, 'jniLibs/x86_64/libopenless_rime.so'), 'utf8'),
+      'packaged runtime input',
+    );
+    assert.equal(
+      readFileSync(join(packaged, 'assets/rime/pinyin_simp.schema.yaml'), 'utf8'),
+      'packaged runtime input',
+    );
+    assert.match(test.trace(), /sudo rm -rf \/usr\/share\/dotnet \/usr\/local\/\.ghcup/);
+  }
   for (const [name, env, expected, curls, sdkCalls] of [
     ['cold', {}, 0, 1, 1],
     ['verbose-version', { FAKE_VERSION_DETAILS: '1' }, 0, 1, 1],

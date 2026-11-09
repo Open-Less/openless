@@ -370,15 +370,6 @@ export interface AudioDspConfig {
   processingOrder: AudioDspStage[];
 }
 
-/** Runtime health of the disposable native capsule sidecar (desktop only). */
-export interface NativeCapsuleStatus {
-  /** Whether the launch-time low-memory background switch is active. */
-  active: boolean;
-  /** False when the sidecar helper is missing or failed to initialize. */
-  available: boolean;
-  error: string | null;
-}
-
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -407,7 +398,6 @@ export interface UserPreferences {
   echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
-  lowMemoryBackgroundEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
   voiceActivationWakeEnabled: boolean;
@@ -577,6 +567,7 @@ export interface UserPreferences {
   streamingInsertSaveClipboard: boolean;
   /** Windows TSF: show the live transcript as an underlined composition in the target. */
   windowsCompositionInput: boolean;
+  macosCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -584,6 +575,7 @@ export interface UserPreferences {
    *  managers / terminals are always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  expressionLearningEnabled: boolean;
   vocabularyLearningSettings: {
     observationSeconds: number;
     suggestionSeconds: number;

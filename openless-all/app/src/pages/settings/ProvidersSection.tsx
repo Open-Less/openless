@@ -1506,97 +1506,107 @@ function ProviderTools({
   };
 
   const resultMessage = message && (
-    <div
-      className="ol-provider-result"
-      key={`${operation}:${status}`}
+    <span
+      className="ol-provider-result ol-provider-result-inline"
       data-status={status}
       role="status"
-      style={{
-        fontSize: 12,
-        color:
-          status === 'error'
-            ? 'var(--ol-warn)'
-            : status === 'success'
-              ? 'var(--ol-ok)'
-              : 'var(--ol-ink-3)',
-        lineHeight: 1.65,
-        overflowWrap: 'anywhere',
-        marginTop: 10,
-      }}
+      title={message}
     >
       <Icon
         name={status === 'success' ? 'check' : status === 'loading' ? 'refresh' : 'info'}
-        size={15}
+        size={14}
         className={status === 'loading' ? 'ol-loading-spinner' : undefined}
       />
       <span>{message}</span>
+    </span>
+  );
+  const modelTools = showFetchModels && (
+    <div className="ol-channel-model-tools">
+      <div className="ol-channel-model-fetch">
+        <button
+          className="ol-channel-fetch-models"
+          type="button"
+          onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
+          style={miniBtnStyle}
+          disabled={disabled || status === 'loading'}
+        >
+          <Icon
+            name={modelsUrl ? 'external' : 'refresh'}
+            size={14}
+            className={
+              status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
+            }
+          />
+          {modelsUrl ? t('settings.providers.viewModels') : t('settings.providers.fetchModels')}
+        </button>
+        <div className="ol-provider-status-slot">{operation === 'models' && resultMessage}</div>
+      </div>
+      {!modelsUrl && (
+        <SelectLite
+          value={selectedModel}
+          onChange={applyModel}
+          disabled={disabled || status === 'loading' || models.length === 0}
+          options={models.map((model) => ({ value: model, label: model }))}
+          placeholder={t('settings.providers.selectModel')}
+          ariaLabel={t('settings.providers.selectModel')}
+          style={{ width: '100%', minWidth: 0, height: 36 }}
+        />
+      )}
     </div>
   );
-
+  const verifyButton = (
+    <button
+      className="ol-channel-verify"
+      type="button"
+      onClick={validate}
+      style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
+      disabled={disabled || status === 'loading'}
+    >
+      <Icon
+        name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
+        size={13}
+        className={
+          status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
+        }
+      />
+      {status === 'loading' && operation === 'validate'
+        ? t('settings.channels.verifying')
+        : t('settings.channels.verify')}
+    </button>
+  );
+  const validation = (
+    <div className="ol-channel-validation-heading">
+      <ChannelSectionHeading
+        icon="bolt"
+        title={t('settings.channels.validationTitle')}
+        description={t(
+          kind === 'omni' && !audioValidation
+            ? 'settings.channels.validationHintOmni'
+            : 'settings.channels.validationHint',
+        )}
+      />
+      <div className="ol-channel-validation-actions">
+        <div className="ol-provider-status-slot">{operation === 'validate' && resultMessage}</div>
+        {verifyButton}
+      </div>
+    </div>
+  );
   if (compact) {
     return (
       <section className="ol-omni-tools" aria-label={t('settings.channels.validationTitle')}>
         <div className="ol-omni-tools-actions">
-          {showFetchModels && (
-            <button
-              className="ol-channel-fetch-models"
-              type="button"
-              onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
-              style={miniBtnStyle}
-              disabled={disabled || status === 'loading'}
-            >
-              <Icon
-                name={modelsUrl ? 'external' : 'refresh'}
-                size={14}
-                className={
-                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
-                }
-              />
-              {modelsUrl
-                ? t('settings.providers.viewModels')
-                : status === 'loading' && operation === 'models'
-                  ? t('settings.providers.loadingModels')
-                  : t('settings.providers.fetchModels')}
-            </button>
-          )}
-          {!modelsUrl && models.length > 0 && (
-            <SelectLite
-              value={selectedModel}
-              onChange={applyModel}
-              disabled={disabled || status === 'loading'}
-              options={models.map((model) => ({ value: model, label: model }))}
-              placeholder={t('settings.providers.selectModel')}
-              ariaLabel={t('settings.providers.selectModel')}
-              style={{ flex: 1, minWidth: 140, maxWidth: '100%', height: 34 }}
-            />
-          )}
-          <button
-            className="ol-channel-verify"
-            type="button"
-            onClick={validate}
-            style={{ ...miniBtnStyle, color: 'var(--ol-blue)', borderColor: 'var(--ol-blue)' }}
-            disabled={disabled || status === 'loading'}
-          >
-            <Icon
-              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
-              size={13}
-              className={
-                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
-              }
-            />
-            {status === 'loading' && operation === 'validate'
-              ? t('settings.channels.verifying')
-              : t('settings.channels.verify')}
-          </button>
+          {modelTools}
+          {verifyButton}
         </div>
-        <p className="ol-omni-tools-hint">
-          {t(
-            audioValidation
-              ? 'settings.channels.validationHint'
-              : 'settings.channels.validationHintOmni',
-          )}
-        </p>
-        {resultMessage}
+        <div className="ol-omni-tools-hint">
+          {operation === 'validate' && message
+            ? resultMessage
+            : t(
+                audioValidation
+                  ? 'settings.channels.validationHint'
+                  : 'settings.channels.validationHintOmni',
+              )}
+        </div>
       </section>
     );
   }
@@ -1604,89 +1614,10 @@ function ProviderTools({
   return (
     <>
       {showFetchModels && (
-        <ChannelFormRow label={t('settings.channels.availableModels')}>
-          <div
-            className="ol-channel-model-tools"
-            data-populated={models.length > 0 ? 'true' : undefined}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 10,
-              minWidth: 0,
-            }}
-          >
-            <button
-              className="ol-channel-fetch-models"
-              type="button"
-              onClick={modelsUrl ? () => void openExternal(modelsUrl) : loadModels}
-              style={miniBtnStyle}
-              disabled={disabled || status === 'loading'}
-            >
-              <Icon
-                name={modelsUrl ? 'external' : 'refresh'}
-                size={14}
-                className={
-                  status === 'loading' && operation === 'models' ? 'ol-loading-spinner' : undefined
-                }
-              />
-              {modelsUrl
-                ? t('settings.providers.viewModels')
-                : status === 'loading' && operation === 'models'
-                  ? t('settings.providers.loadingModels')
-                  : t('settings.providers.fetchModels')}
-            </button>
-            {!modelsUrl && models.length > 0 && (
-              <SelectLite
-                value={selectedModel}
-                onChange={applyModel}
-                disabled={disabled || status === 'loading'}
-                options={models.map((model) => ({ value: model, label: model }))}
-                placeholder={t('settings.providers.selectModel')}
-                ariaLabel={t('settings.providers.selectModel')}
-                style={{ width: '100%', minWidth: 0, height: 38 }}
-              />
-            )}
-          </div>
-          {operation === 'models' && resultMessage}
-        </ChannelFormRow>
+        <ChannelFormRow label={t('settings.channels.availableModels')}>{modelTools}</ChannelFormRow>
       )}
       <section className="ol-channel-validation" style={channelSectionStyle}>
-        <div className="ol-channel-validation-heading">
-          <ChannelSectionHeading
-            icon="bolt"
-            title={t('settings.channels.validationTitle')}
-            description={t(
-              kind === 'omni' && !audioValidation
-                ? 'settings.channels.validationHintOmni'
-                : 'settings.channels.validationHint',
-            )}
-          />
-          <button
-            className="ol-channel-verify"
-            type="button"
-            onClick={validate}
-            style={{
-              ...miniBtnStyle,
-              marginTop: 12,
-              color: 'var(--ol-blue)',
-              borderColor: 'var(--ol-blue)',
-            }}
-            disabled={disabled || status === 'loading'}
-          >
-            <Icon
-              name={status === 'loading' && operation === 'validate' ? 'refresh' : 'play'}
-              size={13}
-              className={
-                status === 'loading' && operation === 'validate' ? 'ol-loading-spinner' : undefined
-              }
-            />
-            {status === 'loading' && operation === 'validate'
-              ? t('settings.channels.verifying')
-              : t('settings.channels.verify')}
-          </button>
-        </div>
-        {operation === 'validate' && resultMessage}
+        {validation}
       </section>
     </>
   );
@@ -2140,7 +2071,7 @@ const miniBtnStyle: CSSProperties = {
   height: 32,
   padding: '0 12px',
   border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'var(--ol-control-solid)',
   boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
   color: 'var(--ol-ink-2)',
@@ -2157,7 +2088,7 @@ const iconBtnStyle: CSSProperties = {
   width: 32,
   height: 32,
   border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'var(--ol-control-solid)',
   boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
   display: 'inline-flex',

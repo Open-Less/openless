@@ -34,7 +34,16 @@ assert.match(
   'Windows artifact must publish the provenance manifest beside installers',
 );
 const checkout = steps.find((s) => s.uses === 'actions/checkout@v4');
-assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.ref }}');
+assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.sha }}');
+// Historical repair tags need not contain the newer repository-local action.
+assert.equal(
+  steps.find((s) => s.uses === './.github/actions/cache-npm').if,
+  "inputs.release_tag == ''",
+);
+assert.equal(
+  steps.find((s) => s.uses === 'actions/setup-node@v4').with.cache,
+  "${{ inputs.release_tag != '' && 'npm' || '' }}",
+);
 const guard = steps.find((s) => s.name === 'Validate targeted draft release repair');
 assert.equal(guard.if, "inputs.release_tag != ''");
 assert.match(guard.run, /permission.*admin/);
@@ -43,7 +52,7 @@ assert.match(guard.run, /INPUT_PLATFORM.*windows/);
 const source = steps.find((s) => s.name === 'Verify repair source CI and version');
 assert.match(source.run, /git rev-parse HEAD/);
 assert.match(source.run, /head_sha=\$source_sha/);
-assert.match(source.run, /total_count == 7/);
+assert.match(source.run, /verify-release-ci\.mjs/);
 const build = steps.find((s) => s.name === 'Build (Windows)');
 const script = build.run.match(/node <<'MSI_CONFIG'\n([\s\S]*?)\nMSI_CONFIG/)[1];
 const originalVersion = (version, signing = false) => {
@@ -78,21 +87,39 @@ assert.equal(originalVersion('2.0.0+build.20261016').bundle.createUpdaterArtifac
 for (const version of ['256.0.0', '1.256.0', '1.0.65536', 'invalid'])
   assert.throws(() => originalVersion(version));
 assert.equal(
-  (build.run.match(/build --bundles msi --config src-tauri\/tauri.msi-version.json/g) ?? []).length,
+  (
+    build.run.match(
+      /bundle "\$\{diagnostic_args\[@\]\}" --bundles msi --config src-tauri\/tauri.msi-version.json/g,
+    ) ?? []
+  ).length,
   2,
 );
-const publisher = steps.find((s) => s.uses?.startsWith('softprops/action-gh-release@'));
+const publishSteps = workflow.jobs.publish.steps;
+const publisher = publishSteps.find((s) => s.uses?.startsWith('softprops/action-gh-release@'));
 assert.equal(publisher.with.tag_name, '${{ env.OPENLESS_RELEASE_TAG }}');
 assert.equal(publisher.with.draft, true);
-assert.ok(steps.find((s) => s.name === 'Confirm repair target remains draft'));
+assert.equal(workflow.jobs.build.permissions.contents, 'read');
+assert.equal(workflow.jobs.publish.permissions.contents, 'write');
+assert.equal(
+  steps.find((s) => s.uses?.startsWith('softprops/action-gh-release@')),
+  undefined,
+  'the read-only build job must not publish',
+);
+assert.ok(publishSteps.find((s) => s.name === 'Confirm repair target remains draft'));
 const smokeTooling = steps.find((s) => s.name === 'Fetch installer smoke tooling');
-assert.ok(smokeTooling, 'Windows smoke tooling must be fetched without checking out unrelated gitlinks');
+assert.ok(
+  smokeTooling,
+  'Windows smoke tooling must be fetched without checking out unrelated gitlinks',
+);
 assert.equal(smokeTooling.if, "matrix.platform == 'windows-latest'");
 assert.equal(smokeTooling.shell, 'pwsh');
 assert.equal(smokeTooling.env.TOOLING_SHA, '${{ github.workflow_sha }}');
 assert.equal(smokeTooling.env.GH_TOKEN, '${{ github.token }}');
 assert.equal(smokeTooling.uses, undefined);
-assert.match(smokeTooling.run, /\$scriptPath = 'openless-all\/app\/scripts\/windows-ime-install-smoke\.ps1'/);
+assert.match(
+  smokeTooling.run,
+  /\$scriptPath = 'openless-all\/app\/scripts\/windows-ime-install-smoke\.ps1'/,
+);
 assert.match(smokeTooling.run, /gh api "repos\/\$env:GITHUB_REPOSITORY\/contents\/\$scriptPath"/);
 assert.match(smokeTooling.run, /--method GET -f "ref=\$env:TOOLING_SHA" --jq '\.content'/);
 assert.match(smokeTooling.run, /if \(\$LASTEXITCODE -ne 0\) \{ throw/);
@@ -120,7 +147,10 @@ for (const kind of ['nsis', 'msi']) {
 }
 assert.doesNotMatch(smoke.run, /continue-on-error|SkipUninstall|exit 0/);
 const smokeSource = readFileSync(new URL('windows-ime-install-smoke.ps1', import.meta.url), 'utf8');
-const wixSource = readFileSync(new URL('../src-tauri/wix/openless-ime.wxs', import.meta.url), 'utf8');
+const wixSource = readFileSync(
+  new URL('../src-tauri/wix/openless-ime.wxs', import.meta.url),
+  'utf8',
+);
 assert.match(
   wixSource,
   /Custom Action="UnregisterOpenLessImeX86"[\s\S]*?CDATA\[Installed\]/,
@@ -140,7 +170,10 @@ assert.match(smokeSource, /\[string\]\$InstallerLogPath/);
 assert.match(smokeSource, /\/LOG=`"\$InstallerLogPath`"/);
 assert.match(smokeSource, /\[diagnostic\] NSIS log path present:/);
 assert.match(smokeSource, /Get-Content -LiteralPath \$InstallerLogPath -Tail 200/);
-assert.match(smokeSource, /Get-ChildItem -LiteralPath \$directory -Filter 'openless-ime-install-diagnostic\.ndjson'/);
+assert.match(
+  smokeSource,
+  /Get-ChildItem -LiteralPath \$directory -Filter 'openless-ime-install-diagnostic\.ndjson'/,
+);
 assert.match(smokeSource, /\[diagnostic\] NSIS stage markers/);
 assert.match(smokeSource, /Get-Content -LiteralPath \$marker\.FullName -Tail 200/);
 assert.match(smokeSource, /\[int\[\]\]\$SuccessExitCodes = @\(0\)/);
@@ -148,9 +181,22 @@ assert.match(smokeSource, /\$process.ExitCode -notin \$SuccessExitCodes/);
 assert.match(smokeSource, /-Label "MSI install" -SuccessExitCodes @\(0, 3010\)/);
 assert.match(smokeSource, /-Label "MSI uninstall" -SuccessExitCodes @\(0, 3010\)/);
 assert.doesNotMatch(smokeSource, /-Label "NSIS (?:install|uninstall)" -SuccessExitCodes/);
-assert.ok(smokeSource.indexOf('$installRoot = Assert-OpenLessImeInstalled') > smokeSource.indexOf('-Label "MSI install"'));
+assert.ok(
+  smokeSource.indexOf('$installRoot = Assert-OpenLessImeInstalled') >
+    smokeSource.indexOf('-Label "MSI install"'),
+);
 if (process.platform === 'win32') {
-  const runtime = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', fileURLToPath(new URL('windows-ime-install-smoke.test.ps1', import.meta.url))], { encoding: 'utf8' });
+  const runtime = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      fileURLToPath(new URL('windows-ime-install-smoke.test.ps1', import.meta.url)),
+    ],
+    { encoding: 'utf8' },
+  );
   assert.equal(runtime.status, 0, runtime.stdout + runtime.stderr);
   console.log(runtime.stdout.trim());
 }
@@ -168,3 +214,24 @@ if (process.platform !== 'win32') {
   }
 }
 console.log('windows-msi-release-contract.test.mjs passed');
+
+// Branch acceptance can build one Mac architecture; tag publishes retain all desktop targets.
+const selected = new Map(
+  [...job.strategy.matrix.include.matchAll(/inputs.platform == '([^']+)' && '(\[[^']+\])'/g)].map(
+    (m) => [m[1], JSON.parse(m[2])],
+  ),
+);
+assert.deepEqual(
+  selected.get('macos-aarch64').map((row) => row['rust-target']),
+  ['aarch64-apple-darwin'],
+);
+assert.deepEqual(
+  selected.get('macos-x86_64').map((row) => row['rust-target']),
+  ['x86_64-apple-darwin'],
+);
+const full = JSON.parse(job.strategy.matrix.include.match(/\|\| '(\[[^']+\])'\) \}\}$/)[1]);
+assert.deepEqual(full.map((row) => row['rust-target']).sort(), [
+  'aarch64-apple-darwin',
+  'x86_64-apple-darwin',
+  'x86_64-pc-windows-msvc',
+]);

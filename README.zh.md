@@ -27,7 +27,6 @@
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
   <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
   <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
-  <a href="https://discord.gg/vTZHTFGFm"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -39,7 +38,7 @@
 </p>
 
 <p align="center">
-  💬 &nbsp;<a href="https://discord.gg/vTZHTFGFm"><strong>加入 Discord 社区</strong></a> &nbsp;·&nbsp; QQ 群&nbsp; <strong>1078960553</strong>
+  QQ 群&nbsp; <strong>1078960553</strong>
 </p>
 
 <br/>
@@ -198,6 +197,10 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 - 它不积累对话上下文;每次听写都是一次独立的清理请求。
 - 流程是:语音 → 转写 → 清理 → 插入到光标,失败时回退到剪贴板。
 - 其余的一切(模式、词典、历史、菜单栏、首页报告)都为这唯一的路径服务。
+
+## 稳定性冻结
+
+OpenLess 当前进入稳定性阶段，项目暂不接受新增产品功能或扩展现有能力的 PR。接下来的工作只聚焦于把现有版本稳定下来：漏洞修复、回归修复、安全修复、文档、测试、兼容性和发布维护可以继续提交。新的功能提案和新功能实现 PR 会暂缓或直接关闭，直到稳定性阶段结束。
 
 ## 对比
 
@@ -429,6 +432,30 @@ egui UI  ── Linux Adapter（无 Tauri/WebKitGTK）───┘
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流构建 macOS、Windows、Android 宿主以及独立的 Linux egui deb/rpm。Linux 真机验收完成、管理员创建 tag 后，验证过的 Linux 包自动附到共用 Release；Beta 资产先留在草稿中供管理员核对发布。Linux 不提供 AppImage 或应用内更新清单。
 
 听写流水线:`hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`。
+
+### 客户端架构与流程图
+
+下面的图来自当前 `beta` 客户端边界。每张渲染图都保留了可编辑的 Mermaid 源文件和 SVG 版本，便于后续更新与审查。
+
+#### 客户端架构
+
+![OpenLess 客户端架构图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-architecture.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-architecture.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-architecture.svg)
+
+#### 客户端数据流
+
+![OpenLess 客户端数据流图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-data-flow.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-data-flow.svg)
+
+#### 启动、权限与录音流程
+
+![OpenLess 启动、权限与录音流程图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png)
+
+[Mermaid 源文件](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg) · [英文图](docs/images/client-diagrams/openless-client-startup-recording-flow.png) · [英文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [英文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg)
+
+配套的依赖与模块审查记录见 [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md)。
 
 贡献与发布规则见[贡献流程](#贡献流程)和[发布规范](RELEASING.md)，模块职责与接线见[架构文档](docs/architecture.md)。
 

@@ -155,7 +155,12 @@ export function AndroidAudioEffects({
             role="img"
             aria-label={label('spectrum', 'Input / processed spectrum')}
             viewBox="0 0 256 80"
-            style={{ width: '100%', height: 100, background: 'var(--ol-bg)', borderRadius: 8 }}
+            style={{
+              width: '100%',
+              height: 100,
+              background: 'var(--ol-bg)',
+              borderRadius: 'var(--ol-radius)',
+            }}
           >
             {Array.from({ length: 64 }, (_, i) => {
               const raw = Math.max(0, Math.min(1, spectrum?.raw[i] || 0)) * 76;

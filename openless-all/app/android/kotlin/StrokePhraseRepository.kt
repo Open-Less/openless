@@ -173,7 +173,7 @@ internal class StrokePhraseRepository(context: Context) {
         const val CACHE_SIZE = 256
     }
 
-    private val userFrequency = StrokeUserFrequency(context)
+    private val userFrequency = StrokeUserFrequency.associations(context)
 }
 
 /**
