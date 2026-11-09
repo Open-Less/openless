@@ -2,7 +2,9 @@
 use crate::types::UpdateChannel;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+type KnownCandidate = Arc<Mutex<Option<String>>>;
 use std::time::Duration;
 use url::Url;
 
@@ -20,9 +22,18 @@ fn github_url(url: &Url) -> bool {
             .starts_with("/Open-Less/openless/releases/download/")
 }
 
+fn legacy_github_mirror_url(url: &Url) -> bool {
+    url.host_str() == Some("fastgit.cc")
+        && url
+            .path()
+            .starts_with("/https://github.com/Open-Less/openless/releases/")
+}
+
 pub(crate) fn allowed_update_download_url(url: &Url) -> bool {
     safe_https(url)
-        && (github_url(url)
+        && (url.host_str() == Some("github.com")
+            && url.path().starts_with("/Open-Less/openless/releases/")
+            || legacy_github_mirror_url(url)
             || url.host_str() == Some("dl.aeoform.com") && url.path().starts_with("/releases/"))
 }
 
@@ -40,6 +51,7 @@ fn allowed_request(url: &Url, redirected: bool) -> bool {
     match url.host_str() {
         Some("github.com") => url.path().starts_with("/Open-Less/openless/releases"),
         Some("api.github.com") => url.path().starts_with("/repos/Open-Less/openless/releases"),
+        Some("fastgit.cc") => legacy_github_mirror_url(url),
         Some("dl.aeoform.com") => {
             url.path().starts_with("/releases/") || url.path().starts_with("/updates/")
         }
@@ -336,7 +348,7 @@ impl From<&str> for ApiDiscoveryError {
 async fn api_manifest(
     channel: UpdateChannel,
     arch: &str,
-    candidate_seen: &AtomicBool,
+    candidate_seen: &KnownCandidate,
 ) -> Result<Value, ApiDiscoveryError> {
     let endpoint = match channel {
         UpdateChannel::Stable => "https://api.github.com/repos/Open-Less/openless/releases/latest",
@@ -364,12 +376,17 @@ async fn api_manifest(
     let version = tag_version(tag, channel).ok_or("invalid release tag")?;
     let (name, url, sig_url, size) =
         api_artifact(release, arch).ok_or("no versioned APK and signature for device ABI")?;
-    candidate_seen.store(true, Ordering::Release);
+    let full_version = artifact_version(name, arch)
+        .ok_or("invalid APK asset version")?
+        .to_string();
+    *candidate_seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
     let signature = text(sig_url, SIGNATURE_LIMIT)
         .await
-        .map_err(ApiDiscoveryError::Candidate)?;
+        .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
     let version = android_signature_version(signature.trim(), name, &version.to_string(), arch)
-        .map_err(ApiDiscoveryError::Candidate)?;
+        .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
     Ok(
         json!({"version":version,"url":url,"signature":signature.trim(),"pub_date":release["published_at"],"notes":release["body"],"size":size}),
     )
@@ -403,7 +420,7 @@ async fn web_manifest_from_feed<F, Fut>(
     feed: &str,
     channel: UpdateChannel,
     arch: &str,
-    candidate_seen: &AtomicBool,
+    candidate_seen: &KnownCandidate,
     mut fetch: F,
 ) -> Result<Value, String>
 where
@@ -426,13 +443,18 @@ where
             continue;
         };
         // Once a matching pair exists, a transport or metadata failure cannot downgrade it.
-        candidate_seen.store(true, Ordering::Release);
-        let signature = fetch(sig_url, SIGNATURE_LIMIT)
-            .await
-            .map_err(|e| format!("GitHub release candidate: public signature: {e}"))?;
+        let full_version = artifact_version(&name, arch)
+            .ok_or("invalid APK asset version")?
+            .to_string();
+        *candidate_seen
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
+        let signature = fetch(sig_url, SIGNATURE_LIMIT).await.map_err(|error| {
+            candidate_error(&full_version, &format!("public signature: {error}"))
+        })?;
         let version =
             android_signature_version(signature.trim(), &name, &version.to_string(), arch)
-                .map_err(|e| format!("GitHub release candidate: {e}"))?;
+                .map_err(|error| candidate_error(&full_version, &error))?;
         return Ok(
             json!({"version":version,"url":url,"signature":signature.trim(),"notes":format!("https://github.com/Open-Less/openless/releases/tag/{tag}")}),
         );
@@ -443,7 +465,7 @@ where
 async fn web_manifest(
     channel: UpdateChannel,
     arch: &str,
-    candidate_seen: &AtomicBool,
+    candidate_seen: &KnownCandidate,
 ) -> Result<Value, String> {
     let feed = text(
         "https://github.com/Open-Less/openless/releases.atom",
@@ -461,6 +483,10 @@ async fn web_manifest(
     .await
 }
 
+fn candidate_error(version: &str, reason: &str) -> String {
+    format!("GitHub release candidate: {version}: {reason}")
+}
+
 fn combine_discovery_errors(api: String, web: String) -> String {
     if web.starts_with("GitHub release candidate:") {
         web
@@ -471,15 +497,19 @@ fn combine_discovery_errors(api: String, web: String) -> String {
 
 async fn discovery_with_deadline<F>(
     budget: Duration,
-    candidate_seen: &AtomicBool,
+    candidate_seen: &KnownCandidate,
     discovery: F,
 ) -> Result<Value, String>
 where
     F: std::future::Future<Output = Result<Value, String>>,
 {
     tokio::time::timeout(budget, discovery).await.map_err(|_| {
-        if candidate_seen.load(Ordering::Acquire) {
-            "GitHub release candidate: discovery timed out".to_string()
+        if let Some(version) = candidate_seen
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            candidate_error(version, "discovery timed out")
         } else {
             "GitHub Android discovery timed out".to_string()
         }
@@ -493,13 +523,11 @@ pub(crate) async fn github_android_manifest(
     if abi(arch).is_none() {
         return Err("unsupported Android updater architecture".into());
     }
-    let candidate_seen = AtomicBool::new(false);
+    let candidate_seen: KnownCandidate = Arc::new(Mutex::new(None));
     discovery_with_deadline(DISCOVERY_BUDGET, &candidate_seen, async {
         match api_manifest(channel, arch, &candidate_seen).await {
             Ok(value) => Ok(value),
-            Err(ApiDiscoveryError::Candidate(error)) => {
-                Err(format!("GitHub release candidate: {error}"))
-            }
+            Err(ApiDiscoveryError::Candidate(error)) => Err(error),
             Err(ApiDiscoveryError::Unavailable(api)) => {
                 web_manifest(channel, arch, &candidate_seen)
                     .await
@@ -717,7 +745,7 @@ mod tests {
                 two_beta_feed(),
                 UpdateChannel::Beta,
                 "aarch64",
-                &AtomicBool::new(false),
+                &Arc::new(Mutex::new(None)),
                 |url, _| {
                     calls.lock().unwrap().push(url.clone());
                     let result = if url.contains("expanded_assets/v2.0.2-Beta.5") {
@@ -749,7 +777,7 @@ mod tests {
                 two_beta_feed(),
                 UpdateChannel::Beta,
                 "aarch64",
-                &AtomicBool::new(false),
+                &Arc::new(Mutex::new(None)),
                 |url, _| {
                     calls.lock().unwrap().push(url.clone());
                     let result = if url.contains("expanded_assets/v2.0.2-Beta.5") {
@@ -763,7 +791,9 @@ mod tests {
                 },
             )
             .await;
-            assert!(result.unwrap_err().starts_with("GitHub release candidate:"));
+            assert!(result
+                .unwrap_err()
+                .starts_with("GitHub release candidate: 2.0.2-Beta.5+build.test: "));
             assert!(calls
                 .lock()
                 .unwrap()
@@ -773,7 +803,9 @@ mod tests {
     }
     #[test]
     fn outer_fallback_preserves_known_candidate_error_category() {
-        let candidate = "GitHub release candidate: signed APK filename differs".to_string();
+        let candidate =
+            "GitHub release candidate: 2.0.2-Beta.6+build.test: signed APK filename differs"
+                .to_string();
         assert_eq!(
             combine_discovery_errors("API quota exceeded".into(), candidate.clone()),
             candidate
@@ -788,7 +820,7 @@ mod tests {
     #[tokio::test]
     async fn discovery_deadline_distinguishes_known_pair_from_unknown_network() {
         for after_pair in [false, true] {
-            let candidate_seen = AtomicBool::new(false);
+            let candidate_seen: KnownCandidate = Arc::new(Mutex::new(None));
             let (page, _) = page_fixture("v2.0.2-Beta.5-tauri", "arm64-v8a");
             let discovery = web_manifest_from_feed(
                 two_beta_feed(),
@@ -810,8 +842,40 @@ mod tests {
                 discovery_with_deadline(Duration::from_millis(20), &candidate_seen, discovery)
                     .await
                     .unwrap_err();
-            assert_eq!(candidate_seen.load(Ordering::Acquire), after_pair);
+            assert_eq!(candidate_seen.lock().unwrap().is_some(), after_pair);
+            if after_pair {
+                assert!(error.starts_with("GitHub release candidate: 2.0.2-Beta.5+build.test: "));
+            }
             assert_eq!(error.starts_with("GitHub release candidate:"), after_pair);
+        }
+    }
+    #[test]
+    fn legacy_release_mirror_urls_keep_exact_origin_and_repository_boundaries() {
+        for raw in [
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases/download/v2.0.2-Beta.6-tauri/OpenLess.apk",
+            "https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(allowed_update_download_url(&url));
+            assert!(allowed_request(&url, false));
+            assert!(allowed_request(&url, true));
+        }
+        for raw in [
+            "http://fastgit.cc/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc.attacker.invalid/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc@attacker.invalid/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://user:password@fastgit.cc/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc:444/https://github.com/Open-Less/openless/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc/https://github.com/other/repo/releases/latest/download/OpenLess.apk",
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases-evil/download/OpenLess.apk",
+            "https://fastgit.cc/https://attacker.invalid/Open-Less/openless/releases/download/OpenLess.apk",
+            "https://fastgit.cc/https://github.com/Open-Less/openless/releases/../../other/private.apk",
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(!allowed_update_download_url(&url));
+            assert!(!allowed_request(&url, false));
+            assert!(!allowed_request(&url, true));
         }
     }
 }

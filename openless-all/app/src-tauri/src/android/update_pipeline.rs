@@ -125,7 +125,23 @@ fn merge_sources(
     // that an older mirror is the newest release. Preserve the failure.
     if let Err(error) = &github {
         if error.starts_with("GitHub release candidate:") {
-            return Err(error.clone());
+            let known_version = error
+                .strip_prefix("GitHub release candidate: ")
+                .and_then(|rest| rest.split_once(": "))
+                .and_then(|(version, _)| semver::Version::parse(version).ok());
+            let safe_mirror = known_version.as_ref().is_some_and(|known| {
+                cdn.as_ref().ok().is_some_and(|candidate| {
+                    semver::Version::parse(&candidate.version)
+                        .ok()
+                        .is_some_and(|mirror| {
+                            candidate.version == known.to_string()
+                                || mirror.cmp_precedence(known).is_gt()
+                        })
+                })
+            });
+            if !safe_mirror {
+                return Err(error.clone());
+            }
         }
     }
     let mut available = Vec::new();
@@ -330,6 +346,31 @@ mod tests {
         let available = merge_sources(Err("GitHub unavailable".into()), Ok(old)).unwrap();
         assert_eq!(available.len(), 1);
         assert_eq!(available[0].version, "2.0.2-Beta.4");
+        let failed = "GitHub release candidate: 2.0.2-Beta.6+build.test: signature unavailable";
+        assert!(merge_sources(
+            Err(failed.into()),
+            Ok(candidate("dl.aeoform.com", "2.0.2-Beta.4"))
+        )
+        .is_err());
+        assert_eq!(
+            merge_sources(Err(failed.into()), Ok(candidate("dl.aeoform.com", VERSION))).unwrap()[0]
+                .version,
+            VERSION
+        );
+        assert!(merge_sources(
+            Err(failed.into()),
+            Ok(candidate("dl.aeoform.com", "2.0.2-Beta.6+build.other"))
+        )
+        .is_err());
+        assert_eq!(
+            merge_sources(
+                Err(failed.into()),
+                Ok(candidate("dl.aeoform.com", "2.0.2-Beta.7"))
+            )
+            .unwrap()[0]
+                .version,
+            "2.0.2-Beta.7"
+        );
     }
 
     fn metadata_candidate(version: &str, abi: &str) -> UpdateCandidate {
