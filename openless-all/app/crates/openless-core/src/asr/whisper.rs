@@ -475,7 +475,9 @@ fn quiet_cut_offset(pcm: &[u8], max_chunk_duration_ms: u64) -> usize {
     while cut >= lowest {
         if let Some(window) = pcm.get(cut - HALF_WINDOW_BYTES..cut + HALF_WINDOW_BYTES) {
             let energy = window
-                .chunks_exact(PCM_BYTES_PER_SAMPLE)
+                .as_chunks::<PCM_BYTES_PER_SAMPLE>()
+                .0
+                .iter()
                 .map(|s| u64::from(i16::from_le_bytes([s[0], s[1]]).unsigned_abs()))
                 .sum();
             if energy < best_energy {
@@ -847,8 +849,8 @@ mod tests {
 
     #[test]
     fn split_pcm_by_duration_cuts_in_a_pause_and_loses_nothing() {
-        let mut pcm: Vec<u8> = std::iter::repeat([0x40u8, 0x1f]) // sample 8000: speech
-            .take(16_000 * 65)
+        // Sample 8000: speech.
+        let mut pcm: Vec<u8> = std::iter::repeat_n([0x40u8, 0x1f], 16_000 * 65)
             .flatten()
             .collect();
         let pause = 32_000 * 28..32_000 * 29;
