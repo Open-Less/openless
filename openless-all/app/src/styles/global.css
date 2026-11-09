@@ -1093,7 +1093,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 2px;
   max-width: 100%;
-  padding: 2.5px;
+  padding: 3px;
   border: 0;
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
   border-radius: var(--ol-control-radius);
@@ -1104,7 +1104,7 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   border: 0;
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
 }
-.ol-service-pipeline-track > :is(.ol-segmented-indicator, .ol-segmented-option) {
+.ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
   --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 3px);
   border-radius: var(--ol-corner-radius);
 }

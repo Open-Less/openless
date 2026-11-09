@@ -4124,25 +4124,8 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         #[cfg(target_os = "macos")]
-        let live_capture = if self
-            .backend
-            .lock()
-            .as_ref()
-            .and_then(|b| b.upgrade())
-            .is_some_and(|b| b.get_preferences().macos_composition_input)
-        {
-            let target = insertion_target.clone();
-            Some(Arc::new(Mutex::new(Some(
-                tauri::async_runtime::spawn_blocking(move || {
-                    if !crate::selection::selection_insertion_target_is_current(&target) {
-                        return Err("live input target changed before capture".into());
-                    }
-                    crate::host_document::LiveComposition::capture()
-                }),
-            ))))
-        } else {
-            None
-        };
+        // Legacy macOS composition preferences must not start AX range capture.
+        let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
                 insertion_target: Some(insertion_target.clone()),
@@ -5005,17 +4988,6 @@ impl TauriTextInsertionSession {
         terminal
             .join_or_spawn(
                 move || async move {
-                    let live = Arc::clone(&self.live_composition);
-                    let live_final = final_text.clone();
-                    let live_result = tauri::async_runtime::spawn_blocking(move || {
-                        let mut guard = live.lock();
-                        match live_final {
-                            Some(text) => Some(replace_live_composition(&mut guard, &text)),
-                            None => guard.take().map(|mut live| live.cancel()),
-                        }
-                    })
-                    .await
-                    .map_err(|e| BackendError::new(BackendErrorCode::Platform, e.to_string()))?;
                     let worker = self.streaming_worker.clone();
                     let session = &self;
                     finish_mac_insertion_after_barrier(
@@ -5029,36 +5001,7 @@ impl TauriTextInsertionSession {
                             if session.cancel_requested.load(Ordering::Acquire) {
                                 return Ok(MacInsertionCompletion::Cancelled);
                             }
-                            if let Some(result) = live_result {
-                                return match result {
-                                    Ok(()) => Ok(MacInsertionCompletion::Finished(
-                                        InsertOutcome::Inserted,
-                                    )),
-                                    Err(_) => match final_text {
-                                        Some(text) => session
-                                            .copy_fallback(text)
-                                            .await
-                                            .map(MacInsertionCompletion::Finished),
-                                        None => Ok(MacInsertionCompletion::Cancelled),
-                                    },
-                                };
-                            }
-                            if session.context.insertion.composition_input {
-                                return match final_text {
-                                    Some(text) => session.copy_fallback(text).await.map(MacInsertionCompletion::Finished),
-                                    None => Ok(MacInsertionCompletion::Cancelled),
-                                };
-                            }
-                            match final_text {
-                                Some(text) if !text.is_empty() => session
-                                    .insert_final(text)
-                                    .await
-                                    .map(MacInsertionCompletion::Finished),
-                                Some(_) => {
-                                    Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted))
-                                }
-                                None => Ok(MacInsertionCompletion::Cancelled),
-                            }
+                            finish_mac_final_text(final_text, |text| session.insert_final(text)).await
                         },
                         || session.restore_platform_state(),
                     )
@@ -5069,6 +5012,23 @@ impl TauriTextInsertionSession {
                 },
             )
             .await
+    }
+}
+
+/// Core passes only the undelivered suffix here; an empty suffix is already delivered.
+/// Final delivery must not probe AX composition support or replace earlier streamed text.
+#[cfg(target_os = "macos")]
+async fn finish_mac_final_text<F>(
+    text: Option<String>,
+    insert: impl FnOnce(String) -> F,
+) -> Result<MacInsertionCompletion, BackendError>
+where
+    F: std::future::Future<Output = Result<InsertOutcome, BackendError>>,
+{
+    match text {
+        Some(text) if !text.is_empty() => insert(text).await.map(MacInsertionCompletion::Finished),
+        Some(_) => Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted)),
+        None => Ok(MacInsertionCompletion::Cancelled),
     }
 }
 
@@ -5263,6 +5223,37 @@ mod mac_insertion_lifecycle_tests {
 
     fn spawn(task: BoxFuture<'static, ()>) {
         tokio::spawn(task);
+    }
+
+    #[tokio::test]
+    async fn final_text_uses_normal_delivery() {
+        let calls = Mutex::new(Vec::new());
+        let result = finish_mac_final_text(Some("final text".to_string()), |text| async {
+            calls.lock().push(text);
+            Ok(InsertOutcome::Inserted)
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(*calls.lock(), ["final text"]);
+    }
+
+    #[tokio::test]
+    async fn fully_streamed_text_finishes_without_an_ax_probe_or_second_insertion() {
+        let result = finish_mac_final_text(Some(String::new()), |_| async {
+            panic!("already delivered text must not invoke insertion or clipboard fallback")
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(
+            finish_mac_final_text(None, |_| async {
+                panic!("cancelled text must not invoke insertion")
+            })
+            .await
+            .unwrap(),
+            MacInsertionCompletion::Cancelled
+        );
     }
 
     #[tokio::test]

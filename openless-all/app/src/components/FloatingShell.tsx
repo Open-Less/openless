@@ -152,7 +152,6 @@ function FloatingShellBody({
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const settingsMount = useExitMount(settingsOpen);
-  const [settingsPainted, setSettingsPainted] = useState(false);
   const providerPromptMount = useExitMount(providerPromptOpen);
   const hotkeyPromptMount = useExitMount(hotkeyModePromptOpen);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -310,7 +309,6 @@ function FloatingShellBody({
       <div
         ref={shellRef}
         data-ol-settings-open={settingsOpen ? 'true' : undefined}
-        data-ol-settings-occluded={settingsOpen && settingsPainted ? 'true' : undefined}
         className="ol-app-shell-bg ol-shell-depth"
         style={{
           flex: 1,
@@ -369,7 +367,7 @@ function FloatingShellBody({
                     color: 'var(--ol-blue)',
                     background: 'transparent',
                     border: '0.5px solid var(--ol-pill-blue-border)',
-                    borderRadius: 'var(--ol-radius)',
+                    borderRadius: 5,
                   }}
                 >
                   {t('shell.betaTag')}
@@ -483,7 +481,9 @@ function FloatingShellBody({
 
             <div style={{ flex: 1 }} />
 
-            <div style={{ display: 'flex', gap: 4, paddingTop: 10 }}>
+            <div
+              style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, paddingTop: 10 }}
+            >
               <Tooltip content={t('shell.navHint.settings')} placement="right">
                 <button
                   onClick={() => openSettings()}
@@ -491,10 +491,11 @@ function FloatingShellBody({
                   style={{
                     display: 'flex',
                     flex: 1,
+                    width: '100%',
                     alignItems: 'center',
                     gap: 10,
                     padding: '8px 10px',
-                    borderRadius: 'var(--ol-control-radius)',
+                    borderRadius: 8,
                     border: 0,
                     fontFamily: 'inherit',
                     fontSize: 15,
@@ -509,7 +510,17 @@ function FloatingShellBody({
                 type="button"
                 className={currentTab === 'usage' ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                 onClick={() => setCurrentTab('usage')}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px' }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: 10,
+                  padding: '8px 10px',
+                  border: 0,
+                  borderRadius: 8,
+                  fontFamily: 'inherit',
+                  fontSize: 15,
+                }}
               >
                 <Icon name="overview" size={16} />
                 <span>{t('shell.footer.usage', { defaultValue: 'Usage' })}</span>
@@ -665,7 +676,6 @@ function FloatingShellBody({
             key={`${settingsInitialSection ?? 'default'}:${settingsInitialServiceView ?? 'default'}`}
             os={os}
             closing={settingsMount.closing}
-            onPaintedChange={setSettingsPainted}
             initialSettingsSection={settingsInitialSection}
             initialServiceView={settingsInitialServiceView}
             onClose={() => setSettingsOpen(false)}
@@ -800,7 +810,7 @@ function MobileTopBar({
         <img
           src="AppIcon.png"
           alt=""
-          style={{ width: 22, height: 22, borderRadius: 'var(--ol-radius)', flexShrink: 0 }}
+          style={{ width: 22, height: 22, borderRadius: 5, flexShrink: 0 }}
         />
         <span
           style={{
@@ -826,7 +836,7 @@ function MobileTopBar({
           height: 36,
           flexShrink: 0,
           border: 0,
-          borderRadius: 'var(--ol-r-md)',
+          borderRadius: 10,
           background: settingsActive ? 'var(--ol-surface-2)' : 'transparent',
           display: 'inline-flex',
           alignItems: 'center',
@@ -956,7 +966,7 @@ const mobileNavBtnStyle: CSSProperties = {
   gap: 4,
   padding: '6px 4px',
   border: 0,
-  borderRadius: 'var(--ol-r-md)',
+  borderRadius: 10,
   background: 'transparent',
   fontFamily: 'inherit',
   cursor: 'default',
@@ -970,7 +980,7 @@ const navBtnStyle: CSSProperties = {
   gap: 10,
   width: '100%',
   padding: '8px 10px',
-  borderRadius: 'var(--ol-control-radius)',
+  borderRadius: 8,
   border: 0,
   // (After the Codex sidebar): 15px nav text, 16px icons — closer to the reference design.
   fontFamily: 'inherit',
@@ -1027,7 +1037,7 @@ function ProviderSetupPrompt({
             style={{
               width: 34,
               height: 34,
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               background: 'rgba(37,99,235,0.10)',
               color: 'var(--ol-blue)',
               display: 'inline-flex',
@@ -1065,7 +1075,7 @@ function ProviderSetupPrompt({
             style={{
               height: 32,
               padding: '0 13px',
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               border: '0.5px solid var(--ol-line-strong)',
               background: 'var(--ol-surface)',
               color: 'var(--ol-ink-3)',
@@ -1084,7 +1094,7 @@ function ProviderSetupPrompt({
             style={{
               height: 32,
               padding: '0 14px',
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               border: 0,
               background: 'var(--ol-primary-solid-bg)',
               color: 'var(--ol-primary-solid-ink)',
@@ -1151,7 +1161,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               width: 34,
               height: 34,
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               background: 'rgba(37,99,235,0.10)',
               color: 'var(--ol-blue)',
               display: 'inline-flex',
@@ -1181,7 +1191,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               height: 32,
               padding: '0 13px',
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               border: '0.5px solid var(--ol-line-strong)',
               background: 'var(--ol-surface)',
               color: 'var(--ol-ink-3)',
@@ -1200,7 +1210,7 @@ function HotkeyModeMigrationPrompt({
             style={{
               height: 32,
               padding: '0 14px',
-              borderRadius: 'var(--ol-control-radius)',
+              borderRadius: 8,
               border: 0,
               background: 'var(--ol-primary-solid-bg)',
               color: 'var(--ol-primary-solid-ink)',

@@ -234,11 +234,39 @@ export function useSelectionMotion(
         indicator.style.visibility = 'hidden';
         return;
       }
-      // Layout offsets stay correct while the parent dialog is scaled on entry.
-      const y = underline ? group.clientHeight - 2 : button.offsetTop;
-      const target = `translate3d(${button.offsetLeft}px, ${y}px, 0)`;
-      const width = `${button.offsetWidth}px`;
-      const targetKey = `${target}:${width}`;
+      // Preserve fractional layout coordinates under CSS zoom and dialog transforms.
+      // offsetTop/offsetWidth round half-pixel padding and visibly uncenter the chip.
+      const outer = group.getBoundingClientRect();
+      const inner = button.getBoundingClientRect();
+      const style = getComputedStyle(group);
+      const borderX = parseFloat(style.borderLeftWidth) || 0;
+      const borderY = parseFloat(style.borderTopWidth) || 0;
+      const boxWidth =
+        parseFloat(style.width) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingLeft) || 0) +
+            (parseFloat(style.paddingRight) || 0) +
+            borderX +
+            (parseFloat(style.borderRightWidth) || 0));
+      const boxHeight =
+        parseFloat(style.height) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingTop) || 0) +
+            (parseFloat(style.paddingBottom) || 0) +
+            borderY +
+            (parseFloat(style.borderBottomWidth) || 0));
+      const scaleX = outer.width / boxWidth || 1;
+      const scaleY = outer.height / boxHeight || 1;
+      const x = (inner.left - outer.left) / scaleX - borderX;
+      const y = underline
+        ? boxHeight - borderY - (parseFloat(style.borderBottomWidth) || 0) - 2
+        : (inner.top - outer.top) / scaleY - borderY;
+      const height = underline ? 2 : inner.height / scaleY;
+      const target = `translate3d(${x}px, ${y}px, 0)`;
+      const width = `${inner.width / scaleX}px`;
+      const targetKey = `${target}:${width}:${height}`;
       if (targetKey === lastTarget) return;
       const from = interrupted.current ?? {
         ...currentFrame(indicator),
@@ -248,7 +276,7 @@ export function useSelectionMotion(
       motion?.cancel();
       indicator.style.transform = target;
       indicator.style.width = width;
-      indicator.style.height = `${underline ? 2 : button.offsetHeight}px`;
+      indicator.style.height = `${height}px`;
       indicator.style.visibility = 'visible';
       lastTarget = targetKey;
       if (moving && !reduced && !keyboardInteraction() && typeof indicator.animate === 'function') {

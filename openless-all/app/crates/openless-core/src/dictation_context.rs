@@ -414,10 +414,9 @@ impl DictationContext {
                         | DictationOutputTarget::VoiceEdit
                 ) && preferences.streaming_insert,
                 save_streamed_text_to_clipboard: preferences.streaming_insert_save_clipboard,
-                // Composition display is a TSF text-service feature; other insertion
-                // modes have no underlined preedit channel.
-                composition_input: (cfg!(target_os = "macos") && preferences.macos_composition_input)
-                    || cfg!(target_os = "windows")
+                // macOS AX composition is retired. Ignore legacy enabled values so saved
+                // settings cannot bypass the regular final/streaming insertion protocol.
+                composition_input: cfg!(target_os = "windows")
                     && preferences.windows_composition_input
                     && preferences.windows_insertion_mode == WindowsInsertionMode::Tsf,
                 restore_clipboard_after_paste: preferences.restore_clipboard_after_paste,
@@ -886,6 +885,33 @@ mod tests {
             assert_eq!(context.recording.transcribe_after_stop, buffered);
         }
         assert!(preferences.stable_transcription_enabled);
+    }
+
+    #[test]
+    fn legacy_macos_live_input_does_not_enable_composition_in_either_pipeline() {
+        for pipeline_mode in [PipelineMode::Traditional, PipelineMode::Multimodal] {
+            let preferences = UserPreferences {
+                macos_composition_input: true,
+                windows_composition_input: false,
+                multimodal_pipeline_enabled: true,
+                pipeline_mode,
+                ..UserPreferences::default()
+            };
+            let context = DictationContext::capture(
+                &preferences,
+                &builtin_style_pack_for_mode(PolishMode::Structured),
+                DictationProviderInvocations::new(
+                    ProviderInvocation::for_provider("asr"),
+                    ProviderInvocation::for_provider("llm"),
+                    ProviderInvocation::for_provider("omni"),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
+            );
+            assert_eq!(context.pipeline_mode, pipeline_mode);
+            assert!(!context.insertion.composition_input);
+        }
     }
 
     #[test]

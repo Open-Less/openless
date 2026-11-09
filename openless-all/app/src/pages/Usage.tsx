@@ -17,6 +17,7 @@ export function Usage() {
   const [history, setHistory] = useState<DictationSession[] | null>(null);
   const [error, setError] = useState(false);
   const [days, setDays] = useState(30);
+  const [view, setView] = useState<'overview' | 'services' | 'history'>('overview');
   const [usage, setUsage] = useState<ServiceUsageSnapshot | null>(null);
   const [usageError, setUsageError] = useState(false);
   const [clearError, setClearError] = useState(false);
@@ -142,7 +143,7 @@ export function Usage() {
   });
   const maxDaily = Math.max(1, ...daily.map((day) => day.count));
   return (
-    <>
+    <div className="ol-usage-page" style={{ width: '100%', minWidth: 0, flexShrink: 0 }}>
       <PageHeader
         title={text('用量', 'Usage')}
         desc={text(
@@ -155,12 +156,42 @@ export function Usage() {
           </Btn>
         }
       />
-      <p style={{ color: 'var(--ol-ink-3)', fontSize: 13, lineHeight: 1.6 }}>
-        {text(
-          '记录数仅来自本机保留的听写历史（最多 200 条）。Token 仅包含桌面端兼容接口明确返回并成功保存的部分；其他调用、TTS 和费用尚未完整记录，不能作为账单。',
-          'Record counts come only from retained dictation history (up to 200 entries). Tokens include only provider-reported values saved from supported desktop calls; other calls, TTS and costs are incomplete and are not a bill.',
-        )}
-      </p>
+      <nav
+        aria-label={text('用量页面', 'Usage pages')}
+        style={{
+          display: 'flex',
+          gap: 8,
+          margin: '0 0 20px',
+          borderBottom: '1px solid var(--ol-line)',
+        }}
+      >
+        {(
+          [
+            ['overview', text('概览', 'Overview')],
+            ['services', text('服务与用途', 'Services and purposes')],
+            ['history', text('记录', 'History')],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            aria-current={view === id ? 'page' : undefined}
+            onClick={() => setView(id)}
+            style={{
+              border: 0,
+              borderBottom: view === id ? '2px solid var(--ol-blue)' : '2px solid transparent',
+              background: 'transparent',
+              color: view === id ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
+              padding: '10px 12px',
+              font: 'inherit',
+              fontWeight: view === id ? 600 : 400,
+              cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       <div style={{ display: 'flex', gap: 8, margin: '8px 0 16px' }}>
         {[7, 30].map((day) => (
           <button
@@ -202,12 +233,16 @@ export function Usage() {
           )}
         </p>
       )}
-      {usage && (
-        <button
-          type="button"
-          className="ol-pressable"
+      {view === 'history' && usage && (
+        <Btn
+          style={{
+            minHeight: 36,
+            lineHeight: 1.4,
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            marginBottom: 2,
+          }}
           disabled={clearing}
-          style={{ alignSelf: 'flex-start', borderRadius: 8, padding: '7px 12px' }}
           onClick={async () => {
             clearingRef.current = true;
             request.current += 1;
@@ -226,15 +261,7 @@ export function Usage() {
           }}
         >
           {text('清除已记录 Token', 'Clear recorded tokens')}
-        </button>
-      )}
-      {usage && (
-        <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
-          {text(
-            '清除前或清除期间已开始的请求可能不会计入新账本。',
-            'Requests started before or during clearing may not appear in the new ledger.',
-          )}
-        </p>
+        </Btn>
       )}
       {error ? (
         <p role="alert">{text('无法读取历史记录。', 'Could not load history.')}</p>
@@ -242,52 +269,153 @@ export function Usage() {
         <p>{text('加载中…', 'Loading…')}</p>
       ) : (
         <>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-              gap: 12,
-            }}
-          >
-            {stats.map(([label, value]) => (
-              <Card key={String(label)}>
-                <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>{label}</div>
-                <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{value}</div>
+          {view === 'overview' && (
+            <>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                {stats.map(([label, value]) => (
+                  <Card key={String(label)}>
+                    <div style={{ color: 'var(--ol-ink-3)', fontSize: 13 }}>{label}</div>
+                    <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{value}</div>
+                  </Card>
+                ))}
+              </div>
+              <Card style={{ marginTop: 14 }}>
+                <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                  {text('每日记录', 'Daily records')}
+                </h2>
+                <div style={{ display: 'flex', alignItems: 'end', gap: 4, height: 120 }}>
+                  {daily.map(({ date, count }) => (
+                    <div
+                      key={date.toISOString()}
+                      title={`${date.toLocaleDateString()}: ${count}`}
+                      style={{
+                        flex: 1,
+                        minWidth: 2,
+                        height: `${Math.max(2, (count / maxDaily) * 100)}%`,
+                        background: count ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
+                        borderRadius: 3,
+                      }}
+                    />
+                  ))}
+                </div>
               </Card>
-            ))}
-          </div>
-          <Card style={{ marginTop: 14 }}>
-            <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
-              {text('每日记录', 'Daily records')}
-            </h2>
-            <div style={{ display: 'flex', alignItems: 'end', gap: 4, height: 120 }}>
-              {daily.map(({ date, count }) => (
-                <div
-                  key={date.toISOString()}
-                  title={`${date.toLocaleDateString()}: ${count}`}
-                  style={{
-                    flex: 1,
-                    minWidth: 2,
-                    height: `${Math.max(2, (count / maxDaily) * 100)}%`,
-                    background: count ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
-                    borderRadius: 3,
-                  }}
-                />
-              ))}
-            </div>
-          </Card>
-          <Card style={{ marginTop: 14 }}>
-            <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
-              {text('服务与用途', 'Services and purposes')}
-            </h2>
-            {grouped.size === 0 ? (
-              <p>{text('没有可归属服务的记录。', 'No attributable records.')}</p>
-            ) : (
-              [...grouped.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .map(([name, count]) => (
+            </>
+          )}
+          {view === 'services' && (
+            <Card style={{ marginTop: 14 }}>
+              <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                {text('服务与用途', 'Services and purposes')}
+              </h2>
+              {grouped.size === 0 ? (
+                <p>{text('没有可归属服务的记录。', 'No attributable records.')}</p>
+              ) : (
+                [...grouped.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([name, count]) => (
+                    <div
+                      key={name}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '10px 0',
+                        borderTop: '1px solid var(--ol-line)',
+                      }}
+                    >
+                      <span>{name}</span>
+                      <span>{count}</span>
+                    </div>
+                  ))
+              )}
+            </Card>
+          )}
+          {view === 'history' && (
+            <>
+              <Card style={{ marginTop: 14 }}>
+                <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                  {text('已报告的模型用量', 'Reported model usage')}
+                </h2>
+                <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
+                  {text(
+                    '缓存和推理字段由各服务商报告，可能已包含在输入或输出中，不能直接相加。',
+                    'Provider-reported cache and reasoning fields may already be included in input or output; do not add them directly.',
+                  )}
+                </p>
+                {byPurpose.map(({ purpose, input, output }) => (
                   <div
-                    key={name}
+                    key={purpose}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      padding: '8px 0',
+                    }}
+                  >
+                    <strong>{purposeName(purpose)}</strong>
+                    <span>
+                      {text('已报告输入', 'Reported input')}: {input?.toLocaleString() ?? '—'} ·{' '}
+                      {text('已报告输出', 'Reported output')}: {output?.toLocaleString() ?? '—'}
+                    </span>
+                  </div>
+                ))}
+                {reported.length === 0 ? (
+                  <p>
+                    {text(
+                      '该时段没有已保存的服务商 token 报告。',
+                      'No provider token reports were saved for this period.',
+                    )}
+                  </p>
+                ) : (
+                  [...reported]
+                    .sort((a, b) => b.occurredAtMs - a.occurredAtMs)
+                    .slice(0, 30)
+                    .map((record) => (
+                      <div
+                        key={record.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                          gap: 8,
+                          padding: '10px 0',
+                          borderTop: '1px solid var(--ol-line)',
+                        }}
+                      >
+                        <time>{new Date(record.occurredAtMs).toLocaleString()}</time>
+                        <span>{purposeName(record.purpose)}</span>
+                        <span>
+                          {[
+                            ...new Set(
+                              [record.provider, record.channel, record.model].filter(Boolean),
+                            ),
+                          ].join(' · ') || '—'}
+                        </span>
+                        <span>
+                          {text('输入', 'Input')}: {safeTokens(record.inputTokens)} ·{' '}
+                          {text('输出', 'Output')}: {safeTokens(record.outputTokens)}
+                          <br />
+                          {text('缓存读取', 'Cache read')}: {safeTokens(record.cachedInputTokens)} ·{' '}
+                          {text('缓存写入', 'Cache write')}:{' '}
+                          {safeTokens(record.cacheWriteInputTokens)}
+                          <br />
+                          {text('推理', 'Reasoning')}: {safeTokens(record.reasoningTokens)}
+                        </span>
+                      </div>
+                    ))
+                )}
+              </Card>
+              <Card style={{ marginTop: 14 }}>
+                <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
+                  {text('最近记录', 'Recent records')}
+                </h2>
+                {rows.slice(0, 30).map((row) => (
+                  <div
+                    key={row.id}
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -296,103 +424,17 @@ export function Usage() {
                       borderTop: '1px solid var(--ol-line)',
                     }}
                   >
-                    <span>{name}</span>
-                    <span>{count}</span>
-                  </div>
-                ))
-            )}
-          </Card>
-          <Card style={{ marginTop: 14 }}>
-            <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
-              {text('已报告的模型用量', 'Reported model usage')}
-            </h2>
-            <p style={{ color: 'var(--ol-ink-3)', fontSize: 12 }}>
-              {text(
-                '缓存和推理字段由各服务商报告，可能已包含在输入或输出中，不能直接相加。',
-                'Provider-reported cache and reasoning fields may already be included in input or output; do not add them directly.',
-              )}
-            </p>
-            {byPurpose.map(({ purpose, input, output }) => (
-              <div
-                key={purpose}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  padding: '8px 0',
-                }}
-              >
-                <strong>{purposeName(purpose)}</strong>
-                <span>
-                  {text('已报告输入', 'Reported input')}: {input?.toLocaleString() ?? '—'} ·{' '}
-                  {text('已报告输出', 'Reported output')}: {output?.toLocaleString() ?? '—'}
-                </span>
-              </div>
-            ))}
-            {reported.length === 0 ? (
-              <p>
-                {text(
-                  '该时段没有已保存的服务商 token 报告。',
-                  'No provider token reports were saved for this period.',
-                )}
-              </p>
-            ) : (
-              [...reported]
-                .sort((a, b) => b.occurredAtMs - a.occurredAtMs)
-                .slice(0, 30)
-                .map((record) => (
-                  <div
-                    key={record.id}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                      gap: 8,
-                      padding: '10px 0',
-                      borderTop: '1px solid var(--ol-line)',
-                    }}
-                  >
-                    <time>{new Date(record.occurredAtMs).toLocaleString()}</time>
-                    <span>{purposeName(record.purpose)}</span>
+                    <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
                     <span>
-                      {[
-                        ...new Set([record.provider, record.channel, record.model].filter(Boolean)),
-                      ].join(' · ') || '—'}
-                    </span>
-                    <span>
-                      {text('输入', 'Input')}: {safeTokens(record.inputTokens)} ·{' '}
-                      {text('输出', 'Output')}: {safeTokens(record.outputTokens)}
-                      <br />
-                      {text('缓存读取', 'Cache read')}: {safeTokens(record.cachedInputTokens)} ·{' '}
-                      {text('缓存写入', 'Cache write')}: {safeTokens(record.cacheWriteInputTokens)}
-                      <br />
-                      {text('推理', 'Reasoning')}: {safeTokens(record.reasoningTokens)}
+                      {[row.asrProvider, row.llmProvider].filter(Boolean).join(' · ') || '—'}
                     </span>
                   </div>
-                ))
-            )}
-          </Card>
-          <Card style={{ marginTop: 14 }}>
-            <h2 style={{ fontSize: 16, margin: '0 0 14px' }}>
-              {text('最近记录', 'Recent records')}
-            </h2>
-            {rows.slice(0, 30).map((row) => (
-              <div
-                key={row.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  padding: '10px 0',
-                  borderTop: '1px solid var(--ol-line)',
-                }}
-              >
-                <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
-                <span>{[row.asrProvider, row.llmProvider].filter(Boolean).join(' · ') || '—'}</span>
-              </div>
-            ))}
-          </Card>
+                ))}
+              </Card>
+            </>
+          )}
         </>
       )}
-    </>
+    </div>
   );
 }

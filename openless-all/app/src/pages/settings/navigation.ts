@@ -46,7 +46,7 @@ export type AdvancedPageId = AdvancedPage['id'];
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
-    if (page.id === 'liveInput') return platform === 'desktop' && (os === 'mac' || os === 'win');
+    if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';

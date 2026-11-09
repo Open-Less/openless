@@ -621,35 +621,21 @@ function CursorContextSection() {
 function LiveInputSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  const os = detectOS();
-  if (!prefs || (os !== 'mac' && os !== 'win')) return null;
-  const mac = os === 'mac';
+  if (!prefs || detectOS() !== 'win') return null;
   return (
     <Card>
       <ExperimentalSectionTitle badge="Beta">
         {t('settings.advancedPages.liveInputTitle')}
       </ExperimentalSectionTitle>
       <SettingRow
-        label={t(
-          mac
-            ? 'settings.advanced.macosCompositionInputLabel'
-            : 'settings.advanced.windowsCompositionInputLabel',
-        )}
-        desc={t(
-          mac
-            ? 'settings.advanced.macosCompositionInputDesc'
-            : 'settings.advanced.windowsCompositionInputDesc',
-        )}
+        label={t('settings.advanced.windowsCompositionInputLabel')}
+        desc={t('settings.advanced.windowsCompositionInputDesc')}
       >
         <Toggle
-          on={mac ? prefs.macosCompositionInput : prefs.windowsCompositionInput}
-          disabled={!mac && prefs.windowsInsertionMode !== 'tsf'}
+          on={prefs.windowsCompositionInput}
+          disabled={prefs.windowsInsertionMode !== 'tsf'}
           onToggle={(next) =>
-            void updatePrefs((current) =>
-              mac
-                ? { ...current, macosCompositionInput: next }
-                : { ...current, windowsCompositionInput: next },
-            )
+            void updatePrefs((current) => ({ ...current, windowsCompositionInput: next }))
           }
         />
       </SettingRow>
@@ -748,14 +734,17 @@ export function AdvancedTab({
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'liveInput' && <LiveInputSection />}
             {item.id === 'cursorContext' && (
-              <>
+              <div
+                className="ol-awareness-sections"
+                style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+              >
                 <CursorContextSection />
                 {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
                   <VocabularyLearningSection />
                 )}
                 {platformCaps?.platform === 'desktop' &&
                   (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
-              </>
+              </div>
             )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
