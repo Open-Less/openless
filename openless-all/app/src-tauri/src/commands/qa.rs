@@ -20,10 +20,6 @@ pub fn set_qa_hotkey(
     coord: CoordinatorState<'_>,
     binding: Option<ShortcutBinding>,
 ) -> Result<(), String> {
-    use crate::issue1338_debug::{Boundary, Event, Kind, Outcome, Probe, SyncContext};
-    let boundary = Boundary::enter(Probe::P2, Kind::QaHotkeySettings);
-    let _context = SyncContext::enter(boundary.operation);
-    let result = (|| {
     if binding
         .as_ref()
         .is_some_and(|binding| !binding.modifiers.is_empty())
@@ -35,9 +31,6 @@ pub fn set_qa_hotkey(
     prefs.qa_companion_key = binding.map(|binding| binding.primary).unwrap_or_default();
     reject_hotkey_collisions(&prefs)?;
     super::settings::persist_strict_settings(&coord, prefs)
-    })();
-    boundary.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
-    result
 }
 
 /// User clicks ✕ or presses Esc to close the QA panel.

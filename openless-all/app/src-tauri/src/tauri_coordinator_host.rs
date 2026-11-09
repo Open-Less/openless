@@ -1095,28 +1095,22 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
-        let dispatch1338 = crate::issue1338_debug::MainDispatch::new(crate::issue1338_debug::Kind::CapsuleDispatch);
-        let task = move |capsule| dispatch1338.wrap(move || task(capsule))();
-        let result1338 = (|| {
-            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
-            {
-                let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
-                let capsule = dispatch.clone_handle(|| self.clone());
-                let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
-                    .map_err(|error| error.to_string());
-                dispatch.dispatched(result.is_ok());
-                result
-            }
-            #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
-            {
-                let _ = kind;
-                let capsule = self.clone();
-                self.app.run_on_main_thread(move || task(capsule))
-                    .map_err(|error| error.to_string())
-            }
-        })();
-        dispatch1338.dispatched(result1338.is_ok());
-        result1338
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+            let capsule = dispatch.clone_handle(|| self.clone());
+            let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
+                .map_err(|error| error.to_string());
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let _ = kind;
+            let capsule = self.clone();
+            self.app.run_on_main_thread(move || task(capsule))
+                .map_err(|error| error.to_string())
+        }
     }
 
     fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
@@ -2094,8 +2088,6 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        let dispatch1338 = crate::issue1338_debug::MainDispatch::new(crate::issue1338_debug::Kind::HostDispatch);
-        let task = dispatch1338.wrap(task);
         #[cfg(feature = "issue-1266-diagnostics")]
         let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
         #[cfg(feature = "issue-1266-diagnostics")]
@@ -2105,7 +2097,6 @@ impl TauriCoordinatorHost {
 
         if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
             task();
-            dispatch1338.dispatched(true);
             #[cfg(feature = "issue-1266-diagnostics")]
             dispatch.dispatched(true);
             return;
@@ -2117,7 +2108,6 @@ impl TauriCoordinatorHost {
         } else {
             false
         };
-        dispatch1338.dispatched(queued);
         #[cfg(feature = "issue-1266-diagnostics")]
         dispatch.dispatched(queued);
         #[cfg(not(feature = "issue-1266-diagnostics"))]
@@ -2319,29 +2309,23 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        let dispatch1338 = crate::issue1338_debug::MainDispatch::new(crate::issue1338_debug::Kind::HostDispatch);
-        let task = dispatch1338.wrap(task);
-        let result1338 = (|| {
-            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
-            {
-                use crate::issue1266_debug::{Kind, MainDispatch};
-                let dispatch = MainDispatch::new(Kind::HostDispatch);
-                let app = dispatch.clone_handle(|| self.app());
-                let result = app.ok_or_else(|| "Tauri AppHandle is not bound".to_string())
-                    .and_then(|app| app.run_on_main_thread(dispatch.wrap(task))
-                        .map_err(|error| error.to_string()));
-                dispatch.dispatched(result.is_ok());
-                result
-            }
-            #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
-            {
-                let app = self.app()
-                    .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
-                app.run_on_main_thread(task).map_err(|error| error.to_string())
-            }
-        })();
-        dispatch1338.dispatched(result1338.is_ok());
-        result1338
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            use crate::issue1266_debug::{Kind, MainDispatch};
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            let app = dispatch.clone_handle(|| self.app());
+            let result = app.ok_or_else(|| "Tauri AppHandle is not bound".to_string())
+                .and_then(|app| app.run_on_main_thread(dispatch.wrap(task))
+                    .map_err(|error| error.to_string()));
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let app = self.app()
+                .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
+            app.run_on_main_thread(task).map_err(|error| error.to_string())
+        }
     }
 
     pub(crate) fn spawn<F>(&self, future: F) -> tauri::async_runtime::JoinHandle<F::Output>

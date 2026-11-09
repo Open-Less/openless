@@ -97,15 +97,13 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 pub async fn check_accessibility_permission(
     core: CoreState<'_>,
 ) -> Result<PermissionStatus, String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::Accessibility, async move {
-        Ok(core
-            .services()
-            .platform
-            .accessibility_permission()
-            .await
-            .map(|snapshot| map_core_permission(snapshot.accessibility))
-            .unwrap_or(PermissionStatus::NotApplicable))
-    }).await
+    Ok(core
+        .services()
+        .platform
+        .accessibility_permission()
+        .await
+        .map(|snapshot| map_core_permission(snapshot.accessibility))
+        .unwrap_or(PermissionStatus::NotApplicable))
 }
 
 #[tauri::command]
@@ -132,15 +130,13 @@ pub async fn request_accessibility_permission(
 
 #[tauri::command]
 pub async fn check_microphone_permission(core: CoreState<'_>) -> Result<PermissionStatus, String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::Microphone, async move {
-        Ok(core
-            .services()
-            .platform
-            .microphone_permission()
-            .await
-            .map(|snapshot| map_core_permission(snapshot.microphone))
-            .unwrap_or(PermissionStatus::NotApplicable))
-    }).await
+    Ok(core
+        .services()
+        .platform
+        .microphone_permission()
+        .await
+        .map(|snapshot| map_core_permission(snapshot.microphone))
+        .unwrap_or(PermissionStatus::NotApplicable))
 }
 
 #[tauri::command]

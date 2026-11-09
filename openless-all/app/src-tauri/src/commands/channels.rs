@@ -23,12 +23,10 @@ pub async fn list_channels(
     window: Window,
     kind: String,
 ) -> Result<Vec<ChannelSummary>, String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::ListChannels, async move {
-        ensure_main_window(&window)?;
-        core.list_channels(parse_kind(&kind)?)
-            .await
-            .map_err(|error| error.to_string())
-    }).await
+    ensure_main_window(&window)?;
+    core.list_channels(parse_kind(&kind)?)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -22,19 +22,9 @@ pub fn set_android_audio_monitoring(enabled: bool) {
 
 #[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
-    use crate::issue1338_debug::{Boundary, Kind, Probe, SyncContext};
-    let command = Boundary::enter(Probe::P2, Kind::GetSettings);
-    let _context = SyncContext::enter(command.operation);
-    let read = Boundary::enter(Probe::P2, Kind::PrefsRead);
     let mut prefs = core.get_preferences();
-    read.returned();
-    drop(read);
     prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
-    let configure = Boundary::enter(Probe::P2, Kind::WarmConfigure);
     sync_low_latency_capture_preferences(&prefs);
-    configure.returned();
-    drop(configure);
-    command.returned();
     prefs
 }
 
@@ -326,7 +316,6 @@ pub async fn set_settings(
 ) -> Result<UserPreferences, String> {
     // Capture old values for the remote-input service diff (start/stop/restart when the
     // port/switch changes after persist).
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::SetSettings, async move {
     let remote_prev = coord.backend().get_preferences();
     if let Some(edits) = &edits {
         prefs = openless_core::preference_patch::patch_preferences(&prefs, edits)
@@ -400,7 +389,6 @@ pub async fn set_settings(
             .map_err(|error| error.message)?;
     }
     Ok(prefs)
-    }).await
 }
 
 #[cfg(mobile)]
@@ -950,30 +938,14 @@ pub struct SettingsSnapshot {
 
 #[tauri::command]
 pub fn get_settings_snapshot(core: CoreState<'_>) -> Result<SettingsSnapshot, String> {
-    use crate::issue1338_debug::{Boundary, Event, Kind, Outcome, Probe, SyncContext};
-    let boundary = Boundary::enter(Probe::P2, Kind::SettingsSnapshot);
-    let _context = SyncContext::enter(boundary.operation);
-    let result = settings_snapshot(&core);
-    boundary.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
-    result
+    settings_snapshot(&core)
 }
 
 fn settings_snapshot(backend: &openless_core::OpenLessBackend) -> Result<SettingsSnapshot, String> {
     for _ in 0..3 {
-        use crate::issue1338_debug::{Boundary, Kind, Probe};
-        let state_read = Boundary::enter(Probe::P2, Kind::SnapshotRevision);
         let revision = backend.snapshot().preferences_revision;
-        state_read.returned();
-        drop(state_read);
-        let prefs_read = Boundary::enter(Probe::P2, Kind::SnapshotPreferences);
         let preferences = backend.get_preferences();
-        prefs_read.returned();
-        drop(prefs_read);
-        let verify = Boundary::enter(Probe::P2, Kind::SnapshotVerify);
-        let matches = backend.snapshot().preferences_revision == revision;
-        verify.returned();
-        drop(verify);
-        if matches {
+        if backend.snapshot().preferences_revision == revision {
             return Ok(SettingsSnapshot {
                 preferences,
                 revision,
@@ -1016,11 +988,9 @@ pub async fn update_setting_fields(
     app: AppHandle,
     edits: std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Result<SettingsSnapshot, String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::UpdateSettingFields, async move {
     let prefs = coord.backend().get_preferences();
     set_settings(coord.clone(), app, prefs, Some(edits)).await?;
     settings_snapshot(&coord.backend())
-    }).await
 }
 
 #[cfg(mobile)]

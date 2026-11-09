@@ -178,9 +178,7 @@ pub(crate) struct HostGuard<'a> {
     operation: Operation,
     kind: Kind,
 }
-#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics", not(feature = "issue-1266-diagnostics")))]
-pub(crate) type HostGuard<'a> = crate::issue1338_debug::Guard<'a, ()>;
-#[cfg(not(all(target_os = "windows", any(feature = "issue-1266-diagnostics", feature = "issue-1338-diagnostics"))))]
+#[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
 pub(crate) type HostGuard<'a> = parking_lot::MutexGuard<'a, ()>;
 
 pub(crate) fn lock_host(mutex: &parking_lot::Mutex<()>, kind: Kind) -> HostGuard<'_> {
@@ -192,20 +190,7 @@ pub(crate) fn lock_host(mutex: &parking_lot::Mutex<()>, kind: Kind) -> HostGuard
         operation.record(Event::Acquired, Outcome::Observed, Facts { kind, ..Facts::default() });
         HostGuard { guard: Some(guard), operation, kind }
     }
-    // [DEBUG-ISSUE-1338] Observe the same gate for commands and registration
-    // supervisors without changing ownership, lock ordering, or retry policy.
-    #[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics", not(feature = "issue-1266-diagnostics")))]
-    {
-        let trace_kind = match kind {
-            Kind::Settings => crate::issue1338_debug::Kind::SettingsHostGate,
-            Kind::SelectionHotkey => crate::issue1338_debug::Kind::SelectionHotkeyRegistration,
-            Kind::QaHotkey => crate::issue1338_debug::Kind::QaHotkeyRegistration,
-            _ => crate::issue1338_debug::Kind::OtherHotkeyRegistration,
-        };
-        crate::issue1338_debug::lock_at(mutex, crate::issue1338_debug::Probe::P2,
-            trace_kind)
-    }
-    #[cfg(not(all(target_os = "windows", any(feature = "issue-1266-diagnostics", feature = "issue-1338-diagnostics"))))]
+    #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
     { let _ = kind; mutex.lock() }
 }
 

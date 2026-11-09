@@ -40,11 +40,6 @@ on:
         type: boolean
         required: false
         default: false
-      windows_backend_diagnostics:
-        description: Opt-in issue 1338 backend observation build (branch only, not a fix)
-        type: boolean
-        required: false
-        default: false
       release_tag:
         description: Existing draft Stable tag to repair (admin only, Windows only)
         type: string
@@ -85,25 +80,10 @@ jobs:
       # On workflow_dispatch / non-tag triggers github.ref_name is not a tag string, endsWith
       # returns false, and it falls back to stable — dispatch behavior unchanged.
       OPENLESS_HANG_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_hang_diagnostics && matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && 'true' || 'false' }}
-      OPENLESS_BACKEND_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_backend_diagnostics && matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && 'true' || 'false' }}
       OPENLESS_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       OPENLESS_RELEASE_IS_TAG: ${{ (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')) || inputs.release_tag != '' }}
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(inputs.release_tag || github.ref_name, '-beta-tauri') || contains(inputs.release_tag || github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
-      - name: Validate independent diagnostic sessions
-        if: github.event_name == 'workflow_dispatch' && inputs.windows_backend_diagnostics
-        shell: bash
-        env:
-          LEGACY_DIAGNOSTICS: ${{ inputs.windows_hang_diagnostics }}
-          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
-          INPUT_PLATFORM: ${{ inputs.platform }}
-        run: |
-          set -euo pipefail
-          [ "$LEGACY_DIAGNOSTICS" != true ] || { echo "::error::Choose one diagnostic session, not both"; exit 1; }
-          [ -z "$INPUT_RELEASE_TAG" ] || { echo "::error::Backend observations are branch-only, never release repairs"; exit 1; }
-          [[ "$GITHUB_REF" == refs/heads/* ]] || { echo "::error::Backend observations require a branch ref"; exit 1; }
-          [ "$INPUT_PLATFORM" != macos ] || { echo "::error::Backend observations require the Windows platform"; exit 1; }
-
       - name: Validate targeted draft release repair
         if: inputs.release_tag != ''
         shell: bash
@@ -372,10 +352,6 @@ jobs:
           if [ "$OPENLESS_HANG_DIAGNOSTICS" = true ]; then
             diagnostic_args=(--features issue-1266-diagnostics)
           fi
-          if [ "$OPENLESS_BACKEND_DIAGNOSTICS" = true ]; then
-            diagnostic_args=(--features issue-1338-diagnostics)
-          fi
-          echo "backend_observation=$OPENLESS_BACKEND_DIAGNOSTICS legacy_observation=$OPENLESS_HANG_DIAGNOSTICS source_sha=$OPENLESS_BUILD_ID"
           # WiX/MSI only accepts a numeric prerelease identifier.  Manual
           # validation runs use the repository's Beta version even though the
           # ref is a branch (and therefore OPENLESS_RELEASE_CHANNEL=stable),
@@ -607,8 +583,7 @@ jobs:
             platform = 'windows'
             protocol_revision = '0x4F4C0009'
             issue_1266_diagnostics = ($env:OPENLESS_HANG_DIAGNOSTICS -eq 'true')
-            issue_1338_diagnostics = ($env:OPENLESS_BACKEND_DIAGNOSTICS -eq 'true')
-            diagnostic_session = $(if ($env:OPENLESS_BACKEND_DIAGNOSTICS -eq 'true') { 'issue-1338-20261106' } elseif ($env:OPENLESS_HANG_DIAGNOSTICS -eq 'true') { 'issue-1266-2e2c7a47' } else { $null })
+            diagnostic_session = $(if ($env:OPENLESS_HANG_DIAGNOSTICS -eq 'true') { 'issue-1266-2e2c7a47' } else { $null })
           } | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM (Join-Path $manifestDir 'openless-provenance.json')
 
       # ── Collect artifacts ──
@@ -717,7 +692,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OPENLESS_BACKEND_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1338-diagnostics' || env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
+          name: ${{ env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi

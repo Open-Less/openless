@@ -601,35 +601,9 @@ mod platform {
     }
 }
 
-pub use platform::{request_accessibility, request_microphone};
-#[cfg(not(all(target_os = "windows", feature = "issue-1338-diagnostics")))]
-pub use platform::{check_accessibility, check_microphone};
-
-#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
-fn observe_native_permission(kind: crate::issue1338_debug::Kind, check: impl FnOnce() -> PermissionStatus) -> PermissionStatus {
-    use crate::issue1338_debug::{Boundary, Event, Outcome, Probe, SyncContext};
-    let boundary = Boundary::enter(Probe::P5, kind);
-    let _context = SyncContext::enter(boundary.operation);
-    let status = check();
-    let outcome = match status {
-        PermissionStatus::Granted => Outcome::Granted,
-        PermissionStatus::Denied => Outcome::Denied,
-        PermissionStatus::NotDetermined => Outcome::NotDetermined,
-        PermissionStatus::Restricted => Outcome::Restricted,
-        PermissionStatus::NotApplicable => Outcome::NotApplicable,
-        PermissionStatus::NoDevice => Outcome::NoDevice,
-    };
-    boundary.record(Event::Returned, outcome);
-    status
-}
-#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
-pub fn check_accessibility() -> PermissionStatus {
-    observe_native_permission(crate::issue1338_debug::Kind::Accessibility, platform::check_accessibility)
-}
-#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
-pub fn check_microphone() -> PermissionStatus {
-    observe_native_permission(crate::issue1338_debug::Kind::Microphone, platform::check_microphone)
-}
+pub use platform::{
+    check_accessibility, check_microphone, request_accessibility, request_microphone,
+};
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
 pub use platform::has_microphone_input_device;

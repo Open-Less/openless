@@ -3,21 +3,19 @@ use super::CoordinatorState;
 /// Opens the desktop Voice Edit panel or asks Android's main WebView to show
 /// its embedded equivalent. The session starts only after the panel invokes
 /// `start_voice_edit_session`.
-// Tauri 2.12.4 warns against Windows WebView creation in synchronous IPC.
-// [DEBUG-ISSUE-1338] A2 changes only this command's dispatch boundary.
+// WebView2 creation from a synchronous IPC callback can deadlock on Windows.
+// An async command lets that callback return before creating the panel.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn voice_edit_window_open(
     window: tauri::Window,
     coord: CoordinatorState<'_>,
 ) -> Result<(), String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::VoiceEditOpen, async move {
-        if window.label() != "main" {
-            return Err("Voice Edit can only be opened from the main window".to_string());
-        }
-        coord.tauri_host().show_voice_edit();
-        Ok(())
-    }).await
+    if window.label() != "main" {
+        return Err("Voice Edit can only be opened from the main window".to_string());
+    }
+    coord.tauri_host().show_voice_edit();
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]

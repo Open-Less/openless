@@ -72,7 +72,6 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
-mod issue1338_debug;
 #[cfg(target_os = "android")]
 mod style_zip_transfer;
 mod llm_gemini;
@@ -218,7 +217,6 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    issue1338_debug::initialize();
     issue1266_debug::initialize();
     tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
@@ -564,8 +562,6 @@ macro_rules! app_invoke_handler_desktop {
             log_client_error,
             #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
             issue1266_health,
-            #[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
-            issue1338_health,
             set_windows_caption_theme,
         ]
     };
@@ -1055,12 +1051,7 @@ fn run_desktop() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
-                        "quit" => {
-                            let boundary = issue1338_debug::Boundary::enter(issue1338_debug::Probe::P6, issue1338_debug::Kind::TrayQuit);
-                            let _context = issue1338_debug::SyncContext::enter(boundary.operation);
-                            request_quit(app);
-                            boundary.returned();
-                        },
+                        "quit" => request_quit(app),
                         id => {
                             if handle_style_tray_menu_event(app, id) {
                                 return;
@@ -1113,11 +1104,10 @@ fn run_desktop() {
 
             Ok(())
         })
-        .invoke_handler(observe_issue1338_invoke(app_invoke_handler_desktop!()))
+        .invoke_handler(app_invoke_handler_desktop!())
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
-            observe_issue1338_lifecycle(&event);
             #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
             observe_issue1266_lifecycle(&event);
             match event {
@@ -1175,47 +1165,6 @@ fn run_desktop() {
             _ => {}
             }
         });
-}
-
-// [DEBUG-ISSUE-1338] Tauri 2.12.4 ipc::InvokeHandler<R> is Fn(Invoke<R>) -> bool.
-// The bool is handled/dispatch return, NOT the eventual async command result.
-fn observe_issue1338_invoke<R: tauri::Runtime>(
-    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
-) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
-    move |invoke| {
-        use issue1338_debug::{Boundary, Event, Facts, Kind, Operation, Outcome, Probe, SyncContext, WebviewKind};
-        if !issue1338_debug::enabled() { return handler(invoke); }
-        let Some(kind) = Kind::command(invoke.message.command()) else { return handler(invoke); };
-        let webview = WebviewKind::from_label(invoke.message.webview_ref().label());
-        let boundary = Boundary { operation: Operation::new(Probe::P1), kind };
-        boundary.operation.record(Event::Entered, Outcome::Observed, Facts { kind, webview, ..Default::default() });
-        let _context = SyncContext::enter(boundary.operation);
-        let handled = handler(invoke);
-        boundary.operation.record(Event::DispatchReturned, if handled { Outcome::Ok } else { Outcome::Error },
-            Facts { kind, webview, ..Default::default() });
-        handled
-    }
-}
-// Optional read-only counters, not an emergency transport: a stuck IPC may
-// also prevent this command. Copy the append-only session file manually.
-#[cfg(all(target_os = "windows", feature = "issue-1338-diagnostics"))]
-#[tauri::command]
-fn issue1338_health() -> issue1338_debug::Health { issue1338_debug::health() }
-
-fn observe_issue1338_lifecycle(event: &RunEvent) {
-    use issue1338_debug::{Boundary, Event, Kind, Outcome, Probe};
-    let event = match event {
-        RunEvent::Ready => Event::Ready,
-        RunEvent::ExitRequested { .. } => Event::ExitRequested,
-        RunEvent::Exit => Event::Exit,
-        RunEvent::WindowEvent { event: tauri::WindowEvent::CloseRequested { .. }, .. } => Event::CloseRequested,
-        RunEvent::WindowEvent { event: tauri::WindowEvent::Destroyed, .. } => Event::Destroyed,
-        _ => return,
-    };
-    // No arbitrary window labels; no assertion that Exit proves process termination.
-    let boundary = Boundary::enter(Probe::P6, Kind::None);
-    boundary.record(event, Outcome::Observed);
-    boundary.returned();
 }
 
 #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
@@ -1923,7 +1872,6 @@ const QUIT_FORCE_EXIT_GRACE: Duration = Duration::from_secs(3);
 
 /// Arm the fallback before requesting graceful exit on explicit user intent.
 fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let boundary = issue1338_debug::Boundary::enter(issue1338_debug::Probe::P6, issue1338_debug::Kind::QuitRequest);
     std::thread::spawn(|| {
         std::thread::sleep(QUIT_FORCE_EXIT_GRACE);
         // Keep the deadline path independent of application locks: synchronous
@@ -1933,7 +1881,6 @@ fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         std::process::exit(0);
     });
     app.exit(0);
-    boundary.returned();
 }
 
 #[tauri::command]
@@ -3373,17 +3320,10 @@ const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
 fn ensure_voice_edit_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Option<tauri::WebviewWindow<R>> {
-    use issue1338_debug::{Boundary, Event, Facts, Kind, Outcome, Probe};
-    let lookup = Boundary::enter(Probe::P4, Kind::VoiceEditLookup);
-    let existing = app.get_webview_window("voice-edit");
-    lookup.operation.record(Event::Returned, Outcome::Returned,
-        Facts { kind: Kind::VoiceEditLookup, flag: existing.is_some(), ..Default::default() });
-    drop(lookup);
-    if let Some(window) = existing {
+    if let Some(window) = app.get_webview_window("voice-edit") {
         return Some(window);
     }
-    let create = Boundary::enter(Probe::P4, Kind::VoiceEditCreate);
-    let created = WebviewWindowBuilder::new(
+    match WebviewWindowBuilder::new(
         app,
         "voice-edit",
         WebviewUrl::App("index.html?window=voice-edit".into()),
@@ -3400,10 +3340,8 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
     .focused(false)
     .visible(false)
     .accept_first_mouse(true)
-    .build();
-    create.record(Event::Returned, if created.is_ok() { Outcome::Ok } else { Outcome::Error });
-    drop(create);
-    match created {
+    .build()
+    {
         Ok(window) => {
             #[cfg(target_os = "macos")]
             {
@@ -3465,15 +3403,8 @@ pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "windows")]
     {
         // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
-        use issue1338_debug::{Boundary, Event, Kind, Outcome, Probe};
-        let focus = Boundary::enter(Probe::P4, Kind::VoiceEditFocusable);
-        let result = window.set_focusable(false);
-        focus.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
-        drop(focus);
-        let show = Boundary::enter(Probe::P4, Kind::VoiceEditShow);
-        let result = window.show();
-        show.record(Event::Returned, if result.is_ok() { Outcome::Ok } else { Outcome::Error });
-        drop(show);
+        let _ = window.set_focusable(false);
+        let _ = window.show();
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let _ = window.show();

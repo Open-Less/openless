@@ -4,9 +4,7 @@ use super::*;
 pub async fn get_startup_snapshot(
     core: CoreState<'_>,
 ) -> Result<openless_core::StartupSnapshot, String> {
-    crate::issue1338_debug::observe_future(crate::issue1338_debug::Kind::StartupSnapshot, async move {
-        core.start().await.map_err(|error| error.to_string())
-    }).await
+    core.start().await.map_err(|error| error.to_string())
 }
 
 #[cfg(not(mobile))]
