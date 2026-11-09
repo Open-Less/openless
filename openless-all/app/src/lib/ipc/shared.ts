@@ -6,6 +6,7 @@ import type {
 } from '../types';
 import { getPlatformCapabilities as loadPlatformCapabilities } from '../platform';
 import { invokeHarmony, isHarmonyHost } from '../harmonyBridge';
+import { invokeGtk, isGtkHost } from '../gtkBridge';
 
 declare global {
   interface Window {
@@ -51,6 +52,11 @@ export function requireBackendReady(): Promise<StartupSnapshot> {
       invokeHarmony<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
     return backendReadyPromise;
   }
+  if (isGtkHost) {
+    backendReadyPromise ??=
+      invokeGtk<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
+    return backendReadyPromise;
+  }
   if (!isTauriNow()) {
     return Promise.resolve({
       contractVersion: BACKEND_CONTRACT_VERSION,
@@ -82,6 +88,11 @@ export async function invokeOrMock<T>(
   if (isHarmonyHost) {
     await requireBackendReady();
     return invokeHarmony<T>(cmd, args);
+  }
+  // 本机 GTK4 + WebKitGTK 宿主：同样走"原生宿主"路径，不走浏览器 mock。
+  if (isGtkHost) {
+    await requireBackendReady();
+    return invokeGtk<T>(cmd, args);
   }
   if (!isTauriNow()) {
     return mock();

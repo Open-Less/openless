@@ -8,6 +8,7 @@ members = [
     "crates/openless-capsule",
     "native-capsule",
     "harmony/rust",
+    "linux-web",
 ]
 exclude = [
     "src-tauri",
