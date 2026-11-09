@@ -375,9 +375,15 @@ async fn github_web_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     )
 }
 
-#[cfg(not(mobile))]
+#[cfg(any(not(mobile), target_os = "android", test))]
 fn github_feed_tag(feed: &str, channel: UpdateChannel) -> Option<&str> {
-    feed.split("<entry>")
+    github_feed_tags(feed, channel).into_iter().next()
+}
+
+#[cfg(any(not(mobile), target_os = "android", test))]
+fn github_feed_tags(feed: &str, channel: UpdateChannel) -> Vec<&str> {
+    let mut tags: Vec<_> = feed
+        .split("<entry>")
         .skip(1)
         .filter_map(|entry| {
             let entry = entry.split("</entry>").next()?;
@@ -402,8 +408,10 @@ fn github_feed_tag(feed: &str, channel: UpdateChannel) -> Option<&str> {
             };
             matches.then_some((version, tag))
         })
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, tag)| tag)
+        .collect();
+    tags.sort_by(|a, b| b.0.cmp_precedence(&a.0));
+    tags.dedup_by(|a, b| a.1 == b.1);
+    tags.into_iter().map(|(_, tag)| tag).collect()
 }
 
 #[cfg(not(mobile))]
@@ -481,3 +489,9 @@ mod public_release_tests {
         .is_none());
     }
 }
+
+#[cfg(any(target_os = "android", test))]
+mod android;
+#[cfg(any(target_os = "android", test))]
+#[allow(unused_imports)]
+pub(crate) use android::*;

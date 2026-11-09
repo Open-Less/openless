@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const app = new URL('../', import.meta.url);
 const read = async (path) => (await readFile(new URL(path, app), 'utf8')).replace(/\r\n/g, '\n');
-const version = '2.0.2-Beta.5+build.20261109-47405c88';
+const version = '2.0.2-Beta.6+build.20261109-1f057451';
 const pkg = JSON.parse(await read('package.json'));
 const lock = JSON.parse(await read('package-lock.json'));
 const tauri = JSON.parse(await read('src-tauri/tauri.conf.json'));
