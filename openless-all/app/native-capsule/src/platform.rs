@@ -266,3 +266,28 @@ pub fn place(window: &winit::window::Window, bounds: [i32; 4]) {
         bounds[3].max(1) as u32,
     ));
 }
+
+/// Re-evaluate native screen coordinates even when the window currently ignores the mouse.
+pub fn update_input_regions(window: &winit::window::Window, regions: &[egui::Rect], pixels_per_point: f32) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use objc2::msg_send;
+        use objc2_app_kit::{NSView, NSWindow};
+        use objc2_foundation::NSPoint;
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::AppKit(handle) = handle.as_raw() {
+                let view = &*handle.ns_view.as_ptr().cast::<NSView>();
+                if let Some(native) = view.window() {
+                    let point: NSPoint = msg_send![&*native as &NSWindow, mouseLocationOutsideOfEventStream];
+                    let factor = window.scale_factor() as f32 / pixels_per_point;
+                    let height = window.inner_size().height as f32 / pixels_per_point;
+                    let point = egui::pos2(point.x as f32 * factor, height - point.y as f32 * factor);
+                    let _ = window.set_cursor_hittest(regions.iter().any(|rect| rect.contains(point)));
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, regions, pixels_per_point);
+}

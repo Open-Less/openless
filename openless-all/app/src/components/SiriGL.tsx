@@ -1,3 +1,4 @@
+import { releaseWebGL } from '../lib/webglResources';
 // SiriGL.tsx — WebGL recreation of Apple's new Siri animation; render core of the
 // capsule's pure-light form.
 //
@@ -241,7 +242,9 @@ export function isWebGLAvailable(): boolean {
   if (webglProbe != null) return webglProbe;
   try {
     const canvas = document.createElement('canvas');
-    webglProbe = canvas.getContext('webgl') != null;
+    const gl = canvas.getContext('webgl');
+    webglProbe = gl != null;
+    if (gl) releaseWebGL(gl);
   } catch {
     webglProbe = false;
   }
@@ -366,11 +369,13 @@ export function SiriGL({
     const vs = compile(gl.VERTEX_SHADER, VERTEX_SRC);
     const fs = compile(gl.FRAGMENT_SHADER, mode === 'wave' ? WAVE_FRAGMENT_SRC : ORB_FRAGMENT_SRC);
     if (!vs || !fs) {
+      releaseWebGL(gl, { shaders: [vs, fs] });
       canvas.remove();
       return undefined;
     }
     const program = gl.createProgram();
     if (!program) {
+      releaseWebGL(gl, { shaders: [vs, fs] });
       canvas.remove();
       return undefined;
     }
@@ -379,12 +384,18 @@ export function SiriGL({
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
       console.error('[SiriGL] program link failed:', gl.getProgramInfoLog(program));
+      releaseWebGL(gl, { program, shaders: [vs, fs] });
       canvas.remove();
       return undefined;
     }
     gl.useProgram(program);
 
     const buffer = gl.createBuffer();
+    if (!buffer) {
+      releaseWebGL(gl, { program, shaders: [vs, fs] });
+      canvas.remove();
+      return undefined;
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     const aPos = gl.getAttribLocation(program, 'aPos');
@@ -532,11 +543,7 @@ export function SiriGL({
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('resize', resizeCanvas);
       cancelAnimationFrame(raf);
-      gl.deleteBuffer(buffer);
-      gl.deleteProgram(program);
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      releaseWebGL(gl, { buffer, program, shaders: [vs, fs] });
       canvas.remove();
     };
   }, [mode, reducedMotion]);

@@ -18,7 +18,7 @@ const assert = {
     if (!threw) throw new Error('expected an error');
   },
 };
-import { insertionSlot, displacedTop } from './useSpringReorder';
+import { insertionSlot, displacedTop, advanceReorderSpring } from './useSpringReorder';
 const slots = [12, 98, 212, 290];
 assert.equal(insertionSlot(-20, slots), 0);
 assert.equal(insertionSlot(12, slots), 0);
@@ -34,3 +34,18 @@ for (let y = 0; y < 300; y++) {
   previous = position;
 }
 console.log('Fractional gaps, unequal row heights, monotonic motion and bounds passed');
+
+const one = advanceReorderSpring(0, 0, 36, 0.2);
+let many: [number, number] = [0, 0];
+for (let i = 0; i < 10; i++) many = advanceReorderSpring(many[0], many[1], 36, 0.02);
+assert.ok(Math.abs(one[0] - many[0]) < 1e-8);
+assert.ok(Math.abs(one[1] - many[1]) < 1e-8);
+assert.ok(one[0] > 12 && one[0] < 36);
+let pose: [number, number] = [0, 0];
+let previousPosition = 0;
+for (const dt of [0.016, 0.12, 0.2, 1]) {
+  pose = advanceReorderSpring(pose[0], pose[1], 36, dt);
+  assert.ok(pose[0] >= previousPosition && pose[0] <= 36);
+  previousPosition = pose[0];
+}
+console.log('Overdamped reorder motion is invariant to delayed frame partitions');

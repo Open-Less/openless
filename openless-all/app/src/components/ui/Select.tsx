@@ -14,6 +14,7 @@ interface SelectProps {
   open?: boolean;
   side?: 'top' | 'bottom';
   popupStyle?: CSSProperties;
+  popupClassName?: string;
 }
 
 /** Standard Base UI Select; keyboard navigation, typeahead and focus return stay upstream. */
@@ -29,6 +30,7 @@ export function Select({
   open,
   side = 'bottom',
   popupStyle,
+  popupClassName,
 }: SelectProps) {
   return (
     <BaseSelect.Root
@@ -59,7 +61,10 @@ export function Select({
           collisionPadding={8}
           alignItemWithTrigger={false}
         >
-          <BaseSelect.Popup className="ol-select-popup" style={popupStyle}>
+          <BaseSelect.Popup
+            className={['ol-select-popup', popupClassName].filter(Boolean).join(' ')}
+            style={popupStyle}
+          >
             <BaseSelect.List className="ol-select-list">
               {options.map((option) => (
                 <BaseSelect.Item

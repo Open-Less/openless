@@ -29,7 +29,7 @@ export function useReducedMotion() {
   );
 }
 
-type Frame = { opacity: string | number; transform: string };
+type Frame = { opacity: string | number; transform: string; width?: string };
 const VISIBLE: Frame = { opacity: 1, transform: 'none' };
 const FADED: Frame = { opacity: 0, transform: 'none' };
 const POP_HIDDEN: Frame = { opacity: 0, transform: 'translate3d(0, 18px, 0) scale(0.84)' };
@@ -234,30 +234,81 @@ export function useSelectionMotion(
         indicator.style.visibility = 'hidden';
         return;
       }
-      // Layout offsets stay correct while the parent dialog is scaled on entry.
-      const y = underline ? group.clientHeight - 2 : button.offsetTop;
-      const target = `translate3d(${button.offsetLeft}px, ${y}px, 0) scaleX(${button.offsetWidth / 100})`;
-      if (target === lastTarget) return;
-      const from = interrupted.current ?? currentFrame(indicator);
+      // Preserve fractional layout coordinates under CSS zoom and dialog transforms.
+      // offsetTop/offsetWidth round half-pixel padding and visibly uncenter the chip.
+      const outer = group.getBoundingClientRect();
+      const inner = button.getBoundingClientRect();
+      const style = getComputedStyle(group);
+      const borderX = parseFloat(style.borderLeftWidth) || 0;
+      const borderY = parseFloat(style.borderTopWidth) || 0;
+      const boxWidth =
+        parseFloat(style.width) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingLeft) || 0) +
+            (parseFloat(style.paddingRight) || 0) +
+            borderX +
+            (parseFloat(style.borderRightWidth) || 0));
+      const boxHeight =
+        parseFloat(style.height) +
+        (style.boxSizing === 'border-box'
+          ? 0
+          : (parseFloat(style.paddingTop) || 0) +
+            (parseFloat(style.paddingBottom) || 0) +
+            borderY +
+            (parseFloat(style.borderBottomWidth) || 0));
+      const scaleX = outer.width / boxWidth || 1;
+      const scaleY = outer.height / boxHeight || 1;
+      const x = (inner.left - outer.left) / scaleX - borderX;
+      const y = underline
+        ? boxHeight - borderY - (parseFloat(style.borderBottomWidth) || 0) - 2
+        : (inner.top - outer.top) / scaleY - borderY;
+      const height = underline ? 2 : inner.height / scaleY;
+      const target = `translate3d(${x}px, ${y}px, 0)`;
+      const width = `${inner.width / scaleX}px`;
+      const targetKey = `${target}:${width}:${height}`;
+      if (targetKey === lastTarget) return;
+      const from = interrupted.current ?? {
+        ...currentFrame(indicator),
+        width: getComputedStyle(indicator).width,
+      };
       interrupted.current = null;
       motion?.cancel();
       indicator.style.transform = target;
-      indicator.style.height = `${underline ? 2 : button.offsetHeight}px`;
+      indicator.style.width = width;
+      indicator.style.height = `${height}px`;
       indicator.style.visibility = 'visible';
-      lastTarget = target;
+      lastTarget = targetKey;
       if (moving && !reduced && !keyboardInteraction() && typeof indicator.animate === 'function') {
-        motion = animate(indicator, from, { opacity: 1, transform: target }, ENTER_MS, false);
+        motion = animate(
+          indicator,
+          from,
+          { opacity: 1, transform: target, width },
+          ENTER_MS,
+          false,
+        );
         motion.animation.id = 'ol-selection-move';
         void motion.animation.finished.then(motion.cancel).catch(() => {});
       }
     };
     position(previous.current !== null && previous.current !== selection);
     previous.current = selection;
-    const observer = new ResizeObserver(() => position(false));
+    let resizeFrame = 0;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        position(false);
+      });
+    });
     observer.observe(group);
     return () => {
-      interrupted.current = currentFrame(indicator);
+      interrupted.current = {
+        ...currentFrame(indicator),
+        width: getComputedStyle(indicator).width,
+      };
       observer.disconnect();
+      cancelAnimationFrame(resizeFrame);
       motion?.cancel();
     };
   }, [groupRef, indicatorRef, selection, underline, reduced]);

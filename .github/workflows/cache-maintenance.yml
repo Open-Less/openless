@@ -6,12 +6,15 @@ name: Cache maintenance
 # cold build. This job keeps the budget visible and drops the scopes that can
 # never be restored again: pull requests that are already closed or merged.
 #
-# It runs weekly and on demand. It never touches branch or tag scopes, so the
-# caches the release path depends on are safe.
+# It runs daily, when a pull request closes, and on demand. It retains the
+# newest branch generations and never prunes tag scopes.
 on:
   schedule:
-    # Monday 03:17 UTC: after the weekend, before the working week.
-    - cron: '17 3 * * 1'
+    # Daily cleanup prevents superseded build generations evicting baseline caches.
+    - cron: '17 3 * * *'
+  pull_request:
+    types: [closed]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:

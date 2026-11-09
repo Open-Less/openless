@@ -31,7 +31,6 @@ import {
   searchSettingsSections,
   visibleSettingsSections,
   visibleAdvancedPages,
-  isTestingFeaturePage,
   type AdvancedPageId,
   type ServiceViewId,
   type SettingsSectionId,
@@ -55,6 +54,7 @@ interface SettingsModalProps {
   initialServiceView?: ServiceViewId;
   /** Keeps the closing surface mounted until its exit finishes. */
   closing?: boolean;
+  onPaintedChange?: (ready: boolean) => void;
 }
 
 const LINKS = [
@@ -68,6 +68,7 @@ export function SettingsModal({
   initialSettingsSection,
   initialServiceView,
   closing = false,
+  onPaintedChange,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   // The provider form's writes settle before close/section switch (async saves don't
@@ -86,7 +87,7 @@ export function SettingsModal({
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const experimentalAsr = useExperimentalAsr(platformCaps?.platform === 'desktop' && os === 'mac');
-  const { prefs, updatePrefs } = useHotkeySettings();
+  const { updatePrefs } = useHotkeySettings();
   const [asrNavigation, setAsrNavigation] = useState(0);
   const openExperimentalAsrChannels = async () => {
     const navigated = await providerForm.finish(async () => {
@@ -105,6 +106,20 @@ export function SettingsModal({
   // Animate the opaque workspace as one surface so its backdrop follows the
   // same interrupted entry and exit lifecycle as the settings content.
   useOverlayMotion(overlayRef, closing, 'backdrop', true, 'settings');
+  useLayoutEffect(() => {
+    onPaintedChange?.(false);
+    if (closing) return;
+    let cancelled = false;
+    const animations = overlayRef.current?.getAnimations?.() ?? [];
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+      if (!cancelled) onPaintedChange?.(true);
+    });
+    return () => {
+      cancelled = true;
+      onPaintedChange?.(false);
+    };
+  }, [closing, onPaintedChange]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const destination = `${requestedSection}:${requestedAdvancedPage ?? ''}`;
   const [sectionKey, advancedKey] = destination.split(':');
@@ -135,8 +150,7 @@ export function SettingsModal({
   );
   const searching = query.trim().length > 0;
   const results = searchSettingsSections(sections, query);
-  const testingFeaturesEnabled = prefs?.testingFeaturesEnabled === true;
-  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os, testingFeaturesEnabled);
+  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os);
   const activeAdvancedPage =
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
@@ -203,8 +217,8 @@ export function SettingsModal({
 
   useEffect(() => {
     if (advancedPage && !advancedPages.some((page) => page.id === advancedPage))
-      setAdvancedPage(isTestingFeaturePage(advancedPage) ? 'testingFeatures' : null);
-  }, [advancedPage, platformCaps, os, testingFeaturesEnabled]);
+      setAdvancedPage(null);
+  }, [advancedPage, platformCaps, os]);
 
   const openAdvancedPage = (page: AdvancedPageId) => {
     setAdvancedPage(page);
@@ -217,7 +231,7 @@ export function SettingsModal({
       return;
     }
     const previousPage = advancedPage;
-    setAdvancedPage(isTestingFeaturePage(previousPage) ? 'testingFeatures' : null);
+    setAdvancedPage(null);
     window.requestAnimationFrame(() => {
       surfaceRef.current
         ?.querySelector<HTMLElement>(`[data-ol-advanced-entry="${previousPage}"]`)
@@ -288,7 +302,7 @@ export function SettingsModal({
         alignItems: 'center',
         gap: 8,
         padding: '7px 10px',
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         border: '0.5px solid var(--ol-line-strong)',
         background: 'var(--ol-surface)',
         minWidth: 0,
@@ -393,7 +407,14 @@ export function SettingsModal({
                   flexShrink: 0,
                 }}
               >
-                <div style={{ flex: 1, order: 0, fontSize: 17, fontWeight: 650 }}>
+                <div
+                  style={{
+                    flex: 1,
+                    order: 0,
+                    fontSize: 17,
+                    fontWeight: 'var(--ol-font-weight-demibold)',
+                  }}
+                >
                   {t('shell.footer.settings')}
                 </div>
                 <button
@@ -536,20 +557,8 @@ export function SettingsModal({
                             type="button"
                             className="ol-settings-back"
                             onClick={backToAdvanced}
-                            aria-label={t(
-                              showingVoiceSettings
-                                ? 'modal.back'
-                                : isTestingFeaturePage(advancedPage)
-                                  ? 'modal.backToTestingFeatures'
-                                  : 'modal.backToAdvanced',
-                            )}
-                            title={t(
-                              showingVoiceSettings
-                                ? 'modal.back'
-                                : isTestingFeaturePage(advancedPage)
-                                  ? 'modal.backToTestingFeatures'
-                                  : 'modal.backToAdvanced',
-                            )}
+                            aria-label={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
+                            title={t(showingVoiceSettings ? 'modal.back' : 'modal.back')}
                           >
                             <Icon name="chevLeft" size={19} />
                           </button>
@@ -562,7 +571,7 @@ export function SettingsModal({
                             flex: 1,
                             minWidth: 0,
                             fontSize: 21,
-                            fontWeight: 650,
+                            fontWeight: 'var(--ol-font-weight-demibold)',
                             letterSpacing: '-0.025em',
                             outline: 'none',
                             overflow: 'hidden',
@@ -571,6 +580,9 @@ export function SettingsModal({
                           }}
                         >
                           {contentTitle}
+                          {activeAdvancedPage &&
+                            'beta' in activeAdvancedPage &&
+                            activeAdvancedPage.beta && <span className="ol-beta-tag">Beta</span>}
                         </h2>
                         {!mobile && (
                           <span style={{ color: 'var(--ol-ink-3)', fontSize: 12, flexShrink: 0 }}>
@@ -592,7 +604,7 @@ export function SettingsModal({
                           style={{
                             margin: 0,
                             fontSize: 20,
-                            fontWeight: 650,
+                            fontWeight: 'var(--ol-font-weight-demibold)',
                             letterSpacing: '-0.025em',
                             outline: 'none',
                           }}
@@ -676,7 +688,7 @@ export function SettingsModal({
                               style={{
                                 padding: '24px 16px',
                                 border: '0.5px solid var(--ol-line)',
-                                borderRadius: 10,
+                                borderRadius: 'var(--ol-r-md)',
                                 textAlign: 'center',
                               }}
                             >
@@ -793,7 +805,7 @@ const iconButtonStyle: CSSProperties = {
   height: 30,
   padding: 0,
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-3)',
   cursor: 'pointer',
@@ -804,7 +816,7 @@ const navButtonStyle: CSSProperties = {
   gap: 10,
   padding: '8px 10px',
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'transparent',
   color: 'var(--ol-ink-2)',
   font: 'inherit',
@@ -820,7 +832,7 @@ const railButtonStyle: CSSProperties = {
   gap: 10,
   flexShrink: 0,
   border: 0,
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   fontFamily: 'inherit',
   fontSize: 14,
   textAlign: 'left',
