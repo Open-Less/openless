@@ -513,7 +513,8 @@ html
     .ol-segmented-indicator,
     .ol-service-view-indicator,
     .ol-select-popup,
-    .ol-select-trigger
+    .ol-select-trigger,
+    .ol-settings-search-field
   ) {
   clip-path: none !important;
   border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;

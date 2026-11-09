@@ -26,6 +26,9 @@ async function openShortcuts(page: Page) {
 test('shortcut search remains visible without focus', async ({ page }) => {
   await openShortcuts(page);
   const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await expect(search).toHaveCSS('appearance', 'none');
+  await expect(search).toHaveCSS('border-radius', '16px');
   const colors = await search.evaluate((element) => ({
     search: getComputedStyle(element).backgroundColor,
     page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
@@ -33,6 +36,10 @@ test('shortcut search remains visible without focus', async ({ page }) => {
   }));
   expect(colors.search).not.toBe('rgba(0, 0, 0, 0)');
   expect(colors.search).not.toBe(colors.page);
+  await search.focus();
+  await expect(search).toHaveCSS('clip-path', 'none');
+  await search.fill('速记');
+  await expect(page.locator('.ol-shortcut-row')).toHaveCount(1);
 });
 
 test('awareness settings have a dedicated advanced page', async ({ page }) => {
