@@ -1104,6 +1104,8 @@ const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
+        // Preserve the custom provider's "0/blank = send the whole clip" setting.
+        OPENAI_COMPATIBLE_ASR_PROVIDER_ID => advanced.chunk_duration_ms,
         _ => advanced
             .chunk_duration_ms
             .or(Some(DEFAULT_BATCH_ASR_CHUNK_MS)),
@@ -1307,6 +1309,26 @@ mod tests {
             advanced_asr_config_for("whisper", Some(r#"{"verboseJson":true}"#)),
             AdvancedAsrConfig::default()
         );
+    }
+
+    #[test]
+    fn custom_asr_disabled_chunking_keeps_long_recordings_whole() {
+        let pcm = vec![0u8; 32_000 * 660];
+        for raw in [
+            None,
+            Some(""),
+            Some("{}"),
+            Some(r#"{"chunkDurationMs":0}"#),
+            Some(r#"{"chunkDurationMs":null}"#),
+        ] {
+            let advanced = advanced_asr_config_for(OPENAI_COMPATIBLE_ASR_PROVIDER_ID, raw);
+            let limit = batch_asr_chunk_limit_ms(OPENAI_COMPATIBLE_ASR_PROVIDER_ID, advanced);
+            let chunks = crate::asr::whisper::split_pcm_by_duration(&pcm, limit);
+
+            assert_eq!(chunks.len(), 1, "disabled chunking was overridden: {raw:?}");
+            assert_eq!(limit, None);
+            assert_eq!(chunks[0].len(), pcm.len());
+        }
     }
 
     #[test]
