@@ -94,14 +94,7 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  [
-    'voiceEnhancement',
-    'cursorContext',
-    'startupDiagnostics',
-    'vocabularyLearning',
-    'customSyncServer',
-    'debug',
-  ],
+  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
@@ -127,8 +120,29 @@ assert.equal(
 const advancedIds: readonly string[] = ADVANCED_PAGES.map((item) => item.id);
 assert.equal(
   advancedIds.includes('vocabularyLearning'),
+  false,
+  'correction learning shares the awareness page rather than a duplicate menu entry',
+);
+
+assert.equal(
+  advancedIds.includes('cursorContext'),
   true,
-  'manual correction learning remains reachable from advanced features',
+  'awareness remains reachable from advanced features',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'liveInput'),
+  false,
+  'retired macOS in-field streaming is not offered',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'win').some((item) => item.id === 'liveInput'),
+  true,
+  'Windows retains its advanced text insertion page',
+);
+assert.equal(
+  visibleAdvancedPages('android', 'android').some((item) => item.id === 'liveInput'),
+  false,
+  'Windows text insertion is not offered to Android',
 );
 
 const sectionIds = SETTINGS_SECTIONS.map((item) => item.id);
