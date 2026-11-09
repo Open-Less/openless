@@ -1,4 +1,3 @@
-import { VocabularyLearningSection } from './VocabularyLearningSection';
 // Content page for each sidebar tab in the settings dialog. Each tab is a vertical stack of section cards;
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
