@@ -4804,6 +4804,12 @@ impl TauriTextInsertionSession {
             if self.context.insertion.allow_non_tsf_fallback {
                 return self.copy_fallback(text).await;
             }
+            #[cfg(target_os = "macos")]
+            {
+                log::warn!("[core-adapter] copying transcript to clipboard: {error}");
+                return self.copy_fallback(text).await;
+            }
+            #[cfg(not(target_os = "macos"))]
             return Err(error);
         }
         #[cfg(target_os = "windows")]
