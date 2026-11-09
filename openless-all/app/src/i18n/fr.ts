@@ -554,6 +554,7 @@ export const fr: typeof zhCN = {
       settings: 'Préférences : raccourcis, fournisseurs, confidentialité et mises à jour',
     },
     footer: {
+      usage: 'Utilisation',
       account: 'Compte',
       feedback: 'Commentaires',
       settings: 'Réglages',
@@ -1218,9 +1219,10 @@ export const fr: typeof zhCN = {
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
     advancedPages: {
+      liveInputTitle: 'Insertion de texte',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
-      cursorContextTitle: 'Contexte du curseur et phrases courtes',
+      cursorContextTitle: 'Perception',
       startupDiagnosticsTitle: 'Diagnostic de démarrage',
       cursorContextHint:
         'Le contexte du curseur est activé par défaut. Désactivez-le ici si le texte voisin ne doit pas partir avec les demandes de reformulation.',
@@ -1287,6 +1289,24 @@ export const fr: typeof zhCN = {
       useSystemProxyLabel: 'Utiliser le proxy système',
       useSystemProxyDesc:
         'Les requêtes suivent le proxy système si cette option est activée. Sinon, elles se connectent directement, ce qui réduit souvent la latence des services locaux, mais peut empêcher l’accès à GitHub ou aux mises à jour dans certaines régions. Les flux vocaux en temps réel et Less Computer ne sont pas concernés.',
+    },
+    expressionLearning: {
+      clearHint:
+        'Après effacement, une dictée en cours peut encore utiliser les préférences capturées à son démarrage.',
+      lineBreaksMore: 'Plus de sauts de ligne',
+      lineBreaksLess: 'Moins de sauts de ligne',
+      exclamationsMore: 'Plus de points d’exclamation',
+      exclamationsLess: 'Moins de points d’exclamation',
+      terminalPunctuationMore: 'Utiliser la ponctuation finale',
+      terminalPunctuationLess: 'Réduire la ponctuation finale',
+
+      title: 'Habitudes d’expression',
+      enabled: 'Apprendre les habitudes',
+      description:
+        'Observe localement les modifications après dictée ; les données d’expression ne stockent que des statistiques abstraites. L’historique est géré séparément. Les préférences répétées et cohérentes deviennent de courtes instructions envoyées au modèle de texte choisi. La désactivation arrête immédiatement l’apprentissage et leur application aux prochaines dictées ; une dictée en cours peut encore utiliser les préférences déjà capturées.',
+      status: '{{count}} préférences stables',
+      clear: 'Effacer les habitudes',
+      error: 'Impossible de lire ou enregistrer les habitudes.',
     },
     vocabularyLearning: {
       title: 'Apprendre des corrections',
@@ -2212,10 +2232,10 @@ export const fr: typeof zhCN = {
         'SendInput Unicode écrit directement, sans passer par TSF / IME et sans changer de méthode de saisie.',
       streamingInsertHintLinux:
         'Utilise le complément fcitx5 pour envoyer le texte ; l’insertion progressive simule les touches avec enigo + XTest.',
-      macosCompositionInputLabel: 'Transcription en direct dans le champ de saisie (macOS)',
+      macosCompositionInputLabel: 'Transcription en direct dans le champ de saisie',
       macosCompositionInputDesc:
         'Affiche la transcription dans le champ initial, puis la remplace par le résultat corrigé ou traduit. Nécessite les autorisations d’accessibilité et un éditeur compatible. Déplacer le curseur ou modifier le texte arrête le remplacement.',
-      windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ (Windows)',
+      windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ',
       windowsCompositionInputDesc:
         "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
@@ -2437,6 +2457,7 @@ export const fr: typeof zhCN = {
     backToAdvanced: 'Retour aux fonctions avancées',
     back: 'Retour',
     advancedPages: {
+      liveInput: 'Configurer la transcription en direct dans le champ.',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       customSyncServer:
         'Pour les services auto-hébergés uniquement ; la synchronisation officielle ne nécessite aucune configuration.',

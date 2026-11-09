@@ -546,6 +546,7 @@ export const es: typeof zhCN = {
       settings: 'Preferencias: atajos, proveedores, privacidad y actualizaciones',
     },
     footer: {
+      usage: 'Uso',
       account: 'Cuenta',
       feedback: 'Comentarios',
       settings: 'Ajustes',
@@ -1201,9 +1202,10 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
-      cursorContextTitle: 'Contexto del cursor y frases cortas',
+      cursorContextTitle: 'Percepción',
       startupDiagnosticsTitle: 'Diagnóstico de inicio',
       cursorContextHint:
         'El contexto del cursor está activado de forma predeterminada. Desactívalo aquí si no quieres enviar el texto cercano con las solicitudes de mejora.',
@@ -1270,6 +1272,24 @@ export const es: typeof zhCN = {
       useSystemProxyLabel: 'Usar proxy del sistema',
       useSystemProxyDesc:
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
+    },
+    expressionLearning: {
+      clearHint:
+        'Tras borrar, un dictado en curso puede seguir usando las preferencias capturadas al comenzar.',
+      lineBreaksMore: 'Más saltos de línea',
+      lineBreaksLess: 'Menos saltos de línea',
+      exclamationsMore: 'Más signos de exclamación',
+      exclamationsLess: 'Menos signos de exclamación',
+      terminalPunctuationMore: 'Usar puntuación final',
+      terminalPunctuationLess: 'Reducir la puntuación final',
+
+      title: 'Hábitos de expresión',
+      enabled: 'Aprender hábitos de expresión',
+      description:
+        'Observa localmente los cambios de formato tras el dictado; los datos de expresión solo guardan estadísticas abstractas. El historial se gestiona por separado. Las preferencias repetidas y coherentes se envían como instrucciones breves al modelo de texto elegido. Al desactivarlo, el aprendizaje se detiene de inmediato y deja de aplicarse a los siguientes dictados; uno en curso puede seguir usando las preferencias ya capturadas.',
+      status: '{{count}} preferencias estables',
+      clear: 'Borrar hábitos',
+      error: 'No se pudieron leer o guardar los hábitos.',
     },
     vocabularyLearning: {
       title: 'Aprender de las correcciones',
@@ -2185,10 +2205,10 @@ export const es: typeof zhCN = {
         'SendInput Unicode escribe directamente, sin pasar por TSF / IME y sin cambiar de método de entrada.',
       streamingInsertHintLinux:
         'Usa el complemento fcitx5 para enviar texto; la inserción progresiva simula teclas mediante enigo + XTest.',
-      macosCompositionInputLabel: 'Transcripción en directo en el campo de entrada (macOS)',
+      macosCompositionInputLabel: 'Transcripción en directo en el campo de entrada',
       macosCompositionInputDesc:
         'Muestra el reconocimiento en el campo original y después lo sustituye por el texto corregido o traducido. Requiere permiso de Accesibilidad y un editor compatible. Mover el cursor o editar el texto detiene la sustitución.',
-      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo (Windows)',
+      windowsCompositionInputLabel: 'Mostrar la transcripción en vivo en el campo',
       windowsCompositionInputDesc:
         'Mientras hablas, el texto reconocido aparece subrayado en el campo y se reemplaza por el resultado final al terminar. Requiere el componente de entrada TSF de OpenLess y una aplicación compatible con TSF.',
       streamingInsertSaveClipboardLabel: 'Copiar al portapapeles',
@@ -2407,6 +2427,7 @@ export const es: typeof zhCN = {
     backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
+      liveInput: 'Configurar la transcripción en directo en el campo.',
       experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:
         'Solo para servicios propios; la sincronización oficial no requiere configuración.',

@@ -810,6 +810,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_consent_or_secret",
     },
     PreferenceField {
+        rust_name: "expression_learning_enabled",
+        key: "expressionLearningEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "vocabulary_learning_settings",
         key: "vocabularyLearningSettings",
         class: PreferenceClass::Excluded,

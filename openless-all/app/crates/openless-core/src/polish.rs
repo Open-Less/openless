@@ -518,6 +518,9 @@ impl ActiveLLMProvider {
     }
 }
 
+pub type LlmUsageObserver =
+    std::sync::Arc<dyn Fn(uuid::Uuid, crate::usage_ledger::ReportedTokens) + Send + Sync>;
+
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
     siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
@@ -531,6 +534,7 @@ pub struct OpenAICompatibleLLMProvider {
     /// connection pool — a fresh TLS handshake on every polish, exactly the cost that
     /// cache exists to avoid. A constant cap keeps the cache key single.
     polish_client: reqwest::Client,
+    usage_observer: Option<LlmUsageObserver>,
 }
 
 impl OpenAICompatibleLLMProvider {
@@ -553,6 +557,31 @@ impl OpenAICompatibleLLMProvider {
             dictation_session_id: None,
             siwc_access: None,
             polish_client,
+            usage_observer: None,
+        }
+    }
+
+    /// The observer must return promptly and receives no request text.
+    pub fn with_usage_observer(mut self, observer: LlmUsageObserver) -> Self {
+        self.usage_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn set_usage_observer(&mut self, observer: LlmUsageObserver) {
+        self.usage_observer = Some(observer);
+    }
+
+    fn report_usage(&self, request_id: uuid::Uuid, usage: crate::usage_ledger::ReportedTokens) {
+        if usage != crate::usage_ledger::ReportedTokens::default() {
+            if let Some(observer) = &self.usage_observer {
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    observer(request_id, usage)
+                }))
+                .is_err()
+                {
+                    log::warn!("usage observer panicked");
+                }
+            }
         }
     }
 
@@ -833,6 +862,17 @@ impl OpenAICompatibleLLMProvider {
             "stream": stream,
             "messages": messages,
         });
+        if stream
+            && self.usage_observer.is_some()
+            && self.config.provider_id == "openai"
+            && url::Url::parse(&self.config.base_url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .as_deref()
+                == Some("api.openai.com")
+        {
+            body["stream_options"] = json!({"include_usage": true});
+        }
         if let Some(temperature) = self.config.temperature {
             // OpenAI 官方 gpt-5 / gpt-6 系列在 Chat Completions 只接受默认 temperature=1，
             // 传 0.3 会被 400 拒绝（issue #857 / #1101）。官方渠道的这些模型不下发该字段，
@@ -942,6 +982,14 @@ impl OpenAICompatibleLLMProvider {
                 status: status.as_u16(),
                 body: preview.to_string(),
             });
+        }
+
+        if self.usage_observer.is_some() {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                if let Some(usage) = crate::usage_ledger::ReportedTokens::from_response(&value) {
+                    self.report_usage(request_id, usage);
+                }
+            }
         }
 
         let extracted =
@@ -1128,6 +1176,7 @@ impl OpenAICompatibleLLMProvider {
         if !cancelled {
             events.finish()?;
         }
+        self.report_usage(request_id, events.reported_tokens());
         let cleaned = clean_polish_output(&full_text);
         log::info!(
             "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
@@ -2503,6 +2552,154 @@ mod tests {
         let err = finish_utf8_sse_chunks(&mut buffer, &mut pending)
             .expect_err("unfinished codepoint should fail at EOF");
         assert!(err.to_string().contains("middle of a UTF-8 codepoint"));
+    }
+
+    #[tokio::test]
+    async fn provider_reports_explicit_streaming_usage_without_changing_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let events = b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
+            write_chunked_sse_response(&mut stream, &[events]);
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        let text = provider
+            .chat_completion_messages_streaming(
+                vec![serde_json::json!({"role":"user","content":"private text"})],
+                StreamingTimeouts {
+                    first_token: Duration::from_secs(2),
+                    idle: Duration::from_secs(2),
+                },
+                |_| {},
+                || false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(text, "hello");
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(21));
+        assert_eq!(observations[0].1.output, Some(4));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_reports_explicit_non_streaming_usage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":33,"completion_tokens":6}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        assert_eq!(
+            provider
+                .chat_completion("system", "private text", Duration::from_secs(2))
+                .await
+                .unwrap(),
+            "hello"
+        );
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(33));
+        assert_eq!(observations[0].1.output, Some(6));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn usage_observer_panic_does_not_escape_provider() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(|_, _| panic!("fixture observer")));
+        provider.report_usage(
+            uuid::Uuid::new_v4(),
+            crate::usage_ledger::ReportedTokens {
+                input: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn missing_provider_usage_does_not_emit_zero_counts() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let captured = calls.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |_, _| {
+            captured.fetch_add(1, Ordering::Relaxed);
+        }));
+        provider.report_usage(uuid::Uuid::new_v4(), Default::default());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn usage_stream_option_is_limited_to_official_openai_chat_requests() {
+        let observer: LlmUsageObserver = std::sync::Arc::new(|_, _| {});
+        let official = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer.clone());
+        assert_eq!(
+            official.chat_body(true, vec![])["stream_options"]["include_usage"],
+            true
+        );
+        assert!(official
+            .chat_body(false, vec![])
+            .get("stream_options")
+            .is_none());
+        let proxy = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "Proxy",
+            "https://proxy.example/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer);
+        assert!(proxy
+            .chat_body(true, vec![])
+            .get("stream_options")
+            .is_none());
     }
 
     #[tokio::test]

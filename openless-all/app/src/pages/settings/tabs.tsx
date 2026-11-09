@@ -1,4 +1,3 @@
-import { VocabularyLearningSection } from './VocabularyLearningSection';
 // Content page for each sidebar tab in the settings dialog. Each tab is a vertical stack of section cards;
 // the real logic lives in the *Section files — this only decides which sections belong to which tab.
 
@@ -27,6 +26,8 @@ import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
+import { VocabularyLearningSection } from './VocabularyLearningSection';
+import { ExpressionLearningSection } from './ExpressionLearningSection';
 import { AudioDspSettings } from './AudioDspSettings';
 import { BetaChannelSection } from './BetaChannelSection';
 import { AutoUpdateSection } from './AutoUpdateSection';
@@ -617,6 +618,31 @@ function CursorContextSection() {
   );
 }
 
+function LiveInputSection() {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  if (!prefs || detectOS() !== 'win') return null;
+  return (
+    <Card>
+      <ExperimentalSectionTitle badge="Beta">
+        {t('settings.advancedPages.liveInputTitle')}
+      </ExperimentalSectionTitle>
+      <SettingRow
+        label={t('settings.advanced.windowsCompositionInputLabel')}
+        desc={t('settings.advanced.windowsCompositionInputDesc')}
+      >
+        <Toggle
+          on={prefs.windowsCompositionInput}
+          disabled={prefs.windowsInsertionMode !== 'tsf'}
+          onToggle={(next) =>
+            void updatePrefs((current) => ({ ...current, windowsCompositionInput: next }))
+          }
+        />
+      </SettingRow>
+    </Card>
+  );
+}
+
 // Privacy: local-first explanation + permission management · data storage.
 export function PrivacyTab() {
   const { t } = useTranslation();
@@ -672,6 +698,7 @@ export function AdvancedTab({
   onOpenAsr: () => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const platformCaps = usePlatformCaps();
   const entries = pages;
   const list = (
     <div className="ol-advanced-settings-list">
@@ -705,8 +732,20 @@ export function AdvancedTab({
               <ExperimentalAsrSection controller={experimentalAsr} onOpenAsr={onOpenAsr} />
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
-            {item.id === 'cursorContext' && <CursorContextSection />}
-            {item.id === 'vocabularyLearning' && <VocabularyLearningSection />}
+            {item.id === 'liveInput' && <LiveInputSection />}
+            {item.id === 'cursorContext' && (
+              <div
+                className="ol-awareness-sections"
+                style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+              >
+                <CursorContextSection />
+                {showsCursorContextControl(platformCaps?.platform, detectOS()) && (
+                  <VocabularyLearningSection />
+                )}
+                {platformCaps?.platform === 'desktop' &&
+                  (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
+              </div>
+            )}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

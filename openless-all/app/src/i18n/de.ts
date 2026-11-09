@@ -549,6 +549,7 @@ export const de: typeof zhCN = {
       settings: 'Einstellungen: Kurzbefehle, Dienste, Datenschutz und Updates',
     },
     footer: {
+      usage: 'Nutzung',
       account: 'Konto',
       feedback: 'Rückmeldung',
       settings: 'Einstellungen',
@@ -1208,9 +1209,10 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      liveInputTitle: 'Texteingabe',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
-      cursorContextTitle: 'Cursorkontext und kurze Eingaben',
+      cursorContextTitle: 'Wahrnehmung',
       startupDiagnosticsTitle: 'Startdiagnose',
       cursorContextHint:
         'Der Cursorkontext ist standardmäßig aktiv. Hier deaktivieren, wenn naher Text nicht mit Überarbeitungsanfragen gesendet werden soll.',
@@ -1276,6 +1278,24 @@ export const de: typeof zhCN = {
       useSystemProxyLabel: 'Systemproxy verwenden',
       useSystemProxyDesc:
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
+    },
+    expressionLearning: {
+      clearHint:
+        'Nach dem Löschen kann ein laufendes Diktat noch die beim Start erfassten Vorlieben verwenden.',
+      lineBreaksMore: 'Mehr Zeilenumbrüche',
+      lineBreaksLess: 'Weniger Zeilenumbrüche',
+      exclamationsMore: 'Mehr Ausrufezeichen',
+      exclamationsLess: 'Weniger Ausrufezeichen',
+      terminalPunctuationMore: 'Satzzeichen am Ende verwenden',
+      terminalPunctuationLess: 'Weniger Satzzeichen am Ende',
+
+      title: 'Ausdrucksgewohnheiten',
+      enabled: 'Ausdrucksgewohnheiten lernen',
+      description:
+        'Beobachtet Formatänderungen nach dem Diktat lokal; Ausdrucksdaten speichern nur abstrakte Statistiken. Der Verlauf wird separat verwaltet. Wiederholte, konsistente Zeilenumbruch- und Satzzeichenpräferenzen werden als kurze Anweisungen an das gewählte Textmodell gesendet. Ausschalten beendet das Lernen sofort und die Anwendung ab dem nächsten Diktat; ein laufendes Diktat kann noch erfasste Vorlieben verwenden.',
+      status: '{{count}} stabile Vorlieben',
+      clear: 'Ausdrucksgewohnheiten löschen',
+      error: 'Ausdrucksgewohnheiten konnten nicht gelesen oder gespeichert werden.',
     },
     vocabularyLearning: {
       title: 'Aus Korrekturen lernen',
@@ -2206,10 +2226,10 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
-      macosCompositionInputLabel: 'Live-Transkript im Eingabefeld (macOS)',
+      macosCompositionInputLabel: 'Live-Transkript im Eingabefeld',
       macosCompositionInputDesc:
         'Zeigt die Erkennung im ursprünglichen Eingabefeld und ersetzt sie anschließend durch den überarbeiteten oder übersetzten Text. Erfordert Bedienungshilfen und einen kompatiblen Editor. Cursorbewegungen oder manuelle Änderungen stoppen die Ersetzung.',
-      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
+      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen',
       windowsCompositionInputDesc:
         'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
@@ -2428,6 +2448,7 @@ export const de: typeof zhCN = {
     backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
+      liveInput: 'Live-Transkript im Eingabefeld konfigurieren.',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       customSyncServer:
         'Nur für selbst gehostete Dienste; die offizielle Synchronisierung benötigt keine Konfiguration.',

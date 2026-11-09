@@ -512,6 +512,7 @@ export const zhTW: typeof zhCN = {
       settings: '偏好設定：快捷鍵、提供商、隱私與更新',
     },
     footer: {
+      usage: '用量',
       account: '帳號',
       feedback: '反饋',
       settings: '設定',
@@ -1135,9 +1136,10 @@ export const zhTW: typeof zhCN = {
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
     advancedPages: {
+      liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
-      cursorContextTitle: '游標上下文與短句行為',
+      cursorContextTitle: '感知',
       startupDiagnosticsTitle: '啟動診斷',
       cursorContextHint: '游標上下文預設開啟。如果不希望潤色請求帶上附近文字，可以在這裡關閉。',
     },
@@ -1195,6 +1197,23 @@ export const zhTW: typeof zhCN = {
       useSystemProxyLabel: '使用系統代理',
       useSystemProxyDesc:
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
+    },
+    expressionLearning: {
+      clearHint: '清除後，進行中的聽寫可能仍使用開始時已擷取的偏好。',
+      lineBreaksMore: '更常分行',
+      lineBreaksLess: '減少分行',
+      exclamationsMore: '更常使用驚嘆號',
+      exclamationsLess: '減少驚嘆號',
+      terminalPunctuationMore: '保留句末標點',
+      terminalPunctuationLess: '減少句末標點',
+
+      title: '表達習慣',
+      enabled: '學習表達習慣',
+      description:
+        '僅在本機觀察聽寫後的排版修改；表達習慣資料只儲存抽象統計，不儲存觀察到的文字。歷史記錄另行管理。反覆且一致的分行、驚嘆號及句末標點偏好穩定後，會以簡短形式指令傳給所選文字模型；關閉後立即停止學習，並從下一次聽寫起停止套用；進行中的聽寫可能仍使用已擷取的偏好。',
+      status: '已形成 {{count}} 項穩定偏好',
+      clear: '清除表達習慣',
+      error: '無法讀取或儲存表達習慣，請重試。',
     },
     vocabularyLearning: {
       title: '手改學詞',
@@ -2021,10 +2040,10 @@ export const zhTW: typeof zhCN = {
       streamingInsertHintMac: '臨時切到 ABC 輸入源，避免 CJK IME 攔截，會話結束後自動切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字元，繞過 TSF / IME，不切輸入法。',
       streamingInsertHintLinux: '透過 fcitx5 外掛提交文字；串流輸入使用 enigo + XTest 合成按鍵。',
-      macosCompositionInputLabel: '即時原文顯示在輸入框（macOS）',
+      macosCompositionInputLabel: '即時原文顯示在輸入框',
       macosCompositionInputDesc:
         '錄音時在原輸入框顯示辨識文字，完成後整段取代為整理或翻譯結果。需要輔助使用授權及編輯器支援；移動游標或手動編輯會停止即時取代。',
-      windowsCompositionInputLabel: '即時原文顯示在輸入框（Windows）',
+      windowsCompositionInputLabel: '即時原文顯示在輸入框',
       windowsCompositionInputDesc:
         '錄音時把辨識到的文字以帶底線的組合文字顯示在輸入框中，結束後替換為最終結果。需要啟用 OpenLess 的 TSF 輸入法元件，且目標應用支援文字服務框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪貼簿',
@@ -2228,6 +2247,7 @@ export const zhTW: typeof zhCN = {
     backToAdvanced: '返回進階功能',
     back: '返回',
     advancedPages: {
+      liveInput: '設定即時原文在輸入框中的顯示。',
       experiments: '設定實驗功能與擴充選項。',
       customSyncServer: '僅供自建服務使用；預設使用官方同步，無須設定。',
       localModels: experimentalAsr.description,

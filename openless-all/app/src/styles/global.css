@@ -1083,6 +1083,9 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
 /* Segmented control (components/ui/Segmented), shared by every segmented choice in
    Settings: a white track with the controls' hairline, a neutral chip that slides under
    the selected option (useSelectionMotion), labels in the selection language. */
+.ol-overview-segment > button {
+  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 2px);
+}
 .ol-segmented {
   position: relative;
   isolation: isolate;
@@ -1090,11 +1093,23 @@ html[data-ol-conservative-layout='true'] .ol-conservative-scope .ol-select-lite-
   flex-wrap: wrap;
   gap: 2px;
   max-width: 100%;
-  padding: 2.5px;
+  padding: 3px;
   border: 0;
   box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
   border-radius: var(--ol-control-radius);
   background: var(--ol-surface);
+}
+.ol-service-pipeline-track {
+  padding: 3px;
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--ol-line-strong);
+}
+.ol-segmented > :is(.ol-segmented-indicator, .ol-segmented-option) {
+  --ol-corner-radius: calc(var(--ol-control-radius, 8px) - 3px);
+  border-radius: var(--ol-corner-radius);
+}
+.ol-action-button {
+  --ol-corner-radius: 8px;
 }
 .ol-segmented-indicator,
 .ol-service-view-indicator {

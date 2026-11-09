@@ -512,6 +512,7 @@ export const zhCN = {
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
     footer: {
+      usage: '用量',
       account: '账户',
       feedback: '反馈',
       settings: '设置',
@@ -1190,11 +1191,29 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      liveInputTitle: '文字插入',
       experiments: '配置实验功能与扩展选项。',
       voiceEnhancementTitle: '语音增强与播放抑制',
-      cursorContextTitle: '光标上下文与短句行为',
+      cursorContextTitle: '感知',
       startupDiagnosticsTitle: '启动诊断',
       cursorContextHint: '光标上下文默认开启。如果不希望润色请求携带附近文字，可以在这里关闭。',
+    },
+    expressionLearning: {
+      clearHint: '清除后，正在进行的听写可能仍使用开始时已捕获的偏好。',
+      lineBreaksMore: '更常分行',
+      lineBreaksLess: '减少分行',
+      exclamationsMore: '更常使用感叹号',
+      exclamationsLess: '减少感叹号',
+      terminalPunctuationMore: '保留句末标点',
+      terminalPunctuationLess: '减少句末标点',
+
+      title: '表达习惯',
+      enabled: '学习表达习惯',
+      description:
+        '仅在本机观察听写后的排版修改；表达习惯数据只保存抽象统计，不保存观察到的文本。历史记录另行管理。重复且一致的分行、感叹号和句末标点偏好达到稳定阈值后，会作为简短形式指令发送给所选文字模型；关闭后立即停止学习，并从下一次听写起停止应用；正在进行的听写可能仍使用已捕获的偏好。',
+      status: '已形成 {{count}} 项稳定偏好',
+      clear: '清除表达习惯',
+      error: '无法读取或保存表达习惯，请重试。',
     },
     vocabularyLearning: {
       title: '手改学词',
@@ -2020,10 +2039,10 @@ export const zhCN = {
       streamingInsertHintMac: '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
       streamingInsertHintLinux: '通过 fcitx5 插件提交文字；流式输入使用 enigo + XTest 合成按键。',
-      macosCompositionInputLabel: '实时原文显示在输入框（macOS）',
+      macosCompositionInputLabel: '实时原文显示在输入框',
       macosCompositionInputDesc:
         '录音时在原输入框显示识别文字，结束后整体替换为整理或翻译结果。需要辅助功能权限及编辑器支持；移动光标或编辑原文会停止实时替换。',
-      windowsCompositionInputLabel: '实时原文显示在输入框（Windows）',
+      windowsCompositionInputLabel: '实时原文显示在输入框',
       windowsCompositionInputDesc:
         '录音时把识别到的文字以带下划线的组合文本显示在输入框中，结束后替换为最终结果。需要启用 OpenLess 的 TSF 输入法组件，且目标应用支持文本服务框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪贴板',
@@ -2228,6 +2247,7 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      liveInput: '配置实时原文在输入框中的显示。',
       experiments: '配置实验功能与扩展选项。',
       customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',
       localModels: experimentalAsr.description,
@@ -2235,7 +2255,7 @@ export const zhCN = {
       multimodal: '管理多模态识别的实验性开关。',
       debug: '保留调试录音、探测光标上下文和导出日志。',
       voiceEnhancement: '配置高级音频处理、降噪与播放回声抑制。',
-      cursorContext: '配置润色请求使用的光标附近上下文与短句行为。',
+      cursorContext: '管理光标上下文、短句行为和手改学词。',
       startupDiagnostics: '查看启动耗时、后端握手和延迟探测结果。',
     },
     descriptions: {

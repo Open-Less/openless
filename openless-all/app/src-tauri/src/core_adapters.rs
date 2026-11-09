@@ -92,6 +92,7 @@ pub(crate) fn backend_dependencies(
     backend: BackendSlot,
     native_asr_dependencies: TauriNativeAsrDependencies,
     preferences: Arc<openless_core::PreferencesStore>,
+    usage_recorder: Option<Arc<openless_core::usage_ledger::UsageRecorder>>,
     hotkey_status: Arc<Mutex<openless_core::HotkeyStatus>>,
     qa_host_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 ) -> openless_core::BackendDependencies {
@@ -251,9 +252,11 @@ pub(crate) fn backend_dependencies(
         )
         .expect("Apple system speech provider ID");
     let polisher = Arc::new(openless_core::TextPolisherRouter::default());
-    let production_polisher: Arc<dyn TextPolisher> = Arc::new(
-        openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store)),
-    );
+    let production_polisher = openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store));
+    let production_polisher: Arc<dyn TextPolisher> = Arc::new(match &usage_recorder {
+        Some(recorder) => production_polisher.with_usage_recorder(Arc::clone(recorder)),
+        None => production_polisher,
+    });
     for provider_type in openless_core::SHARED_CLOUD_LLM_PROVIDER_TYPES {
         polisher
             .register(*provider_type, Arc::clone(&production_polisher))
@@ -307,6 +310,7 @@ pub(crate) fn backend_dependencies(
             .expect("built-in Omni provider ids are non-empty");
     }
     let mut dependencies = openless_core::BackendDependencies::unsupported();
+    dependencies.services.usage_recorder = usage_recorder;
     if let Some(model_store) = model_store.clone() {
         dependencies.services.configure_model_store(model_store);
     }
@@ -4120,25 +4124,8 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         #[cfg(target_os = "macos")]
-        let live_capture = if self
-            .backend
-            .lock()
-            .as_ref()
-            .and_then(|b| b.upgrade())
-            .is_some_and(|b| b.get_preferences().macos_composition_input)
-        {
-            let target = insertion_target.clone();
-            Some(Arc::new(Mutex::new(Some(
-                tauri::async_runtime::spawn_blocking(move || {
-                    if !crate::selection::selection_insertion_target_is_current(&target) {
-                        return Err("live input target changed before capture".into());
-                    }
-                    crate::host_document::LiveComposition::capture()
-                }),
-            ))))
-        } else {
-            None
-        };
+        // Legacy macOS composition preferences must not start AX range capture.
+        let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
                 insertion_target: Some(insertion_target.clone()),
@@ -4913,7 +4900,8 @@ impl TauriTextInsertionSession {
                                         .as_ref()
                                         .and_then(|b| b.upgrade())
                                         .is_some_and(|b| {
-                                            b.get_preferences().vocabulary_learning_enabled
+                                            let prefs = b.get_preferences();
+                                            prefs.vocabulary_learning_enabled || prefs.expression_learning_enabled
                                         })
                             },
                             || {
@@ -5000,17 +4988,6 @@ impl TauriTextInsertionSession {
         terminal
             .join_or_spawn(
                 move || async move {
-                    let live = Arc::clone(&self.live_composition);
-                    let live_final = final_text.clone();
-                    let live_result = tauri::async_runtime::spawn_blocking(move || {
-                        let mut guard = live.lock();
-                        guard.take().map(|mut live| match live_final {
-                            Some(text) => live.replace(&text),
-                            None => live.cancel(),
-                        })
-                    })
-                    .await
-                    .map_err(|e| BackendError::new(BackendErrorCode::Platform, e.to_string()))?;
                     let worker = self.streaming_worker.clone();
                     let session = &self;
                     finish_mac_insertion_after_barrier(
@@ -5024,36 +5001,7 @@ impl TauriTextInsertionSession {
                             if session.cancel_requested.load(Ordering::Acquire) {
                                 return Ok(MacInsertionCompletion::Cancelled);
                             }
-                            if let Some(result) = live_result {
-                                return match result {
-                                    Ok(()) => Ok(MacInsertionCompletion::Finished(
-                                        InsertOutcome::Inserted,
-                                    )),
-                                    Err(_) => match final_text {
-                                        Some(text) => session
-                                            .copy_fallback(text)
-                                            .await
-                                            .map(MacInsertionCompletion::Finished),
-                                        None => Ok(MacInsertionCompletion::Cancelled),
-                                    },
-                                };
-                            }
-                            if session.context.insertion.composition_input {
-                                return match final_text {
-                                    Some(text) => session.copy_fallback(text).await.map(MacInsertionCompletion::Finished),
-                                    None => Ok(MacInsertionCompletion::Cancelled),
-                                };
-                            }
-                            match final_text {
-                                Some(text) if !text.is_empty() => session
-                                    .insert_final(text)
-                                    .await
-                                    .map(MacInsertionCompletion::Finished),
-                                Some(_) => {
-                                    Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted))
-                                }
-                                None => Ok(MacInsertionCompletion::Cancelled),
-                            }
+                            finish_mac_final_text(final_text, |text| session.insert_final(text)).await
                         },
                         || session.restore_platform_state(),
                     )
@@ -5065,6 +5013,58 @@ impl TauriTextInsertionSession {
             )
             .await
     }
+}
+
+/// Core passes only the undelivered suffix here; an empty suffix is already delivered.
+/// Final delivery must not probe AX composition support or replace earlier streamed text.
+#[cfg(target_os = "macos")]
+async fn finish_mac_final_text<F>(
+    text: Option<String>,
+    insert: impl FnOnce(String) -> F,
+) -> Result<MacInsertionCompletion, BackendError>
+where
+    F: std::future::Future<Output = Result<InsertOutcome, BackendError>>,
+{
+    match text {
+        Some(text) if !text.is_empty() => insert(text).await.map(MacInsertionCompletion::Finished),
+        Some(_) => Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted)),
+        None => Ok(MacInsertionCompletion::Cancelled),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn replace_live_composition(
+    slot: &mut Option<crate::host_document::LiveComposition>,
+    text: &str,
+) -> Result<(), String> {
+    replace_unwritten_target(
+        slot,
+        text,
+        crate::host_document::LiveComposition::capture,
+        |live, value| live.replace(value),
+        |live| live.has_written(),
+    )
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn replace_unwritten_target<T>(
+    slot: &mut Option<T>,
+    text: &str,
+    capture: impl FnOnce() -> Result<T, String>,
+    mut replace: impl FnMut(&mut T, &str) -> Result<(), String>,
+    written: impl Fn(&T) -> bool,
+) -> Result<(), String> {
+    if let Some(live) = slot.as_mut() {
+        match replace(live, text) {
+            Ok(()) => return Ok(()),
+            Err(error) if written(live) => return Err(error),
+            Err(_) => *slot = None,
+        }
+    }
+    let mut live = capture()?;
+    let result = replace(&mut live, text);
+    *slot = Some(live);
+    result
 }
 
 impl TextInsertionSession for TauriTextInsertionSession {
@@ -5104,9 +5104,10 @@ impl TextInsertionSession for TauriTextInsertionSession {
             }
             tauri::async_runtime::spawn_blocking(move || {
                 let mut live = session.live_composition.lock();
-                live.as_mut()
-                    .ok_or_else(|| "live input is unavailable in this editor".to_string())?
-                    .replace(&text)
+                match replace_live_composition(&mut live, &text) {
+                    Err(_) if live.as_ref().is_none_or(|target| !target.has_written()) => Ok(()),
+                    result => result,
+                }
             })
             .await
             .map_err(|e| BackendError::new(BackendErrorCode::Platform, e.to_string()))?
@@ -5222,6 +5223,37 @@ mod mac_insertion_lifecycle_tests {
 
     fn spawn(task: BoxFuture<'static, ()>) {
         tokio::spawn(task);
+    }
+
+    #[tokio::test]
+    async fn final_text_uses_normal_delivery() {
+        let calls = Mutex::new(Vec::new());
+        let result = finish_mac_final_text(Some("final text".to_string()), |text| async {
+            calls.lock().push(text);
+            Ok(InsertOutcome::Inserted)
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(*calls.lock(), ["final text"]);
+    }
+
+    #[tokio::test]
+    async fn fully_streamed_text_finishes_without_an_ax_probe_or_second_insertion() {
+        let result = finish_mac_final_text(Some(String::new()), |_| async {
+            panic!("already delivered text must not invoke insertion or clipboard fallback")
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(
+            finish_mac_final_text(None, |_| async {
+                panic!("cancelled text must not invoke insertion")
+            })
+            .await
+            .unwrap(),
+            MacInsertionCompletion::Cancelled
+        );
     }
 
     #[tokio::test]
@@ -5595,6 +5627,72 @@ fn map_tauri_error(error: impl std::fmt::Display) -> BackendError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_input_retargets_only_before_any_write() {
+        #[derive(Debug)]
+        struct Target {
+            written: bool,
+            current: bool,
+        }
+        let mut slot = Some(Target {
+            written: false,
+            current: false,
+        });
+        let capture = || Ok(Target {
+            written: false,
+            current: true,
+        });
+        let replace = |target: &mut Target, _: &str| {
+            if !target.current {
+                return Err("target changed".into());
+            }
+            target.written = true;
+            Ok(())
+        };
+        let written = |target: &Target| target.written;
+        super::replace_unwritten_target(&mut slot, "text", capture, replace, written).unwrap();
+        assert!(slot.as_ref().unwrap().written);
+        slot.as_mut().unwrap().current = false;
+        let result = super::replace_unwritten_target(
+            &mut slot,
+            "more",
+            || panic!("a written target must never be replaced"),
+            replace,
+            written,
+        );
+        assert_eq!(result.unwrap_err(), "target changed");
+    }
+
+    #[test]
+    fn live_input_keeps_target_when_write_outcome_is_uncertain() {
+        let mut slot = None;
+        let result = super::replace_unwritten_target(
+            &mut slot,
+            "text",
+            || Ok(false),
+            |written, _| {
+                *written = true;
+                Err("verification failed".into())
+            },
+            |written| *written,
+        );
+        assert_eq!(result.unwrap_err(), "verification failed");
+        assert_eq!(slot, Some(true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires the foreground disposable native-live-input-fixture app"]
+    fn live_input_captures_late_focused_native_editor() {
+        let (_, bundle) = crate::selection::current_front_app_parts();
+        assert_eq!(bundle.as_deref(), Some("org.openless.live-input-fixture"));
+        let mut slot = None;
+        super::replace_live_composition(&mut slot, "实时原文").unwrap();
+        let mut live = slot.expect("captured live editor");
+        assert!(live.has_written());
+        live.cancel().unwrap();
+    }
+
     use super::*;
 
     #[cfg(target_os = "windows")]

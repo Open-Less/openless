@@ -2,12 +2,56 @@ import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 const fixture = 'http://127.0.0.1:5326/e2e/fixtures/refinements.html';
+
+test('style and dictionary action buttons retain compact corners', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '风格', exact: true }).click();
+  await page.getByRole('button', { name: '润色模式', exact: true }).click();
+  await expect(page.getByRole('button', { name: '导入 ZIP' })).toHaveCSS('border-radius', '8px');
+  await expect(page.getByRole('button', { name: '激活', exact: true }).first()).toHaveCSS(
+    'border-radius',
+    '8px',
+  );
+  await page.getByRole('button', { name: '词典', exact: true }).click();
+  await expect(page.locator('.ol-action-button').first()).toHaveCSS('border-radius', '8px');
+});
+
 async function openShortcuts(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
   await settleNavigation(page);
 }
+
+test('shortcut search remains visible without focus', async ({ page }) => {
+  await openShortcuts(page);
+  const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
+  const colors = await search.evaluate((element) => ({
+    search: getComputedStyle(element).backgroundColor,
+    page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
+      .backgroundColor,
+  }));
+  expect(colors.search).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colors.search).not.toBe(colors.page);
+});
+
+test('awareness settings have a dedicated advanced page', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: /^(高级功能|实验与扩展)$/ }).click();
+  await settleNavigation(dialog);
+  await dialog.locator('[data-ol-advanced-entry="cursorContext"]').click();
+  await expect(dialog.locator('[data-ol-advanced-page="cursorContext"]')).toBeVisible();
+  await expect(dialog.getByText('手改学词', { exact: true })).toBeVisible();
+  const expression = dialog.getByRole('switch', { name: '学习表达习惯', exact: true });
+  await expect(expression).toBeVisible();
+  await expect(expression).toHaveAttribute('aria-checked', 'false');
+  await expression.click();
+  await expect(expression).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '清除表达习惯', exact: true }).click();
+  await expect(dialog.getByText('已形成 0 项稳定偏好')).toBeVisible();
+});
 
 test('shortcut search and categories live in the flat settings pane; keyboard close preserves exit', async ({
   page,

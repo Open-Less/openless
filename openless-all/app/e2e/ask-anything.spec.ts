@@ -19,6 +19,14 @@ test('translation uses the shared popup and native headroom; save failure preser
   await picker.click();
   const popup = page.locator('.ol-select-popup');
   await expect(popup).toBeVisible();
+  await expect(popup).toHaveClass(/ol-capsule-language-popup/);
+  await expect(popup).toHaveCSS('backdrop-filter', 'none');
+  await popup.evaluate((node) => node.setAttribute('data-test-retained', 'true'));
+  for (let i = 0; i < 8; i += 1) {
+    await page.evaluate((level) => (window as any).fixture.setCapsule({ level }), i / 10);
+    await expect(popup).toHaveAttribute('data-test-retained', 'true');
+    await expect(popup).toHaveCSS('opacity', '1');
+  }
   const clipped = await popup.evaluate((node) =>
     getComputedStyle(node).clipPath.startsWith('shape('),
   );

@@ -21,6 +21,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
+    id: 'liveInput',
+    icon: 'keyboard',
+    titleKey: 'settings.advancedPages.liveInputTitle',
+    beta: true,
+  },
+  {
     id: 'cursorContext',
     icon: 'search',
     titleKey: 'settings.advancedPages.cursorContextTitle',
@@ -31,12 +37,6 @@ export const ADVANCED_PAGES = [
     icon: 'bolt',
     titleKey: 'settings.advancedPages.startupDiagnosticsTitle',
   },
-  {
-    id: 'vocabularyLearning',
-    icon: 'pencil',
-    titleKey: 'settings.vocabularyLearning.title',
-    beta: true,
-  },
   { id: 'customSyncServer', icon: 'cloud', titleKey: 'cloudSyncE2ee.customServerTitle' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
 ] as const;
@@ -46,8 +46,8 @@ export type AdvancedPageId = AdvancedPage['id'];
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
-    if (page.id === 'vocabularyLearning') return platform === 'desktop' || platform === 'android';
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';
     return true;

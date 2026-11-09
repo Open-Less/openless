@@ -139,6 +139,7 @@ export let mockSettings: UserPreferences = {
   macosCompositionInput: false,
   cursorContextEnabled: true,
   vocabularyLearningEnabled: false,
+  expressionLearningEnabled: false,
   vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
   showOverviewActivityHeatmap: true,
   stackedRowLayout: false,

@@ -331,6 +331,39 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
   });
 });
 
+test('pipeline selection stays evenly inset in both modes', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
+  const track = dialog.locator('.ol-service-pipeline-track');
+  for (const name of ['传统模式', '多模态模式']) {
+    await dialog.getByRole('button', { name, exact: true }).click();
+    await expect
+      .poll(() =>
+        track.evaluate((element, selectedName) => {
+          const outer = element.getBoundingClientRect();
+          const selected = element.querySelector<HTMLElement>('button[aria-pressed="true"]')!;
+          const chip = element.querySelector<HTMLElement>('.ol-segmented-indicator')!;
+          const item = selected.getBoundingClientRect();
+          const inner = chip.getBoundingClientRect();
+          return Math.max(
+            Math.abs(inner.top - item.top),
+            Math.abs(inner.left - item.left),
+            Math.abs(inner.width - item.width),
+            Math.abs(inner.height - item.height),
+            Math.abs(inner.top - outer.top - (outer.bottom - inner.bottom)),
+            Math.abs(
+              (selectedName === '传统模式' ? inner.left - outer.left : outer.right - inner.right) -
+                (inner.top - outer.top),
+            ),
+          );
+        }, name),
+      )
+      .toBeLessThan(0.75);
+  }
+});
+
 test('selection highlights move and settle correctly after a rapid mode return', async ({
   page,
 }) => {

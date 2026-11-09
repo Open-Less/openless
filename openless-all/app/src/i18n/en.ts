@@ -542,6 +542,7 @@ export const en: typeof zhCN = {
       settings: 'Preferences: shortcuts, providers, privacy and updates',
     },
     footer: {
+      usage: 'Usage',
       account: 'Account',
       feedback: 'Feedback',
       settings: 'Settings',
@@ -1241,9 +1242,10 @@ export const en: typeof zhCN = {
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
     advancedPages: {
+      liveInputTitle: 'Text insertion',
       experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
-      cursorContextTitle: 'Cursor context and short-input behavior',
+      cursorContextTitle: 'Awareness',
       startupDiagnosticsTitle: 'Startup diagnostics',
       cursorContextHint:
         'Cursor context is enabled by default. Disable it if you do not want nearby text sent with polish requests.',
@@ -1252,6 +1254,24 @@ export const en: typeof zhCN = {
       recording: 'Recording',
       text: 'Text and context',
       diagnostics: 'Diagnostics',
+    },
+    expressionLearning: {
+      clearHint:
+        'After clearing, an in-progress dictation may still use the preferences captured when it started.',
+      lineBreaksMore: 'More line breaks',
+      lineBreaksLess: 'Fewer line breaks',
+      exclamationsMore: 'More exclamation marks',
+      exclamationsLess: 'Fewer exclamation marks',
+      terminalPunctuationMore: 'Use terminal punctuation',
+      terminalPunctuationLess: 'Use less terminal punctuation',
+
+      title: 'Expression habits',
+      enabled: 'Learn expression habits',
+      description:
+        'Observes formatting edits locally after dictation; expression data stores abstract statistics, not observed text. History is managed separately. Repeated, consistent line-break and punctuation preferences become short instructions sent to the selected text model. Turning this off stops learning immediately and applying preferences to new dictations; an in-progress dictation may still use its captured preferences.',
+      status: '{{count}} stable preferences',
+      clear: 'Clear expression habits',
+      error: 'Could not read or save expression habits. Try again.',
     },
     vocabularyLearning: {
       title: 'Learn from corrections',
@@ -2145,10 +2165,10 @@ export const en: typeof zhCN = {
         'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
       streamingInsertHintLinux:
         'Uses fcitx5 plugin for text submission; streaming insertion uses enigo + XTest for keystroke synthesis.',
-      macosCompositionInputLabel: 'Live transcript in the input field (macOS)',
+      macosCompositionInputLabel: 'Live transcript in the input field',
       macosCompositionInputDesc:
         'Shows recognition in the captured editor, then replaces it with the final polished or translated text. Requires Accessibility and editor support. Moving the caret or editing stops replacement.',
-      windowsCompositionInputLabel: 'Show live transcript in the input box (Windows)',
+      windowsCompositionInputLabel: 'Show live transcript in the input box',
       windowsCompositionInputDesc:
         'While you speak, the recognized text appears underlined in the input box and is replaced by the final result when you finish. Requires the OpenLess TSF input component and a target app that supports the Text Services Framework (TSF).',
       streamingInsertSaveClipboardLabel: 'Copy to clipboard',
@@ -2362,6 +2382,7 @@ export const en: typeof zhCN = {
     backToAdvanced: 'Back to advanced features',
     back: 'Back',
     advancedPages: {
+      liveInput: 'Configure the live transcript in the input field.',
       experiments: 'Configure experimental features and extensions.',
       customSyncServer: 'For self-hosted services only; official sync needs no configuration.',
       localModels: experimentalAsr.description,

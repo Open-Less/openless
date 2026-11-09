@@ -533,6 +533,7 @@ export const ja: typeof zhCN = {
       settings: '環境設定：ショートカット・プロバイダー・プライバシー・更新',
     },
     footer: {
+      usage: '使用量',
       account: 'アカウント',
       feedback: 'フィードバック',
       settings: '設定',
@@ -1172,9 +1173,10 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
-      cursorContextTitle: 'カーソル文脈と短文の動作',
+      cursorContextTitle: '認識',
       startupDiagnosticsTitle: '起動診断',
       cursorContextHint:
         'カーソル文脈は初期状態でオンです。近くの文字を推敲リクエストに含めたくない場合は、ここでオフにします。',
@@ -1238,6 +1240,23 @@ export const ja: typeof zhCN = {
       useSystemProxyLabel: 'システムプロキシを使用',
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
+    },
+    expressionLearning: {
+      clearHint: '消去後も、進行中の音声入力には開始時の好みが使われる場合があります。',
+      lineBreaksMore: '改行を増やす',
+      lineBreaksLess: '改行を減らす',
+      exclamationsMore: '感嘆符を増やす',
+      exclamationsLess: '感嘆符を減らす',
+      terminalPunctuationMore: '文末の句読点を使う',
+      terminalPunctuationLess: '文末の句読点を減らす',
+
+      title: '表現の習慣',
+      enabled: '表現の習慣を学習',
+      description:
+        '音声入力後の書式変更を端末内で観察し、表現の習慣には抽象的な統計のみを保存します。履歴は別に管理されます。繰り返し確認された改行や句読点の傾向を、選択した文字モデルへの短い指示として利用します。オフにすると学習は直ちに停止し、次の音声入力から適用されません。進行中の入力には取得済みの好みが使われる場合があります。',
+      status: '安定した好み {{count}} 件',
+      clear: '表現の習慣を消去',
+      error: '表現の習慣を読み書きできませんでした。',
     },
     vocabularyLearning: {
       title: '修正から単語を学習',
@@ -2115,10 +2134,10 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
-      macosCompositionInputLabel: '入力欄に認識中の原文を表示（macOS）',
+      macosCompositionInputLabel: '入力欄に認識中の原文を表示',
       macosCompositionInputDesc:
         '録音中の認識結果を元の入力欄に表示し、終了後に整形または翻訳した文章へ置き換えます。アクセシビリティ権限と対応エディタが必要です。カーソル移動や手動編集で置き換えを停止します。',
-      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示',
       windowsCompositionInputDesc:
         '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
@@ -2330,6 +2349,7 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      liveInput: '入力欄に表示するリアルタイム原文を設定します。',
       experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',
       localModels: experimentalAsr.description,

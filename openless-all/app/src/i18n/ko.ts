@@ -527,6 +527,7 @@ export const ko: typeof zhCN = {
       settings: '환경설정: 단축키, 제공자, 개인정보 및 업데이트',
     },
     footer: {
+      usage: '사용량',
       account: '계정',
       feedback: '피드백',
       settings: '설정',
@@ -1165,9 +1166,10 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      liveInputTitle: '텍스트 삽입',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
-      cursorContextTitle: '커서 문맥과 짧은 입력',
+      cursorContextTitle: '인식',
       startupDiagnosticsTitle: '시작 진단',
       cursorContextHint:
         '커서 문맥은 기본적으로 켜져 있습니다. 주변 텍스트를 다듬기 요청에 포함하지 않으려면 여기서 끄세요.',
@@ -1230,6 +1232,23 @@ export const ko: typeof zhCN = {
       useSystemProxyLabel: '시스템 프록시 사용',
       useSystemProxyDesc:
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
+    },
+    expressionLearning: {
+      clearHint: '삭제 후에도 진행 중인 받아쓰기에는 시작할 때 캡처한 선호가 사용될 수 있습니다.',
+      lineBreaksMore: '줄바꿈 늘리기',
+      lineBreaksLess: '줄바꿈 줄이기',
+      exclamationsMore: '느낌표 늘리기',
+      exclamationsLess: '느낌표 줄이기',
+      terminalPunctuationMore: '문장 끝 구두점 사용',
+      terminalPunctuationLess: '문장 끝 구두점 줄이기',
+
+      title: '표현 습관',
+      enabled: '표현 습관 학습',
+      description:
+        '받아쓰기 후 서식 수정을 기기에서만 관찰하며 표현 습관에는 추상적인 통계만 저장합니다. 기록은 별도로 관리됩니다. 반복되고 일관된 줄바꿈과 문장 부호 선호를 선택한 텍스트 모델에 짧은 지시로 전달합니다. 끄면 학습은 즉시 중단되고 다음 받아쓰기부터 적용되지 않습니다. 진행 중인 받아쓰기에는 이미 캡처한 선호가 사용될 수 있습니다.',
+      status: '안정된 선호 {{count}}개',
+      clear: '표현 습관 지우기',
+      error: '표현 습관을 읽거나 저장하지 못했습니다.',
     },
     vocabularyLearning: {
       title: '수정으로 단어 학습',
@@ -2101,10 +2120,10 @@ export const ko: typeof zhCN = {
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
         'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
-      macosCompositionInputLabel: '입력란에 실시간 원문 표시(macOS)',
+      macosCompositionInputLabel: '입력란에 실시간 원문 표시',
       macosCompositionInputDesc:
         '녹음 중 인식한 원문을 원래 입력란에 표시하고 완료 후 정리하거나 번역한 결과로 바꿉니다. 손쉬운 사용 권한과 지원되는 편집기가 필요합니다. 커서를 이동하거나 직접 편집하면 실시간 교체를 중지합니다.',
-      windowsCompositionInputLabel: '실시간 원문을 입력창에 표시 (Windows)',
+      windowsCompositionInputLabel: '실시간 원문을 입력창에 표시',
       windowsCompositionInputDesc:
         '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
@@ -2314,6 +2333,7 @@ export const ko: typeof zhCN = {
     backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
+      liveInput: '입력란의 실시간 원문 표시를 설정합니다.',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',
       localModels: experimentalAsr.description,
