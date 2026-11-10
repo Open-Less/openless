@@ -34,9 +34,7 @@ struct Host {
 
 fn main() {
     let host = init_host();
-    let dist = std::env::var("OPENLESS_DIST")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist"));
+    let dist = resolve_dist();
     let port = match serve_dir(dist.clone()) {
         Ok(port) => port,
         Err(error) => {
@@ -287,6 +285,25 @@ const CAPSULE_HEIGHT: i32 = 228;
 const CAPSULE_BOTTOM_MARGIN: i32 = 12;
 
 // ── 命令分发 ────────────────────────────────────────────────────────────────
+
+/// 前端资源目录的解析顺序：
+/// 1. `OPENLESS_DIST`（排障/自定义安装）
+/// 2. 安装布局 `<prefix>/lib/openless/web/dist`（包内位置，`/usr/bin` 的相对路径）
+/// 3. 源码树 `linux-web/dist`（开发期直接 `cargo run`）
+fn resolve_dist() -> PathBuf {
+    if let Ok(dir) = std::env::var("OPENLESS_DIST") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe.parent().and_then(|bin| bin.parent()) {
+            let installed = root.join("lib/openless/web/dist");
+            if installed.join("index.html").is_file() {
+                return installed;
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist")
+}
 
 fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("OPENLESS_DATA_DIR") {
