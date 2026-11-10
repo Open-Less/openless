@@ -3,6 +3,7 @@
 //! Tauri still verifies the signed artifact and version before installation.
 
 use crate::types::UpdateChannel;
+mod signature_index;
 
 /// CDN that serves both the update manifests and the mirrored release artifacts.
 pub(crate) const CDN_BASE: &str = "https://dl.aeoform.com";
@@ -216,9 +217,11 @@ async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     let name = artifact["name"].as_str().ok_or("missing artifact name")?;
     let signature = assets
         .iter()
-        .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        .find(|a| a["name"].as_str() == Some(signature_index::NAME))
+        .or_else(|| assets.iter().find(|a| a["name"].as_str() == Some(&format!("{name}.sig"))))
         .and_then(|a| a["browser_download_url"].as_str())
         .ok_or("missing GitHub signature")?;
+    let indexed = signature.ends_with(signature_index::NAME);
     let signature = client
         .get(signature)
         .timeout(std::time::Duration::from_secs(8))
@@ -230,6 +233,7 @@ async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value
         .text()
         .await
         .map_err(|e| e.to_string())?;
+    let signature = signature_index::extract(&signature, tag, name, indexed)?;
     let version = github_signed_version(signature.trim(), version)?;
     Ok(
         serde_json::json!({"version": version, "url": artifact["browser_download_url"],
@@ -367,7 +371,12 @@ async fn github_web_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     let (artifact, signature) =
         github_page_assets(&assets, tag, std::env::consts::OS, std::env::consts::ARCH)
             .ok_or("no matching signed updater assets on GitHub release page")?;
-    let signature = text(&signature).await?;
+    let indexed = signature.ends_with(signature_index::NAME);
+    let body = text(&signature).await?;
+    let name = artifact.rsplit('/').next().ok_or("missing artifact filename")?;
+    // GitHub HTML encodes '+' in names; decode before looking up the exact index key.
+    let name = android::decode_asset_name(name).ok_or("invalid artifact filename")?;
+    let signature = signature_index::extract(&body, tag, &name, indexed)?;
     let version = github_signed_version(signature.trim(), version)?;
     Ok(
         serde_json::json!({"version": version, "url": artifact, "signature": signature.trim(),
@@ -437,7 +446,8 @@ fn github_page_assets(page: &str, tag: &str, os: &str, arch: &str) -> Option<(St
     })?;
     let (signature, _) = paths
         .iter()
-        .find(|(_, candidate)| *candidate == format!("{name}.sig"))?;
+        .find(|(_, candidate)| *candidate == signature_index::NAME)
+        .or_else(|| paths.iter().find(|(_, candidate)| *candidate == format!("{name}.sig")))?;
     Some((
         format!("https://github.com{artifact}"),
         format!("https://github.com{signature}"),

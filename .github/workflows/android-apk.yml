@@ -425,6 +425,9 @@ jobs:
   publish-android-release:
     timeout-minutes: 30
     name: Publish Android release assets
+    concurrency:
+      group: openless-release-assets-${{ github.ref_name }}
+      cancel-in-progress: false
     if: needs.plan.outputs.is_tag_release == 'true'
     needs: [plan, build-android-apk]
     permissions:
@@ -537,7 +540,14 @@ jobs:
           path: |
             ${{ steps.stage.outputs.out_dir }}/latest-android-*.json
 
-      - name: Append release files (originals + signatures)
+      - name: Consolidate release signatures
+        timeout-minutes: 5
+        working-directory: openless-all/app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/merge-release-signatures.mjs "${{ steps.stage.outputs.out_dir }}" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+
+      - name: Append release files (originals + signature index)
         id: release_assets
         shell: bash
         run: |
@@ -549,6 +559,8 @@ jobs:
                 echo "$f.sig"
               fi
             done <<< "${{ steps.stage.outputs.release_files }}"
+            index="${{ steps.stage.outputs.out_dir }}/updater-signatures.json"
+            if [ -f "$index" ]; then echo "$index"; fi
           } > "$RUNNER_TEMP/android-release-files.txt"
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/android-release-files.txt" >> "$GITHUB_OUTPUT"

@@ -13,7 +13,7 @@ const METADATA_REQUEST_BUDGET: Duration = Duration::from_secs(8);
 const PROBE_BUDGET: Duration = Duration::from_secs(4);
 const METADATA_LIMIT: usize = 2 * 1024 * 1024;
 const API_METADATA_LIMIT: usize = 8 * 1024 * 1024;
-const SIGNATURE_LIMIT: usize = 16 * 1024;
+const SIGNATURE_LIMIT: usize = super::signature_index::LIMIT;
 
 fn github_url(url: &Url) -> bool {
     url.host_str() == Some("github.com")
@@ -280,7 +280,7 @@ fn latest_android_release<'a>(
         .find(|release| api_artifact(release, arch).is_some())
 }
 
-fn decode_asset_name(encoded: &str) -> Option<String> {
+pub(super) fn decode_asset_name(encoded: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(encoded.len());
     let mut chars = encoded.as_bytes().iter().copied();
     while let Some(ch) = chars.next() {
@@ -310,7 +310,8 @@ fn api_artifact<'a>(
     let name = artifact["name"].as_str()?;
     let signature = assets
         .iter()
-        .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))?;
+        .find(|a| a["name"].as_str() == Some(super::signature_index::NAME))
+        .or_else(|| assets.iter().find(|a| a["name"].as_str() == Some(&format!("{name}.sig"))))?;
     let artifact_url = artifact["browser_download_url"].as_str()?;
     let signature_url = signature["browser_download_url"].as_str()?;
     let expected = format!("/Open-Less/openless/releases/download/{tag}/");
@@ -382,8 +383,10 @@ async fn api_manifest(
     *candidate_seen
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
-    let signature = text(sig_url, SIGNATURE_LIMIT)
+    let body = text(sig_url, SIGNATURE_LIMIT)
         .await
+        .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
+    let signature = super::signature_index::extract(&body, tag, name, sig_url.ends_with(super::signature_index::NAME))
         .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
     let version = android_signature_version(signature.trim(), name, &version.to_string(), arch)
         .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
@@ -408,7 +411,8 @@ fn web_artifact(page: &str, tag: &str, arch: &str) -> Option<(String, String, St
         .filter_map(|(p, n)| Some((artifact_version(n, arch)?, p, n)))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, p, n)| (p, n))?;
-    let signature = paths.iter().find(|(_, n)| *n == format!("{name}.sig"))?.0;
+    let signature = paths.iter().find(|(_, n)| *n == super::signature_index::NAME)
+        .or_else(|| paths.iter().find(|(_, n)| *n == format!("{name}.sig")))?.0;
     Some((
         name.clone(),
         format!("https://github.com{path}"),
@@ -449,9 +453,12 @@ where
         *candidate_seen
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
-        let signature = fetch(sig_url, SIGNATURE_LIMIT).await.map_err(|error| {
+        let indexed = sig_url.ends_with(super::signature_index::NAME);
+        let body = fetch(sig_url, SIGNATURE_LIMIT).await.map_err(|error| {
             candidate_error(&full_version, &format!("public signature: {error}"))
         })?;
+        let signature = super::signature_index::extract(&body, tag, &name, indexed)
+            .map_err(|error| candidate_error(&full_version, &error))?;
         let version =
             android_signature_version(signature.trim(), &name, &version.to_string(), arch)
                 .map_err(|error| candidate_error(&full_version, &error))?;

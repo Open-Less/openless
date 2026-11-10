@@ -730,6 +730,10 @@ jobs:
   # are not copied into the release.
   publish:
     name: Publish Tauri release
+    # Same lock as Android: merge/upload one shared signature index without races.
+    concurrency:
+      group: openless-release-assets-${{ inputs.release_tag || github.ref_name }}
+      cancel-in-progress: false
     needs: build
     if: >-
       !cancelled() &&
@@ -815,6 +819,20 @@ jobs:
           fi
           echo "Staged $copied release file(s):"
           find "$dest" -type f -print
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tooling
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Consolidate release signatures
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node release-tooling/openless-all/app/scripts/merge-release-signatures.mjs release-files "$OPENLESS_RELEASE_TAG" "$GITHUB_REPOSITORY"
 
       - name: Create / update release
         timeout-minutes: 20
