@@ -14,7 +14,10 @@ pub fn claim_single_instance() -> Option<std::os::unix::net::UnixListener> {
     let path = format!("{dir}/openless-web.sock");
     let _ = std::fs::remove_file(&path);
     match std::os::unix::net::UnixListener::bind(&path) {
-        Ok(listener) => Some(listener),
+        Ok(listener) => {
+            println!("[linux-web] 单实例锁已占用：{path}");
+            Some(listener)
+        }
         Err(error) => {
             eprintln!("[linux-web] 单实例锁占用失败（可能已有实例）：{error}");
             None
