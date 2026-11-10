@@ -1314,6 +1314,31 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             })?;
             Ok(json!({ "saved": true }))
         }
+        // ── 风格包激活（Tauri 里还会刷托盘菜单，这里同样刷一次）─────
+        "set_active_style_pack" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            let pack = backend
+                .activate_style_pack(&id)
+                .map_err(|error| error.to_string())?;
+            // 托盘菜单不缓存「当前风格包」（`LinuxTray` 在下一次风格/麦克风/语言
+            // 变更时重建），所以这里不需要额外刷新调用。
+            Ok(json_value(pack))
+        }
+        "read_style_pack_icon" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            Ok(json_value(
+                backend
+                    .read_style_pack_icon(&id)
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "reset_accessibility_permission_and_restart_app" => {
+            // Linux 没有辅助功能授权这个概念（Tauri 那条是 macOS 专用的
+            // TCC 重置）。这里明确返回「不适用」，而不是假装成功。
+            Err("Linux 没有辅助功能授权流程".to_string())
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
