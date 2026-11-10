@@ -1811,6 +1811,73 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(json_value(manifest))
         }
+        // ── 重新润色 / 麦克风电平监视 / 热键状态 ─────────────────────
+        "repolish" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let raw_text = required_str(_args, "rawText")?.to_string();
+            let mode = polish_mode(_args)?;
+            let style_pack_id = _args
+                .get("stylePackId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let _ = mode; // 显式 style_pack_id 优先，与 Tauri 一致（mode 只为兼容老调用方）
+            Ok(json_value(
+                runtime
+                    .block_on(backend.services().auxiliary.repolish(
+                        openless_core::RepolishRequest {
+                            raw_text,
+                            style_pack_id,
+                            // Linux 没有「取最前窗口」的端口（Tauri 用平台 API），
+                            // 这里如实留空，不编造上下文。
+                            front_app: None,
+                        },
+                    ))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "apply_quick_note_repolish" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let session_id = required_str(_args, "sessionId")?.to_string();
+            let text = required_str(_args, "text")?.to_string();
+            let style_pack_id = _args
+                .get("stylePackId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            Ok(json_value(
+                backend
+                    .apply_history_repolish(&session_id, text, style_pack_id)
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "start_microphone_level_monitor" => {
+            // Tauri 这条是空实现（电平由录音链自己推）；这里同样不额外起采集，
+            // 免得和录音抢设备。前端拿到的电平来自 `dictation:level` 事件。
+            Ok(json!({ "started": false }))
+        }
+        "stop_microphone_level_monitor" => Ok(json!({ "stopped": true })),
+        "get_hotkey_status" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let status = runtime
+                .block_on(backend.services().platform.hotkey_status())
+                .map_err(|error| error.to_string())?;
+            Ok(json_value(status))
+        }
+        "set_desktop_onboarding_finished" => {
+            // 引导完成状态落在偏好里（Tauri 用单独的状态文件；Linux 没有那次
+            // 迁移历史，选项就是偏好，少一个文件少一处不同步）。
+            let finished = arg_bool(_args, "finished")?;
+            // 与 Tauri 落同一个文件（`desktop-onboarding.json`，camelCase 字段），
+            // 这样迁移/共享数据目录时两边读到的是同一份状态。
+            let path = data_dir().join("desktop-onboarding.json");
+            let payload = serde_json::to_vec_pretty(&json!({ "finished": finished }))
+                .map_err(|error| error.to_string())?;
+            let temp = path.with_extension("json.tmp");
+            std::fs::write(&temp, payload).map_err(|error| error.to_string())?;
+            std::fs::rename(&temp, &path).map_err(|error| error.to_string())?;
+            Ok(json!({ "finished": finished }))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
