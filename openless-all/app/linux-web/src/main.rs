@@ -203,6 +203,28 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             Ok(serde_json::to_value(status).unwrap_or(Value::Null))
         }
         "set_settings" | "save_settings" | "update_setting_fields" => Ok(json!({ "saved": true })),
+        "list_history" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let entries = backend.list_history().map_err(|error| error.to_string())?;
+            serde_json::to_value(entries).map_err(|error| error.to_string())
+        }
+        "get_activity_stats" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let days = backend
+                .list_activity()
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(days).map_err(|error| error.to_string())
+        }
+        "list_provider_descriptors" => {
+            let kind = match _args.get("kind").and_then(|value| value.as_str()) {
+                Some("asr") => openless_core::ProviderKind::Asr,
+                Some("llm") => openless_core::ProviderKind::Llm,
+                Some("omni") => openless_core::ProviderKind::Omni,
+                _ => return Err("kind 必须是 asr / llm / omni".to_string()),
+            };
+            serde_json::to_value(openless_core::provider_rules::provider_descriptors(kind))
+                .map_err(|error| error.to_string())
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
