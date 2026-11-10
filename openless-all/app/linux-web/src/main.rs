@@ -8,6 +8,7 @@
 //! 下的 ES module / fetch），这也是 Tauri/Cog 之类的常规做法。
 mod events;
 mod host;
+mod hotkeys;
 
 use gtk::prelude::*;
 use javascriptcore::ValueExt;
@@ -122,8 +123,9 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
     {
         let backend = host.backend.clone();
         let runtime = host.runtime.clone();
-        if let (Some(backend), Some(runtime)) = (backend, runtime) {
-            events::spawn_backend_events(backend, runtime, view.clone());
+        if let (Some(backend), Some(runtime)) = (backend.clone(), runtime.clone()) {
+            events::spawn_backend_events(backend.clone(), runtime.clone(), view.clone());
+            hotkeys::spawn(backend, runtime, window.clone());
         }
     }
 }
