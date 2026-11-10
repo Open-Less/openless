@@ -445,6 +445,21 @@ fn validate_combo(
     openless_core::validate_shortcut_binding(&shortcut).map_err(|error| error.to_string())
 }
 
+fn arg_bool(args: &Value, key: &str) -> Result<bool, String> {
+    args.get(key)
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| format!("缺少参数 {key}"))
+}
+
+/// `PolishMode` 的 serde 名字（raw / light / structured / formal）。
+fn polish_mode(args: &Value) -> Result<openless_core::PolishMode, String> {
+    let raw = args
+        .get("mode")
+        .cloned()
+        .ok_or_else(|| "缺少参数 mode".to_string())?;
+    serde_json::from_value(raw).map_err(|error| format!("未知的润色模式：{error}"))
+}
+
 fn json_value<T: serde::Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
@@ -1399,6 +1414,142 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     )
                     .map_err(|error| error.to_string())?,
             ))
+        }
+        // ── 历史 / 词表 / 风格包 / 频道的变更命令 ─────────────────────
+        "clear_history" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            if backend.snapshot().dictation.session_id.is_some() {
+                return Err("录音进行中，先停止再清空历史".to_string());
+            }
+            let entries = backend.list_history().map_err(|error| error.to_string())?;
+            backend.clear_history().map_err(|error| error.to_string())?;
+            // 归档录音一并删掉，否则数据目录会留下无主 wav。
+            for entry in entries {
+                if let Some(path) = find_recording(&data_dir(), &entry.id) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            Ok(json!({ "cleared": true }))
+        }
+        "delete_history_entry" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            if backend
+                .snapshot()
+                .dictation
+                .session_id
+                .is_some_and(|active| active.to_string() == id)
+            {
+                return Err("这条正在录音，先停止或取消再删除".to_string());
+            }
+            backend.delete_history(&id).map_err(|error| error.to_string())?;
+            if let Some(path) = find_recording(&data_dir(), &id) {
+                let _ = std::fs::remove_file(path);
+            }
+            Ok(json!({ "deleted": true }))
+        }
+        "set_vocab_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            let enabled = arg_bool(_args, "enabled")?;
+            backend
+                .set_vocabulary_enabled(&id, enabled)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "enabled": enabled }))
+        }
+        "set_style_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let mode = polish_mode(_args)?;
+            let enabled = arg_bool(_args, "enabled")?;
+            let pack_id = openless_core::style_packs::builtin_style_pack_id(mode);
+            backend
+                .set_style_pack_enabled(pack_id, enabled)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "enabled": enabled }))
+        }
+        "set_default_polish_mode" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let mode = polish_mode(_args)?;
+            let pack_id = openless_core::style_packs::builtin_style_pack_id(mode);
+            let pack = backend
+                .activate_style_pack(pack_id)
+                .map_err(|error| error.to_string())?;
+            Ok(json_value(pack))
+        }
+        "set_style_pack_icon" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            let png: Option<Vec<u8>> = match _args.get("png") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    serde_json::from_value(value.clone())
+                        .map_err(|error| format!("png 参数不是字节数组：{error}"))?,
+                ),
+            };
+            Ok(json_value(
+                backend
+                    .set_style_pack_icon(&id, png.as_deref())
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "rename_channel" | "reorder_channels" | "set_channel_provider_type" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|value| value.as_str()))
+                .ok_or_else(|| "未知的频道类型".to_string())?;
+            let result = match command {
+                "rename_channel" => runtime.block_on(backend.rename_channel(
+                    kind,
+                    required_str(_args, "id")?.to_string(),
+                    required_str(_args, "name")?.to_string(),
+                )),
+                "reorder_channels" => runtime.block_on(backend.reorder_channels(
+                    kind,
+                    serde_json::from_value(
+                        _args.get("ids").cloned().unwrap_or_else(|| json!([])),
+                    )
+                    .map_err(|error| error.to_string())?,
+                )),
+                _ => runtime.block_on(backend.set_channel_provider_type(
+                    kind,
+                    required_str(_args, "id")?.to_string(),
+                    required_str(_args, "providerType")?.to_string(),
+                )),
+            };
+            result.map_err(|error| error.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+        "list_provider_models" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind: openless_core::ProviderKind = match required_str(_args, "kind")? {
+                "asr" => openless_core::ProviderKind::Asr,
+                "llm" => openless_core::ProviderKind::Llm,
+                "omni" => openless_core::ProviderKind::Omni,
+                other => return Err(format!("未知的供应商类型：{other}")),
+            };
+            let thinking_enabled = backend.get_preferences().llm_thinking_enabled;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.services().provider.list_models(
+                        openless_core::ProviderRequest {
+                            kind,
+                            thinking_enabled,
+                            channel_id: _args
+                                .get("channelId")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string),
+                        },
+                    ))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "validate_shortcut_binding" => {
+            let binding = shortcut_arg(_args, false)?
+                .ok_or_else(|| "缺少 binding".to_string())?;
+            openless_core::validate_shortcut_binding(&binding)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "valid": true }))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
