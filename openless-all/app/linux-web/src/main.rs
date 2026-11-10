@@ -6,6 +6,8 @@
 //!
 //! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（WebKit 拒绝 file://
 //! 下的 ES module / fetch），这也是 Tauri/Cog 之类的常规做法。
+mod host;
+
 use gtk::prelude::*;
 use javascriptcore::ValueExt;
 use std::io::{BufRead, BufReader, Write};
@@ -105,6 +107,12 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
     window.set_child(Some(&view));
     view.load_uri(url);
     window.show_all();
+    // 托盘与窗口显隐：窗口关掉只是隐藏，进程继续常驻（与 Tauri 版行为一致）。
+    window.connect_delete_event(|window, _| {
+        window.hide();
+        gtk::glib::Propagation::Stop
+    });
+    host::start_tray(window.clone());
 }
 
 // ── 命令分发 ────────────────────────────────────────────────────────────────
