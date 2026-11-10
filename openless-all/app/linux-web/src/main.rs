@@ -381,6 +381,41 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "saved": true }))
         }
+        "validate_provider_credentials" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = _args
+                .get("kind")
+                .and_then(|value| value.as_str())
+                .and_then(|kind| match kind {
+                    "asr" => Some(openless_core::ProviderKind::Asr),
+                    "llm" => Some(openless_core::ProviderKind::Llm),
+                    "omni" => Some(openless_core::ProviderKind::Omni),
+                    _ => None,
+                })
+                .ok_or_else(|| "kind 必须是 asr / llm / omni".to_string())?;
+            let channel_id = _args
+                .get("channelId")
+                .or_else(|| _args.get("channel_id"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let thinking_enabled = backend.get_preferences().llm_thinking_enabled;
+            let result = runtime
+                .block_on(backend.services().provider.validate(openless_core::ProviderRequest {
+                    kind,
+                    channel_id,
+                    thinking_enabled,
+                }))
+                .map_err(|error| {
+                    error
+                        .details
+                        .as_ref()
+                        .and_then(|details| details.get("siwc"))
+                        .map(|details| format!("siwc:{details}"))
+                        .unwrap_or(error.message)
+                })?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
