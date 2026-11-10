@@ -177,6 +177,14 @@ fn init_host() -> Host {
     host
 }
 
+fn channel_kind(kind: Option<&str>) -> Option<openless_core::ChannelKind> {
+    match kind {
+        Some("asr") => Some(openless_core::ChannelKind::Asr),
+        Some("llm") => Some(openless_core::ChannelKind::Llm),
+        _ => None,
+    }
+}
+
 fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> {
     let dir = data_dir();
     let backend = host.backend.as_deref();
@@ -256,10 +264,77 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 Some("asr") => openless_core::ProviderKind::Asr,
                 Some("llm") => openless_core::ProviderKind::Llm,
                 Some("omni") => openless_core::ProviderKind::Omni,
-                _ => return Err("kind 必须是 asr / llm / omni".to_string()),
+                _ => return Err("kind 必须是 asr / llm".to_string()),
             };
             serde_json::to_value(openless_core::provider_rules::provider_descriptors(kind))
                 .map_err(|error| error.to_string())
+        }
+        // ── 渠道 ───────────────────────────────────────────────────────
+        "list_channels" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone();
+            let runtime = runtime.ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|v| v.as_str()))
+                .ok_or_else(|| "kind 必须是 asr / llm".to_string())?;
+            let channels = runtime
+                .block_on(backend.list_channels(kind))
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(channels).map_err(|error| error.to_string())
+        }
+        "create_channel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone();
+            let runtime = runtime.ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|v| v.as_str()))
+                .ok_or_else(|| "kind 必须是 asr / llm".to_string())?;
+            let name = _args
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("新渠道")
+                .to_string();
+            let provider_type = _args
+                .get("providerType")
+                .or_else(|| _args.get("provider_type"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("custom")
+                .to_string();
+            let channel = runtime
+                .block_on(backend.create_channel(kind, name, provider_type))
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(channel).map_err(|error| error.to_string())
+        }
+        "delete_channel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone();
+            let runtime = runtime.ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|v| v.as_str()))
+                .ok_or_else(|| "kind 必须是 asr / llm".to_string())?;
+            let id = _args
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "缺少 id".to_string())?
+                .to_string();
+            runtime
+                .block_on(backend.delete_channel(kind, id))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "deleted": true }))
+        }
+        "set_channel_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone();
+            let runtime = runtime.ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|v| v.as_str()))
+                .ok_or_else(|| "kind 必须是 asr / llm".to_string())?;
+            let id = _args
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "缺少 id".to_string())?
+                .to_string();
+            let enabled = _args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+            runtime
+                .block_on(backend.set_channel_enabled(kind, id, enabled))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "enabled": enabled }))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
