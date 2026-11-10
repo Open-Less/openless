@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
+import {
+  getActivityStats,
+  getCredentials,
+  listHistory,
+  listProviderDescriptors,
+  readCredential,
+  type ProviderKind,
+} from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { countCodePoints } from '../lib/unicode';
@@ -26,8 +33,12 @@ import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } fro
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
+import { loadOverviewServiceDetails, type OverviewServiceDetails } from '../lib/overviewServices';
 import { isHarmonyHost } from '../lib/harmonyBridge';
 import { HarmonyDictation } from '../components/HarmonyDictation';
+import { SavedToast, type SaveToastState } from '../components/SavedToast';
+
+type RefreshOutcome = 'ok' | 'stale' | 'error';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -41,7 +52,7 @@ function useModeLabels(): Record<PolishMode, string> {
 
 interface OverviewProps {
   onOpenHistory?: () => void;
-  onOpenSettings?: (section: 'general' | 'services' | 'privacy' | 'shortcuts') => void;
+  onOpenSettings?: (section: OverviewSettingsSection, serviceView?: ProviderKind) => void;
 }
 
 // id → i18n nameKey; this keeps display labels only, provider behavior comes from the Core descriptor.
@@ -73,6 +84,13 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   custom: 'custom',
 };
 
+const OMNI_NAME_KEY_BY_ID: Record<string, string> = {
+  openai: 'omniOpenai',
+  gemini: 'omniGemini',
+  'dashscope-omni': 'omniDashscope',
+  custom: 'custom',
+};
+
 export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
@@ -83,26 +101,40 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const [credsError, setCredsError] = useState(false);
   const [credsLoading, setCredsLoading] = useState(true);
   const [creds, setCreds] = useState<CredentialsStatus | null>(null);
+  const credsRef = useRef(creds);
+  credsRef.current = creds;
   const { prefs, capability } = useHotkeySettings();
+  const preferencesRef = useRef(prefs);
+  preferencesRef.current = prefs;
+  const [serviceDetails, setServiceDetails] = useState<
+    Partial<Record<'asr' | 'llm' | 'omni', OverviewServiceDetails>>
+  >({});
   // A narrow desktop window still uses desktop shortcuts.
   const desktop = isDesktop();
   const credentialsRequestSeq = useRef(0);
   const historyRequestSeq = useRef(0);
   const activityRequestSeq = useRef(0);
+  const refreshNoticeSeq = useRef(0);
+  const [refreshNotice, setRefreshNotice] = useState<{ id: number; state: SaveToastState }>({
+    id: 0,
+    state: 'idle',
+  });
 
-  const refreshHistory = useCallback(() => {
+  const refreshHistory = useCallback((): Promise<RefreshOutcome> => {
     const requestSeq = historyRequestSeq.current + 1;
     historyRequestSeq.current = requestSeq;
     setHistoryError(false);
-    listHistory()
+    return listHistory()
       .then((entries) => {
-        if (requestSeq !== historyRequestSeq.current) return;
+        if (requestSeq !== historyRequestSeq.current) return 'stale';
         setHistory(entries);
+        return 'ok';
       })
       .catch((error) => {
-        if (requestSeq !== historyRequestSeq.current) return;
+        if (requestSeq !== historyRequestSeq.current) return 'stale';
         console.error('[overview] failed to load history', error);
         setHistoryError(true);
+        return 'error';
       });
   }, []);
 
@@ -114,41 +146,53 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   // mobile period cards would stay empty forever.
   const [activity, setActivity] = useState<ActivityDay[] | null>(null);
   const [activityError, setActivityError] = useState(false);
-  const refreshActivity = useCallback(() => {
+  const refreshActivity = useCallback((): Promise<RefreshOutcome> => {
     const requestSeq = activityRequestSeq.current + 1;
     activityRequestSeq.current = requestSeq;
     setActivityError(false);
-    getActivityStats()
+    return getActivityStats()
       .then((stats) => {
-        if (requestSeq !== activityRequestSeq.current) return;
+        if (requestSeq !== activityRequestSeq.current) return 'stale';
         setActivity(stats);
+        return 'ok';
       })
       .catch((error) => {
-        if (requestSeq !== activityRequestSeq.current) return;
+        if (requestSeq !== activityRequestSeq.current) return 'stale';
         console.error('[overview] failed to load activity stats', error);
         setActivity(null);
         setActivityError(true);
+        return 'error';
       });
   }, []);
   useEffect(() => {
     refreshActivity();
   }, [refreshActivity]);
 
-  const refreshCredentials = useCallback(() => {
+  const refreshCredentials = useCallback((): Promise<RefreshOutcome> => {
     const requestSeq = credentialsRequestSeq.current + 1;
     credentialsRequestSeq.current = requestSeq;
     setCredsError(false);
-    setCredsLoading(true);
-    getCredentials()
-      .then((status) => {
-        if (requestSeq !== credentialsRequestSeq.current) return;
+    // Keep the previous credentials and service details until this read resolves.
+    // Mark loading only for the empty first paint; a refresh must not swap in the placeholder.
+    setCredsLoading((current) => current && credsRef.current === null);
+    return getCredentials()
+      .then(async (status) => {
+        if (requestSeq !== credentialsRequestSeq.current) return 'stale';
+        const details = await loadOverviewServiceDetails(status, preferencesRef.current, {
+          listProviderDescriptors,
+          readCredential,
+        });
+        if (requestSeq !== credentialsRequestSeq.current) return 'stale';
         setCreds(status);
+        setServiceDetails(details);
         setCredsError(false);
+        return 'ok';
       })
       .catch((error) => {
-        if (requestSeq !== credentialsRequestSeq.current) return;
+        if (requestSeq !== credentialsRequestSeq.current) return 'stale';
         console.error('[overview] failed to load credentials status', error);
         setCredsError(true);
+        return 'error';
       })
       .finally(() => {
         if (requestSeq === credentialsRequestSeq.current) setCredsLoading(false);
@@ -167,22 +211,36 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     prefs?.activeAsrProvider,
     prefs?.pipelineMode,
     prefs?.activeOmniProvider,
+    prefs?.localAsrActiveModel,
+    prefs?.localWhisperActiveModel,
+    prefs?.foundryLocalAsrModel,
+    prefs?.sherpaOnnxModel,
   ]);
 
   // ⌘R / Ctrl+R refetches this page's three data sets (history, activity, credentials), same key and semantics as the history page.
   // preventDefault blocks the webview's default full-page reload, which would remount the whole frontend.
   // The overview previously had no refresh entry; users had to switch pages away and back to see fresh data.
-  const refreshAll = useCallback(() => {
-    refreshHistory();
-    refreshActivity();
-    refreshCredentials();
-  }, [refreshHistory, refreshActivity, refreshCredentials]);
+  const refreshAll = useCallback(
+    (notify = false) => {
+      void Promise.all([refreshHistory(), refreshActivity(), refreshCredentials()]).then(
+        (results) => {
+          if (!notify || results.some((result) => result === 'stale')) return;
+          setRefreshNotice({
+            id: refreshNoticeSeq.current + 1,
+            state: results.some((result) => result === 'error') ? 'failed' : 'saved',
+          });
+          refreshNoticeSeq.current += 1;
+        },
+      );
+    },
+    [refreshHistory, refreshActivity, refreshCredentials],
+  );
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
-        refreshAll();
+        refreshAll(true);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -217,6 +275,11 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     };
   }, [refreshCredentials]);
 
+  useEffect(() => {
+    window.addEventListener('ol-channels-changed', refreshCredentials);
+    return () => window.removeEventListener('ol-channels-changed', refreshCredentials);
+  }, [refreshCredentials]);
+
   const metrics = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -249,110 +312,87 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
     hotkeyAvailable: prefs && capability ? capability.adapter !== 'unavailable' : null,
     hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
   });
-  const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
-  // Configured provider cards no longer stay resident (no informational value); only still-pending cards
-  // show as reminders. Once everything is configured the whole "current voice services" group hides. While
-  // credentials are loading / the fetch failed (providers empty), keep placeholder cards to avoid a blank flash.
-  const pendingProviders = setup.providers.filter((p) => !p.configured);
-  const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
+  const providerName = (provider: (typeof setup.providers)[number]) => {
+    const nameKey =
+      provider.id &&
+      (provider.kind === 'asr'
+        ? ASR_NAME_KEY_BY_ID
+        : provider.kind === 'omni'
+          ? OMNI_NAME_KEY_BY_ID
+          : LLM_NAME_KEY_BY_ID)[provider.id];
+    return nameKey
+      ? t(`settings.providers.presets.${nameKey}`)
+      : provider.id || t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
+  };
+  const openSettings = (section: OverviewSettingsSection, serviceView?: ProviderKind) =>
+    onOpenSettings?.(section, serviceView);
 
   return (
-    // Single-screen fixed page: no scrolling, fills the height given by the shell, dashboards share
-    // one screen elastically; when the window is squeezed very short, the bottom row shrinks internally
-    // (the recent list scrolls internally) and the page itself shows no scrollbar.
+    // Desktop is one dashboard. The page itself does not scroll; the recent-recognition
+    // list is the scroller, and the year heatmap stays fully visible in the left column.
+    // Mobile stacks the same blocks, so that surface still grows with the page.
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
-        flex: 1,
-        minHeight: 0,
+        flex: mobile ? '1 0 auto' : '1 1 0%',
+        height: mobile ? undefined : '100%',
+        minHeight: mobile ? undefined : 0,
         minWidth: 0,
-        gap: 14,
+        overflow: mobile ? 'visible' : 'hidden',
+        gap: 8,
       }}
     >
       <PageHeader
         compact
         title={t('overview.title')}
         right={
-          <Btn size="sm" icon="refresh" onClick={refreshAll}>
+          <Btn size="sm" icon="refresh" onClick={() => refreshAll(true)}>
             {t('overview.refresh')}
           </Btn>
+        }
+      />
+      <SavedToast
+        saveState={refreshNotice.state}
+        replayKey={refreshNotice.id}
+        message={
+          refreshNotice.state === 'failed' ? t('common.operationFailed') : t('common.refreshed')
         }
       />
 
       {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
 
-      {showProvidersSection && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 8,
-            }}
-          >
-            <h2
-              style={{
-                fontSize: 13,
-                fontWeight: 'var(--ol-font-weight-semibold)',
-                color: 'var(--ol-ink-2)',
-                margin: 0,
-              }}
-            >
-              {t('overview.servicesTitle')}
-            </h2>
-            <Btn
-              size="sm"
-              variant="soft"
-              disabled={!onOpenSettings}
-              onClick={() => openSettings('services')}
-            >
-              {t('overview.actions.services')}
-            </Btn>
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                mobile || pendingProviders.length < 2
-                  ? 'minmax(0, 1fr)'
-                  : 'repeat(2, minmax(0, 1fr))',
-              gap: 12,
-            }}
-          >
-            {pendingProviders.map((provider) => {
-              const nameKey =
-                provider.id &&
-                (provider.kind === 'asr' ? ASR_NAME_KEY_BY_ID : LLM_NAME_KEY_BY_ID)[provider.id];
-              const name = nameKey
-                ? t(`settings.providers.presets.${nameKey}`)
-                : provider.id ||
-                  t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
-              return (
-                <ProviderCard
-                  key={provider.kind}
-                  kind={provider.kind}
-                  name={name}
-                  status="notConfigured"
-                  onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
-                />
-              );
-            })}
-            {setup.providers.length === 0 && (
-              <Card padding={16}>
-                <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
-                  {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
-                </div>
-              </Card>
-            )}
-          </div>
-        </div>
-      )}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns:
+            mobile || setup.providers.length < 2 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
+          gap: 10,
+          flexShrink: 0,
+        }}
+      >
+        {setup.providers.map((provider) => (
+          <ProviderCard
+            key={provider.kind}
+            kind={provider.kind}
+            name={providerName(provider)}
+            providerId={provider.id}
+            details={serviceDetails[provider.kind]}
+            status={provider.configured ? 'configured' : 'notConfigured'}
+            onConfigure={onOpenSettings ? () => openSettings('services', provider.kind) : undefined}
+          />
+        ))}
+        {setup.providers.length === 0 && (
+          <Card padding={16}>
+            <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+              {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+            </div>
+          </Card>
+        )}
+      </div>
 
       {/* Usage records: title + four metric cards as one group. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
         <h2
           style={{
             fontSize: 13,
@@ -367,7 +407,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           style={{
             display: 'grid',
             gridTemplateColumns: mobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-            gap: 12,
+            gap: 8,
           }}
         >
           <Metric
@@ -407,30 +447,53 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         </div>
       </div>
 
-      {/* Bottom row takes the remaining height: the period chart area stretches, the recent list scrolls internally. */}
+      {/* Bottom row fills the dashboard. The chart shrinks; the year heatmap and recent list stay inside it. */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
-          gap: 12,
-          flex: 1,
-          // Keep the chart readable; when the window is too short the page scrolls instead.
-          minHeight: mobile ? 0 : 260,
+          gridTemplateRows: 'minmax(0, 1fr)',
+          gap: 10,
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
       >
-        <PeriodMetricsCard
-          series={series}
-          period={period}
-          metric={metric}
-          onPeriodChange={setPeriod}
-          onMetricChange={setMetric}
-          loadError={activityError}
-          onRetry={refreshActivity}
-        />
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            minHeight: 0,
+            gap: 10,
+            overflow: 'hidden',
+          }}
+        >
+          <PeriodMetricsCard
+            series={series}
+            period={period}
+            metric={metric}
+            onPeriodChange={setPeriod}
+            onMetricChange={setMetric}
+            loadError={activityError}
+            onRetry={refreshActivity}
+          />
+          {!mobile &&
+            prefs?.showOverviewActivityHeatmap !== false &&
+            activity &&
+            activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
+        </div>
 
         <Card
           padding={0}
-          style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+          }}
         >
           <div
             style={{
@@ -488,7 +551,7 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
                     {t('overview.recentEmptyHint')}
                   </div>
                 )}
-                {history.slice(0, 8).map((s) => (
+                {history.map((s) => (
                   <RecentRow key={s.id} session={s} modeLabel={modeLabel} />
                 ))}
               </>
@@ -496,11 +559,6 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           </div>
         </Card>
       </div>
-      {/* Independent activity storage survives history clearing; keep the existing visibility preference. */}
-      {!mobile &&
-        prefs?.showOverviewActivityHeatmap !== false &&
-        activity &&
-        activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
     </div>
   );
 }
@@ -508,93 +566,94 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
 interface ProviderCardProps {
   kind: 'asr' | 'llm' | 'omni';
   name: string;
+  providerId: string | null;
+  details?: OverviewServiceDetails;
   status: 'configured' | 'notConfigured';
   onConfigure?: () => void;
 }
 
-function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
+function ProviderCard({ kind, name, providerId, details, status, onConfigure }: ProviderCardProps) {
   const { t } = useTranslation();
+  const modelLabel = details?.error
+    ? t('settings.providers.readFailed')
+    : details?.model
+      ? details.model
+      : null;
+  const detailLabel = [name, providerId, modelLabel].filter(Boolean).join(' · ');
   return (
-    <Card padding={16} style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 10,
-            flexShrink: 0,
-            background: 'var(--ol-blue-soft)',
-            color: 'var(--ol-blue)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Icon name={kind === 'asr' ? 'mic' : 'sparkle'} size={18} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: 8,
-              marginBottom: 4,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12.5,
-                color: 'var(--ol-ink-4)',
-                fontWeight: 'var(--ol-font-weight-semibold)',
-              }}
-            >
-              {t(`overview.${kind}Kind`)}
-            </span>
-            {status === 'configured' && (
-              <Pill tone="ok" size="sm">
-                <span
-                  style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }}
-                />
-                {t('overview.statusConfigured')}
-              </Pill>
-            )}
-            {status === 'notConfigured' && (
-              <Pill tone="outline" size="sm">
-                {t('overview.statusNotConfigured')}
-              </Pill>
-            )}
-          </div>
-          <div
-            style={{
-              fontSize: 15,
-              fontWeight: 'var(--ol-font-weight-semibold)',
-              color: 'var(--ol-ink)',
-              overflowWrap: 'anywhere',
-            }}
-          >
-            {name}
-          </div>
-        </div>
+    <Card
+      padding={10}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, minHeight: 0 }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 'var(--ol-control-radius)',
+          flexShrink: 0,
+          background: 'var(--ol-blue-soft)',
+          color: 'var(--ol-blue)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Icon name={kind === 'asr' ? 'mic' : 'sparkle'} size={16} />
       </div>
       <div
         style={{
+          flex: 1,
+          minWidth: 0,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
           gap: 8,
         }}
       >
         <span
-          style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+          style={{
+            flexShrink: 0,
+            fontSize: 12,
+            color: 'var(--ol-ink-4)',
+            fontWeight: 'var(--ol-font-weight-semibold)',
+          }}
         >
-          {t(`overview.providerHelp.${kind}`)}
+          {t(`overview.${kind}Kind`)}
         </span>
-        <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
-          {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
-        </Btn>
+        {status === 'configured' ? (
+          <Pill tone="ok" size="sm">
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: 'var(--ol-radius)',
+                background: 'var(--ol-ok)',
+              }}
+            />
+            {t('overview.statusConfigured')}
+          </Pill>
+        ) : (
+          <Pill tone="outline" size="sm">
+            {t('overview.statusNotConfigured')}
+          </Pill>
+        )}
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 14,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink)',
+          }}
+          title={detailLabel}
+        >
+          {detailLabel}
+        </span>
       </div>
+      <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
+        {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
+      </Btn>
     </Card>
   );
 }
@@ -630,7 +689,16 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
     };
   }, [activity, i18n.resolvedLanguage, i18n.language]);
   return (
-    <Card padding={12} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+    <Card
+      padding={12}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 0,
+        flex: '0 0 auto',
+      }}
+    >
       <span
         style={{
           fontSize: 13,
@@ -641,10 +709,7 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
       >
         {t('overview.activityTitle')}
       </span>
-      {/* Cells no longer cap: 53 columns fill the card width to the right edge.
-          The card height tightens to content height (flex default 0 1 auto: no stretch, shrinks only when
-          the window is squeezed short); padding is equal on all four sides; the freed height goes entirely
-          to the period/recent rows above, and the heatmap sinks to the bottom. */}
+      {/* Cells fill the card width. The card stays at content height so the year grid is not clipped. */}
       <Heatmap
         data={data}
         startDate={startDate}
@@ -712,15 +777,16 @@ function SegmentedToggle<T extends string | number>({
 }) {
   return (
     <div
+      className="ol-overview-segment"
       role="group"
       aria-label={ariaLabel}
       style={{
         display: 'flex',
         gap: 2,
         padding: 2,
-        borderRadius: 8,
+        borderRadius: 'var(--ol-control-radius)',
         background: 'var(--ol-surface-2)',
-        border: '0.5px solid var(--ol-line)',
+        boxShadow: 'inset 0 0 0 0.5px var(--ol-line)',
       }}
     >
       {options.map((option) => {
@@ -738,7 +804,7 @@ function SegmentedToggle<T extends string | number>({
                 ? 'var(--ol-font-weight-semibold)'
                 : 'var(--ol-font-weight-medium)',
               border: 0,
-              borderRadius: 6,
+              borderRadius: 'var(--ol-r-sm)',
               background: selected ? 'var(--ol-blue)' : 'transparent',
               color: selected ? '#fff' : 'var(--ol-ink-3)',
               cursor: 'pointer',
@@ -748,7 +814,9 @@ function SegmentedToggle<T extends string | number>({
                 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
             }}
           >
-            {option.label}
+            <span className="ol-segmented-label" data-label={option.label}>
+              {option.label}
+            </span>
           </button>
         );
       })}
@@ -793,7 +861,14 @@ function PeriodMetricsCard({
   return (
     <Card
       padding={18}
-      style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minWidth: 0,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
     >
       {/* flexWrap: the card is narrow inside a 1fr column; wrap instead of squashing buttons when the two toggles don't fit. */}
       <div

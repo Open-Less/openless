@@ -200,7 +200,7 @@ export function SelectionWorkspaceExtraControlsDialog({
                   style={{
                     alignSelf: 'flex-start',
                     border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 7,
+                    borderRadius: 'var(--ol-control-radius)',
                     background: 'var(--ol-control-solid)',
                     color: 'var(--ol-ink-2)',
                     padding: '6px 10px',
@@ -233,7 +233,7 @@ export function SelectionWorkspaceExtraControlsDialog({
               onClick={onClose}
               style={{
                 border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 7,
+                borderRadius: 'var(--ol-control-radius)',
                 background: 'var(--ol-control-solid)',
                 color: 'var(--ol-ink)',
                 padding: '7px 14px',

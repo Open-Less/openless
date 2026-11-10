@@ -26,7 +26,7 @@ const kbdStyle: CSSProperties = {
   minWidth: 20,
   height: 21,
   padding: '0 6px',
-  borderRadius: 5,
+  borderRadius: 'var(--ol-radius)',
   fontSize: 11.5,
   lineHeight: 1,
   fontWeight: 'var(--ol-font-weight-medium)',

@@ -1,3 +1,4 @@
+import { releaseWebGL } from '../../lib/webglResources';
 // orbFeed.ts — shared render source for the capsule's thinking orb.
 //
 // Requirement: every assistant message avatar shows the rotating capsule thinking
@@ -55,19 +56,30 @@ function startFeed(): Feed | null {
 
   const vs = compile(gl.VERTEX_SHADER, VERTEX_SRC);
   const fs = compile(gl.FRAGMENT_SHADER, ORB_FRAGMENT_SRC);
-  if (!vs || !fs) return null;
+  if (!vs || !fs) {
+    releaseWebGL(gl, { shaders: [vs, fs] });
+    return null;
+  }
   const program = gl.createProgram();
-  if (!program) return null;
+  if (!program) {
+    releaseWebGL(gl, { shaders: [vs, fs] });
+    return null;
+  }
   gl.attachShader(program, vs);
   gl.attachShader(program, fs);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     console.error('[orbFeed] program link failed:', gl.getProgramInfoLog(program));
+    releaseWebGL(gl, { program, shaders: [vs, fs] });
     return null;
   }
   gl.useProgram(program);
 
   const buffer = gl.createBuffer();
+  if (!buffer) {
+    releaseWebGL(gl, { program, shaders: [vs, fs] });
+    return null;
+  }
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   const aPos = gl.getAttribLocation(program, 'aPos');
@@ -82,8 +94,11 @@ function startFeed(): Feed | null {
   let shaderTime = 0;
   let raf = 0;
   let last = performance.now();
+  let disposed = false;
 
   const frame = (now: number) => {
+    raf = 0;
+    if (disposed || document.hidden) return;
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     shaderTime += dt * SPEED;
@@ -96,19 +111,28 @@ function startFeed(): Feed | null {
     // Notify subscribers to drawImage within the same task — the WebGL frame stays
     // valid until this task ends.
     for (const cb of subscribers) cb(canvas);
-    raf = requestAnimationFrame(frame);
+    if (!disposed) raf = requestAnimationFrame(frame);
   };
-  raf = requestAnimationFrame(frame);
+  const visibility = () => {
+    cancelAnimationFrame(raf);
+    raf = 0;
+    if (!document.hidden && !disposed) {
+      last = performance.now();
+      raf = requestAnimationFrame(frame);
+    }
+  };
+  document.addEventListener('visibilitychange', visibility);
+  visibility();
 
   return {
     canvas,
     dispose() {
+      disposed = true;
+      document.removeEventListener('visibilitychange', visibility);
       cancelAnimationFrame(raf);
-      gl.deleteBuffer(buffer);
-      gl.deleteProgram(program);
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      releaseWebGL(gl, { buffer, program, shaders: [vs, fs] });
+      canvas.width = 0;
+      canvas.height = 0;
     },
   };
 }

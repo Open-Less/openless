@@ -1,3 +1,4 @@
+import { measureTabularDigit } from '../lib/tabularTextMetrics';
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -62,7 +63,6 @@ export interface LiveTranscriptPillProps {
 }
 
 const FONT_SIZE = 16;
-const FONT_WEIGHT = 500;
 const DEFAULT_PILL_HEIGHT = 40;
 
 let measureCanvas: HTMLCanvasElement | null = null;
@@ -82,8 +82,12 @@ function measureGlyphWidth(glyph: string, fontSize: number): number {
   if (!measureCanvas) measureCanvas = document.createElement('canvas');
   const ctx = measureCanvas.getContext('2d');
   if (!ctx) return fontSize;
-  ctx.font = `${FONT_WEIGHT} ${fontSize}px ${getSansFont()}`;
-  const raw = ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
+  const weight =
+    getComputedStyle(document.documentElement).getPropertyValue('--ol-font-weight-medium').trim() ||
+    '500';
+  ctx.font = `${weight} ${fontSize}px ${getSansFont()}`;
+  const raw =
+    measureTabularDigit(glyph, ctx.font) ?? ctx.measureText(glyph === ' ' ? '\u00a0' : glyph).width;
   return Math.max(1, raw) + INSERT_TEXT_MOTION.glyphGapPx;
 }
 
@@ -534,7 +538,7 @@ function TranscriptGlyph({
               filter: `blur(${INSERT_TEXT_MOTION.bornBlurPx}px)`,
             }
       }
-      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      animate={{ opacity: 1, y: 0, filter: 'blur(0px)', transitionEnd: { filter: 'none' } }}
       transition={
         reduceMotion
           ? { duration: 0 }

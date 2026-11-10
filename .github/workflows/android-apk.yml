@@ -39,13 +39,15 @@ on:
         type: boolean
         default: false
 
-# Repeated pushes of the same tag run only the newest; workflow_dispatch isolates by run_id to avoid mutual cancellation.
+# Supersede equivalent manual builds; different ABI/profile/signing requests stay
+# independent. Tag publication must finish once started.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.abis || 'aarch64' }}-${{ inputs.fast_profile || false }}-${{ inputs.signed_debug || false }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') }}
 
 jobs:
   plan:
+    timeout-minutes: 10
     name: Plan Android ABI matrix
     permissions:
       contents: read
@@ -148,10 +150,13 @@ jobs:
           echo "Resolved ABIs: $abi_list (fast_profile=$fast)"
 
   build-android-apk:
+    timeout-minutes: 90
     name: Build Android (${{ matrix.abi }})
     needs: plan
+    # Publishing is `publish-android-release`. Branch and schedule builds only
+    # produce artifacts, so they do not get contents: write.
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -224,6 +229,7 @@ jobs:
           packages: platform-tools
 
       - name: Install NDK and accept SDK licenses
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
@@ -247,8 +253,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -263,13 +269,15 @@ jobs:
           shared-key: android-${{ matrix.abi }}
           workspaces: openless-all/app/src-tauri -> target
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          # Keep Gradle caches for post-job save; do not wipe ~/.gradle before post.
-          cache-read-only: false
+          # Keep reusable baseline caches; avoid one large copy per release tag.
+          cache-read-only: ${{ github.ref != 'refs/heads/beta' || (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') }}
 
       - name: Install npm deps
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -316,6 +324,7 @@ jobs:
         run: node scripts/configure-android-release-signing.mjs
 
       - name: Prime Gradle wrapper
+        timeout-minutes: 10
         working-directory: openless-all/app
         shell: bash
         run: |
@@ -331,6 +340,7 @@ jobs:
           exit 1
 
       - name: Build Android debug APK
+        timeout-minutes: 70
         if: needs.plan.outputs.mode == 'debug'
         working-directory: openless-all/app
         env:
@@ -341,6 +351,7 @@ jobs:
         run: npm run tauri:android:build:debug
 
       - name: Build Android release APK
+        timeout-minutes: 70
         if: needs.plan.outputs.mode == 'release'
         working-directory: openless-all/app
         env:
@@ -377,6 +388,7 @@ jobs:
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: ${{ needs.plan.outputs.mode == 'release' && format('openless-android-release-{0}', matrix.gradle_abi) || format('openless-android-debug-{0}', matrix.gradle_abi) }}
           path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: error
@@ -411,6 +423,7 @@ jobs:
           fi
 
   publish-android-release:
+    timeout-minutes: 30
     name: Publish Android release assets
     if: needs.plan.outputs.is_tag_release == 'true'
     needs: [plan, build-android-apk]
@@ -429,10 +442,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - name: Install npm deps
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -530,6 +544,7 @@ jobs:
       - name: Upload Android updater manifests
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-android-updater-manifests
           if-no-files-found: error
           path: |

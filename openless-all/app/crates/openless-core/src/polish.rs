@@ -518,6 +518,9 @@ impl ActiveLLMProvider {
     }
 }
 
+pub type LlmUsageObserver =
+    std::sync::Arc<dyn Fn(uuid::Uuid, crate::usage_ledger::ReportedTokens) + Send + Sync>;
+
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
     siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
@@ -531,6 +534,7 @@ pub struct OpenAICompatibleLLMProvider {
     /// connection pool — a fresh TLS handshake on every polish, exactly the cost that
     /// cache exists to avoid. A constant cap keeps the cache key single.
     polish_client: reqwest::Client,
+    usage_observer: Option<LlmUsageObserver>,
 }
 
 impl OpenAICompatibleLLMProvider {
@@ -553,6 +557,43 @@ impl OpenAICompatibleLLMProvider {
             dictation_session_id: None,
             siwc_access: None,
             polish_client,
+            usage_observer: None,
+        }
+    }
+
+    /// The observer must return promptly and receives no request text.
+    pub fn with_usage_observer(mut self, observer: LlmUsageObserver) -> Self {
+        self.usage_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn set_usage_observer(&mut self, observer: LlmUsageObserver) {
+        self.usage_observer = Some(observer);
+    }
+
+    pub(crate) fn usage_metadata(&self) -> (String, String) {
+        let protocol = match self.config.protocol.format {
+            LlmRequestFormat::ChatCompletions => "chat_completions",
+            LlmRequestFormat::Responses => "responses",
+            LlmRequestFormat::Messages => "messages",
+        };
+        (
+            crate::prompt_cache::service_id(&self.config.base_url).into(),
+            protocol.into(),
+        )
+    }
+
+    fn report_usage(&self, request_id: uuid::Uuid, usage: crate::usage_ledger::ReportedTokens) {
+        if usage != crate::usage_ledger::ReportedTokens::default() {
+            if let Some(observer) = &self.usage_observer {
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    observer(request_id, usage)
+                }))
+                .is_err()
+                {
+                    log::warn!("usage observer panicked");
+                }
+            }
         }
     }
 
@@ -826,13 +867,21 @@ impl OpenAICompatibleLLMProvider {
 
     fn chat_body(&self, stream: bool, messages: Vec<Value>) -> Value {
         if self.config.protocol.format != LlmRequestFormat::ChatCompletions {
-            return crate::llm_protocol::request_body(&self.config, stream, messages);
+            let mut body = crate::llm_protocol::request_body(&self.config, stream, messages);
+            crate::prompt_cache::apply(&self.config, &mut body);
+            return body;
         }
         let mut body = json!({
             "model": self.config.model,
             "stream": stream,
             "messages": messages,
         });
+        if stream
+            && self.usage_observer.is_some()
+            && crate::prompt_cache::supports_usage(&self.config)
+        {
+            body["stream_options"] = json!({"include_usage": true});
+        }
         if let Some(temperature) = self.config.temperature {
             // OpenAI 官方 gpt-5 / gpt-6 系列在 Chat Completions 只接受默认 temperature=1，
             // 传 0.3 会被 400 拒绝（issue #857 / #1101）。官方渠道的这些模型不下发该字段，
@@ -853,6 +902,7 @@ impl OpenAICompatibleLLMProvider {
         self.config
             .protocol
             .apply_service_tier(&self.config.provider_id, &mut body);
+        crate::prompt_cache::apply(&self.config, &mut body);
         body
     }
 
@@ -919,7 +969,7 @@ impl OpenAICompatibleLLMProvider {
             })
             .map_err(|error| LLMError::ParseError(error.message))?;
         let request = self
-            .authorize(self.polish_client.post(url))
+            .authorize(self.polish_client.post(url), body)
             .header("Content-Type", "application/json")
             .json(body);
 
@@ -942,6 +992,14 @@ impl OpenAICompatibleLLMProvider {
                 status: status.as_u16(),
                 body: preview.to_string(),
             });
+        }
+
+        if self.usage_observer.is_some() {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                if let Some(usage) = crate::usage_ledger::ReportedTokens::from_response(&value) {
+                    self.report_usage(request_id, usage);
+                }
+            }
         }
 
         let extracted =
@@ -1043,7 +1101,7 @@ impl OpenAICompatibleLLMProvider {
             self.config.protocol.format
         );
         let request = self
-            .authorize(self.polish_client.post(&url))
+            .authorize(self.polish_client.post(&url), &body)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&body);
@@ -1128,6 +1186,7 @@ impl OpenAICompatibleLLMProvider {
         if !cancelled {
             events.finish()?;
         }
+        self.report_usage(request_id, events.reported_tokens());
         let cleaned = clean_polish_output(&full_text);
         log::info!(
             "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
@@ -1150,12 +1209,26 @@ impl OpenAICompatibleLLMProvider {
         Ok(full_text)
     }
 
-    fn authorize(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn authorize(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        body: &Value,
+    ) -> reqwest::RequestBuilder {
         for (name, value) in self.config.protocol.format.headers(&self.config.api_key) {
             request = request.header(name, value);
         }
         for (name, value) in &self.config.extra_headers {
             request = request.header(name, value);
+        }
+        if let Some((name, value)) = crate::prompt_cache::routing_header(&self.config, body) {
+            if !self
+                .config
+                .extra_headers
+                .keys()
+                .any(|configured| configured.eq_ignore_ascii_case(name))
+            {
+                request = request.header(name, value);
+            }
         }
         request
     }
@@ -1352,15 +1425,12 @@ impl CodexOAuthLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let mut system_prompt = prompts::qa_system_prompt();
-        if let Some(premise) = context_premise(
+        let system_prompt = compose_qa_system_prompt(
             working_languages,
             chinese_script_preference,
             output_language_preference,
             front_app,
-        ) {
-            system_prompt = format!("{}\n\n{}", premise, system_prompt);
-        }
+        );
 
         let mut request_messages = Vec::with_capacity(messages.len() + 1);
         request_messages.push(json!({ "role": "system", "content": system_prompt }));
@@ -2503,6 +2573,221 @@ mod tests {
         let err = finish_utf8_sse_chunks(&mut buffer, &mut pending)
             .expect_err("unfinished codepoint should fail at EOF");
         assert!(err.to_string().contains("middle of a UTF-8 codepoint"));
+    }
+
+    #[tokio::test]
+    async fn provider_reports_explicit_streaming_usage_without_changing_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let events = b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
+            write_chunked_sse_response(&mut stream, &[events]);
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        let text = provider
+            .chat_completion_messages_streaming(
+                vec![serde_json::json!({"role":"user","content":"private text"})],
+                StreamingTimeouts {
+                    first_token: Duration::from_secs(2),
+                    idle: Duration::from_secs(2),
+                },
+                |_| {},
+                || false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(text, "hello");
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(21));
+        assert_eq!(observations[0].1.output, Some(4));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_reports_explicit_non_streaming_usage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":33,"completion_tokens":6}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let observed = std::sync::Arc::new(StdMutex::new(Vec::new()));
+        let output = observed.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{address}"),
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |id, usage| {
+            output.lock().unwrap().push((id, usage))
+        }));
+        assert_eq!(
+            provider
+                .chat_completion("system", "private text", Duration::from_secs(2))
+                .await
+                .unwrap(),
+            "hello"
+        );
+        let observations = observed.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1.input, Some(33));
+        assert_eq!(observations[0].1.output, Some(6));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn usage_observer_panic_does_not_escape_provider() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(|_, _| panic!("fixture observer")));
+        provider.report_usage(
+            uuid::Uuid::new_v4(),
+            crate::usage_ledger::ReportedTokens {
+                input: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn missing_provider_usage_does_not_emit_zero_counts() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let captured = calls.clone();
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "http://127.0.0.1:1",
+            "",
+            "fixture-model",
+        ))
+        .with_usage_observer(std::sync::Arc::new(move |_, _| {
+            captured.fetch_add(1, Ordering::Relaxed);
+        }));
+        provider.report_usage(uuid::Uuid::new_v4(), Default::default());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn usage_stream_option_is_limited_to_verified_chat_services() {
+        let observer: LlmUsageObserver = std::sync::Arc::new(|_, _| {});
+        let official = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer.clone());
+        assert_eq!(
+            official.chat_body(true, vec![])["stream_options"]["include_usage"],
+            true
+        );
+        assert!(official
+            .chat_body(false, vec![])
+            .get("stream_options")
+            .is_none());
+        let proxy = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "openai",
+            "Proxy",
+            "https://proxy.example/v1",
+            "",
+            "gpt-4o-mini",
+        ))
+        .with_usage_observer(observer);
+        assert!(proxy
+            .chat_body(true, vec![])
+            .get("stream_options")
+            .is_none());
+    }
+
+    #[test]
+    fn cache_policy_survives_protocol_conversion_and_header_authorization() {
+        let messages = vec![
+            json!({"role": "system", "content": "fixed rules\n\n# 上下文\nApp A"}),
+            json!({"role": "user", "content": "unique input"}),
+        ];
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.anthropic.com/v1",
+            "test",
+            "claude-sonnet-4-6",
+        );
+        config.protocol.format = LlmRequestFormat::Messages;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"][1]["text"], "\n\n# 上下文\nApp A");
+        assert_eq!(body["messages"][0]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "custom",
+            "Official",
+            "https://api.openai.com/v1",
+            "test",
+            "gpt-6.1",
+        );
+        config.protocol.format = LlmRequestFormat::Responses;
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages.clone());
+        assert_eq!(body["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][1]["content"], "unique input");
+
+        let mut config = OpenAICompatibleConfig::new(
+            "ark",
+            "Ark",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "test",
+            "doubao-seed-2-1-pro-260628",
+        );
+        config
+            .extra_headers
+            .insert("x-prompt-cache-id".into(), "user-affinity".into());
+        let provider = OpenAICompatibleLLMProvider::new(config);
+        let body = provider.chat_body(true, messages);
+        let request = provider
+            .authorize(
+                provider
+                    .polish_client
+                    .post("https://ark.cn-beijing.volces.com/api/v3/chat/completions"),
+                &body,
+            )
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["x-prompt-cache-id"], "user-affinity");
+        assert_eq!(
+            request
+                .headers()
+                .get_all("x-prompt-cache-id")
+                .iter()
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -4515,14 +4800,14 @@ mod tests {
         let mut expected = compose_system_prompt(&prompts::system_prompt(PolishMode::Light), &[]);
         expected = format!(
             "{}\n\n{}",
+            expected,
             context_premise(
                 &["中文".to_string()],
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
                 Some("Notes (com.apple.Notes)"),
             )
-            .unwrap(),
-            expected
+            .unwrap()
         );
         expected = format!("{}\n\n{}", expected, prompts::polish_injection_defense());
         assert_eq!(without, expected);

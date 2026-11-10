@@ -25,6 +25,7 @@ import { withStartupDeadline } from './lib/startupProbe';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 import {
   needsDesktopGuide,
+  permissionGate,
   newGuideProgress,
   readGuideProgress,
   REOPEN_ONBOARDING_EVENT,
@@ -56,19 +57,6 @@ const SelectionVoiceIntentPicker = lazy(() =>
 const VoiceEditPanel = lazy(() =>
   import('./pages/VoiceEditPanel').then((m) => ({ default: m.VoiceEditPanel })),
 );
-// Tauri's Less Computer panel targets macOS and Windows; Linux gets the native egui
-// UI instead. TAURI_ENV_PLATFORM is a compile-time literal, so platforms that don't
-// run this WebView can drop the import, keeping the panel chunk out of mobile builds.
-// Plain-browser vite (preview/styling) lacks the variable → stays loadable.
-const TAURI_BUILD_PLATFORM: string | undefined = import.meta.env.TAURI_ENV_PLATFORM;
-const LESS_COMPUTER_BUNDLED =
-  !TAURI_BUILD_PLATFORM || TAURI_BUILD_PLATFORM === 'darwin' || TAURI_BUILD_PLATFORM === 'windows';
-const LessComputerPanel = LESS_COMPUTER_BUNDLED
-  ? lazy(() => import('./pages/LessComputerPanel').then((m) => ({ default: m.LessComputerPanel })))
-  : null;
-const LessComputerGlow = LESS_COMPUTER_BUNDLED
-  ? lazy(() => import('./pages/LessComputerGlow').then((m) => ({ default: m.LessComputerGlow })))
-  : null;
 
 interface AppProps {
   isCapsule: boolean;
@@ -161,20 +149,7 @@ function ReadyApp({
       </Suspense>
     );
   }
-  if (isLessComputer) {
-    return LessComputerPanel ? (
-      <Suspense fallback={null}>
-        <LessComputerPanel />
-      </Suspense>
-    ) : null;
-  }
-  if (isLessComputerGlow) {
-    return LessComputerGlow ? (
-      <Suspense fallback={null}>
-        <LessComputerGlow />
-      </Suspense>
-    ) : null;
-  }
+  if (isLessComputer || isLessComputerGlow) return null;
 
   const os = forcedOs ?? detectOS();
   // Windows startup must not block the first screen on permission probes.
@@ -449,17 +424,21 @@ function ReadyApp({
         checkMicrophonePermission(),
       ]);
       if (cancelled) return;
-      const aOk = a === 'granted' || a === 'notApplicable';
       // noDevice (no mic present) isn't a permission issue: don't trap the user on
       // onboarding; let them in and show the clear "no microphone detected" notice on
       // the permissions page. See issue #779.
-      const mOk = m === 'granted' || m === 'notApplicable' || m === 'noDevice';
-      if (aOk && mOk) {
+      const next = permissionGate({
+        os,
+        persistedFinished: persistedOnboarding.finished,
+        accessibility: a,
+        microphone: m,
+      });
+      if (next.gate === 'ready') {
         setGate('ready');
       } else {
         saveGuideProgress({
           ...(progress ?? newGuideProgress()),
-          step: !aOk && os === 'mac' ? 'accessibility' : 'microphone',
+          step: next.step,
           finished: false,
         });
         setGate('onboarding');

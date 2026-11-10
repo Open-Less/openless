@@ -130,8 +130,8 @@ impl PolishTranslationStream {
     }
 }
 
-/// Builds the working_languages + front_app premise at the head of the
-/// system prompt: a context heading followed by the working-languages line
+/// Builds the working_languages + front_app premise after the static rules:
+/// a context heading followed by the working-languages line
 /// and the front-app line (asking the model to match that app's typical
 /// communication tone).
 ///
@@ -273,6 +273,7 @@ pub(crate) fn compose_polish_prompts_for_input(
     has_prior_turns: bool,
     edit_plan_input: bool,
 ) -> (String, String) {
+    // Keep stable rules ahead of per-request application/document context for prefix caches.
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords);
     if let Some(premise) = context_premise(
         working_languages,
@@ -280,7 +281,7 @@ pub(crate) fn compose_polish_prompts_for_input(
         output_language_preference,
         front_app,
     ) {
-        system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        system_prompt = format!("{}\n\n{}", system_prompt, premise);
     }
     // Cursor context (the document the user is writing). When the switch is
     // off the caller passes None and the prompt here is byte-identical to
@@ -397,7 +398,7 @@ pub fn compose_translate_prompts(
         OutputLanguagePreference::Auto,
         front_app,
     ) {
-        system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        system_prompt = format!("{}\n\n{}", system_prompt, premise);
     }
     let user_prompt = prompts::user_prompt(raw_text);
     (system_prompt, user_prompt)
@@ -417,7 +418,7 @@ pub fn compose_qa_system_prompt(
         output_language_preference,
         front_app,
     ) {
-        system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        system_prompt = format!("{}\n\n{}", system_prompt, premise);
     }
     system_prompt
 }
@@ -557,5 +558,112 @@ mod translation_stream_tests {
         assert!(user.contains("<draft>"));
         assert!(user.contains("<instruction>"));
         assert!(user.contains(prompts::voice_edit_injection_defense()));
+    }
+}
+
+#[cfg(test)]
+mod stable_prompt_prefix_tests {
+    use super::*;
+    use crate::dictation_context::DictationContext;
+    use crate::shared_types::PipelineMode;
+
+    fn assert_prefix_and_app(prompt: &str, prefix: &str, app: &str) {
+        assert!(prompt.starts_with(prefix));
+        assert!(prompt.find(app).unwrap() >= prefix.len());
+        assert_eq!(prompt.matches(app).count(), 1);
+    }
+
+    #[test]
+    fn polish_keeps_the_style_prefix_when_app_and_cursor_change() {
+        let style = prompts::system_prompt(PolishMode::Structured);
+        let hotwords = vec!["OpenLess".into()];
+        let prefix = compose_system_prompt(&style, &hotwords);
+        let make = |app, before| {
+            compose_polish_prompts(
+                "current speech",
+                PolishMode::Structured,
+                &hotwords,
+                &style,
+                &[],
+                ChineseScriptPreference::Auto,
+                OutputLanguagePreference::Auto,
+                Some(app),
+                Some(&prompts::cursor_context_input(before, "after")),
+                true,
+            )
+        };
+        let (notes, user) = make("Notes", "document alpha");
+        let (mail, other_user) = make("Mail", "document beta");
+        assert_prefix_and_app(&notes, &prefix, "Notes");
+        assert_prefix_and_app(&mail, &prefix, "Mail");
+        assert_ne!(notes, mail);
+        assert_eq!(user, other_user);
+        for (prompt, text) in [(&notes, "document alpha"), (&mail, "document beta")] {
+            assert!(prompt.contains(text));
+            assert!(
+                prompt.find("</cursor_context>").unwrap()
+                    < prompt.find(prompts::polish_injection_defense()).unwrap()
+            );
+            assert!(prompt.contains(prompts::cursor_context_injection_defense()));
+            assert!(prompt.ends_with(prompts::polish_context_instruction()));
+        }
+    }
+
+    #[test]
+    fn translation_and_qa_preserve_static_prefix_across_app_changes() {
+        let translation_prefix = prompts::translate_system_prompt("English");
+        let qa_prefix = prompts::qa_system_prompt();
+        for app in ["Notes", "Mail"] {
+            let (translation, user) = compose_translate_prompts(
+                "current speech",
+                "English",
+                &[],
+                ChineseScriptPreference::Auto,
+                Some(app),
+            );
+            assert_prefix_and_app(&translation, &translation_prefix, app);
+            assert_eq!(user, prompts::user_prompt("current speech"));
+            let qa = compose_qa_system_prompt(
+                &[],
+                ChineseScriptPreference::Auto,
+                OutputLanguagePreference::Auto,
+                Some(app),
+            );
+            assert_prefix_and_app(&qa, &qa_prefix, app);
+        }
+        assert_eq!(
+            compose_translate_prompts("text", "English", &[], ChineseScriptPreference::Auto, None)
+                .0,
+            translation_prefix
+        );
+        assert_eq!(
+            compose_qa_system_prompt(
+                &[],
+                ChineseScriptPreference::Auto,
+                OutputLanguagePreference::Auto,
+                None
+            ),
+            qa_prefix
+        );
+    }
+
+    #[test]
+    fn dictation_snapshots_keep_the_style_prefix_for_traditional_and_omni() {
+        let style = prompts::system_prompt(PolishMode::Structured);
+        let prefix = compose_system_prompt(&style, &[]);
+        for pipeline in [PipelineMode::Traditional, PipelineMode::Multimodal] {
+            let mut context = DictationContext {
+                pipeline_mode: pipeline,
+                ..Default::default()
+            };
+            context.polish.style_system_prompt = style.clone();
+            context.polish.front_app = Some("Notes".into());
+            let first = context.effective_polish_system_prompt();
+            context.polish.front_app = Some("Mail".into());
+            let second = context.effective_polish_system_prompt();
+            assert_prefix_and_app(&first, &prefix, "Notes");
+            assert_prefix_and_app(&second, &prefix, "Mail");
+            assert_ne!(first, second);
+        }
     }
 }

@@ -7,7 +7,7 @@ day-to-day development.
 
 **Only repository administrators may create version tags and publish releases.**
 
-- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets ride the same tag, but the L01-L12 device acceptance must be finished *before* the tag is cut.
+- Only an admin may create a release tag (`v*-tauri`) or publish a GitHub Release. Linux assets may ride the same tag only after the L01-L12 device acceptance is finished for that release candidate. A desktop/Android tag may be cut without publishing Linux packages.
 - Contributors (including AI agents) **must not** create release tags, publish
   releases, or trigger release automation. If a release is needed, **request an admin
   to cut it** — open an issue or ping a maintainer with the target version and the
@@ -45,23 +45,26 @@ See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli
 
 These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
-Linux and HarmonyOS ride in the same Release through two dispatch-only entry
-points, `.github/workflows/release-linux-egui.yml` and
-`.github/workflows/release-harmony.yml`. Neither reacts to a `push:` event, so an
-arbitrary commit can never rebuild a package; `release-tauri.yml` dispatches both
-through `dispatch-platform-releases` as soon as the desktop/Android assets of a
-`v*-tauri` tag are published. That dispatch is what makes a tag push ship a
-complete Release: the two workflows only wait ten minutes for the Release to
-exist, less than the desktop matrix needs, which is why they cannot be triggered
-by the tag itself. To rebuild one platform for an already-published tag, dispatch
-it by hand on the same tag - that stays the repair path.
+Linux and HarmonyOS have dispatch-only entry points,
+`.github/workflows/release-linux-egui.yml` and `.github/workflows/release-harmony.yml`.
+Neither reacts directly to a tag push. After the desktop build, `release-tauri.yml`
+dispatches HarmonyOS on the same immutable release tag.
 
-Linux runs the same Core/host/deb/rpm verification as CI and **attaches the
-verified packages to that Release automatically**; nothing is uploaded by hand,
-and there is no in-app updater manifest or AppImage. Because the tag now ships
-Linux unattended, the device acceptance in
-[docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
-is a **pre-tag** gate rather than a post-build one.
+Linux is separate: an administrator must complete and record the L01-L12 device
+acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
+for the exact candidate, then set the repository variable
+`LINUX_ACCEPTED_RELEASE_TAG` to that release tag. Automatic dispatch occurs only
+when the variable exactly matches the current tag; missing or older acceptance
+omits Linux and records the reason in the release workflow summary. Desktop and
+Android delivery may proceed independently. The reusable Linux publication job
+checks the same exact-tag gate, including manual dispatches, before attaching any
+packages or aliases. A build-only dispatch with `publish=false` does not publish.
+
+Accepted Linux packages use the same Core/host/deb/rpm checks as CI and attach
+automatically. There is no in-app updater manifest or AppImage. Never mark a tag
+accepted merely because compilation or CI passed; the hardware acceptance remains
+a separate requirement. To repair an accepted release, dispatch its workflow on
+the same tag, with the acceptance variable still matching that tag.
 
 HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
 `OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
@@ -131,7 +134,7 @@ Stable website links use `https://github.com/Open-Less/openless/releases/latest/
 Beta links must use the release tag because `latest` excludes pre-releases:
 `https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
 
-The Tauri and Android workflows attach their aliases automatically. Linux remains administrator-attached after product acceptance, so the administrator must attach the two files from the `openless-linux-egui-direct-download` Actions artifact to the accepted Release as well as the versioned packages. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+The Tauri and Android workflows attach their aliases automatically. Accepted Linux publications attach the two files from the `openless-linux-egui-direct-download` Actions artifact alongside the versioned packages, behind the same exact-tag acceptance gate. Do not replace the versioned assets; the aliases are an additional website-facing contract.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
@@ -368,4 +371,4 @@ change the published channel. The same format applies to subsequent releases.
    and pushes the release tag, which triggers the macOS/Windows/Android asset
    workflows and their channel updater manifests.
 4. After both release workflows pass, an admin verifies and publishes the shared
-   draft. Linux packages are attached independently only after Linux acceptance.
+   draft. Linux packages are attached independently only after exact-tag Linux acceptance.

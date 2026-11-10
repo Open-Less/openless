@@ -25,6 +25,14 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-mmacosx-version-min=14.0")
             .compile("openless_playback_reference");
+        println!("cargo:rerun-if-changed=src/accessibility_guide_macos.m");
+        cc::Build::new()
+            .file("src/accessibility_guide_macos.m")
+            .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=14.0")
+            .compile("openless_accessibility_guide");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=CoreAudio");
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();

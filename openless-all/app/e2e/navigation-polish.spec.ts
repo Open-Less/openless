@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 
 async function settings(page: Page) {
   await page.goto('/?os=mac');
@@ -112,7 +113,7 @@ test('fetching and selecting models keeps the form and verify button at the same
   page,
 }) => {
   const dialog = await settings(page);
-  await dialog.getByRole('button', { name: 'AI 服务与模型', exact: true }).click();
+  await dialog.getByRole('button', { name: 'AI 与模型', exact: true }).click();
   await page.getByRole('button', { name: '添加渠道', exact: true }).click();
   const form = page.getByRole('dialog', { name: '添加渠道', exact: true });
   expect(await form.evaluate((element) => !!element.closest('[inert]'))).toBe(false);
@@ -143,10 +144,16 @@ test('dictation shortcuts hug the key label and coarse wheel scrolling has inter
   page,
 }) => {
   const dialog = await settings(page);
+  await openMicrophoneSettings(dialog);
   const recorder = dialog.locator('.ol-shortcut-recorder').first();
   const binding = recorder.locator('.ol-shortcut-binding');
   await expect(binding).toContainText('右 Ctrl');
   expect((await binding.boundingBox())!.width).toBeLessThan(140);
+  await dialog
+    .getByRole('navigation', { name: '设置分类' })
+    .getByRole('button', { name: '快捷键', exact: true })
+    .click();
+  await settleNavigation(dialog);
   const scroll = dialog.locator('.ol-settings-scroll[data-transition-phase="settled"]');
   await scroll.evaluate((element) => {
     element.scrollTop = 0;

@@ -607,7 +607,7 @@ export function ChannelList({
                 alignItems: 'center',
                 gap: '14px 20px',
                 padding: '14px 12px',
-                borderRadius: 12,
+                borderRadius: 'var(--ol-r-lg)',
                 border: '0.5px solid',
                 borderColor: isActive ? 'var(--ol-line)' : 'transparent',
                 background: isActive ? 'var(--ol-surface-2)' : 'transparent',
@@ -1249,8 +1249,9 @@ function ChannelModal({
       onClose={requestClose}
       zIndex={1000}
       closing={closing}
-      width={mobile ? '100%' : 'min(840px, 100%)'}
-      style={{ padding: 0, overflow: 'hidden', maxHeight: 'calc(100dvh - 40px)' }}
+      motionVariant="pop"
+      width={mobile ? 'min(100%, calc(100vw - 32px))' : 'min(800px, calc(100vw - 96px))'}
+      style={{ padding: 0, overflow: 'hidden', maxHeight: 'calc(100dvh - 120px)' }}
     >
       {content}
     </Modal>
@@ -1271,7 +1272,7 @@ const ghostBtn: CSSProperties = {
   height: 32,
   padding: '0 14px',
   border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   background: 'var(--ol-control-solid)',
   color: 'var(--ol-ink-2)',
   cursor: 'pointer',

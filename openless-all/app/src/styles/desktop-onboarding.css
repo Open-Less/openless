@@ -24,17 +24,17 @@
   align-items: center;
   gap: 9px;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
   letter-spacing: -0.03em;
 }
 .ol-guide-brand img {
-  border-radius: 6px;
+  border-radius: var(--ol-r-sm);
 }
 
 .ol-guide-turn h1,
 .ol-guide-turn h2 {
   margin: 0 0 20px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
   letter-spacing: -0.035em;
   line-height: 1.35;
   outline: none;
@@ -64,7 +64,7 @@
 }
 .ol-guide-reply > span {
   padding: 8px 15px;
-  border-radius: 22px;
+  border-radius: var(--ol-surface-radius);
   font-size: 13px;
   line-height: 1.5;
   background: var(--ol-surface-2);
@@ -114,7 +114,7 @@
   justify-content: center;
   min-height: 36px;
   padding: 8px 15px;
-  border-radius: 20px;
+  border-radius: var(--ol-surface-radius);
   border: 0;
   font-size: 12px;
   line-height: 1.5;
@@ -125,7 +125,7 @@
 .ol-guide-primary {
   color: var(--ol-primary-solid-ink);
   background: var(--ol-primary-solid-bg);
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
   white-space: nowrap;
 }
 .ol-guide-secondary {
@@ -155,7 +155,7 @@
   gap: 14px;
   margin-top: 24px;
   padding: 20px;
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
   font-size: 14px;
 }
@@ -180,14 +180,14 @@
   border: 1px solid transparent;
   background: var(--ol-surface-2);
   color: var(--ol-ink);
-  border-radius: 16px;
+  border-radius: var(--ol-r-xl);
 }
 .ol-guide-choice[aria-pressed='true'] {
   border-color: var(--ol-ink-3);
 }
 .ol-guide-choice strong {
   font-size: 14px;
-  font-weight: 550;
+  font-weight: calc(550 + var(--ol-font-weight-offset));
 }
 .ol-guide-choice span {
   font-size: 12px;
@@ -255,7 +255,7 @@
   color: var(--ol-ink-2);
   background: var(--ol-surface);
   border: 1px solid var(--ol-line);
-  border-radius: 20px;
+  border-radius: var(--ol-surface-radius);
   padding: 6px 10px;
   max-width: 160px;
 }
@@ -433,7 +433,7 @@
 .ol-guide-history-answer {
   max-width: 50%;
   padding: 5px 10px;
-  border-radius: 14px;
+  border-radius: var(--ol-r-lg);
   background: var(--ol-surface-2);
 }
 .ol-guide-stage {
@@ -498,7 +498,7 @@
 .ol-model-setup-header h2 {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: var(--ol-font-weight-semibold);
 }
 .ol-model-setup-header p {
   margin: 8px 0 0;

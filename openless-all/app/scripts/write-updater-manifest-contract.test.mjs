@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./write-updater-manifest.mjs', import.meta.url));
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const releaseTag = 'v2.0.2-Beta.3-tauri';
+const releaseTag = `v${packageJson.version.split('+')[0]}-tauri`;
 const tempDir = mkdtempSync(join(tmpdir(), 'openless-updater-'));
 const assetName = `OpenLess_${packageJson.version}_arm64-v8a.apk`;
 

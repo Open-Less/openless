@@ -598,7 +598,7 @@ body {
   -webkit-user-select: text;
 }
 .result-copy {
-  align-self: flex-end;
+  align-self: center;
   -webkit-appearance: none;
   appearance: none;
   border: 1px solid var(--blue);

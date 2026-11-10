@@ -123,7 +123,7 @@
   padding: 0 14px;
   pointer-events: none;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: calc(500 + var(--ol-font-weight-offset));
   opacity: 1;
   transition: opacity 80ms linear 120ms;
 }

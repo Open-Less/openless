@@ -288,15 +288,12 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
   false,
 );
+// Windows runs the same pinned checks in parallel, with its own target cache.
 check(
-  'changes job publishes the native-source gate for pinned toolchains',
-  workflow.includes('msrv_needed: ${{ steps.detect.outputs.msrv }}'),
-  true,
-);
-// The secondary platform uses the same native-source gate.
-check(
-  'windows msrv steps follow the source gate',
-  workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
+  'windows msrv job follows the source gate',
+  /windows-msrv:[\s\S]*?inputs\.platform != 'macos'\) && needs\.changes\.outputs\.msrv != 'false'/.test(
+    workflow,
+  ),
   true,
 );
 // `cargo check` immediately followed by `cargo test --no-run` compiles the graph

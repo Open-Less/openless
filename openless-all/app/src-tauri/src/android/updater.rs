@@ -4,27 +4,11 @@
 mod android_impl {
     use std::path::PathBuf;
 
-    use serde::Deserialize;
     use tauri::{AppHandle, Emitter};
 
-    use crate::android::updater_logic::{
-        format_manifest_error, map_abi_to_arch, verify_updater_signature, version_is_newer,
-        INSTALLER_NOT_OPENED_MSG, UPDATER_PUBKEY_B64,
-    };
+    use crate::android::updater_logic::{map_abi_to_arch, INSTALLER_NOT_OPENED_MSG};
     use crate::commands::AppUpdateMetadata;
-    use crate::net;
     use crate::types::UpdateChannel;
-
-    #[derive(Debug, Deserialize)]
-    struct UpdaterManifest {
-        version: String,
-        #[serde(default)]
-        pub_date: Option<String>,
-        url: String,
-        signature: String,
-        #[serde(default)]
-        notes: Option<String>,
-    }
 
     #[derive(Clone, serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -60,55 +44,25 @@ mod android_impl {
         })
     }
 
-    async fn fetch_manifest(url: &str) -> Result<UpdaterManifest, String> {
-        let resp = net::send_with_retry(|| {
-            net::http()
-                .get(url)
-                .timeout(std::time::Duration::from_secs(15))
-        })
-        .await
-        .map_err(|e| format!("fetch manifest: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format_manifest_error(resp.status().as_u16(), url));
-        }
-        resp.json::<UpdaterManifest>()
-            .await
-            .map_err(|e| format!("parse manifest: {e}"))
-    }
-
     pub async fn check_update(channel: UpdateChannel) -> Result<Option<AppUpdateMetadata>, String> {
         let arch = device_arch()?;
-        // Manifests live on the project CDN; channel is a URL path, not a filename suffix, so
-        // there is no tag discovery and no GitHub dependency (see `crate::update_source`).
-        let url = crate::update_source::manifest_url(channel, "android", arch);
         let current = env!("CARGO_PKG_VERSION").to_string();
-        match fetch_manifest(&url).await {
-            Ok(manifest) => {
-                if !version_is_newer(&manifest.version, &current) {
-                    return Ok(None);
-                }
-                let raw_json = serde_json::json!({
-                    "version": manifest.version,
-                    "url": manifest.url,
-                    "signature": manifest.signature,
-                    "pubDate": manifest.pub_date,
-                    "notes": manifest.notes,
-                });
-                Ok(Some(AppUpdateMetadata {
-                    rid: 0,
-                    current_version: current,
-                    version: manifest.version,
-                    date: manifest.pub_date,
-                    body: manifest.notes,
-                    raw_json,
-                }))
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn verify_signature(apk_bytes: &[u8], signature_b64: &str) -> Result<(), String> {
-        verify_updater_signature(apk_bytes, signature_b64, UPDATER_PUBKEY_B64)
+        let Some(candidate) = super::super::update_pipeline::check(channel, arch, &current).await?
+        else {
+            return Ok(None);
+        };
+        let raw_json = serde_json::json!({
+            "version": candidate.version, "url": candidate.url, "signature": candidate.signature,
+            "pubDate": candidate.pub_date, "notes": candidate.notes,
+        });
+        Ok(Some(AppUpdateMetadata {
+            rid: 0,
+            current_version: current,
+            version: candidate.version,
+            date: candidate.pub_date,
+            body: candidate.notes,
+            raw_json,
+        }))
     }
 
     fn updates_cache_dir() -> Result<PathBuf, String> {
@@ -122,52 +76,31 @@ mod android_impl {
         signature: String,
         version: String,
     ) -> Result<(), String> {
+        semver::Version::parse(&version).map_err(|_| "invalid update version")?;
+        let arch = device_arch()?;
+        let bytes = super::super::update_pipeline::download(
+            version.clone(),
+            arch,
+            url,
+            signature,
+            |downloaded, content_length| {
+                let _ = app.emit(
+                    "android-update:progress",
+                    AndroidUpdateProgress {
+                        downloaded,
+                        content_length,
+                        phase: "downloading".into(),
+                    },
+                );
+            },
+        )
+        .await?;
         let cache_dir = updates_cache_dir()?;
         std::fs::create_dir_all(&cache_dir).map_err(|e| format!("create cache dir: {e}"))?;
         let dest = cache_dir.join(format!("OpenLess_{version}.apk"));
-
-        let resp = net::send_with_retry(|| net::http().get(&url))
-            .await
-            .map_err(|e| format!("download apk: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("download status {}", resp.status()));
-        }
-        let total = resp.content_length();
-        // Security: cap the stream so an unbounded one can't exhaust memory. 200 MB far
-        // exceeds any real APK size (~50 MB currently).
-        const MAX_APK_BYTES: u64 = 200 * 1024 * 1024;
-        if let Some(len) = total {
-            if len > MAX_APK_BYTES {
-                return Err(format!(
-                    "APK 声明大小 {len} 字节超过上限 {MAX_APK_BYTES}，拒绝下载"
-                ));
-            }
-        }
-        let mut downloaded: u64 = 0;
-        let mut bytes = Vec::new();
-        let mut stream = resp.bytes_stream();
-        use futures_util::StreamExt;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("download chunk: {e}"))?;
-            downloaded += chunk.len() as u64;
-            if downloaded > MAX_APK_BYTES {
-                return Err(format!(
-                    "下载字节数 {downloaded} 超过上限 {MAX_APK_BYTES}，已终止"
-                ));
-            }
-            bytes.extend_from_slice(&chunk);
-            let _ = app.emit(
-                "android-update:progress",
-                AndroidUpdateProgress {
-                    downloaded,
-                    content_length: total,
-                    phase: "downloading".to_string(),
-                },
-            );
-        }
-
-        verify_signature(&bytes, &signature)?;
         std::fs::write(&dest, &bytes).map_err(|e| format!("write apk: {e}"))?;
+        let downloaded = bytes.len() as u64;
+        let total = Some(downloaded);
 
         let _ = app.emit(
             "android-update:progress",

@@ -57,7 +57,7 @@ export function ExperimentalSectionTitle({
         <span
           style={{
             padding: '2px 6px',
-            borderRadius: 999,
+            borderRadius: 'var(--ol-radius)',
             background: 'var(--ol-blue-soft)',
             color: 'var(--ol-blue)',
             fontSize: 10,
@@ -176,7 +176,7 @@ export function Toggle({
 export const btnGhostStyle: CSSProperties = {
   padding: '5px 10px',
   fontSize: 12,
-  borderRadius: 6,
+  borderRadius: 'var(--ol-r-sm)',
   border: '0.5px solid var(--ol-line-strong)',
   background: 'var(--ol-control-solid)',
   color: 'var(--ol-ink-2)',
@@ -191,7 +191,7 @@ export const inputStyle: CSSProperties = {
   height: 32,
   padding: '0 10px',
   border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8,
+  borderRadius: 'var(--ol-control-radius)',
   fontSize: 13.5,
   fontFamily: 'inherit',
   outline: 'none',

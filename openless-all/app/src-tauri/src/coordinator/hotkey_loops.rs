@@ -5,8 +5,11 @@
 //! parent-module items via `use super::*;`. Visibility is `pub(super)` so the
 //! parent `coordinator` module can call them through `use hotkey_loops::*;`.
 
-use crate::issue1266_debug::{Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation, Outcome as DebugOutcome, Probe as DebugProbe};
 use super::*;
+use crate::issue1266_debug::{
+    Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation,
+    Outcome as DebugOutcome, Probe as DebugProbe,
+};
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
@@ -92,7 +95,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::MainHotkey);
+        let registration =
+            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::MainHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -189,7 +193,8 @@ pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::QaHotkey);
+        let registration =
+            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::QaHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -325,7 +330,10 @@ pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::SelectionHotkey);
+        let registration = crate::issue1266_debug::lock_host(
+            &inner.settings_host_gate,
+            DebugKind::SelectionHotkey,
+        );
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -614,143 +622,10 @@ pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
 
 // ─────────────────────── coding agent hotkey supervisor ───────────────────────
 
-pub(super) fn coding_agent_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    // The global-hotkey monitor is a Tauri desktop adapter; Linux egui uses its
-    // fcitx5 listener and the same Core edge interpreter.
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = update_coding_agent_hotkey_binding_now(&inner);
-    }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::CodingHotkey);
-        if inner.backend.ensure_runtime_ready().is_err() {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        if let Err(error) = update_coding_agent_hotkey_binding_now(&inner) {
-            log::warn!("[less-computer] hotkey registration failed: {error}");
-        }
-        drop(registration);
-        std::thread::sleep(std::time::Duration::from_secs(5));
-    }
-}
-
-/// Whether "Less Computer voice hotkey disabled" has already been logged.
-///
-/// The supervisor polls every 5s, so users without a voice hotkey hit the same
-/// disabled branch every round; unconditional logging produces a steady 720
-/// identical lines per hour that drowns out useful session logs and triggers
-/// log rotation early. Log once when the state flips to disabled; cleared when
-/// the hotkey is installed again so the next disable logs once more.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-static LESS_COMPUTER_HOTKEY_DISABLED_LOGGED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
 pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) -> Result<(), String> {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        // This Tauri monitor is unavailable on the current target; the Linux egui
-        // host owns its fcitx5 listener instead of duplicating this adapter.
-        take_coding_agent_hotkeys_on_main_thread(inner);
-        return Ok(());
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        // Single-modifier installation has no main-thread wait; holding the
-        // target lock linearizes the supervisor against rebinding. Combo keys
-        // must release it before queuing/waiting on the main thread and
-        // recheck the target in the callback — never wait on the UI while
-        // holding the lock.
-        let target_guard = inner.hotkey_runtime_target.lock();
-        let target = target_guard.clone();
-        let Some(binding) = target.coding_agent_voice.clone() else {
-            take_coding_agent_hotkeys_on_main_thread(inner);
-            if !LESS_COMPUTER_HOTKEY_DISABLED_LOGGED.swap(true, Ordering::SeqCst) {
-                log::info!("[less-computer] hotkey disabled");
-            }
-            return Ok(());
-        };
-        if !target.coding_agent_enabled || is_unconfigured_shortcut(&binding) {
-            take_coding_agent_hotkeys_on_main_thread(inner);
-            return Ok(());
-        }
-        validate_less_computer_hotkey(&binding)?;
-        LESS_COMPUTER_HOTKEY_DISABLED_LOGGED.store(false, Ordering::SeqCst);
-
-        if let Some(modifier_binding) = less_computer_modifier_binding(&binding) {
-            take_coding_agent_combo_hotkey_on_main_thread(inner);
-            if let Some(monitor) = inner.coding_agent_modifier_hotkey.lock().as_ref() {
-                monitor.update_binding(modifier_binding);
-                return Ok(());
-            }
-            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            // Less Computer's dedicated tap also forwards Esc cancel and combo
-            // abort (double coverage with the main monitor; cancel_session is
-            // idempotent, so repeat triggers are harmless). A combo abort
-            // cancels the voice_agent session.
-            let cancel_tx = spawn_esc_cancel_bridge(inner);
-            let combo_tx = spawn_combo_abort_bridge(inner, cancel_less_computer_press);
-            let monitor = HotkeyMonitor::start(modifier_binding, tx, cancel_tx, combo_tx)
-                .map_err(|error| error.to_string())?;
-            monitor.set_recording_active(inner.shortcut_recording_active.load(Ordering::SeqCst));
-            let bridge_inner = Arc::clone(inner);
-            std::thread::Builder::new()
-                .name("openless-less-computer-modifier-bridge".into())
-                .spawn(move || less_computer_modifier_bridge_loop(bridge_inner, rx))
-                .map_err(|error| error.to_string())?;
-            *inner.coding_agent_modifier_hotkey.lock() = Some(monitor);
-            log::info!(
-                "[less-computer] modifier hotkey installed ({})",
-                binding.display_label()
-            );
-            return Ok(());
-        }
-
-        inner.coding_agent_modifier_hotkey.lock().take();
-        drop(target_guard);
-        let inner_clone = Arc::clone(inner);
-        let binding_for_main = binding.clone();
-        // The registration receipt must join the settings transaction: a combo
-        // key already claimed by the system must not be saved as success with
-        // only a log entry.
-        let (result_tx, result_rx) = mpsc::sync_channel(1);
-        inner.host.run_on_main_thread(move || {
-            let result = (|| {
-                let current_target = inner_clone.hotkey_runtime_target.lock();
-                if *current_target != target {
-                    // Also covers a rollback after the receive timeout: a
-                    // queued task must not reinstall a revoked binding.
-                    return Err("Less Computer hotkey target changed before registration".into());
-                }
-                if let Some(monitor) = inner_clone.coding_agent_combo_hotkey.lock().as_ref() {
-                    return monitor
-                        .update_binding(binding_for_main)
-                        .map_err(|error| error.to_string());
-                }
-                let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-                let monitor = ComboHotkeyMonitor::start(binding_for_main, tx)
-                    .map_err(|error| error.to_string())?;
-                let bridge_inner = Arc::clone(&inner_clone);
-                std::thread::Builder::new()
-                    .name("openless-less-computer-combo-bridge".into())
-                    .spawn(move || less_computer_combo_bridge_loop(bridge_inner, rx))
-                    .map_err(|error| error.to_string())?;
-                *inner_clone.coding_agent_combo_hotkey.lock() = Some(monitor);
-                Ok(())
-            })();
-            let _ = result_tx.send(result);
-        })?;
-        result_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|_| "Less Computer hotkey registration timed out".to_string())?
-    }
+    // Legacy saved bindings must never install a retired feature's listener.
+    take_coding_agent_hotkeys_on_main_thread(inner);
+    Ok(())
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1402,7 +1277,8 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ComboHotkey);
+        let registration =
+            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ComboHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1496,7 +1372,10 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::TranslationHotkey);
+        let registration = crate::issue1266_debug::lock_host(
+            &inner.settings_host_gate,
+            DebugKind::TranslationHotkey,
+        );
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1623,7 +1502,8 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ActionHotkey);
+        let registration =
+            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::ActionHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1665,8 +1545,15 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
             .run_on_main_thread(move || {
                 debug_registration.mark(DebugEvent::Entered);
                 let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-                debug_registration.record(DebugEvent::Returned,
-                    if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
+                debug_registration.record(
+                    DebugEvent::Returned,
+                    if result.is_ok() {
+                        DebugOutcome::Ok
+                    } else {
+                        DebugOutcome::Error
+                    },
+                    DebugFacts::default(),
+                );
                 let _ = init_tx.send(result);
             })
             .is_err()
@@ -1681,7 +1568,7 @@ pub(super) fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotke
             Ok(r) => {
                 debug_registration.mark(DebugEvent::AckReceived);
                 r
-            },
+            }
             Err(_) => {
                 debug_registration.mark(DebugEvent::AckTimedOut);
                 drop(init_rx);
@@ -1883,7 +1770,10 @@ pub(super) fn action_hotkey_binding(
 }
 
 pub(super) fn hotkey_runtime_target(inner: &Arc<Inner>) -> openless_core::HotkeyRuntimeTarget {
-    inner.hotkey_runtime_target.lock().clone()
+    let mut target = inner.hotkey_runtime_target.lock().clone();
+    target.coding_agent_enabled = false;
+    target.coding_agent_voice = None;
+    target
 }
 
 pub(super) fn is_modifier_only_shortcut(binding: &crate::types::ShortcutBinding) -> bool {
@@ -1959,7 +1849,8 @@ pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let registration = crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::StyleHotkey);
+        let registration =
+            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::StyleHotkey);
         if inner.backend.ensure_runtime_ready().is_err() {
             drop(registration);
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -2189,13 +2080,18 @@ pub(super) async fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
         let debug_operation = DebugOperation::new(DebugProbe::P3);
-        debug_operation.record(DebugEvent::Consumed, DebugOutcome::Observed, DebugFacts {
+        debug_operation.record(
+            DebugEvent::Consumed,
+            DebugOutcome::Observed,
+            DebugFacts {
             kind: match &evt {
                 HotkeyEvent::Pressed { .. } => DebugKind::Pressed,
                 HotkeyEvent::Released { .. } => DebugKind::Released,
                 _ => DebugKind::OtherEdge,
-            }, ..DebugFacts::default()
-        });
+                },
+                ..DebugFacts::default()
+            },
+        );
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             // Recording mode: forward only the "record Fn" event to the
             // frontend (the recorder detects Fn presses while capturing;
@@ -2206,7 +2102,11 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             if matches!(evt, HotkeyEvent::FnRecordingPressed) {
                 emit_fn_recording_pressed(&inner);
             }
-            debug_operation.record(DebugEvent::Returned, DebugOutcome::Skipped, DebugFacts::default());
+            debug_operation.record(
+                DebugEvent::Returned,
+                DebugOutcome::Skipped,
+                DebugFacts::default(),
+            );
             continue;
         }
         let inner_cloned = Arc::clone(&inner);
@@ -2230,22 +2130,36 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
                 );
-                debug_operation.record(DebugEvent::Requested, DebugOutcome::Observed,
-                    DebugFacts { flag: hold, ..DebugFacts::default() });
+                debug_operation.record(
+                    DebugEvent::Requested,
+                    DebugOutcome::Observed,
+                    DebugFacts {
+                        flag: hold,
+                        ..DebugFacts::default()
+                    },
+                );
                 if hold {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         let _handler_scope = debug_operation.scope();
                         debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_pressed_edge(&task_inner, at, press_id).await;
-                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
+                        debug_operation.record(
+                            DebugEvent::HandlerReturned,
+                            DebugOutcome::Returned,
+                            DebugFacts::default(),
+                        );
                     });
                 } else {
                     inner.host.block_on(async {
                         let _handler_scope = debug_operation.scope();
                         debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_pressed_edge(&inner_cloned, at, press_id).await;
-                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
+                        debug_operation.record(
+                            DebugEvent::HandlerReturned,
+                            DebugOutcome::Returned,
+                            DebugFacts::default(),
+                        );
                     });
                 }
             }
@@ -2254,22 +2168,36 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
                 );
-                debug_operation.record(DebugEvent::Requested, DebugOutcome::Observed,
-                    DebugFacts { flag: hold, ..DebugFacts::default() });
+                debug_operation.record(
+                    DebugEvent::Requested,
+                    DebugOutcome::Observed,
+                    DebugFacts {
+                        flag: hold,
+                        ..DebugFacts::default()
+                    },
+                );
                 if hold {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         let _handler_scope = debug_operation.scope();
                         debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_released_edge(&task_inner, at, press_id).await;
-                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
+                        debug_operation.record(
+                            DebugEvent::HandlerReturned,
+                            DebugOutcome::Returned,
+                            DebugFacts::default(),
+                        );
                     });
                 } else {
                     inner.host.block_on(async {
                         let _handler_scope = debug_operation.scope();
                         debug_operation.mark(DebugEvent::HandlerEntered);
                         handle_released_edge(&inner_cloned, at, press_id).await;
-                        debug_operation.record(DebugEvent::HandlerReturned, DebugOutcome::Returned, DebugFacts::default());
+                        debug_operation.record(
+                            DebugEvent::HandlerReturned,
+                            DebugOutcome::Returned,
+                            DebugFacts::default(),
+                        );
                     });
                 }
             }
@@ -2654,51 +2582,22 @@ mod less_computer_panel_tests {
     }
 
     #[tokio::test]
-    async fn panel_dictation_bypasses_hotkeys_and_a_toggle_press_only_commits_text() {
-        use openless_core::{
-            LessComputerEventKind, LessComputerVoiceMode, LessComputerVoiceOutcome,
-        };
+    async fn retired_agent_shortcut_is_inert_for_old_enabled_preferences() {
         let (coordinator, recorder, data_dir) =
             fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
         let mut events = coordinator.backend().subscribe();
-        coordinator
-            .start_less_computer_voice_from_panel(LessComputerVoiceMode::Dictate)
-            .await
-            .unwrap();
+        let prefs = coordinator.backend().get_preferences();
+        assert!(prefs.testing_features_enabled && prefs.coding_agent_enabled);
         let inner = &coordinator.inner;
-        assert_eq!(
-            inner.less_computer_press_generation.load(Ordering::SeqCst),
-            0
-        );
-        assert!(matches!(
-            inner.less_computer_voice.lock().as_ref(),
-            Some(LessComputerHostCapture::Recording(session))
-                if session.mode() == LessComputerVoiceMode::Dictate
-        ));
-        assert!(coordinator
-            .start_less_computer_voice_from_panel(LessComputerVoiceMode::Submit)
-            .await
-            .is_err());
-
-        // A toggle press ends the panel capture with the panel's own delivery mode.
-        assert!(
-            handle_less_computer_pressed(inner, 7, std::time::Instant::now())
-                .await
-                .is_none()
-        );
-        wait_for_released_capture(&coordinator, &recorder, 1).await;
-        let kinds = voice_states(&mut events);
-        assert!(!kinds
-            .iter()
-            .any(|kind| matches!(kind, LessComputerEventKind::User { .. })));
-        assert!(kinds.iter().any(|kind| matches!(
-            kind,
-            LessComputerEventKind::VoiceState {
-                outcome: Some(LessComputerVoiceOutcome::Committed),
-                transcript,
-                ..
-            } if transcript == "voice"
-        )));
+        let target = hotkey_runtime_target(inner);
+        assert!(!target.coding_agent_enabled);
+        assert!(target.coding_agent_voice.is_none());
+        assert!(handle_less_computer_pressed(inner, 7, std::time::Instant::now()).await.is_none());
+        assert_eq!(inner.less_computer_press_generation.load(Ordering::SeqCst), 0);
+        assert!(inner.less_computer_voice.lock().is_none());
+        assert!(coordinator.backend().less_computer_active_session().is_none());
+        assert_eq!(recorder.stop_count(), 0);
+        assert!(voice_states(&mut events).is_empty());
         drop(coordinator);
         std::fs::remove_dir_all(data_dir).unwrap();
     }

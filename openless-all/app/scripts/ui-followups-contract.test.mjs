@@ -37,8 +37,13 @@ assert.match(
 );
 assert.match(
   capsuleStyles,
-  /\.ol-live-transcript-pill[\s\S]*?clip-path: inset\(0 round 999px\)/,
-  'streaming transcript pill must clip its full rounded shell',
+  /\.ol-live-transcript-pill\s*\{[^}]*border-radius: 999px;[^}]*overflow: hidden;[^}]*clip-path: inset\(0 round 999px\);/,
+  'streaming transcript pill must retain its original capsule shape',
+);
+assert.match(
+  capsuleStyles,
+  /\.ol-live-transcript-track\s*\{[^}]*border-radius: 999px;[^}]*clip-path: inset\(0 round 999px\);/,
+  'streaming transcript text track must retain its original capsule clipping',
 );
 assert.match(
   capsuleStyles,

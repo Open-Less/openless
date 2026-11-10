@@ -7,16 +7,36 @@ export type SettingsSectionId =
   | 'shortcuts'
   | 'appearance'
   | 'services'
+  | 'cloudServices'
   | 'privacy'
   | 'advanced'
   | 'about';
 
 export const ADVANCED_PAGES = [
-  { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title' },
-  { id: 'testingFeatures', icon: 'sparkle', titleKey: 'settings.testingFeatures.title' },
-  { id: 'lessComputer', icon: 'mac', titleKey: 'settings.codingAgent.title' },
-  { id: 'claudeConsole', icon: 'chevLR', titleKey: 'settings.codingConsole.title' },
-  { id: 'vocabularyLearning', icon: 'sparkle', titleKey: 'settings.vocabularyLearning.title' },
+  { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
+  {
+    id: 'voiceEnhancement',
+    icon: 'mic',
+    titleKey: 'settings.advancedPages.voiceEnhancementTitle',
+    beta: true,
+  },
+  {
+    id: 'liveInput',
+    icon: 'keyboard',
+    titleKey: 'settings.advancedPages.liveInputTitle',
+    beta: true,
+  },
+  {
+    id: 'cursorContext',
+    icon: 'search',
+    titleKey: 'settings.advancedPages.cursorContextTitle',
+    beta: true,
+  },
+  {
+    id: 'startupDiagnostics',
+    icon: 'bolt',
+    titleKey: 'settings.advancedPages.startupDiagnosticsTitle',
+  },
   { id: 'customSyncServer', icon: 'cloud', titleKey: 'cloudSyncE2ee.customServerTitle' },
   { id: 'debug', icon: 'bolt', titleKey: 'settings.debug.title' },
 ] as const;
@@ -24,30 +44,22 @@ export const ADVANCED_PAGES = [
 export type AdvancedPage = (typeof ADVANCED_PAGES)[number];
 export type AdvancedPageId = AdvancedPage['id'];
 
-export function isTestingFeaturePage(page: AdvancedPageId | null): boolean {
-  return page === 'lessComputer' || page === 'claudeConsole';
-}
-
-export function visibleAdvancedPages(
-  platform: PlatformKind | undefined,
-  os: OS,
-  enabled = false,
-): AdvancedPage[] {
+export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
-    if (isTestingFeaturePage(page.id) && !enabled) return false;
-    if (page.id === 'lessComputer') return platform === 'desktop' && (os === 'mac' || os === 'win');
-    if (page.id === 'claudeConsole') return platform === 'desktop' && os === 'mac';
-    if (page.id === 'vocabularyLearning')
-      return (
-        platform === 'android' ||
-        platform === 'harmony' ||
-        (platform === 'desktop' && (os === 'win' || os === 'mac'))
-      );
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';
     return true;
   });
+}
+
+// Native readers exist on macOS, Windows, and Android. Generic mobile and Harmony
+// have no cursor-context capture, so the toggle stays hidden there.
+export function showsCursorContextControl(platform: PlatformKind | undefined, os: OS): boolean {
+  if (platform === 'mobile' || platform === 'harmony' || os === 'harmony') return false;
+  if (platform === 'android' || os === 'android') return true;
+  return os === 'mac' || os === 'win';
 }
 
 export interface SettingsNavigationItem {
@@ -59,10 +71,11 @@ export const SETTINGS_SECTIONS: SettingsNavigationItem[] = [
   { id: 'general', icon: 'mic' },
   { id: 'inputMethod', icon: 'keyboard' },
   { id: 'shortcuts', icon: 'bolt' },
-  { id: 'services', icon: 'cloud' },
+  { id: 'services', icon: 'sparkle' },
+  { id: 'cloudServices', icon: 'cloud' },
   { id: 'appearance', icon: 'settings' },
   { id: 'privacy', icon: 'shield' },
-  { id: 'advanced', icon: 'sparkle' },
+  { id: 'advanced', icon: 'flask' },
   { id: 'about', icon: 'info' },
 ];
 

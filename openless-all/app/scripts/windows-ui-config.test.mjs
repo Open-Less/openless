@@ -255,6 +255,16 @@ assertMatch(
 );
 assertMatch(
   coordinatorRs,
+  /fn capsule_cursor_update\([\s\S]*?CapsuleState::Done[\s\S]*?CapsuleState::Cancelled[\s\S]*?CapsuleState::Error[\s\S]*?CapsuleState::Idle[\s\S]*?SuspendHitsUntilInteractive/,
+  'closing the openless capsule must not enable passthrough while the undecorated window is visible',
+);
+assertMatch(
+  coordinatorRs,
+  /if action == CapsuleWindowAction::HideCapsule \{[\s\S]*?hide_capsule_window_if_present\(\);[\s\S]*?self\.hide\(\);[\s\S]*?self\.update_cursor_for_payload\(payload, style\);/,
+  'capsule hide must finish before any cursor or style change',
+);
+assertMatch(
+  coordinatorRs,
   /ShowWindow\(hwnd, SW_HIDE\)/,
   'windows capsule hide helper should force the native window hidden',
 );
