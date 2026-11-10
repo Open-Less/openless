@@ -104,6 +104,10 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
         );
     });
 
+    // 排障用：OPENLESS_WEB_TOPMOST=1 让窗口浮在最前（截图/对比时用）。
+    if std::env::var("OPENLESS_WEB_TOPMOST").ok().as_deref() == Some("1") {
+        window.set_keep_above(true);
+    }
     window.set_child(Some(&view));
     view.load_uri(url);
     window.show_all();

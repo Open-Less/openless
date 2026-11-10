@@ -4,6 +4,10 @@ export type OS = 'mac' | 'win' | 'android' | 'harmony';
 
 export function detectOS(): OS {
   if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') return 'harmony';
+  // 本机 GTK/WebKit 宿主：窗口装饰由 GTK（合成器）提供，前端不能再画一条
+  // 标题栏 —— 否则窗口顶部会多出一块空白（mac 样式标题栏 + 原生标题栏叠在一起）。
+  // 走 win 分支：titlebarHeight=0、无圆角、无自定义标题栏。
+  if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk') return 'win';
   if (typeof navigator === 'undefined') return 'mac';
   const uaDataPlatform =
     (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
