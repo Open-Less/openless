@@ -52,13 +52,13 @@
 
 ### 必须人工完成的切换前置条件
 
-主仓库目前尚未配置以下三个仓库 Secrets：
+主仓库必须配置以下三个仓库 Secrets（本次已从历史会话恢复配置；值不写入仓库）：
 
 - `OSS_BUCKET`
 - `OSS_ACCESS_KEY_ID`
 - `OSS_ACCESS_KEY_SECRET`
 
-可选仓库变量 `OSS_ENDPOINT`，默认 `oss-cn-zhangjiakou.aliyuncs.com`。Bucket 继续私有，不将凭据放入代码、日志或普通变量。GitHub API 无法读回网站仓库已有 Secret 的值，必须由凭据持有者重新配置。
+可选仓库变量 `OSS_ENDPOINT`，默认 `oss-cn-zhangjiakou.aliyuncs.com`。Bucket 继续私有，不将凭据放入代码、日志或普通变量。GitHub API 无法读回网站仓库已有 Secret 的值；本次恢复使用的是用户先前提供的原始配置，已通过标准输入写入主仓库 Secrets，未回显或落盘密钥。配置存在不等同于 OSS 同步验收通过。
 
 切换顺序：
 

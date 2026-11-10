@@ -14,6 +14,12 @@ import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
 import yaml from 'js-yaml';
 import { mergeSignatures, signatureFromIndex } from './merge-release-signatures.mjs';
+const audit = spawnSync(
+  process.execPath,
+  [new URL('./audit-harmony-ipc.mjs', import.meta.url).pathname, '--check'],
+  { encoding: 'utf8' },
+);
+assert.equal(audit.status, 0, audit.stdout + audit.stderr);
 const root = mkdtempSync(join(tmpdir(), 'openless-distribution-'));
 try {
   const tag = 'v2.0.2-Beta.7-tauri';
