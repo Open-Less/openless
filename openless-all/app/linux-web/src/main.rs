@@ -1134,6 +1134,38 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 "elapsedMs": elapsed,
             }))
         }
+        // ── 服务用量 ──────────────────────────────────────────────────
+        "get_service_usage" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let recorder = backend
+                .services()
+                .usage_recorder
+                .clone()
+                .ok_or_else(|| "服务用量不可用".to_string())?;
+            let (records, dropped) = recorder.snapshot().map_err(|error| error.to_string())?;
+            Ok(json!({ "records": records, "droppedOrFailed": dropped }))
+        }
+        "clear_service_usage" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let recorder = backend
+                .services()
+                .usage_recorder
+                .clone()
+                .ok_or_else(|| "服务用量不可用".to_string())?;
+            recorder.clear().map_err(|error| error.to_string())?;
+            Ok(json!({ "cleared": true }))
+        }
+        // ── 自定义组合键（校验规则在 Tauri 侧，Linux 先只落盘）─────────
+        "set_combo_hotkey" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let binding: Option<openless_core::shared_types::ComboBinding> =
+                serde_json::from_value(_args.get("binding").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            persist_preferences(host, backend, |prefs| {
+                prefs.custom_combo_hotkey = binding;
+            })?;
+            Ok(json!({ "saved": true }))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
