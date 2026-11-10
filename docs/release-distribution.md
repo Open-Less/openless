@@ -2,6 +2,27 @@
 
 本次在 PR #1426 中补充单一签名 JSON、从 `aeoform/openless-workspace` 迁移 OSS 同步，并适配 PR #1399 的阿里云优先／GitHub 二进制回退。只改变配置生效后的发行；不删除或迁移已有 GitHub Release 附件。
 
+## 单一 Release 入口，平台并行
+
+`v*-tauri` 标签只触发 `.github/workflows/release-tauri.yml`，显示为 `Release (all platforms)`：
+
+```text
+tag → prepare-release（仅创建／验证共享草稿，不构建）
+        ├─ desktop matrix（macOS ARM / Intel / Windows）→ desktop publish ┐
+        ├─ Android plan → 四 ABI matrix → Android publish               ├─ 同一草稿
+        └─ HarmonyOS build → HAP 上传／可选商店候选包                    ┘
+```
+
+- 三条构建线只依赖同一个轻量预检，不相互依赖；移除原先桌面发布后才 dispatch Harmony 的等待及 Harmony 等待桌面创建 Release 的轮询。
+- Android／Harmony 使用同一 run 的本地 `workflow_call`，定义来自标签的不可变提交。Android 删除独立 tag push，避免同一标签重复构建四个 ABI；独立周检、debug／手动入口保留。
+- 预检遇到已有已发布 Release、错误 tag／渠道、API 错误时停止，不重开或修改历史版本；已有草稿只读取，不覆盖正文和附件。
+- 桌面下载器只匹配 `openless-macos-*`、`openless-windows-*`，避免合并 run 后重复下载数百 MB 的 APK／HAP，且不会混入商店签名包。
+- 桌面和 Android 的发布 job 仍共享签名索引互斥锁，防止读改写覆盖；锁覆盖发布段，不阻塞构建。Harmony 不写该索引，不需等待它们。编译并行度仍默认 2，不额外拆分构建矩阵。
+- 一个平台失败不取消其他平台的构建；整个 Release run 会报失败，产物保留在草稿中。仍由管理员确认后发布，OSS 清单在发布之后同步，不能为了并行而先指向不存在的包。
+- 桌面分支／周检和 Windows 草稿维修在 tag-only 预检跳过时仍可运行，不会顺带启动 Android／Harmony 发布。Harmony 手动维修入口及渠道校验保留。
+
+这里消除的是可确认的依赖等待，不承诺尚未实际发版测量的提速百分比。
+
 ## 单一签名 JSON
 
 新 Release 只附加 `updater-signatures.json`，格式：

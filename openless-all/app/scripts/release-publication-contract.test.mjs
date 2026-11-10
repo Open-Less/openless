@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
+import { prepareRelease } from './prepare-release.mjs';
 
 const workflow = (name) =>
   yaml.load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
@@ -87,13 +88,111 @@ for (const name of [
   );
 }
 
-const handoff = workflow('release-tauri.yml').jobs['dispatch-platform-releases'];
-assert.equal(handoff.env.LINUX_ACCEPTED_RELEASE_TAG, undefined);
-const dispatch = handoff.steps.find((step) =>
-  step.run?.includes('gh workflow run release-harmony.yml'),
+const unified = workflow('release-tauri.yml');
+assert.deepEqual(unified.on.push.tags, ['v*-tauri']);
+assert.ok(unified.jobs['prepare-release']);
+assert.match(unified.jobs['prepare-release'].if, /github.event_name == 'push'/);
+assert.equal(unified.jobs['prepare-release'].permissions.contents, 'write');
+assert.ok(
+  unified.jobs['prepare-release'].steps.some((step) =>
+    step.run?.includes('scripts/prepare-release.mjs'),
+  ),
 );
-assert.ok(dispatch);
-assert.doesNotMatch(JSON.stringify(handoff), /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/);
+for (const name of ['build', 'android', 'harmony']) {
+  assert.equal(
+    unified.jobs[name].needs,
+    'prepare-release',
+    `${name} starts after the same short preflight`,
+  );
+}
+assert.match(
+  unified.jobs.build.if,
+  /result == 'skipped'/,
+  'manual/scheduled desktop builds still work',
+);
+for (const [name, file] of [
+  ['android', 'android-apk.yml'],
+  ['harmony', 'release-harmony.yml'],
+]) {
+  const job = unified.jobs[name];
+  assert.equal(job.uses, `./.github/workflows/${file}`);
+  assert.equal(job.secrets, 'inherit');
+  assert.match(job.if, /github.event_name == 'push'/);
+  assert.match(job.if, /refs\/tags\/v/);
+  assert.equal(job.permissions.contents, 'write');
+  assert.ok(workflow(file).on.workflow_call);
+}
+assert.equal(unified.jobs['dispatch-platform-releases'], undefined);
+const desktopDownloads = unified.jobs.publish.steps.filter((step) =>
+  step.uses?.startsWith('actions/download-artifact@'),
+);
+assert.deepEqual(desktopDownloads.map((step) => step.with.pattern).sort(), [
+  'openless-macos-*',
+  'openless-windows-*',
+]);
+const channelValidation = workflow('release-harmony.yml').jobs['build-harmony-hap'].steps.find(
+  (step) => step.name === 'Validate release channel',
+);
+assert.ok(channelValidation);
+assert.doesNotMatch(JSON.stringify(unified), /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/);
+const tag = 'v2.0.2-Beta.7-tauri';
+const repository = 'Open-Less/openless';
+const apiCalls = [];
+const missing = (args) => {
+  apiCalls.push(args);
+  if (args[0] === 'api') throw Object.assign(new Error('not found'), { stderr: 'HTTP 404' });
+  return '';
+};
+assert.equal(prepareRelease(tag, repository, missing), 'created');
+assert.equal(apiCalls.length, 2);
+for (const flag of ['--verify-tag', '--draft', '--prerelease'])
+  assert.ok(apiCalls[1].includes(flag));
+const stableCalls = [];
+prepareRelease('v2.0.2-tauri', repository, (args) => {
+  stableCalls.push(args);
+  if (args[0] === 'api') throw Object.assign(new Error('not found'), { stderr: 'HTTP 404' });
+  return '';
+});
+assert.ok(!stableCalls[1].includes('--prerelease'));
+let reads = 0;
+const existing = { tag_name: tag, draft: true, prerelease: true };
+assert.equal(
+  prepareRelease(tag, repository, () => {
+    reads++;
+    return JSON.stringify(existing);
+  }),
+  'existing draft',
+);
+assert.equal(reads, 1, 'retry reads the draft without changing its body or assets');
+assert.throws(
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, draft: false })),
+  /already published/,
+);
+assert.throws(
+  () =>
+    prepareRelease(tag, repository, () =>
+      JSON.stringify({ ...existing, tag_name: 'v2.0.1-tauri' }),
+    ),
+  /tag mismatch/,
+);
+assert.throws(
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, prerelease: false })),
+  /channel mismatch/,
+);
+let unavailableCalls = 0;
+assert.throws(
+  () =>
+    prepareRelease(tag, repository, () => {
+      unavailableCalls++;
+      throw Object.assign(new Error('API unavailable'), { stderr: 'HTTP 503' });
+    }),
+  /API unavailable/,
+);
+assert.equal(unavailableCalls, 1, 'API errors cannot trigger release creation');
+assert.throws(
+  () => prepareRelease('main', repository, () => assert.fail('invalid tags cannot call GitHub')),
+  /immutable/,
+);
 const directory = mkdtempSync(join(tmpdir(), 'openless-release-handoff-'));
 try {
   const calls = join(directory, 'calls');
@@ -107,7 +206,7 @@ try {
     ['invalid', 1],
   ]) {
     writeFileSync(calls, '');
-    const result = spawnSync('bash', ['-c', dispatch.run], {
+    const result = spawnSync('bash', ['-c', channelValidation.run], {
       env: {
         ...process.env,
         PATH: `${directory}:${process.env.PATH}`,
@@ -118,17 +217,7 @@ try {
     });
     assert.equal(result.status, expected, channel);
     const logged = readFileSync(calls, 'utf8');
-    if (expected === 0) {
-      assert.match(
-        logged,
-        new RegExp(
-          `release-harmony\\.yml.*--ref v2\\.0\\.2-Beta\\.5-tauri.*tag=v2\\.0\\.2-Beta\\.5-tauri.*channel=${channel}`,
-        ),
-      );
-      assert.equal(logged.trim().split('\n').length, 1, 'dispatch only Harmony');
-    } else {
-      assert.equal(logged, '', 'bad channel must not dispatch');
-    }
+    assert.equal(logged, '', 'channel validation must not dispatch another workflow');
   }
 } finally {
   rmSync(directory, { recursive: true, force: true });

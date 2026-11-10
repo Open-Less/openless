@@ -117,12 +117,12 @@ try {
 // --- workflow contract (#1103) ---
 const workflow = readFileSync(workflowPath, 'utf8');
 const parsed = load(workflow);
-// Tags build the release APK; a weekly schedule keeps the Gradle/Rust cache
-// warm now that a per-branch push would cost 13-18 minutes and duplicate what
-// `android-check` already covers.
-assert.deepEqual(Object.keys(parsed.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
-assert.equal(parsed.on.push.branches, undefined);
-assert.deepEqual(parsed.on.push.tags, ['v*-tauri']);
+// The unified tag workflow calls Android exactly once; the independent weekly
+// smoke build and manual/debug entry points remain available.
+assert.deepEqual(Object.keys(parsed.on).sort(), ['schedule', 'workflow_call', 'workflow_dispatch']);
+assert.equal(parsed.on.push, undefined, 'do not build every ABI twice for a tag');
+assert.equal(parsed.on.workflow_call.inputs.abis.default, 'aarch64');
+assert.equal(parsed.on.workflow_call.inputs.fast_profile.type, 'boolean');
 assert.equal(parsed.on.schedule.length, 1);
 assert.match(parsed.on.schedule[0].cron, /^\d+ \d+ \* \* [0-6]$/);
 assert.equal(typeof parsed.concurrency.group, 'string');

@@ -43,11 +43,16 @@ component, which is a 16-bit field. The full version still appears in the app an
 updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
-These tags build the macOS, Windows, and Android Tauri hosts in parallel.
+These tags have one entry point, `.github/workflows/release-tauri.yml` (`Release (all platforms)`).
+A short preflight creates or validates the shared **draft**; macOS/Windows, all four
+Android ABIs, and HarmonyOS then build in parallel in the same Actions run.
+Android and HarmonyOS are reusable workflows resolved from the caller's immutable
+commit, not delayed dispatches after desktop publication. Android no longer has
+its own tag-push trigger, so the APKs are not built twice.
 
-HarmonyOS has a dispatch-only entry point, `.github/workflows/release-harmony.yml`.
-It does not react directly to a tag push. After the desktop build, `release-tauri.yml`
-dispatches HarmonyOS on the same immutable release tag.
+Standalone Android weekly/debug/manual builds and HarmonyOS manual repairs remain
+available. Desktop branch/manual builds and Windows draft repairs keep their existing
+scope. See [release distribution](docs/release-distribution.md) for the dependency graph.
 
 Linux-specific CI and release automation is paused: the reusable Linux check and
 release entry point have been removed, and desktop releases no longer dispatch Linux.
@@ -60,7 +65,7 @@ Android delivery remain independent; Linux has no in-app updater or AppImage.
 
 HarmonyOS builds, signs and attaches the single `OpenLess_harmony_arm64.hap`,
 and can upload the signed package (App Pack) to
-HUAWEI AppGallery Connect. The automatic dispatch uses `channel: none`, the
+HUAWEI AppGallery Connect. The automatic reusable call uses `channel: none`, the
 repository path: the HAP is attached to the GitHub Release unsigned and nothing
 reaches the store. Set the repository variable `HARMONY_AUTO_CHANNEL` to
 `release` (production) or `test` (test channel) to have the signed package

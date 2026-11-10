@@ -78,7 +78,12 @@ for (const [name, source] of [
     `${name} workflow must not rebuild on every branch push`,
   );
   assert.match(source, /schedule:/, `${name} workflow needs a warm-up schedule`);
-  assert.match(source, /tags:[\s\S]{0,40}v\*-tauri/, `${name} workflow must still ship tags`);
+  if (name === 'Tauri release') {
+    assert.match(source, /tags:[\s\S]{0,40}v\*-tauri/, 'the unified workflow owns tag releases');
+  } else {
+    assert.match(source, /workflow_call:/, 'Android is called inside the unified release');
+    assert.doesNotMatch(source, /^  push:/m, 'avoid duplicate tag builds');
+  }
 }
 
 console.log('workflow-concurrency-contract.test.mjs passed');

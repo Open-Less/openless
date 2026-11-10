@@ -22,14 +22,17 @@ const tauriRelease = readFileSync(
   'utf8',
 );
 
-// Dispatch-only, with the tag as a required input: the HAP can never come from a
-// branch or ride along with an unrelated push.
-assert.match(workflow, /^on:\n  workflow_dispatch:/m);
+// Reusable and manual entry points require a tag; no independent push trigger
+// may create a second HAP build outside the unified release.
+assert.match(workflow, /^  workflow_dispatch:/m);
 assert.doesNotMatch(workflow, /^  (push|pull_request):/m);
 assert.match(workflow, /inputs:[\s\S]*?tag:[\s\S]*?required: true/);
 
-// The tag is what gets built.
-assert.match(workflow, /ref: \$\{\{ inputs\.tag \}\}/);
+// Automatic calls pin the triggering commit; manual repairs choose the input tag.
+assert.match(
+  workflow,
+  /ref: \$\{\{ github\.event_name == 'push' && github\.sha \|\| inputs\.tag \}\}/,
+);
 assert.match(workflow, /TAG_VERSION=\$\{TAG_VERSION%-tauri\}/);
 assert.match(workflow, /does not match package\.json version/);
 
@@ -151,25 +154,17 @@ assert.match(workflow, /node scripts\/upload-appgallery\.mjs \\/);
 assert.match(workflow, /gh release upload/);
 assert.match(workflow, /OpenLess_harmony_arm64\.hap/);
 
-// This entry point is dispatch-only, so the Tauri tag build has to hand the tag
-// over explicitly. Without that hand-off the workflow sits at zero runs and every
-// Release ships without a HAP - which is exactly what happened to 2.0.x.
-assert.match(
-  tauriRelease,
-  /^  dispatch-platform-releases:$/m,
-  'release-tauri.yml must hand the tag to this workflow',
-);
-assert.match(
-  tauriRelease,
-  /gh workflow run release-harmony\.yml[\s\S]{0,300}-f "tag=\$RELEASE_TAG"/,
-  'the hand-off must dispatch with the tag as an input',
-);
-assert.match(
-  tauriRelease,
-  /gh workflow run release-harmony\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
-  'the downstream workflow definition must be loaded from the same immutable release tag',
-);
-assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
+// Reusable workflows stay in the same run and resolve at the caller's immutable
+// commit; Harmony must not wait for desktop build/publication before starting.
+assert.match(workflow, /^  workflow_call:$/m);
+const harmonyCall = tauriRelease.slice(tauriRelease.indexOf('\n  harmony:'));
+assert.match(harmonyCall, /uses: \.\/\.github\/workflows\/release-harmony\.yml/);
+assert.match(harmonyCall, /needs: prepare-release/);
+assert.doesNotMatch(harmonyCall, /needs:.*(?:build|publish|android)/);
+assert.match(harmonyCall, /tag: \$\{\{ github\.ref_name \}\}/);
+assert.match(harmonyCall, /publish: true/);
+assert.match(harmonyCall, /secrets: inherit/);
+assert.doesNotMatch(tauriRelease, /gh workflow run|dispatch-platform-releases/);
 assert.doesNotMatch(
   tauriRelease,
   /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/,
@@ -180,13 +175,12 @@ assert.match(
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,
   'the hand-off must be tag-push only, so a branch or schedule run dispatches nothing',
 );
-assert.match(tauriRelease, /actions: write/, 'GITHUB_TOKEN needs actions: write to dispatch');
+assert.doesNotMatch(tauriRelease, /actions: write/, 'same-run calls need no dispatch write token');
 assert.match(
-  tauriRelease,
-  /HARMONY_CHANNEL: \$\{\{ vars\.HARMONY_AUTO_CHANNEL \|\| 'none' \}\}/,
-  'the automatic hand-off must default to the unsigned repository path',
+  harmonyCall,
+  /channel: \$\{\{ vars\.HARMONY_AUTO_CHANNEL \|\| 'none' \}\}/,
+  'the automatic call must default to the unsigned repository path',
 );
-assert.match(tauriRelease, /channel=\$HARMONY_CHANNEL/);
 assert.match(releasing, /HARMONY_AUTO_CHANNEL/);
 
 // `env:` at job level outranks `$GITHUB_ENV`, so a placeholder key here would

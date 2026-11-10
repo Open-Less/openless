@@ -1,7 +1,7 @@
 name: Android APK (debug)
 
 # Triggers:
-#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
+#   - workflow_call from release-tauri.yml on v*-tauri tags → signed APKs + signatures → shared Release
 #   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
 #     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
 #   - workflow_dispatch + signed_debug=true — debug APK signed with the release
@@ -15,12 +15,19 @@ name: Android APK (debug)
 #   - Tauri still runs plugin-init cargo + android-studio-script per ABI (first ABI twice).
 
 on:
-  push:
-    # Same reasoning as release-tauri: an APK per branch push cost 13-18 minutes
-    # and duplicated the Gradle + Rust trees that `android-check` already keeps
-    # warm. Tags, a weekly smoke build and explicit dispatch cover it.
-    tags:
-      - 'v*-tauri'
+  # Tag releases have exactly one entry point: release-tauri.yml. Keeping a
+  # second tag trigger here would compile/sign all four ABIs twice.
+  workflow_call:
+    inputs:
+      abis:
+        type: string
+        default: aarch64
+      fast_profile:
+        type: boolean
+        default: false
+      signed_debug:
+        type: boolean
+        default: false
   schedule:
     # Monday 05:23 UTC: weekly APK smoke build (debug-grade, not published).
     - cron: '23 5 * * 1'
@@ -76,7 +83,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          INPUT_SIGNED_DEBUG: ${{ github.event.inputs.signed_debug }}
+          INPUT_SIGNED_DEBUG: ${{ inputs.signed_debug }}
         run: |
           set -euo pipefail
           is_tag=false
@@ -129,8 +136,8 @@ jobs:
         id: abis
         shell: bash
         env:
-          INPUT_ABIS: ${{ github.event.inputs.abis }}
-          INPUT_FAST_PROFILE: ${{ github.event.inputs.fast_profile }}
+          INPUT_ABIS: ${{ inputs.abis }}
+          INPUT_FAST_PROFILE: ${{ inputs.fast_profile }}
         run: |
           set -euo pipefail
           if [ "${{ steps.mode.outputs.is_tag_release }}" = "true" ]; then

@@ -1,4 +1,4 @@
-name: Release Tauri (cross-platform)
+name: Release (all platforms)
 # meta: ensure Actions indexes this workflow on forks (no behavior change).
 # Triggers:
 #   - push a v*.*.*-tauri tag (kept distinct from the legacy Swift vX.Y.Z tags, no conflict)
@@ -55,7 +55,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' }}
 
 jobs:
+  prepare-release:
+    name: Prepare shared draft
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare the shared release without modifying published versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node openless-all/app/scripts/prepare-release.mjs "$RELEASE_TAG" "$GITHUB_REPOSITORY"
+
   build:
+    needs: prepare-release
+    # Branch/manual desktop builds still run when the tag-only preflight is skipped.
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     # Read-only. Tag and repair publishes run in `publish`, which is the only
     # job that needs contents: write. The tag/repair guard stays on that job.
     permissions:
@@ -785,11 +809,19 @@ jobs:
           EOF
           echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
-      - name: Download built release artifacts
+      # Called workflows share this run's artifacts. Never download the APK/HAP
+      # trees (or store-signed Harmony packages) into the desktop publisher.
+      - name: Download built macOS release artifacts
         timeout-minutes: 20
         uses: actions/download-artifact@v4
         with:
-          pattern: openless-*
+          pattern: openless-macos-*
+          path: ${{ runner.temp }}/openless-release-artifacts
+      - name: Download built Windows release artifacts
+        timeout-minutes: 20
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openless-windows-*
           path: ${{ runner.temp }}/openless-release-artifacts
 
       - name: Stage release files
@@ -855,57 +887,27 @@ jobs:
           # from the project CDN. The stage step copies installers only.
           files: release-files/*
 
-  # Harmony receives the immutable release tag. Linux automation is paused.
-  dispatch-platform-releases:
-    needs: [build, publish]
-    # Independent of the desktop result: the HAP only needs the tag, so a
-    # Windows-only or notarization failure must not cost it its Release entry.
-    # A cancelled run still dispatches nothing.
-    if: >-
-      !cancelled() && github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  # Same-run reusable workflows resolve from the caller's immutable commit.
+  # Only the shared draft preflight precedes them; no platform waits for another.
+  android:
+    name: Android release
+    needs: prepare-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
     permissions:
-      actions: write
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.ref_name }}
-      # Repository distribution path by default: the HAP is attached to the
-      # GitHub Release unsigned and nothing reaches AppGallery. Set the
-      # `HARMONY_AUTO_CHANNEL` repository variable to `release` (production) or
-      # `test` (test channel) to upload the signed package as the AGC candidate
-      # automatically - the upload never submits it for review, so that decision
-      # stays human either way.
-      HARMONY_CHANNEL: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
-    steps:
-      - name: Dispatch the HarmonyOS release
-        run: |
-          set -euo pipefail
-          case "$HARMONY_CHANNEL" in
-            none | release | test) ;;
-            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test (got '$HARMONY_CHANNEL')"; exit 1 ;;
-          esac
-          gh workflow run release-harmony.yml \
-            --ref "$RELEASE_TAG" \
-            -f "tag=$RELEASE_TAG" \
-            -f "channel=$HARMONY_CHANNEL" \
-            -f publish=true \
-            -f upload_to_appgallery=true
+      contents: write
+    uses: ./.github/workflows/android-apk.yml
+    secrets: inherit
 
-      - name: Report the dispatched runs
-        # The dispatch already returned a run id; this listing is the log line
-        # that makes the old silent miss visible, so a missing run must not fail
-        # the tag build after every asset is already published.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          sleep 10
-          for workflow in release-harmony.yml; do
-            echo "### $workflow"
-            gh run list --workflow="$workflow" --limit 3 \
-              --json createdAt,status,conclusion,url \
-              --jq '.[] | "\(.createdAt) \(.status) \(.conclusion // "-") \(.url)"'
-          done
+  harmony:
+    name: HarmonyOS release
+    needs: prepare-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-tauri')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-harmony.yml
+    with:
+      tag: ${{ github.ref_name }}
+      channel: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}
+      publish: true
+      upload_to_appgallery: true
+    secrets: inherit
