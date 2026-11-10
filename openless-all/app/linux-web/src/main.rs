@@ -410,6 +410,41 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// 解析 `set_combo_hotkey` / `validate_combo_hotkey` 的 binding 参数。
+fn combo_binding(
+    args: &Value,
+) -> Result<openless_core::shared_types::ComboBinding, String> {
+    serde_json::from_value(args.get("binding").cloned().unwrap_or(Value::Null))
+        .map_err(|error| error.to_string())
+}
+
+/// 组合键校验：规则来自 `openless_core::validate_shortcut_binding`（与设置页、
+/// Tauri 侧同一套），这里额外拒绝「只有修饰键」的组合——那是修饰键触发的领域，
+/// 不该作为组合键保存。
+fn validate_combo(
+    binding: &openless_core::shared_types::ComboBinding,
+) -> Result<(), String> {
+    const MODIFIERS: [&str; 8] = [
+        "shift", "ctrl", "control", "alt", "option", "super", "meta", "win",
+    ];
+    let primary = binding.primary.trim();
+    if primary.is_empty() {
+        return Err("组合键缺少主键".to_string());
+    }
+    if MODIFIERS.iter().any(|name| primary.eq_ignore_ascii_case(name)) {
+        return Err(format!("「{primary}」是修饰键，需要再配一个主键"));
+    }
+    let shortcut = openless_core::shared_types::ShortcutBinding {
+        primary: binding.primary.clone(),
+        modifiers: binding.modifiers.clone(),
+    };
+    // 与 Tauri 的 `validate_combo_hotkey` 同序：先拒绝裸 Shift（那是修饰键触发的
+    // 领域），再走 core 的通用校验。
+    openless_core::reject_bare_shift_dictation_shortcut(&shortcut)
+        .map_err(|error| error.to_string())?;
+    openless_core::validate_shortcut_binding(&shortcut).map_err(|error| error.to_string())
+}
+
 fn json_value<T: serde::Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
@@ -1306,9 +1341,9 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // ── 自定义组合键（校验规则在 Tauri 侧，Linux 先只落盘）─────────
         "set_combo_hotkey" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            let binding: Option<openless_core::shared_types::ComboBinding> =
-                serde_json::from_value(_args.get("binding").cloned().unwrap_or(Value::Null))
-                    .map_err(|error| error.to_string())?;
+            let binding = combo_binding(_args)?;
+            validate_combo(&binding)?;
+            let binding = Some(binding);
             persist_preferences(host, backend, |prefs| {
                 prefs.custom_combo_hotkey = binding;
             })?;
@@ -1338,6 +1373,32 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // Linux 没有辅助功能授权这个概念（Tauri 那条是 macOS 专用的
             // TCC 重置）。这里明确返回「不适用」，而不是假装成功。
             Err("Linux 没有辅助功能授权流程".to_string())
+        }
+        // ── 组合键校验（规则在 core 的 validate_shortcut_binding）──────
+        "validate_combo_hotkey" => {
+            let binding = combo_binding(_args)?;
+            validate_combo(&binding)?;
+            Ok(json!({ "valid": true }))
+        }
+        "cloud_sync_e2ee_apply_restore" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let preview_id = required_str(_args, "previewId")?.to_string();
+            let mode: openless_core::cloud_sync_e2ee::RestoreMode =
+                serde_json::from_value(_args.get("mode").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            let choices: Vec<openless_core::cloud_sync_e2ee::SyncConflictChoice> =
+                serde_json::from_value(
+                    _args.get("conflictChoices").cloned().unwrap_or_else(|| json!([])),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(
+                        backend.cloud_sync_e2ee_apply_restore(preview_id, mode, choices),
+                    )
+                    .map_err(|error| error.to_string())?,
+            ))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
