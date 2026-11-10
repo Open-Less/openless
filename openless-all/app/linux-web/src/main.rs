@@ -177,6 +177,49 @@ fn init_host() -> Host {
     host
 }
 
+
+/// 读偏好 → 改一个字段 → 用 core 的 update_settings 写回（revision 冲突检测）。
+fn persist_preferences(
+    host: &Host,
+    backend: &openless_core::OpenLessBackend,
+    mutate: impl FnOnce(&mut openless_core::UserPreferences),
+) -> Result<(), String> {
+    let runtime_settings = host
+        .settings_runtime
+        .as_deref()
+        .ok_or_else(|| "设置运行时未就绪".to_string())?;
+    let mut draft = backend.get_preferences();
+    mutate(&mut draft);
+    let revision = backend.snapshot().preferences_revision;
+    backend
+        .update_settings(
+            draft,
+            openless_core::SettingsUpdateOptions {
+                expected_preferences_revision: Some(revision),
+                ..openless_core::SettingsUpdateOptions::STRICT
+            },
+            runtime_settings,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn shortcut_arg(args: &Value, optional: bool) -> Result<Option<openless_core::shared_types::ShortcutBinding>, String> {
+    let raw = args.get("binding").cloned().unwrap_or(Value::Null);
+    if raw.is_null() {
+        return if optional {
+            Ok(None)
+        } else {
+            Err("缺少参数 binding".to_string())
+        };
+    }
+    let binding: openless_core::shared_types::ShortcutBinding =
+        serde_json::from_value(raw).map_err(|error| error.to_string())?;
+    openless_core::validate_shortcut_binding(&binding)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(Some(binding))
+}
+
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(|value| value.as_str())
@@ -679,6 +722,33 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .block_on(backend.record_channel_test(kind, id, ok, latency_ms, error))
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "recorded": true }))
+        }
+        // ── 热键 ──────────────────────────────────────────────────────
+        "set_dictation_hotkey" | "set_qa_hotkey" | "set_quick_note_hotkey"
+        | "set_selection_polish_hotkey" | "set_translation_hotkey"
+        | "set_switch_style_hotkey" | "set_open_app_hotkey" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let optional = command != "set_dictation_hotkey" && command != "set_translation_hotkey";
+            let binding = shortcut_arg(_args, optional)?;
+            persist_preferences(host, backend, |prefs| match command {
+                "set_dictation_hotkey" => {
+                    if let Some(binding) = binding.clone() {
+                        prefs.dictation_hotkey = binding;
+                    }
+                }
+                "set_qa_hotkey" => prefs.qa_hotkey = binding.clone(),
+                "set_quick_note_hotkey" => prefs.quick_note_hotkey = binding.clone(),
+                "set_selection_polish_hotkey" => prefs.selection_polish_hotkey = binding.clone(),
+                "set_translation_hotkey" => {
+                    if let Some(binding) = binding.clone() {
+                        prefs.translation_hotkey = binding;
+                    }
+                }
+                "set_switch_style_hotkey" => prefs.switch_style_hotkey = binding.clone(),
+                "set_open_app_hotkey" => prefs.open_app_hotkey = binding.clone(),
+                _ => {}
+            })?;
+            Ok(json!({ "saved": true }))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
