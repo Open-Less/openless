@@ -44,6 +44,10 @@ fn main() {
     if std::env::var("OPENLESS_NO_TRANSITION").ok().as_deref() == Some("1") {
         url.push_str("?noTransition=1");
     }
+    // 对照：OPENLESS_PAGE_FADE=1 恢复淡入过渡（默认 GTK 宿主是瞬时切换）。
+    if std::env::var("OPENLESS_PAGE_FADE").ok().as_deref() == Some("1") {
+        url.push_str(if url.contains('?') { "&pageTransition=fade" } else { "?pageTransition=fade" });
+    }
     // 宿主传进来的桥 socket：窗口层后续通过它订阅事件（目前只记录，便于排障）。
     if let Some(index) = std::env::args().position(|arg| arg == "--host-socket") {
         if let Some(socket) = std::env::args().nth(index + 1) {
