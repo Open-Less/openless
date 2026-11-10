@@ -6,6 +6,8 @@
 //!
 //! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（WebKit 拒绝 file://
 //! 下的 ES module / fetch），这也是 Tauri/Cog 之类的常规做法。
+#[cfg(feature = "capsule")]
+mod capsule;
 mod events;
 mod host;
 mod hotkeys;
