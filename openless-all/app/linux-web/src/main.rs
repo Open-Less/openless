@@ -32,6 +32,12 @@ fn main() {
         }
     };
     let url = format!("http://127.0.0.1:{port}/index.html");
+    // 宿主传进来的桥 socket：窗口层后续通过它订阅事件（目前只记录，便于排障）。
+    if let Some(index) = std::env::args().position(|arg| arg == "--host-socket") {
+        if let Some(socket) = std::env::args().nth(index + 1) {
+            println!("[linux-web] 宿主桥 socket: {socket}");
+        }
+    }
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
     let app = gtk::Application::new(Some("com.openless.linuxweb"), Default::default());

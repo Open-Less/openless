@@ -548,6 +548,10 @@ pub enum SettingsSection {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Copy, Debug)]
 pub enum SettingsField {
+    /// 流式插入（上游 settings.rs 仍有开关，合并时被这一侧的删除带走了）。
+    StreamingInsert,
+    StreamingSaveClipboard,
+    RestoreClipboard,
     /// 稳定模式（先录音后识别，上游 #1082）。
     StableTranscription,
     StartMinimized,

@@ -142,6 +142,37 @@ impl OpenLessEguiApp {
     /// 时序：调用方保证宿主已经 bind 好桥 socket（UI 进程连不上就直接报错退出，
     /// 不会自己抢单实例锁或打开数据目录）。
     pub(super) fn spawn_ui_window(&mut self, socket: &std::path::Path) -> Result<(), String> {
+        // 窗口层可以换成 Web 版（GTK + WebKitGTK 渲染官方 React）。托盘、热键、
+        // 后端、单实例全部留在这个宿主进程里 —— 换的只是窗口。
+        // 用 `OPENLESS_WEB_UI=1` 打开，二进制与本体同目录（openless-linux-web）。
+        if std::env::var("OPENLESS_WEB_UI").ok().as_deref() == Some("1") {
+            let own = std::env::current_exe().map_err(|error| error.to_string())?;
+            if let Some(dir) = own.parent() {
+                let web = dir.join("openless-linux-web");
+                if web.is_file() {
+                    let mut command = std::process::Command::new(&web);
+                    command
+                        .arg("--host-socket")
+                        .arg(socket)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::inherit());
+                    let child = command.spawn().map_err(|error| error.to_string())?;
+                    log::info!(
+                        "[ui-host] spawned WEB UI window process pid={} socket={}",
+                        child.id(),
+                        socket.display()
+                    );
+                    self.window.child = Some(child);
+                    self.window.spawned_at = Some(std::time::Instant::now());
+                    return Ok(());
+                }
+                log::warn!(
+                    "[ui-host] OPENLESS_WEB_UI=1 但 {} 不存在，回落到 egui 窗口",
+                    web.display()
+                );
+            }
+        }
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let mut command = std::process::Command::new(executable);
         command

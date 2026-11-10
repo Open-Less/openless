@@ -157,6 +157,17 @@ impl OpenLessEguiApp {
             return;
         };
         match field {
+            frontend::view_model::SettingsField::StreamingInsert => {
+                preferences.streaming_insert = !preferences.streaming_insert;
+            }
+            frontend::view_model::SettingsField::StreamingSaveClipboard => {
+                preferences.streaming_insert_save_clipboard =
+                    !preferences.streaming_insert_save_clipboard;
+            }
+            frontend::view_model::SettingsField::RestoreClipboard => {
+                preferences.restore_clipboard_after_paste =
+                    !preferences.restore_clipboard_after_paste;
+            }
             frontend::view_model::SettingsField::StableTranscription => {
                 preferences.stable_transcription_enabled =
                     !preferences.stable_transcription_enabled;
