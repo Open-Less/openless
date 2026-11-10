@@ -36,6 +36,11 @@ require_file() {
 }
 
 require_file "$BINARY"
+# 胶囊窗口由 `capsule` feature 控制（需要 libgtk-layer-shell）。包里必须是带
+# 这个 feature 的构建，否则录音时根本不会有胶囊。
+if ! strings -a "$BINARY" | grep -q 'openless-capsule'; then
+  echo "warning: $BINARY 没有 capsule 支持（用 --features capsule 重新构建）" >&2
+fi
 require_file "$DIST_DIR/index.html"
 require_file "$PLUGIN_ROOT/libopenless.so"
 require_file "$PLUGIN_ROOT/openless.conf"
