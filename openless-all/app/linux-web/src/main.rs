@@ -1656,6 +1656,80 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     .map_err(|error| error.to_string())?,
             ))
         }
+        // ── 云同步上传 / 学习词 / 麦克风权限 / 远程输入 ────────────────
+        "cloud_sync_upload" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let base_revision = _args
+                .get("baseRevision")
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| "缺少参数 baseRevision".to_string())?;
+            let ui_preferences: openless_core::CloudSyncUiPreferences =
+                serde_json::from_value(_args.get("uiPreferences").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_upload(base_revision, ui_preferences))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "add_learned_vocab" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let phrase = required_str(_args, "phrase")?.to_string();
+            backend
+                .add_learned_vocabulary(phrase)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "added": true }))
+        }
+        "check_microphone_permission" | "request_microphone_permission" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let platform = &backend.services().platform;
+            if command == "request_microphone_permission" {
+                // Linux 没有系统级授权弹窗：申请即尝试打开一次采集设备。
+                let _ = runtime.block_on(platform.request_microphone_permission());
+            }
+            match runtime.block_on(platform.microphone_permission()) {
+                Ok(snapshot) => Ok(json!({ "microphone": json_value(snapshot.microphone) })),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        "get_remote_input_status" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let remote = &backend.services().remote_input;
+            let status = remote.status().map_err(|error| error.message)?;
+            let pin = runtime
+                .block_on(remote.read_pairing_pin())
+                .map_err(|error| error.message)?;
+            Ok(json!({
+                "status": json_value(status),
+                // SecretValue 故意没有 Serialize（避免把密钥直接扔进任何序列化路径），
+                // 这里取它的明文展示形式。
+                "pairingPin": pin.expose_secret(),
+            }))
+        }
+        "set_remote_locale" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let locale = required_str(_args, "locale")?.to_string();
+            runtime
+                .block_on(backend.services().remote_input.set_locale(locale))
+                .map_err(|error| error.message)?;
+            Ok(json!({ "ok": true }))
+        }
+        "regenerate_remote_pin" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let remote = &backend.services().remote_input;
+            runtime
+                .block_on(remote.regenerate_pairing_pin())
+                .map_err(|error| error.message)?;
+            let pin = runtime
+                .block_on(remote.read_pairing_pin())
+                .map_err(|error| error.message)?;
+            Ok(json!(pin.expose_secret()))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
