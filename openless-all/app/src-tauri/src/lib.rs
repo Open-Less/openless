@@ -10,18 +10,11 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
-// ── Linux 桌面不再由 Tauri 提供 ───────────────────────────────────────────────
-// 用户在 Linux 上已使用 egui 前端（`openless-all/app/linux-egui`），Tauri 版的 Linux
-// 桌面实现（fcitx5 插件桥 `linux_fcitx.rs`、Linux 热键/插入/选区路径、平台覆盖配置
-// `tauri.linux.conf.json`）已随本次一并删除。这里显式拦住误在 Linux 上构建 Tauri 版
-// 的情况，给出可操作的提示，而不是让人面对一堆“找不到模块”的零散错误。
-//
-// 不受影响的平台：macOS / Windows（桌面）与 Android（`target_os = "android"`）。
-#[cfg(target_os = "linux")]
-compile_error!(
-    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/app/linux-egui，\
-     打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
-);
+// ── Linux 桌面：Tauri v3 + CEF（自带 Chromium）────────────────────────────────
+// 历史上这里用 `compile_error!` 拦住 Linux 构建，因为当时 Tauri 在 Linux 上只有
+// WebKitGTK，渲染和 macOS/Windows 对不齐。Tauri v3 提供了 `tauri-runtime-cef`：
+// 三平台都跑我们自带的同一个 Chromium，渲染一致性问题从根上消失。
+// 详见 docs/linux-render-engine.md。
 
 mod android;
 mod asr;

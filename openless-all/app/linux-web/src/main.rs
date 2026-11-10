@@ -14,7 +14,7 @@ mod hotkeys;
 
 use gtk::prelude::*;
 use javascriptcore::ValueExt;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
@@ -26,16 +26,18 @@ struct Host {
     settings_runtime: Option<std::sync::Arc<dyn openless_core::SettingsRuntime>>,
     /// 胶囊/QA 的窗口级状态：这些不属于后端，属于宿主展示层。
     qa_expanded: std::sync::Mutex<bool>,
-    main_window: std::sync::Mutex<Option<gtk::ApplicationWindow>>,
+    /// 交给 GTK 主线程的命令通道。`Host` 要能跨线程（HTTP 桥在线程池里跑），
+    /// 而 GTK 对象不是 `Send`，所以这里只存一个发送端。
+    gui_tx: std::sync::Mutex<Option<gtk::glib::Sender<GuiCommand>>>,
     capsule_transcript_visible: std::sync::Mutex<bool>,
     capsule_language_menu: std::sync::Mutex<bool>,
     shortcut_recording_active: std::sync::Mutex<bool>,
 }
 
 fn main() {
-    let host = init_host();
+    let host = std::sync::Arc::new(init_host());
     let dist = resolve_dist();
-    let port = match serve_dir(dist.clone()) {
+    let port = match serve_dir(dist.clone(), host.clone()) {
         Ok(port) => port,
         Err(error) => {
             eprintln!("[linux-web] 静态资源目录不可用（{}）：{error}", dist.display());
@@ -60,13 +62,21 @@ fn main() {
     }
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
+    // 无头宿主：只留后端 + HTTP 命令桥，把主线程停住即可（不起 GTK）。
+    if std::env::var("OPENLESS_HEADLESS").ok().as_deref() == Some("1") {
+        println!("[linux-web] 无头模式：只提供 /api 与静态资源");
+        loop {
+            std::thread::park();
+        }
+    }
+
     let app = gtk::Application::new(Some("com.openless.linuxweb"), Default::default());
-    let host = std::sync::Arc::new(host);
     app.connect_activate(move |app| build_window(app, &url, host.clone()));
     app.run();
 }
 
 fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
+
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("OpenLess")
@@ -247,7 +257,19 @@ const PAGE_SWEEP: &str = r#"
         window.hide();
         gtk::glib::Propagation::Stop
     });
-    *host.main_window.lock().unwrap() = Some(window.clone());
+    // GTK 主线程的命令泵：`Host` 只持有发送端，窗口对象留在这里。
+    {
+        #[allow(deprecated)]
+        let (tx, rx) = gtk::glib::MainContext::channel::<GuiCommand>(gtk::glib::Priority::default());
+        let window_for_gui = window.clone();
+        rx.attach(None, move |command: GuiCommand| {
+            match command {
+                GuiCommand::PresentMain => window_for_gui.present(),
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+        *host.gui_tx.lock().unwrap() = Some(tx);
+    }
     host::start_tray(window.clone());
     // 后端就绪后立刻开始把事件推给页面（听写状态 / 历史变更 / QA 电平等）。
     {
@@ -259,9 +281,13 @@ const PAGE_SWEEP: &str = r#"
             #[cfg(feature = "capsule")]
             {
                 // 胶囊是独立的 layer surface：不抢焦点、贴底居中，页面走 ?capsule=1。
+                // 排障：OPENLESS_CAPSULE_URL 可以指定任意页面，用来单独验证
+                // 胶囊窗口的透明/定位（正式运行时照旧走 ?window=capsule）。
+                let capsule_url = std::env::var("OPENLESS_CAPSULE_URL")
+                    .unwrap_or_else(|_| format!("{url}?window=capsule"));
                 let capsule = std::sync::Arc::new(capsule::build(
                     app,
-                    &format!("{url}?window=capsule"),
+                    &capsule_url,
                     CAPSULE_WIDTH,
                     CAPSULE_HEIGHT,
                     CAPSULE_BOTTOM_MARGIN,
@@ -328,7 +354,7 @@ fn init_host() -> Host {
         capsule_language_menu: std::sync::Mutex::new(false),
         shortcut_recording_active: std::sync::Mutex::new(false),
         qa_expanded: std::sync::Mutex::new(false),
-        main_window: std::sync::Mutex::new(None),
+        gui_tx: std::sync::Mutex::new(None),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
@@ -540,10 +566,15 @@ fn set_qa_expanded(host: &Host, expanded: bool) {
     *host.qa_expanded.lock().unwrap() = expanded;
 }
 
+/// 需要 GTK 主线程执行的动作（`Host` 本身不能持有 GTK 对象）。
+pub enum GuiCommand {
+    PresentMain,
+}
+
 /// 把键盘焦点交回主窗口。
 fn focus_main_window(host: &Host) {
-    if let Some(window) = host.main_window.lock().unwrap().as_ref() {
-        window.present();
+    if let Some(sender) = host.gui_tx.lock().unwrap().as_ref() {
+        let _ = sender.send(GuiCommand::PresentMain);
     }
 }
 
@@ -2151,7 +2182,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
 
 // ── 静态资源 ────────────────────────────────────────────────────────────────
 
-fn serve_dir(root: PathBuf) -> std::io::Result<u16> {
+fn serve_dir(root: PathBuf, host: std::sync::Arc<Host>) -> std::io::Result<u16> {
     if !root.join("index.html").exists() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -2163,26 +2194,82 @@ fn serve_dir(root: PathBuf) -> std::io::Result<u16> {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let root = root.clone();
+            let host = host.clone();
             std::thread::spawn(move || {
-                let _ = handle_request(stream, &root);
+                let _ = handle_request(stream, &root, &host);
             });
         }
     });
     Ok(port)
 }
 
-fn handle_request(mut stream: TcpStream, root: &Path) -> std::io::Result<()> {
+/// 静态文件 + 命令桥。
+///
+/// 除了把 `dist/` 发出去，还提供两个接口，让**任何**渲染宿主（Qt/CEF/浏览器）
+/// 都能驱动同一个 Rust 后端，而不必各自实现一遍 135 条命令：
+///
+/// - `POST /api/invoke`  `{id,command,args}` → `{ok,value|error}`
+/// - `GET  /api/events`  SSE，推 `{name,payload}`（映射与 GTK 宿主同一份）
+fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
+    let mut content_length = 0usize;
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
             break;
         }
+        if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
     }
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
-    let path = path.split('?').next().unwrap_or("/");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
+    let path = target.split('?').next().unwrap_or("/").to_string();
+
+    if path == "/api/events" {
+        return stream_events(stream, host);
+    }
+    if path == "/api/invoke" && method == "POST" {
+        let mut body = vec![0u8; content_length];
+        reader.read_exact(&mut body)?;
+        let reply = (|| -> Result<Value, String> {
+            let message: Value = serde_json::from_slice(&body)
+                .map_err(|error| format!("请求体不是 JSON：{error}"))?;
+            let command = message
+                .get("command")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "缺少 command".to_string())?;
+            let args = message.get("args").cloned().unwrap_or_else(|| json!({}));
+            dispatch(host, command, &args)
+        })();
+        let payload = match reply {
+            Ok(value) => json!({ "ok": true, "value": value }),
+            Err(error) => json!({ "ok": false, "error": error }),
+        };
+        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+            bytes.len()
+        );
+        stream.write_all(header.as_bytes())?;
+        stream.write_all(&bytes)?;
+        return Ok(());
+    }
+    if path == "/api/ping" {
+        let bytes = serde_json::to_vec(&json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
+            .unwrap_or_default();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+            bytes.len()
+        );
+        stream.write_all(header.as_bytes())?;
+        stream.write_all(&bytes)?;
+        return Ok(());
+    }
+
     let mut file_path = root.join(path.trim_start_matches('/'));
     if path.ends_with('/') || file_path.is_dir() {
         file_path.push("index.html");
@@ -2199,6 +2286,44 @@ fn handle_request(mut stream: TcpStream, root: &Path) -> std::io::Result<()> {
     );
     stream.write_all(header.as_bytes())?;
     stream.write_all(&body)?;
+    Ok(())
+}
+
+/// SSE：把后端事件推给页面（Qt/CEF/浏览器都能直接用）。
+fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
+    let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) else {
+        let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+        return Ok(());
+    };
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+    )?;
+    stream.write_all(b": connected\n\n")?;
+    stream.flush()?;
+    let mut subscription = backend.subscribe();
+    loop {
+        let event = match runtime.block_on(subscription.recv()) {
+            Ok(event) => event,
+            Err(_) => {
+                // 滞后：让页面重新拉快照。
+                if stream
+                    .write_all(b"data: {\"name\":\"resync\",\"payload\":\"{}\"}\n\n")
+                    .is_err()
+                {
+                    break;
+                }
+                let _ = stream.flush();
+                continue;
+            }
+        };
+        let Some((name, payload)) = events::map_event(&event) else {
+            continue;
+        };
+        let line = json!({ "name": name, "payload": payload.to_string() });
+        if write!(stream, "data: {line}\n\n").is_err() || stream.flush().is_err() {
+            break;
+        }
+    }
     Ok(())
 }
 

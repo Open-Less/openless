@@ -7,6 +7,7 @@ import type {
 import { getPlatformCapabilities as loadPlatformCapabilities } from '../platform';
 import { invokeHarmony, isHarmonyHost } from '../harmonyBridge';
 import { invokeGtk, isGtkHost } from '../gtkBridge';
+import { invokeHttp, isHttpBridge } from '../httpBridge';
 
 declare global {
   interface Window {
@@ -58,6 +59,11 @@ export function requireBackendReady(): Promise<StartupSnapshot> {
       invokeHarmony<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
     return backendReadyPromise;
   }
+  if (isHttpBridge) {
+    backendReadyPromise ??=
+      invokeHttp<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
+    return backendReadyPromise;
+  }
   if (isGtkHost) {
     backendReadyPromise ??=
       invokeGtk<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
@@ -105,6 +111,11 @@ export async function invokeOrMock<T>(
   if (isHarmonyHost) {
     await requireBackendReady();
     return invokeHarmony<T>(cmd, args);
+  }
+  // 通用 HTTP 桥（Qt / CEF / 浏览器直连本地后端）。
+  if (isHttpBridge) {
+    await requireBackendReady();
+    return invokeHttp<T>(cmd, args);
   }
   // 本机 GTK4 + WebKitGTK 宿主：同样走"原生宿主"路径，不走浏览器 mock。
   if (isGtkHost) {

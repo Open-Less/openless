@@ -11,6 +11,44 @@ use openless_core::{BackendEvent, BackendEventKind, OpenLessBackend};
 use serde_json::json;
 use std::sync::Arc;
 
+/// 后端事件 → 前端事件名 + payload。
+///
+/// GTK 宿主走 `evaluate_javascript`，HTTP 宿主走 SSE，但**映射必须只有一份**，
+/// 否则两条渲染路径会慢慢漂。返回 `None` 表示这个事件前端不关心。
+pub fn map_event(event: &BackendEvent) -> Option<(&'static str, serde_json::Value)> {
+    Some(match &event.kind {
+        BackendEventKind::DictationStateChanged(state) => (
+            "dictation:state",
+            serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::HistoryChanged(change) => (
+            "history:changed",
+            serde_json::to_value(change).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::CredentialsChanged(status) => (
+            "credentials:changed",
+            serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::PreferencesChanged(change) => (
+            "settings:changed",
+            serde_json::to_value(change).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::TranscriptDelta(delta) => (
+            "dictation:transcript",
+            serde_json::to_value(delta).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::QaLevel(level) => (
+            "qa:level",
+            serde_json::to_value(level).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::QaState(state) => (
+            "qa:state",
+            serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
+        ),
+        _ => return None,
+    })
+}
+
 /// 把事件名 + payload 推到页面。
 fn forward(view: &webkit2gtk::WebView, name: &str, payload: serde_json::Value) {
     let js = format!(
@@ -49,41 +87,10 @@ pub fn spawn_backend_events(
                     continue;
                 }
             };
-            let name = match &event.kind {
-                BackendEventKind::DictationStateChanged(state) => {
-                    let _ = tx.send((
-                        "dictation:state".into(),
-                        serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
-                    ));
-                    continue;
-                }
-                BackendEventKind::HistoryChanged(change) => (
-                    "history:changed",
-                    serde_json::to_value(change).unwrap_or(serde_json::Value::Null),
-                ),
-                BackendEventKind::CredentialsChanged(status) => (
-                    "credentials:changed",
-                    serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
-                ),
-                BackendEventKind::PreferencesChanged(change) => (
-                    "settings:changed",
-                    serde_json::to_value(change).unwrap_or(serde_json::Value::Null),
-                ),
-                BackendEventKind::TranscriptDelta(delta) => (
-                    "dictation:transcript",
-                    serde_json::to_value(delta).unwrap_or(serde_json::Value::Null),
-                ),
-                BackendEventKind::QaLevel(level) => (
-                    "qa:level",
-                    serde_json::to_value(level).unwrap_or(serde_json::Value::Null),
-                ),
-                BackendEventKind::QaState(state) => (
-                    "qa:state",
-                    serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
-                ),
-                _ => continue,
+            let Some((name, payload)) = map_event(&event) else {
+                continue;
             };
-            let _ = tx.send((name.0.to_string(), name.1));
+            let _ = tx.send((name.to_string(), payload));
         }
     });
 }
