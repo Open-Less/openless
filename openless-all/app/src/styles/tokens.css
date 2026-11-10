@@ -496,3 +496,11 @@ body {
     --ol-surface-raised: color-mix(in srgb, var(--ol-surface) 97%, var(--ol-ink) 3%);
   }
 }
+
+/* WebKitGTK：fontconfig 的默认 sans 往往是 **Noto Sans CJK**，拉丁字形按中文
+   排版优化（更宽、笔画更重），和 macOS 的 SF Pro / Windows 的 Segoe UI 差得明显。
+   这里把拉丁优先交给 Noto Sans（有 Inter 就用 Inter），中文仍落 Noto Sans CJK。 */
+html[data-ol-engine='webkitgtk'] {
+  --ol-font-sans: 'Inter', 'Noto Sans', 'Noto Sans CJK SC', system-ui, sans-serif;
+  --ol-font-mono: 'JetBrains Mono', 'Noto Sans Mono', 'DejaVu Sans Mono', monospace;
+}

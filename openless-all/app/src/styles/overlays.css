@@ -328,3 +328,16 @@
     padding: 10px 16px;
   }
 }
+
+/* ── WebKitGTK（Linux 的 GTK 宿主）──────────────────────────────────────────
+   `backdrop-filter` 在这条链上代价极高且不稳定：整窗模糊每帧都要离屏合成，
+   打开设置浮层时会掉帧（用户看到的「进设置抖一下」），而部分版本直接退化
+   成一片平灰（看起来像「灰色渲错了」）。
+   这里退化成半透明底色：观感接近，但只花一次填充。 */
+html[data-ol-engine='webkitgtk'] .ol-dialog-overlay,
+html[data-ol-engine='webkitgtk'] .ol-model-dialog-overlay,
+html[data-ol-engine='webkitgtk'] .ol-overlay-blur {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-color: var(--ol-dialog-backdrop);
+}

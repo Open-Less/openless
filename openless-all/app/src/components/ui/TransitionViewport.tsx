@@ -22,15 +22,18 @@ const departing = { opacity: 0, transform: 'translateY(-12px) scale(0.985)', fil
  * 重绘（新旧页面同时在），实测掉帧，肉眼就是「切换时抖一下」。所以 GTK 宿主
  * 只保留最便宜的透明度交叉淡入：不模糊、不缩放、不位移。
  * 想彻底关掉过渡做对照：宿主加 `OPENLESS_NO_TRANSITION=1`（会打开 reduced 路径）。 */
-/** GTK 宿主的策略：**不做交叉淡入**。
+/** GTK 宿主的策略：**只做入场淡入，不做交叉淡入**。
  *
  * 数据说明问题：即使只剩透明度，切换期间新旧两个满窗图层同时在合成，
  * 帧间隔仍会掉到 29–42ms（丢 1–2 帧），肉眼就是抖一下。WebKitGTK 在
  * 这两个满窗图层上还要各自重绘阴影、渐变、圆角遮罩，代价随页面复杂度上升。
- * 而 Linux 这条链上没有 macOS/Windows 那样的合成器调度余量，所以这里直接
- * 放弃动画：单图层、瞬时切换，稳定优先。想找回调成淡入可用
- * `?pageTransition=fade`（宿主侧 `OPENLESS_PAGE_FADE=1`）。 */
+ * 而 Linux 这条链上没有 macOS/Windows 那样的合成器调度余量，所以这里退一步：
+ * 离场页立刻移除，只让新页淡入（**一个**动画图层，不是两个），既保住切换的
+ * 观感，又不让旧页参与合成。想回到交叉淡入可用 `?pageTransition=fade`
+ * （宿主侧 `OPENLESS_PAGE_FADE=1`）。 */
 const instantSwap = isGtkHost;
+/** GTK 宿主：只淡入新页（单图层），不平移、不缩放、不模糊。 */
+const fadeInOnly = isGtkHost;
 
 function urlForcesFade(): boolean {
   if (typeof window === 'undefined') return false;
@@ -68,7 +71,10 @@ export function TransitionViewport({
   onEntered,
 }: Props) {
   const reducedMotion = useReducedMotion();
-  const reduced = reducedMotion || urlDisablesTransition() || (instantSwap && !urlForcesFade());
+  const reduced = reducedMotion || urlDisablesTransition();
+  // GTK 宿主：不留旧页（避免两个满窗图层一起合成），但新页仍然淡入。
+  const retainOutgoing = !instantSwap || urlForcesFade();
+  const fadeOnly = fadeInOnly && !urlForcesFade();
   const [committed, setCommitted] = useState<Surface>({ key: contentKey, children });
   const retained = useRef(committed);
   const latest = useRef({ key: contentKey, children });
@@ -105,7 +111,10 @@ export function TransitionViewport({
     });
   };
   const currentSurface: Surface = { key: contentKey, children };
-  const surfaces = switching && !reduced ? [retained.current, currentSurface] : [currentSurface];
+  const surfaces =
+    switching && !reduced && retainOutgoing
+      ? [retained.current, currentSurface]
+      : [currentSurface];
 
   return (
     <div
@@ -114,11 +123,15 @@ export function TransitionViewport({
     >
       {surfaces.map((surface) => {
         const incoming = !reduced && switching && surface.key === contentKey;
+        // 单图层模式：新页直接从透明淡入（phase=enter 而不是等待旧页）。
+        const fadeIn = fadeOnly && incoming;
         const leaving = !reduced && revealing && !incoming;
         const phase = incoming
-          ? revealing
+          ? fadeIn
             ? 'enter'
-            : 'waiting'
+            : revealing
+              ? 'enter'
+              : 'waiting'
           : leaving
             ? 'exit'
             : !reduced && restoring

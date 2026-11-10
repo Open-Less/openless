@@ -2024,6 +2024,123 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // evdev 权限提示），宿主不要再拼一份，否则两边会漂。
             Ok(json_value(openless_core::shared_types::HotkeyCapability::current()))
         }
+        // ── 风格市场 + GitHub 设备码登录（全部走 core 的 MarketplaceApi）──
+        "marketplace_list" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            // 三个字段都可选，所以缺省就是「不带过滤」，不需要 Default 实现。
+            let query = openless_core::MarketplaceQuery {
+                query: _args.get("query").and_then(|v| v.as_str()).map(str::to_string),
+                sort: _args.get("sort").and_then(|v| v.as_str()).map(str::to_string),
+                limit: _args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32),
+            };
+            Ok(json_value(
+                runtime
+                    .block_on(backend.services().marketplace.list(query))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "marketplace_detail" | "marketplace_install" | "marketplace_like"
+        | "marketplace_delete" | "marketplace_my_likes" | "marketplace_my_packs"
+        | "marketplace_auth_status" | "marketplace_logout"
+        | "github_device_flow_start" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let api = &backend.services().marketplace;
+            let pack_id = _args
+                .get("packId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let outcome = match command {
+                "marketplace_detail" => {
+                    let id = pack_id.ok_or_else(|| "缺少 packId".to_string())?;
+                    json_value(runtime.block_on(api.detail(id)).map_err(|e| e.to_string())?)
+                }
+                "marketplace_install" => {
+                    let id = pack_id.ok_or_else(|| "缺少 packId".to_string())?;
+                    json_value(runtime.block_on(api.install(id)).map_err(|e| e.to_string())?)
+                }
+                "marketplace_like" => {
+                    let id = pack_id.ok_or_else(|| "缺少 packId".to_string())?;
+                    json_value(
+                        runtime.block_on(api.toggle_like(id)).map_err(|e| e.to_string())?,
+                    )
+                }
+                "marketplace_delete" => {
+                    let id = pack_id.ok_or_else(|| "缺少 packId".to_string())?;
+                    runtime.block_on(api.delete(id)).map_err(|e| e.to_string())?;
+                    Value::Null
+                }
+                "marketplace_my_likes" => json_value(
+                    runtime.block_on(api.my_likes()).map_err(|e| e.to_string())?,
+                ),
+                "marketplace_my_packs" => json_value(
+                    runtime.block_on(api.my_packs()).map_err(|e| e.to_string())?,
+                ),
+                "marketplace_auth_status" => json_value(
+                    runtime.block_on(api.auth_status()).map_err(|e| e.to_string())?,
+                ),
+                "marketplace_logout" => {
+                    runtime.block_on(api.logout()).map_err(|e| e.to_string())?;
+                    Value::Null
+                }
+                _ => json_value(
+                    runtime
+                        .block_on(api.start_device_flow())
+                        .map_err(|e| e.to_string())?,
+                ),
+            };
+            Ok(outcome)
+        }
+        "marketplace_download" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let pack_id = required_str(_args, "packId")?.to_string();
+            let target = required_str(_args, "targetPath")?.to_string();
+            let bytes = runtime
+                .block_on(backend.services().marketplace.download_archive(pack_id))
+                .map_err(|error| error.to_string())?;
+            if let Some(parent) = PathBuf::from(&target).parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
+            Ok(json!({ "written": target, "bytes": bytes.len() }))
+        }
+        "marketplace_upload" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let pack_id = required_str(_args, "packId")?.to_string();
+            let origin = _args
+                .get("originPackId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            Ok(json_value(
+                runtime
+                    .block_on(backend.services().marketplace.upload(pack_id, origin))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "github_device_flow_poll" | "github_device_flow_cancel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let api = &backend.services().marketplace;
+            let flow_id = required_str(_args, "flowId")?.to_string();
+            if command == "github_device_flow_poll" {
+                Ok(json_value(
+                    runtime
+                        .block_on(api.poll_device_flow(flow_id))
+                        .map_err(|error| error.to_string())?,
+                ))
+            } else {
+                runtime
+                    .block_on(api.cancel_device_flow(Some(flow_id)))
+                    .map_err(|error| error.to_string())?;
+                Ok(json!(null))
+            }
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
