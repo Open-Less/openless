@@ -4,8 +4,8 @@ name: CI
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
 #   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux Core、
-#      remote_tls、egui 和 deb/rpm 统一使用发版构建链检查（PR 不上传 Release）。
-# macOS/Windows/Android 不跑完整 Tauri bundle；Linux 则运行完整 deb/rpm 发版构建校验。
+#      Linux egui 的专属 CI 与发行暂时停用，保留本地构建/打包脚本。
+# macOS/Windows/Android 不跑完整 Tauri bundle。
 
 on:
   # Feature branches are covered by their pull request. Running both produced two full
@@ -28,11 +28,16 @@ on:
         type: choice
         options: [macos-latest, macos-15-intel]
         default: macos-latest
+      windows_build_jobs:
+        description: Windows Cargo/CMake parallelism for controlled manual comparisons (default stays 2)
+        type: choice
+        options: ['2', '4']
+        default: '2'
 
 # Supersede a PR or an equivalent manual request. Keep different manual
 # platform/runner selections independent, and preserve baseline push evidence.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -46,11 +51,11 @@ jobs:
     outputs:
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
-      linux: ${{ steps.detect.outputs.linux }}
       harmony: ${{ steps.detect.outputs.harmony }}
       frontend: ${{ steps.detect.outputs.frontend }}
       android: ${{ steps.detect.outputs.android }}
       capsule: ${{ steps.detect.outputs.capsule }}
+      ios: ${{ steps.detect.outputs.ios-device }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,7 +69,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux harmony frontend android capsule; do
+          for area in tauri msrv harmony frontend android capsule ios-device; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             decision=$( [ "$verdict" = 'false' ] && echo false || echo true )
@@ -72,6 +77,140 @@ jobs:
             echo "$area=$decision"
             echo "$area=$decision" >> "$GITHUB_OUTPUT"
           done
+
+  # iOS is part of the same CI run and uses the Cargo dependency graph rather
+  # than a separate path-filtered workflow. Only explicit false skips it.
+  ios-test:
+    # Keep existing check-run names for branch protection compatibility.
+    name: test
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: clippy
+      - name: Record the unchanged shared source baseline
+        run: |
+          git diff --exit-code HEAD -- openless-all/app
+          git rev-parse HEAD:openless-all/app
+      - name: Prepare the isolated mobile Core
+        run: python3 openless-all/ios/scripts/prepare-core.py
+      - name: Resolve Xcode cache identity
+        id: xcode
+        run: echo "version=$(xcodebuild -version | tr '\n' '-')" >> "$GITHUB_OUTPUT"
+      - name: Cache iOS host Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ios-host
+          key: ${{ steps.xcode.outputs.version }}
+          workspaces: 'openless-all/ios/CoreHost -> target'
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+      - name: Test shared keyboard contracts
+        timeout-minutes: 5
+        run: swift test --package-path openless-all/ios/Packages/OpenLessShared
+      - name: Test mobile Core and iOS Host
+        timeout-minutes: 12
+        run: cargo test --manifest-path openless-all/ios/CoreHost/Cargo.toml --workspace --lib --locked --timings
+      - name: Check mobile Core
+        timeout-minutes: 5
+        run: cargo clippy --manifest-path openless-all/ios/CoreHost/Cargo.toml -p openless-core --all-targets --locked -- -D warnings
+      - name: Test interface resources, predictions and native audio
+        timeout-minutes: 5
+        working-directory: openless-all/ios
+        run: |
+          python3 scripts/test-interface-resources.py
+          python3 scripts/build-predictions.py
+          bash scripts/test-predictions.sh
+          bash scripts/test-audio.sh
+      - name: Verify shared sources were not modified
+        run: git diff --exit-code -- openless-all/app
+      - name: Upload host Cargo timings
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-host-cargo-timings
+          path: openless-all/ios/CoreHost/target/cargo-timings/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ios-device-build:
+    name: device-build
+    # No outputs/artifacts are consumed from ios-test. Run independently on the
+    # same two VMs instead of adding ~8 minutes of tests before a ~15 minute build.
+    # Both checks still have to pass; this workflow does not publish the IPA.
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    defaults:
+      run:
+        working-directory: openless-all/ios
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-apple-ios
+      - name: Prepare native build tools and dependencies
+        timeout-minutes: 10
+        run: |
+          xcodebuild -version
+          command -v cmake >/dev/null || brew install cmake
+          bash scripts/bootstrap.sh
+      - name: Resolve Xcode cache identity
+        id: xcode
+        run: echo "version=$(xcodebuild -version | tr '\n' '-')" >> "$GITHUB_OUTPUT"
+      - name: Cache iOS device Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ios-device
+          key: ios16-${{ steps.xcode.outputs.version }}
+          workspaces: 'openless-all/ios/CoreHost -> ../.build/core-ios16'
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+      - name: Prepare verified local speech dependencies
+        timeout-minutes: 10
+        run: bash scripts/bootstrap-local-speech.sh
+      - name: Build Rime and test composition
+        timeout-minutes: 12
+        run: |
+          bash scripts/build-rime.sh host
+          bash scripts/test-rime.sh
+          bash scripts/build-rime.sh device
+      - name: Build the mobile Core and refresh attribution
+        timeout-minutes: 10
+        run: |
+          bash scripts/build-core.sh device
+          python3 scripts/collect-rust-licenses.py
+      - name: Build and validate the unsigned iPhone app
+        timeout-minutes: 12
+        env:
+          OPENLESS_DERIVED_DATA: ${{ runner.temp }}/ios-device
+        run: |
+          python3 scripts/validate-project.py
+          bash scripts/build.sh device Release unsigned
+          python3 scripts/package-ipa.py \
+            "$OPENLESS_DERIVED_DATA/Build/Products/Release-iphoneos/OpenLess.app" \
+            "$RUNNER_TEMP/OpenLess-ci-unsigned.ipa"
+      - name: Verify shared sources were not modified
+        run: git diff --exit-code -- ../app
+      - name: Upload device Cargo timings
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-device-cargo-timings
+          path: openless-all/ios/.build/core-ios16/cargo-timings/
+          if-no-files-found: ignore
+          retention-days: 7
 
   ui-motion-browsers:
     name: UI motion / ${{ matrix.browser }}
@@ -593,69 +732,6 @@ jobs:
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
 
-  # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
-  # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
-  # plus the Linux host, fcitx5 and package contracts.
-  linux-egui-package:
-    needs: [changes]
-    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
-    name: Linux Core, egui and deb/rpm checks
-    permissions:
-      contents: read
-    uses: ./.github/workflows/check-linux-egui.yml
-    with:
-      # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
-      scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
-
-  windows-frontend:
-    # Split out of `cross-platform`: the job used to serialise 6 minutes of
-    # frontend work behind 15 minutes of Rust compiling on the same runner, and
-    # the Windows runner is the slowest of the three. Running them in parallel
-    # costs one extra setup but removes ~6 minutes from the critical path.
-    needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
-    name: Windows frontend and contracts
-    runs-on: windows-latest
-    timeout-minutes: 40
-    env:
-      CARGO_PROFILE_TEST_DEBUG: 0
-    defaults:
-      run:
-        working-directory: openless-all/app
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Cache npm from beta
-        uses: ./.github/actions/cache-npm
-      - name: Install frontend dependencies
-        timeout-minutes: 10
-        run: npm ci
-      - name: Check Windows prerequisites
-        shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
-      - name: Check PowerShell scripts
-        shell: pwsh
-        run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
-            $errors = $null
-            [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
-            if ($errors) {
-              $errors | Format-List
-              exit 1
-            }
-          }
-      - name: Build frontend
-        timeout-minutes: 10
-        run: npm run build
-      - name: Run the platform-sensitive contracts
-        # `process.platform` branches and the `windows-*` contracts only mean
-        # anything here; everything else runs on macOS (full suite) and Linux.
-        run: node scripts/frontend-test-runner.mjs --platform-only windows
-
   native-capsule:
     # The capsule crates compile into the desktop shells. They get their own macOS + Windows
     # runners only because their `ui,host` feature set is not built anywhere else, and that
@@ -716,10 +792,10 @@ jobs:
       # The shared Core and full Tauri test binary compile together; limit concurrency
       # so the arm64 runner is not OOM-killed
       # at peak memory.
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: ${{ matrix.label == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.windows_build_jobs || '2' }}
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.label == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.windows_build_jobs || '2' }}
     defaults:
       run:
         working-directory: openless-all/app
@@ -741,6 +817,13 @@ jobs:
 
       # Pinned toolchains run in independent MSRV jobs with separate caches.
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Record runner resources and compiler limits
+        shell: bash
+        run: |
+          node -e 'const os = require("node:os"); console.log(JSON.stringify({platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model, cpus: os.cpus().length, memoryGiB: +(os.totalmem()/2**30).toFixed(1), cargoJobs: process.env.CARGO_BUILD_JOBS, cmakeJobs: process.env.CMAKE_BUILD_PARALLEL_LEVEL}, null, 2))'
+          rustc --version
+          cargo --version
 
       - name: Configure macOS check profile
         if: runner.os == 'macOS'
@@ -781,6 +864,11 @@ jobs:
         timeout-minutes: 10
         run: npm ci
 
+      - name: Check Windows prerequisites
+        if: matrix.preflight
+        shell: pwsh
+        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+
       - name: Check PowerShell scripts
         if: matrix.preflight
         shell: pwsh
@@ -797,16 +885,23 @@ jobs:
       - name: Build the frontend for the Tauri context
         timeout-minutes: 10
         # `tauri::generate_context!()` embeds `../dist` at compile time, so the
-        # Rust compile below needs the frontend built even on Windows, where the
-        # contract suite runs in its own job.
+        # Rust compile below needs the frontend built on Windows too.
         if: runner.os == 'Windows'
         run: npm run build
 
+      - name: Run the platform-sensitive contracts
+        # Run 42646377148: the separate Windows frontend VM took 95s, of which
+        # only 42s were contracts. npm ci/build and PowerShell parsing already
+        # happen here. Reuse this VM; stable + contracts remains below macOS's
+        # 920s critical path. Keep the full suite on macOS.
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: node scripts/frontend-test-runner.mjs --platform-only windows
+
       - name: Build frontend and run frontend/contract tests
         timeout-minutes: 10
-        # Windows runs the platform-sensitive subset in its own job: spawning 144
-        # node processes there costs ~3x the macOS time, and the rest of the suite
-        # is already covered here. The frontend build it needs is the step above.
+        # Windows runs only its platform-sensitive subset above; spawning the
+        # full suite there is much slower and duplicates macOS coverage.
         if: runner.os == 'macOS'
         run: npm test
 
@@ -829,7 +924,8 @@ jobs:
         if: runner.os == 'macOS'
         env:
           OPENLESS_CODEX_TEST_EXE: codex
-        run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
+        # Share dependency artifacts with the host, not a second workspace tree.
+        run: cargo test --locked -p openless-core --target-dir src-tauri/target hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
       # test compiles and runs lib/bin, covering the production binary paths that plain cargo
       # check misses. Avoids a metadata-only check followed by another codegen pass over the same
@@ -862,15 +958,21 @@ jobs:
 
       - name: Run isolated Windows hang diagnostics tests (off/on)
         timeout-minutes: 10
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
         run: python scripts/test-windows-hang-diagnostics.py
 
       - name: Run owner-thread target ownership tests
         timeout-minutes: 10
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
         run: python scripts/test-windows-runtime-target.py
 
       - name: Run real Windows runtime ownership lifecycle
         if: runner.os == 'Windows'
         timeout-minutes: 15
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
         run: python scripts/test-windows-runtime-target.py --runtime
 
       - name: Run Windows symbol-pair format tests
@@ -886,9 +988,11 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --timings
 
       - name: Run native recorder module tests (Windows)
-        # Exercise the production recorder module without hardware, Tauri, MLX, or ASR submodules.
+        # Keep the isolated source/test fixture, but reuse compiled dependencies.
         if: runner.os == 'Windows'
         timeout-minutes: 15
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
         run: python scripts/test-recorder-module.py
 
       - name: Run Windows audio COM lifecycle tests
@@ -896,7 +1000,7 @@ jobs:
         # require a microphone. Device-dependent capture/playback tests remain explicitly ignored.
         if: runner.os == 'Windows'
         timeout-minutes: 20
-        run: cargo test --locked --manifest-path src-tauri/vendor/cpal/Cargo.toml --lib --test windows_lifecycle
+        run: cargo test --locked --manifest-path src-tauri/vendor/cpal/Cargo.toml --target-dir src-tauri/target --lib --test windows_lifecycle
 
       - name: Build the Windows TSF input method
         # The TSF DLL has its own vcxproj and is not part of the Tauri build, so
@@ -1019,9 +1123,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_build_jobs || '2' }}
       CARGO_PROFILE_TEST_DEBUG: 0
-      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_build_jobs || '2' }}
     defaults:
       run:
         working-directory: openless-all/app

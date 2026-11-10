@@ -1,3 +1,4 @@
+// Linux automation is paused, but the local packaging/source contracts remain.
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -6,84 +7,34 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const load = (path) => readFile(join(root, path), 'utf8');
-const [release, ci, check, pack, verify, gate, manifest, tauri, revisionFile, buildScript, host] =
+const [ci, tauri, pack, verify, gate, manifest, revisionFile, buildScript, host] =
   await Promise.all([
-    load('.github/workflows/release-linux-egui.yml'),
     load('.github/workflows/ci.yml'),
-    load('.github/workflows/check-linux-egui.yml'),
+    load('.github/workflows/release-tauri.yml'),
     load('openless-all/app/scripts/package-linux-egui.sh'),
     load('openless-all/app/scripts/verify-linux-egui-packages.sh'),
     load('openless-all/app/scripts/check-core-deps.ps1'),
     load('openless-all/app/linux-egui/Cargo.toml'),
-    load('.github/workflows/release-tauri.yml'),
     load('openless-all/app/linux-egui/package-revision'),
     load('openless-all/app/linux-egui/build.rs'),
     load('openless-all/app/linux-egui/src/main.rs'),
   ]);
-
-// CI must execute the exact test/build/package/checksum path used for tags.
-assert.match(ci, /linux-egui-package:[\s\S]*?uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(ci, /linux-egui-package:[\s\S]*?permissions:\s*contents: read/);
-// The release entry point needs write access to attach assets; the CI caller is
-// read-only and must not be able to publish.
-assert.match(release, /permissions:\n  contents: write/);
-assert.deepEqual(
-  [...ci.matchAll(/^  (linux-[\w-]+):/gm)].map((match) => match[1]),
-  ['linux-egui-package'],
-  'PR CI must expose one Linux job, including Core and remote TLS checks',
-);
-assert.match(release, /uses: \.\/\.github\/workflows\/check-linux-egui\.yml/);
-assert.match(
-  check,
-  /^on:\n  workflow_call:/m,
-  'the reusable check must not run as a duplicate standalone workflow',
-);
-assert.match(check, /contents: write/);
-assert.match(check, /runs-on: ubuntu-24\.04/);
-assert.match(check, /cargo test --locked -p openless-core/);
-for (const crate of ['openless-core', 'openless-linux-egui']) {
-  assert.ok(check.includes(`cargo clippy --locked -p ${crate} --all-targets -- -D warnings`));
+for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
+  assert.equal(
+    existsSync(join(root, '.github/workflows', name)),
+    false,
+    `${name}: Linux automation is paused`,
+  );
 }
-assert.match(
-  check,
-  /cargo test --locked --manifest-path src-tauri\/backend-tests\/Cargo\.toml --test remote_tls/,
-);
-assert.match(check, /cargo test --locked -p openless-linux-egui --all-targets/);
-// `cargo test --all-targets` already compiles every target, so a following
-// `cargo check --all-targets` was a second full compile for no extra coverage.
-assert.doesNotMatch(check, /cargo check --locked -p openless-linux-egui/);
-assert.match(check, /check-core-deps\.ps1 openless-linux-egui/);
-assert.match(check, /ctest --test-dir build --output-on-failure/);
-assert.match(check, /cargo build --locked --release -p openless-linux-egui/);
-assert.match(check, /bash scripts\/package-linux-egui\.sh/);
-assert.match(check, /sha256sum \.\/\*\.deb \.\/\*\.rpm > SHA256SUMS/);
-assert.match(check, /bash scripts\/verify-linux-egui-packages\.sh/);
-assert.match(check, /OpenLess_linux_x86_64\.deb/);
-assert.match(check, /OpenLess_linux_x86_64\.rpm/);
-assert.match(check, /openless-linux-egui-direct-download/);
+assert.doesNotMatch(ci, /linux-egui-package:|check-linux-egui\.yml/);
+assert.doesNotMatch(tauri, /release-linux-egui\.yml|LINUX_ACCEPTED_RELEASE_TAG|build-linux-egui:/);
+assert.doesNotMatch(ci, /libgtk-3|webkit2gtk|libwebkit/);
 assert.match(gate, /cargo tree --locked/);
 assert.match(gate, /tauri\|wry\|webkit2gtk/);
-assert.doesNotMatch(ci + check, /libgtk-3|webkit2gtk|libwebkit/);
 
-// Linux artifacts require independent device acceptance and an exact-tag publication gate.
-// Shared Tauri tags and PRs must never publish unaccepted Linux packages.
-assert.match(release, /^on:\n  workflow_dispatch:/m);
-assert.doesNotMatch(release, /^  (push|pull_request):/m);
-// Accepted Linux packages can accompany the same release; manual and automatic
-// publication share the exact-tag acceptance gate before any upload.
-assert.match(check, /LINUX_ACCEPTED_RELEASE_TAG/);
-assert.match(tauri, /LINUX_ACCEPTED_RELEASE_TAG/);
-assert.match(check, /gh release upload/);
-assert.match(check, /inputs\.publish/);
-assert.match(check, /inputs\.release_tag != ''/);
-assert.match(check, /SHA256SUMS-linux/);
-assert.match(check, /github\.ref_type == 'tag'/);
-assert.match(check, /does not match package\.json version/);
 const revision = revisionFile.trim();
-assert.match(revision, /^[1-9][0-9]*$/, 'Linux package revision must be a positive integer');
-assert.ok(Number(revision) > 79, 'new Linux packages must upgrade the last -79 candidate');
-assert.match(check, /REVISION=\$\(< linux-egui\/package-revision\)/);
-assert.match(check, /version=\$\{VERSION%%\+\*\}-\$REVISION/);
+assert.match(revision, /^[1-9][0-9]*$/, 'positive Linux package revision');
+assert.ok(Number(revision) > 79, 'local packages must upgrade the last -79 candidate');
 assert.match(buildScript, /rerun-if-changed=package-revision/);
 assert.match(buildScript, /rerun-if-env-changed=OPENLESS_LINUX_VERSION/);
 assert.match(buildScript, /OPENLESS_APP_VERSION=\{expected\}/);
@@ -92,35 +43,12 @@ assert.match(verify, /DEB_VERSION=\$\(dpkg-deb --field/);
 assert.match(verify, /OpenLess \$DEB_VERSION/);
 assert.match(pack, /linux-egui\/package-revision/);
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
-assert.ok(!tauri.includes('build-linux-egui:'), 'Linux does not build Tauri');
-assert.match(release, /release_tag: \$\{\{ inputs\.tag \}\}/);
-assert.match(release, /checkout_ref: \$\{\{ inputs\.tag \}\}/);
-
-// Automatic dispatch is enabled only by administrator acceptance of the exact tag.
-assert.match(
-  tauri,
-  /^  dispatch-platform-releases:$/m,
-  'release-tauri.yml must hand the tag to this workflow',
-);
-assert.match(
-  tauri,
-  /gh workflow run release-linux-egui\.yml[\s\S]{0,200}-f "tag=\$RELEASE_TAG"[\s\S]{0,80}-f publish=true/,
-  'the Linux hand-off must attach the packages for the same tag',
-);
-
-// Keep deb/rpm only, including dynamically-loaded desktop libraries and the
-// fcitx5 addon. No AppImage, minisign, embedded downloader or Qwen ASR runtime.
-//
-// Rendering is Vulkan-only: the GL/EGL paths were removed (`refactor: remove
-// Linux egui OpenGL rendering`), so the packages depend on the Vulkan loader
-// and nothing dlopens libEGL / libwayland-egl any more. If libegl1 or
-// libwayland-egl1 comes back, a GL renderer was reintroduced.
 assert.match(pack, /dpkg-deb --build/);
 assert.match(pack, /rpmbuild --define/);
 assert.match(pack, /x86_64-linux-gnu\/fcitx5\/libopenless\.so/);
 assert.match(pack, /\/usr\/lib64\/fcitx5\/libopenless\.so/);
-assert.doesNotMatch(pack, /appimagetool|AppImage|qwen-asr|qwen_asr/i);
-assert.doesNotMatch(release + check, /appimagetool|APPIMAGE_|MINISIGN|latest-linux-egui/i);
+assert.match(pack, /require_file "\$PLUGIN_ROOT\/libopenless\.so"/);
+assert.doesNotMatch(pack, /appimagetool|AppImage|qwen-asr|qwen_asr|src-tauri/i);
 assert.match(verify, /test "\$\{#debs\[@\]\}" -eq 1/);
 assert.match(verify, /test "\$\{#rpms\[@\]\}" -eq 1/);
 assert.match(verify, /test "\$\{#appimages\[@\]\}" -eq 0/);
@@ -134,23 +62,17 @@ const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'libwayland-client0']) {
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
-for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
-  assert.ok(
-    !debDeps.includes(removed),
-    `deb must not require ${removed} after the Vulkan migration`,
-  );
+for (const dep of ['libegl1', 'libgl1', 'libwayland-egl1']) {
+  assert.ok(!debDeps.includes(dep), `deb must not require ${dep}`);
 }
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'pipewire-libs', 'vulkan-loader', 'libwayland-client']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
-for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
-  assert.ok(
-    !rpmDeps.includes(removed),
-    `rpm must not require ${removed} after the Vulkan migration`,
-  );
+for (const dep of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
+  assert.ok(!rpmDeps.includes(dep), `rpm must not require ${dep}`);
 }
-assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m, 'packages must recommend a Vulkan driver');
+assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m);
 for (const [file, size] of [
   ['32x32.png', '32x32'],
   ['64x64.png', '64x64'],
@@ -165,36 +87,4 @@ for (const [file, size] of [
   assert.deepEqual(copy, shared, `${file} must match the shared icon`);
   assert.ok(pack.includes(`${size}:${file}`));
 }
-assert.doesNotMatch(pack + release, /src-tauri/);
-assert.doesNotMatch(
-  check,
-  /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/,
-);
-
-// The package installs the fcitx5 plugin, so the packaging job must build it
-// even though `ctest` lives in the parallel test job: dropping it made
-// `package-linux-egui.sh` fail on an empty `test -s` with no output at all.
-{
-  const buildJob = check.match(/  build-linux-egui:[\s\S]*$/)?.[0] ?? '';
-  assert.match(
-    buildJob,
-    /cmake --build build --parallel/,
-    'build-linux-egui must compile the fcitx5 plugin that the package installs',
-  );
-  assert.match(
-    pack,
-    /require_file "\$PLUGIN_ROOT\/libopenless\.so"/,
-    'package-linux-egui.sh must report a missing plugin artifact instead of a bare test -s',
-  );
-}
-
-assert.match(
-  check,
-  /cargo test --locked -p openless-core --lib \\\n\s+api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact/,
-);
-assert.match(
-  check,
-  /grep -Fq 'test api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics \.\.\. ok'/,
-);
-assert.match(check, /needs: \[test-linux-egui, build-linux-egui\]/);
-console.log('linux-egui-release-contract.test.mjs passed');
+console.log('linux-egui-release-contract: automation paused, local packaging contracts passed');

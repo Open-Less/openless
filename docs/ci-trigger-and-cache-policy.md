@@ -1,6 +1,6 @@
 # CI 触发范围与缓存配额
 
-状态：canonical；更新：2026-11-08。本文说明 CI 为什么在什么情况下跑哪些 job、缓存在 10 GB 预算内怎么分配，以及发版前怎么把耗时压下来。
+状态：canonical。本文说明 CI 的触发、缓存与历史性能证据。最新 runner/耗时取舍见 [CI runner 平衡记录](ci-runner-balance.md)：Linux 专属 CI/发行暂停，Windows 前端复用 stable VM，iOS 两项独立验证并行。后文实测历史不代表这些新改动已在线验收。
 
 ## 1. 触发与门控
 
@@ -12,7 +12,7 @@
 | tag `v*-tauri` | 发布 Tauri 桌面与 Android；Linux 包不随标签自动发布 |
 | `workflow_dispatch` | 全量；`platform=macos` 只跑 macOS（仅 macOS 验证入口） |
 
-同一 PR 连续推送会取消旧运行（`concurrency.cancel-in-progress`）。CI 的相同 ref、platform、macos_runner 手动请求也会取消旧运行，不同参数独立运行。桌面手动构建按 ref、platform、诊断开关区分；Android 按 ref、ABI、profile、签名模式区分。标签发布（包括手动选择标签）和修复发布不会被新运行中途取消。
+同一 PR 连续推送会取消旧运行（`concurrency.cancel-in-progress`）。CI 的相同 ref、platform、macos_runner、windows_build_jobs 手动请求也会取消旧运行，不同参数独立运行。桌面手动构建按 ref、platform、诊断开关区分；Android 按 ref、ABI、profile、签名模式区分。标签发布（包括手动选择标签）和修复发布不会被新运行中途取消。
 
 ### 改动范围判定
 
@@ -25,15 +25,15 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
 | `tauri` | macOS / Windows 桌面检查 | 改动能到达 `openless`（含 vendor 路径依赖）或桌面专属的 `openless-native-capsule` |
 | `android` | Android cargo check | 改动能到达 `openless` 的 Android 闭包，或影响 Android 项目生成/构建的 npm manifest；纯 bundle-only 改动不单独触发 |
 | `msrv` | macOS / Windows Rust 1.99 MSRV | 有任何 `.rs` / `Cargo.toml` / `Cargo.lock` / `rust-toolchain*` / `.github/**` |
-| `linux` | Linux Core/egui 测试与 deb/rpm 打包链 | 改动能到达 `openless-linux-egui` 的闭包。Linux 宿主是原生 egui，不读前端 `dist/` |
+| `linux` | 自动化已暂停；仅保留本地区域判定能力 | CI 不再计算或消费此输出，Linux 源码与本地打包脚本保留 |
 | `harmony` | 鸿蒙 ArkTS 契约、Rust host、HAP | 改动能到达 `openless-harmony-host` 的闭包，或动了它要打包的前端 bundle |
 | `frontend` | Chromium/WebKit UI 动效 | 只动浏览器会渲染的面：`src/**`、`e2e/**`、样式与 vite/playwright 配置；`app/assets/**` / `app/public/**` 按 native consumer 处理 |
 | `capsule` | 胶囊 crates（macOS + Windows 双 runner） | 拥有改动文件的包是 `openless-capsule` / `openless-native-capsule`。它们的 `ui,host` feature 组合不在别处构建，所以保留独立 job，但常见 PR 不再为它付出两台 runner |
-| `ios-device` | iOS `device-build`（Xcode/Rime 与真实 device Core 编译） | 改动能到达 iOS Core 闭包，或动了 `openless-all/ios/**`；共享 Rust 代码也要保留 device target 证据 |
+| `ios-device` | CI 内的 `ios-test` / `ios-device-build`（共享契约、Xcode/Rime 与真实 device Core 编译） | 改动能到达 iOS Core 闭包，或动了 `openless-all/ios/**`；共享 Rust 代码也要保留 device target 证据 |
 
 契约测试 `scripts/ci-changed-areas.test.mjs` 用真实 git diff 驱动这些判定，双向断言：够不到的必须跳过，其余的必须运行。改动前它抓到的真实故障（`linux` 输出漏写导致 Linux job 被误跳过）就是这条规则存在的理由。
 
-`linux-egui-package` 通过可复用工作流的 `scope` 输入接收结果（`full` / `none`，**默认 `full`**）：纯散文改动跳过整个 Linux 构建与打包链。独立 Linux 手动构建沿用完整检查，只上传 Actions 产物；管理员在产品验收后，针对已接受的现有 tag 构建并单独附加包，见 [发布规范](../RELEASING.md)。
+Linux 专属自动化已暂停：删除 `check-linux-egui.yml`、`release-linux-egui.yml` 和 CI 的 `linux-egui-package` 调用，桌面发布不再派发 Linux。保留 Linux 源码及本地构建/打包/校验脚本；Ubuntu 上的浏览器、Android、鸿蒙等任务不受影响。恢复 Linux 自动发行前仍须完成产品验收，见 [发布规范](../RELEASING.md)。
 
 `ui-motion` 使用生产前端构建运行 `npm run test:ui-motion`，在 Chromium 与 WebKit 上验证快速往返切页、弹窗中断、手机抽屉退出以及减少动态效果下的模型入口规则。失败时保留浏览器 trace 和截图；浏览器 mock 验证不替代原生权限与设备交互。
 
@@ -43,7 +43,7 @@ Rust 部分不靠手写路径表，而是走 Cargo 自己的包图：`cargo meta
   该数字由依赖实际要求决定：`tauri 2.12` 要 1.90、`aes 0.9.3`/`uuid 1.28` 要 1.89，代码库选择跟随当前 stable（1.99）以保持单一数字，不再为旧工具链回退依赖。
 - 工具链不同 ⇒ cargo fingerprint 全失效、产物与缓存不能共用。历史上 stable 与 MSRV 挤在同一个 job 里共用缓存，串行 29 分 59 秒（见 [`macos-build-performance.md`](macos-build-performance.md)）；拆成并行独立 job、缓存分开后是 stable 8m36s / MSRV 3m39s。
 - 平台专属依赖图不同，所以 macOS 与 Windows 各自验证：macOS 是 `keyring/apple-native`；Windows 是 `keyring/windows-native`、TSF IME。Windows MSRV 也在独立 job 中运行，避免 stable → MSRV 串行重编译和污染 stable 缓存。`Windows checks` 汇总两路结果，任一路失败、取消或意外跳过都会失败。
-- Linux 宿主 `linux-egui` 与桌面侧同用 `rust-version = "1.99"`（egui 0.37 本身只要求 1.95），Linux 侧按 stable 验证。
+- Linux 宿主 `linux-egui` 与桌面侧同用 `rust-version = "1.99"`（egui 0.37 本身只要求 1.95）；专属 CI 暂停期间不再提供 Linux 编译证据。
 
 ## 3. 缓存配额分配（10 GB / 仓库）
 
@@ -70,7 +70,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 |---|---|---|---|
 | Windows 依赖树 | ~1.6 GB | beta 的 CI / 手动构建 / 周期构建 | 所有 PR、发版 |
 | macOS（stable 0.87 + MSRV 0.72） | ~1.6 GB | 同上 | 同上 |
-| Linux（egui 0.75 + core） | ~1.7 GB | beta `push` / 手动运行 | 同上 |
+| Linux（历史缓存） | 不再新增 | — | 专属 CI/发行已暂停；历史缓存按维护策略回收 |
 | Android（Rust 0.85 + Rime 0.40 + gradle 0.31） | ~1.6 GB | beta 的 CI / 手动构建 / 周期构建 | PR、发版 |
 | Harmony Rust host | 0.28 GB | beta `push` / 手动运行 | PR、发版 |
 | Playwright 浏览器 | 0.37 GB | beta `push` / 手动运行 | PR |
@@ -85,7 +85,7 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 - `playwright` 与 `mobile-rime` 使用 restore/save 拆分；`swatinem/rust-cache` 用 `save-if` 达到同样效果。Playwright 按引擎与版本分键，每个 runner 只下载、恢复自己的浏览器；新键首次使用需要冷下载。
 - npm 复合 action 内允许 beta 门控的 `actions/cache@v4`，其他 ref 只用 `cache/restore`；周期构建也可以维护 beta 下载缓存。
 - 历史标签修复入口是兼容例外：标签可能早于 npm 复合 action，继续使用原有 `setup-node` npm 缓存；常规 tag 发布使用只读复合 action。
-- Linux 测试与打包各自使用独立缓存，PR 只读、beta 写入；dev/test 关闭 debug info。Windows MSRV 新增独立缓存族，实际体积需在 beta 首次写入后由维护作业重新核算，不能把上表历史余量视为保证。
+- Linux 专属测试与打包已暂停，不再写入其缓存。Windows MSRV 使用独立缓存族，实际体积需由维护作业重新核算，不能把上表历史余量视为保证。
 - key 结构为 `v0-rust-<job>-<os>-<环境哈希>-<lockfile哈希>`：环境哈希含工具链与 `CARGO_PROFILE_*`，所以 stable / MSRV / release 天然分开，不要用跨平台 `shared-key` 混合。
 - 相同 `shared-key` 只是必要条件：恢复仍要求工具链/环境哈希和缓存路径版本兼容。CI 的 dev/test 缓存不能保证让 release 热启动，发布配置依赖 beta 的周期构建预热；不能把共同前缀当作已命中的证据。
 - 原生胶囊（`native-capsule` job）原本是一个 `pull_request`-only workflow：缓存写在 `refs/pull/<n>/merge`，这个作用域此后再不会被恢复，而 beta 上没有 job 产出同 key 的树，所以 PR 永远冷编译。现在它在 `ci.yml` 里，用 `shared-key: native-capsule` + beta 门控的 `save-if`，并且由 `capsule` 区域门控——常见 PR 完全不会为它拉起 runner。
@@ -94,10 +94,18 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 ## 4. 维护
 
-- 报告与清理：`bash openless-all/app/scripts/ci-cache-usage.sh [--prune] [--limit-gb 8] [--repo OWNER/NAME]`。`--prune` 只删已关闭/已合并 PR 的 `refs/pull/*` 作用域（先查 PR 状态，状态读不到就保留），永不触碰分支与 tag 作用域；用量超过预算时退出码为 1。
-- 自动维护：`.github/workflows/cache-maintenance.yml` 每周一 03:17 UTC 运行并支持手动触发，预算 8 GB。
+- 报告与清理：`bash openless-all/app/scripts/ci-cache-usage.sh --prune --keep-family 2 --prune-budget --limit-gb 8 --repo OWNER/NAME`。先清理关闭/合并 PR 的作用域（状态不可读则保留），再保留每个分支缓存族最新两代；仍超预算时，`--prune-budget` 按最后访问时间淘汰分支缓存，直到用量不超过预算。即使每个族只剩当前基线，也可能因总量过大而被淘汰，之后对应 job 需要冷构建；淘汰计划由维护脚本显式报告，而不是等触及 GitHub 配额后被动驱逐。tag、开放或状态不可读的 PR 不参与预算淘汰；它们独占超额时仍报错。`--dry-run` 只报告计划，不删除。
+- 自动维护：`.github/workflows/cache-maintenance.yml` 每天 03:17 UTC、`main/beta` PR 关闭时运行，也支持手动触发，预算 8 GB。PR 关闭事件只执行默认分支的脚本，不执行 PR 提交中的脚本；token 需要 `actions: write` 和 `pull-requests: read`。
 - 契约测试 `scripts/ci-cache-sharing.test.mjs` 会拒绝任何 `uses: actions/cache@v4`（自动保存）以及任何鸿蒙工具链缓存键，防止上面两条规则被无意改回去。
-- 合并/关闭 PR 后可手动立即回收：`gh api -X DELETE repos/Open-Less/openless/actions/caches?ref=refs/pull/<N>/merge`。
+- 合并/关闭 PR 后可手动运行上述维护脚本；删除 API 必须同时传入 `key` 与 `ref`，仅传 `ref` 会返回 422。
+
+### CI 入口合并与上游同步
+
+- iOS 检查从独立的 `check-ios.yml` 迁入 `ci.yml`，统一运行、取消和 Cargo 图区域检测，保留原有 `test` / `device-build` 检查名称（兼容按名称设置的分支保护）及全部共享契约、Core 测试/Clippy、原生音频、预测和真机打包检查；`platform=macos` 的手动运行不启动 iOS。默认分支 push 也提供 iOS 基线证据，PR 仅在 `ios-device` 区域可达时运行。
+- Linux 专属 CI/发行按要求暂停，两个 YAML 及桌面自动派发逻辑已删除，本地构建链保留。
+- 缓存维护与 MicYou 同步仍是独立 workflow：前者需要删除缓存权限，后者会生成 draft PR；两者不是 PR 质量门禁，不把写权限带进 CI。
+- MicYou 固定版本更新至 `692ecbb9cee1ac45da590cadb59b645f23c1ea65`。上游新增的 `crate::aec` 可用性检查和测试依赖 MicYou 设备宿主；OpenLess 的 DSP-only 适配补丁明确移除这些宿主逻辑，保留自身参考音频捕获边界。此次刷新后导入的 Rust/模型/许可证字节不变，只更新补丁和溯源校验。未来真实补丁冲突仍必须失败并人工审查，不能静默跳过。
+- MicYou API 查询使用只读 `GH_TOKEN` 避免共享出口匿名限流；源码下载不携带 token。
 
 ## 5. 实测对照
 
@@ -120,12 +128,12 @@ GitHub 每仓库保留 10 GB 缓存，超出按 LRU 静默淘汰；淘汰后 job
 
 **发版前预热必须在默认分支 `beta` 上执行**：其他分支的缓存不能被未来的 tag 恢复。桌面每周 schedule 在 beta 维护 release 缓存；手动预热也选择 beta。Android 周期构建默认只维护 aarch64；需要全部 release ABI 时在 beta 手动选择 `abis=all`。Tag 和其他分支只读 Rust/Gradle/npm 缓存，避免一次性副本挤掉可复用的基线。缓存命中仍需编译应用本身，不承诺固定发版时长。
 
-Linux 发版不受影响：`release-linux-egui.yml` 复用 CI 的同一个 `build-linux-egui` job（同名同 key），tag 运行能恢复基线分支的缓存。
+Linux 发行自动化已暂停，不再有独立构建或自动附件上传；上述历史数据不代表当前仍运行 Linux job。
 
 ## 7. 已知取舍
 
-- 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 始终全量，所以合并后仍有完整证据。
-- `build-linux-egui` 在 `push` 时仍会构建 release 二进制（保持基线缓存里有 release 产物、并持续验证打包链），但不再上传 Action artifact；artifact 只在 PR 与 tag 运行产生。
+- 改动范围门控只跳过“够不到”的平台；`push` 到 `main`/`beta` 对仍启用的平台始终全量。Linux 专属自动化暂停后，不再承诺其原生验证证据。
+- 移除 Linux 专属 CI 后，不再自动验证 Core/egui 的 Linux 原生依赖、fcitx5、remote TLS 与 deb/rpm 打包链；本地契约测试仍保留，但不能替代这些原生运行证据。
 - 所有 job 都设了 `timeout-minutes`，避免卡死的运行长时间占用并发与时间。
 
 ## 桌面整理后的依赖与维护

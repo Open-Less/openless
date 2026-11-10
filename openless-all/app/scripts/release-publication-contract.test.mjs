@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
-import vm from 'node:vm';
 
 const workflow = (name) =>
   yaml.load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
@@ -12,30 +11,15 @@ for (const name of ['release-tauri.yml', 'android-apk.yml']) {
   const steps = Object.values(workflow(name).jobs).flatMap((job) => job.steps ?? []);
   const publishers = steps.filter((step) => step.uses?.startsWith('softprops/action-gh-release@'));
   assert.equal(publishers.length, 1, `${name} must have one asset publisher`);
-  assert.equal(
-    publishers[0].with.draft,
-    true,
-    `${name}: no channel may publish a partially built release`,
-  );
+  assert.equal(publishers[0].with.draft, true, `${name}: never publish a partial release`);
   assert.match(publishers[0].with.prerelease, /OPENLESS_RELEASE_CHANNEL == 'beta'/);
-  // Updater manifests belong to the CDN, not to the release assets: current clients read
-  // `/updates/{stable,beta}/` (see src-tauri/src/update_source.rs), and cloning them into the
-  // release produced fourteen near-identical files per tag.
-  assert.doesNotMatch(
-    publishers[0].with.files,
-    /latest-[^\s]*\.json/,
-    `${name}: updater manifests must not be attached to the release`,
-  );
+  assert.doesNotMatch(publishers[0].with.files, /latest-[^\s]*\.json/);
   const manifestUploads = steps.filter(
     (step) =>
       step.uses?.startsWith('actions/upload-artifact@') &&
       /latest-[^\s]*\.json/.test(step.with?.path ?? ''),
   );
-  assert.equal(
-    manifestUploads.length,
-    1,
-    `${name}: exactly one artifact must carry the updater manifests for the CDN sync`,
-  );
+  assert.equal(manifestUploads.length, 1, `${name}: updater manifests belong to the CDN artifact`);
 }
 const sync = workflow('sync-homebrew-cask.yml');
 assert.deepEqual(sync.on.release.types, ['published']);
@@ -57,117 +41,55 @@ for (const name of [
   'Update Casks/openless.rb',
   'Commit & push cask bump',
 ]) {
-  const step = steps.find((candidate) => candidate.name === name);
   assert.equal(
-    step?.if,
+    steps.find((step) => step.name === name)?.if,
     "steps.publication.outputs.ready == 'true'",
-    `${name}: a draft must not change the public cask`,
+    `${name}: drafts must not change the public cask`,
   );
 }
 
-const linux = workflow('check-linux-egui.yml');
-const publish = linux.jobs['publish-linux-egui'];
-assert.deepEqual(publish.needs, ['test-linux-egui', 'build-linux-egui']);
-assert.equal(linux.jobs['test-linux-egui'].needs, undefined, 'testing must remain parallel');
-assert.equal(linux.jobs['build-linux-egui'].needs, undefined, 'packaging must remain parallel');
-assert.equal(publish.permissions, undefined, 'the reusable job must inherit its caller permission');
-assert.equal(publish.env.GH_REPO, '${{ github.repository }}');
-assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
-assert.equal(publish.env.RELEASE_TAG, '${{ inputs.release_tag }}');
-assert.doesNotMatch(publish.if, /always\(|failure\(|cancelled\(/);
-for (const [results, inputs, expected] of [
-  [['success', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, true],
-  [['failure', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'failure'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['cancelled', 'success'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'skipped'], { scope: 'full', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'none', publish: true, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'full', publish: false, release_tag: 'v2.0.2-tauri' }, false],
-  [['success', 'success'], { scope: 'full', publish: true, release_tag: '' }, false],
-]) {
-  const enabled =
-    results.every((result) => result === 'success') &&
-    Boolean(vm.runInNewContext(publish.if, { inputs }));
-  assert.equal(enabled, expected, JSON.stringify({ results, inputs }));
-}
-const downloads = publish.steps.filter((step) => step.uses === 'actions/download-artifact@v8');
-assert.deepEqual(
-  downloads.map((step) => step.with.name),
-  ['openless-linux-egui-x86_64', 'openless-linux-egui-direct-download'],
-);
-const uploads = linux.jobs['build-linux-egui'].steps.filter((step) =>
-  step.uses?.startsWith('actions/upload-artifact@'),
-);
-for (const step of downloads) {
-  assert.ok(uploads.some((upload) => upload.with.name === step.with.name));
-  assert.equal(step.with['run-id'], undefined, 'download only this run');
-  assert.equal(step.with['github-token'], undefined, 'do not enable cross-run downloads');
-}
-assert.equal(
-  publish.steps.some((step) => step.uses?.startsWith('actions/checkout@')),
-  false,
-);
-for (const [name, job] of Object.entries(linux.jobs)) {
-  if (name !== 'publish-linux-egui')
-    assert.ok((job.steps ?? []).every((step) => !step.run?.includes('gh release upload')));
-}
-const attach = publish.steps.find((step) => step.run?.includes('gh release upload'));
-assert.match(attach.run, /seq 1 40/);
-assert.match(attach.run, /sleep 15/);
-assert.match(attach.run, /--clobber/);
-const acceptance = publish.steps.find((step) => step.name === 'Verify exact-tag Linux acceptance');
-assert.ok(acceptance);
-assert.match(publish.env.LINUX_ACCEPTED_RELEASE_TAG, /vars\.LINUX_ACCEPTED_RELEASE_TAG/);
-for (const [tag, accepted, expected] of [
-  ['v2.0.2-Beta.5-tauri', '', 1],
-  ['v2.0.2-Beta.5-tauri', 'v2.0.2-Beta.4-tauri', 1],
-  ['', '', 1],
-  ['v2.0.2-Beta.5-tauri', 'v2.0.2-Beta.5-tauri', 0],
-]) {
-  const result = spawnSync('bash', ['-c', acceptance.run], {
-    env: { ...process.env, RELEASE_TAG: tag, LINUX_ACCEPTED_RELEASE_TAG: accepted },
-  });
-  assert.equal(result.status, expected, `publication acceptance: ${tag}/${accepted}`);
-}
 const handoff = workflow('release-tauri.yml').jobs['dispatch-platform-releases'];
-assert.match(handoff.env.LINUX_ACCEPTED_RELEASE_TAG, /vars\.LINUX_ACCEPTED_RELEASE_TAG/);
+assert.equal(handoff.env.LINUX_ACCEPTED_RELEASE_TAG, undefined);
 const dispatch = handoff.steps.find((step) =>
   step.run?.includes('gh workflow run release-harmony.yml'),
 );
 assert.ok(dispatch);
-const directory = mkdtempSync(join(tmpdir(), 'openless-release-acceptance-'));
+assert.doesNotMatch(JSON.stringify(handoff), /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/);
+const directory = mkdtempSync(join(tmpdir(), 'openless-release-handoff-'));
 try {
   const calls = join(directory, 'calls');
-  const summary = join(directory, 'summary');
   writeFileSync(join(directory, 'gh'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n', {
     mode: 0o755,
   });
-  for (const accepted of ['', 'v2.0.2-Beta.4-tauri', 'v2.0.2-Beta.5-tauri']) {
+  for (const [channel, expected] of [
+    ['none', 0],
+    ['release', 0],
+    ['test', 0],
+    ['invalid', 1],
+  ]) {
     writeFileSync(calls, '');
-    writeFileSync(summary, '');
     const result = spawnSync('bash', ['-c', dispatch.run], {
       env: {
         ...process.env,
         PATH: `${directory}:${process.env.PATH}`,
         CALLS: calls,
         RELEASE_TAG: 'v2.0.2-Beta.5-tauri',
-        LINUX_ACCEPTED_RELEASE_TAG: accepted,
-        HARMONY_CHANNEL: 'none',
-        GITHUB_STEP_SUMMARY: summary,
+        HARMONY_CHANNEL: channel,
       },
     });
-    assert.equal(result.status, 0);
+    assert.equal(result.status, expected, channel);
     const logged = readFileSync(calls, 'utf8');
-    assert.match(logged, /release-harmony\.yml.*channel=none/);
-    assert.equal(logged.includes('release-linux-egui.yml'), accepted === 'v2.0.2-Beta.5-tauri');
-    assert.match(
-      readFileSync(summary, 'utf8'),
-      accepted
-        ? accepted.endsWith('Beta.5-tauri')
-          ? /Linux publication accepted/
-          : /Linux omitted/
-        : /Linux omitted/,
-    );
+    if (expected === 0) {
+      assert.match(
+        logged,
+        new RegExp(
+          `release-harmony\\.yml.*--ref v2\\.0\\.2-Beta\\.5-tauri.*tag=v2\\.0\\.2-Beta\\.5-tauri.*channel=${channel}`,
+        ),
+      );
+      assert.equal(logged.trim().split('\n').length, 1, 'dispatch only Harmony');
+    } else {
+      assert.equal(logged, '', 'bad channel must not dispatch');
+    }
   }
 } finally {
   rmSync(directory, { recursive: true, force: true });

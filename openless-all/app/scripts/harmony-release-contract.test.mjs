@@ -169,11 +169,7 @@ assert.match(
   'the downstream workflow definition must be loaded from the same immutable release tag',
 );
 assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
-assert.match(
-  tauriRelease,
-  /gh workflow run release-linux-egui\.yml[\s\S]{0,80}--ref "\$RELEASE_TAG"[\s\S]{0,180}-f "tag=\$RELEASE_TAG"/,
-  'the Linux workflow definition must use the same immutable release tag',
-);
+assert.doesNotMatch(tauriRelease, /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/, 'Linux automation is paused');
 assert.match(
   tauriRelease,
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,

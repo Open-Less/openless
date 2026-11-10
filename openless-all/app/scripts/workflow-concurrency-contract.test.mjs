@@ -46,9 +46,9 @@ assert.ok(
 
 assert.ok(
   workflows.ci.includes(
-    "group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}",
+    "group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}",
   ),
-  'CI must group equivalent requests without mixing event, platform or runner selections',
+  'CI must group equivalent requests without mixing event, platform, runner or compiler parallelism selections',
 );
 assert.ok(
   workflows.ci.includes(

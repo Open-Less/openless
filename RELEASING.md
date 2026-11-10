@@ -45,26 +45,18 @@ See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli
 
 These tags build the macOS, Windows, and Android Tauri hosts in parallel.
 
-Linux and HarmonyOS have dispatch-only entry points,
-`.github/workflows/release-linux-egui.yml` and `.github/workflows/release-harmony.yml`.
-Neither reacts directly to a tag push. After the desktop build, `release-tauri.yml`
+HarmonyOS has a dispatch-only entry point, `.github/workflows/release-harmony.yml`.
+It does not react directly to a tag push. After the desktop build, `release-tauri.yml`
 dispatches HarmonyOS on the same immutable release tag.
 
-Linux is separate: an administrator must complete and record the L01-L12 device
+Linux-specific CI and release automation is paused: the reusable Linux check and
+release entry point have been removed, and desktop releases no longer dispatch Linux.
+Linux source, local build/package/verification scripts, and device acceptance
+requirements remain available. No Linux artifacts or aliases are automatically
+built or attached. Before manually distributing packages, complete the L01-L12
 acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
-for the exact candidate, then set the repository variable
-`LINUX_ACCEPTED_RELEASE_TAG` to that release tag. Automatic dispatch occurs only
-when the variable exactly matches the current tag; missing or older acceptance
-omits Linux and records the reason in the release workflow summary. Desktop and
-Android delivery may proceed independently. The reusable Linux publication job
-checks the same exact-tag gate, including manual dispatches, before attaching any
-packages or aliases. A build-only dispatch with `publish=false` does not publish.
-
-Accepted Linux packages use the same Core/host/deb/rpm checks as CI and attach
-automatically. There is no in-app updater manifest or AppImage. Never mark a tag
-accepted merely because compilation or CI passed; the hardware acceptance remains
-a separate requirement. To repair an accepted release, dispatch its workflow on
-the same tag, with the acceptance variable still matching that tag.
+for that exact candidate. Compilation alone is not device acceptance. Desktop and
+Android delivery remain independent; Linux has no in-app updater or AppImage.
 
 HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
 `OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
@@ -117,7 +109,7 @@ A local machine without store certificates can still produce a package:
 checks its contents without a device.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
-Both local packaging and the shared CI/tag build use this explicit revision; never drop
+Local packaging uses this explicit revision (Linux CI/tag builds are paused); never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
 ## Direct download aliases
@@ -128,13 +120,13 @@ The release workflows also publish stable, version-independent asset names for t
 - macOS Intel: `OpenLess_macos_x86_64.dmg`
 - Windows x64: `OpenLess_windows_x86_64-setup.exe`
 - Android: `OpenLess_android_<abi>.apk` (one each for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`)
-- Linux: `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
+- Linux (manual distribution only while automation is paused): `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
 
 Stable website links use `https://github.com/Open-Less/openless/releases/latest/download/<asset-name>`.
 Beta links must use the release tag because `latest` excludes pre-releases:
 `https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
 
-The Tauri and Android workflows attach their aliases automatically. Accepted Linux publications attach the two files from the `openless-linux-egui-direct-download` Actions artifact alongside the versioned packages, behind the same exact-tag acceptance gate. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+The Tauri and Android workflows attach their aliases automatically. Linux automation is paused; any manually accepted Linux distribution must provide its aliases alongside the versioned packages. Do not replace the versioned assets; the aliases are an additional website-facing contract.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
@@ -205,12 +197,12 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    or manual cask edit is needed. Do not publish via an asset workflow's
    `GITHUB_TOKEN`, which does not emit the downstream release event.
 
-Before dispatching the Linux release build, additionally require all of the following:
+Linux workflow dispatch is paused. Before manually distributing Linux packages (or restoring automation), require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
-3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
-4. The dispatch pins the tag as an input; the workflow checks that tag out and rejects a `package.json` version mismatch, so the packages provably come from the reviewed commit.
+3. Run the local package verifier for ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
+4. Check out the reviewed immutable tag and verify the package version matches `package.json`, so the packages provably come from the reviewed commit.
 5. The checksum file is produced and attached as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
 
 ## HarmonyOS signing material and AppGallery credentials
