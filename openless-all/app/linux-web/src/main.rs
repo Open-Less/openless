@@ -989,6 +989,53 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     .map_err(|error| error.to_string())?,
             ))
         }
+        // ── 杂项：剪贴板 / 网络 / 本地 IP / 日志 / 重启 ────────────────
+        "copy_text_to_clipboard" => {
+            let text = _args
+                .get("text")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if !text.is_empty() {
+                openless_linux_egui::fcitx5_copy_to_clipboard(text)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(json!({ "copied": !text.is_empty() }))
+        }
+        "check_network" => {
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let (state, latency) =
+                runtime.block_on(openless_linux_egui::linux_access::probe_network());
+            Ok(json!({
+                "online": matches!(state, openless_linux_egui::linux_access::CheckState::Ready),
+                "latencyMs": latency,
+            }))
+        }
+        "list_local_ips" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let ips = runtime
+                .block_on(backend.services().remote_input.list_local_ips())
+                .map_err(|error| error.message)?;
+            Ok(json_value(ips))
+        }
+        "log_client_error" => {
+            // 页面报错只进日志，不回传任何用户内容。
+            let message = _args
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("(no message)");
+            eprintln!("[linux-web][client] {message}");
+            Ok(Value::Null)
+        }
+        "is_wayland_cli_mode" => Ok(json!(
+            std::env::var_os("WAYLAND_DISPLAY").is_some()
+        )),
+        "restart_app" => {
+            // 与 Tauri 版同语义：退出由 systemd/autostart 拉起；这里直接退出，
+            // 进程管理交给单元文件（`app-openless@autostart.service` 的 Restart 策略）。
+            println!("[linux-web] restart requested");
+            std::process::exit(0);
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
