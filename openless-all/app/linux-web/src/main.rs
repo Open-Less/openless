@@ -1551,6 +1551,111 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "valid": true }))
         }
+        // ── 偏好类小命令 + 少数纯搬运 ────────────────────────────────
+        "get_qa_hotkey_label" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let prefs = backend.get_preferences();
+            if prefs.qa_companion_key.is_empty() {
+                return Ok(json!(""));
+            }
+            Ok(json!(format!(
+                "{} + {}",
+                prefs.dictation_hotkey.display_label(),
+                prefs.qa_companion_key
+            )))
+        }
+        "get_update_channel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let prefs = backend.get_preferences();
+            // 与 Tauri 的 effective_update_channel 同规则：没显式设过时，
+            // 版本号带 `-`（例如 2.0.2-Beta.3）就走 beta。
+            let channel = if prefs.update_channel_explicit {
+                prefs.update_channel
+            } else if env!("CARGO_PKG_VERSION").contains('-') {
+                openless_core::shared_types::UpdateChannel::Beta
+            } else {
+                openless_core::shared_types::UpdateChannel::Stable
+            };
+            Ok(json_value(channel))
+        }
+        "set_update_channel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let channel: openless_core::shared_types::UpdateChannel =
+                serde_json::from_value(_args.get("channel").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| format!("未知的更新通道：{error}"))?;
+            persist_preferences(host, backend, |prefs| {
+                prefs.update_channel = channel;
+                prefs.update_channel_explicit = true;
+            })?;
+            Ok(json_value(channel))
+        }
+        "open_system_settings" => {
+            // Linux 没有 macOS 那种按面板直达的 URL 方案；能用的是桌面的设置入口。
+            // 拿不到就静默失败（前端只是打开设置，不该因此报错打断流程）。
+            let pane = _args.get("pane").and_then(|value| value.as_str()).unwrap_or("");
+            let program = if pane == "microphone" { "pavucontrol" } else { "systemsettings" };
+            let _ = std::process::Command::new(program)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            Ok(json!({ "opened": program }))
+        }
+        "delete_channel_if_blank" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|value| value.as_str()))
+                .ok_or_else(|| "未知的频道类型".to_string())?;
+            let deleted = runtime
+                .block_on(backend.delete_channel_if_blank(
+                    kind,
+                    required_str(_args, "id")?.to_string(),
+                ))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "deleted": deleted }))
+        }
+        "create_style_pack_from_template" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let template: openless_core::StylePack =
+                serde_json::from_value(_args.get("template").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            Ok(json_value(
+                backend
+                    .create_style_pack(template)
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "get_expression_profile" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json_value(
+                backend
+                    .expression_profile_directions()
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "clear_expression_profile" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .clear_expression_profile()
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "cleared": true }))
+        }
+        "get_dictation_translation_target" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json_value(backend.dictation_translation_target()))
+        }
+        "select_dictation_translation_target" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let session = required_str(_args, "sessionId")?;
+            let session = uuid::Uuid::parse_str(session)
+                .map(openless_core::SessionId::from_uuid)
+                .map_err(|error| format!("session id 不合法：{error}"))?;
+            let target = required_str(_args, "targetLanguage")?.to_string();
+            Ok(json_value(
+                backend
+                    .select_dictation_translation_target(session, target)
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
