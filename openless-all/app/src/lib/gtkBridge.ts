@@ -6,7 +6,23 @@
 //
 // 原生侧把 args 当 JSON 字符串收，返回也是 JSON 字符串；这样命令面不需要为每种
 // 参数类型生成绑定，和鸿蒙那条完全同构。
-export const isGtkHost = import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk';
+/** 构建期为 GTK 平台时**再确认桥真的存在**。
+ *
+ * 只看构建期常量不够：同一份 dist 也可能被别的 webview 打开（比如用 CEF/Qt
+ * 做视觉对比时），那时 `window.webkit` 根本不存在，界面却会一直报
+ * 「GTK 宿主桥尚未就绪」而挡住整页。真正的判据是 WebKit 注入的
+ * `messageHandlers.openless`。 */
+const platformIsGtk = import.meta.env?.VITE_OPENLESS_PLATFORM === 'gtk';
+
+export function gtkBridgeAvailable(): boolean {
+  return (
+    platformIsGtk &&
+    typeof window !== 'undefined' &&
+    !!window.webkit?.messageHandlers?.openless
+  );
+}
+
+export const isGtkHost = gtkBridgeAvailable();
 
 declare global {
   interface Window {

@@ -47,6 +47,12 @@ export function validateStartupSnapshot(snapshot: StartupSnapshot): StartupSnaps
 let backendReadyPromise: Promise<StartupSnapshot> | null = null;
 
 export function requireBackendReady(): Promise<StartupSnapshot> {
+  if (previewMockMode()) {
+    return Promise.resolve({
+      contractVersion: BACKEND_CONTRACT_VERSION,
+      backend: { running: true },
+    });
+  }
   if (isHarmonyHost) {
     backendReadyPromise ??=
       invokeHarmony<StartupSnapshot>('get_startup_snapshot').then(validateStartupSnapshot);
@@ -80,11 +86,22 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   return platformCapabilities();
 }
 
+/** 视觉预览模式：`?mock=1` 时强制走前端 mock 数据，不碰任何原生桥。
+ *  用途：在任意 webview（GTK/CEF/Qt）里都能看到完整界面，方便对比渲染差异，
+ *  而不需要把后端也接上。**只影响查询路径，不改变正式运行时的行为。** */
+function previewMockMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('mock') === '1';
+}
+
 export async function invokeOrMock<T>(
   cmd: string,
   args: Record<string, unknown> | undefined,
   mock: () => T,
 ): Promise<T> {
+  if (previewMockMode()) {
+    return mock();
+  }
   if (isHarmonyHost) {
     await requireBackendReady();
     return invokeHarmony<T>(cmd, args);
