@@ -128,10 +128,34 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
         let runtime = host.runtime.clone();
         if let (Some(backend), Some(runtime)) = (backend.clone(), runtime.clone()) {
             events::spawn_backend_events(backend.clone(), runtime.clone(), view.clone());
-            hotkeys::spawn(backend, runtime, window.clone());
+            hotkeys::spawn(backend.clone(), runtime.clone(), window.clone());
+            #[cfg(feature = "capsule")]
+            {
+                // 胶囊是独立的 layer surface：不抢焦点、贴底居中，页面走 ?capsule=1。
+                let capsule = std::sync::Arc::new(capsule::build(
+                    app,
+                    &format!("{url}?window=capsule"),
+                    CAPSULE_WIDTH,
+                    CAPSULE_HEIGHT,
+                    CAPSULE_BOTTOM_MARGIN,
+                ));
+                // 排障：OPENLESS_CAPSULE_ALWAYS=1 时启动就显示胶囊（截图/对齐用）。
+                if std::env::var("OPENLESS_CAPSULE_ALWAYS").ok().as_deref() == Some("1") {
+                    capsule.window.show_all();
+                }
+                capsule::attach_events(capsule, runtime, backend);
+            }
         }
     }
 }
+
+/// 胶囊尺寸与贴底间距（与 Tauri 的胶囊窗口一致：宽 460、底距 12）。
+#[cfg(feature = "capsule")]
+const CAPSULE_WIDTH: i32 = 460;
+#[cfg(feature = "capsule")]
+const CAPSULE_HEIGHT: i32 = 228;
+#[cfg(feature = "capsule")]
+const CAPSULE_BOTTOM_MARGIN: i32 = 12;
 
 // ── 命令分发 ────────────────────────────────────────────────────────────────
 

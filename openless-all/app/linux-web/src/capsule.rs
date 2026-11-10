@@ -8,6 +8,7 @@
 //! 状态由事件桥推（`dictation:state` / `dictation:level`）。
 use gtk::prelude::*;
 use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use webkit2gtk::{SettingsExt, WebViewExt};
 use std::sync::Arc;
 
 pub struct CapsuleWindow {
@@ -49,7 +50,7 @@ pub fn build(
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    window.set_margin(Edge::Bottom, bottom_margin);
+    window.set_layer_shell_margin(Edge::Bottom, bottom_margin);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_namespace("openless-capsule");
 
@@ -63,55 +64,53 @@ pub fn build(
     CapsuleWindow { window, view }
 }
 
-/// 把胶囊挂到事件桥上：`dictation:state` 决定显隐，`dictation:level` 决定波形。
+/// 把胶囊挂到事件桥上：`dictation:state` 决定显隐，电平取自同一个状态快照
+/// （`DictationStateSnapshot.level`，Core 每次电平变化都会 publish 一次）。
+///
+/// 结构说明：GTK 对象是 `!Send`，不能跨 await 持有，所以
+/// **工作线程**只把 JSON 字符串丢进 glib 通道，**主线程**再拿着窗口去求值。
 pub fn attach_events(
     capsule: Arc<CapsuleWindow>,
     runtime: Arc<tokio::runtime::Runtime>,
     backend: Arc<openless_core::OpenLessBackend>,
 ) {
-    runtime.spawn(async move {
+    #[allow(deprecated)]
+    let (sender, receiver) = gtk::glib::MainContext::channel::<(bool, String)>(gtk::glib::Priority::default());
+
+    receiver.attach(None, move |(visible, js): (bool, String)| {
+        if visible {
+            capsule.window.show_all();
+        } else {
+            capsule.window.hide();
+        }
+        capsule.view.evaluate_javascript(
+            &js,
+            None::<&str>,
+            None::<&str>,
+            None::<&webkit2gtk::gio::Cancellable>,
+            |_| {},
+        );
+        gtk::glib::ControlFlow::Continue
+    });
+
+    std::thread::spawn(move || {
         let mut subscription = backend.subscribe();
         loop {
-            let Ok(event) = subscription.recv().await else {
+            let event = match runtime.block_on(subscription.recv()) {
+                Ok(event) => event,
+                Err(_) => continue,
+            };
+            let openless_core::BackendEventKind::DictationStateChanged(state) = &event.kind else {
                 continue;
             };
-            let (name, payload) = match &event.kind {
-                openless_core::BackendEventKind::DictationStateChanged(state) => {
-                    let visible = !matches!(state.phase, openless_core::DictationPhase::Idle);
-                    let capsule = Arc::clone(&capsule);
-                    gtk::glib::idle_add_local_once(move || {
-                        if visible {
-                            capsule.window.show_all();
-                        } else {
-                            capsule.window.hide();
-                        }
-                    });
-                    (
-                        "dictation:state",
-                        serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
-                    )
-                }
-                openless_core::BackendEventKind::QaLevel(level) => (
-                    "dictation:level",
-                    serde_json::to_value(level).unwrap_or(serde_json::Value::Null),
-                ),
-                _ => continue,
-            };
+            let visible = !matches!(state.phase, openless_core::DictationPhase::Idle);
             let js = format!(
-                "window.__openlessEvent && window.__openlessEvent({}, {});",
-                serde_json::json!(name),
-                serde_json::json!(payload.to_string())
+                "window.__openlessEvent && window.__openlessEvent(\"dictation:level\", {});",
+                serde_json::json!({ "level": state.level })
             );
-            let view = capsule.view.clone();
-            gtk::glib::idle_add_local_once(move || {
-                view.evaluate_javascript(
-                    &js,
-                    None::<&str>,
-                    None::<&str>,
-                    None::<&webkit2gtk::gio::Cancellable>,
-                    |_| {},
-                );
-            });
+            if sender.send((visible, js)).is_err() {
+                break;
+            }
         }
     });
 }

@@ -15,7 +15,7 @@ openless-core = { path = "../crates/openless-core" }
 openless-linux-egui = { path = "../linux-egui" }
 # 胶囊窗口需要 wlr-layer-shell（不给焦点、贴底居中）。默认关闭：日常构建/CI 不装
 # 这个系统库也能过；本地验胶囊时 `--features capsule` 打开。
-gtk-layer-shell = { version = "0.8", optional = true }
+gtk-layer-shell = { version = "0.8", optional = true, features = ["v0_6"] }
 
 [features]
 default = []
