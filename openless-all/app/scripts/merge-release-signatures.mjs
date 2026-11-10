@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { isMissingRelease, readRelease } from './prepare-release.mjs';
 
 export const INDEX_NAME = 'updater-signatures.json';
 export function signatureFromIndex(index, tag, name) {
@@ -59,6 +60,13 @@ export function mergeSignatures(directory, tag, previous) {
 function gh(args) {
   return spawnSync('gh', args, { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
 }
+// Same failure shape as a throwing `execFileSync` call, so the shared missing-
+// release check works for both injection styles.
+function ghOrThrow(args) {
+  const result = gh(args);
+  if (result.status === 0) return result.stdout;
+  throw Object.assign(new Error('gh failed'), { stderr: result.stderr });
+}
 function main() {
   const [directoryArg, tag, repository] = process.argv.slice(2);
   if (
@@ -68,29 +76,28 @@ function main() {
   )
     throw new Error('Usage: merge-release-signatures.mjs <directory> <tag> <owner/repo>');
   const directory = resolve(directoryArg);
-  const result = gh(['api', `repos/${repository}/releases/tags/${tag}`]);
   let previous;
-  if (result.status === 0) {
-    const release = JSON.parse(result.stdout);
-    if (!release.draft) throw new Error('Refusing to mutate signatures on a published release');
+  let release;
+  try {
+    release = readRelease(tag, repository, ghOrThrow);
+  } catch (error) {
+    if (!isMissingRelease(error.stderr)) throw new Error(`Cannot inspect release: ${error.stderr}`);
+    release = undefined;
+  }
+  if (release) {
+    if (release.tagName !== tag) throw new Error('Release tag mismatch');
+    if (!release.isDraft) throw new Error('Refusing to mutate signatures on a published release');
     const asset = release.assets.find((a) => a.name === INDEX_NAME);
     if (!asset && release.assets.some((a) => a.name.endsWith('.sig'))) {
       console.log('Legacy draft: retain its original detached signature format');
       return;
     }
     if (asset) {
-      const download = gh([
-        'api',
-        `repos/${repository}/releases/assets/${asset.id}`,
-        '-H',
-        'Accept: application/octet-stream',
-      ]);
+      const download = gh(['api', asset.apiUrl, '-H', 'Accept: application/octet-stream']);
       if (download.status !== 0)
         throw new Error(`Cannot read existing signature index: ${download.stderr}`);
       previous = JSON.parse(download.stdout);
     }
-  } else if (!result.stderr.includes('HTTP 404')) {
-    throw new Error(`Cannot inspect release: ${result.stderr}`);
   }
   const index = mergeSignatures(directory, tag, previous);
   writeFileSync(join(directory, INDEX_NAME), JSON.stringify(index, null, 2) + '\n');

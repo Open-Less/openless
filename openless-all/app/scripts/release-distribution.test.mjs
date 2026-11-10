@@ -58,12 +58,20 @@ try {
 
   const bin = join(root, 'bin');
   mkdirSync(bin);
+  // `gh release view` resolves drafts; the mock only has to answer that call and
+  // the asset download (which must use the numeric API URL, not the node id).
   writeFileSync(
     join(bin, 'gh'),
-    '#!/bin/sh\nif [ -n "$MOCK_FAIL" ]; then echo "HTTP $MOCK_FAIL" >&2; exit 1; fi\nprintf "%s" "$MOCK_RELEASE"\n',
+    '#!/bin/sh\nif [ -n "$MOCK_FAIL" ]; then echo "HTTP $MOCK_FAIL" >&2; exit 1; fi\n' +
+      'if [ "$MOCK_MISSING" = 1 ]; then echo "release not found" >&2; exit 1; fi\n' +
+      'case "$1 $2" in\n' +
+      '  "release view") printf "%s" "$MOCK_RELEASE" ;;\n' +
+      '  "api https://api.github.com/repos/Open-Less/openless/releases/assets/7") printf "%s" "$MOCK_INDEX" ;;\n' +
+      '  *) echo "unexpected gh invocation: $*" >&2; exit 1 ;;\n' +
+      'esac\n',
   );
   chmodSync(join(bin, 'gh'), 0o755);
-  const runMerge = (release, failure = '') =>
+  const runMerge = (release, failure = '', extra = {}) =>
     spawnSync(
       process.execPath,
       [
@@ -79,15 +87,62 @@ try {
           PATH: bin + ':' + process.env.PATH,
           MOCK_RELEASE: JSON.stringify(release),
           MOCK_FAIL: failure,
+          ...extra,
         },
       },
     );
-  assert.notEqual(runMerge({ draft: false, assets: [] }).status, 0);
+  assert.notEqual(runMerge({ tagName: tag, isDraft: false, assets: [] }).status, 0);
   assert.ok(existsSync(join(desktop, 'OpenLess_2.0.2-Beta.7_x64-setup.exe.sig')));
-  assert.equal(runMerge({ draft: true, assets: [{ name: 'historical.exe.sig' }] }).status, 0);
+  assert.equal(
+    runMerge({ tagName: tag, isDraft: true, assets: [{ name: 'historical.exe.sig' }] }).status,
+    0,
+  );
+  assert.notEqual(
+    runMerge({ tagName: 'v2.0.2-Beta.6-tauri', isDraft: true, assets: [] }).status,
+    0,
+    'a draft for another tag must not be mutated',
+  );
   assert.ok(!existsSync(join(desktop, 'updater-signatures.json')));
   assert.notEqual(runMerge({}, '503').status, 0, 'API failures must not discard other platforms');
-  assert.equal(runMerge({ draft: true, assets: [] }).status, 0);
+  // A real draft found through `release view` keeps the other platform's entry.
+  const existingIndex = JSON.stringify({
+    schema: 1,
+    release_tag: tag,
+    artifacts: {
+      'OpenLess_2.0.2-Beta.7_arm64-v8a.apk': {
+        signature: 'android-signature',
+        size: 7,
+        sha256: '',
+      },
+    },
+  });
+  assert.equal(
+    runMerge(
+      {
+        tagName: tag,
+        isDraft: true,
+        assets: [
+          {
+            name: 'updater-signatures.json',
+            id: 'RA_kwDOSNoZCc4rVTlL',
+            apiUrl: 'https://api.github.com/repos/Open-Less/openless/releases/assets/7',
+          },
+        ],
+      },
+      '',
+      { MOCK_INDEX: existingIndex },
+    ).status,
+    0,
+  );
+  const merged = JSON.parse(readFileSync(join(desktop, 'updater-signatures.json'), 'utf8'));
+  assert.deepEqual(Object.keys(merged.artifacts), [
+    'OpenLess_2.0.2-Beta.7_arm64-v8a.apk',
+    'OpenLess_2.0.2-Beta.7_x64-setup.exe',
+  ]);
+  rmSync(join(desktop, 'OpenLess_2.0.2-Beta.7_x64-setup.exe.sig'), { force: true });
+  rmSync(join(desktop, 'updater-signatures.json'), { force: true });
+  put(desktop, 'OpenLess_2.0.2-Beta.7_x64-setup.exe', 'desktop', 'desktop-signature');
+  assert.equal(runMerge({ tagName: tag, isDraft: true, assets: [] }).status, 0);
   assert.ok(existsSync(join(desktop, 'updater-signatures.json')));
   assert.ok(!existsSync(join(desktop, 'OpenLess_2.0.2-Beta.7_x64-setup.exe.sig')));
 

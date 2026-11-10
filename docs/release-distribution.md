@@ -16,6 +16,7 @@ tag → prepare-release（仅创建／验证共享草稿，不构建）
 - 三条构建线只依赖同一个轻量预检，不相互依赖；移除原先桌面发布后才 dispatch Harmony 的等待及 Harmony 等待桌面创建 Release 的轮询。
 - Android／Harmony 使用同一 run 的本地 `workflow_call`，定义来自标签的不可变提交。Android 删除独立 tag push，避免同一标签重复构建四个 ABI；独立周检、debug／手动入口保留。
 - 预检遇到已有已发布 Release、错误 tag／渠道、API 错误时停止，不重开或修改历史版本；已有草稿只读取，不覆盖正文和附件。
+- 草稿必须用 `gh release view <tag>` 解析：REST 的 `GET /releases/tags/<tag>` 对真实草稿返回 `404`，旧实现会误判为“尚无 Release”而重复创建，签名汇总也会误以为没有旧索引而覆盖另一平台记录。查询失败只接受 `release not found`／`HTTP 404`；其他错误直接失败，不创建。索引附件按 `assets[].apiUrl` 下载，不用 `id`（那是 GraphQL node ID，不是 REST 数字 ID）。
 - 桌面下载器只匹配 `openless-macos-*`、`openless-windows-*`，避免合并 run 后重复下载数百 MB 的 APK／HAP，且不会混入商店签名包。
 - 桌面和 Android 的发布 job 仍共享签名索引互斥锁，防止读改写覆盖；锁覆盖发布段，不阻塞构建。Harmony 不写该索引，不需等待它们。编译并行度仍默认 2，不额外拆分构建矩阵。
 - 一个平台失败不取消其他平台的构建；整个 Release run 会报失败，产物保留在草稿中。仍由管理员确认后发布，OSS 清单在发布之后同步，不能为了并行而先指向不存在的包。
@@ -43,7 +44,7 @@ tag → prepare-release（仅创建／验证共享草稿，不构建）
 
 - 构建过程仍由 Tauri／`tauri signer sign` 生成临时独立 `.sig`，CDN 清单继续内嵌原签名，不变更密钥、签名算法或验签标准。
 - 桌面与 Android 的发布 job 共用 `openless-release-assets-<tag>` 并发锁；每个发布者读入草稿上已有索引，合并自己平台，再上传同一个 JSON，不能覆盖丢失另一个平台的记录。不新增聚合 VM。
-- 合并成功后只删除本机 staging 中的独立 `.sig`，不删除远端历史附件。历史草稿若已有 `.sig` 而无索引，维修时保持旧格式；已发布的 Release 拒绝修改签名索引。
+- 合并成功后只删除本机 staging 中的独立 `.sig`，不删除远端历史附件。历史草稿若已有 `.sig` 而无索引，维修时保持旧格式；已发布的 Release 拒绝修改签名索引。草稿查询走 `gh release view`（REST tag 端点对草稿返 404），索引附件按其 `apiUrl` 下载。
 - 新客户端优先解析同一 Release 的索引，检查 schema、标签和精确文件名；历史 Release 仍读取独立 `.sig`。最终必须用内置公钥验证包本身与 trusted comment，不能把索引里的 SHA-256 当成来源认证。
 - **旧客户端兼容限制**：已安装、只认识独立 `.sig` 的客户端仍可通过 CDN 内嵌签名更新，但无法在 CDN 完全不可用时独立发现只附加索引的新 Release。这不能靠修改未来发行文件修复；需先在 CDN 可用时升级到支持索引的新客户端。历史 Release 原有 GitHub 路径不变。
 

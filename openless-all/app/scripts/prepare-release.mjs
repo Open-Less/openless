@@ -8,6 +8,15 @@ const runGh = (args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+// Draft releases are invisible to `GET /releases/tags/<tag>` (GitHub answers
+// 404 for a real draft), so resolve by tag through `gh release view`, which also
+// sees drafts. Any other failure is an outage, not permission to create one.
+export const RELEASE_FIELDS = 'apiUrl,isDraft,isPrerelease,tagName,assets';
+export const isMissingRelease = (stderr) => /release not found|HTTP 404/.test(String(stderr ?? ''));
+export function readRelease(tag, repository, gh = runGh) {
+  return JSON.parse(gh(['release', 'view', tag, '--repo', repository, '--json', RELEASE_FIELDS]));
+}
+
 // One short preflight creates the shared draft before any platform starts.
 // Existing published releases are read-only; platform retries must not reopen one.
 export function prepareRelease(tag, repository, gh = runGh) {
@@ -18,11 +27,9 @@ export function prepareRelease(tag, repository, gh = runGh) {
   const prerelease = tag.endsWith('-beta-tauri') || tag.includes('-Beta.');
   let release;
   try {
-    release = JSON.parse(
-      gh(['api', `repos/${repository}/releases/tags/${encodeURIComponent(tag)}`]),
-    );
+    release = readRelease(tag, repository, gh);
   } catch (error) {
-    if (!/HTTP 404/.test(String(error.stderr ?? ''))) throw error;
+    if (!isMissingRelease(error.stderr)) throw error;
     gh([
       'release',
       'create',
@@ -39,9 +46,9 @@ export function prepareRelease(tag, repository, gh = runGh) {
     ]);
     return 'created';
   }
-  if (release.tag_name !== tag) throw new Error('Release tag mismatch');
-  if (release.draft !== true) throw new Error('Refusing to modify an already published release');
-  if (release.prerelease !== prerelease) throw new Error('Release channel mismatch');
+  if (release.tagName !== tag) throw new Error('Release tag mismatch');
+  if (release.isDraft !== true) throw new Error('Refusing to modify an already published release');
+  if (release.isPrerelease !== prerelease) throw new Error('Release channel mismatch');
   return 'existing draft';
 }
 

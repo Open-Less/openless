@@ -138,24 +138,31 @@ assert.doesNotMatch(JSON.stringify(unified), /release-linux-egui|LINUX_ACCEPTED_
 const tag = 'v2.0.2-Beta.7-tauri';
 const repository = 'Open-Less/openless';
 const apiCalls = [];
+// Draft lookup must go through `gh release view`: the REST tag endpoint answers
+// 404 for a real draft, which previously looked like "no release yet".
 const missing = (args) => {
   apiCalls.push(args);
-  if (args[0] === 'api') throw Object.assign(new Error('not found'), { stderr: 'HTTP 404' });
+  assert.notEqual(args[0], 'api', 'never probe drafts through /releases/tags');
+  if (args[1] === 'view')
+    throw Object.assign(new Error('not found'), { stderr: 'release not found' });
   return '';
 };
 assert.equal(prepareRelease(tag, repository, missing), 'created');
 assert.equal(apiCalls.length, 2);
+assert.equal(apiCalls[0][1], 'view');
+assert.equal(apiCalls[1][1], 'create');
 for (const flag of ['--verify-tag', '--draft', '--prerelease'])
   assert.ok(apiCalls[1].includes(flag));
 const stableCalls = [];
 prepareRelease('v2.0.2-tauri', repository, (args) => {
   stableCalls.push(args);
-  if (args[0] === 'api') throw Object.assign(new Error('not found'), { stderr: 'HTTP 404' });
+  if (args[1] === 'view')
+    throw Object.assign(new Error('not found'), { stderr: 'release not found' });
   return '';
 });
 assert.ok(!stableCalls[1].includes('--prerelease'));
 let reads = 0;
-const existing = { tag_name: tag, draft: true, prerelease: true };
+const existing = { tagName: tag, isDraft: true, isPrerelease: true };
 assert.equal(
   prepareRelease(tag, repository, () => {
     reads++;
@@ -165,18 +172,16 @@ assert.equal(
 );
 assert.equal(reads, 1, 'retry reads the draft without changing its body or assets');
 assert.throws(
-  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, draft: false })),
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, isDraft: false })),
   /already published/,
 );
 assert.throws(
   () =>
-    prepareRelease(tag, repository, () =>
-      JSON.stringify({ ...existing, tag_name: 'v2.0.1-tauri' }),
-    ),
+    prepareRelease(tag, repository, () => JSON.stringify({ ...existing, tagName: 'v2.0.1-tauri' })),
   /tag mismatch/,
 );
 assert.throws(
-  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, prerelease: false })),
+  () => prepareRelease(tag, repository, () => JSON.stringify({ ...existing, isPrerelease: false })),
   /channel mismatch/,
 );
 let unavailableCalls = 0;
