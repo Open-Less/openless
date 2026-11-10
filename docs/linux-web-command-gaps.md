@@ -29,3 +29,45 @@ chat_panel_focus_keyboard dismiss_insert_fallback_card get_capsule_snapshot qa_g
 ## 未分类（6）
 
 get_android_audio_effects_status get_dictation_translation_target select_dictation_translation_target set_android_audio_monitoring set_capsule_language_menu set_capsule_transcript_visible
+
+## 剩余命令的处置（2026-11 复核）
+
+上一节的分组是自动分类，这里才是**结论**。`linux-web` 已实现 135 条，
+剩余 88 条全部属于下面四类，不做不是遗漏：
+
+### 1. 本地模型（约 55 条）—— 不做
+`sherpa_onnx_asr_*`、`foundry_local_asr_*`、`local_asr_*`、`experimental_asr_*`。
+
+Linux 版本的产品定位不含本地模型（云端 ASR/LLM 才是这条链）；接了这些命令
+会得到一堆永远走不到的分支。前端在 Linux 上不会展示入口（`platformCaps`
+门控），但命令本身若被调用会报「不支持」，而不是假装成功。
+
+### 2. 平台专属（约 10 条）—— 不做
+`app_download_and_install_android_update`、`set_android_audio_monitoring`、
+`get_android_audio_effects_status`、`siwc_*`、`get_windows_ime_status`、
+`handle_window_hotkey_event`、`check_accessibility_permission`、
+`request_accessibility_permission`。
+
+TCC 授权与 Windows IME 在 Linux 上没有对应概念；`siwc_*` 是 Windows 商店的
+凭据桥。**不做假实现**：调用会返回明确的「不适用」错误。
+
+### 3. 市场（6 条）—— 不做
+`marketplace_*`。Linux 未开市场，前端入口由 `platformCaps` 关掉。
+
+### 4. 另一条链（约 12 条）—— 需单独设计，非照搬
+`voice_edit_window_*`、`start/stop_voice_edit_*`、`commit_voice_edit`、
+`cancel_voice_edit_session`、`selection_voice_*`、`*_selection_polish_preview`、
+`get_voice_edit_state`。
+
+Tauri 这些靠独立窗口 + 原生输入注入；Linux 的选区/语音编辑走
+fcitx5 插件（`captureSelectionTarget` / apply），窗口形态也不同。
+照搬会做出两套互相打架的链路，要做得先决定 Linux 的交互形态。
+
+## 已实现部分的对照原则
+
+- 参数名以**前端实际调用**为准（如 `set_active_*_provider` 收 `provider` 而不是 `id`）。
+- 类型以 core 为准，不猜字段：`SecretValue` 显式 `expose_secret()`、`PolishMode`
+  走 serde 名字、`CloudSyncUiPreferences` / `RestoreMode` 直接反序列化。
+- 数据源以**上游现状**为准：更新检查改读 CDN 清单
+  （`dl.aeoform.com/updates/...`），不再读 GitHub atom。
+- 没有真实语义的一律不做或明确报错，不用空实现凑数。

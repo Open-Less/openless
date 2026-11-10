@@ -2002,6 +2002,11 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // 这几条只用于页面内部状态同步，这里如实记为无操作。
             Ok(json!(null))
         }
+        "get_hotkey_capability" => {
+            // Linux 的能力描述 core 里已经写好了（adapter=Fcitx5 + 各触发键 +
+            // evdev 权限提示），宿主不要再拼一份，否则两边会漂。
+            Ok(json_value(openless_core::shared_types::HotkeyCapability::current()))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
