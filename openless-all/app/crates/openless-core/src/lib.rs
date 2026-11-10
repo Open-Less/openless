@@ -28,6 +28,7 @@ mod correction_observation;
 pub mod coding_agent_guard;
 pub mod config;
 pub mod correction;
+pub mod credential_accounts;
 pub mod credentials;
 pub mod credentials_legacy;
 pub mod dictation_context;

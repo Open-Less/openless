@@ -336,6 +336,51 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "enabled": enabled }))
         }
+        // ── 凭据读写（映射表在 core: credential_accounts::credential_key）──
+        "read_credential" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let account = _args
+                .get("account")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "缺少 account".to_string())?;
+            let provider = _args
+                .get("provider")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let key = openless_core::credential_accounts::credential_key(account, provider)
+                .map_err(|error| error.to_string())?;
+            let value = runtime
+                .block_on(backend.read_credential(key))
+                .map_err(|error| error.to_string())?;
+            Ok(json!(value.map(|secret| secret.into_exposed())))
+        }
+        "set_credential" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let account = _args
+                .get("account")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "缺少 account".to_string())?;
+            let provider = _args
+                .get("provider")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let value = _args
+                .get("value")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let key = openless_core::credential_accounts::credential_key(account, provider)
+                .map_err(|error| error.to_string())?;
+            runtime
+                .block_on(backend.set_credential(
+                    key,
+                    openless_core::SecretValue::new(value),
+                ))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "saved": true }))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
