@@ -95,3 +95,25 @@ pub async fn list_style_packs(core: CoreState<'_>) -> Result<Vec<StylePack>, Str
 6. **更新/杂项**：`check_network` `app_check_update_with_channel`
    `get_update_channel` `set_update_channel` `export_error_log` `get_service_usage`
 7. **最后**：4 条无 Tauri 实现的命令（Linux 侧 stub 或真实现）。
+
+## 云同步这一组的注意点（实测，2026-11）
+
+`cloud_sync_e2ee_*` 的 core API **同步/异步混用**：
+
+| 形态 | 例子 |
+|---|---|
+| 同步 `Result<T>` | `cloud_sync_e2ee_status()` |
+| 异步 `.await` | `cloud_sync_e2ee_lock()`、`cloud_sync_e2ee_sync_now()`、`cloud_sync_*` |
+
+而且返回类型各不相同（`EncryptedSyncStatus`、`String`、`()`、快照结构…），
+`dispatch` 的每个分支必须自己收敛成 `Result<Value, String>`。建议：
+
+```rust
+fn json_value<T: serde::Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+// 分支统一写成： Ok(json_value(expr))
+```
+
+不要用 `json_value(..)?` 再 `?` 一次——那会把 `Value` 再套一层 `Result`，
+`match` 分支类型就不一致了（这一步踩过，已回退）。
