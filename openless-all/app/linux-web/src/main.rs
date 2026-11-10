@@ -220,6 +220,48 @@ fn shortcut_arg(args: &Value, optional: bool) -> Result<Option<openless_core::sh
     Ok(Some(binding))
 }
 
+/// 在数据目录下按 `<session>.wav` 找归档录音（录音目录名可能随版本变，所以扫一遍）。
+fn find_recording(data_dir: &std::path::Path, session_id: &str) -> Option<PathBuf> {
+    let wanted = format!("{session_id}.wav");
+    let mut stack = vec![data_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|name| name.to_str()) == Some(wanted.as_str()) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// 不引入 base64 crate：录音回放只需要标准字母表 + padding。
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 fn json_value<T: serde::Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
@@ -1035,6 +1077,62 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // 进程管理交给单元文件（`app-openless@autostart.service` 的 Restart 策略）。
             println!("[linux-web] restart requested");
             std::process::exit(0);
+        }
+        // ── 录音回放 / 重新转录 ───────────────────────────────────────
+        "read_audio_recording" => {
+            let session_id = required_str(_args, "sessionId")?.to_string();
+            let path = find_recording(&data_dir(), &session_id)
+                .ok_or_else(|| "找不到这次录音".to_string())?;
+            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+            Ok(json!(format!(
+                "data:audio/wav;base64,{}",
+                base64_encode(&bytes)
+            )))
+        }
+        "retranscribe_recording" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let session_id = required_str(_args, "sessionId")?.to_string();
+            let entry = backend
+                .list_history()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|entry| entry.id == session_id)
+                .ok_or_else(|| "history entry not found".to_string())?;
+            if backend
+                .snapshot()
+                .dictation
+                .session_id
+                .is_some_and(|active| active.to_string() == session_id)
+            {
+                return Err("录音还在进行，先停掉再重新转录".to_string());
+            }
+            if entry.has_audio_recording != Some(true) {
+                return Err("这条历史没有归档录音".to_string());
+            }
+            let path = find_recording(&data_dir(), &session_id)
+                .ok_or_else(|| "找不到这次录音".to_string())?;
+            let wav = std::fs::read(&path).map_err(|error| error.to_string())?;
+            // 归档 wav 是 16k/mono/16bit + 固定 44 字节标准头（见 asr::wav）。
+            if wav.len() <= 44 {
+                return Err("录音为空或损坏".to_string());
+            }
+            let pcm = wav[44..].to_vec();
+            let started = std::time::Instant::now();
+            let retranscription = runtime
+                .block_on(backend.services().auxiliary.retranscribe_pcm(pcm))
+                .map_err(|error| error.into_message())?;
+            let text = retranscription.text;
+            let asr = retranscription.asr;
+            if text.trim().is_empty() {
+                return Err("重新转录仍未识别到语音".to_string());
+            }
+            let elapsed = started.elapsed().as_millis() as u64;
+            let _ = asr; // AsrCallLabel 没有 Serialize：前端用不到它
+            Ok(json!({
+                "text": text,
+                "elapsedMs": elapsed,
+            }))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
