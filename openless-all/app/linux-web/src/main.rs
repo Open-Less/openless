@@ -38,7 +38,12 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let url = format!("http://127.0.0.1:{port}/index.html");
+    let mut url = format!("http://127.0.0.1:{port}/index.html");
+    // 排障对照：OPENLESS_NO_TRANSITION=1 时页面走 reduced-motion 路径（无过渡动画），
+    // 用来区分「抖动来自动画」还是「抖动来自布局/滚动条」。
+    if std::env::var("OPENLESS_NO_TRANSITION").ok().as_deref() == Some("1") {
+        url.push_str("?noTransition=1");
+    }
     // 宿主传进来的桥 socket：窗口层后续通过它订阅事件（目前只记录，便于排障）。
     if let Some(index) = std::env::args().position(|arg| arg == "--host-socket") {
         if let Some(socket) = std::env::args().nth(index + 1) {
@@ -63,6 +68,114 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
 
     let manager = UserContentManager::new();
     manager.register_script_message_handler("openless");
+    // 在页面任何脚本之前打上引擎标记：WebKitGTK 在合成器上有几处做不到
+    // Chromium/WebView2 那样的性能（最明显的是全页 `filter: blur()` 过渡），
+    // 前端据此降级动画，而不是让用户看到抖动。
+
+/// 排障用帧探针（`OPENLESS_FRAME_PROBE=1`）：监听页面切换的相位属性变化，
+/// 记录切换期间每帧间隔，最差帧通过 `log_client_error` 打到宿主 stderr。
+/// 只在设了这个环境变量时注入，正式运行不产生任何开销。
+const FRAME_PROBE: &str = r#"
+(() => {
+  const marks = new Map();
+  const watch = () => {
+    const surfaces = document.querySelectorAll('[data-transition-phase]');
+    surfaces.forEach((node) => {
+      const phase = node.getAttribute('data-transition-phase');
+      if (phase === 'settled') return;
+      const started = performance.now();
+      if (marks.has(phase)) return;
+      marks.set(phase, started);
+      let last = started;
+      let worst = 0;
+      // 同时盯住左侧导航与滚动容器的矩形：整窗平移/抖动会让导航也跟着动，
+      // 只有内容变则是局部重排（典型原因：滚动条出现/消失改变可用宽度）。
+      const nav = document.querySelector('nav');
+      const base = nav ? nav.getBoundingClientRect() : null;
+      let navShift = 0;
+      let widthShift = 0;
+      const tick = (now) => {
+        worst = Math.max(worst, now - last);
+        last = now;
+        if (base && nav) {
+          const rect = nav.getBoundingClientRect();
+          navShift = Math.max(navShift, Math.abs(rect.left - base.left), Math.abs(rect.top - base.top));
+          widthShift = Math.max(widthShift, Math.abs(rect.width - base.width));
+        }
+        if (now - started < 420) {
+          requestAnimationFrame(tick);
+        } else {
+          marks.delete(phase);
+          window.webkit.messageHandlers.openless.postMessage(JSON.stringify({
+            id: 'probe-' + Math.random().toString(36).slice(2),
+            command: 'log_client_error',
+            args: JSON.stringify({ message: 'frame-probe ' + phase + ' worst=' + worst.toFixed(1) + 'ms navShift=' + navShift.toFixed(2) + ' navWidthShift=' + widthShift.toFixed(2) }),
+          }));
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+  };
+  new MutationObserver(watch).observe(document.documentElement, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-transition-phase'],
+  });
+  watch();
+})();
+"#;
+
+
+/// 排障用页面轮换（`OPENLESS_PAGE_SWEEP=1`）：每 900ms 点一个侧栏项，
+/// 让帧探针有真实的页面切换可测。只在设了这个环境变量时注入。
+const PAGE_SWEEP: &str = r#"
+(() => {
+  const tick = () => {
+    const buttons = Array.from(document.querySelectorAll('button.ol-nav-btn'));
+    if (!buttons.length) return void setTimeout(tick, 400);
+    let index = 0;
+    setInterval(() => {
+      index = (index + 1) % buttons.length;
+      buttons[index].click();
+    }, 900);
+  };
+  setTimeout(() => {
+    window.webkit.messageHandlers.openless.postMessage(JSON.stringify({
+      id: 'sweep-engine',
+      command: 'log_client_error',
+      args: JSON.stringify({ message: 'engine=' + (document.documentElement.dataset.olEngine || 'none') }),
+    }));
+    tick();
+  }, 3000);
+})();
+"#;
+
+    if std::env::var("OPENLESS_PAGE_SWEEP").ok().as_deref() == Some("1") {
+        manager.add_script(&webkit2gtk::UserScript::new(
+            PAGE_SWEEP,
+            webkit2gtk::UserContentInjectedFrames::TopFrame,
+            webkit2gtk::UserScriptInjectionTime::End,
+            &[],
+            &[],
+        ));
+    }
+    if std::env::var("OPENLESS_FRAME_PROBE").ok().as_deref() == Some("1") {
+        manager.add_script(&webkit2gtk::UserScript::new(
+            FRAME_PROBE,
+            webkit2gtk::UserContentInjectedFrames::TopFrame,
+            webkit2gtk::UserScriptInjectionTime::End,
+            &[],
+            &[],
+        ));
+    }
+    manager.add_script(&webkit2gtk::UserScript::new(
+        "window.__openlessEngine='webkitgtk';\
+         document.documentElement.dataset.olEngine='webkitgtk';",
+        webkit2gtk::UserContentInjectedFrames::TopFrame,
+        webkit2gtk::UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    ));
 
     let view = webkit2gtk::WebView::builder()
         .user_content_manager(&manager)
@@ -115,6 +228,11 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
     }
     window.set_child(Some(&view));
     view.load_uri(url);
+    view.connect_load_changed(|_view, event| {
+        if event == webkit2gtk::LoadEvent::Finished {
+            println!("[linux-web] 页面已加载完成");
+        }
+    });
     window.show_all();
     // 托盘与窗口显隐：窗口关掉只是隐藏，进程继续常驻（与 Tauri 版行为一致）。
     window.connect_delete_event(|window, _| {

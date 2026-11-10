@@ -45,6 +45,9 @@ pub fn build(
         );
     }
 
+    if !gtk_layer_shell::is_supported() {
+        eprintln!("[capsule] 合成器不支持 wlr-layer-shell，胶囊会退化成普通窗口");
+    }
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_anchor(Edge::Bottom, true);
@@ -61,6 +64,10 @@ pub fn build(
     view.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
     view.load_uri(url);
     window.add(&view);
+    eprintln!(
+        "[capsule] layer-shell 已启用：{}×{}，贴底 {}px，namespace=openless-capsule",
+        width, height, bottom_margin
+    );
     CapsuleWindow { window, view }
 }
 

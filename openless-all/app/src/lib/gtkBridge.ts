@@ -21,6 +21,12 @@ type Pending = { resolve: (value: string) => void; reject: (error: Error) => voi
 const pending = new Map<string, Pending>();
 let nextId = 1;
 
+// 引擎标记：WebKitGTK 缺几样合成器能力（全页滤镜动画最明显），
+// 前端与 CSS 据此降级。由构建期的 isGtkHost 决定，不依赖宿主注入脚本。
+if (isGtkHost && typeof document !== 'undefined') {
+  document.documentElement.dataset.olEngine = 'webkitgtk';
+}
+
 if (isGtkHost && typeof window !== 'undefined') {
   window.__openlessResolve = (id: string, wire: string) => {
     const entry = pending.get(id);

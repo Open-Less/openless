@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { isGtkHost } from '../../lib/gtkBridge';
 import { useReducedMotion } from '../../lib/motion';
 import { useSmoothWheelScroll } from '../../lib/useSmoothWheelScroll';
 import { PageSkeleton } from './PageSkeleton';
@@ -16,6 +17,17 @@ const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const settled = { opacity: 1, transform: 'none', filter: 'none' };
 const waiting = { opacity: 0, transform: 'translateY(12px) scale(0.975)', filter: 'blur(8px)' };
 const departing = { opacity: 0, transform: 'translateY(-12px) scale(0.985)', filter: 'blur(6px)' };
+
+/** WebKitGTK 上整页做 `filter: blur()` + `scale()` 会为两个满窗图层逐帧离屏
+ * 重绘（新旧页面同时在），实测掉帧，肉眼就是「切换时抖一下」。所以 GTK 宿主
+ * 只保留最便宜的透明度交叉淡入：不模糊、不缩放、不位移。
+ * 想彻底关掉过渡做对照：宿主加 `OPENLESS_NO_TRANSITION=1`（会打开 reduced 路径）。 */
+const cheapTransition = isGtkHost;
+
+function urlDisablesTransition(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('noTransition') === '1';
+}
 
 type Surface = { key: string; children: ReactNode };
 interface Props {
@@ -42,7 +54,8 @@ export function TransitionViewport({
   pace = 'default',
   onEntered,
 }: Props) {
-  const reduced = useReducedMotion();
+  const reducedMotion = useReducedMotion();
+  const reduced = reducedMotion || urlDisablesTransition();
   const [committed, setCommitted] = useState<Surface>({ key: contentKey, children });
   const retained = useRef(committed);
   const latest = useRef({ key: contentKey, children });
@@ -157,12 +170,16 @@ function TransitionSurface({
   const ref = useRef<HTMLDivElement>(null);
   const completed = useRef(onEntered);
   completed.current = onEntered;
-  const initialPose = useRef(phase === 'waiting' ? waiting : settled);
+  const blur = !cheapTransition;
+  const waitingPose = cheapTransition ? { opacity: 0, transform: 'none', filter: 'none' } : waiting;
+  const departingPose = cheapTransition ? { opacity: 0, transform: 'none', filter: 'none' } : departing;
+  const initialPose = useRef(phase === 'waiting' ? waitingPose : settled);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
     let cancelled = false;
-    const target = phase === 'waiting' ? waiting : phase === 'exit' ? departing : settled;
+    const target =
+      phase === 'waiting' ? waitingPose : phase === 'exit' ? departingPose : settled;
     const apply = () => {
       node.style.opacity = String(target.opacity);
       node.style.transform = target.transform;
@@ -181,7 +198,7 @@ function TransitionSurface({
     }
     const current = getComputedStyle(node);
     const from = { opacity: current.opacity, transform: current.transform, filter: current.filter };
-    node.style.willChange = 'transform, opacity, filter';
+    node.style.willChange = blur ? 'transform, opacity, filter' : 'transform, opacity';
     // One native timeline keeps opacity, scale and blur synchronized even when
     // JavaScript frames are delayed. Cleanup freezes the painted pose for reversals.
     const timingScale = pace === 'gentle' ? 1.2 : 1;
