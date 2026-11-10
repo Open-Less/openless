@@ -120,11 +120,12 @@ assert.match(packaging, /sign-harmony-hap\.py/);
 assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
 assert.match(
   packaging,
-  /sha256sum \.\/OpenLess_harmony_arm64\.hap \.\/OpenLess_harmony\.hap > SHA256SUMS/,
-  'Release checksums must cover only the unsigned HAP pair uploaded to GitHub',
+  /sha256sum \.\/OpenLess_harmony_arm64\.hap > SHA256SUMS/,
+  'Release checksums must cover the single unsigned HAP uploaded to GitHub',
 );
 assert.match(packaging, /OpenLess_harmony_arm64\.hap/);
-assert.match(packaging, /OpenLess_harmony\.hap/);
+assert.doesNotMatch(packaging, /OpenLess_harmony\.hap/);
+assert.doesNotMatch(workflow, /OpenLess_harmony\.hap/);
 assert.match(signing, /HARMONY_KEYSTORE_PASSWORD/);
 assert.match(signing, /\[redacted\]/);
 
@@ -169,7 +170,11 @@ assert.match(
   'the downstream workflow definition must be loaded from the same immutable release tag',
 );
 assert.match(tauriRelease, /gh workflow run release-harmony\.yml[\s\S]{0,400}-f publish=true/);
-assert.doesNotMatch(tauriRelease, /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/, 'Linux automation is paused');
+assert.doesNotMatch(
+  tauriRelease,
+  /release-linux-egui|LINUX_ACCEPTED_RELEASE_TAG/,
+  'Linux automation is paused',
+);
 assert.match(
   tauriRelease,
   /github\.event_name == 'push'[\s\S]{0,120}refs\/tags\/v/,

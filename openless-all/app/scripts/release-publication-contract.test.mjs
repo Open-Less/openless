@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -20,6 +20,45 @@ for (const name of ['release-tauri.yml', 'android-apk.yml']) {
       /latest-[^\s]*\.json/.test(step.with?.path ?? ''),
   );
   assert.equal(manifestUploads.length, 1, `${name}: updater manifests belong to the CDN artifact`);
+}
+const desktop = workflow('release-tauri.yml');
+assert.doesNotMatch(
+  JSON.stringify(desktop),
+  /stage-release-download-aliases|openless-download-alias/,
+);
+const staging = mkdtempSync(join(tmpdir(), 'openless-release-assets-'));
+try {
+  const source = join(staging, 'openless-release-artifacts', 'desktop');
+  mkdirSync(source, { recursive: true });
+  const originals = [
+    'OpenLess_2.0.2-Beta.7_x64-setup.exe',
+    'OpenLess_2.0.2-Beta.7_x64-setup.exe.sig',
+    'OpenLess_2.0.2-Beta.7_aarch64.dmg',
+    'OpenLess_aarch64.app.tar.gz',
+    'OpenLess_aarch64.app.tar.gz.sig',
+  ];
+  // Old artifacts can survive a partial rerun: do not publish their aliases again.
+  const excluded = [
+    'OpenLess_windows_x86_64-setup.exe',
+    'OpenLess_windows_x86_64-setup.exe.sig',
+    'OpenLess_macos_aarch64.dmg',
+    'latest-darwin-aarch64.json',
+    'openless.exe',
+    'debug.pdb',
+  ];
+  for (const name of [...originals, ...excluded]) writeFileSync(join(source, name), 'fixture');
+  const stage = Object.values(desktop.jobs)
+    .flatMap((job) => job.steps ?? [])
+    .find((step) => step.name === 'Stage release files');
+  assert.ok(stage);
+  const result = spawnSync('bash', ['-c', stage.run], {
+    env: { ...process.env, RUNNER_TEMP: staging, GITHUB_WORKSPACE: staging },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(readdirSync(join(staging, 'release-files')).sort(), originals.sort());
+} finally {
+  rmSync(staging, { recursive: true, force: true });
 }
 const sync = workflow('sync-homebrew-cask.yml');
 assert.deepEqual(sync.on.release.types, ['published']);

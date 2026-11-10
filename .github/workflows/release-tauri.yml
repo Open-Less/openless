@@ -637,27 +637,6 @@ jobs:
             fi
           done
 
-      - name: Stage direct download alias
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
-        working-directory: openless-all/app
-        env:
-          OPENLESS_DOWNLOAD_TARGET: ${{ matrix.updater-target }}
-          OPENLESS_DOWNLOAD_ARCH: ${{ matrix.updater-arch }}
-          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ matrix.updater-target == 'darwin' && 'src-tauri/target/release/bundle/dmg' || 'src-tauri/target/release/bundle/nsis' }}
-          OPENLESS_DOWNLOAD_OUTPUT_DIR: src-tauri/target/release/downloads
-        run: node scripts/stage-release-download-aliases.mjs
-
-      - name: Upload direct download aliases
-        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
-        timeout-minutes: 10
-        uses: actions/upload-artifact@v4
-        with:
-          retention-days: 14
-          name: openless-download-alias-${{ matrix.updater-target }}-${{ matrix.updater-arch }}
-          compression-level: 0
-          path: openless-all/app/src-tauri/target/release/downloads/*
-          if-no-files-found: error
-
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
@@ -822,7 +801,7 @@ jobs:
           while IFS= read -r -d '' file; do
             base=$(basename "$file")
             case "$base" in
-              *.json|*.pdb|openless.exe)
+              OpenLess_macos_*|OpenLess_windows_*|*.json|*.pdb|openless.exe)
                 ;;
               *.dmg|*.dmg.sig|*.msi|*.msi.sig|*.app.tar.gz|*.app.tar.gz.sig|*setup.exe|*setup.exe.sig)
                 cp "$file" "$dest/$base"

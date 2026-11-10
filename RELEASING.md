@@ -58,8 +58,8 @@ acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff
 for that exact candidate. Compilation alone is not device acceptance. Desktop and
 Android delivery remain independent; Linux has no in-app updater or AppImage.
 
-HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
-`OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
+HarmonyOS builds, signs and attaches the single `OpenLess_harmony_arm64.hap`,
+and can upload the signed package (App Pack) to
 HUAWEI AppGallery Connect. The automatic dispatch uses `channel: none`, the
 repository path: the HAP is attached to the GitHub Release unsigned and nothing
 reaches the store. Set the repository variable `HARMONY_AUTO_CHANNEL` to
@@ -86,7 +86,7 @@ redistribution, which is also why it is fetched at job time rather than vendored
 
 | Channel | Artifact | Signing | Where it goes |
 | --- | --- | --- | --- |
-| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` (+ `OpenLess_harmony.hap`) | **unsigned** | Release assets, `SHA256SUMS` |
+| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` | **unsigned** | Release assets, `SHA256SUMS` |
 | AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
 | 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
 
@@ -112,21 +112,13 @@ from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Local packaging uses this explicit revision (Linux CI/tag builds are paused); never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
-## Direct download aliases
+## Download assets: no duplicate aliases in new releases
 
-The release workflows also publish stable, version-independent asset names for the official website:
+Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs (with their original signatures). HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives and their signatures are distinct products and remain published. Linux automation remains paused.
 
-- macOS Apple Silicon: `OpenLess_macos_aarch64.dmg`
-- macOS Intel: `OpenLess_macos_x86_64.dmg`
-- Windows x64: `OpenLess_windows_x86_64-setup.exe`
-- Android: `OpenLess_android_<abi>.apk` (one each for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`)
-- Linux (manual distribution only while automation is paused): `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
+Existing releases and their download aliases are not migrated or deleted. The alias helper remains available for legacy/manual use, but no automatic release workflow invokes it. Partial desktop reruns also filter out old alias artifacts instead of publishing them again; they do not delete assets already attached to an existing release.
 
-Stable website links use `https://github.com/Open-Less/openless/releases/latest/download/<asset-name>`.
-Beta links must use the release tag because `latest` excludes pre-releases:
-`https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
-
-The Tauri and Android workflows attach their aliases automatically. Linux automation is paused; any manually accepted Linux distribution must provide its aliases alongside the versioned packages. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+Website/CDN download resolution must use the actual asset names from the selected release API (or an external redirect to those assets), rather than assume the old fixed alias exists in a new release. This change does not implement a website redirect. Stable selection may use the latest stable release; beta selection must explicitly select its prerelease tag because GitHub `latest` excludes prereleases. Historical fixed-name links remain valid for historical releases. Updater manifest generation and its CDN artifact handoff are unchanged.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 

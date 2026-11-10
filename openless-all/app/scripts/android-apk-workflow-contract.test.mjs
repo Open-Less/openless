@@ -155,8 +155,8 @@ assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO/);
 assert.match(workflow, /first ABI may compile twice|android-studio-script/);
 assert.match(workflow, /publish-android-release/);
 assert.match(workflow, /download-artifact/);
-assert.match(workflow, /stage-release-download-aliases\.mjs/);
-assert.match(workflow, /OpenLess_android_\*\.apk/);
+assert.doesNotMatch(workflow, /stage-release-download-aliases\.mjs/);
+assert.doesNotMatch(workflow, /OpenLess_android_\*\.apk/);
 assert.match(workflow, /Rust cache/);
 
 // Exercise the upload list so overlapping globs cannot upload the same asset twice.
@@ -197,7 +197,8 @@ try {
   const assets = readFileSync(join(releaseTmp, 'android-release-files.txt'), 'utf8')
     .trim()
     .split(/\r?\n/);
-  assert.deepEqual(assets.sort(), names.map((name) => `${directory}/${name}`).sort());
+  assert.deepEqual(assets.sort(), originals.flatMap((path) => [path, `${path}.sig`]).sort());
+  assert.ok(assets.every((path) => !path.includes('/OpenLess_android_')));
   const manifestUpload = parsed.jobs['publish-android-release'].steps.find((step) =>
     step.uses?.startsWith('actions/upload-artifact@'),
   );

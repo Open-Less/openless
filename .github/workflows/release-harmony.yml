@@ -311,7 +311,6 @@ jobs:
           output=target/harmony-packages
           gh release upload "$RELEASE_TAG" \
             "$output"/OpenLess_harmony_arm64.hap \
-            "$output"/OpenLess_harmony.hap \
             "$output"/SHA256SUMS \
             --clobber
           echo "attached HarmonyOS assets to $RELEASE_TAG"

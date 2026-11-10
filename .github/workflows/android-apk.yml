@@ -512,19 +512,6 @@ jobs:
             "$out_dir/OpenLess_${version}_x86.apk" \
             "$out_dir/OpenLess_${version}_x86_64.apk"
 
-      - name: Stage direct download aliases
-        if: needs.plan.outputs.is_tag_release == 'true'
-        working-directory: openless-all/app
-        env:
-          OPENLESS_DOWNLOAD_SOURCE_DIR: ${{ steps.stage.outputs.out_dir }}
-          OPENLESS_DOWNLOAD_OUTPUT_DIR: ${{ steps.stage.outputs.out_dir }}
-        run: |
-          set -euo pipefail
-          for arch in aarch64 armv7 i686 x86_64; do
-            OPENLESS_DOWNLOAD_TARGET=android OPENLESS_DOWNLOAD_ARCH="$arch" \
-              node scripts/stage-release-download-aliases.mjs
-          done
-
       - name: Write Android updater manifests
         working-directory: openless-all/app
         env:
@@ -550,17 +537,18 @@ jobs:
           path: |
             ${{ steps.stage.outputs.out_dir }}/latest-android-*.json
 
-      - name: Append release files (signatures + aliases)
+      - name: Append release files (originals + signatures)
         id: release_assets
         shell: bash
         run: |
           set -euo pipefail
-          out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/OpenLess_android_*.apk; do
-              [ -e "$f" ] && echo "$f"
-            done
+            while IFS= read -r f; do
+              if [ -n "$f" ] && [ -f "$f.sig" ]; then
+                echo "$f.sig"
+              fi
+            done <<< "${{ steps.stage.outputs.release_files }}"
           } > "$RUNNER_TEMP/android-release-files.txt"
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/android-release-files.txt" >> "$GITHUB_OUTPUT"
