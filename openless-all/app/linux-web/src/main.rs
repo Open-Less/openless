@@ -220,6 +220,10 @@ fn shortcut_arg(args: &Value, optional: bool) -> Result<Option<openless_core::sh
     Ok(Some(binding))
 }
 
+fn json_value<T: serde::Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(|value| value.as_str())
@@ -749,6 +753,241 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 _ => {}
             })?;
             Ok(json!({ "saved": true }))
+        }
+        // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
+        "cloud_sync_e2ee_status" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json_value(
+                backend.cloud_sync_e2ee_status().map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_cancel" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json_value(
+                backend
+                    .cloud_sync_e2ee_cancel(required_str(_args, "taskId")?.to_string())
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_claim_setup_prompt"
+        | "cloud_sync_e2ee_lock"
+        | "cloud_sync_e2ee_sync_now"
+        | "cloud_sync_e2ee_sign_out"
+        | "cloud_sync_e2ee_sign_in_with_token"
+        | "cloud_sync_e2ee_begin_sign_in"
+        | "cloud_sync_e2ee_get_ui_preferences"
+        | "cloud_sync_e2ee_get_ui_preferences_snapshot"
+        | "cloud_sync_status"
+        | "cloud_sync_restore" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            match command {
+                "cloud_sync_e2ee_claim_setup_prompt" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_claim_setup_prompt())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_lock" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_lock())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_sync_now" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_sync_now())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_sign_out" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_sign_out())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_sign_in_with_token" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_sign_in_with_token())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_begin_sign_in" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_begin_sign_in())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_get_ui_preferences" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_get_ui_preferences())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_e2ee_get_ui_preferences_snapshot" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_get_ui_preferences_snapshot())
+                        .map_err(|error| error.to_string())?,
+                )),
+                "cloud_sync_status" => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_status())
+                        .map_err(|error| error.to_string())?,
+                )),
+                _ => Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_restore())
+                        .map_err(|error| error.to_string())?,
+                )),
+            }
+        }
+        "cloud_sync_e2ee_prepare_enable" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let consent = required_str(_args, "consentVersion")?.to_string();
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_prepare_enable(consent))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_create" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let password = required_str(_args, "password")?.to_string();
+            let confirmation = required_str(_args, "passwordConfirmation")?.to_string();
+            let remember = _args.get("rememberKey").and_then(|v| v.as_bool()).unwrap_or(false);
+            let consent = required_str(_args, "consentVersion")?.to_string();
+            let observed_revision = required_str(_args, "observedRevision")?.to_string();
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_create(
+                        password,
+                        confirmation,
+                        remember,
+                        consent,
+                        observed_revision,
+                    ))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_unlock" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let password = required_str(_args, "password")?.to_string();
+            let remember = _args.get("rememberKey").and_then(|v| v.as_bool()).unwrap_or(false);
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_unlock(password, remember))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_set_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let enabled = _args
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| "缺少参数 enabled".to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_set_enabled(enabled))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_preview_restore" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let revision = required_str(_args, "observedRevision")?.to_string();
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_preview_restore(revision))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_change_password" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let current = required_str(_args, "currentPassword")?.to_string();
+            let next = required_str(_args, "newPassword")?.to_string();
+            let confirmation = required_str(_args, "confirmation")?.to_string();
+            let remember = _args.get("rememberKey").and_then(|v| v.as_bool()).unwrap_or(false);
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_change_password(
+                        current,
+                        next,
+                        confirmation,
+                        remember,
+                    ))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_delete_remote" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let vault = required_str(_args, "expectedVaultId")?.to_string();
+            let revision = required_str(_args, "observedRevision")?.to_string();
+            let confirmed = _args.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false);
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_delete_remote(vault, revision, confirmed))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_configure_server" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let origin = _args.get("origin").and_then(|v| v.as_str()).map(str::to_string);
+            let token = required_str(_args, "token")?.to_string();
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_configure_server(origin, token))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_e2ee_poll_sign_in" | "cloud_sync_e2ee_cancel_sign_in" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let session = required_str(_args, "authorizationSessionId")?.to_string();
+            if command == "cloud_sync_e2ee_poll_sign_in" {
+                Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_poll_sign_in(session))
+                        .map_err(|error| error.to_string())?,
+                ))
+            } else {
+                Ok(json_value(
+                    runtime
+                        .block_on(backend.cloud_sync_e2ee_cancel_sign_in(session))
+                        .map_err(|error| error.to_string())?,
+                ))
+            }
+        }
+        "cloud_sync_e2ee_set_ui_preferences_checked" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let locale = required_str(_args, "locale")?.to_string();
+            let font_scale = required_str(_args, "fontScale")?.to_string();
+            let expected = _args
+                .get("expectedRevision")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_e2ee_set_ui_preferences_checked(
+                        locale,
+                        font_scale,
+                        expected,
+                    ))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "cloud_sync_delete" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let revision = _args
+                .get("baseRevision")
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| "缺少参数 baseRevision".to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.cloud_sync_delete(revision))
+                    .map_err(|error| error.to_string())?,
+            ))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
