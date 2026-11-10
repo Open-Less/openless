@@ -177,6 +177,12 @@ fn init_host() -> Host {
     host
 }
 
+fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    args.get(key)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| format!("缺少参数 {key}"))
+}
+
 fn channel_kind(kind: Option<&str>) -> Option<openless_core::ChannelKind> {
     match kind {
         Some("asr") => Some(openless_core::ChannelKind::Asr),
@@ -415,6 +421,104 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                         .unwrap_or(error.message)
                 })?;
             serde_json::to_value(result).map_err(|error| error.to_string())
+        }
+        // ── 词库 / 纠错规则（core 全是同步接口）────────────────────────
+        "list_vocab" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            serde_json::to_value(backend.list_vocabulary().map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())
+        }
+        "add_vocab" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let phrase = required_str(_args, "phrase")?;
+            let note = _args.get("note").and_then(|value| value.as_str()).map(str::to_string);
+            serde_json::to_value(
+                backend.add_vocabulary(phrase.to_string(), note).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "remove_vocab" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .remove_vocabulary(&required_str(_args, "id")?)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "removed": true }))
+        }
+        "update_vocab" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .update_vocabulary_phrase(
+                    required_str(_args, "id")?,
+                    required_str(_args, "phrase")?.to_string(),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "updated": true }))
+        }
+        "list_vocab_presets" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            serde_json::to_value(
+                backend.list_vocabulary_presets().map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "save_vocab_presets" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let store: openless_core::VocabPresetStore =
+                serde_json::from_value(_args.get("store").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            backend
+                .save_vocabulary_presets(&store)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "saved": true }))
+        }
+        "list_correction_rules" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            serde_json::to_value(
+                backend.list_correction_rules().map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "add_correction_rule" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let rule = backend
+                .add_correction_rule(
+                    required_str(_args, "pattern")?.to_string(),
+                    required_str(_args, "replacement")?.to_string(),
+                )
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(rule).map_err(|error| error.to_string())
+        }
+        "remove_correction_rule" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .remove_correction_rule(&required_str(_args, "id")?)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "removed": true }))
+        }
+        "set_correction_rule_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let enabled = _args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+            backend
+                .set_correction_rule_enabled(&required_str(_args, "id")?, enabled)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "enabled": enabled }))
+        }
+        "accept_pending_correction" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .accept_pending_correction(&required_str(_args, "id")?)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "accepted": true }))
+        }
+        "reject_pending_correction" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend.reject_pending_correction(&required_str(_args, "id")?);
+            Ok(json!({ "rejected": true }))
+        }
+        "dismiss_vocab_suggestions" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend.dismiss_pending_corrections();
+            Ok(json!({ "dismissed": true }))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
