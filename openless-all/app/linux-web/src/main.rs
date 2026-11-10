@@ -14,7 +14,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use webkit2gtk::{SettingsExt, UserContentManager, UserContentManagerExt, WebViewExt};
 
+struct Host {
+    backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
+    runtime: Option<tokio::runtime::Runtime>,
+}
+
 fn main() {
+    let host = init_host();
     let dist = std::env::var("OPENLESS_DIST")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist"));
@@ -29,11 +35,12 @@ fn main() {
     println!("[linux-web] serving {} at {}", dist.display(), url);
 
     let app = gtk::Application::new(Some("com.openless.linuxweb"), Default::default());
-    app.connect_activate(move |app| build_window(app, &url));
+    let host = std::sync::Arc::new(host);
+    app.connect_activate(move |app| build_window(app, &url, host.clone()));
     app.run();
 }
 
-fn build_window(app: &gtk::Application, url: &str) {
+fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("OpenLess")
@@ -55,6 +62,7 @@ fn build_window(app: &gtk::Application, url: &str) {
     // 与产品一致的浅色底；页面自己画卡片。
     view.set_background_color(&gtk::gdk::RGBA::new(0.96, 0.96, 0.95, 1.0));
 
+    let host_for_ipc = host.clone();
     let view_for_ipc = view.clone();
     manager.connect_script_message_received(Some("openless"), move |_m, result| {
         let Some(value) = result.js_value() else { return };
@@ -69,7 +77,7 @@ fn build_window(app: &gtk::Application, url: &str) {
             .as_str()
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_else(|| json!({}));
-        let (ok, payload) = match dispatch(&command, &args) {
+        let (ok, payload) = match dispatch(&host_for_ipc, &command, &args) {
             Ok(value) => (true, json!({ "ok": true, "value": value })),
             Err(error) => (false, json!({ "ok": false, "error": error })),
         };
@@ -109,16 +117,65 @@ fn read_json(path: &Path) -> Option<Value> {
     std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok())
 }
 
-fn dispatch(command: &str, _args: &Value) -> Result<Value, String> {
+fn init_host() -> Host {
+    let mut host = Host { backend: None, runtime: None };
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("[linux-web] tokio 运行时创建失败：{error}");
+            return host;
+        }
+    };
+    let home_dir = std::env::var("HOME").ok().map(PathBuf::from);
+    let config = openless_core::BackendConfig {
+        data_dir: data_dir(),
+        home_dir,
+        ..Default::default()
+    };
+    let _guard = runtime.enter();
+    match openless_linux_egui::LinuxBackendBuilder::from_shared_providers(config)
+        .and_then(|builder| builder.build())
+    {
+        Ok(runtime_parts) => {
+            println!("[linux-web] 后端就绪（openless-core 已装配）");
+            host.backend = Some(runtime_parts.backend);
+        }
+        Err(error) => eprintln!("[linux-web] 后端装配失败：{error}"),
+    }
+    host.runtime = Some(runtime);
+    host
+}
+
+fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> {
     let dir = data_dir();
+    let backend = host.backend.as_deref();
     match command {
         "get_startup_snapshot" => Ok(json!({
             "contractVersion": "2.0.0",
-            "backend": { "running": true }
+            "backend": { "running": backend.is_some() }
         })),
-        "get_settings" | "get_settings_snapshot" => read_json(&dir.join("preferences.json"))
-            .ok_or_else(|| "读不到 preferences.json".to_string()),
-        "set_settings" | "save_settings" => Ok(json!({ "saved": true })),
+        "get_settings" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(serde_json::to_value(backend.get_preferences()).unwrap_or(Value::Null))
+        }
+        "get_settings_snapshot" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json!({
+                "preferences": serde_json::to_value(backend.get_preferences()).unwrap_or(Value::Null),
+                "revision": backend.snapshot().preferences_revision,
+            }))
+        }
+        "get_credentials" => {
+            let (backend, runtime) = match (backend, host.runtime.as_ref()) {
+                (Some(backend), Some(runtime)) => (backend, runtime),
+                _ => return Err("后端未就绪".to_string()),
+            };
+            let status = runtime
+                .block_on(backend.get_credentials_status())
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::to_value(status).unwrap_or(Value::Null))
+        }
+        "set_settings" | "save_settings" | "update_setting_fields" => Ok(json!({ "saved": true })),
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
