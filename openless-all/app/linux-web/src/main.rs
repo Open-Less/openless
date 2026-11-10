@@ -24,6 +24,12 @@ struct Host {
     backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     settings_runtime: Option<std::sync::Arc<dyn openless_core::SettingsRuntime>>,
+    /// 胶囊/QA 的窗口级状态：这些不属于后端，属于宿主展示层。
+    qa_expanded: std::sync::Mutex<bool>,
+    main_window: std::sync::Mutex<Option<gtk::ApplicationWindow>>,
+    capsule_transcript_visible: std::sync::Mutex<bool>,
+    capsule_language_menu: std::sync::Mutex<bool>,
+    shortcut_recording_active: std::sync::Mutex<bool>,
 }
 
 fn main() {
@@ -243,6 +249,7 @@ const PAGE_SWEEP: &str = r#"
         window.hide();
         gtk::glib::Propagation::Stop
     });
+    *host.main_window.lock().unwrap() = Some(window.clone());
     host::start_tray(window.clone());
     // 后端就绪后立刻开始把事件推给页面（听写状态 / 历史变更 / QA 电平等）。
     {
@@ -296,7 +303,16 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 fn init_host() -> Host {
-    let mut host = Host { backend: None, runtime: None, settings_runtime: None };
+    let mut host = Host {
+        backend: None,
+        runtime: None,
+        settings_runtime: None,
+        capsule_transcript_visible: std::sync::Mutex::new(false),
+        capsule_language_menu: std::sync::Mutex::new(false),
+        shortcut_recording_active: std::sync::Mutex::new(false),
+        qa_expanded: std::sync::Mutex::new(false),
+        main_window: std::sync::Mutex::new(None),
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
         Err(error) => {
@@ -500,6 +516,18 @@ async fn fetch_update_manifest(
         "currentVersion": current,
         "newer": openless_linux_egui::update_check::is_newer(current, version),
     })))
+}
+
+/// QA 面板形态切换：宿主只记录，窗口层（layer-shell）按它调整尺寸。
+fn set_qa_expanded(host: &Host, expanded: bool) {
+    *host.qa_expanded.lock().unwrap() = expanded;
+}
+
+/// 把键盘焦点交回主窗口。
+fn focus_main_window(host: &Host) {
+    if let Some(window) = host.main_window.lock().unwrap().as_ref() {
+        window.present();
+    }
 }
 
 fn json_value<T: serde::Serialize>(value: T) -> Value {
@@ -1877,6 +1905,102 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             std::fs::write(&temp, payload).map_err(|error| error.to_string())?;
             std::fs::rename(&temp, &path).map_err(|error| error.to_string())?;
             Ok(json!({ "finished": finished }))
+        }
+        // ── QA / 胶囊窗口级命令 ──────────────────────────────────────
+        "qa_get_snapshot" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            Ok(json_value(
+                runtime
+                    .block_on(backend.services().qa.snapshot())
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "qa_toggle_recording" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.services().qa.toggle_recording())
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+        "qa_window_dismiss" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.services().qa.dismiss())
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "dismissed": true }))
+        }
+        "qa_set_edit_instruction_mode" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let enabled = arg_bool(_args, "enabled")?;
+            runtime
+                .block_on(backend.services().qa.set_edit_instruction_mode(enabled))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "enabled": enabled }))
+        }
+        "qa_submit_text" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let text = required_str(_args, "text")?.to_string();
+            let expected = match _args.get("expectedSessionId").and_then(|value| value.as_str()) {
+                Some(raw) => Some(
+                    uuid::Uuid::parse_str(raw)
+                        .map(openless_core::SessionId::from_uuid)
+                        .map_err(|error| format!("session id 不合法：{error}"))?,
+                ),
+                None => None,
+            };
+            // 带上下文提交：避免把回答贴到已经换掉的会话里。
+            runtime
+                .block_on(backend.services().qa.submit_text_in_context(text, expected))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+        "qa_window_set_expanded" => {
+            let expanded = arg_bool(_args, "expanded")?;
+            // 窗口尺寸由宿主决定（与 Tauri 同语义：只改变展示形态，不动会话状态）。
+            set_qa_expanded(host, expanded);
+            Ok(json!({ "expanded": expanded }))
+        }
+        "get_capsule_snapshot" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let dictation = backend.snapshot().dictation;
+            Ok(json!({
+                "sessionId": dictation.session_id.map(|id| id.to_string()),
+                "phase": json_value(dictation.phase),
+                "level": dictation.level,
+                "elapsedMs": dictation.elapsed_ms,
+                "transcriptVisible": *host.capsule_transcript_visible.lock().unwrap(),
+            }))
+        }
+        "set_capsule_transcript_visible" => {
+            let visible = arg_bool(_args, "visible")?;
+            *host.capsule_transcript_visible.lock().unwrap() = visible;
+            Ok(json!({ "transcriptVisible": visible }))
+        }
+        "set_capsule_language_menu" => {
+            // 语言菜单是胶囊内的临时浮层；宿主只记录开合状态供快照查询。
+            let open = arg_bool(_args, "open")?;
+            *host.capsule_language_menu.lock().unwrap() = open;
+            Ok(json!({ "open": open }))
+        }
+        "chat_panel_focus_keyboard" => {
+            // 把键盘焦点交回主窗口（页面里的聊天面板需要输入）。
+            focus_main_window(host);
+            Ok(json!({ "focused": true }))
+        }
+        "set_shortcut_recording_active" => {
+            let active = arg_bool(_args, "active")?;
+            *host.shortcut_recording_active.lock().unwrap() = active;
+            Ok(json!({ "active": active }))
+        }
+        "dismiss_insert_fallback_card" | "report_insert_fallback_card_height" => {
+            // 插入兜底卡片在 Linux 宿主里不存在（没有那条插入链路），
+            // 这几条只用于页面内部状态同步，这里如实记为无操作。
+            Ok(json!(null))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
