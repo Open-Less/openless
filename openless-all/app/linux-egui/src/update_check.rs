@@ -26,6 +26,11 @@ impl UpdateChannel {
     }
 }
 
+/// 构建期注入的当前版本（`2.0.2-Beta.3` 这种）。宿主与选版本逻辑必须用同一个值。
+pub fn app_version() -> &'static str {
+    env!("OPENLESS_APP_VERSION")
+}
+
 /// 一条发布记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {

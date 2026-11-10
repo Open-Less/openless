@@ -460,6 +460,48 @@ fn polish_mode(args: &Value) -> Result<openless_core::PolishMode, String> {
     serde_json::from_value(raw).map_err(|error| format!("未知的润色模式：{error}"))
 }
 
+/// 从 CDN 拉取更新清单（与 Tauri updater 同一份数据源）。
+///
+/// 返回给前端的形状贴近 Tauri 的 `Update`：`version` / `notes` / `pubDate` / `url`，
+/// 外加 `currentVersion` 与 `newer`（前端据此决定是否提示）。
+async fn fetch_update_manifest(
+    channel: openless_linux_egui::update_check::UpdateChannel,
+) -> Result<Option<Value>, String> {
+    let (path, suffix) = match channel {
+        openless_linux_egui::update_check::UpdateChannel::Stable => ("stable", ""),
+        openless_linux_egui::update_check::UpdateChannel::Beta => ("beta", "-beta"),
+    };
+    let url = format!(
+        "https://dl.aeoform.com/updates/{path}/latest-linux-x86_64{suffix}.json"
+    );
+    let response = openless_core::net::send_with_retry(|| {
+        openless_core::net::http()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(15))
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!("更新清单: HTTP {}", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|error| error.to_string())?;
+    let Some(version) = body.get("version").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let current = openless_linux_egui::update_check::app_version();
+    Ok(Some(json!({
+        "version": version,
+        "notes": body.get("notes").cloned().unwrap_or(Value::Null),
+        "pubDate": body.get("pub_date").cloned().unwrap_or(Value::Null),
+        "url": format!("https://github.com/Open-Less/openless/releases/tag/v{version}"),
+        "currentVersion": current,
+        "newer": openless_linux_egui::update_check::is_newer(current, version),
+    })))
+}
+
 fn json_value<T: serde::Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
@@ -1729,6 +1771,45 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .block_on(remote.read_pairing_pin())
                 .map_err(|error| error.message)?;
             Ok(json!(pin.expose_secret()))
+        }
+        // ── 当前频道选择 / 更新检查 ──────────────────────────────────
+        "set_active_asr_provider" | "set_active_llm_provider" | "set_active_omni_provider" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let slot = if command == "set_active_asr_provider" {
+                openless_core::ProviderSlot::Asr
+            } else if command == "set_active_llm_provider" {
+                openless_core::ProviderSlot::Llm
+            } else {
+                openless_core::ProviderSlot::Omni
+            };
+            // 前端参数名是 `provider`（不是 id）。
+            let provider = required_str(_args, "provider")?.to_string();
+            Ok(json_value(
+                runtime
+                    .block_on(backend.set_active_provider(slot, provider))
+                    .map_err(|error| error.to_string())?,
+            ))
+        }
+        "app_check_update_with_channel" | "fetch_latest_beta_release" => {
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let channel = if command == "fetch_latest_beta_release" {
+                openless_linux_egui::update_check::UpdateChannel::Beta
+            } else {
+                match _args.get("channel").and_then(|value| value.as_str()) {
+                    Some("beta") => openless_linux_egui::update_check::UpdateChannel::Beta,
+                    Some("stable") | None => {
+                        openless_linux_egui::update_check::UpdateChannel::Stable
+                    }
+                    Some(other) => return Err(format!("未知的更新通道：{other}")),
+                }
+            };
+            // 走 CDN 清单（`dl.aeoform.com/updates/...`），不再读 GitHub atom：
+            // 上游把 updater 清单搬到了 CDN，atom 那条只剩发布说明的含义。
+            let manifest = runtime
+                .block_on(fetch_update_manifest(channel))
+                .map_err(|error| error.to_string())?;
+            Ok(json_value(manifest))
         }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
