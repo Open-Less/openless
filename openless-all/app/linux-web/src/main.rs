@@ -624,6 +624,62 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "saved": true }))
         }
+        // ── 听写 / 录音 ────────────────────────────────────────────────
+        "start_dictation" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.start_dictation())
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "started": true }))
+        }
+        "stop_dictation" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime
+                .block_on(backend.stop_dictation())
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "stopped": true }))
+        }
+        "cancel_dictation" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let session = backend.snapshot().dictation.session_id;
+            runtime
+                .block_on(backend.cancel_dictation(session))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "cancelled": true }))
+        }
+        "list_microphone_devices" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let devices = runtime
+                .block_on(backend.services().platform.microphone_devices())
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(devices).map_err(|error| error.to_string())
+        }
+        "record_channel_test" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let kind = channel_kind(_args.get("kind").and_then(|v| v.as_str()))
+                .ok_or_else(|| "kind 必须是 asr / llm".to_string())?;
+            let id = required_str(_args, "id")?.to_string();
+            let ok = _args.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            let latency_ms = _args
+                .get("latencyMs")
+                .or_else(|| _args.get("latency_ms"))
+                .and_then(|v| v.as_u64())
+                .map(|value| value as u32);
+            let error = _args
+                .get("error")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            host.runtime
+                .clone()
+                .ok_or_else(|| "运行时未就绪".to_string())?
+                .block_on(backend.record_channel_test(kind, id, ok, latency_ms, error))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "recorded": true }))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
