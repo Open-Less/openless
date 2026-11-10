@@ -520,6 +520,110 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             backend.dismiss_pending_corrections();
             Ok(json!({ "dismissed": true }))
         }
+        // ── 风格包 ─────────────────────────────────────────────────────
+        "list_style_packs" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let active = backend.get_preferences().active_style_pack_id;
+            serde_json::to_value(
+                backend
+                    .list_style_packs(&active)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "save_style_pack" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let pack: openless_core::StylePack =
+                serde_json::from_value(_args.get("stylePack").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            serde_json::to_value(
+                backend
+                    .update_style_pack(pack)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "delete_style_pack" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            backend
+                .remove_style_pack(&required_str(_args, "id")?)
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "removed": true }))
+        }
+        "set_style_pack_enabled" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let enabled = _args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+            serde_json::to_value(
+                backend
+                    .set_style_pack_enabled(&required_str(_args, "id")?, enabled)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "reset_builtin_style_pack" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            serde_json::to_value(
+                backend
+                    .reset_builtin_style_pack(&required_str(_args, "id")?)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "preview_style_pack_runtime" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let pack: openless_core::StylePack =
+                serde_json::from_value(_args.get("stylePack").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            serde_json::to_value(backend.preview_style_pack_runtime(&pack))
+                .map_err(|error| error.to_string())
+        }
+        "get_default_style_system_prompts" => {
+            serde_json::to_value(openless_core::StyleSystemPrompts::default())
+                .map_err(|error| error.to_string())
+        }
+        "import_style_pack_from_zip" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let path = std::path::PathBuf::from(required_str(_args, "zipPath")?);
+            serde_json::to_value(
+                backend
+                    .import_style_pack_path(&path)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        "export_style_pack_to_zip" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let path = std::path::PathBuf::from(required_str(_args, "targetPath")?);
+            backend
+                .export_style_pack_path(&required_str(_args, "id")?, &path)
+                .map_err(|error| error.to_string())?;
+            Ok(json!(path.to_string_lossy()))
+        }
+        "set_style_pack_hotkeys" => {
+            // 与 Tauri 一致：写回偏好里的 style_pack_hotkeys（冲突检测由 core 负责）。
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime_settings = host
+                .settings_runtime
+                .as_deref()
+                .ok_or_else(|| "设置运行时未就绪".to_string())?;
+            let hotkeys: Vec<openless_core::shared_types::StylePackHotkey> =
+                serde_json::from_value(_args.get("hotkeys").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| error.to_string())?;
+            let mut draft = backend.get_preferences();
+            draft.style_pack_hotkeys = hotkeys;
+            let revision = backend.snapshot().preferences_revision;
+            backend
+                .update_settings(
+                    draft,
+                    openless_core::SettingsUpdateOptions {
+                        expected_preferences_revision: Some(revision),
+                        ..openless_core::SettingsUpdateOptions::STRICT
+                    },
+                    runtime_settings,
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(json!({ "saved": true }))
+        }
         "get_history" | "history_list" => {
             let history = read_json(&dir.join("history.json")).unwrap_or_else(|| json!([]));
             Ok(json!({ "entries": history, "revision": 0 }))
