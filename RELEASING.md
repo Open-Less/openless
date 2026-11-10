@@ -100,7 +100,7 @@ Dispatch the workflow with `channel: none` (default), `channel: release` or
   `test.cer/p7b/p12`), sign, and upload to AppGallery.
 
 The workflow artifact bundle carries both packages; the Release step uploads only
-the unsigned pair, and the AppGallery step uploads only the signed one. CI never
+the single unsigned HAP and its checksum, and the AppGallery step uploads only the signed one. CI never
 signs: `ci.yml` always builds with `OPENLESS_HARMONY_CHANNEL=none`.
 
 A local machine without store certificates can still produce a package:
@@ -114,7 +114,7 @@ it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
 ## Download assets: no duplicate aliases in new releases
 
-Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs (with their original signatures). HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives and their signatures are distinct products and remain published. Linux automation remains paused.
+Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs. Updater signatures are consolidated into one `updater-signatures.json` per release, not separate `.sig` attachments. Temporary `.sig` files remain in build artifacts to generate the index and CDN manifests. HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives remain published, with signatures in the index. Linux automation remains paused. See [release distribution](docs/release-distribution.md) for format, compatibility limits and cutover.
 
 Existing releases and their download aliases are not migrated or deleted. The alias helper remains available for legacy/manual use, but no automatic release workflow invokes it. Partial desktop reruns also filter out old alias artifacts instead of publishing them again; they do not delete assets already attached to an existing release.
 
@@ -158,8 +158,10 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
    The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
    `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
-   current clients read the CDN, not the release. Download them from the run and publish them to
-   the CDN as part of publishing the release:
+   current clients can read the CDN and independently discover signed GitHub releases.
+   The main repository's `mirror-release.yml` now mirrors published binaries, verifies their
+   Minisign signatures, and generates/uploads rolling manifests. Downloadable run artifacts
+   remain available for diagnosis or manual recovery:
 
    | platform | workflow artifact |
    | --- | --- |
@@ -176,8 +178,11 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    ```
 
    Their `url` fields must point at the CDN artifacts (`.../releases/{tag}/{asset}`).
-   Manifest upload is the step that makes a release reachable by auto-update: a published
-   release whose manifests were not synced is downloadable by hand but invisible to the updater.
+   The mirror must upload binaries successfully before advancing rolling manifests. New clients
+   can fall back to GitHub release discovery/download if Aliyun is unavailable; older CDN-only
+   clients still require rolling manifests. Configure `OSS_BUCKET`, `OSS_ACCESS_KEY_ID` and
+   `OSS_ACCESS_KEY_SECRET` in the main repository before cutting over the website workflow.
+   The website migration must only be merged after a successful main-repository mirror run.
    Clients built before the CDN switch read the old `releases/latest/download/latest-*.json`
    assets, which new releases no longer carry, so they need one manual download.
 7. Publishing Stable with the administrator's CLI/UI credential automatically

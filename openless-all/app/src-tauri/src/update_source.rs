@@ -3,7 +3,13 @@
 //! Tauri still verifies the signed artifact and version before installation.
 
 use crate::types::UpdateChannel;
+#[path = "update_source/artifact_fallback.rs"]
+mod artifact_fallback;
+#[path = "update_source/signature_index.rs"]
 mod signature_index;
+pub(crate) use artifact_fallback::{
+    github_fallback_for_cdn_artifact, resolve_artifact_download_url,
+};
 
 /// CDN that serves both the update manifests and the mirrored release artifacts.
 pub(crate) const CDN_BASE: &str = "https://dl.aeoform.com";
@@ -218,7 +224,11 @@ async fn github_api_manifest(channel: UpdateChannel) -> Result<serde_json::Value
     let signature = assets
         .iter()
         .find(|a| a["name"].as_str() == Some(signature_index::NAME))
-        .or_else(|| assets.iter().find(|a| a["name"].as_str() == Some(&format!("{name}.sig"))))
+        .or_else(|| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        })
         .and_then(|a| a["browser_download_url"].as_str())
         .ok_or("missing GitHub signature")?;
     let indexed = signature.ends_with(signature_index::NAME);
@@ -373,7 +383,10 @@ async fn github_web_manifest(channel: UpdateChannel) -> Result<serde_json::Value
             .ok_or("no matching signed updater assets on GitHub release page")?;
     let indexed = signature.ends_with(signature_index::NAME);
     let body = text(&signature).await?;
-    let name = artifact.rsplit('/').next().ok_or("missing artifact filename")?;
+    let name = artifact
+        .rsplit('/')
+        .next()
+        .ok_or("missing artifact filename")?;
     // GitHub HTML encodes '+' in names; decode before looking up the exact index key.
     let name = android::decode_asset_name(name).ok_or("invalid artifact filename")?;
     let signature = signature_index::extract(&body, tag, &name, indexed)?;
@@ -447,7 +460,11 @@ fn github_page_assets(page: &str, tag: &str, os: &str, arch: &str) -> Option<(St
     let (signature, _) = paths
         .iter()
         .find(|(_, candidate)| *candidate == signature_index::NAME)
-        .or_else(|| paths.iter().find(|(_, candidate)| *candidate == format!("{name}.sig")))?;
+        .or_else(|| {
+            paths
+                .iter()
+                .find(|(_, candidate)| *candidate == format!("{name}.sig"))
+        })?;
     Some((
         format!("https://github.com{artifact}"),
         format!("https://github.com{signature}"),
@@ -489,6 +506,13 @@ mod public_release_tests {
             .0
             .ends_with("_x64-setup.exe"));
         assert!(github_page_assets(page, tag, "macos", "x86_64").is_none());
+        let indexed_page = page.replace("OpenLess_aarch64.app.tar.gz.sig", signature_index::NAME);
+        for (os, arch) in [("macos", "aarch64"), ("windows", "x86_64")] {
+            assert!(github_page_assets(&indexed_page, tag, os, arch)
+                .unwrap()
+                .1
+                .ends_with(signature_index::NAME));
+        }
         assert!(github_page_assets(page, "v2.0.2-Beta.3-tauri", "macos", "aarch64").is_none());
         assert!(github_page_assets(
             &page.replace(".tar.gz.sig", ".tar.gz.unsigned"),
@@ -500,7 +524,8 @@ mod public_release_tests {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[path = "update_source/android.rs"]
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 mod android;
 #[cfg(any(target_os = "android", test))]
 #[allow(unused_imports)]

@@ -67,7 +67,7 @@
 ### 本地验证与待验证
 
 - 修复了既有 `ci-performance.test.mjs` 的机器配置泄漏：清除 `CARGO_TARGET_DIR` 并不能覆盖 `~/.cargo/config.toml` 的 `build.target-dir`，先前第一轮构建被重定向到全局目录，第二轮却显式使用 fixture 目录，导致 `fresh` 断言失败。现在所有离线 fixture 命令都显式使用同一临时 target；复用、非测试生产构建及故意损坏的 feature 编译失败用例全部通过。
-- `npm test` 完整通过：生产前端构建及 169 个 JS/TS 测试文件（包含新增的复用/合并和 iOS 下载契约）。
+- `npm test` 完整通过：生产前端构建及 170 个 JS/TS 测试文件（包含新增的复用/合并、iOS 下载、签名汇总与双源下载回退契约）。
 - 4 个 Python harness 路由/模式用例通过；真实 Rust 所有权 helper 的 7 项单测及 2 项编译失败边界在指定 target 下通过。
 - Actionlint、相关格式与 `git diff --check` 通过。完整 Windows runtime/录音/COM 原生执行和 macOS 沙箱需要对应平台的 Actions 验证。
 

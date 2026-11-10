@@ -554,13 +554,15 @@ jobs:
           set -euo pipefail
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            while IFS= read -r f; do
-              if [ -n "$f" ] && [ -f "$f.sig" ]; then
-                echo "$f.sig"
-              fi
-            done <<< "${{ steps.stage.outputs.release_files }}"
             index="${{ steps.stage.outputs.out_dir }}/updater-signatures.json"
-            if [ -f "$index" ]; then echo "$index"; fi
+            if [ -f "$index" ]; then
+              echo "$index"
+            else
+              # Targeted repairs of historical drafts keep their original format.
+              while IFS= read -r f; do
+                if [ -n "$f" ] && [ -f "$f.sig" ]; then echo "$f.sig"; fi
+              done <<< "${{ steps.stage.outputs.release_files }}"
+            fi
           } > "$RUNNER_TEMP/android-release-files.txt"
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/android-release-files.txt" >> "$GITHUB_OUTPUT"
