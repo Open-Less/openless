@@ -21,6 +21,7 @@ use webkit2gtk::{SettingsExt, UserContentManager, UserContentManagerExt, WebView
 struct Host {
     backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
+    settings_runtime: Option<std::sync::Arc<dyn openless_core::SettingsRuntime>>,
 }
 
 fn main() {
@@ -147,7 +148,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 fn init_host() -> Host {
-    let mut host = Host { backend: None, runtime: None };
+    let mut host = Host { backend: None, runtime: None, settings_runtime: None };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => std::sync::Arc::new(runtime),
         Err(error) => {
@@ -168,6 +169,7 @@ fn init_host() -> Host {
         Ok(runtime_parts) => {
             println!("[linux-web] 后端就绪（openless-core 已装配）");
             host.backend = Some(runtime_parts.backend);
+            host.settings_runtime = Some(runtime_parts.settings_runtime);
         }
         Err(error) => eprintln!("[linux-web] 后端装配失败：{error}"),
     }
@@ -204,7 +206,39 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map_err(|error| error.to_string())?;
             Ok(serde_json::to_value(status).unwrap_or(Value::Null))
         }
-        "set_settings" | "save_settings" | "update_setting_fields" => Ok(json!({ "saved": true })),
+        // 设置写回：走 core 的 update_settings（带 revision 冲突检测），
+        // 运行时效果（开机自启 / 热键 / 渠道切换）由 LinuxSettingsRuntime 负责。
+        "set_settings" | "save_settings" | "update_setting_fields" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host
+                .settings_runtime
+                .as_deref()
+                .ok_or_else(|| "设置运行时未就绪".to_string())?;
+            let edits: std::collections::BTreeMap<String, Value> = _args
+                .get("edits")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default();
+            let revision = backend.snapshot().preferences_revision;
+            let draft = openless_core::preference_patch::patch_preferences(
+                &backend.get_preferences(),
+                &edits,
+            )
+            .map_err(|error| error.to_string())?;
+            backend
+                .update_settings(
+                    draft,
+                    openless_core::SettingsUpdateOptions {
+                        expected_preferences_revision: Some(revision),
+                        ..openless_core::SettingsUpdateOptions::STRICT
+                    },
+                    runtime,
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(json!({
+                "preferences": serde_json::to_value(backend.get_preferences()).unwrap_or(Value::Null),
+                "revision": backend.snapshot().preferences_revision,
+            }))
+        }
         "list_history" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let entries = backend.list_history().map_err(|error| error.to_string())?;
