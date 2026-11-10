@@ -6,6 +6,7 @@
 //!
 //! 静态资源用一个只在 127.0.0.1 上监听的小 HTTP 服务提供（WebKit 拒绝 file://
 //! 下的 ES module / fetch），这也是 Tauri/Cog 之类的常规做法。
+mod events;
 mod host;
 
 use gtk::prelude::*;
@@ -18,7 +19,7 @@ use webkit2gtk::{SettingsExt, UserContentManager, UserContentManagerExt, WebView
 
 struct Host {
     backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
 }
 
 fn main() {
@@ -117,6 +118,14 @@ fn build_window(app: &gtk::Application, url: &str, host: std::sync::Arc<Host>) {
         gtk::glib::Propagation::Stop
     });
     host::start_tray(window.clone());
+    // 后端就绪后立刻开始把事件推给页面（听写状态 / 历史变更 / QA 电平等）。
+    {
+        let backend = host.backend.clone();
+        let runtime = host.runtime.clone();
+        if let (Some(backend), Some(runtime)) = (backend, runtime) {
+            events::spawn_backend_events(backend, runtime, view.clone());
+        }
+    }
 }
 
 // ── 命令分发 ────────────────────────────────────────────────────────────────
@@ -138,7 +147,7 @@ fn read_json(path: &Path) -> Option<Value> {
 fn init_host() -> Host {
     let mut host = Host { backend: None, runtime: None };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
-        Ok(runtime) => runtime,
+        Ok(runtime) => std::sync::Arc::new(runtime),
         Err(error) => {
             eprintln!("[linux-web] tokio 运行时创建失败：{error}");
             return host;
