@@ -2204,11 +2204,22 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     runtime.block_on(api.logout()).map_err(|e| e.to_string())?;
                     Value::Null
                 }
-                _ => json_value(
-                    runtime
+                // 字段名必须和前端 `GithubDeviceStartResponse` 一致：
+                // core 给的是 `intervalSecs` / `expiresInSecs`，前端读的是
+                // `interval` / `expiresIn`。名字对不上时 expiresAt 会变成 NaN，
+                // 轮询间隔退化成 0 —— 实测 15 分钟里打了 7752 次 poll。
+                _ => {
+                    let flow = runtime
                         .block_on(api.start_device_flow())
-                        .map_err(|e| e.to_string())?,
-                ),
+                        .map_err(|e| e.to_string())?;
+                    json!({
+                        "flowId": flow.flow_id,
+                        "userCode": flow.user_code,
+                        "verificationUri": flow.verification_uri,
+                        "interval": flow.interval_secs,
+                        "expiresIn": flow.expires_in_secs,
+                    })
+                }
             };
             Ok(outcome)
         }
