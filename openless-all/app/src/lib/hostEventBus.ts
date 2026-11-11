@@ -48,6 +48,12 @@ export function markNativeHost(): void {
 }
 export const isNativeHost = () => nativeHost;
 
+/** Tauri 或我们自己的原生宿主（GTK/HTTP）都算「有原生后端」。 */
+export function isNativeHostNow(): boolean {
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) return true;
+  return nativeHost;
+}
+
 /**
  * 订阅一个宿主事件。返回取消订阅函数。
  * 非原生宿主（纯浏览器预览）返回空操作，不会抛错。

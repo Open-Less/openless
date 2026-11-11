@@ -1,4 +1,5 @@
-import { invokeOrMock, isTauriNow } from './shared';
+import { invokeOrMock } from './shared';
+import { isNativeHostNow } from '../hostEventBus';
 
 export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v1';
 
@@ -144,7 +145,10 @@ export const cloudSyncE2eeGetUiPreferences = (): Promise<{
 } | null> => invokeOrMock('cloud_sync_e2ee_get_ui_preferences', undefined, unavailable);
 
 export async function mirrorEncryptedSyncUiPreferences(): Promise<void> {
-  if (!isTauriNow()) unavailable();
+  // 这里原来只认 Tauri，导致 Linux 宿主（命令全都实现了）在
+  // `prepareEncryptedSync()` 第一步就抛 cloud_sync_e2ee_unavailable，
+  // 界面表现为「加密同步暂不可用」。
+  if (!isNativeHostNow()) unavailable();
   const { flushEncryptedSyncUiPreferences } = await import('../encryptedSyncUiBridge');
   await flushEncryptedSyncUiPreferences();
 }

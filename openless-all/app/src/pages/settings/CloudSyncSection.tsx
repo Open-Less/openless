@@ -8,7 +8,7 @@ import { Btn, Card } from '../_atoms';
 import { Toggle } from './shared';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { marketplaceAuthStatus, readCredential } from '../../lib/ipc';
-import { isTauriNow } from '../../lib/ipc/shared';
+import { isNativeHostNow } from '../../lib/hostEventBus';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION as CONSENT_VERSION,
   cloudSyncE2eeStatus,
@@ -738,7 +738,7 @@ export function CloudSyncSection() {
           <Btn
             variant="primary"
             icon="user"
-            disabled={!isTauriNow() || !available || working}
+            disabled={!isNativeHostNow() || !available || working}
             onClick={() => setShowLogin(true)}
           >
             {t('cloudSyncE2ee.signIn')}

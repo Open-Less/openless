@@ -1,6 +1,7 @@
 // The main native window owns the device-local UI mirror. Every write shares
 // this queue and a native revision, including the initial consent preparation.
-import { invokeOrMock, isTauriNow } from './ipc/shared';
+import { invokeOrMock } from './ipc/shared';
+import { isNativeHostNow } from './hostEventBus';
 import {
   getLocalePreference,
   setLocalePreference,
@@ -36,7 +37,11 @@ export async function flushEncryptedSyncUiPreferences(): Promise<void> {
 }
 
 export function installEncryptedSyncUiBridge(): Promise<void> {
-  if (!isTauriNow() || new URLSearchParams(location.search).has('window')) return Promise.resolve();
+  // 只有「次级窗口」（胶囊 / QA / 选区浮层）才不装：它们不该写同步偏好。
+  // 我们的宿主用 `?bridge=http&window=main` 标记主窗口，这里必须识别成主窗口。
+  const kind = new URLSearchParams(location.search).get('window');
+  const secondary = kind !== null && kind !== 'main';
+  if (!isNativeHostNow() || secondary) return Promise.resolve();
   return (installation ??= install());
 }
 

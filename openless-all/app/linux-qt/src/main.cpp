@@ -272,7 +272,10 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     QString windowKind;
     switch (kind) {
         case Surface::Main:
-            windowKind = "main";
+            // 主窗口**不带** `window` 参数：前端用 `!params.get('window')`
+            // 判断主窗口（`isMainWindow`），带了就会跳过主窗口的初始化，
+            // 包括云同步 UI 桥的安装。
+            windowKind.clear();
             container_->setWindowFlags(Qt::Window);
             container_->setWindowTitle("OpenLess");
             container_->resize(1180, 820);
@@ -322,7 +325,9 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
                                                     : "OPENLESS_QT_URL_CAPSULE";
     url_ = qEnvironmentVariable(overrideKey);
     if (url_.isEmpty()) {
-        url_ = QString("%1/index.html?bridge=http&window=%2").arg(baseUrl, windowKind);
+        url_ = windowKind.isEmpty()
+                   ? QString("%1/index.html?bridge=http").arg(baseUrl)
+                   : QString("%1/index.html?bridge=http&window=%2").arg(baseUrl, windowKind);
     }
 
     QObject::connect(view_, &QWebEngineView::loadFinished, view_, [this](bool ok) {
