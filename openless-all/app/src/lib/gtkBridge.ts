@@ -24,6 +24,11 @@ export function gtkBridgeAvailable(): boolean {
 
 export const isGtkHost = gtkBridgeAvailable();
 
+// 登记到事件总线（单向依赖：桥 → 总线，总线不反过来 import 桥）。
+if (isGtkHost) {
+  void import('./hostEventBus').then((module) => module.markNativeHost());
+}
+
 declare global {
   interface Window {
     webkit?: {

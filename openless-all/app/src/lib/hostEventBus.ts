@@ -6,9 +6,6 @@
 // 以前只有 Tauri 那条能用，另外两条（我们自己的 Linux 宿主）事件全被丢掉，
 // 所以云同步这类「靠事件驱动」的界面永远不刷新。
 
-import { isGtkHost } from './gtkBridge';
-import { isHttpBridge } from './httpBridge';
-
 type Handler = (payload: unknown) => void;
 
 const listeners = new Map<string, Set<Handler>>();
@@ -43,14 +40,20 @@ if (typeof window !== 'undefined') {
   window.__openlessEvent = emitHostEvent;
 }
 
-export const isNativeHost = isGtkHost || isHttpBridge;
+/** 由各宿主桥在初始化时登记，避免总线反向 import 桥（会形成循环依赖，
+ *  打包后表现为 `Cannot access 'X' before initialization` 白屏）。 */
+let nativeHost = false;
+export function markNativeHost(): void {
+  nativeHost = true;
+}
+export const isNativeHost = () => nativeHost;
 
 /**
  * 订阅一个宿主事件。返回取消订阅函数。
  * 非原生宿主（纯浏览器预览）返回空操作，不会抛错。
  */
 export function listenHostEvent(name: string, handler: Handler): () => void {
-  if (!isNativeHost) return () => {};
+  if (!nativeHost) return () => {};
   let set = listeners.get(name);
   if (!set) {
     set = new Set();

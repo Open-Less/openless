@@ -7,7 +7,9 @@ export const isHttpBridge =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('bridge') === 'http';
 
-import { emitHostEvent } from './hostEventBus';
+import { emitHostEvent, markNativeHost } from './hostEventBus';
+
+if (isHttpBridge) markNativeHost();
 
 type Pending = { resolve: (value: string) => void; reject: (error: Error) => void };
 const pending = new Map<string, Pending>();
