@@ -2258,9 +2258,22 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 // `interval` / `expiresIn`。名字对不上时 expiresAt 会变成 NaN，
                 // 轮询间隔退化成 0 —— 实测 15 分钟里打了 7752 次 poll。
                 _ => {
-                    let flow = runtime
-                        .block_on(api.start_device_flow())
-                        .map_err(|e| e.to_string())?;
+                    let start = |runtime: &std::sync::Arc<tokio::runtime::Runtime>| {
+                        runtime.block_on(api.start_device_flow())
+                    };
+                    // 上一次登录被取消后，core 会拒绝立刻重新发起；先清一下再重试。
+                    let flow = match start(&runtime) {
+                        Ok(flow) => flow,
+                        Err(error) => {
+                            let message = error.to_string();
+                            if message.contains("取消") || message.contains("cancel") {
+                                let _ = runtime.block_on(api.cancel_device_flow(None));
+                                start(&runtime).map_err(|retry| retry.to_string())?
+                            } else {
+                                return Err(message);
+                            }
+                        }
+                    };
                     json!({
                         "flowId": flow.flow_id,
                         "userCode": flow.user_code,
@@ -2321,9 +2334,17 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     // spawn 需要 'static 所有权，这里拿一份 Arc。
                     if let Some(arc) = host.backend.as_ref().map(std::sync::Arc::clone) {
                         runtime.spawn(async move {
+                            // 等 token 落盘，再丢掉旧会话并用新 token 重连。
+                            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                             let _ = arc.cloud_sync_e2ee_sign_out().await;
-                            if let Err(error) = arc.cloud_sync_e2ee_sync_now().await {
-                                println!("[linux-web] 登录后云同步重连失败：{error}");
+                            match arc.cloud_sync_e2ee_sync_now().await {
+                                Ok(status) => println!(
+                                    "[linux-web] 登录后云同步已重连：auth={:?} account={:?}",
+                                    status.auth_state, status.account
+                                ),
+                                Err(error) => {
+                                    println!("[linux-web] 登录后云同步重连失败：{error}")
+                                }
                             }
                         });
                     }
