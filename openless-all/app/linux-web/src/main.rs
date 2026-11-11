@@ -34,7 +34,26 @@ struct Host {
     shortcut_recording_active: std::sync::Mutex<bool>,
 }
 
+/// 极简日志桥：把 core 的 `log` 输出转到 stderr（→ journal）。
+/// 不引依赖，但能让我们看到 `[e2ee-token]` / `[core]` 这类关键诊断。
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
 fn main() {
+    static LOGGER: StderrLogger = StderrLogger;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Info);
     let host = std::sync::Arc::new(init_host());
     let dist = resolve_dist();
     let port = match serve_dir(dist.clone(), host.clone()) {
@@ -386,6 +405,22 @@ fn init_host() -> Host {
             match runtime.block_on(runtime_parts.backend.start()) {
                 Ok(_) => println!("[linux-web] 后端已启动"),
                 Err(error) => eprintln!("[linux-web] 后端启动失败：{error}"),
+            }
+            // E2EE 云同步的会话只在「真正连一次」之后才会恢复：纯 `status()`
+            // 在冷启动永远是 signed_out（界面据此提示「请重新登录」）。
+            // 这里启动后连一次（未启用同步时只是握手，不会上传），
+            // 让状态、账号、hasCloudSnapshot 等字段从一开始就是真实的。
+            {
+                let backend = std::sync::Arc::clone(&runtime_parts.backend);
+                runtime.spawn(async move {
+                    match backend.cloud_sync_e2ee_sync_now().await {
+                        Ok(status) => println!(
+                            "[linux-web] 云同步会话已恢复：auth={:?} enabled={} account={:?}",
+                            status.auth_state, status.enabled, status.account
+                        ),
+                        Err(error) => println!("[linux-web] 云同步会话恢复失败：{error}"),
+                    }
+                });
             }
             host.backend = Some(runtime_parts.backend);
             host.settings_runtime = Some(runtime_parts.settings_runtime);

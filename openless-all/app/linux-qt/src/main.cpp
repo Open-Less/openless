@@ -369,10 +369,21 @@ void SurfaceWindow::applyLayerShell() {
 }
 
 void SurfaceWindow::setVisible(bool visible) {
-    if (visible_ == visible) return;
     visible_ = visible;
+    // 不能拿缓存标志当「已可见」：主窗口关闭时走的是 closeEvent→hide()，
+    // 缓存里还是 true，于是托盘点「打开」会因为 `visible_ == true` 直接返回，
+    // 窗口再也不出来。以实际可见性为准。
+    if (visible == topLevel()->isVisible()) {
+        if (visible) {
+            topLevel()->raise();
+            topLevel()->activateWindow();
+        }
+        return;
+    }
     if (visible) {
         topLevel()->show();
+        topLevel()->raise();
+        topLevel()->activateWindow();
     } else {
         topLevel()->hide();
     }
