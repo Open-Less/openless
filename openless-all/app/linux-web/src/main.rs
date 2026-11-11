@@ -26,6 +26,8 @@ struct Host {
     settings_runtime: Option<std::sync::Arc<dyn openless_core::SettingsRuntime>>,
     /// 胶囊/QA 的窗口级状态：这些不属于后端，属于宿主展示层。
     qa_expanded: std::sync::Mutex<bool>,
+    /// 云同步状态的短缓存（250ms）：界面高频轮询时不必每次重新序列化。
+    cloud_sync_status_cache: std::sync::Mutex<Option<(std::time::Instant, Value)>>,
     /// 交给 GTK 主线程的命令通道。`Host` 要能跨线程（HTTP 桥在线程池里跑），
     /// 而 GTK 对象不是 `Send`，所以这里只存一个发送端。
     gui_tx: std::sync::Mutex<Option<gtk::glib::Sender<GuiCommand>>>,
@@ -403,6 +405,7 @@ fn init_host() -> Host {
         capsule_language_menu: std::sync::Mutex::new(false),
         shortcut_recording_active: std::sync::Mutex::new(false),
         qa_expanded: std::sync::Mutex::new(false),
+        cloud_sync_status_cache: std::sync::Mutex::new(None),
         gui_tx: std::sync::Mutex::new(None),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
@@ -646,6 +649,28 @@ async fn fetch_update_manifest(
 /// QA 面板形态切换：宿主只记录，窗口层（layer-shell）按它调整尺寸。
 fn set_qa_expanded(host: &Host, expanded: bool) {
     *host.qa_expanded.lock().unwrap() = expanded;
+}
+
+impl Host {
+    /// 云同步状态：250ms 内的重复请求直接返回缓存。
+    fn cloud_sync_status_cached(&self, backend: &openless_core::OpenLessBackend) -> Value {
+        const TTL: std::time::Duration = std::time::Duration::from_millis(250);
+        let mut slot = self
+            .cloud_sync_status_cache
+            .lock()
+            .expect("cloud sync status cache lock poisoned");
+        if let Some((at, value)) = slot.as_ref() {
+            if at.elapsed() < TTL {
+                return value.clone();
+            }
+        }
+        let value = match backend.cloud_sync_e2ee_status() {
+            Ok(status) => json_value(status),
+            Err(error) => json!({ "error": error.to_string() }),
+        };
+        *slot = Some((std::time::Instant::now(), value.clone()));
+        value
+    }
 }
 
 /// 需要 GTK 主线程执行的动作（`Host` 本身不能持有 GTK 对象）。
@@ -1196,13 +1221,10 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         }
         // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
         "cloud_sync_e2ee_status" => {
-            // 只读缓存，**不做任何网络/阻塞调用**：界面会高频轮询这个命令，
-            // 之前在里面 `block_on(sync_now)` 直接把 UI 拖死（status 每秒多次、
-            // Qt 进程 CPU 200%+）。会话恢复统一放到启动时和登录成功后的后台任务。
+            // 只读缓存 + 250ms 去重：界面会高频轮询这个命令（实测 12 分钟
+            // 1.8 万次），既不做网络调用，也不重复序列化。
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            Ok(json_value(
-                backend.cloud_sync_e2ee_status().map_err(|error| error.to_string())?,
-            ))
+            Ok(host.cloud_sync_status_cached(backend))
         }
         "cloud_sync_e2ee_cancel" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
@@ -2461,6 +2483,7 @@ fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
     stream.write_all(b": connected\n\n")?;
     stream.flush()?;
     let mut subscription = backend.subscribe();
+    let mut last_cloud_sync: Option<String> = None;
     loop {
         let event = match runtime.block_on(subscription.recv()) {
             Ok(event) => event,
@@ -2479,7 +2502,16 @@ fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
         let Some((name, payload)) = events::map_event(&event) else {
             continue;
         };
-        let line = json!({ "name": name, "payload": payload.to_string() });
+        let payload_text = payload.to_string();
+        if name.starts_with("cloud-sync-e2ee:") {
+            // 内容没变就不重发：前端收到 state 事件会重新拉 status，
+            // 重复事件会把它变成自激循环（实测能打到每秒几十次）。
+            if last_cloud_sync.as_deref() == Some(payload_text.as_str()) {
+                continue;
+            }
+            last_cloud_sync = Some(payload_text.clone());
+        }
+        let line = json!({ "name": name, "payload": payload_text });
         if write!(stream, "data: {line}\n\n").is_err() || stream.flush().is_err() {
             break;
         }
