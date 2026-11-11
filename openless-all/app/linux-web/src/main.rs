@@ -2334,9 +2334,13 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                     // spawn 需要 'static 所有权，这里拿一份 Arc。
                     if let Some(arc) = host.backend.as_ref().map(std::sync::Arc::clone) {
                         runtime.spawn(async move {
-                            // 等 token 落盘，再丢掉旧会话并用新 token 重连。
+                            // **不要**在这里调 `cloud_sync_e2ee_sign_out()`：
+                            // core 的 sign_out 会把 Marketplace 的 GitHub token
+                            // 一起删掉并打 tombstone —— 等于刚登录就立刻登出，
+                            // 界面于是永远提示「请重新登录」。
+                            // `sync_now` 自己会发现连接里的 token 与当前
+                            // marketplace token 不一致，从而强制重连。
                             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                            let _ = arc.cloud_sync_e2ee_sign_out().await;
                             match arc.cloud_sync_e2ee_sync_now().await {
                                 Ok(status) => println!(
                                     "[linux-web] 登录后云同步已重连：auth={:?} account={:?}",
