@@ -17,6 +17,7 @@
 #include <QNetworkRequest>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QFileInfo>
 #include <QScreen>
 #include <QSystemTrayIcon>
 #include <QTimer>
@@ -165,8 +166,13 @@ void SurfaceWindow::load() {
         // layer-shell 必须在**平台窗口创建之前**安装集成：
         // `winId()` 会提前创建平台窗口（xdg-shell 已绑定），所以改用
         // `windowHandle()` —— 只创建 QWindow，真正的 surface 延迟到 show()。
-        if (!view_->windowHandle()) view_->setAttribute(Qt::WA_NativeWindow, true);
+        view_->winId();
         applyLayerShell();
+        // LayerShellQt 的集成只在 surface 创建时生效：配置完要 hide + show
+        // 让平台 surface 按 layer-shell 重建（否则会报 already has a shell
+        // integration，或干脆不显示）。
+        view_->hide();
+        view_->show();
     }
     view_->load(QUrl(url_));
     qInfo("surface=%d url=%s", static_cast<int>(kind_), qPrintable(url_));
@@ -234,8 +240,12 @@ int main(int argc, char **argv) {
         QProcessEnvironment backendEnv = QProcessEnvironment::systemEnvironment();
         backendEnv.insert("OPENLESS_HEADLESS", "1");
         backend->setProcessEnvironment(backendEnv);
-        const QString hostBin = qEnvironmentVariable(
-            "OPENLESS_HOST_BIN", QStringLiteral("/usr/lib/openless/openless-linux-web"));
+        // 默认与自身同目录（安装后是 /usr/lib/openless），这样解包试跑也能找到后端。
+        QString defaultHost = QCoreApplication::applicationDirPath() + "/openless-linux-web";
+        if (!QFileInfo::exists(defaultHost)) {
+            defaultHost = QStringLiteral("/usr/lib/openless/openless-linux-web");
+        }
+        const QString hostBin = qEnvironmentVariable("OPENLESS_HOST_BIN", defaultHost);
         QStringList args;
         backend->start(hostBin, args);
         if (!backend->waitForStarted(5000)) {
