@@ -14,6 +14,8 @@
 #include <QCommandLineParser>
 #include <QElapsedTimer>
 #include <QVBoxLayout>
+#include <QCloseEvent>
+#include <QSet>
 #include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -67,6 +69,25 @@ const char *kHostScript =
 
 enum class Surface { Main, Capsule, Qa };
 
+/// 顶层容器。主窗口关闭时只隐藏，不退出进程（托盘常驻）。
+class TopLevelWindow : public QWidget {
+public:
+    explicit TopLevelWindow(bool closeHides) : closeHides_(closeHides) {}
+
+protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (closeHides_) {
+            hide();
+            event->ignore();
+            return;
+        }
+        QWidget::closeEvent(event);
+    }
+
+private:
+    bool closeHides_;
+};
+
 /// 一个 webview 窗口。胶囊/问答用 layer-shell，主窗口是普通窗口。
 class SurfaceWindow {
 public:
@@ -100,7 +121,7 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     : kind_(kind), view_(nullptr) {
     view_ = new QWebEngineView();
     view_->setPage(new LoggingPage(view_));
-    container_ = new QWidget();
+    container_ = new TopLevelWindow(kind != Surface::Main ? false : true);
     {
         auto *layout = new QVBoxLayout(container_);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -332,8 +353,19 @@ int main(int argc, char **argv) {
 
     // ── 3. 托盘 ─────────────────────────────────────────────────────────────
     auto *tray = new QSystemTrayIcon(&app);
-    tray->setIcon(QIcon::fromTheme("openless",
-                                   QIcon::fromTheme("audio-input-microphone")));
+    QIcon trayIcon = QIcon::fromTheme("openless");
+    if (trayIcon.isNull()) {
+        // 主题里没有就用包内图标（hicolor 已装，但某些桌面主题不索引它）。
+        for (const QString &candidate : {QStringLiteral("/usr/share/icons/hicolor/256x256/apps/openless.png"),
+                                         QStringLiteral("/usr/share/icons/hicolor/128x128/apps/openless.png"),
+                                         QStringLiteral("/usr/share/pixmaps/openless.png")}) {
+            if (QFileInfo::exists(candidate)) { trayIcon = QIcon(candidate); break; }
+        }
+    }
+    if (trayIcon.isNull()) trayIcon = QIcon::fromTheme("audio-input-microphone");
+    tray->setIcon(trayIcon);
+    qInfo("tray available=%d iconNull=%d", tray->isSystemTrayAvailable(),
+          trayIcon.isNull() ? 1 : 0);
     auto *menu = new QMenu();
     menu->addAction("打开 OpenLess", [&mainWindow]() { mainWindow.setVisible(true); });
     menu->addAction("隐藏窗口", [&mainWindow]() { mainWindow.setVisible(false); });
@@ -362,9 +394,16 @@ int main(int argc, char **argv) {
                 const QString payload = object.value("payload").toString();
                 const auto inner = QJsonDocument::fromJson(payload.toUtf8()).object();
                 if (name == "dictation:state") {
+                    // DictationPhase: idle/starting/recording/transcribing/
+                    // polishing/inserting/completed/cancelled/failed。
+                    // 只有「进行中」的阶段才显示胶囊；completed/cancelled/failed
+                    // 都是终态，必须收起（否则取消录音后胶囊一直挂在屏幕上）。
                     const QString phase = inner.value("phase").toString();
-                    const bool active = !phase.isEmpty() && phase != "idle";
-                    capsule.setVisible(active);
+                    static const QSet<QString> activePhases = {
+                        QStringLiteral("starting"), QStringLiteral("recording"),
+                        QStringLiteral("transcribing"), QStringLiteral("polishing"),
+                        QStringLiteral("inserting")};
+                    capsule.setVisible(activePhases.contains(phase));
                 } else if (name == "qa:state") {
                     // QaStateEvent 的字段是 `kind`（activity/idle/thinking/…），
                     // 不是 phase/open。旧写法读不到值，导致浮层该显不显、该隐不隐。

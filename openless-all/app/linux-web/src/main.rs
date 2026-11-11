@@ -65,6 +65,11 @@ fn main() {
     // 无头宿主：只留后端 + HTTP 命令桥，把主线程停住即可（不起 GTK）。
     if std::env::var("OPENLESS_HEADLESS").ok().as_deref() == Some("1") {
         println!("[linux-web] 无头模式：只提供 /api 与静态资源");
+        // 无头模式仍要挂热键监听：快捷键 → 听写/QA → 事件推给渲染宿主。
+        // 之前漏了这步，所以「按快捷键没反应」。
+        if let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) {
+            hotkeys::spawn_headless(backend, runtime);
+        }
         loop {
             std::thread::park();
         }
@@ -375,6 +380,13 @@ fn init_host() -> Host {
     {
         Ok(runtime_parts) => {
             println!("[linux-web] 后端就绪（openless-core 已装配）");
+            // 必须显式 `start()`：core 的 `running` 标志不置位时，
+            // 所有会改状态的命令（start_dictation 等）都会返回
+            // "backend is not started" —— 表现就是「按快捷键没反应」。
+            match runtime.block_on(runtime_parts.backend.start()) {
+                Ok(_) => println!("[linux-web] 后端已启动"),
+                Err(error) => eprintln!("[linux-web] 后端启动失败：{error}"),
+            }
             host.backend = Some(runtime_parts.backend);
             host.settings_runtime = Some(runtime_parts.settings_runtime);
         }

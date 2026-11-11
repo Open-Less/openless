@@ -10,6 +10,66 @@ use openless_core::OpenLessBackend;
 use openless_linux_egui::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
 use std::sync::Arc;
 
+/// 无 GTK 主循环时的热键监听（`OPENLESS_HEADLESS=1` 用）。
+///
+/// 与 [`spawn`] 的区别：不经过 glib channel，事件直接在自己的线程里处理，
+/// 因为无头模式根本没有 GTK 事件循环（主线程只是 park）。
+pub fn spawn_headless(
+    backend: Arc<OpenLessBackend>,
+    runtime: Arc<tokio::runtime::Runtime>,
+) {
+    std::thread::Builder::new()
+        .name("openless-hotkeys".into())
+        .spawn(move || match Fcitx5HotkeyListener::start() {
+            Ok(listener) => {
+                println!("[linux-web] 热键监听已启动（无头）");
+                loop {
+                    listener.drain(|event| match event {
+                        LinuxHotkeyEvent::DictationPressed { .. } => {
+                            let backend = Arc::clone(&backend);
+                            runtime.spawn(async move {
+                                let session = backend.snapshot().dictation.session_id;
+                                let result = match session {
+                                    Some(id) => {
+                                        backend.stop_dictation_session(id).await.map(|_| ())
+                                    }
+                                    None => backend
+                                        .start_dictation_with_options(
+                                            openless_core::DictationStartOptions::default(),
+                                        )
+                                        .await
+                                        .map(|_| ()),
+                                };
+                                if let Err(error) = result {
+                                    eprintln!("[linux-web] 听写切换失败：{error}");
+                                }
+                            });
+                        }
+                        LinuxHotkeyEvent::QaPressed => {
+                            // 问答热键：开/关一次语音提问，状态通过 qa:state 推给宿主。
+                            let backend = Arc::clone(&backend);
+                            runtime.spawn(async move {
+                                if let Err(error) =
+                                    backend.services().qa.toggle_recording().await
+                                {
+                                    eprintln!("[linux-web] QA 切换失败：{error}");
+                                }
+                            });
+                        }
+                        _ => {}
+                    });
+                    if listener.take_error().is_some() {
+                        eprintln!("[linux-web] fcitx5 热键监听断开");
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+            Err(error) => eprintln!("[linux-web] fcitx5 热键监听启动失败：{error}"),
+        })
+        .ok();
+}
+
 pub fn spawn(
     backend: Arc<OpenLessBackend>,
     runtime: Arc<tokio::runtime::Runtime>,
