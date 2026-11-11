@@ -314,10 +314,12 @@ function OnboardingSurface({ children }: { children: ReactNode }) {
     <div
       style={{
         flex: 1,
+        // App's absolute onboarding layer is a block, so flex alone cannot bound scrolling.
+        height: '100%',
         minHeight: 0,
         overflow: 'auto',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         justifyContent: 'center',
         padding:
           'calc(18px + env(safe-area-inset-top, 0px)) 16px calc(18px + env(safe-area-inset-bottom, 0px))',
