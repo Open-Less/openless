@@ -424,6 +424,15 @@ fn init_host() -> Host {
     {
         Ok(runtime_parts) => {
             println!("[linux-web] 后端就绪（openless-core 已装配）");
+            // 必须在 start() **之前**绑定恢复效果：启动流程里的
+            // `recover_registered()` 会用它在崩溃/中断后完成上一次恢复的收尾，
+            // 晚绑定会让状态卡在 recovery_required，之后所有设置改动都被拒绝。
+            if let Err(error) = runtime_parts
+                .backend
+                .bind_restore_runtime_effects(std::sync::Arc::new(LinuxRestoreEffects))
+            {
+                eprintln!("[linux-web] 恢复效果绑定失败：{error}");
+            }
             // 必须显式 `start()`：core 的 `running` 标志不置位时，
             // 所有会改状态的命令（start_dictation 等）都会返回
             // "backend is not started" —— 表现就是「按快捷键没反应」。
@@ -446,16 +455,6 @@ fn init_host() -> Host {
                         Err(error) => println!("[linux-web] 云同步会话恢复失败：{error}"),
                     }
                 });
-            }
-            // 云同步的「恢复」需要宿主提供一个运行时效果适配器：
-            // 恢复凭据/偏好之后，把结果实际应用到运行中的宿主（快捷键、代理…）。
-            // 不绑定时 `apply_restore` 会直接返回 `sync_documents_unsupported`
-            // ——这正是「云端配置同步不下来」的原因。
-            if let Err(error) = runtime_parts
-                .backend
-                .bind_restore_runtime_effects(std::sync::Arc::new(LinuxRestoreEffects))
-            {
-                eprintln!("[linux-web] 恢复效果绑定失败：{error}");
             }
             host.backend = Some(runtime_parts.backend);
             host.settings_runtime = Some(runtime_parts.settings_runtime);
