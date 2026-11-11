@@ -9,8 +9,11 @@
 // 同时 Qt 走**原生 Wayland**，能用 LayerShellQt 做贴底/不给键盘/透明的浮层
 // （Tauri v3 的 CEF 在 Linux 上强制 X11，这两件事都做不到）。
 #include <QApplication>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QCommandLineParser>
 #include <QElapsedTimer>
+#include <QVBoxLayout>
 #include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -58,10 +61,9 @@ protected:
 const char *kHostScript =
     "window.__openlessHost='qt';"
     "(function(){var d=document.documentElement;"
-    "if(d){d.dataset.olEngine='chromium';d.dataset.olPlatform='linux';}"
+    "if(d){d.dataset.olEngine='chromium';}"
     "else{document.addEventListener('DOMContentLoaded',function(){"
-    "var d=document.documentElement;d.dataset.olEngine='chromium';"
-    "d.dataset.olPlatform='linux';});}})();";
+    "document.documentElement.dataset.olEngine='chromium';});}})();";
 
 enum class Surface { Main, Capsule, Qa };
 
@@ -84,6 +86,10 @@ private:
     Surface kind_;
     QString url_;
     QWebEngineView *view_ = nullptr;
+    /// 浮层用普通 QWidget 作顶层窗口，webview 只是子控件。
+    /// QWebEngineView 自己作顶层时 LayerShellQt 的 surface 起不来（实测不映射）。
+    QWidget *container_ = nullptr;
+    QWidget *topLevel() const { return container_ ? container_ : view_; }
     bool visible_ = false;
     bool expanded_ = false;
     QSize compactSize_;
@@ -94,6 +100,13 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     : kind_(kind), view_(nullptr) {
     view_ = new QWebEngineView();
     view_->setPage(new LoggingPage(view_));
+    container_ = new QWidget();
+    {
+        auto *layout = new QVBoxLayout(container_);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        layout->addWidget(view_);
+    }
 
     auto *settings = view_->settings();
     settings->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
@@ -103,31 +116,38 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     switch (kind) {
         case Surface::Main:
             windowKind = "main";
-            view_->setWindowFlags(Qt::Window);
-            view_->setWindowTitle("OpenLess");
-            view_->resize(1180, 820);
+            container_->setWindowFlags(Qt::Window);
+            container_->setWindowTitle("OpenLess");
+            container_->resize(1180, 820);
             compactSize_ = QSize(1180, 820);
             break;
         case Surface::Capsule:
             windowKind = "capsule";
-            view_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+            container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                                       Qt::Tool);
+            container_->setAttribute(Qt::WA_TranslucentBackground, true);
+            container_->setAttribute(Qt::WA_NoSystemBackground, true);
+            container_->setStyleSheet("background: transparent;");
             view_->setAttribute(Qt::WA_TranslucentBackground, true);
-            view_->setAttribute(Qt::WA_NoSystemBackground, true);
             view_->setStyleSheet("background: transparent;");
             view_->page()->setBackgroundColor(Qt::transparent);
             compactSize_ = QSize(460, 228);
             break;
         case Surface::Qa:
             windowKind = "qa";
-            view_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+            container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                                       Qt::Tool);
+            container_->setAttribute(Qt::WA_TranslucentBackground, true);
+            container_->setAttribute(Qt::WA_NoSystemBackground, true);
+            container_->setStyleSheet("background: transparent;");
             view_->setAttribute(Qt::WA_TranslucentBackground, true);
-            view_->setAttribute(Qt::WA_NoSystemBackground, true);
             view_->setStyleSheet("background: transparent;");
             view_->page()->setBackgroundColor(Qt::transparent);
             compactSize_ = QSize(480, 80);
             expandedSize_ = QSize(760, 416);
             break;
     }
+    container_->resize(compactSize_);
     view_->resize(compactSize_);
 
     QWebEngineScript script;
@@ -159,27 +179,33 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     Q_UNUSED(parent);
 }
 
-SurfaceWindow::~SurfaceWindow() { delete view_; }
+SurfaceWindow::~SurfaceWindow() {
+    delete container_;
+    delete view_;
+}
 
 void SurfaceWindow::load() {
     if (kind_ != Surface::Main) {
         // layer-shell 必须在**平台窗口创建之前**安装集成：
         // `winId()` 会提前创建平台窗口（xdg-shell 已绑定），所以改用
         // `windowHandle()` —— 只创建 QWindow，真正的 surface 延迟到 show()。
-        view_->winId();
+        container_->winId();
         applyLayerShell();
         // LayerShellQt 的集成只在 surface 创建时生效：配置完要 hide + show
         // 让平台 surface 按 layer-shell 重建（否则会报 already has a shell
         // integration，或干脆不显示）。
-        view_->hide();
-        view_->show();
+        // 重建 surface 以应用 layer-shell；随后立刻按当前可见性恢复
+        //（否则浮层会在启动时被这一次 show 强行显示出来）。
+        container_->hide();
+        container_->show();
+        topLevel()->setVisible(visible_);
     }
     view_->load(QUrl(url_));
     qInfo("surface=%d url=%s", static_cast<int>(kind_), qPrintable(url_));
 }
 
 void SurfaceWindow::applyLayerShell() {
-    auto *window = view_->windowHandle();
+    auto *window = container_->windowHandle();
     if (!window) return;
     auto *layerWindow = LayerShellQt::Window::get(window);
     if (!layerWindow) {
@@ -209,21 +235,32 @@ void SurfaceWindow::setVisible(bool visible) {
     if (visible_ == visible) return;
     visible_ = visible;
     if (visible) {
-        view_->show();
+        topLevel()->show();
     } else {
-        view_->hide();
+        topLevel()->hide();
     }
 }
 
 void SurfaceWindow::setExpanded(bool expanded) {
     if (kind_ != Surface::Qa || expanded_ == expanded) return;
     expanded_ = expanded;
+    topLevel()->resize(expanded ? expandedSize_ : compactSize_);
     view_->resize(expanded ? expandedSize_ : compactSize_);
 }
 
 }  // namespace
 
 int main(int argc, char **argv) {
+    // 浮层是 layer-shell surface，QQuickWidget（QWebEngineView 内部）默认走
+    // GL/RHI 时拿不到合适的 surface。软件渲染后端让 webview 走 raster，
+    // 不再依赖 GL surface（代价是动画稍慢，浮层只有几十像素，可接受）。
+    // 默认软件渲染：这是 layer-shell 浮层能正常映射的前提（GL/RHI surface
+    // 在 layer-shell 下起不来，实测窗口不显示）。代价是动画略慢；
+    // 想要 GPU 渲染可用 OPENLESS_QT_GPU=1 关掉（浮层会失效，仅排障用）。
+    if (!qEnvironmentVariableIsSet("OPENLESS_QT_GPU")) {
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
+
     QApplication app(argc, argv);
     app.setApplicationName("OpenLess");
     app.setApplicationDisplayName("OpenLess");
@@ -329,11 +366,16 @@ int main(int argc, char **argv) {
                     const bool active = !phase.isEmpty() && phase != "idle";
                     capsule.setVisible(active);
                 } else if (name == "qa:state") {
-                    const QString phase = inner.value("phase").toString();
-                    const bool open = inner.value("open").toBool(false) ||
-                                      (!phase.isEmpty() && phase != "idle" && phase != "hidden");
-                    qa.setVisible(open);
-                    qa.setExpanded(inner.value("expanded").toBool(false));
+                    // QaStateEvent 的字段是 `kind`（activity/idle/thinking/…），
+                    // 不是 phase/open。旧写法读不到值，导致浮层该显不显、该隐不隐。
+                    const QString kind = inner.value("kind").toString();
+                    qInfo("qa:state kind=%s", qPrintable(kind));
+                    const bool idle = kind.isEmpty() || kind == "idle";
+                    qa.setVisible(!idle);
+                    // 有回答或思考中 ⇒ 展开；活动提示、录音中 ⇒ 收起成小条。
+                    const bool expanded = kind == "thinking" || kind == "answer" ||
+                                          kind == "answerDelta" || kind == "awaitingApproval";
+                    qa.setExpanded(expanded);
                 }
             }
         }
