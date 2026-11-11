@@ -1127,9 +1127,20 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
         "cloud_sync_e2ee_status" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            Ok(json_value(
-                backend.cloud_sync_e2ee_status().map_err(|error| error.to_string())?,
-            ))
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            let mut status = backend
+                .cloud_sync_e2ee_status()
+                .map_err(|error| error.to_string())?;
+            // 冷启动时 E2EE 服务还没从 Marketplace 会话里恢复登录，status 会误报
+            // signed_out（界面据此显示「无法启用同步」）。这里用已有的 GitHub
+            // 会话把登录状态预热一次，再返回真实状态。
+            if matches!(status.auth_state, openless_core::cloud_sync_e2ee::AuthState::SignedOut)
+            {
+                if let Ok(warmed) = runtime.block_on(backend.cloud_sync_e2ee_sign_in_with_token()) {
+                    status = warmed;
+                }
+            }
+            Ok(json_value(status))
         }
         "cloud_sync_e2ee_cancel" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
@@ -2291,6 +2302,8 @@ fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::R
             let args = message.get("args").cloned().unwrap_or_else(|| json!({}));
             dispatch(host, command, &args)
         })();
+        // 全量命令日志：前端只显示友好文案，排障必须能看到到底调了什么。
+        println!("[cmd] {}", message_command(&body));
         let payload = match reply {
             Ok(value) => json!({ "ok": true, "value": value }),
             Err(error) => {
