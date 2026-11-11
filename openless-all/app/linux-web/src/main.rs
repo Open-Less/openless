@@ -1203,8 +1203,11 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // 冷启动时 E2EE 服务还没从 Marketplace 会话里恢复登录，status 会误报
             // signed_out（界面据此显示「无法启用同步」）。这里用已有的 GitHub
             // 会话把登录状态预热一次，再返回真实状态。
-            if matches!(status.auth_state, openless_core::cloud_sync_e2ee::AuthState::SignedOut)
-            {
+            if matches!(
+                status.auth_state,
+                openless_core::cloud_sync_e2ee::AuthState::SignedOut
+                    | openless_core::cloud_sync_e2ee::AuthState::Expired
+            ) {
                 if let Ok(warmed) = runtime.block_on(backend.cloud_sync_e2ee_sign_in_with_token()) {
                     status = warmed;
                 }
@@ -2297,11 +2300,23 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .map(str::to_string);
             if command == "github_device_flow_poll" {
                 let flow_id = flow_id.ok_or_else(|| "缺少参数 flowId".to_string())?;
-                Ok(json_value(
-                    runtime
-                        .block_on(api.poll_device_flow(flow_id))
-                        .map_err(|error| error.to_string())?,
-                ))
+                let polled = runtime
+                    .block_on(api.poll_device_flow(flow_id))
+                    .map_err(|error| error.to_string())?;
+                // 刚完成授权：云同步缓存的是**旧 token**，清掉会话让它用新
+                // token 重连，否则界面会一直显示「请重新登录」。
+                if matches!(polled, openless_core::OAuthPollResult::Authorized { .. }) {
+                    // spawn 需要 'static 所有权，这里拿一份 Arc。
+                    if let Some(arc) = host.backend.as_ref().map(std::sync::Arc::clone) {
+                        runtime.spawn(async move {
+                            let _ = arc.cloud_sync_e2ee_sign_out().await;
+                            if let Err(error) = arc.cloud_sync_e2ee_sync_now().await {
+                                println!("[linux-web] 登录后云同步重连失败：{error}");
+                            }
+                        });
+                    }
+                }
+                Ok(json_value(polled))
             } else {
                 runtime
                     .block_on(api.cancel_device_flow(flow_id))
