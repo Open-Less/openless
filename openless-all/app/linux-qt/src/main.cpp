@@ -60,6 +60,15 @@ protected:
     /// 剪贴板并吞掉弹框。比自定义协议/fetch 都可靠（没有 CORS 与激活限制）。
     void javaScriptAlert(const QUrl &securityOrigin, const QString &message) override {
         Q_UNUSED(securityOrigin);
+        const QString openPrefix = QStringLiteral("openless-open:");
+        if (message.startsWith(openPrefix)) {
+            const QString url = message.mid(openPrefix.size()).trimmed();
+            if (url.startsWith(QLatin1String("http")) || url.startsWith(QLatin1String("https"))) {
+                QDesktopServices::openUrl(QUrl(url));
+                qInfo("external open (alert channel): %s", qPrintable(url));
+            }
+            return;
+        }
         const QString prefix = QStringLiteral("openless-copy:");
         if (message.startsWith(prefix)) {
             const QString text = message.mid(prefix.size());
@@ -120,6 +129,15 @@ const char *kHostScript =
     ".catch(function(err){console.log('openless clipboard plugin fallback: '+err);"
     "return hostFallback(text);});"
     "}"
+    "function installOpen(){"
+    "try{"
+    "window.open=function(url){"
+    "if(url){alert('openless-open:'+String(url));}"
+    "return null;"
+    "};"
+    "console.log('openless window.open shim installed');"
+    "}catch(e){console.log('openless window.open shim failed: '+e);}"
+    "}"
     "function install(){"
     "var clip=null;"
     "try{clip=navigator.clipboard;}catch(e){}"
@@ -130,6 +148,7 @@ const char *kHostScript =
     "console.log('openless clipboard shim failed: '+e);}"
     "}"
     "install();"
+    "installOpen();"
     "})();"
     "(function(){var d=document.documentElement;"
     "if(d){d.dataset.olEngine='chromium';}"

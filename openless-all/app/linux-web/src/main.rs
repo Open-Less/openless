@@ -2080,6 +2080,16 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 Err(error) => Err(error.to_string()),
             }
         }
+        // Linux 没有 macOS 的辅助功能授权，也没有 Windows 的 IME 状态：
+        // 返回「已授权 / 非 Windows」而不是报错，否则设置页会显示成故障。
+        "check_accessibility_permission" | "request_accessibility_permission" => {
+            Ok(json!("granted"))
+        }
+        "get_windows_ime_status" => Ok(json!({
+            "tsfAvailable": false,
+            "activeProfile": null,
+            "message": null,
+        })),
         "get_hotkey_capability" => {
             // Linux 的能力描述 core 里已经写好了（adapter=Fcitx5 + 各触发键 +
             // evdev 权限提示），宿主不要再拼一份，否则两边会漂。
@@ -2188,8 +2198,14 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
             let api = &backend.services().marketplace;
-            let flow_id = required_str(_args, "flowId")?.to_string();
+            // 前端 `githubDeviceFlowCancel(undefined)` 会传 `flowId: null`，
+            // 语义是「取消当前流程」，所以这里是可选参数。
+            let flow_id = _args
+                .get("flowId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
             if command == "github_device_flow_poll" {
+                let flow_id = flow_id.ok_or_else(|| "缺少参数 flowId".to_string())?;
                 Ok(json_value(
                     runtime
                         .block_on(api.poll_device_flow(flow_id))
@@ -2197,7 +2213,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 ))
             } else {
                 runtime
-                    .block_on(api.cancel_device_flow(Some(flow_id)))
+                    .block_on(api.cancel_device_flow(flow_id))
                     .map_err(|error| error.to_string())?;
                 Ok(json!(null))
             }
