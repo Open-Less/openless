@@ -4324,6 +4324,7 @@ dependencies = [
 name = "openless-linux-web"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "gtk",
  "gtk-layer-shell",
  "javascriptcore-rs",

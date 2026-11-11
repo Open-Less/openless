@@ -34,6 +34,31 @@ struct Host {
     shortcut_recording_active: std::sync::Mutex<bool>,
 }
 
+/// 恢复（云端同步还原）之后要在宿主编生效的效果。
+///
+/// Tauri 那边会重建热键监听、改代理、刷新托盘；Linux 这边的热键由 fcitx5 插件
+/// 与监听线程自行跟随偏好变化，所以这里做两件必须做的事：校验快捷键不冲突、
+/// 同步代理开关。失败要如实返回，让恢复流程回滚而不是假装成功。
+struct LinuxRestoreEffects;
+
+impl openless_core::config::RestoreRuntimeEffects for LinuxRestoreEffects {
+    fn apply_target(
+        &self,
+        target: openless_core::UserPreferences,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
+        Box::pin(async move {
+            openless_core::reject_hotkey_collisions(&target).map_err(|_| {
+                openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::InvalidArgument,
+                    "restore_hotkey_conflict",
+                )
+            })?;
+            openless_core::net::set_use_system_proxy(target.use_system_proxy);
+            Ok(())
+        })
+    }
+}
+
 /// 极简日志桥：把 core 的 `log` 输出转到 stderr（→ journal）。
 /// 不引依赖，但能让我们看到 `[e2ee-token]` / `[core]` 这类关键诊断。
 struct StderrLogger;
@@ -421,6 +446,16 @@ fn init_host() -> Host {
                         Err(error) => println!("[linux-web] 云同步会话恢复失败：{error}"),
                     }
                 });
+            }
+            // 云同步的「恢复」需要宿主提供一个运行时效果适配器：
+            // 恢复凭据/偏好之后，把结果实际应用到运行中的宿主（快捷键、代理…）。
+            // 不绑定时 `apply_restore` 会直接返回 `sync_documents_unsupported`
+            // ——这正是「云端配置同步不下来」的原因。
+            if let Err(error) = runtime_parts
+                .backend
+                .bind_restore_runtime_effects(std::sync::Arc::new(LinuxRestoreEffects))
+            {
+                eprintln!("[linux-web] 恢复效果绑定失败：{error}");
             }
             host.backend = Some(runtime_parts.backend);
             host.settings_runtime = Some(runtime_parts.settings_runtime);

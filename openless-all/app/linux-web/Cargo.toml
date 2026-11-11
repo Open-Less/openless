@@ -11,6 +11,7 @@ javascriptcore = { package = "javascriptcore-rs", version = "1.1" }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.54", features = ["rt-multi-thread"] }
 openless-core = { path = "../crates/openless-core" }
