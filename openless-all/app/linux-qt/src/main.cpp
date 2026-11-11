@@ -15,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QVBoxLayout>
 #include <QCloseEvent>
+#include <cstdlib>
 #include <QDesktopServices>
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlSchemeHandler>
@@ -556,11 +557,19 @@ int main(int argc, char **argv) {
     });
 
     QObject::connect(&app, &QApplication::aboutToQuit, [backend]() {
-        if (backend) {
+        if (backend && backend->state() != QProcess::NotRunning) {
             backend->terminate();
             backend->waitForFinished(2000);
         }
     });
 
-    return app.exec();
+    const int exitCode = app.exec();
+    // QtWebEngine 的析构在退出阶段会偶发 SIGSEGV（coredumpctl 里
+    // openless-qt 的崩溃全在 __libc_start_main 收尾），表现为「退出时提示程序
+    // 崩溃」。这里先收掉后端子进程，然后跳过整个析构链直接退出。
+    if (backend && backend->state() != QProcess::NotRunning) {
+        backend->terminate();
+        backend->waitForFinished(2000);
+    }
+    std::_Exit(exitCode);
 }
