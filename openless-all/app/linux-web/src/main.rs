@@ -1368,6 +1368,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             if !text.is_empty() {
                 openless_linux_egui::fcitx5_copy_to_clipboard(text)
                     .map_err(|error| error.to_string())?;
+                println!("[linux-web] 已复制到剪贴板（{} 字符）", text.chars().count());
             }
             Ok(json!({ "copied": !text.is_empty() }))
         }

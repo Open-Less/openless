@@ -15,6 +15,13 @@
 #include <QElapsedTimer>
 #include <QVBoxLayout>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QWebEngineUrlScheme>
+#include <QWebEngineUrlSchemeHandler>
+#include <QWebEngineUrlRequestJob>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QBuffer>
 #include <QSet>
 #include <QMenu>
 #include <QNetworkAccessManager>
@@ -49,6 +56,20 @@ public:
     using QWebEnginePage::QWebEnginePage;
 
 protected:
+    /// 剪贴板通道：页面执行 `alert('openless-copy:<text>')`，这里直接写系统
+    /// 剪贴板并吞掉弹框。比自定义协议/fetch 都可靠（没有 CORS 与激活限制）。
+    void javaScriptAlert(const QUrl &securityOrigin, const QString &message) override {
+        Q_UNUSED(securityOrigin);
+        const QString prefix = QStringLiteral("openless-copy:");
+        if (message.startsWith(prefix)) {
+            const QString text = message.mid(prefix.size());
+            QGuiApplication::clipboard()->setText(text, QClipboard::Clipboard);
+            qInfo("clipboard: %d chars via alert channel", static_cast<int>(text.size()));
+            return;
+        }
+        qInfo("[alert] %s", qPrintable(message));
+    }
+
     void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level, const QString &message,
                                  int line, const QString &source) override {
         if (level == InfoMessageLevel && !message.contains("openless", Qt::CaseInsensitive)) {
@@ -57,15 +78,77 @@ protected:
         qInfo("[page %d] %s (%s:%d)", static_cast<int>(level), qPrintable(message),
               qPrintable(source), line);
     }
+
+    /// 页面里跳到外部站点（例如「发布说明」链接）时交给系统浏览器，
+    /// 不在应用内导航走 —— 否则会把整个应用界面替换成网页。
+    bool acceptNavigationRequest(const QUrl &url, NavigationType type, bool isMainFrame) override {
+        if (isMainFrame && type == NavigationTypeLinkClicked && isExternal(url)) {
+            QDesktopServices::openUrl(url);
+            return false;
+        }
+        return QWebEnginePage::acceptNavigationRequest(url, type, isMainFrame);
+    }
+
+public:
+    /// 本地宿主（127.0.0.1 的静态资源与 /api）之外的都算外部。
+    static bool isExternal(const QUrl &url) {
+        const QString host = url.host();
+        return !(host == QLatin1String("127.0.0.1") || host == QLatin1String("localhost") ||
+                 host.isEmpty() || url.scheme() == QLatin1String("data") ||
+                 url.scheme() == QLatin1String("blob"));
+    }
 };
 
 /// 宿主注入：让前端知道渲染层是 Chromium，且不要画二次标题栏。
 const char *kHostScript =
     "window.__openlessHost='qt';"
+    // 剪贴板：QtWebEngine 在 Wayland 下经常没有 navigator.clipboard（或写入被
+    // 焦点/权限挡住），History 的复制按钮就会报 "clipboard unavailable"。
+    // 这里直接接管 writeText，走宿主命令（fcitx5 剪贴板，不依赖焦点）。
+    "(function(){"
+    "function put(text){"
+    // 交给宿主：alert 通道 → Qt 的 QClipboard（当前焦点客户端，写入可靠）。
+    "alert('openless-copy:'+String(text));"
+    "return Promise.resolve();"
+    "}"
+    "function install(){"
+    "var clip=null;"
+    "try{clip=navigator.clipboard;}catch(e){}"
+    "if(!clip){clip={};Object.defineProperty(Navigator.prototype,'clipboard',"
+    "{value:clip,configurable:true});}"
+    "try{clip.writeText=function(text){return put(text);};"
+    "console.log('openless clipboard shim installed');}catch(e){"
+    "console.log('openless clipboard shim failed: '+e);}"
+    "}"
+    "install();"
+    "})();"
     "(function(){var d=document.documentElement;"
     "if(d){d.dataset.olEngine='chromium';}"
     "else{document.addEventListener('DOMContentLoaded',function(){"
     "document.documentElement.dataset.olEngine='chromium';});}})();";
+
+/// `openless:` 自定义协议：页面把文本 POST 过来，宿主直接写系统剪贴板。
+///
+/// 为什么不走 fcitx5 插件：KWin/wayland 下后台进程（fcitx5）没有输入事件
+/// 序列，**无法夺取剪贴板所有权**（插件调用返回 true 但选择区不变，实测）。
+/// 而 Qt 窗口是当前焦点客户端，`QClipboard::setText` 是可靠路径。
+class ClipboardSchemeHandler : public QWebEngineUrlSchemeHandler {
+public:
+    explicit ClipboardSchemeHandler(QObject *parent = nullptr)
+        : QWebEngineUrlSchemeHandler(parent) {}
+
+    void requestStarted(QWebEngineUrlRequestJob *job) override {
+        QIODevice *body = job->requestBody();
+        const QByteArray payload = body ? body->readAll() : QByteArray();
+        const QString text = QString::fromUtf8(payload);
+        QGuiApplication::clipboard()->setText(text, QClipboard::Clipboard);
+        qInfo("clipboard: %d chars via host", static_cast<int>(text.size()));
+        auto *buffer = new QBuffer();
+        buffer->setData(QByteArrayLiteral("ok"));
+        buffer->open(QIODevice::ReadOnly);
+        job->reply("text/plain", buffer);
+    }
+};
 
 enum class Surface { Main, Capsule, Qa };
 
@@ -121,6 +204,13 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     : kind_(kind), view_(nullptr) {
     view_ = new QWebEngineView();
     view_->setPage(new LoggingPage(view_));
+    // 让页面能用 openless:copy 直接写系统剪贴板。
+    static ClipboardSchemeHandler *clipboardHandler = nullptr;
+    if (!clipboardHandler) {
+        clipboardHandler = new ClipboardSchemeHandler(qApp);
+    }
+    QWebEngineProfile::defaultProfile()->installUrlSchemeHandler("openless",
+                                                                 clipboardHandler);
     container_ = new TopLevelWindow(kind != Surface::Main ? false : true);
     {
         auto *layout = new QVBoxLayout(container_);
@@ -280,6 +370,14 @@ int main(int argc, char **argv) {
     // 想要 GPU 渲染可用 OPENLESS_QT_GPU=1 关掉（浮层会失效，仅排障用）。
     if (!qEnvironmentVariableIsSet("OPENLESS_QT_GPU")) {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
+
+    // 自定义协议必须在 QApplication 之前注册。
+    {
+        QWebEngineUrlScheme scheme(QByteArrayLiteral("openless"));
+        scheme.setFlags(QWebEngineUrlScheme::FetchApiAllowed |
+                        QWebEngineUrlScheme::LocalScheme);
+        QWebEngineUrlScheme::registerScheme(scheme);
     }
 
     QApplication app(argc, argv);
