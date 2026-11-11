@@ -271,6 +271,157 @@ impl CredentialStore for LinuxCredentialStore {
         Some(self.siwc.clone())
     }
 
+    // ── 端到端加密云同步的密钥存储 ───────────────────────────────────
+    // core 的默认实现是「fail closed」（没有适配器就报错），所以 Linux 必须在
+    // 自己的凭据库里实现，否则云同步永远返回 secure_storage_denied。
+    fn read_sync_secret(
+        &self,
+        account: openless_core::credentials::SyncSecretAccount,
+    ) -> BoxFuture<'static, Result<Option<SecretValue>, BackendError>> {
+        Box::pin(async move { read_sync_secret_value(&account) })
+    }
+
+    fn write_sync_secret(
+        &self,
+        account: openless_core::credentials::SyncSecretAccount,
+        value: SecretValue,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async move { write_sync_secret_value(&account, &value) })
+    }
+
+    fn remove_sync_secret(
+        &self,
+        account: openless_core::credentials::SyncSecretAccount,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async move { remove_sync_secret_value(&account) })
+    }
+
+
+    // ── 云同步：导出/替换整套凭据 ────────────────────────────────────
+    // 账号命名与其它平台完全一致（asr.api_key / ark.api_key / …），所以在
+    // Linux 上创建的快照可以被 macOS/Windows 还原，反之亦然。
+    fn export_sync_credentials_readonly(
+        &self,
+    ) -> BoxFuture<'static, Result<openless_core::credentials::SyncCredentials, BackendError>> {
+        let state = self
+            .state
+            .lock()
+            .expect("credential metadata lock poisoned")
+            .clone();
+        Box::pin(async move {
+            use openless_core::credentials::{
+                SyncChannel, SyncCredentialRecord, SyncCredentials, SyncNamespace,
+            };
+            let mut snapshot = SyncCredentials {
+                channels: Vec::new(),
+                credentials: Vec::new(),
+            };
+            for (kind, namespace, slot) in [
+                (ChannelKind::Asr, SyncNamespace::Asr, ProviderSlot::Asr),
+                (ChannelKind::Llm, SyncNamespace::Llm, ProviderSlot::Llm),
+            ] {
+                let active = state.metadata.active_provider(slot);
+                for channel in state.metadata.list_channels(kind) {
+                    snapshot.channels.push(SyncChannel {
+                        id: channel.id.clone(),
+                        namespace,
+                        provider_type: channel.provider_type.clone(),
+                        name: channel.name.clone(),
+                        enabled: channel.enabled,
+                        order: channel.order,
+                        active: channel.id == active,
+                        configuration: Default::default(),
+                    });
+                    let mut accounts = std::collections::BTreeMap::new();
+                    for key in state.keys.iter().filter(|key| {
+                        key.namespace == credential_namespace(namespace)
+                            && key.provider_id.as_deref() == Some(channel.id.as_str())
+                    }) {
+                        if let Some(secret) = read_secret(key)? {
+                            accounts.insert(key.account.clone(), secret.expose_secret().to_string());
+                        }
+                    }
+                    snapshot.credentials.push(SyncCredentialRecord {
+                        channel_id: channel.id.clone(),
+                        namespace,
+                        accounts,
+                    });
+                }
+            }
+            snapshot.validate()?;
+            Ok(snapshot)
+        })
+    }
+
+    fn export_sync_credentials(
+        &self,
+        _permit: &openless_core::credentials::ExclusivePermit,
+    ) -> BoxFuture<'static, Result<openless_core::credentials::SyncCredentials, BackendError>> {
+        self.export_sync_credentials_readonly()
+    }
+
+    fn replace_sync_credentials(
+        &self,
+        snapshot: openless_core::credentials::SyncCredentials,
+        _permit: &openless_core::credentials::ExclusivePermit,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let state_handle = Arc::clone(&self.state);
+        let metadata_path = self.metadata_path.clone();
+        Box::pin(async move {
+            use openless_core::credentials::{
+                ChannelSummary, CredentialKey, CredentialMetadata, SyncNamespace,
+            };
+            snapshot.validate()?;
+            let mut asr = Vec::new();
+            let mut llm = Vec::new();
+            let mut active = std::collections::HashMap::new();
+            for channel in &snapshot.channels {
+                let summary = ChannelSummary {
+                    id: channel.id.clone(),
+                    name: channel.name.clone(),
+                    provider_type: channel.provider_type.clone(),
+                    enabled: channel.enabled,
+                    order: channel.order,
+                    last_test: None,
+                };
+                match channel.namespace {
+                    SyncNamespace::Asr => asr.push(summary),
+                    SyncNamespace::Llm => llm.push(summary),
+                    SyncNamespace::Omni => {}
+                }
+                if channel.active {
+                    active.insert(channel.namespace.as_str().to_string(), channel.id.clone());
+                }
+            }
+            let mut keys = Vec::new();
+            for record in &snapshot.credentials {
+                for (account, value) in &record.accounts {
+                    let key = CredentialKey::new(
+                        credential_namespace(record.namespace),
+                        Some(record.channel_id.clone()),
+                        account.clone(),
+                    )?;
+                    write_secret(&key, &SecretValue::new(value.clone()))?;
+                    keys.push(key);
+                }
+            }
+            let metadata = CredentialMetadata::from_parts(
+                asr,
+                llm,
+                active.get("asr").cloned().unwrap_or_default(),
+                active.get("llm").cloned().unwrap_or_default(),
+                active.get("omni").cloned().unwrap_or_default(),
+                0,
+            );
+            let mut state = state_handle
+                .lock()
+                .expect("credential metadata lock poisoned");
+            state.metadata = metadata;
+            state.keys = keys;
+            persist_metadata(&metadata_path, &state)
+        })
+    }
+
     fn status(
         &self,
         preferences: UserPreferences,
@@ -924,6 +1075,87 @@ fn remove_secret(key: &CredentialKey) -> Result<(), BackendError> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(keyring_error(error)),
     })
+}
+
+/// `SyncNamespace` ↔ `CredentialNamespace`（枚举名一致，只是分属两个模块）。
+#[cfg(any(target_os = "linux", test))]
+fn credential_namespace(
+    namespace: openless_core::credentials::SyncNamespace,
+) -> openless_core::credentials::CredentialNamespace {
+    use openless_core::credentials::{CredentialNamespace, SyncNamespace};
+    match namespace {
+        SyncNamespace::Asr => CredentialNamespace::Asr,
+        SyncNamespace::Llm => CredentialNamespace::Llm,
+        SyncNamespace::Omni => CredentialNamespace::Omni,
+    }
+}
+
+/// 同步（E2EE）密钥单独走一条 keyring 账号空间：账号名由 core 生成
+/// （`cloud-sync.e2ee.local.<digest>` / `cloud-sync.e2ee.key.<digest>`），
+/// 与 provider 凭据的 key 形状完全不同，所以不会互相覆盖。
+#[cfg(target_os = "linux")]
+fn sync_secret_entry(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<keyring::Entry, BackendError> {
+    crate::linux_access::ensure_persistent_vault()?;
+    keyring::Entry::new(KEYRING_SERVICE, account.as_str()).map_err(keyring_error)
+}
+
+#[cfg(target_os = "linux")]
+fn read_sync_secret_value(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<SecretValue>, BackendError> {
+    let entry = sync_secret_entry(account)?;
+    run_with_vault_timeout("sync-read", move || match entry.get_password() {
+        Ok(value) => Ok(Some(SecretValue::new(value))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(keyring_error(error)),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn write_sync_secret_value(
+    account: &openless_core::credentials::SyncSecretAccount,
+    value: &SecretValue,
+) -> Result<(), BackendError> {
+    let entry = sync_secret_entry(account)?;
+    let secret = value.expose_secret().to_string();
+    run_with_vault_timeout("sync-write", move || {
+        entry.set_password(&secret).map_err(keyring_error)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn remove_sync_secret_value(
+    account: &openless_core::credentials::SyncSecretAccount,
+) -> Result<(), BackendError> {
+    let entry = sync_secret_entry(account)?;
+    run_with_vault_timeout("sync-remove", move || match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(keyring_error(error)),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_sync_secret_value(
+    _: &openless_core::credentials::SyncSecretAccount,
+) -> Result<Option<SecretValue>, BackendError> {
+    unsupported_keyring()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn write_sync_secret_value(
+    _: &openless_core::credentials::SyncSecretAccount,
+    _: &SecretValue,
+) -> Result<(), BackendError> {
+    unsupported_keyring()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn remove_sync_secret_value(
+    _: &openless_core::credentials::SyncSecretAccount,
+) -> Result<(), BackendError> {
+    unsupported_keyring()
 }
 
 #[cfg(not(target_os = "linux"))]

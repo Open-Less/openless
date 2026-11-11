@@ -7,6 +7,8 @@ export const isHttpBridge =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('bridge') === 'http';
 
+import { emitHostEvent } from './hostEventBus';
+
 type Pending = { resolve: (value: string) => void; reject: (error: Error) => void };
 const pending = new Map<string, Pending>();
 let nextId = 1;
@@ -19,10 +21,7 @@ function attachEvents() {
   source.onmessage = (message) => {
     try {
       const { name, payload } = JSON.parse(message.data) as { name: string; payload: string };
-      (window as unknown as { __openlessEvent?: (n: string, p: string) => void }).__openlessEvent?.(
-        name,
-        payload,
-      );
+      emitHostEvent(name, payload);
     } catch {
       /* 心跳或解析失败都不影响后续事件 */
     }

@@ -45,6 +45,20 @@ pub fn map_event(event: &BackendEvent) -> Option<(&'static str, serde_json::Valu
             "qa:state",
             serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
         ),
+        // 云同步（E2EE）：这三个事件前端 CloudSyncSection 与
+        // encryptedSyncUiBridge 都在订阅，之前没映射 → 云同步界面永不刷新。
+        BackendEventKind::CloudSyncStateChanged(event) => (
+            "cloud-sync-e2ee:state",
+            serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::CloudSyncConflictDetected(event) => (
+            "cloud-sync-e2ee:conflict",
+            serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+        ),
+        BackendEventKind::CloudSyncRestoreCompleted(event) => (
+            "cloud-sync-e2ee:restored",
+            serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+        ),
         _ => return None,
     })
 }

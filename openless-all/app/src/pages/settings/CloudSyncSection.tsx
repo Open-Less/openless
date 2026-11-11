@@ -420,19 +420,22 @@ export function CloudSyncSection() {
     window.addEventListener('openless:sync-ui-persistence-failed', uiPersistenceFailed);
     void (async () => {
       try {
-        if (isTauriNow()) {
-          const { listen } = await import('@tauri-apps/api/event');
+        {
+          // 三种宿主都要订阅：Tauri 的事件 API、我们自己的 GTK/HTTP 宿主。
+          // 以前这里用 `isTauriNow()` 门控，Linux 宿主上事件全被丢掉，
+          // 云同步界面因此永远不刷新。
+          const { listenHostEvent } = await import('../../lib/hostEventBus');
           for (const [name, kind] of [
             ['cloud-sync-e2ee:state', 'state'],
             ['cloud-sync-e2ee:conflict', 'conflict'],
             ['cloud-sync-e2ee:restored', 'restored'],
           ] as const) {
-            const stop = await listen(name, (event) => {
+            const stop = listenHostEvent(name, (payload) => {
               if (disposed) return;
-              if (kind === 'state') eventsRef.current.state(event.payload as EncryptedSyncEvent);
+              if (kind === 'state') eventsRef.current.state(payload as EncryptedSyncEvent);
               else if (kind === 'conflict')
-                eventsRef.current.conflict(event.payload as EncryptedSyncConflictEvent);
-              else eventsRef.current.restored(event.payload as EncryptedSyncRestoreEvent);
+                eventsRef.current.conflict(payload as EncryptedSyncConflictEvent);
+              else eventsRef.current.restored(payload as EncryptedSyncRestoreEvent);
             });
             if (disposed) {
               stop();

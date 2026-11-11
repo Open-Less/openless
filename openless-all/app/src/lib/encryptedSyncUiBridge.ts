@@ -165,13 +165,14 @@ async function install(): Promise<void> {
     if (event.key === 'ol-font-scale' || event.key?.includes('locale')) changed(event);
   });
   const hydrationEpoch = choiceEpoch;
-  const { listen } = await import('@tauri-apps/api/event');
-  await listen<Restored>('cloud-sync-e2ee:restored', ({ payload }) => {
-    if (
-      !/^(0|[1-9]\d{0,19})$/.test(payload.sequence) ||
-      BigInt(payload.sequence) <= restoredSequence
-    )
-      return;
+  const { listenHostEvent } = await import('./hostEventBus');
+  listenHostEvent('cloud-sync-e2ee:restored', (payload) => {
+    // 宿主事件是 unknown：先做形状校验再当 Restored 用。
+    const restored = payload as Restored | null;
+    if (!restored || typeof restored !== 'object') return;
+    const sequence = String(restored.sequence ?? '');
+    if (!/^(0|[1-9]\d{0,19})$/.test(sequence)) return;
+    if (BigInt(sequence) <= restoredSequence) return;
     const eventChoiceEpoch = choiceEpoch;
     const notificationEpoch = ++restorationEpoch;
     // Pause old writes immediately, but retain their choices until native has
@@ -179,20 +180,16 @@ async function install(): Promise<void> {
     // discard the current user's pending changes.
     void enqueue(async () => {
       try {
-        if (BigInt(payload.sequence) <= restoredSequence) return;
+        if (BigInt(sequence) <= restoredSequence) return;
         const before = await readStatus();
-        if (!belongs(before, payload)) return;
+        if (!belongs(before, restored)) return;
         const current = await readUi();
         const after = await readStatus();
-        if (
-          !belongs(after, payload) ||
-          !sameScope(before, after) ||
-          BigInt(payload.sequence) <= restoredSequence
-        )
-          return;
+        if (!belongs(after, restored) || !sameScope(before, after)) return;
+        if (BigInt(sequence) <= restoredSequence) return;
         invalidate(eventChoiceEpoch);
         known = current;
-        restoredSequence = BigInt(payload.sequence);
+        restoredSequence = BigInt(sequence);
         if (current.preferences) await apply(current.preferences, eventChoiceEpoch);
       } finally {
         settledRestorationEpoch = notificationEpoch;

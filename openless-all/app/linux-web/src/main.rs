@@ -2062,6 +2062,23 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // 这几条只用于页面内部状态同步，这里如实记为无操作。
             Ok(json!(null))
         }
+        // ── 钥匙串（云同步的 E2EE 密钥就存在这里）─────────────────────
+        "keyring_state" => {
+            let (keyring, input) = openless_linux_egui::linux_access::probe_session();
+            Ok(json!({
+                "keyring": json_value(keyring),
+                "input": json_value(input),
+            }))
+        }
+        "unlock_keyring" => {
+            // 只由用户动作触发解锁（会自动弹 kwallet 对话框）；
+            // 自动启动路径永远不解锁，避免启动时弹窗。
+            let timeout = openless_linux_egui::linux_access::VAULT_UNLOCK_TIMEOUT;
+            match openless_linux_egui::linux_access::unlock_default_vault(timeout) {
+                Ok(()) => Ok(json!({ "unlocked": true })),
+                Err(error) => Err(error.to_string()),
+            }
+        }
         "get_hotkey_capability" => {
             // Linux 的能力描述 core 里已经写好了（adapter=Fcitx5 + 各触发键 +
             // evdev 权限提示），宿主不要再拼一份，否则两边会漂。
