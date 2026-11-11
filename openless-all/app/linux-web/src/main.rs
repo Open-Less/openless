@@ -2277,7 +2277,15 @@ fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::R
         })();
         let payload = match reply {
             Ok(value) => json!({ "ok": true, "value": value }),
-            Err(error) => json!({ "ok": false, "error": error }),
+            Err(error) => {
+                // 前端只显示友好文案，真实错误码在这里留一份，排障时查 journal。
+                println!(
+                    "[cmd] {} -> error: {}",
+                    message_command(&body),
+                    error
+                );
+                json!({ "ok": false, "error": error })
+            }
         };
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
         let header = format!(
@@ -2320,6 +2328,14 @@ fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::R
 }
 
 /// SSE：把后端事件推给页面（Qt/CEF/浏览器都能直接用）。
+/// 从请求体里取出命令名（仅用于错误日志）。
+fn message_command(body: &[u8]) -> String {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| value.get("command").and_then(|c| c.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
 fn stream_events(mut stream: TcpStream, host: &Host) -> std::io::Result<()> {
     let (Some(backend), Some(runtime)) = (host.backend.clone(), host.runtime.clone()) else {
         let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");

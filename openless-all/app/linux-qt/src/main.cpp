@@ -106,10 +106,19 @@ const char *kHostScript =
     // 焦点/权限挡住），History 的复制按钮就会报 "clipboard unavailable"。
     // 这里直接接管 writeText，走宿主命令（fcitx5 剪贴板，不依赖焦点）。
     "(function(){"
-    "function put(text){"
-    // 交给宿主：alert 通道 → Qt 的 QClipboard（当前焦点客户端，写入可靠）。
+    "function hostFallback(text){"
     "alert('openless-copy:'+String(text));"
     "return Promise.resolve();"
+    "}"
+    "function put(text){"
+    // 默认走 fcitx5 插件（copy_text_to_clipboard → 插件 setClipboard）；
+    // 插件在部分合成器上无法夺取选区（会如实返回失败），此时退回宿主写入。
+    "return fetch('/api/invoke',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({id:'clip-'+Date.now(),command:'copy_text_to_clipboard',"
+    "args:{text:String(text)}})}).then(function(r){return r.json();})"
+    ".then(function(j){if(!j||j.ok===false)throw new Error((j&&j.error)||'plugin copy failed');})"
+    ".catch(function(err){console.log('openless clipboard plugin fallback: '+err);"
+    "return hostFallback(text);});"
     "}"
     "function install(){"
     "var clip=null;"

@@ -753,7 +753,17 @@ public:
                 << "SetClipboardText: clipboard addon not loaded";
             return false;
         }
-        clipboard->call<IClipboard::setClipboard>("openless", text);
+        clipboard->call<IClipboard::setClipboardV2>("openless", text, false);
+        // 读回校验：KWin 下后台进程没有输入事件序列时，setClipboard 会**静默
+        // 失败**（不报错，但选区内容不变）。这里如实返回 false，避免调用方以为
+        // 成功了。宿主应改用自己窗口的剪贴板 API。
+        const std::string readback =
+            clipboard->call<IClipboard::clipboard>(nullptr);
+        if (readback != text) {
+            FCITX_LOGC(openless, Debug)
+                << "SetClipboardText: clipboard not updated (readback mismatch)";
+            return false;
+        }
         return true;
     }
 
