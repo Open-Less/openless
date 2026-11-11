@@ -447,6 +447,7 @@ fn init_host() -> Host {
             {
                 let backend = std::sync::Arc::clone(&runtime_parts.backend);
                 runtime.spawn(async move {
+                    // 只在启动时做一次；失败也不阻塞其它命令。
                     match backend.cloud_sync_e2ee_sync_now().await {
                         Ok(status) => println!(
                             "[linux-web] 云同步会话已恢复：auth={:?} enabled={} account={:?}",
@@ -1195,24 +1196,13 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         }
         // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
         "cloud_sync_e2ee_status" => {
+            // 只读缓存，**不做任何网络/阻塞调用**：界面会高频轮询这个命令，
+            // 之前在里面 `block_on(sync_now)` 直接把 UI 拖死（status 每秒多次、
+            // Qt 进程 CPU 200%+）。会话恢复统一放到启动时和登录成功后的后台任务。
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
-            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
-            let mut status = backend
-                .cloud_sync_e2ee_status()
-                .map_err(|error| error.to_string())?;
-            // 冷启动时 E2EE 服务还没从 Marketplace 会话里恢复登录，status 会误报
-            // signed_out（界面据此显示「无法启用同步」）。这里用已有的 GitHub
-            // 会话把登录状态预热一次，再返回真实状态。
-            if matches!(
-                status.auth_state,
-                openless_core::cloud_sync_e2ee::AuthState::SignedOut
-                    | openless_core::cloud_sync_e2ee::AuthState::Expired
-            ) {
-                if let Ok(warmed) = runtime.block_on(backend.cloud_sync_e2ee_sign_in_with_token()) {
-                    status = warmed;
-                }
-            }
-            Ok(json_value(status))
+            Ok(json_value(
+                backend.cloud_sync_e2ee_status().map_err(|error| error.to_string())?,
+            ))
         }
         "cloud_sync_e2ee_cancel" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
