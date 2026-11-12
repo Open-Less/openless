@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/OpenLessCapsule';
+import { VerticalSensitivityRegulator } from '../../components/ui/VerticalSensitivityRegulator';
 import { parseCapsuleStyle } from '../../lib/capsuleLayout';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
@@ -517,7 +518,16 @@ export function RecordingInputSection({
                 label={t('settings.recording.capsuleStyleLabel')}
                 className="ol-capsule-style-segmented"
               />
-              <CapsuleStylePreview style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'} />
+              <div className="ol-capsule-preview-row">
+                <CapsuleStylePreview
+                  style={parseCapsuleStyle(prefs.capsuleStyle) ?? 'classic'}
+                  sensitivity={prefs.capsuleSensitivity ?? 1.0}
+                />
+                <VerticalSensitivityRegulator
+                  value={prefs.capsuleSensitivity ?? 1.0}
+                  onChange={(next) => savePrefs({ ...prefs, capsuleSensitivity: next })}
+                />
+              </div>
             </div>
           </SettingRow>
           <>

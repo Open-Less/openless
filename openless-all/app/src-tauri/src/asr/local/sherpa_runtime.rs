@@ -26,6 +26,20 @@ use crate::asr::local::sherpa::{
 };
 
 const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
+
+/// ONNX worker threads for SenseVoice offline decode.
+///
+/// The policy lives in `openless_core::asr::decode_threads` so it is covered by
+/// tests that run without the native sherpa libraries loaded.
+#[cfg(local_asr_sherpa)]
+fn sense_voice_decode_threads() -> i32 {
+    openless_core::asr::decode_threads::sense_voice_decode_threads_for(
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct SherpaTokenEmission {
     pub text: String,
@@ -530,18 +544,19 @@ async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
 #[cfg(local_asr_sherpa)]
 fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognizer> {
     let mut config = OfflineRecognizerConfig::default();
-    let default_num_threads = std::thread::available_parallelism()
+    // Baseline for families whose thread count has not been benchmarked: whatever
+    // this host offered before. SenseVoice overrides it below with a measured value.
+    config.model_config.num_threads = std::thread::available_parallelism()
         .map(|n| n.get().clamp(1, 4) as i32)
         .unwrap_or(2);
-    config.model_config.num_threads = default_num_threads;
-    #[cfg(target_os = "windows")]
-    {
-        // Keep Windows offline decode on one ONNX worker until native multi-threaded decode is proven stable.
-        config.model_config.num_threads = 1;
-    }
     config.model_config.provider = Some("cpu".into());
     match sherpa_target(alias)?.sherpa_family() {
         Some(openless_core::SherpaModelFamily::SenseVoice) => {
+            // Benchmarked on Windows: one ONNX worker costs ~2.2x decode latency.
+            // Safe to raise because every decode is serialized by
+            // `run_serialized_decode`, and the transcript is identical at every
+            // thread count we measured.
+            config.model_config.num_threads = sense_voice_decode_threads();
             config.model_config.tokens = Some(path_to_string(&dir.join("tokens.txt"))?);
             config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
                 model: Some(path_to_string(&dir.join("model.int8.onnx"))?),

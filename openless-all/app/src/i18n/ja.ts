@@ -316,6 +316,7 @@ export const ja: typeof zhCN = {
     translateTo: '翻訳先',
     translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
+    recordingCountdown: '{{time}} 後に停止します',
     selectionPolish: {
       polishing: '推敲中...',
       replaced: '置き換えました',
@@ -1370,6 +1371,8 @@ export const ja: typeof zhCN = {
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'デフォルトスタイル',
+      capsuleSensitivityLabel: '感度',
+      capsuleSensitivityTooltip: 'アニメーション応答感度 (ダブルクリックで 1.0× にリセット)',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',

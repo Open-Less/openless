@@ -325,6 +325,7 @@ export const es: typeof zhCN = {
     translateTo: 'Traducir al',
     translationChangeFailed: 'No se pudo cambiar el idioma. Vuelve a seleccionarlo.',
     translating: 'Traduciendo',
+    recordingCountdown: 'Se detiene en {{time}}',
     selectionPolish: {
       polishing: 'Mejorando el texto…',
       replaced: 'Reemplazado',
@@ -1405,6 +1406,8 @@ export const es: typeof zhCN = {
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado',
+      capsuleSensitivityLabel: 'Sensibilidad',
+      capsuleSensitivityTooltip: 'Sensibilidad de respuesta de animación (doble clic para restablecer a 1.0×)',
       stableTranscriptionLabel: 'Modo estable (grabar y luego transcribir)',
       stableTranscriptionDesc:
         'Al activarlo, ASR se conecta solo después de detener la grabación y recibe el audio completo. El resultado tarda más, pero la captura no se ve afectada por retrasos de conexión ni por inestabilidad de red durante la grabación.',

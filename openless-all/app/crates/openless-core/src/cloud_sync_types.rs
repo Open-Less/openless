@@ -131,6 +131,8 @@ pub struct SyncPreferences {
     pub capsule_transcript_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_transcript_font_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule_sensitivity: Option<f32>,
     // Old plaintext readers reject unknown keys. Display targeting syncs through E2EE only.
     #[serde(skip_serializing)]
     pub capsule_display_mode: Option<SyncCapsuleDisplayMode>,

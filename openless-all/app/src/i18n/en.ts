@@ -325,6 +325,7 @@ export const en: typeof zhCN = {
     translateTo: 'Translate to',
     translationChangeFailed: 'Could not change language. Please select it again.',
     translating: 'Translating',
+    recordingCountdown: 'Stops in {{time}}',
     selectionPolish: {
       polishing: 'Polishing…',
       replaced: 'Replaced',
@@ -1385,6 +1386,8 @@ export const en: typeof zhCN = {
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'Default style',
+      capsuleSensitivityLabel: 'Sensitivity',
+      capsuleSensitivityTooltip: 'Animation response sensitivity (double-click to reset to 1.0×)',
       stableTranscriptionLabel: 'Stable mode (record, then transcribe)',
       stableTranscriptionDesc:
         'When enabled, ASR connects only after recording stops and receives the complete audio. Results arrive later, but connection delays and network instability during recording cannot interrupt capture.',

@@ -4,7 +4,16 @@
   --ol-pill-scheme: light;
   --ol-pill-fill: rgb(255 255 255 / 86%);
   --ol-pill-border: rgb(79 91 115 / 24%);
-  --ol-pill-highlight: rgb(255 255 255 / 82%);
+  /* Soft top sheen. A single `inset 0 1px 0 <white>` reads as a drawn hairline
+     across the capsule; a multi-stop gradient falls off like light on glass. */
+  --ol-pill-sheen: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 92%) 0%,
+    rgb(255 255 255 / 62%) 6%,
+    rgb(255 255 255 / 26%) 16%,
+    rgb(255 255 255 / 8%) 30%,
+    rgb(255 255 255 / 0%) 48%
+  );
   --ol-pill-ink: #1d4ed8;
   --ol-pill-sweep: rgb(147 197 253 / 28%);
   --ol-pill-cancel: rgb(102 116 139 / 10%);
@@ -20,7 +29,14 @@
   --ol-pill-scheme: dark;
   --ol-pill-fill: rgb(28 34 45 / 88%);
   --ol-pill-border: rgb(218 231 255 / 26%);
-  --ol-pill-highlight: rgb(235 244 255 / 13%);
+  --ol-pill-sheen: linear-gradient(
+    to bottom,
+    rgb(235 244 255 / 22%) 0%,
+    rgb(235 244 255 / 14%) 6%,
+    rgb(235 244 255 / 6%) 16%,
+    rgb(235 244 255 / 2%) 30%,
+    rgb(235 244 255 / 0%) 48%
+  );
   --ol-pill-ink: #a7c7ff;
   --ol-pill-sweep: rgb(90 145 240 / 22%);
   --ol-pill-cancel: rgb(225 235 255 / 10%);
@@ -91,13 +107,11 @@
   font-size: 11px;
   color: var(--ol-pill-ink);
   color-scheme: var(--ol-pill-scheme);
-  background: var(--ol-pill-fill);
+  background: var(--ol-pill-sheen), var(--ol-pill-fill);
   border: 0.5px solid var(--ol-pill-border);
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
-  box-shadow:
-    0 3px 10px var(--ol-pill-shadow),
-    inset 0 1px 0 var(--ol-pill-highlight);
+  box-shadow: 0 3px 10px var(--ol-pill-shadow);
   white-space: nowrap;
   transform-origin: center bottom;
 }
@@ -140,6 +154,69 @@
   font-size: 10px;
   white-space: normal;
   width: max-content;
+}
+
+/* "Time left" chip for the final recording minute. Shares the translation badge's
+   frosted lane so the two never look like different products, and reserves the same
+   28px row in the Classic layout. */
+.ol-recording-countdown {
+  --ol-countdown-ink: #4b5563;
+  --ol-countdown-dot: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-family: var(--ol-font-sans);
+  font-size: 11.5px;
+  font-weight: var(--ol-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--ol-countdown-ink);
+  background: var(--ol-capsule-badge-bg);
+  border: 1px solid var(--ol-capsule-badge-border);
+  box-shadow: 0 3px 10px var(--ol-capsule-pill-shadow);
+  pointer-events: none;
+}
+[data-ol-theme='dark'] .ol-recording-countdown {
+  --ol-countdown-ink: #d6e2f5;
+  --ol-countdown-dot: #74b7ff;
+}
+.ol-recording-countdown[data-urgent='true'] {
+  --ol-countdown-ink: #c92d36;
+  --ol-countdown-dot: #e5484d;
+  border-color: rgba(229, 72, 77, 0.42);
+}
+[data-ol-theme='dark'] .ol-recording-countdown[data-urgent='true'] {
+  --ol-countdown-ink: #ff9b99;
+  --ol-countdown-dot: #ff6f6b;
+  border-color: rgba(255, 111, 107, 0.45);
+}
+.ol-recording-countdown-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--ol-countdown-dot);
+  box-shadow: 0 0 8px var(--ol-countdown-dot);
+}
+.ol-recording-countdown[data-urgent='true'] .ol-recording-countdown-dot {
+  animation: ol-countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes ol-countdown-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-recording-countdown[data-urgent='true'] .ol-recording-countdown-dot {
+    animation: none;
+  }
 }
 
 .ol-capsule-transcript-overlay .ol-capsule-transcript-rail {
