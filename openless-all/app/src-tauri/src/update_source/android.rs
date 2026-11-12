@@ -13,7 +13,7 @@ const METADATA_REQUEST_BUDGET: Duration = Duration::from_secs(8);
 const PROBE_BUDGET: Duration = Duration::from_secs(4);
 const METADATA_LIMIT: usize = 2 * 1024 * 1024;
 const API_METADATA_LIMIT: usize = 8 * 1024 * 1024;
-const SIGNATURE_LIMIT: usize = 16 * 1024;
+const SIGNATURE_LIMIT: usize = super::signature_index::LIMIT;
 
 fn github_url(url: &Url) -> bool {
     url.host_str() == Some("github.com")
@@ -280,7 +280,7 @@ fn latest_android_release<'a>(
         .find(|release| api_artifact(release, arch).is_some())
 }
 
-fn decode_asset_name(encoded: &str) -> Option<String> {
+pub(super) fn decode_asset_name(encoded: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(encoded.len());
     let mut chars = encoded.as_bytes().iter().copied();
     while let Some(ch) = chars.next() {
@@ -310,7 +310,12 @@ fn api_artifact<'a>(
     let name = artifact["name"].as_str()?;
     let signature = assets
         .iter()
-        .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))?;
+        .find(|a| a["name"].as_str() == Some(super::signature_index::NAME))
+        .or_else(|| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str() == Some(&format!("{name}.sig")))
+        })?;
     let artifact_url = artifact["browser_download_url"].as_str()?;
     let signature_url = signature["browser_download_url"].as_str()?;
     let expected = format!("/Open-Less/openless/releases/download/{tag}/");
@@ -382,9 +387,16 @@ async fn api_manifest(
     *candidate_seen
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
-    let signature = text(sig_url, SIGNATURE_LIMIT)
+    let body = text(sig_url, SIGNATURE_LIMIT)
         .await
         .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
+    let signature = super::signature_index::extract(
+        &body,
+        tag,
+        name,
+        sig_url.ends_with(super::signature_index::NAME),
+    )
+    .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
     let version = android_signature_version(signature.trim(), name, &version.to_string(), arch)
         .map_err(|error| ApiDiscoveryError::Candidate(candidate_error(&full_version, &error)))?;
     Ok(
@@ -408,7 +420,11 @@ fn web_artifact(page: &str, tag: &str, arch: &str) -> Option<(String, String, St
         .filter_map(|(p, n)| Some((artifact_version(n, arch)?, p, n)))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, p, n)| (p, n))?;
-    let signature = paths.iter().find(|(_, n)| *n == format!("{name}.sig"))?.0;
+    let signature = paths
+        .iter()
+        .find(|(_, n)| *n == super::signature_index::NAME)
+        .or_else(|| paths.iter().find(|(_, n)| *n == format!("{name}.sig")))?
+        .0;
     Some((
         name.clone(),
         format!("https://github.com{path}"),
@@ -449,9 +465,12 @@ where
         *candidate_seen
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(full_version.clone());
-        let signature = fetch(sig_url, SIGNATURE_LIMIT).await.map_err(|error| {
+        let indexed = sig_url.ends_with(super::signature_index::NAME);
+        let body = fetch(sig_url, SIGNATURE_LIMIT).await.map_err(|error| {
             candidate_error(&full_version, &format!("public signature: {error}"))
         })?;
+        let signature = super::signature_index::extract(&body, tag, &name, indexed)
+            .map_err(|error| candidate_error(&full_version, &error))?;
         let version =
             android_signature_version(signature.trim(), &name, &version.to_string(), arch)
                 .map_err(|error| candidate_error(&full_version, &error))?;
@@ -579,6 +598,26 @@ mod tests {
             let page=format!("<a href=\"/Open-Less/openless/releases/download/{tag}/{name}\"><a href=\"/Open-Less/openless/releases/download/{tag}/{name}.sig\">");
             assert_eq!(web_artifact(&page, tag, arch).unwrap().0, name);
             assert!(web_artifact(&page.replace(".apk.sig", ".apk.unsigned"), tag, arch).is_none());
+            let mut indexed = release.clone();
+            indexed["assets"][1] = json!({"name":super::super::signature_index::NAME,
+                "browser_download_url":format!("https://github.com/Open-Less/openless/releases/download/{tag}/updater-signatures.json")});
+            assert!(api_artifact(&indexed, arch)
+                .unwrap()
+                .2
+                .ends_with("updater-signatures.json"));
+            let index_page = page.replace(&format!("{name}.sig"), "updater-signatures.json");
+            assert!(web_artifact(&index_page, tag, arch)
+                .unwrap()
+                .2
+                .ends_with("updater-signatures.json"));
+            let index = json!({"schema":1,"release_tag":tag,"artifacts":{name.clone():{"signature":signature(&name)}}});
+            let extracted =
+                super::super::signature_index::extract(&index.to_string(), tag, &name, true)
+                    .unwrap();
+            assert_eq!(
+                android_signature_version(&extracted, &name, "2.0.2-Beta.6", arch).unwrap(),
+                "2.0.2-Beta.6+build.20261109-test"
+            );
         }
         assert!(artifact_version("OpenLess_2.0.2-Beta.6_x86_64.apk", "i686").is_none());
         assert!(artifact_version("OpenLess_android_aarch64.apk", "aarch64").is_none());

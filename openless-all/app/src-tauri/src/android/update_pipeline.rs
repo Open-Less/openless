@@ -200,6 +200,45 @@ async fn transfer<P: Fn(u64, Option<u64>)>(
     candidate: &UpdateCandidate,
     progress: &P,
 ) -> Result<Vec<u8>, String> {
+    let chosen = update_source::resolve_artifact_download_url(&candidate.url).await;
+    let fallback = update_source::github_fallback_for_cdn_artifact(&chosen);
+    let mut errors = Vec::new();
+    for url in std::iter::once(chosen).chain(fallback) {
+        let seconds = if url.starts_with("https://dl.aeoform.com/") {
+            120
+        } else {
+            600
+        };
+        let mut attempt = candidate.clone();
+        attempt.url = url;
+        progress(0, attempt.size);
+        let result = tokio::time::timeout(
+            Duration::from_secs(seconds),
+            transfer_once(&attempt, progress),
+        )
+        .await
+        .map_err(|_| "APK download timed out".to_string())
+        .and_then(|value| value)
+        .and_then(|bytes| {
+            updater_logic::verify_updater_signature(
+                &bytes,
+                &attempt.signature,
+                updater_logic::UPDATER_PUBKEY_B64,
+            )?;
+            Ok(bytes)
+        });
+        match result {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+async fn transfer_once<P: Fn(u64, Option<u64>)>(
+    candidate: &UpdateCandidate,
+    progress: &P,
+) -> Result<Vec<u8>, String> {
     use futures_util::StreamExt;
     let url = url::Url::parse(&candidate.url).map_err(|_| "invalid APK source")?;
     let response = update_source::bounded_update_get(url, Duration::from_secs(600)).await?;

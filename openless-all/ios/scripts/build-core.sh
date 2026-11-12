@@ -17,7 +17,7 @@ for spec in "device:aarch64-apple-ios:iphoneos" "simulator:aarch64-apple-ios-sim
   [ "$PLATFORM" = all ] || [ "$PLATFORM" = "$platform" ] || continue
   mkdir -p "$ROOT/Frameworks/$platform"
   IPHONEOS_DEPLOYMENT_TARGET=16.0 SDKROOT="$(xcrun --sdk "$sdk" --show-sdk-path)" \
-    rustup run 1.99.0 cargo build --manifest-path "$ROOT/CoreHost/Cargo.toml" --locked --release --target "$target"
+    rustup run 1.99.0 cargo build --manifest-path "$ROOT/CoreHost/Cargo.toml" --locked --release --target "$target" --timings
   cp "$CARGO_TARGET_DIR/$target/release/libopenless_ios_host.a" "$ROOT/Frameworks/$platform/libOpenLessCore.a"
   python3 "$ROOT/scripts/validate-deployment.py" "$ROOT/Frameworks/$platform/libOpenLessCore.a"
 done

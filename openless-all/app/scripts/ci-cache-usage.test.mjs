@@ -104,6 +104,17 @@ args="$*"
 case "$args" in
   *-X\\ DELETE*)
     printf '%s\\n' "$args" >>"$DELETE_LOG"
+    if [ "\${STATEFUL_CACHE:-0}" = 1 ]; then
+      ${pythonCommand} - "$CACHES_JSON" "$args" <<'PY'
+import json, sys, urllib.parse
+path, args = sys.argv[1:]
+query = urllib.parse.parse_qs(args.split('?', 1)[1])
+data = json.load(open(path))
+data['actions_caches'] = [e for e in data['actions_caches'] if not (e['key'] == query['key'][0] and e['ref'] == query['ref'][0])]
+with open(path, 'w') as output:
+    json.dump(data, output)
+PY
+    fi
     ;;
   *actions/caches?per_page=100*)
     ${pythonCommand} - "$CACHES_JSON" "$args" <<'PY'
@@ -113,7 +124,8 @@ for entry in data["actions_caches"]:
     if "--jq .actions_caches[].size_in_bytes" in " ".join(sys.argv[2:]):
         print(entry['size_in_bytes'])
         continue
-    print(f"{entry['ref']}\\t{entry['key']}\\t{entry['size_in_bytes']}\\t{entry['created_at']}")
+    timestamp = entry.get('last_accessed_at', entry['created_at']) if 'last_accessed_at' in sys.argv[2] else entry['created_at']
+    print(f"{entry['ref']}\\t{entry['key']}\\t{entry['size_in_bytes']}\\t{timestamp}")
 PY
     ;;
   *repos/*/pulls/*)
@@ -242,6 +254,105 @@ try {
     false,
   );
 
+  // Budget pruning uses access time, not creation time, and never evicts
+  // open PRs/tags even if they are older than every branch cache.
+  const budgetFixtures = [
+    {
+      ref: 'refs/heads/beta',
+      key: 'hot-baseline',
+      size_in_bytes: 2e9,
+      created_at: '2026-01-01',
+      last_accessed_at: '2026-11-10',
+    },
+    {
+      ref: 'refs/heads/beta',
+      key: 'cold-baseline',
+      size_in_bytes: 2e9,
+      created_at: '2026-11-01',
+      last_accessed_at: '2026-11-02',
+    },
+    { ref: 'refs/tags/v1', key: 'protected-tag', size_in_bytes: 2e9, created_at: '2025-01-01' },
+    {
+      ref: 'refs/pull/101/merge',
+      key: 'protected-open-pr',
+      size_in_bytes: 2e9,
+      created_at: '2025-01-01',
+    },
+    {
+      ref: 'refs/pull/999/merge',
+      key: 'protected-unreadable-pr',
+      size_in_bytes: 1e9,
+      created_at: '2025-01-01',
+    },
+  ];
+  const budgetPath = join(scratch, 'budget.json');
+  const budgetEnv = { CACHES_JSON: budgetPath, STATEFUL_CACHE: '1' };
+  const resetBudget = () => {
+    writeFileSync(budgetPath, JSON.stringify({ actions_caches: budgetFixtures }));
+    rmSync(deleteLog, { force: true });
+  };
+  resetBudget();
+  const budget = run(['--prune', '--prune-budget', '--limit-gb', '7'], budgetEnv);
+  check('budget pruning succeeds after real deletions', budget.code, 0);
+  const budgetDeleted = readFileSync(deleteLog, 'utf8').trim().split('\n');
+  check('budget pruning deletes just one cold branch cache', budgetDeleted.length, 1);
+  check(
+    'budget pruning chooses LRU rather than oldest-created',
+    budgetDeleted[0].includes('key=cold-baseline'),
+    true,
+  );
+  check('budget pruning rechecks usage', /post-prune usage: 7\.0+ GB/.test(budget.stdout), true);
+
+  resetBudget();
+  const dryBudget = run(['--prune', '--prune-budget', '--dry-run', '--limit-gb', '7'], budgetEnv);
+  check('dry run remains over actual budget', dryBudget.code, 1);
+  check('dry run makes no deletes', existsSync(deleteLog), false);
+  check(
+    'dry run reports projected usage',
+    /projected budget-prune usage: 7\.00 GB/.test(dryBudget.stdout),
+    true,
+  );
+
+  resetBudget();
+  writeFileSync(
+    budgetPath,
+    JSON.stringify({
+      actions_caches: [
+        ...budgetFixtures,
+        {
+          ref: 'refs/pull/102/merge',
+          key: 'closed-pr',
+          size_in_bytes: 2e9,
+          created_at: '2025-01-01',
+        },
+      ],
+    }),
+  );
+  const combinedDryRun = run(
+    ['--prune', '--prune-budget', '--dry-run', '--limit-gb', '7'],
+    budgetEnv,
+  );
+  check(
+    'dry budget accounts for planned dead-scope deletions',
+    /projected budget-prune usage: 7\.00 GB/.test(combinedDryRun.stdout),
+    true,
+  );
+  check(
+    'dry budget does not over-prune the hot baseline',
+    /would prune.*hot-baseline/.test(combinedDryRun.stdout),
+    false,
+  );
+  check('combined dry run still deletes nothing', existsSync(deleteLog), false);
+
+  resetBudget();
+  const impossible = run(['--prune', '--prune-budget', '--limit-gb', '4'], budgetEnv);
+  check('protected scopes exceeding budget still fail visibly', impossible.code, 1);
+  check(
+    'protected scopes are never budget-pruned',
+    readFileSync(deleteLog, 'utf8').trim().split('\n').length,
+    2,
+  );
+
   // Inside the budget: exit 0.
   const healthy = run(['--repo', 'example/openless', '--limit-gb', '10']);
   check('inside budget exits 0', healthy.code, 0);
@@ -252,6 +363,8 @@ try {
   check('unknown flag exits 2', badFlag.code, 2);
   const badKeep = run(['--prune', '--keep-family', 'two']);
   check('non-numeric --keep-family exits 2', badKeep.code, 2);
+  check('budget pruning requires prune', run(['--prune-budget']).code, 2);
+  check('invalid budget exits 2', run(['--limit-gb', 'NaN']).code, 2);
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

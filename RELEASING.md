@@ -43,32 +43,29 @@ component, which is a 16-bit field. The full version still appears in the app an
 updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
-These tags build the macOS, Windows, and Android Tauri hosts in parallel.
+These tags have one entry point, `.github/workflows/release-tauri.yml` (`Release (all platforms)`).
+A short preflight creates or validates the shared **draft**; macOS/Windows, all four
+Android ABIs, and HarmonyOS then build in parallel in the same Actions run.
+Android and HarmonyOS are reusable workflows resolved from the caller's immutable
+commit, not delayed dispatches after desktop publication. Android no longer has
+its own tag-push trigger, so the APKs are not built twice.
 
-Linux and HarmonyOS have dispatch-only entry points,
-`.github/workflows/release-linux-egui.yml` and `.github/workflows/release-harmony.yml`.
-Neither reacts directly to a tag push. After the desktop build, `release-tauri.yml`
-dispatches HarmonyOS on the same immutable release tag.
+Standalone Android weekly/debug/manual builds and HarmonyOS manual repairs remain
+available. Desktop branch/manual builds and Windows draft repairs keep their existing
+scope. See [release distribution](docs/release-distribution.md) for the dependency graph.
 
-Linux is separate: an administrator must complete and record the L01-L12 device
+Linux-specific CI and release automation is paused: the reusable Linux check and
+release entry point have been removed, and desktop releases no longer dispatch Linux.
+Linux source, local build/package/verification scripts, and device acceptance
+requirements remain available. No Linux artifacts or aliases are automatically
+built or attached. Before manually distributing packages, complete the L01-L12
 acceptance in [docs/linux-egui-handoff/07-acceptance.md](docs/linux-egui-handoff/07-acceptance.md)
-for the exact candidate, then set the repository variable
-`LINUX_ACCEPTED_RELEASE_TAG` to that release tag. Automatic dispatch occurs only
-when the variable exactly matches the current tag; missing or older acceptance
-omits Linux and records the reason in the release workflow summary. Desktop and
-Android delivery may proceed independently. The reusable Linux publication job
-checks the same exact-tag gate, including manual dispatches, before attaching any
-packages or aliases. A build-only dispatch with `publish=false` does not publish.
+for that exact candidate. Compilation alone is not device acceptance. Desktop and
+Android delivery remain independent; Linux has no in-app updater or AppImage.
 
-Accepted Linux packages use the same Core/host/deb/rpm checks as CI and attach
-automatically. There is no in-app updater manifest or AppImage. Never mark a tag
-accepted merely because compilation or CI passed; the hardware acceptance remains
-a separate requirement. To repair an accepted release, dispatch its workflow on
-the same tag, with the acceptance variable still matching that tag.
-
-HarmonyOS builds, signs and attaches `OpenLess_harmony_arm64.hap` plus the
-`OpenLess_harmony.hap` alias, and can upload the signed package (App Pack) to
-HUAWEI AppGallery Connect. The automatic dispatch uses `channel: none`, the
+HarmonyOS builds, signs and attaches the single `OpenLess_harmony_arm64.hap`,
+and can upload the signed package (App Pack) to
+HUAWEI AppGallery Connect. The automatic reusable call uses `channel: none`, the
 repository path: the HAP is attached to the GitHub Release unsigned and nothing
 reaches the store. Set the repository variable `HARMONY_AUTO_CHANNEL` to
 `release` (production) or `test` (test channel) to have the signed package
@@ -94,7 +91,7 @@ redistribution, which is also why it is fetched at job time rather than vendored
 
 | Channel | Artifact | Signing | Where it goes |
 | --- | --- | --- | --- |
-| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` (+ `OpenLess_harmony.hap`) | **unsigned** | Release assets, `SHA256SUMS` |
+| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` | **unsigned** | Release assets, `SHA256SUMS` |
 | AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
 | 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
 
@@ -108,7 +105,7 @@ Dispatch the workflow with `channel: none` (default), `channel: release` or
   `test.cer/p7b/p12`), sign, and upload to AppGallery.
 
 The workflow artifact bundle carries both packages; the Release step uploads only
-the unsigned pair, and the AppGallery step uploads only the signed one. CI never
+the single unsigned HAP and its checksum, and the AppGallery step uploads only the signed one. CI never
 signs: `ci.yml` always builds with `OPENLESS_HARMONY_CHANNEL=none`.
 
 A local machine without store certificates can still produce a package:
@@ -117,24 +114,16 @@ A local machine without store certificates can still produce a package:
 checks its contents without a device.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
-Both local packaging and the shared CI/tag build use this explicit revision; never drop
+Local packaging uses this explicit revision (Linux CI/tag builds are paused); never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
 
-## Direct download aliases
+## Download assets: no duplicate aliases in new releases
 
-The release workflows also publish stable, version-independent asset names for the official website:
+Future release runs publish only the original versioned macOS DMGs, Windows installers and Android APKs. Updater signatures are consolidated into one `updater-signatures.json` per release, not separate `.sig` attachments. Temporary `.sig` files remain in build artifacts to generate the index and CDN manifests. HarmonyOS publishes only `OpenLess_harmony_arm64.hap` and its checksum. They no longer generate or attach the duplicate names `OpenLess_macos_*`, `OpenLess_windows_*`, `OpenLess_android_*` or `OpenLess_harmony.hap`. macOS `.app.tar.gz` updater archives remain published, with signatures in the index. Linux automation remains paused. See [release distribution](docs/release-distribution.md) for format, compatibility limits and cutover.
 
-- macOS Apple Silicon: `OpenLess_macos_aarch64.dmg`
-- macOS Intel: `OpenLess_macos_x86_64.dmg`
-- Windows x64: `OpenLess_windows_x86_64-setup.exe`
-- Android: `OpenLess_android_<abi>.apk` (one each for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`)
-- Linux: `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
+Existing releases and their download aliases are not migrated or deleted. The alias helper remains available for legacy/manual use, but no automatic release workflow invokes it. Partial desktop reruns also filter out old alias artifacts instead of publishing them again; they do not delete assets already attached to an existing release.
 
-Stable website links use `https://github.com/Open-Less/openless/releases/latest/download/<asset-name>`.
-Beta links must use the release tag because `latest` excludes pre-releases:
-`https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
-
-The Tauri and Android workflows attach their aliases automatically. Accepted Linux publications attach the two files from the `openless-linux-egui-direct-download` Actions artifact alongside the versioned packages, behind the same exact-tag acceptance gate. Do not replace the versioned assets; the aliases are an additional website-facing contract.
+Website/CDN download resolution must use the actual asset names from the selected release API (or an external redirect to those assets), rather than assume the old fixed alias exists in a new release. This change does not implement a website redirect. Stable selection may use the latest stable release; beta selection must explicitly select its prerelease tag because GitHub `latest` excludes prereleases. Historical fixed-name links remain valid for historical releases. Updater manifest generation and its CDN artifact handoff are unchanged.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
@@ -174,8 +163,10 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
 
    The workflows also write the channel updater manifests (`latest-{target}-{arch}.json` and
    `latest-{target}-{arch}-beta.json`) but deliberately keep them **out** of the release assets —
-   current clients read the CDN, not the release. Download them from the run and publish them to
-   the CDN as part of publishing the release:
+   current clients can read the CDN and independently discover signed GitHub releases.
+   The main repository's `mirror-release.yml` now mirrors published binaries, verifies their
+   Minisign signatures, and generates/uploads rolling manifests. Downloadable run artifacts
+   remain available for diagnosis or manual recovery:
 
    | platform | workflow artifact |
    | --- | --- |
@@ -192,8 +183,11 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    ```
 
    Their `url` fields must point at the CDN artifacts (`.../releases/{tag}/{asset}`).
-   Manifest upload is the step that makes a release reachable by auto-update: a published
-   release whose manifests were not synced is downloadable by hand but invisible to the updater.
+   The mirror must upload binaries successfully before advancing rolling manifests. New clients
+   can fall back to GitHub release discovery/download if Aliyun is unavailable; older CDN-only
+   clients still require rolling manifests. Configure `OSS_BUCKET`, `OSS_ACCESS_KEY_ID` and
+   `OSS_ACCESS_KEY_SECRET` in the main repository before cutting over the website workflow.
+   The website migration must only be merged after a successful main-repository mirror run.
    Clients built before the CDN switch read the old `releases/latest/download/latest-*.json`
    assets, which new releases no longer carry, so they need one manual download.
 7. Publishing Stable with the administrator's CLI/UI credential automatically
@@ -205,12 +199,12 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    or manual cask edit is needed. Do not publish via an asset workflow's
    `GITHUB_TOKEN`, which does not emit the downstream release event.
 
-Before dispatching the Linux release build, additionally require all of the following:
+Linux workflow dispatch is paused. Before manually distributing Linux packages (or restoring automation), require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
-3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
-4. The dispatch pins the tag as an input; the workflow checks that tag out and rejects a `package.json` version mismatch, so the packages provably come from the reviewed commit.
+3. Run the local package verifier for ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
+4. Check out the reviewed immutable tag and verify the package version matches `package.json`, so the packages provably come from the reviewed commit.
 5. The checksum file is produced and attached as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
 
 ## HarmonyOS signing material and AppGallery credentials

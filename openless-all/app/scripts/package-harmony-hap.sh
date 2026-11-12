@@ -12,7 +12,6 @@
 #
 # Output: target/harmony-packages/
 #   OpenLess_harmony_arm64.hap   versioned artifact
-#   OpenLess_harmony.hap         stable alias used by the website links
 #   SHA256SUMS
 set -euo pipefail
 
@@ -156,7 +155,6 @@ mkdir -p "$OUTPUT"
 # The repository and the GitHub Release distribute the unsigned package, so a
 # download never carries someone else's signing identity.
 cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony_arm64.hap"
-cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony.hap"
 if [ -n "$APP_PACK" ]; then
   # Store-only artifact: AppGallery takes the App Pack, and it never enters the
   # GitHub Release.
@@ -167,7 +165,7 @@ if [ -n "$SIGNED" ]; then
   # of the Release.
   cp "$SIGNED" "$OUTPUT/OpenLess_harmony_arm64-signed.hap"
 fi
-# SHA256SUMS belongs to the GitHub Release, which contains only the unsigned HAP pair.
-(cd "$OUTPUT" && sha256sum ./OpenLess_harmony_arm64.hap ./OpenLess_harmony.hap > SHA256SUMS)
+# SHA256SUMS belongs to the GitHub Release, which contains only the unsigned HAP.
+(cd "$OUTPUT" && sha256sum ./OpenLess_harmony_arm64.hap > SHA256SUMS)
 echo "HAP packages ready in $OUTPUT"
 ls -l "$OUTPUT"
