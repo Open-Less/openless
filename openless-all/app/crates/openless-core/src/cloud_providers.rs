@@ -2641,7 +2641,9 @@ impl DictationEngine for SharedOmniDictationEngine {
                 return Err(failure);
             }
             let output = match result {
-                Ok(output) if !output.trim().is_empty() => output.trim().to_string(),
+                Ok(output) if !output.trim().is_empty() => {
+                    crate::output_cleaning::unwrap_dictation_json_wrapper(&output)
+                }
                 Ok(_) => {
                     let error = BackendError::new(
                         BackendErrorCode::Provider,
@@ -2825,6 +2827,8 @@ fn build_omni_prompt(context: &DictationContext) -> String {
     let mut snapshot = context.clone();
     snapshot.polish.translation_active = false;
     let mut prompt = snapshot.effective_polish_system_prompt();
+    prompt.push_str("\n\n");
+    prompt.push_str(crate::prompts::omni_dictation_audio_instruction());
     if context.polish.translation_active {
         prompt.push_str(&format!(
             "\n\n# 翻译\n把识别和整理后的最终正文翻译成「{}」。只输出译文，不要输出源文、标记或解释。",
@@ -3930,5 +3934,23 @@ mod tests {
         assert!(parse_temperature("2.1").is_err());
         assert!(parse_extra_headers(r#"{"x-trace":"ok"}"#).is_ok());
         assert!(parse_extra_headers(r#"{"Authorization":"secret"}"#).is_err());
+    }
+
+    #[test]
+    fn omni_prompt_explains_audio_input_before_any_translation_request() {
+        let mut context = DictationContext::default();
+        let prompt = build_omni_prompt(&context);
+        let audio = crate::prompts::omni_dictation_audio_instruction();
+        assert!(prompt.ends_with(audio));
+
+        context.polish.translation_active = true;
+        context.polish.translation_target_language = "English".into();
+        let prompt = build_omni_prompt(&context);
+        let audio_at = prompt.find(audio).expect("audio instruction present");
+        let translation_at = prompt.find("# 翻译").expect("translation section present");
+        assert!(
+            audio_at < translation_at,
+            "translation must override the keep-language rule"
+        );
     }
 }

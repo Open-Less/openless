@@ -214,6 +214,39 @@ pub fn clean_json_llm_output(content: &str) -> String {
     strip_markdown_fence(trimmed).trim().to_string()
 }
 
+/// Field names audio models have been seen to invent when they wrap dictation output.
+const DICTATION_JSON_WRAPPER_KEYS: &[&str] = &[
+    "raw_transcript",
+    "transcript",
+    "transcription",
+    "text",
+    "output",
+    "result",
+    "polished_text",
+];
+
+/// Multimodal audio models sometimes return the dictation as a one-field JSON object,
+/// e.g. `{"raw_transcript": "..."}`. Unwrap only that exact shape with a known key, so
+/// dictated text that merely looks like JSON is left untouched.
+pub fn unwrap_dictation_json_wrapper(content: &str) -> String {
+    let trimmed = content.trim();
+    let candidate = strip_markdown_fence(trimmed).trim();
+    if candidate.starts_with('{') && candidate.ends_with('}') {
+        if let Ok(serde_json::Value::Object(map)) =
+            serde_json::from_str::<serde_json::Value>(candidate)
+        {
+            if let [(key, serde_json::Value::String(text))] =
+                map.iter().collect::<Vec<_>>().as_slice()
+            {
+                if DICTATION_JSON_WRAPPER_KEYS.contains(&key.as_str()) && !text.trim().is_empty() {
+                    return text.trim().to_string();
+                }
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Strip model reasoning blocks so only the final polished text is inserted.
 ///
 /// Thinking-capable OpenAI-compatible models commonly return their reasoning in
@@ -481,5 +514,26 @@ mod tests {
             sentence_like_segments("The price is 3.14. Next sentence."),
             ["The price is 3.14.", "Next sentence."]
         );
+    }
+
+    #[test]
+    fn dictation_json_wrapper_is_unwrapped_only_for_known_single_fields() {
+        assert_eq!(
+            unwrap_dictation_json_wrapper(r#"{"raw_transcript": "Hello，hello，能听到吗？"}"#),
+            "Hello，hello，能听到吗？"
+        );
+        assert_eq!(
+            unwrap_dictation_json_wrapper("```json\n{\"text\": \"你好\"}\n```"),
+            "你好"
+        );
+        // Dictated JSON-like text and multi-field objects stay as spoken.
+        for kept in [
+            r#"{"name": "OpenLess"}"#,
+            r#"{"text": "a", "lang": "zh"}"#,
+            r#"{"text": ""}"#,
+            "普通文本 {不是 JSON}",
+        ] {
+            assert_eq!(unwrap_dictation_json_wrapper(kept), kept);
+        }
     }
 }
