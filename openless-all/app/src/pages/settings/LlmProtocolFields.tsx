@@ -78,8 +78,16 @@ export function LlmProtocolFields({
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<'read' | 'save' | null>(null);
-  const arkServiceTier = providerType === 'ark';
-  const accounts = arkServiceTier ? [...protocolAccounts, serviceTierAccount] : protocolAccounts;
+  const showsServiceTier = providerType === 'ark' || providerType === 'openai';
+  const serviceTierLabel =
+    providerType === 'openai'
+      ? 'settings.providers.openaiServiceTierLabel'
+      : 'settings.providers.serviceTierLabel';
+  const serviceTierHint =
+    providerType === 'openai'
+      ? 'settings.providers.openaiServiceTierHint'
+      : 'settings.providers.serviceTierHint';
+  const accounts = showsServiceTier ? [...protocolAccounts, serviceTierAccount] : protocolAccounts;
   const mounted = useRef(true);
   const writing = useRef(false);
   const pendingWrite = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -202,15 +210,12 @@ export function LlmProtocolFields({
           {t('settings.providers.responsesThinkingHint')}
         </p>
       )}
-      {arkServiceTier && (
-        <SettingRow
-          label={t('settings.providers.serviceTierLabel')}
-          desc={t('settings.providers.serviceTierHint')}
-        >
+      {showsServiceTier && (
+        <SettingRow label={t(serviceTierLabel)} desc={t(serviceTierHint)}>
           <Toggle
             on={values['ark.service_tier'] === 'fast'}
             disabled={disabled}
-            label={t('settings.providers.serviceTierLabel')}
+            label={t(serviceTierLabel)}
             onToggle={(enabled) => change('ark.service_tier', enabled ? 'fast' : '', true)}
           />
         </SettingRow>
