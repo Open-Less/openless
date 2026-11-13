@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "2.0.2-Beta.6+build.20261109-1f057451",
+  "version": "2.0.2-Beta.7+build.20261113-6a7b5bb",
   "type": "module",
   "scripts": {
     "pretest": "npm run build",
