@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from 'react';
 import { isAndroid, isTauri } from '../lib/ipc';
-import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
+import { disposeAudioCue, playRecordStartCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
 
 interface CapsulePayload {
@@ -17,11 +17,12 @@ interface CapsulePayload {
 }
 
 export function AudioCueListener() {
-  const audioCueEnabledRef = useRef<boolean>(true);
+  const audioCueEnabledRef = useRef(false);
+  const audioCuePreferenceChangedRef = useRef(false);
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
   const audioCueRuntimeEnabled = !isAndroid();
 
-  // Read settings (enabled by default)
+  // Read settings before playing cues.
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
     let cancelled = false;
@@ -29,9 +30,10 @@ export function AudioCueListener() {
       try {
         const { getSettings } = await import('../lib/ipc');
         const prefs = await getSettings();
-        if (!cancelled) audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
+        if (cancelled || audioCuePreferenceChangedRef.current) return;
+        audioCueEnabledRef.current = prefs.audioCueOnRecord !== false;
       } catch {
-        // Read failure: keep the default true
+        // Leave the cue off until the preference is known.
       }
     })();
     return () => {
@@ -48,7 +50,10 @@ export function AudioCueListener() {
       const { listen } = await import('@tauri-apps/api/event');
       listen<UserPreferences>('prefs:changed', (event) => {
         const next = event.payload;
-        if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+        if (cancelled || !next) return;
+        audioCuePreferenceChangedRef.current = true;
+        audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+        if (!audioCueEnabledRef.current) disposeAudioCue();
       })
         .then((fn) => {
           if (cancelled) fn();
@@ -62,12 +67,6 @@ export function AudioCueListener() {
     };
   }, [audioCueRuntimeEnabled]);
 
-  // Prime the AudioContext
-  useEffect(() => {
-    if (!isTauri || !audioCueRuntimeEnabled) return;
-    primeAudioCue();
-  }, [audioCueRuntimeEnabled]);
-
   // Listen for capsule state edges
   useEffect(() => {
     if (!isTauri || !audioCueRuntimeEnabled) return;
@@ -79,8 +78,7 @@ export function AudioCueListener() {
       if (cancelled) return;
       const currentWindow = getCurrentWebviewWindow();
       // The cue belongs to the resident recording capsule only. The main window must not
-      // prime an AudioContext or replay the current recording edge when it is opened during
-      // an active session.
+      // replay the current recording edge when it is opened during an active session.
       if (currentWindow.label !== 'capsule') return;
       const target = { kind: 'WebviewWindow' as const, label: currentWindow.label };
       listen<CapsulePayload>(
@@ -107,7 +105,7 @@ export function AudioCueListener() {
     return () => {
       cancelled = true;
       unlisten?.();
-      stopAudioCue();
+      disposeAudioCue();
     };
   }, [audioCueRuntimeEnabled]);
 
