@@ -535,6 +535,12 @@ impl ModelManifest {
                 if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(invalid("model file has an invalid sha256"));
                 }
+            } else if is_plaintext_remote_url(&file.url) {
+                // Without TLS or a digest nothing binds the bytes to the manifest, and
+                // the file is later parsed by native inference code.
+                return Err(invalid(
+                    "model file over plain http must declare a sha256 checksum",
+                ));
             }
         }
         if files.is_empty() {
@@ -3085,7 +3091,16 @@ pub fn extract_archive_safely(
             std::fs::create_dir_all(parent).map_err(platform_error)?;
         }
         let mut file = std::fs::File::create(output).map_err(platform_error)?;
-        std::io::copy(&mut entry, &mut file).map_err(platform_error)?;
+        // The size checks above trust the archive's own header; bound the bytes
+        // actually inflated so a lying entry cannot fill the disk.
+        let written = std::io::copy(
+            &mut std::io::Read::take(&mut entry, max_file_bytes.saturating_add(1)),
+            &mut file,
+        )
+        .map_err(platform_error)?;
+        if written > max_file_bytes || written != entry.size() {
+            return Err(invalid("archive entry size does not match its header"));
+        }
     }
     commit_staging(&staging, destination)?;
     staging_guard.committed = true;
@@ -3133,6 +3148,20 @@ pub fn validate_model_url(value: &str) -> Result<(), BackendError> {
         return Err(invalid("model file URL must use http or https"));
     }
     Ok(())
+}
+
+/// Plain `http` to anything other than this machine (local test servers stay usable).
+fn is_plaintext_remote_url(value: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(value) else {
+        return true;
+    };
+    parsed.scheme() == "http"
+        && !match parsed.host() {
+            Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        }
 }
 fn archive_file_name(value: &str) -> Option<String> {
     url::Url::parse(value)
@@ -3851,6 +3880,16 @@ mod tests {
             .is_file());
         assert!(legacy.join("whisper-base/conflict.bin").is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plaintext_remote_model_urls_require_a_checksum() {
+        assert!(is_plaintext_remote_url("http://mirror.example/model.bin"));
+        assert!(is_plaintext_remote_url("http://192.168.1.2/model.bin"));
+        assert!(!is_plaintext_remote_url("https://huggingface.co/model.bin"));
+        assert!(!is_plaintext_remote_url("http://127.0.0.1:9000/model.bin"));
+        assert!(!is_plaintext_remote_url("http://localhost/model.bin"));
+        assert!(!is_plaintext_remote_url("http://[::1]/model.bin"));
     }
 
     #[test]
