@@ -1500,11 +1500,6 @@ export const ja: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter（多くのエディタ）',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter（チャット入力）',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'キーボード一覧に OpenLess を表示',
-      windowsShowOpenlessInKeyboardListDesc:
-        'オフにすると Win+Space で OpenLess に切り替わりません。SendInput とクリップボード貼り付け挿入には影響しません。オンに戻すと一覧に再表示されます。',
-      windowsShowOpenlessInKeyboardListError:
-        'キーボード一覧を更新できません：システムが OpenLess 言語プロファイルの変更を拒否しました。',
       historyGroupTitle: '履歴とコンテキスト',
       historyRetentionLabel: '履歴保持期間（日）',
       historyRetentionDesc:

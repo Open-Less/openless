@@ -540,11 +540,8 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
-    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
-    /// paste). Default true keeps current behavior; when off, the language
-    /// profile is disabled per-user without admin rights. TSF mode still
-    /// force-enables the profile but never rewrites this pref.
+    /// Legacy wire compatibility only. The Windows speech TIP does not appear
+    /// in the keyboard list and stays enabled regardless of this preference.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// User's working languages (multi-select, native names). Injected as

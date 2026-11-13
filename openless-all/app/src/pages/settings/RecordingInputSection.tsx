@@ -10,12 +10,8 @@ import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
 import { defaultDictationHotkey } from '../../lib/hotkey';
 import { getSherpaOnnxAsrCatalog } from '../../lib/localAsr';
-import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
-import {
-  showWindowsOpenlessKeyboardListToggle,
-  showWindowsSendInputNewlineMode,
-} from '../../lib/windowsKeyboardListToggle';
+import { showWindowsSendInputNewlineMode } from '../../lib/windowsKeyboardListToggle';
 import {
   isPlainTextInsertionActive,
   pasteShortcutForPlainTextToggle,
@@ -202,17 +198,19 @@ export function RecordingInputSection({
     if (!prefs?.voiceActivationEnabled) setVoiceActivationModelMissing(false);
   }, [prefs?.voiceActivationEnabled]);
 
-  const saveKeyboardListAffectingPrefs = useCallback(
+  const saveWindowsInsertionPrefs = useCallback(
     async (nextPrefs: UserPreferences) => {
       try {
         await savePrefs(nextPrefs);
       } catch (error) {
-        console.error('[settings] keyboard list visibility pref save failed', error);
-        emitSaved('failed', t('settings.recording.windowsShowOpenlessInKeyboardListError'));
+        // The shared settings provider already reports the save failure and
+        // rolls back its optimistic update; do not replace it with an obsolete
+        // keyboard-list error when changing the insertion method.
+        console.error('[settings] Windows insertion pref save failed', error);
         await refresh();
       }
     },
-    [savePrefs, refresh, t],
+    [savePrefs, refresh],
   );
 
   // Read from the cached platform capabilities so the recording controls don't
@@ -260,7 +258,7 @@ export function RecordingInputSection({
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
-    void saveKeyboardListAffectingPrefs({
+    void saveWindowsInsertionPrefs({
       ...prefs,
       windowsInsertionMode,
       windowsSendInputInsertionOnly: windowsInsertionMode === 'sendInput',
@@ -270,8 +268,6 @@ export function RecordingInputSection({
   ) => savePrefs({ ...prefs, windowsSendInputNewlineMode });
   const onMacosNewlineModeChange = (macosNewlineMode: MacosNewlineMode) =>
     savePrefs({ ...prefs, macosNewlineMode });
-  const onWindowsShowOpenlessInKeyboardListChange = (windowsShowOpenlessInKeyboardList: boolean) =>
-    void saveKeyboardListAffectingPrefs({ ...prefs, windowsShowOpenlessInKeyboardList });
   const onStartMinimizedChange = (startMinimized: boolean) =>
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
@@ -861,21 +857,6 @@ export function RecordingInputSection({
               />
             </SettingRow>
           )}
-          {capability.adapter === 'windowsLowLevel' &&
-            showWindowsOpenlessKeyboardListToggle(
-              prefs.windowsInsertionMode,
-              prefs.windowsSendInputInsertionOnly,
-            ) && (
-              <SettingRow
-                label={t('settings.recording.windowsShowOpenlessInKeyboardListLabel')}
-                desc={t('settings.recording.windowsShowOpenlessInKeyboardListDesc')}
-              >
-                <Toggle
-                  on={prefs.windowsShowOpenlessInKeyboardList}
-                  onToggle={(next) => void onWindowsShowOpenlessInKeyboardListChange(next)}
-                />
-              </SettingRow>
-            )}
           {capability.adapter === 'windowsLowLevel' && (
             <SettingRow label={t('settings.recording.allowNonTsfFallbackLabel')}>
               <Toggle

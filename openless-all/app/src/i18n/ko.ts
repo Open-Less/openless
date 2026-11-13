@@ -1491,11 +1491,6 @@ export const ko: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter(대부분 편집기)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter(채팅 입력창)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: '키보드 목록에 OpenLess 표시',
-      windowsShowOpenlessInKeyboardListDesc:
-        '끄면 Win+Space로 OpenLess에 전환되지 않습니다. SendInput 및 클립보드 붙여넣기 삽입에는 영향 없습니다. 다시 켜면 목록에 복원됩니다.',
-      windowsShowOpenlessInKeyboardListError:
-        '키보드 목록을 업데이트할 수 없습니다: 시스템이 OpenLess 언어 프로필 변경을 거부했습니다.',
       historyGroupTitle: '기록 및 컨텍스트',
       historyRetentionLabel: '기록 보관 기간(일)',
       historyRetentionDesc:
