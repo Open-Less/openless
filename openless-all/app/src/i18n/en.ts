@@ -1603,6 +1603,8 @@ export const en: typeof zhCN = {
         'Manually send a real request to check this configuration. It may use service credits. Saving settings does not run a check.',
       validationHintOmni:
         'Manually send a text-only connectivity request (no recording). Passing does not mean audio dictation works—please confirm with a short recording. It may use service credits.',
+      validationHintRealtime:
+        'Check the Realtime connection and model configuration without sending audio, opening the microphone or generating a reply. Then confirm dictation quality with a short recording.',
       autoSaveHint:
         'Changes save automatically. Once configured, you can check the connection manually.',
       nameHint:
@@ -1656,6 +1658,8 @@ export const en: typeof zhCN = {
       asrTitle: 'ASR (transcription)',
       asrDesc: 'Used to turn recorded speech into text.',
       omniTitle: 'Multimodal model',
+      openaiRealtimeOmniNotice:
+        'Choose an audio-capable Realtime model to turn recordings directly into prepared text, without a separate polishing pass. Uses the lowest low reasoning level and returns text, not generated speech. Requires an OpenAI API key and API credits; a Codex or ChatGPT login cannot replace the key. Other OpenAI models may not accept audio.',
       omniDesc:
         'One model that turns audio + prompt into the final text directly (experimental pipeline).',
       pipelineModeLabel: 'Pipeline mode',
@@ -1720,6 +1724,7 @@ export const en: typeof zhCN = {
         asrLocalQwen3C: 'Local Qwen3-ASR (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (audio-capable)',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1879,6 +1884,8 @@ export const en: typeof zhCN = {
       validateSuccess: 'Connection check passed.',
       validateSuccessOmni:
         'Text connectivity passed. This does not mean audio dictation works—please confirm with a short recording.',
+      validateSuccessRealtime:
+        'Realtime session connection and model configuration passed. Confirm dictation quality with a short recording.',
       validateFailed: 'Connection check failed.',
       providerHttpStatus:
         'Provider returned HTTP {{status}}. Check the API key permissions or endpoint.',

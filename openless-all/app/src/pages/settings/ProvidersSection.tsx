@@ -34,6 +34,7 @@ import { ProviderFormContext } from './ProviderForm';
 import { SiwcChannelFields } from './SiwcChannelFields';
 import { LocalModelPicker } from './models/LocalModelPicker';
 import { emitSaved } from '../../lib/savedEvent';
+import { providerValidationCopy } from '../../lib/providerValidation';
 import { useContentMotion } from '../../lib/motion';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -1373,6 +1374,7 @@ function ProviderTools({
   kind,
   modelAccount,
   provider,
+  providerType,
   onModelSelected,
   onTested,
   onUserMutation,
@@ -1385,6 +1387,7 @@ function ProviderTools({
   kind: 'llm' | 'asr' | 'omni';
   modelAccount: string;
   provider?: string;
+  providerType?: string;
   onModelSelected: () => void;
   onTested?: () => void;
   onUserMutation?: () => void;
@@ -1395,6 +1398,7 @@ function ProviderTools({
   audioValidation?: boolean;
 }) {
   const { t } = useTranslation();
+  const validationCopy = providerValidationCopy(kind, providerType, audioValidation);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -1439,15 +1443,7 @@ function ProviderTools({
       const latency = Math.round(performance.now() - started);
       setResult(
         result.ok ? 'success' : 'error',
-        t(
-          result.ok
-            ? audioValidation
-              ? 'settings.providers.validateSuccessAudio'
-              : kind === 'omni'
-                ? 'settings.providers.validateSuccessOmni'
-                : 'settings.providers.validateSuccess'
-            : 'settings.providers.validateFailed',
-        ),
+        t(result.ok ? validationCopy.successKey : 'settings.providers.validateFailed'),
       );
       await persistTest(result.ok, result.ok ? latency : null, result.ok ? null : 'validateFailed');
     } catch (error) {
@@ -1476,7 +1472,7 @@ function ProviderTools({
     setOperation('models');
     setResult('loading', t('settings.providers.loadingModels'));
     try {
-      const result = await listProviderModels(kind, provider);
+      const result = await listProviderModels(kind, provider, providerType);
       setModels(result.models);
       if (result.models.length === 0) {
         setResult('empty', t('settings.providers.modelsEmpty'));
@@ -1579,11 +1575,7 @@ function ProviderTools({
       <ChannelSectionHeading
         icon="bolt"
         title={t('settings.channels.validationTitle')}
-        description={t(
-          kind === 'omni' && !audioValidation
-            ? 'settings.channels.validationHintOmni'
-            : 'settings.channels.validationHint',
-        )}
+        description={t(validationCopy.hintKey)}
       />
       <div className="ol-channel-validation-actions">
         <div className="ol-provider-status-slot">{operation === 'validate' && resultMessage}</div>
@@ -1599,13 +1591,7 @@ function ProviderTools({
           {verifyButton}
         </div>
         <div className="ol-omni-tools-hint">
-          {operation === 'validate' && message
-            ? resultMessage
-            : t(
-                audioValidation
-                  ? 'settings.channels.validationHint'
-                  : 'settings.channels.validationHintOmni',
-              )}
+          {operation === 'validate' && message ? resultMessage : t(validationCopy.hintKey)}
         </div>
       </section>
     );
@@ -2129,6 +2115,7 @@ export function OmniChannelSection() {
         nameKey: descriptor.labelKey,
         baseUrl: descriptor.defaultEndpoint ?? '',
         modelPlaceholder: descriptor.defaultModel ?? '',
+        models: descriptor.staticModels,
       })),
     [descriptors],
   );
@@ -2214,6 +2201,11 @@ export function OmniChannelSection() {
             account="omni.model"
             placeholder={omniPreset?.modelPlaceholder || 'model-name'}
             onValueChange={setOmniModel}
+            options={
+              omniPreset?.models.length
+                ? omniPreset.models.map((model) => ({ value: model, label: model }))
+                : undefined
+            }
             mono
             trailing={
               committedOmniProvider === 'gemini' && !geminiTranscribe ? (
@@ -2238,6 +2230,14 @@ export function OmniChannelSection() {
             style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
           >
             {t('settings.providers.geminiTranscribeOmniNotice')}
+          </div>
+        )}
+        {committedOmniProvider === 'openai-realtime' && (
+          <div
+            role="note"
+            style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65, marginBottom: 12 }}
+          >
+            {t('settings.providers.openaiRealtimeOmniNotice')}
           </div>
         )}
         <CredentialField
@@ -2275,6 +2275,7 @@ export function OmniChannelSection() {
         <ProviderTools
           key={`omni:${committedOmniProvider}:${geminiTranscribe ? omniModel.trim() : ''}`}
           kind="omni"
+          providerType={committedOmniProvider}
           modelAccount="omni.model"
           onModelSelected={() => setOmniModelRevision((v) => v + 1)}
           compact

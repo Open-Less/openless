@@ -1637,6 +1637,8 @@ export const de: typeof zhCN = {
         'Sendet manuell eine echte Anfrage, um diese Konfiguration zu prüfen. Dabei kann Dienstguthaben verbraucht werden. Das Speichern der Einstellungen führt keine Prüfung aus.',
       validationHintOmni:
         'Sendet manuell eine reine Text-Verbindungsanfrage (ohne Aufnahme). Erfolg bedeutet nicht, dass Audio-Diktat funktioniert — bitte mit einer kurzen Aufnahme bestätigen. Dabei kann Dienstguthaben verbraucht werden.',
+      validationHintRealtime:
+        'Prüft die Realtime-Verbindung und Modellkonfiguration, ohne Audio zu senden, das Mikrofon zu starten oder eine Antwort zu erzeugen. Prüfe die Diktierqualität anschließend mit einer kurzen Aufnahme.',
       autoSaveHint:
         'Änderungen werden automatisch gespeichert. Anschließend kannst du die Verbindung manuell prüfen.',
       nameHint:
@@ -1694,6 +1696,8 @@ export const de: typeof zhCN = {
       asrTitle: 'ASR (Transkription)',
       asrDesc: 'Wandelt aufgenommene Sprache in Text um.',
       omniTitle: 'Multimodales Modell',
+      openaiRealtimeOmniNotice:
+        'Wähle ein Realtime-Modell mit Audioeingabe, um Aufnahmen ohne zusätzlichen Überarbeitungsschritt direkt in geordneten Text umzuwandeln. Die Denkstufe bleibt auf dem niedrigsten Wert low; ausgegeben wird nur Text, keine erzeugte Sprache. Dafür werden ein OpenAI-API-Schlüssel und API-Guthaben benötigt; eine Codex- oder ChatGPT-Anmeldung ersetzt den Schlüssel nicht. Andere OpenAI-Modelle unterstützen möglicherweise kein Audio.',
       omniDesc:
         'Ein Modell erzeugt direkt aus Audio und Prompt den fertigen Text (experimenteller Ablauf).',
       pipelineModeLabel: 'Verarbeitungsmodus',
@@ -1758,6 +1762,7 @@ export const de: typeof zhCN = {
         asrLocalQwen3C: 'Lokales Qwen3-ASR (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (mit Audiounterstützung)',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1922,6 +1927,8 @@ export const de: typeof zhCN = {
       validateSuccess: 'Verbindungsprüfung bestanden.',
       validateSuccessOmni:
         'Text-Verbindung bestanden. Das bedeutet nicht, dass Audio-Diktat funktioniert — bitte mit einer kurzen Aufnahme bestätigen.',
+      validateSuccessRealtime:
+        'Realtime-Sitzungsverbindung und Modellkonfiguration geprüft. Bestätige die Diktierqualität mit einer kurzen Aufnahme.',
       validateFailed: 'Verbindungsprüfung fehlgeschlagen.',
       providerHttpStatus:
         'Der Anbieter hat HTTP {{status}} zurückgegeben. Prüfe die Berechtigungen des API-Schlüssels oder den Endpunkt.',

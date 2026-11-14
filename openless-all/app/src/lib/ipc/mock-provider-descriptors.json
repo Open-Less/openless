@@ -680,6 +680,21 @@
   },
   {
     "kind": "omni",
+    "providerType": "openai-realtime",
+    "labelKey": "omniOpenaiRealtime",
+    "defaultEndpoint": "https://api.openai.com/v1",
+    "defaultModel": "gpt-realtime-2.1",
+    "authRequirement": "api_key",
+    "validationProbe": "omni_text",
+    "staticModels": [
+      "gpt-realtime-2.1",
+      "gpt-realtime-2.1-mini"
+    ],
+    "defaultRequestFormat": null,
+    "supportedRequestFormats": []
+  },
+  {
+    "kind": "omni",
     "providerType": "gemini",
     "labelKey": "omniGemini",
     "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",

@@ -1579,6 +1579,8 @@ export const ko: typeof zhCN = {
         '실제 요청을 보내 현재 설정을 확인합니다. 서비스 사용량이 차감될 수 있습니다. 설정을 저장해도 자동으로 확인하지 않습니다.',
       validationHintOmni:
         '텍스트 연결만 수동으로 확인합니다(녹음 없음). 통과해도 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 다시 확인하세요. 서비스 사용량이 차감될 수 있습니다.',
+      validationHintRealtime:
+        '오디오 전송, 마이크 사용, 응답 생성 없이 Realtime 연결과 모델 설정을 확인합니다. 이후 짧게 녹음하여 실제 받아쓰기 품질을 확인하세요.',
       autoSaveHint:
         '변경 사항은 자동으로 저장됩니다. 설정을 마친 후 연결을 직접 확인할 수 있습니다.',
       nameHint:
@@ -1632,6 +1634,8 @@ export const ko: typeof zhCN = {
       asrTitle: 'ASR 음성(전사)',
       asrDesc: '녹음된 음성을 텍스트로 전사합니다.',
       omniTitle: '멀티모달 모델',
+      openaiRealtimeOmniNotice:
+        '오디오 입력을 지원하는 Realtime 모델을 선택하면 별도의 다듬기 단계 없이 녹음을 정리된 텍스트로 바로 출력합니다. 추론 수준은 최저 low로 고정하며 음성은 생성하지 않습니다. OpenAI API 키와 API 크레딧이 필요하며 Codex 또는 ChatGPT 로그인으로 키를 대신할 수 없습니다. 다른 OpenAI 모델은 오디오를 지원하지 않을 수 있습니다.',
       omniDesc:
         '하나의 모델이 프롬프트 + 오디오를 받아 최종 텍스트를 한 번에 출력합니다(실험적 파이프라인).',
       pipelineModeLabel: '인식 파이프라인',
@@ -1696,6 +1700,7 @@ export const ko: typeof zhCN = {
         asrLocalQwen3C: '로컬 Qwen3-ASR(C / CPU)',
         asrAppleSpeech: 'Apple 음성 (macOS)',
         omniOpenai: 'OpenAI (오디오 지원)',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1852,6 +1857,8 @@ export const ko: typeof zhCN = {
       validateSuccess: '연결 확인을 통과했습니다.',
       validateSuccessOmni:
         '텍스트 연결은 통과했습니다. 오디오 받아쓰기가 된다는 뜻은 아닙니다. 짧은 녹음으로 확인하세요.',
+      validateSuccessRealtime:
+        'Realtime 세션 연결과 모델 설정 확인을 통과했습니다. 짧게 녹음하여 받아쓰기 품질을 확인하세요.',
       validateFailed: '연결 확인에 실패했습니다.',
       providerHttpStatus:
         '공급자가 {{status}} 를 반환했습니다. API Key 권한 또는 Endpoint 를 확인해 주세요.',

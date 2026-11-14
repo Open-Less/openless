@@ -13,6 +13,9 @@ use crate::errors::{BackendError, BackendErrorCode};
 
 pub const OPENAI_COMPATIBLE_ASR_PROVIDER_ID: &str = "openai-compatible";
 pub const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
+/// Explicit Realtime transport; the existing `openai` Omni provider keeps Chat Completions.
+pub const OPENAI_REALTIME_OMNI_PROVIDER_ID: &str = "openai-realtime";
+pub const OPENAI_REALTIME_OMNI_MODELS: &[&str] = &["gpt-realtime-2.1", "gpt-realtime-2.1-mini"];
 
 const BAILIAN_PROVIDER_ID: &str = "bailian";
 const QWEN3_REALTIME_PROVIDER_ID: &str = "bailian-qwen3-realtime";
@@ -85,6 +88,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
 
 const OMNI_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("openai", "omniOpenai"),
+    (OPENAI_REALTIME_OMNI_PROVIDER_ID, "omniOpenaiRealtime"),
     ("gemini", "omniGemini"),
     ("dashscope-omni", "omniDashscope"),
     ("custom", "custom"),
@@ -375,6 +379,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "gemini") => GEMINI_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
+        (ProviderKind::Omni, OPENAI_REALTIME_OMNI_PROVIDER_ID) => OPENAI_REALTIME_OMNI_MODELS,
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -737,6 +742,7 @@ pub(crate) fn tokenhub_chat_model_policy(model: &str) -> Option<TokenHubChatMode
 pub fn default_omni_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("https://api.openai.com/v1"),
+        OPENAI_REALTIME_OMNI_PROVIDER_ID => Some("https://api.openai.com/v1"),
         "gemini" => Some("https://generativelanguage.googleapis.com/v1beta"),
         "dashscope-omni" => Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
         _ => None,
@@ -746,6 +752,7 @@ pub fn default_omni_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_omni_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "openai" => Some("gpt-4o-audio-preview"),
+        OPENAI_REALTIME_OMNI_PROVIDER_ID => Some(OPENAI_REALTIME_OMNI_MODELS[0]),
         "gemini" => Some("gemini-3.5-flash-lite"),
         "dashscope-omni" => Some("qwen3-omni-flash"),
         _ => None,
@@ -1407,6 +1414,42 @@ mod tests {
         );
         assert!(parse_extra_headers(r#"{"x-trace":"enabled"}"#).is_ok());
         assert!(parse_extra_headers(r#"{"authorization":"secret"}"#).is_err());
+    }
+
+    #[test]
+    fn openai_realtime_is_an_explicit_omni_provider_without_changing_openai_defaults() {
+        let realtime =
+            provider_descriptor(ProviderKind::Omni, OPENAI_REALTIME_OMNI_PROVIDER_ID).unwrap();
+        assert_eq!(realtime.label_key, "omniOpenaiRealtime");
+        assert_eq!(
+            realtime.default_endpoint.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(realtime.default_model.as_deref(), Some("gpt-realtime-2.1"));
+        assert_eq!(realtime.static_models, OPENAI_REALTIME_OMNI_MODELS);
+        assert_eq!(realtime.auth_requirement, AuthRequirement::ApiKey);
+        // Hosts use the Omni validation entry point, but Realtime checks only a session handshake.
+        assert_eq!(realtime.validation_probe, ValidationProbe::OmniText);
+        assert!(realtime.supported_request_formats.is_empty());
+        assert!(!omni_configured(
+            OPENAI_REALTIME_OMNI_PROVIDER_ID,
+            &CredentialConfiguration::default()
+        ));
+        assert!(omni_configured(
+            OPENAI_REALTIME_OMNI_PROVIDER_ID,
+            &CredentialConfiguration {
+                omni_api_key: true,
+                ..CredentialConfiguration::default()
+            }
+        ));
+        assert!(provider_descriptor(ProviderKind::Asr, OPENAI_REALTIME_OMNI_PROVIDER_ID).is_none());
+        assert!(!provider_descriptors(ProviderKind::Llm)
+            .iter()
+            .any(|descriptor| descriptor.provider_type.as_str() == OPENAI_REALTIME_OMNI_PROVIDER_ID));
+
+        let openai = provider_descriptor(ProviderKind::Omni, "openai").unwrap();
+        assert_eq!(openai.default_model.as_deref(), Some("gpt-4o-audio-preview"));
+        assert!(openai.static_models.is_empty());
     }
 
     #[test]

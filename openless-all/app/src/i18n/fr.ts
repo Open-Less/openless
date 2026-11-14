@@ -1647,6 +1647,8 @@ export const fr: typeof zhCN = {
         'Envoyez manuellement une requête réelle pour vérifier cette configuration. Elle peut consommer des crédits du service. L’enregistrement des réglages ne lance pas de vérification.',
       validationHintOmni:
         'Envoyez manuellement une requête de connectivité texte uniquement (sans enregistrement). Réussir ne signifie pas que la dictée audio fonctionne — confirmez avec un court enregistrement. Elle peut consommer des crédits du service.',
+      validationHintRealtime:
+        'Vérifie la connexion Realtime et la configuration du modèle sans envoyer d’audio, activer le microphone ni générer de réponse. Confirmez ensuite la qualité de dictée avec un court enregistrement.',
       autoSaveHint:
         'Les modifications sont enregistrées automatiquement. Une fois le service configuré, vous pouvez vérifier la connexion.',
       nameHint:
@@ -1705,6 +1707,8 @@ export const fr: typeof zhCN = {
       asrTitle: 'ASR (transcription)',
       asrDesc: 'Convertit la voix enregistrée en texte.',
       omniTitle: 'Modèle multimodal',
+      openaiRealtimeOmniNotice:
+        'Choisissez un modèle Realtime acceptant l’audio pour transformer directement les enregistrements en texte organisé, sans seconde étape de révision. Le raisonnement reste au niveau minimal low et la sortie est textuelle, sans génération vocale. Une clé API et des crédits OpenAI sont nécessaires ; une connexion Codex ou ChatGPT ne remplace pas la clé. Les autres modèles OpenAI n’acceptent pas forcément l’audio.',
       omniDesc:
         'Un modèle transforme directement l’audio et les instructions en texte final (flux expérimental).',
       pipelineModeLabel: 'Mode de traitement',
@@ -1769,6 +1773,7 @@ export const fr: typeof zhCN = {
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (avec audio)',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1934,6 +1939,8 @@ export const fr: typeof zhCN = {
       validateSuccess: 'Connexion vérifiée avec succès.',
       validateSuccessOmni:
         'Connectivité texte OK. Cela ne signifie pas que la dictée audio fonctionne — confirmez avec un court enregistrement.',
+      validateSuccessRealtime:
+        'Connexion à la session Realtime et configuration du modèle validées. Confirmez la qualité de dictée avec un court enregistrement.',
       validateFailed: 'Échec de la vérification de connexion.',
       providerHttpStatus:
         'Le fournisseur a renvoyé HTTP {{status}}. Vérifiez les autorisations de la clé API ou l’adresse.',

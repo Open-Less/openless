@@ -86,6 +86,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
 
 const OMNI_NAME_KEY_BY_ID: Record<string, string> = {
   openai: 'omniOpenai',
+  'openai-realtime': 'omniOpenaiRealtime',
   gemini: 'omniGemini',
   'dashscope-omni': 'omniDashscope',
   custom: 'custom',

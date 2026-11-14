@@ -1588,6 +1588,8 @@ export const ja: typeof zhCN = {
         '実際にリクエストを送信して設定を確認します。サービスの利用枠を消費する場合があります。設定の保存だけでは確認を実行しません。',
       validationHintOmni:
         'テキストのみの疎通確認を手動送信します（録音なし）。成功しても音声ディクテーションが使えるとは限りません。短い録音で再確認してください。サービスの利用枠を消費する場合があります。',
+      validationHintRealtime:
+        '音声の送信、マイクの起動、応答の生成を行わずに Realtime の接続とモデル設定を確認します。その後、短い録音でディクテーションの品質を確認してください。',
       autoSaveHint: '変更は自動保存されます。設定が終わったら、手動で接続を確認できます。',
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
@@ -1641,6 +1643,8 @@ export const ja: typeof zhCN = {
       asrTitle: 'ASR 音声（転写）',
       asrDesc: '録音した音声をテキストに文字起こしします。',
       omniTitle: 'マルチモーダルモデル',
+      openaiRealtimeOmniNotice:
+        '音声入力に対応する Realtime モデルを選ぶと、別の推敲処理なしで録音から整えたテキストを直接生成します。推論レベルは最低の low に固定し、音声は生成しません。OpenAI API キーと API 利用枠が必要です。Codex や ChatGPT のログインは API キーの代わりにはなりません。他の OpenAI モデルが音声対応とは限りません。',
       omniDesc:
         '1つのモデルが「プロンプト + 音声」から最終テキストを直接出力します（実験的パイプライン）。',
       pipelineModeLabel: '認識パイプライン',
@@ -1705,6 +1709,7 @@ export const ja: typeof zhCN = {
         asrLocalQwen3C: 'ローカル Qwen3-ASR（C / CPU）',
         asrAppleSpeech: 'Apple 音声認識 (macOS)',
         omniOpenai: 'OpenAI（音声対応）',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1862,6 +1867,8 @@ export const ja: typeof zhCN = {
       validateSuccess: '接続チェックに合格しました。',
       validateSuccessOmni:
         'テキスト疎通は成功しました。これは音声ディクテーションが使えることを意味しません。短い録音で確認してください。',
+      validateSuccessRealtime:
+        'Realtime セッションの接続とモデル設定の確認に成功しました。短い録音でディクテーションの品質を確認してください。',
       validateFailed: '接続チェックに失敗しました。',
       providerHttpStatus:
         'サプライヤーが {{status}} を返しました。API Key 権限またはエンドポイントを確認してください。',

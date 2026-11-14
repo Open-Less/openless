@@ -1628,6 +1628,8 @@ export const es: typeof zhCN = {
         'Envía manualmente una solicitud real para comprobar la configuración. Puede consumir saldo del servicio. Guardar los ajustes no ejecuta esta comprobación.',
       validationHintOmni:
         'Envía manualmente una solicitud solo de texto (sin grabación). Pasar no significa que el dictado de audio funcione: confirma con una grabación corta. Puede consumir saldo del servicio.',
+      validationHintRealtime:
+        'Comprueba la conexión Realtime y la configuración del modelo sin enviar audio, activar el micrófono ni generar una respuesta. Después confirma la calidad del dictado con una grabación breve.',
       autoSaveHint:
         'Los cambios se guardan automáticamente. Después de configurar el servicio, puedes comprobar la conexión.',
       nameHint:
@@ -1682,6 +1684,8 @@ export const es: typeof zhCN = {
       asrTitle: 'ASR (transcripción)',
       asrDesc: 'Convierte las grabaciones de voz en texto.',
       omniTitle: 'Modelo multimodal',
+      openaiRealtimeOmniNotice:
+        'Elige un modelo Realtime compatible con audio para convertir las grabaciones directamente en texto organizado, sin una fase adicional de edición. Usa el nivel mínimo de razonamiento low y solo devuelve texto, sin generar voz. Requiere una clave API y créditos de OpenAI; iniciar sesión en Codex o ChatGPT no sustituye la clave. Otros modelos de OpenAI pueden no admitir audio.',
       omniDesc:
         'Un modelo convierte directamente el audio y las instrucciones en el texto final (flujo experimental).',
       pipelineModeLabel: 'Modo de procesamiento',
@@ -1746,6 +1750,7 @@ export const es: typeof zhCN = {
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
         asrAppleSpeech: 'Apple Speech (macOS)',
         omniOpenai: 'OpenAI (con audio)',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
@@ -1908,6 +1913,8 @@ export const es: typeof zhCN = {
       validateSuccess: 'Conexión comprobada correctamente.',
       validateSuccessOmni:
         'Conectividad de texto correcta. Esto no significa que el dictado de audio funcione: confirma con una grabación corta.',
+      validateSuccessRealtime:
+        'Conexión de la sesión Realtime y configuración del modelo correctas. Confirma la calidad del dictado con una grabación breve.',
       validateFailed: 'La comprobación de conexión falló.',
       providerHttpStatus:
         'El proveedor devolvió HTTP {{status}}. Comprueba los permisos de la clave API o la dirección.',

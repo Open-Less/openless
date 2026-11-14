@@ -1524,6 +1524,8 @@ export const zhCN = {
         '手动发起一次真实请求，检查当前配置；可能消耗服务额度。保存设置不会自动验证。',
       validationHintOmni:
         '手动发起一次文本连通性请求（不含录音）。通过不代表音频听写可用，请再做一次短录音确认。可能消耗服务额度。',
+      validationHintRealtime:
+        '检查 Realtime 连接和当前模型配置，不发送音频、不启动麦克风，也不生成回复。通过后请再用短录音确认实际听写效果。',
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
@@ -1573,6 +1575,8 @@ export const zhCN = {
       asrTitle: 'ASR 语音（转写）',
       asrDesc: '用于将录制的语音转写为文本。',
       omniTitle: '多模态模型',
+      openaiRealtimeOmniNotice:
+        '选择支持音频输入的 Realtime 模型，直接将录音整理为文字，无需独立润色。固定使用最低 low 推理等级，仅输出文字、不生成语音。使用 OpenAI API Key 和 API 额度；Codex 或 ChatGPT 登录不能代替 API Key。其他 OpenAI 模型不一定支持音频。',
       omniDesc: '一个模型直接接收「提示词 + 音频」一步输出最终文本（实验性管线）。',
       pipelineModeLabel: '识别管线',
       pipelineModeHint: '传统 = ASR 转写 + LLM 润色两段式；多模态 = 单个多模态模型一次完成。',
@@ -1635,6 +1639,7 @@ export const zhCN = {
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
         asrAppleSpeech: '苹果识别（macOS）',
         omniOpenai: 'OpenAI（支持音频）',
+        omniOpenaiRealtime: 'OpenAI Realtime',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里云百炼 Omni',
       },
@@ -1777,6 +1782,7 @@ export const zhCN = {
       modelSaved: '已保存模型 {{model}}。',
       validateSuccess: '连接检查通过。',
       validateSuccessOmni: '文本连通性通过。这不代表音频听写可用，请再做一次短录音确认。',
+      validateSuccessRealtime: 'Realtime 会话连接与模型配置检查通过。请用短录音确认听写效果。',
       validateFailed: '连接检查未通过。',
       providerHttpStatus: '供应商接口返回 {{status}}，请检查 API Key 权限或 Endpoint。',
       endpointMustUseHttps:
