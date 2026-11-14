@@ -119,6 +119,13 @@ text LLM. Keep that LLM configured for those actions. Direct audio-attachment Q&
 through these Qwen profiles is explicitly unsupported; choose text Q&A or an
 audio-Q&A provider. The OpenAI GA profile also supports native text requests.
 
+The ordinary dictation/selection/voice-Q&A pipeline is separate from the history
+page's **Retranscribe** operation. Current multimodal entries do not offer that
+operation; older traditional entries and applicable quick notes still use the
+selected ASR channel. When retiring an external ASR bridge, configure a usable
+native ASR channel for these older recordings instead of leaving it pointed at
+the stopped localhost service.
+
 ## Model candidates, validation and other WebSocket services
 
 The model catalog supplies candidates, not proof of access. Custom model names

@@ -33,8 +33,11 @@ Short confirmations and fragments are kept concise. Questions and action
 requests spoken in ordinary dictation are transcribed rather than answered.
 Long dictation retains details and corrections instead of being summarized.
 The final result follows the existing preview, script conversion, insertion and
-history pipeline. Auxiliary text operations and recorded-audio retries use the
-same transport; retrying a complete file includes connection setup time.
+history pipeline. Auxiliary text operations also use this transport. Current
+multimodal history entries do not expose audio retranscription; retranscribing
+older traditional entries still uses the separately selected ASR channel. Keep
+that channel usable if removing an old ASR bridge. Complete-file PCM playback
+through the Realtime engine includes connection setup time.
 
 The dictation prompt allows clear, committed self-corrections only to content
 already identified within the current recording. Consecutive corrections keep
