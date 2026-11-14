@@ -1868,11 +1868,8 @@ pub async fn answer_qa_with_context(
                 .await
                 .map_err(map_omni_error)?;
             if let Some(query) = crate::web_search::planned_query(&plan) {
-                let results = crate::web_search::search(&search_config, &query).await;
-                if should_cancel() {
-                    return Err(BackendError::new(BackendErrorCode::Cancelled, "cancelled"));
-                }
-                user_text.push_str(&crate::web_search::context(results));
+                user_text
+                    .push_str(&qa_search_context(&search_config, &query, &should_cancel).await?);
             }
         }
         provider
@@ -1905,17 +1902,10 @@ pub async fn answer_qa_with_context(
             let plan =
                 answer_cloud_qa(&provider, &context, &planning, |_| {}, &should_cancel).await?;
             if let Some(query) = crate::web_search::planned_query(&plan) {
-                let cancel_search = async {
-                    while !should_cancel() {
-                        tokio::time::sleep(Duration::from_millis(25)).await;
-                    }
-                };
-                let results = tokio::select! {
-                    _ = cancel_search => return Err(BackendError::new(BackendErrorCode::Cancelled, "cancelled")),
-                    result = crate::web_search::search(&search_config, &query) => result,
-                };
+                let search_context =
+                    qa_search_context(&search_config, &query, &should_cancel).await?;
                 if let Some(last) = messages.last_mut() {
-                    last.content.push_str(&crate::web_search::context(results));
+                    last.content.push_str(&search_context);
                 }
             }
         }
@@ -1925,6 +1915,30 @@ pub async fn answer_qa_with_context(
         return Err(error);
     }
     result
+}
+
+async fn qa_search_context<C>(
+    config: &crate::web_search::WebSearchConfig,
+    query: &str,
+    should_cancel: C,
+) -> Result<String, BackendError>
+where
+    C: Fn() -> bool + Send + Sync,
+{
+    let cancelled = || BackendError::new(BackendErrorCode::Cancelled, "cancelled");
+    if should_cancel() {
+        return Err(cancelled());
+    }
+    let cancellation = async {
+        while !should_cancel() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation => Err(cancelled()),
+        result = crate::web_search::search(config, query) => Ok(crate::web_search::context(result)),
+    }
 }
 
 async fn answer_cloud_qa<F, C>(
@@ -2913,6 +2927,41 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn qa_search_cancels_while_waiting_for_a_response() {
+        use super::*;
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = crate::web_search::WebSearchConfig {
+            provider: crate::web_search::SearchProvider::Searxng,
+            endpoint: format!("http://{}/search", listener.local_addr().unwrap()),
+            ..Default::default()
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancelled);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            signal.store(true, Ordering::Release);
+            // Keep the response pending until the client drops its cancelled request.
+            loop {
+                if socket.read(&mut bytes).await.unwrap_or(0) == 0 {
+                    break;
+                }
+            }
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            qa_search_context(&config, "weather", || cancelled.load(Ordering::Acquire)),
+        )
+        .await
+        .expect("cancellation must not wait for the 15-second search timeout")
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        server.abort();
+    }
+
     #[tokio::test]
     async fn manual_bailian_protocol_is_snapshotted_for_recording() {
         use super::*;

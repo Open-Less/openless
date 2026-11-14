@@ -563,13 +563,13 @@ impl OpenAICompatibleLLMProvider {
         }
     }
 
-    /// The observer must return promptly and receives no request text.
     pub(crate) fn enable_qa_web_search(&mut self) -> bool {
         self.qa_web_search = self.config.protocol.format == LlmRequestFormat::ChatCompletions
             && crate::web_search::native_deepseek(&self.config.base_url, &self.config.model);
         self.qa_web_search
     }
 
+    /// The observer must return promptly and receives no request text.
     pub fn with_usage_observer(mut self, observer: LlmUsageObserver) -> Self {
         self.usage_observer = Some(observer);
         self
