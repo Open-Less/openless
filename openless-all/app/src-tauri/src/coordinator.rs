@@ -1570,6 +1570,9 @@ impl Coordinator {
             .cache_capsule_display_mode(preferences.capsule_display_mode);
         self.inner
             .host
+            .cache_capsule_siri_enhanced(preferences.capsule_siri_enhanced);
+        self.inner
+            .host
             .cache_capsule_style(preferences.capsule_style);
     }
     /// Apply only the Tauri presentation side of the Core-owned vocabulary

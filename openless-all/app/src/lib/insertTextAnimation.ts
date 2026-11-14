@@ -31,6 +31,62 @@ export const INSERT_TEXT_MOTION = {
   minWidth: 72,
 } as const;
 
+/**
+ * Siri enhanced glyph birth ("ink wash"): the glyph fades in quickly as a soft, slightly
+ * oversized blur, lingers briefly, then comes into focus and eases to rest (ease-in-out, so the
+ * focus does not snap at full speed). Births 45-80 ms apart and a focus about one ASR burst long
+ * keep several glyphs mid-focus at a normal pace.
+ */
+export const SIRI_ENHANCED_GLYPH_MOTION = {
+  fadeMs: 200,
+  focusMs: 380,
+  bornY: 2,
+  bornBlurPx: 6,
+  bornScale: 1.3,
+  focusEase: [0.6, 0, 0.3, 1],
+  /**
+   * While the transcript is finalised and polished, a breathing cycle repeats until the rail goes
+   * away: the whole line slowly blurs together (settleBlurInMs), rests (settleBlurHoldMs), comes
+   * back into focus glyph by glyph from left to right (settleSweepMs, first glyph starting to focus
+   * until the last is sharp; each glyph takes settleFocusMs, so neighbours overlap into a wave),
+   * then rests sharp (settleHoldMs). Sine easing keeps both ends of every ramp soft.
+   */
+  settleBlurPx: 4,
+  settleScale: 1.08,
+  settleBlurInMs: 800,
+  settleBlurHoldMs: 200,
+  settleFocusMs: 600,
+  settleSweepMs: 1100,
+  settleHoldMs: 400,
+  /** easeInOutSine. */
+  settleEase: [0.37, 0, 0.63, 1],
+  /** Render window for the wide marquee pill (the default 64 glyphs leave its left side empty). */
+  maxUnits: 160,
+  /** The band starts as wide as the Siri capsule below it and grows with the text. */
+  minWidth: 460,
+  /** Room kept ahead of the text while growing, in glyphs (font sizes), so it widens early. */
+  lookaheadEm: 3,
+  /**
+   * Open: the band grows out of the centre of the Siri wave (riseY below its own centre, at
+   * riseScale), moving up and unfolding over openMs while it spreads out from its centre.
+   * Close: it collapses toward a small blob (closeWidth) while it moves back into the wave's
+   * centre, shrinking and fading (sinkMs, starting sinkDelayMs in). riseY plus half the band must
+   * stay within SIRI_ENHANCED_RAIL_TRAVEL in the Tauri host.
+   */
+  riseY: 85,
+  /** closeWidth × riseScale ≈ a 30px dot at the wave's centre. */
+  riseScale: 0.54,
+  /** Constant speed, so the dot clears the wave instead of lingering behind it. */
+  openMs: 800,
+  openEase: [0, 0, 1, 1],
+  closeWidth: 56,
+  collapseMs: 360,
+  sinkDelayMs: 60,
+  sinkMs: 480,
+  /** How long the last line outlives the transcript: until the sink has finished. */
+  closeMs: 540,
+} as const;
+
 export interface InsertUnit {
   key: string;
   text: string;
