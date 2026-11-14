@@ -9391,9 +9391,23 @@ impl OpenLessBackend {
                 &preferences.active_asr_provider,
             )
         };
+        let active_omni_provider = if traditional {
+            crate::dictation_context::ProviderInvocation::for_provider(
+                &preferences.active_omni_provider,
+            )
+        } else {
+            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
+                .await?
+        };
+        let qa_needs_text_llm = matches!(
+            purpose,
+            DictationContextPurpose::QaText | DictationContextPurpose::QaVoice
+        ) && crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+            &active_omni_provider.provider_type,
+        );
         let mut deferred_llm_error = None;
         let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if traditional && !skip_llm_at_capture {
+        let active_llm_provider = if (traditional || qa_needs_text_llm) && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await
@@ -9410,14 +9424,6 @@ impl OpenLessBackend {
             crate::dictation_context::ProviderInvocation::for_provider(
                 &preferences.active_llm_provider,
             )
-        };
-        let active_omni_provider = if traditional {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_omni_provider,
-            )
-        } else {
-            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
-                .await?
         };
         let recent_history = if preferences.polish_context_window_minutes == 0 {
             Vec::new()
