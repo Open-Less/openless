@@ -6,7 +6,7 @@ impl OpenLessBackend {
         &self,
         state: std::sync::Arc<dyn crate::local_migration_bundle::AndroidMigrationState>,
     ) -> Result<(), BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .bind_android_migration_state(state)
             .map_err(|error| {
                 BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
@@ -17,7 +17,7 @@ impl OpenLessBackend {
         &self,
         options: crate::local_migration_bundle::BundleExportOptions,
     ) -> Result<crate::local_migration_bundle::BundleArtifact, BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .export_local_bundle(options)
             .await
             .map_err(|error| {
@@ -40,7 +40,7 @@ impl OpenLessBackend {
         password: Option<crate::local_migration_bundle::BundlePassword>,
         mode: crate::local_migration_bundle::RestoreMode,
     ) -> Result<crate::local_migration_bundle::BundleMergePreview, BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .preview_local_bundle(bytes, password, mode)
             .await
             .map_err(|error| {
@@ -57,7 +57,7 @@ impl OpenLessBackend {
         expected_generation: Option<crate::cloud_sync_e2ee_documents::Revision>,
         expected_android_revision: Option<String>,
     ) -> Result<crate::local_migration_bundle::BundleInspection, BackendError> {
-        self.local_migration_store
+        self.local_migration_store()?
             .import_local_bundle(
                 bytes,
                 password,
