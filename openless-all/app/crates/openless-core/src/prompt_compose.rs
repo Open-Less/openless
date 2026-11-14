@@ -637,15 +637,12 @@ mod stable_prompt_prefix_tests {
                 .0,
             translation_prefix
         );
-        assert_eq!(
-            compose_qa_system_prompt(
-                &[],
-                ChineseScriptPreference::Auto,
-                OutputLanguagePreference::Auto,
-                None
-            ),
-            qa_prefix
+        let qa = compose_qa_system_prompt(
+            &[], ChineseScriptPreference::Auto, OutputLanguagePreference::Auto, None,
         );
+        assert!(qa.starts_with(&qa_prefix));
+        assert!(qa.contains("Current local date:"));
+        assert!(qa.contains("Ask for a city"));
     }
 
     #[test]
