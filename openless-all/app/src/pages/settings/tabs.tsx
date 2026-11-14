@@ -17,6 +17,8 @@ import { TypographySection } from './TypographySection';
 import { ThemeSection } from './ThemeSection';
 import { ProvidersSection } from './ChannelList';
 import { OmniChannelSection } from './ProvidersSection';
+import { WebSearchSection } from './WebSearchSection';
+import { DeepSeekSuiteSection } from './DeepSeekSuiteSection';
 import { NetworkSection } from './NetworkSection';
 import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';
@@ -460,6 +462,7 @@ export function ServicesTab({
             {selectedView === 'llm' && <ProvidersSection kind="llm" />}
             {selectedView === 'asr' && <ProvidersSection kind="asr" />}
             {selectedView === 'omni' && <OmniChannelSection />}
+            {selectedView === 'deepseek' && <DeepSeekSuiteSection />}
             {showLocalModel && selectedView === 'models' && (
               <>
                 {multimodal && voiceActivationModels && (
@@ -746,6 +749,7 @@ export function AdvancedTab({
                   (detectOS() === 'mac' || detectOS() === 'win') && <ExpressionLearningSection />}
               </div>
             )}
+            {item.id === 'webSearch' && <WebSearchSection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

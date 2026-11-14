@@ -619,6 +619,8 @@ fn reset_credentials_cache_for_tests() {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[allow(non_snake_case)]
 struct CredsRoot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web_search: Option<String>,
     #[serde(default = "credsroot_default_version")]
     version: u32,
     #[serde(default)]
@@ -3496,6 +3498,21 @@ fn apply_sync_credentials_root(
 pub struct CredentialsVault;
 
 impl CredentialsVault {
+    pub fn get_web_search_config() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(load_credentials_for_update()?.web_search)
+    }
+
+    pub fn set_web_search_config(value: &str) -> Result<()> {
+        if !value.is_empty() {
+            serde_json::from_str::<openless_core::web_search::WebSearchConfig>(value)?;
+        }
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            root.web_search = (!value.is_empty()).then(|| value.to_string());
+            Ok(true)
+        })
+    }
+
     /// System credential store service name; maps to the Keychain service on macOS.
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 

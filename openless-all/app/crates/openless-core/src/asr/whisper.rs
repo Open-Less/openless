@@ -185,6 +185,19 @@ impl WhisperBatchASR {
         let client = crate::net::http();
 
         let request = match self.request_format {
+            AsrRequestFormat::DeepSeek => {
+                anyhow::ensure!(
+                    pcm_duration_ms(pcm) <= 120_000 && wav.len() <= 8 * 1024 * 1024,
+                    "DeepSeek ASR accepts at most 120 seconds and 8 MiB per upload"
+                );
+                let file = reqwest::multipart::Part::bytes(wav)
+                    .file_name("audio.wav")
+                    .mime_str("audio/wav")?;
+                client
+                    .post(&url)
+                    .bearer_auth(&self.api_key)
+                    .multipart(reqwest::multipart::Form::new().part("file", file))
+            }
             AsrRequestFormat::Multipart => {
                 let wav_part = reqwest::multipart::Part::bytes(wav)
                     .file_name("audio.wav")
@@ -1229,6 +1242,43 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "openrouter ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn deepseek_sends_only_wav_file_to_tools_asr() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let text = String::from_utf8_lossy(&request);
+            assert!(text.starts_with("POST /v1/tools/asr HTTP/1.1"));
+            assert!(text
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key"));
+            assert!(text.contains("name=\"file\""));
+            for field in ["model", "prompt", "language", "response_format"] {
+                assert!(!text.contains(&format!("name=\"{field}\"")));
+            }
+            assert!(text.contains("RIFF"));
+            write_json_response(
+                &mut stream,
+                r#"{"text":"Shanghai weather","duration_ms":1000}"#,
+            );
+        });
+        let asr = WhisperBatchASR::new(
+            "test-key".into(),
+            format!("http://{addr}/v1"),
+            "deepseek-asr".into(),
+            Some("private hotwords".into()),
+            Some(120_000),
+            true,
+        )
+        .with_request_format(AsrRequestFormat::DeepSeek)
+        .with_endpoint_path("/tools/asr");
+        asr.consume_pcm_chunk(&vec![0; 32_000]);
+        assert_eq!(asr.transcribe().await.unwrap().text, "Shanghai weather");
         server.join().unwrap();
     }
 

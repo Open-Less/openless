@@ -94,7 +94,14 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
+  [
+    'webSearch',
+    'voiceEnhancement',
+    'cursorContext',
+    'startupDiagnostics',
+    'customSyncServer',
+    'debug',
+  ],
   'the pipeline switch lives in Services on every platform',
 );
 console.log('settings navigation tests passed');
@@ -174,7 +181,7 @@ assert.equal(
 
 assert.equal(
   visibleAdvancedPages('desktop', 'mac')[0].id,
-  'localModels',
+  'webSearch',
   'advanced features opens its peer pages directly',
 );
 assert.equal(
@@ -206,7 +213,7 @@ assert.equal(
 const serviceViews = availableServiceViews(true);
 assert.deepEqual(
   serviceViews,
-  ['llm', 'asr', 'omni', 'models', 'connections'],
+  ['llm', 'asr', 'omni', 'deepseek', 'models', 'connections'],
   'both pipeline configurations remain visible in the same order',
 );
 assert.equal(
@@ -267,7 +274,7 @@ assert.equal(
 );
 assert.deepEqual(
   phoneViews,
-  ['llm', 'asr', 'omni', 'connections'],
+  ['llm', 'asr', 'omni', 'deepseek', 'connections'],
   'mobile service tabs stay stable',
 );
 console.log('settings service view tests passed');
@@ -279,7 +286,14 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('harmony', 'harmony').map((item) => item.id),
-  ['voiceEnhancement', 'cursorContext', 'startupDiagnostics', 'customSyncServer', 'debug'],
+  [
+    'webSearch',
+    'voiceEnhancement',
+    'cursorContext',
+    'startupDiagnostics',
+    'customSyncServer',
+    'debug',
+  ],
   'Harmony retains shared utility settings without desktop coding-agent controls',
 );
 for (const os of ['mac', 'win', 'android'] as const) {

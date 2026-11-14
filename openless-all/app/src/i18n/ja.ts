@@ -1173,6 +1173,8 @@ export const ja: typeof zhCN = {
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
@@ -2327,6 +2329,7 @@ export const ja: typeof zhCN = {
     experimentsTitle: '実験と拡張',
     experimentsDescription: '実験的な機能と拡張オプションを設定します。',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'サービス設定',
       llm: '言語モデル',
       asr: '音声認識',
@@ -2349,6 +2352,8 @@ export const ja: typeof zhCN = {
     backToAdvanced: '高度な機能に戻る',
     back: '戻る',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '入力欄に表示するリアルタイム原文を設定します。',
       experiments: '実験的な機能と拡張オプションを設定します。',
       customSyncServer: 'セルフホスト専用です。公式の同期には設定は不要です。',

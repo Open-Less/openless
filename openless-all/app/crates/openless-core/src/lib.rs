@@ -63,6 +63,8 @@ pub mod prompts;
 pub mod provider_registry;
 mod provider_resolution;
 pub mod provider_rules;
+pub mod web_search;
+pub mod deepseek_tts;
 mod provider_service;
 pub mod provider_transport;
 pub mod providers;

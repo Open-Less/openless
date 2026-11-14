@@ -1219,6 +1219,8 @@ export const fr: typeof zhCN = {
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Insertion de texte',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
@@ -2434,6 +2436,7 @@ export const fr: typeof zhCN = {
     experimentsTitle: 'Expérimentations et extensions',
     experimentsDescription: 'Configurer les fonctions expérimentales et les extensions.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Réglages des services',
       llm: 'Modèles de langage',
       asr: 'Reconnaissance vocale',
@@ -2457,6 +2460,8 @@ export const fr: typeof zhCN = {
     backToAdvanced: 'Retour aux fonctions avancées',
     back: 'Retour',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configurer la transcription en direct dans le champ.',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       customSyncServer:

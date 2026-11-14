@@ -1166,6 +1166,8 @@ export const ko: typeof zhCN = {
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '텍스트 삽입',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
@@ -2312,6 +2314,7 @@ export const ko: typeof zhCN = {
     experimentsTitle: '실험 및 확장',
     experimentsDescription: '실험 기능과 확장 옵션을 설정합니다.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: '서비스 설정',
       llm: '언어 모델',
       asr: '음성 인식',
@@ -2333,6 +2336,8 @@ export const ko: typeof zhCN = {
     backToAdvanced: '고급 기능으로 돌아가기',
     back: '뒤로',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: '입력란의 실시간 원문 표시를 설정합니다.',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       customSyncServer: '자체 호스팅 서비스 전용입니다. 공식 동기화는 설정이 필요하지 않습니다.',

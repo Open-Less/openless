@@ -28,6 +28,7 @@ import {
   MessageScrollerViewport,
 } from '../components/chat/ui/message-scroller';
 import { OpenLessPill } from '../components/OpenLessCapsule';
+import { DeepSeekReadAloud, stopDeepSeekReading } from '../components/DeepSeekReadAloud';
 import { QaSurface } from '../components/QaSurface';
 import { VoiceWaveform } from '../components/chat/VoiceWaveform';
 import { AssistantMarkdown } from '../components/chat/markdown';
@@ -145,6 +146,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setStatus(next);
   };
   const invalidateRequests = () => {
+    stopDeepSeekReading();
     panelEpoch.current += 1;
     submissionRef.current = null;
     microphoneRef.current = null;
@@ -1121,6 +1123,7 @@ function MessageRow({
         <div className="qa-answer-label-row">
           <AssistantLabel />
           <CopyMessage text={message.content} />
+          <DeepSeekReadAloud text={message.content} />
         </div>
         <AssistantMarkdown markdown={message.content} />
       </div>

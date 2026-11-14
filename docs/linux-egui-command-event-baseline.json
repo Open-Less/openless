@@ -45,6 +45,8 @@
     "create_channel",
     "create_style_pack_from_template",
     "debug_read_cursor_context",
+    "deepseek_tts_start",
+    "deepseek_tts_stop",
     "delete_channel",
     "delete_channel_if_blank",
     "delete_history_entry",

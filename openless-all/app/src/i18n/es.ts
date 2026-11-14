@@ -1202,6 +1202,8 @@ export const es: typeof zhCN = {
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
@@ -2404,6 +2406,7 @@ export const es: typeof zhCN = {
     experimentsTitle: 'Experimentos y extensiones',
     experimentsDescription: 'Configura funciones experimentales y extensiones.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Ajustes de servicios',
       llm: 'Modelos de lenguaje',
       asr: 'Reconocimiento de voz',
@@ -2427,6 +2430,8 @@ export const es: typeof zhCN = {
     backToAdvanced: 'Volver a funciones avanzadas',
     back: 'Atrás',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Configurar la transcripción en directo en el campo.',
       experiments: 'Configura funciones experimentales y extensiones.',
       customSyncServer:

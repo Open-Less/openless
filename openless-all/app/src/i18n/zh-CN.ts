@@ -1191,6 +1191,8 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
       experiments: '配置实验功能与扩展选项。',
       voiceEnhancementTitle: '语音增强与播放抑制',
@@ -2226,6 +2228,7 @@ export const zhCN = {
     experimentsTitle: '实验与扩展',
     experimentsDescription: '配置实验功能与扩展选项。',
     serviceViews: {
+      deepseek: 'DeepSeek 大统一',
       label: '服务设置分类',
       llm: '语言模型',
       asr: '语音识别',
@@ -2247,6 +2250,8 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      webSearch: '配置追问联网、免费搜索和搜索 API。',
+      webSearchTitle: 'Web Search',
       liveInput: '配置实时原文在输入框中的显示。',
       experiments: '配置实验功能与扩展选项。',
       customSyncServer: '仅供自建服务使用；默认使用官方同步，无需配置。',

@@ -1209,6 +1209,8 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Texteingabe',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
@@ -2425,6 +2427,7 @@ export const de: typeof zhCN = {
     experimentsTitle: 'Experimente und Erweiterungen',
     experimentsDescription: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Diensteinstellungen',
       llm: 'Sprachmodelle',
       asr: 'Spracherkennung',
@@ -2448,6 +2451,8 @@ export const de: typeof zhCN = {
     backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Live-Transkript im Eingabefeld konfigurieren.',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       customSyncServer:

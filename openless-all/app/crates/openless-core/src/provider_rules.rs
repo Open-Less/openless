@@ -36,6 +36,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("minimax", "asrMinimax"),
     ("groq", "asrGroq"),
     ("whisper", "asrWhisper"),
+    ("deepseek", "deepseek"),
     ("openrouter", "asrOpenrouter"),
     ("orcarouter", "orcarouter"),
     ("zenmux", "asrZenmux"),
@@ -375,6 +376,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "gemini") => GEMINI_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
+        (ProviderKind::Asr, "deepseek") => &["deepseek-asr"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -584,6 +586,7 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("https://api.minimaxi.com/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "whisper" => Some("https://api.openai.com/v1"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "zenmux" => Some("https://zenmux.ai/api/v1"),
@@ -609,6 +612,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("asr-1.0"),
         "groq" => Some("whisper-large-v3-turbo"),
         "whisper" => Some("whisper-1"),
+        "deepseek" => Some("deepseek-asr"),
         "openrouter" => Some("openai/whisper-large-v3-turbo"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL),
         "zenmux" => Some(crate::asr::whisper::ZENMUX_DEFAULT_MODEL),
@@ -648,7 +652,8 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "ark" => Some("deepseek-v3-2"),
-        "deepseek" | "opencode" => Some("deepseek-v4-flash"),
+        "deepseek" => Some("deepseek-flash"),
+        "opencode" => Some("deepseek-v4-flash"),
         "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
         "atlascloud" => Some("qwen/qwen3.5-flash"),
         "openai" | "cometapi" => Some("gpt-4o"),
@@ -842,7 +847,8 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper"
+        "deepseek"
+            | "whisper"
             | "siliconflow"
             | "zhipu"
             | "groq"
@@ -1103,6 +1109,7 @@ const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
 
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
+        "deepseek" => Some(120_000),
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
         // Preserve the custom provider's "0/blank = send the whole clip" setting.
         OPENAI_COMPATIBLE_ASR_PROVIDER_ID => advanced.chunk_duration_ms,
@@ -1114,6 +1121,7 @@ pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrRequestFormat {
+    DeepSeek,
     Multipart,
     OpenRouterJson,
     ZenMuxJson,
@@ -1121,6 +1129,7 @@ pub enum AsrRequestFormat {
 
 pub fn whisper_request_format(provider_id: &str) -> AsrRequestFormat {
     match provider_id {
+        "deepseek" => AsrRequestFormat::DeepSeek,
         "openrouter" => AsrRequestFormat::OpenRouterJson,
         "zenmux" => AsrRequestFormat::ZenMuxJson,
         _ => AsrRequestFormat::Multipart,
