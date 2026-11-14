@@ -317,7 +317,7 @@ test('multimodal settings fit one desktop page and keep inactive notices below l
     });
     expect(bounds.verticalOverflow).toBeLessThanOrEqual(1);
     expect(bounds.horizontalOverflow).toBeLessThanOrEqual(1);
-    expect(bounds.entries).toBe(5);
+    expect(bounds.entries).toBe(6);
     expect(bounds.badgesBelowLabels).toBe(true);
     await expect(card.getByRole('button', { name: '验证', exact: true })).toBeInViewport({
       ratio: 1,

@@ -13,8 +13,8 @@ export type SettingsSectionId =
   | 'about';
 
 export const ADVANCED_PAGES = [
-  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
+  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   {
     id: 'voiceEnhancement',
     icon: 'mic',

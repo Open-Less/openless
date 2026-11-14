@@ -181,7 +181,7 @@ assert.equal(
 
 assert.equal(
   visibleAdvancedPages('desktop', 'mac')[0].id,
-  'webSearch',
+  'localModels',
   'advanced features opens its peer pages directly',
 );
 assert.equal(
