@@ -387,12 +387,23 @@ impl SelectionVoiceWorkflow {
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
-        // Only the active pipeline's text channel is required.
+        // Qwen Realtime delegates text editing to the saved LLM channel.
         let (llm, omni) = match mode {
-            PipelineMode::Multimodal => (
-                ProviderInvocation::for_provider("selection-voice-unused-llm"),
-                text,
-            ),
+            PipelineMode::Multimodal => {
+                let llm = if crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                    &text.provider_type,
+                ) {
+                    crate::provider_resolution::resolve_session_provider(
+                        &self.credential_store,
+                        crate::credentials::ProviderSlot::Llm,
+                        &preferences.active_llm_provider,
+                    )
+                    .await?
+                } else {
+                    ProviderInvocation::for_provider("selection-voice-unused-llm")
+                };
+                (llm, text)
+            }
             PipelineMode::Traditional => (
                 text,
                 ProviderInvocation::for_provider("selection-voice-unused-omni"),
@@ -434,7 +445,10 @@ impl SelectionVoiceWorkflow {
         context.polish.cursor_context = None;
         context.polish.context_window_minutes = 0;
         context.polish.prior_turns.clear();
-        let output = if context.pipeline_mode == PipelineMode::Multimodal {
+        let output = if context.pipeline_mode == PipelineMode::Multimodal
+            && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                &context.omni.provider_type,
+            ) {
             crate::cloud_providers::polish_with_omni_text(
                 self.credential_store.as_ref(),
                 &context,

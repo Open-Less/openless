@@ -1525,6 +1525,8 @@ export const zhTW: typeof zhCN = {
         '手動發出一次實際請求，檢查目前設定；可能消耗服務額度。儲存設定不會自動驗證。',
       validationHintOmni:
         '手動發出一次文字連通性請求（不含錄音）。通過不代表音訊聽寫可用，請再做一次短錄音確認。可能消耗服務額度。',
+      validationHintRealtime:
+        '檢查 Realtime 連線和目前模型設定，不傳送音訊、不啟動麥克風，也不產生回覆。通過後請再用短錄音確認實際聽寫效果。',
       autoSaveHint: '修改欄位後會自動儲存；完成設定後，可手動驗證連線。',
       nameHint: '名稱僅用於區分同一供應商的多個渠道，不影響模型或連線。',
       errModel: '模型',
@@ -1573,7 +1575,46 @@ export const zhTW: typeof zhCN = {
       asrProviderDesc: '切換後將自動選用對應憑據。',
       asrTitle: 'ASR 語音（轉寫）',
       asrDesc: '用於將錄製的語音轉寫為文字。',
+      realtimeOptions: {
+        bearer: 'Bearer（主要 Key）',
+        apiKey: 'API-Key（主要 Key）',
+        headers: '僅使用額外 Headers',
+        minimal: 'minimal（最低公開等級）',
+        low: 'low（低）',
+        medium: 'medium（中）',
+        high: 'high（高）',
+        xhigh: 'xhigh（最高）',
+        authLabel: 'Realtime 驗證方式',
+        bearerHint: '主要 Key 寫入 Authorization: Bearer；額外 Headers 不覆寫驗證。',
+        apiKeyHint: '主要 Key 寫入 api-key Header；額外 Headers 不覆寫驗證。',
+        headersHint:
+          '僅傳送你明確填寫的額外 Headers；主要 Key 可留空。請在下方填寫服務要求的驗證 Header。',
+        effortLabel: '推理等級',
+        effortHint:
+          'Auto 依模型能力選擇；omit 不傳送等級，使用服務預設。none 為實驗選項，尚未列入公開介面列舉；低推理不等於關閉思考。',
+        auto: 'Auto（依能力，預設）',
+        omit: 'omit（使用服務預設）',
+        none: 'none（實驗）',
+        fallbackLabel: '不支援 none 時回退 low 一次',
+        fallbackHint:
+          '僅對明確拒絕 none 的協定或參數錯誤回退；網路逾時、額度等其他錯誤不會自動切換。',
+        configError: '無法讀取或儲存 Realtime 設定。可重新讀取或重設此供應商的選項。',
+        retry: '重新讀取',
+        reset: '重設選項',
+        optionalKey: '主要 API Key（僅 Headers 模式可空白）',
+        modelCandidates: '載入模型候選',
+        modelCandidatesHint:
+          '候選可能來自內建目錄或服務回傳，不代表帳號的全部可用模型。請驗證所選設定。',
+        openaiNotice:
+          'OpenAI GA Realtime 相容協定，輸出文字。16 kHz 錄音持續轉為 24 kHz 上傳；預設 API 根網址 https://api.openai.com/v1。自訂網址必須相容同一協定，並非任意 WebSocket 服務都能使用。',
+        dashscopeNotice:
+          '百煉 Qwen 3.5 / 3.8 Realtime 文字整理協定，上傳 16 kHz PCM。預設公共入口 wss://dashscope.aliyuncs.com/api-ws/v1/realtime；Qwen 3.8 必須填寫業務空間專屬網域。本通道僅整理音訊；選取問答等純文字任務仍使用另行設定的文字模型。',
+        legacyNotice:
+          '舊 Qwen3 Realtime 文字整理協定，上傳 16 kHz PCM，預設公共入口 wss://dashscope.aliyuncs.com/api-ws/v1/realtime。與新版協定分開；不傳送 OpenAI 推理參數。純文字輔助任務使用另行設定的文字模型。',
+      },
       omniTitle: '多模態模型',
+      openaiRealtimeOmniNotice:
+        'OpenAI GA Realtime 相容協定，輸出文字。16 kHz 錄音持續轉為 24 kHz 上傳；預設 API 根網址 https://api.openai.com/v1。自訂網址必須相容同一協定，並非任意 WebSocket 服務都能使用。',
       omniDesc: '一個模型直接接收「提示詞 + 音訊」一步輸出最終文字（實驗性管線）。',
       pipelineModeLabel: '識別管線',
       pipelineModeHint: '傳統 = ASR 轉寫 + LLM 潤色兩段式；多模態 = 單一多模態模型一次完成。',
@@ -1636,6 +1677,9 @@ export const zhTW: typeof zhCN = {
         asrLocalQwen3C: '本地 Qwen3-ASR（C / CPU）',
         asrAppleSpeech: 'Apple 語音（macOS）',
         omniOpenai: 'OpenAI（支援音訊）',
+        omniOpenaiRealtime: 'OpenAI GA 相容 Realtime',
+        omniDashscopeRealtime: '百煉 Realtime（Qwen 3.5 / 3.8）',
+        omniDashscopeRealtimeLegacy: '百煉 Realtime（舊 Qwen3）',
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里雲百煉 Omni',
       },
@@ -1778,6 +1822,7 @@ export const zhTW: typeof zhCN = {
       modelSaved: '已儲存模型 {{model}}。',
       validateSuccess: '連線檢查透過。',
       validateSuccessOmni: '文字連通性通過。這不代表音訊聽寫可用，請再做一次短錄音確認。',
+      validateSuccessRealtime: 'Realtime 工作階段連線與模型設定檢查通過。請用短錄音確認聽寫效果。',
       validateFailed: '連線檢查未透過。',
       providerHttpStatus: '供應商介面返回 {{status}}，請檢查 API Key 權限或 Endpoint。',
       endpointMustUseHttps:

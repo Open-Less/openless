@@ -338,6 +338,30 @@ fn credential_batch_validation_rejects_oauth_cookie_accounts_and_omni_id_aliases
 }
 
 #[test]
+fn realtime_options_are_allowed_as_typed_public_omni_configuration() {
+    let mut data = channel_snapshot();
+    data.channels[0].namespace = SyncNamespace::Omni;
+    data.channels[0].id = "openai-realtime".into();
+    data.channels[0].provider_type = "openai-realtime".into();
+    data.provider_credentials[0].namespace = SyncNamespace::Omni;
+    data.provider_credentials[0].channel_id = "openai-realtime".into();
+    data.provider_credentials[0].accounts.clear();
+    data.provider_credentials[0].accounts.insert(
+        crate::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT.into(),
+        r#"{"authMode":"headers","reasoningEffort":"none","reasoningFallback":true}"#.into(),
+    );
+    export_snapshot(data.clone()).unwrap();
+    data.provider_credentials[0].accounts.insert(
+        crate::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT.into(),
+        r#"{"unknown":"fixture-secret"}"#.into(),
+    );
+    assert_eq!(
+        export_snapshot(data).unwrap_err(),
+        DocumentError::InvalidDocument
+    );
+}
+
+#[test]
 fn unknown_preference_values_roundtrip_and_merge_without_application() {
     let base = sample();
     let local = change(

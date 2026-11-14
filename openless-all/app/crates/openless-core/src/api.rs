@@ -9391,9 +9391,23 @@ impl OpenLessBackend {
                 &preferences.active_asr_provider,
             )
         };
+        let active_omni_provider = if traditional {
+            crate::dictation_context::ProviderInvocation::for_provider(
+                &preferences.active_omni_provider,
+            )
+        } else {
+            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
+                .await?
+        };
+        let qa_needs_text_llm = matches!(
+            purpose,
+            DictationContextPurpose::QaText | DictationContextPurpose::QaVoice
+        ) && crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+            &active_omni_provider.provider_type,
+        );
         let mut deferred_llm_error = None;
         let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if traditional && !skip_llm_at_capture {
+        let active_llm_provider = if (traditional || qa_needs_text_llm) && !skip_llm_at_capture {
             match self
                 .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
                 .await
@@ -9410,14 +9424,6 @@ impl OpenLessBackend {
             crate::dictation_context::ProviderInvocation::for_provider(
                 &preferences.active_llm_provider,
             )
-        };
-        let active_omni_provider = if traditional {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_omni_provider,
-            )
-        } else {
-            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
-                .await?
         };
         let recent_history = if preferences.polish_context_window_minutes == 0 {
             Vec::new()
@@ -9655,6 +9661,40 @@ mod tests {
                 .reserve_dictation_session(false, DictationOutputTarget::ForegroundApp, None)
                 .unwrap();
             backend.reset_dictation_session(next.session_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn qa_realtime_capture_requires_llm_only_for_qwen_qa() {
+        for profile in ["openai-realtime", "dashscope-realtime", "dashscope-realtime-legacy"] {
+            let (backend, _) = backend();
+            let llm = backend.create_channel(
+                ChannelKind::Llm, "openai-compatible".into(), "Disabled text channel".into(),
+            ).await.unwrap();
+            backend.set_channel_enabled(ChannelKind::Llm, llm, false).await.unwrap();
+            backend.set_active_provider(ProviderSlot::Omni, profile.into()).await.unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.multimodal_pipeline_enabled = true;
+            preferences.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+            backend.set_preferences(preferences).unwrap();
+            for purpose in [
+                DictationContextPurpose::Dictation,
+                DictationContextPurpose::AuxiliaryVoice,
+                DictationContextPurpose::QaText,
+                DictationContextPurpose::QaVoice,
+            ] {
+                let result = backend.capture_dictation_context(
+                    &DictationStartOptions::default(), purpose,
+                ).await;
+                let qwen_qa = profile != "openai-realtime" && matches!(
+                    purpose, DictationContextPurpose::QaText | DictationContextPurpose::QaVoice,
+                );
+                if qwen_qa {
+                    assert_eq!(result.unwrap_err().code, BackendErrorCode::InvalidState);
+                } else {
+                    assert_eq!(result.unwrap().pipeline_mode, crate::shared_types::PipelineMode::Multimodal);
+                }
+            }
         }
     }
 

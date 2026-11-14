@@ -243,12 +243,23 @@ impl SelectionServiceInner {
                 &preferences,
             )
             .await?;
-            // Only the active pipeline's text channel is required.
+            // Qwen Realtime delegates text editing to the saved LLM channel.
             match mode {
-                PipelineMode::Multimodal => (
-                    ProviderInvocation::for_provider(preferences.active_llm_provider.clone()),
-                    text,
-                ),
+                PipelineMode::Multimodal => {
+                    let llm = if crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                        &text.provider_type,
+                    ) {
+                        crate::provider_resolution::resolve_session_provider(
+                            &self.credential_store,
+                            crate::credentials::ProviderSlot::Llm,
+                            &preferences.active_llm_provider,
+                        )
+                        .await?
+                    } else {
+                        ProviderInvocation::for_provider(preferences.active_llm_provider.clone())
+                    };
+                    (llm, text)
+                }
                 PipelineMode::Traditional => (
                     text,
                     ProviderInvocation::for_provider(preferences.active_omni_provider.clone()),
@@ -468,13 +479,13 @@ impl SelectionServiceInner {
                 None
             }
         };
-        let (text_provider_id, text_model) = match context.pipeline_mode {
-            PipelineMode::Multimodal => {
-                (context.omni.provider_id.clone(), context.omni.model.clone())
-            }
-            PipelineMode::Traditional => {
-                (context.llm.provider_id.clone(), context.llm.model.clone())
-            }
+        let (text_provider_id, text_model) = if context.pipeline_mode == PipelineMode::Multimodal
+            && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                &context.omni.provider_type,
+            ) {
+            (context.omni.provider_id.clone(), context.omni.model.clone())
+        } else {
+            (context.llm.provider_id.clone(), context.llm.model.clone())
         };
         let session = DictationSession {
             id: session_id.to_string(),
@@ -715,7 +726,10 @@ impl SelectionApi for SelectionService {
                     // conversion.
                     // Copy preference is read before the provider call.
                     let script_pref = context.polish.chinese_script_preference;
-                    let mut output = if context.pipeline_mode == PipelineMode::Multimodal {
+                    let mut output = if context.pipeline_mode == PipelineMode::Multimodal
+                        && !crate::provider_rules::omni_uses_text_provider_for_auxiliary(
+                            &context.omni.provider_type,
+                        ) {
                         crate::cloud_providers::polish_with_omni_text(
                             inner.credential_store.as_ref(),
                             context.as_ref(),

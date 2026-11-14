@@ -4,6 +4,8 @@ const LLM_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::LLM_EXTRA_HE
 const LLM_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::LLM_TEMPERATURE_ACCOUNT;
 const OMNI_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::OMNI_EXTRA_HEADERS_ACCOUNT;
 const OMNI_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::OMNI_TEMPERATURE_ACCOUNT;
+const OMNI_REALTIME_OPTIONS_ACCOUNT: &str =
+    openless_core::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT;
 const MARKETPLACE_GITHUB_TOKEN_ACCOUNT: &str = "github.oauth_token";
 const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT: &str =
     openless_core::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT;
@@ -365,10 +367,7 @@ fn credentials_status(
     let llm_configured =
         openless_core::provider_rules::llm_configured(&active_llm_provider, &configuration);
     let omni_configured = pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal
-        && openless_core::provider_rules::omni_configured(
-            &snap.active_omni_provider,
-            &configuration,
-        );
+        && omni_configured_for_active_provider(&snap);
     Ok(CredentialsStatus {
         active_asr_provider,
         active_llm_provider,
@@ -406,6 +405,14 @@ fn read_vault_credential(
                     .map(|value| value.to_string()),
                 None => CredentialsVault::get_active_llm_temperature_string(),
             })
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_REALTIME_OPTIONS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::get_omni_realtime_options_json_for_provider(provider)
+                }
+                None => CredentialsVault::get_active_omni_realtime_options_json(),
+            }
         }
         (openless_core::CredentialNamespace::Omni, OMNI_EXTRA_HEADERS_ACCOUNT) => {
             match key.provider_id.as_deref() {
@@ -478,6 +485,20 @@ fn write_vault_credential(
                     CredentialsVault::set_llm_temperature_for_provider(provider, value)
                 }
                 None => CredentialsVault::set_active_llm_temperature(value),
+            }
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_REALTIME_OPTIONS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) if value.trim().is_empty() => {
+                    CredentialsVault::clear_omni_realtime_options_for_provider(provider)
+                }
+                None if value.trim().is_empty() => {
+                    CredentialsVault::clear_active_omni_realtime_options()
+                }
+                Some(provider) => {
+                    CredentialsVault::set_omni_realtime_options_for_provider(provider, value)
+                }
+                None => CredentialsVault::set_active_omni_realtime_options(value),
             }
         }
         (openless_core::CredentialNamespace::Omni, OMNI_EXTRA_HEADERS_ACCOUNT) => {
@@ -688,10 +709,23 @@ fn configured(field: &Option<String>) -> bool {
 /// API Key + Base URL + Model; the Gemini channel requires API Key + Model (empty Base URL falls
 /// back to the backend's official default).
 pub(crate) fn omni_configured_for_active_provider(snap: &CredentialsSnapshot) -> bool {
-    openless_core::provider_rules::omni_configured(
-        &snap.active_omni_provider,
-        &credential_configuration(snap, "", false),
-    )
+    let realtime =
+        openless_core::provider_rules::is_realtime_omni_provider(&snap.active_omni_provider);
+    let explicit_headers = realtime
+        && snap.omni_realtime_auth_mode.unwrap_or_default()
+            == openless_core::omni::realtime_options::RealtimeAuthMode::Headers;
+    let mut configuration = credential_configuration(snap, "", false);
+    if explicit_headers {
+        // Readiness only: Core keeps Bearer/key-required defaults for hosts that
+        // do not read typed options. This boolean never becomes a sent API key.
+        configuration.omni_api_key = true;
+    }
+    let descriptor_configured =
+        openless_core::provider_rules::omni_configured(&snap.active_omni_provider, &configuration);
+    if !descriptor_configured || !realtime {
+        return descriptor_configured;
+    }
+    explicit_headers || configured(&snap.omni_api_key)
 }
 
 fn credential_configuration(
@@ -924,7 +958,7 @@ fn credential_key(
         LLM_EXTRA_HEADERS_ACCOUNT | LLM_TEMPERATURE_ACCOUNT => {
             openless_core::CredentialNamespace::Llm
         }
-        OMNI_EXTRA_HEADERS_ACCOUNT | OMNI_TEMPERATURE_ACCOUNT => {
+        OMNI_EXTRA_HEADERS_ACCOUNT | OMNI_TEMPERATURE_ACCOUNT | OMNI_REALTIME_OPTIONS_ACCOUNT => {
             openless_core::CredentialNamespace::Omni
         }
         MARKETPLACE_GITHUB_TOKEN_ACCOUNT => openless_core::CredentialNamespace::Marketplace,
@@ -1022,6 +1056,37 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn realtime_readiness_distinguishes_explicit_headers_from_missing_main_key() {
+        use openless_core::omni::realtime_options::RealtimeAuthMode;
+        for provider in [
+            "openai-realtime",
+            "dashscope-realtime",
+            "dashscope-realtime-legacy",
+        ] {
+            let mut snapshot = CredentialsSnapshot {
+                active_omni_provider: provider.into(),
+                omni_endpoint: Some("https://gateway.example/v1".into()),
+                omni_model: Some("fixture-model".into()),
+                ..Default::default()
+            };
+            assert!(!omni_configured_for_active_provider(&snapshot));
+            for mode in [RealtimeAuthMode::Bearer, RealtimeAuthMode::ApiKey] {
+                snapshot.omni_realtime_auth_mode = Some(mode);
+                assert!(!omni_configured_for_active_provider(&snapshot));
+                snapshot.omni_api_key = Some("fixture-main-key".into());
+                assert!(omni_configured_for_active_provider(&snapshot));
+                snapshot.omni_api_key = Some("  ".into());
+                assert!(!omni_configured_for_active_provider(&snapshot));
+            }
+            snapshot.omni_api_key = None;
+            snapshot.omni_realtime_auth_mode = Some(RealtimeAuthMode::Headers);
+            assert!(omni_configured_for_active_provider(&snapshot));
+            snapshot.active_omni_provider = "openai".into();
+            assert!(!omni_configured_for_active_provider(&snapshot));
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_credential_worker_holds_restore_lease_until_it_finishes() {
         let dir = std::env::temp_dir().join(format!(
@@ -1065,6 +1130,9 @@ mod tests {
             "omni.api_key",
             "omni.endpoint",
             "omni.model",
+            OMNI_EXTRA_HEADERS_ACCOUNT,
+            OMNI_TEMPERATURE_ACCOUNT,
+            OMNI_REALTIME_OPTIONS_ACCOUNT,
             OMNI_EXTRA_HEADERS_ACCOUNT,
             OMNI_TEMPERATURE_ACCOUNT,
         ] {

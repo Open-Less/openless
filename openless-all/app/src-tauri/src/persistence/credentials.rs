@@ -727,6 +727,12 @@ struct CredsOmniEntry {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extraHeaders: Option<HashMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_omni_realtime_options"
+    )]
+    realtimeOptions: Option<openless_core::omni::realtime_options::RealtimeOptions>,
 }
 
 impl CredsOmniEntry {
@@ -738,6 +744,7 @@ impl CredsOmniEntry {
             && self.baseURL.as_deref().unwrap_or("").is_empty()
             && self.model.as_deref().unwrap_or("").is_empty()
             && self.temperature.is_none()
+            && self.realtimeOptions.is_none()
             && self
                 .extraHeaders
                 .as_ref()
@@ -1345,6 +1352,81 @@ fn omni_extra_headers_json(root: &CredsRoot, provider_id: &str) -> Result<Option
 
 fn active_omni_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
     omni_extra_headers_json(root, &root.omni.active)
+}
+
+fn omni_realtime_options_json(root: &CredsRoot, provider_id: &str) -> Result<Option<String>> {
+    root.omni
+        .providers
+        .get(provider_id)
+        .and_then(|entry| entry.realtimeOptions.as_ref())
+        .map(serde_json::to_string)
+        .transpose()
+        .context("encode Omni Realtime options")
+}
+
+fn parse_omni_realtime_options(
+    value: &str,
+) -> Result<Option<openless_core::omni::realtime_options::RealtimeOptions>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    openless_core::omni::realtime_options::RealtimeOptions::parse(value)
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("invalid Omni Realtime options"))
+}
+
+fn deserialize_omni_realtime_options<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<openless_core::omni::realtime_options::RealtimeOptions>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    value
+        .map(|value| {
+            let encoded = serde_json::to_string(&value)
+                .map_err(|_| serde::de::Error::custom("invalid Omni Realtime options"))?;
+            openless_core::omni::realtime_options::RealtimeOptions::parse(&encoded)
+                .map_err(|_| serde::de::Error::custom("invalid Omni Realtime options"))
+        })
+        .transpose()
+}
+
+fn set_omni_realtime_options_in_root(
+    root: &mut CredsRoot,
+    provider_id: &str,
+    options: Option<openless_core::omni::realtime_options::RealtimeOptions>,
+) {
+    root.omni
+        .providers
+        .entry(provider_id.to_string())
+        .or_default()
+        .realtimeOptions = options;
+}
+
+fn parse_omni_extra_headers_for_type(
+    provider_type: &str,
+    value: &str,
+) -> Result<HashMap<String, String>> {
+    if openless_core::provider_rules::is_realtime_omni_provider(provider_type) {
+        return openless_core::omni::realtime_options::parse_headers(value)
+            .map_err(|_| anyhow::anyhow!("invalid Omni Realtime extra headers"));
+    }
+    parse_extra_headers_json(value)
+}
+
+fn parse_omni_extra_headers_for_provider(
+    root: &CredsRoot,
+    provider_id: &str,
+    value: &str,
+) -> Result<HashMap<String, String>> {
+    let provider_type = root
+        .omni
+        .providers
+        .get(provider_id)
+        .and_then(|entry| entry.channel.providerType.as_deref())
+        .unwrap_or(provider_id);
+    parse_omni_extra_headers_for_type(provider_type, value)
 }
 
 fn omni_temperature_value(root: &CredsRoot, provider_id: &str) -> Option<f64> {
@@ -2878,6 +2960,9 @@ pub struct CredentialsSnapshot {
     pub omni_api_key: Option<String>,
     pub omni_endpoint: Option<String>,
     pub omni_model: Option<String>,
+    /// Non-secret mode from the same vault read; absent options preserve Bearer authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omni_realtime_auth_mode: Option<openless_core::omni::realtime_options::RealtimeAuthMode>,
 }
 
 /// Provider identities and their fields from the same successful vault read.
@@ -2941,6 +3026,15 @@ fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnap
             .flatten(),
         omni_model: include_omni
             .then(|| lookup_account(root, CredentialAccount::OmniModel))
+            .flatten(),
+        omni_realtime_auth_mode: include_omni
+            .then(|| {
+                root.omni
+                    .providers
+                    .get(&root.omni.active)
+                    .and_then(|entry| entry.realtimeOptions.as_ref())
+                    .map(|options| options.auth_mode)
+            })
             .flatten(),
     }
 }
@@ -3188,6 +3282,12 @@ fn export_sync_credentials_root(
         }
         if let Some(value) = canonical_headers(&entry.extraHeaders)? {
             values.insert("omni.extra_headers".into(), value);
+        }
+        if let Some(options) = entry.realtimeOptions.as_ref() {
+            values.insert(
+                openless_core::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT.into(),
+                serde_json::to_string(options)?,
+            );
         }
         snapshot.credentials.push(SyncCredentialRecord {
             channel_id: id.clone(),
@@ -3469,8 +3569,13 @@ fn apply_sync_credentials_root(
                     .flatten();
                 let headers = values
                     .get("omni.extra_headers")
-                    .map(|value| parse_extra_headers_json(value))
+                    .map(|value| parse_omni_extra_headers_for_type(&channel.provider_type, value))
                     .transpose()?;
+                let realtime_options = values
+                    .get(openless_core::credentials::OMNI_REALTIME_OPTIONS_ACCOUNT)
+                    .map(|value| parse_omni_realtime_options(value))
+                    .transpose()?
+                    .flatten();
                 next.omni.providers.insert(
                     channel.id.clone(),
                     CredsOmniEntry {
@@ -3481,6 +3586,7 @@ fn apply_sync_credentials_root(
                         model: value("omni.model"),
                         temperature,
                         extraHeaders: headers,
+                        realtimeOptions: realtime_options,
                     },
                 );
                 if channel.active {
@@ -3593,12 +3699,17 @@ impl CredentialsVault {
 
     #[cfg(target_os = "macos")]
     pub fn retire_macos_local_asr() -> Result<()> {
-        mutate_credentials(openless_core::credentials::ChangeOrigin::LocalOnly, |root| {
-            let mut metadata = credential_metadata(root);
-            let changed = metadata.retire_macos_local_asr();
-            if changed { apply_credential_metadata(root, metadata)?; }
-            Ok(changed)
-        })
+        mutate_credentials(
+            openless_core::credentials::ChangeOrigin::LocalOnly,
+            |root| {
+                let mut metadata = credential_metadata(root);
+                let changed = metadata.retire_macos_local_asr();
+                if changed {
+                    apply_credential_metadata(root, metadata)?;
+                }
+                Ok(changed)
+            },
+        )
     }
 
     pub fn load_metadata() -> Result<openless_core::CredentialMetadata> {
@@ -3913,6 +4024,42 @@ impl CredentialsVault {
         active_omni_extra_headers(&load_credentials())
     }
 
+    pub fn get_active_omni_realtime_options_json() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        let root = load_credentials();
+        omni_realtime_options_json(&root, &root.omni.active)
+    }
+
+    pub fn get_omni_realtime_options_json_for_provider(id: &str) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        omni_realtime_options_json(&load_credentials(), id)
+    }
+
+    pub fn set_active_omni_realtime_options(value: &str) -> Result<()> {
+        let options = parse_omni_realtime_options(value)?;
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let id = root.omni.active.clone();
+            set_omni_realtime_options_in_root(root, &id, options);
+            Ok(true)
+        })
+    }
+
+    pub fn set_omni_realtime_options_for_provider(id: &str, value: &str) -> Result<()> {
+        let options = parse_omni_realtime_options(value)?;
+        mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            set_omni_realtime_options_in_root(root, id, options);
+            Ok(true)
+        })
+    }
+
+    pub fn clear_active_omni_realtime_options() -> Result<()> {
+        Self::set_active_omni_realtime_options("")
+    }
+
+    pub fn clear_omni_realtime_options_for_provider(id: &str) -> Result<()> {
+        Self::set_omni_realtime_options_for_provider(id, "")
+    }
+
     pub fn get_active_omni_extra_headers_json() -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
         active_omni_extra_headers_json(&load_credentials())
@@ -3963,8 +4110,8 @@ impl CredentialsVault {
     }
 
     pub fn set_active_omni_extra_headers_json(value: &str) -> Result<()> {
-        let headers = parse_extra_headers_json(value)?;
         mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let headers = parse_omni_extra_headers_for_provider(root, &root.omni.active, value)?;
             root.omni
                 .providers
                 .entry(root.omni.active.clone())
@@ -3975,8 +4122,8 @@ impl CredentialsVault {
     }
 
     pub fn set_omni_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
-        let headers = parse_extra_headers_json(value)?;
         mutate_credentials(openless_core::credentials::ChangeOrigin::User, |root| {
+            let headers = parse_omni_extra_headers_for_provider(root, id, value)?;
             root.omni
                 .providers
                 .entry(id.to_string())
@@ -4503,6 +4650,7 @@ mod tests {
         assert_eq!(hidden.omni_api_key, None);
         assert_eq!(hidden.omni_endpoint, None);
         assert_eq!(hidden.omni_model, None);
+        assert_eq!(hidden.omni_realtime_auth_mode, None);
 
         let visible = super::credentials_snapshot(&root, true);
         assert_eq!(visible.omni_api_key.as_deref(), Some("omni-secret"));
@@ -6365,6 +6513,7 @@ mod sync_capture_diagnostic_tests {
             model: Some("legacy-model".into()),
             temperature: Some(0.7),
             extraHeaders: Some(HashMap::from([("x-fixture".into(), "header-value".into())])),
+            realtimeOptions: None,
             channel: ChannelMeta {
                 order: Some(3),
                 lastTest: Some(ChannelTest {
@@ -6376,6 +6525,96 @@ mod sync_capture_diagnostic_tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn realtime_options_are_provider_scoped_and_roundtrip_through_sync() {
+        let mut root = CredsRoot::default();
+        root.omni.active = "openai-realtime".into();
+        for (id, json) in [
+            (
+                "openai-realtime",
+                r#"{"authMode":"headers","reasoningEffort":"none","reasoningFallback":false}"#,
+            ),
+            (
+                "dashscope-realtime",
+                r#"{"authMode":"api-key","reasoningEffort":"auto","reasoningFallback":true}"#,
+            ),
+            (
+                "dashscope-realtime-legacy",
+                r#"{"authMode":"bearer","reasoningEffort":"omit","reasoningFallback":true}"#,
+            ),
+        ] {
+            let mut entry = CredsOmniEntry::default();
+            entry.channel.providerType = Some(id.into());
+            entry.realtimeOptions = parse_omni_realtime_options(json).unwrap();
+            root.omni.providers.insert(id.into(), entry);
+        }
+        let headers = parse_omni_extra_headers_for_provider(
+            &root,
+            "openai-realtime",
+            r#"{"Authorization":"fixture-custom-auth","x-tenant":"one"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get("authorization").map(String::as_str),
+            Some("fixture-custom-auth")
+        );
+        root.omni
+            .providers
+            .get_mut("openai-realtime")
+            .unwrap()
+            .extraHeaders = Some(headers);
+        assert!(
+            parse_omni_extra_headers_for_type("custom", r#"{"Authorization":"fixture"}"#).is_err()
+        );
+        assert!(parse_omni_extra_headers_for_type(
+            "openai-realtime",
+            r#"{"Host":"example.invalid"}"#
+        )
+        .is_err());
+        let error =
+            parse_omni_realtime_options(r#"{"mistakenSecret":"do-not-echo-this"}"#).unwrap_err();
+        assert!(!error.to_string().contains("do-not-echo-this"));
+        let invalid = serde_json::from_value::<CredsOmniEntry>(
+            serde_json::json!({"realtimeOptions":{"authMode":"do-not-echo-this"}}),
+        )
+        .unwrap_err();
+        assert!(!invalid.to_string().contains("do-not-echo-this"));
+
+        let encoded = serde_json::to_string(&root).unwrap();
+        assert_eq!(
+            credentials_snapshot(&root, true).omni_realtime_auth_mode,
+            Some(openless_core::omni::realtime_options::RealtimeAuthMode::Headers)
+        );
+        let decoded: CredsRoot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.omni.providers, root.omni.providers);
+        let snapshot = export_sync_credentials_root(&decoded).unwrap();
+        let restored = apply_sync_credentials_root(&CredsRoot::default(), &snapshot).unwrap();
+        for id in [
+            "openai-realtime",
+            "dashscope-realtime",
+            "dashscope-realtime-legacy",
+        ] {
+            assert_eq!(
+                omni_realtime_options_json(&restored, id).unwrap(),
+                omni_realtime_options_json(&root, id).unwrap()
+            );
+        }
+        assert_eq!(
+            omni_extra_headers(&restored, "openai-realtime"),
+            omni_extra_headers(&root, "openai-realtime")
+        );
+        let saved_qwen = omni_realtime_options_json(&root, "dashscope-realtime").unwrap();
+        set_omni_realtime_options_in_root(&mut root, "openai-realtime", None);
+        assert!(omni_realtime_options_json(&root, "openai-realtime")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            omni_realtime_options_json(&root, "dashscope-realtime").unwrap(),
+            saved_qwen
+        );
+        assert!(!omni_extra_headers(&root, "openai-realtime").is_empty());
     }
 
     #[test]
