@@ -95,7 +95,6 @@ const FONT_SIZE = 16;
 const SIRI_ENHANCED_FEATHER_PX = 40;
 /** Siri enhanced band height: the 40px Siri rail plus a third. */
 const SIRI_ENHANCED_RAIL_HEIGHT = 54;
-const FONT_WEIGHT = 500;
 const DEFAULT_PILL_HEIGHT = 40;
 
 let measureCanvas: HTMLCanvasElement | null = null;
